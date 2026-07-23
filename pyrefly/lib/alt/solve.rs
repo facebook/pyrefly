@@ -3872,6 +3872,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .collect(),
                     )
                 };
+                let return_ty = match return_ty {
+                    Type::BoundMethod(method) => self
+                        .bind_boundmethod(&method, &mut |a, b| self.is_subset_eq(a, b))
+                        .unwrap_or_else(|| self.heap.mk_bound_method(*method)),
+                    return_ty => return_ty,
+                };
                 // Cap inferred return unions aggressively. A small shared width
                 // budget keeps both top-level and nested inferred unions from
                 // accumulating many alternatives across recursive inference.
@@ -3884,7 +3890,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // per iteration. A limit of 3 lets truncation kick in by iteration 4
                 // while keeping the global fixpoint iteration budget at 5.
                 const MAX_INFERRED_RETURN_NESTING_DEPTH: usize = 3;
-                let return_ty = if return_ty.union_width() > MAX_INFERRED_RETURN_UNION_WIDTH {
+                let return_ty = if return_ty.is_toplevel_callable() {
+                    return_ty
+                } else if return_ty.union_width() > MAX_INFERRED_RETURN_UNION_WIDTH {
                     self.heap.mk_any_implicit()
                 } else {
                     let any = self.heap.mk_any_implicit();
