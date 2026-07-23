@@ -8,6 +8,23 @@
 use crate::testcase;
 
 testcase!(
+    test_generic_decorator_on_dunder_new,
+    r#"
+from collections.abc import Callable
+
+def fn[T](c: Callable[[T], None]) -> T:  # E: missing an explicit `return`
+    pass
+
+class C:
+    @fn  # E: is not assignable to parameter `c`
+    def __new__(cls):
+        pass
+
+C()  # E: `__new__` on `C` resolves back to the same class
+"#,
+);
+
+testcase!(
     test_class_init,
     r#"
 from typing import assert_type
@@ -184,6 +201,91 @@ class Meta[T](type):
 class C[T](metaclass=Meta[T]): # E: Metaclass may not be an unbound generic
     pass
 assert_type(C(), C[Any]) # Correct, because invalid metaclass.
+    "#,
+);
+
+testcase!(
+    test_metaclass_invalid_losing_direct_generic,
+    r#"
+from typing import Any
+
+class Meta1[T](type): ...
+class Meta2[T](Meta1[T]): ...
+class A(metaclass=Meta2[Any]): ...
+class B[T](A, metaclass=Meta1[T]): ...  # E: Metaclass may not be an unbound generic
+    "#,
+);
+
+testcase!(
+    test_init_subclass_class_keywords,
+    r#"
+class Foo:
+    def __init_subclass__(cls, asdf: int) -> None:
+        pass
+
+class Bar(Foo, asdf=1): ...
+class Baz(Foo, asdf=""): ...  # E: Argument `Literal['']` is not assignable to parameter `asdf` with type `int`
+class Qux(Foo): ...  # E: Missing argument `asdf`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_skips_custom_metaclass_keywords,
+    r#"
+class Meta(type):
+    def __new__(cls, name, bases, namespace, abstract: bool = False):
+        return super().__new__(cls, name, bases, namespace)
+
+class Base(metaclass=Meta): ...
+class Child(Base, abstract=True): ...
+    "#,
+);
+
+testcase!(
+    test_init_subclass_metaclass_without_keywords_still_checked,
+    r#"
+# A custom metaclass only consumes class-header keywords; with no keywords, a
+# required `__init_subclass__` argument still goes unfilled at runtime, so the
+# missing-argument error must fire even in the presence of a metaclass.
+class Meta(type): ...
+
+class Base(metaclass=Meta):
+    def __init_subclass__(cls, x: int) -> None:
+        pass
+
+class Child(Base): ...  # E: Missing argument `x`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_follows_mro_not_first_base,
+    r#"
+class A:
+    def __init_subclass__(cls, kw: str) -> None:
+        pass
+
+class B: ...
+
+# `__init_subclass__` is resolved through C's MRO, so A's requirement applies
+# even though A is not the first base.
+class C(B, A): ...  # E: Missing argument `kw`
+class D(B, A, kw="x"): ...
+class E(B, A, kw=1): ...  # E: Argument `Literal[1]` is not assignable to parameter `kw` with type `str`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_inherited_without_keywords,
+    r#"
+class Grandparent:
+    def __init_subclass__(cls, kw: str) -> None:
+        pass
+
+class Parent(Grandparent, kw="x"): ...
+
+# `Child` inherits `Grandparent.__init_subclass__`, which requires `kw`, so this
+# reports a missing argument even though `Child` passes no keywords.
+class Child(Parent): ...  # E: Missing argument `kw`
     "#,
 );
 
@@ -703,6 +805,22 @@ assert_type(C(False), C[B])
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4192
+testcase!(
+    test_overloaded_init_missing_self,
+    r#"
+from typing import overload
+
+class C:
+    @overload
+    def __init__(): ...  # E: Overloaded function must have an implementation
+    @overload
+    def __init__(): ...
+
+C()  # E: This method has no `self` parameter to receive the implicit instance argument
+    "#,
+);
+
 testcase!(
     test_init_bad_receiver_annotation,
     r#"
@@ -986,7 +1104,7 @@ class A[T]:
 testcase!(
     test_new_returns_concrete_inside_method,
     r#"
-from typing import Self, reveal_type
+from typing import Self, assert_type, reveal_type
 
 class C:
     def __new__(cls) -> "C": ...
@@ -998,14 +1116,14 @@ class C:
 class D(C): ...
 
 def check_subclass(d: D) -> None:
-    reveal_type(type(d)())  # E: revealed type: C
+    assert_type(type(d)(), C)
     "#,
 );
 
 testcase!(
     test_new_returns_list_self_inside_method,
     r#"
-from typing import Self, reveal_type
+from typing import Self, assert_type, reveal_type
 
 class C:
     def __new__(cls) -> list[Self]: ...
@@ -1017,7 +1135,7 @@ class C:
 class D(C): ...
 
 def check_subclass(d: D) -> None:
-    reveal_type(type(d)())  # E: revealed type: list[D]
+    assert_type(type(d)(), list[D])
     "#,
 );
 

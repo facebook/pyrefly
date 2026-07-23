@@ -48,6 +48,7 @@ mod solver;
 pub mod state;
 #[cfg(not(target_arch = "wasm32"))]
 mod stubgen;
+#[cfg(test)]
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tsp;

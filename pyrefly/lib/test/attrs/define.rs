@@ -1012,6 +1012,82 @@ assert_type(fields_dict(C)["x"], attr.Attribute[int])
 "#,
 );
 
+// Over the 100-field cap, we fall back to the stub's `dict`: every field degrades to
+// `Attribute[Any]`.
+attrs_testcase!(
+    test_attrs_fields_dict_over_cap_falls_back_to_dict,
+    r#"
+from typing import Any, assert_type
+import attr
+
+@attr.define
+class Huge:
+    f0: int; f1: int; f2: int; f3: int; f4: int; f5: int; f6: int; f7: int
+    f8: int; f9: int; f10: int; f11: int; f12: int; f13: int; f14: int; f15: int
+    f16: int; f17: int; f18: int; f19: int; f20: int; f21: int; f22: int; f23: int
+    f24: int; f25: int; f26: int; f27: int; f28: int; f29: int; f30: int; f31: int
+    f32: int; f33: int; f34: int; f35: int; f36: int; f37: int; f38: int; f39: int
+    f40: int; f41: int; f42: int; f43: int; f44: int; f45: int; f46: int; f47: int
+    f48: int; f49: int; f50: int; f51: int; f52: int; f53: int; f54: int; f55: int
+    f56: int; f57: int; f58: int; f59: int; f60: int; f61: int; f62: int; f63: int
+    f64: int; f65: int; f66: int; f67: int; f68: int; f69: int; f70: int; f71: int
+    f72: int; f73: int; f74: int; f75: int; f76: int; f77: int; f78: int; f79: int
+    f80: int; f81: int; f82: int; f83: int; f84: int; f85: int; f86: int; f87: int
+    f88: int; f89: int; f90: int; f91: int; f92: int; f93: int; f94: int; f95: int
+    f96: int; f97: int; f98: int; f99: int; f100: str
+
+d = attr.fields_dict(Huge)
+assert_type(d["f0"], attr.Attribute[Any])
+assert_type(d["f100"], attr.Attribute[Any])
+"#,
+);
+
+// Field-precise across inheritance and generic substitution: a generic base specialized in a
+// subclass yields the exact `Attribute[T]` per field.
+attrs_testcase!(
+    test_attrs_fields_dict_wide_generic_inheritance,
+    r#"
+from typing import assert_type
+import attr
+
+@attr.define
+class Base[T]:
+    head: T
+    a0: int; a1: int; a2: int; a3: int; a4: int; a5: int; a6: int; a7: int
+    a8: int; a9: int; a10: int; a11: int; a12: int; a13: int; a14: int; a15: int
+    a16: int; a17: int; a18: int; a19: int; a20: int
+
+@attr.define
+class Sub(Base[str]):
+    tail: bytes
+
+d = attr.fields_dict(Sub)
+assert_type(d["head"], attr.Attribute[str])
+assert_type(d["a20"], attr.Attribute[int])
+assert_type(d["tail"], attr.Attribute[bytes])
+"#,
+);
+
+// Field-precise for the classic `@attr.s(auto_attribs=True)` form too, not just `@define`.
+attrs_testcase!(
+    test_attrs_fields_dict_wide_classic_auto_attribs,
+    r#"
+from typing import assert_type
+import attr
+
+@attr.s(auto_attribs=True)
+class Wide:
+    a0: int; a1: int; a2: int; a3: int; a4: int; a5: int; a6: int; a7: int
+    a8: int; a9: int; a10: int; a11: int; a12: int; a13: int; a14: int; a15: int
+    a16: int; a17: int; a18: int; a19: int; a20: int
+    last: str
+
+d = attr.fields_dict(Wide)
+assert_type(d["a0"], attr.Attribute[int])
+assert_type(d["last"], attr.Attribute[str])
+"#,
+);
+
 // ON_SETATTR
 //
 // `on_setattr=setters.frozen` makes attributes immutable (attrs raises FrozenAttributeError) without

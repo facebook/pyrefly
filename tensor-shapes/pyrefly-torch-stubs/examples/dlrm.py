@@ -48,14 +48,14 @@ Key patterns exercised:
 - Quantized embeddings for memory-efficient inference
 """
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torch.quantization
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
@@ -64,7 +64,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class BottomMLP[DenseDim, D](nn.Module):
+class BottomMLP[DenseDim: IntVar, D: IntVar](nn.Module):
     """Bottom MLP: maps dense features to embedding space.
 
     Architecture: DenseDim → 512 → 256 → D
@@ -72,17 +72,17 @@ class BottomMLP[DenseDim, D](nn.Module):
     (B, DenseDim) → (B, D)
     """
 
-    def __init__(self, dense_dim: Dim[DenseDim], embed_dim: Dim[D]) -> None:
+    def __init__(self, dense_dim: Int[DenseDim], embed_dim: Int[D]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(dense_dim, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, embed_dim)
 
-    def forward[B](self, x: Tensor[B, DenseDim]) -> Tensor[B, D]:
+    def forward[B: IntVar](self, x: Tensor[[B, DenseDim]]) -> Tensor[[B, D]]:
         h = nn.functional.relu(self.fc1(x))
-        assert_type(h, Tensor[B, 512])
+        assert_type(h, Tensor[[B, 512]])
         h = nn.functional.relu(self.fc2(h))
-        assert_type(h, Tensor[B, 256])
+        assert_type(h, Tensor[[B, 256]])
         return self.fc3(h)
 
 
@@ -91,7 +91,7 @@ class BottomMLP[DenseDim, D](nn.Module):
 # ============================================================================
 
 
-class TopMLP[TopIn](nn.Module):
+class TopMLP[TopIn: IntVar](nn.Module):
     """Top MLP: maps interaction features to prediction.
 
     Architecture: TopIn → 512 → 256 → 1
@@ -99,17 +99,17 @@ class TopMLP[TopIn](nn.Module):
     (B, TopIn) → (B, 1)
     """
 
-    def __init__(self, top_in: Dim[TopIn]) -> None:
+    def __init__(self, top_in: Int[TopIn]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(top_in, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, 1)
 
-    def forward[B](self, x: Tensor[B, TopIn]) -> Tensor[B, 1]:
+    def forward[B: IntVar](self, x: Tensor[[B, TopIn]]) -> Tensor[[B, 1]]:
         h = nn.functional.relu(self.fc1(x))
-        assert_type(h, Tensor[B, 512])
+        assert_type(h, Tensor[[B, 512]])
         h = nn.functional.relu(self.fc2(h))
-        assert_type(h, Tensor[B, 256])
+        assert_type(h, Tensor[[B, 256]])
         return torch.sigmoid(self.fc3(h))
 
 
@@ -118,7 +118,7 @@ class TopMLP[TopIn](nn.Module):
 # ============================================================================
 
 
-class DLRM[DenseDim, D](nn.Module):
+class DLRM[DenseDim: IntVar, D: IntVar](nn.Module):
     """DLRM recommendation model.
 
     Concrete configuration for shape tracking:
@@ -133,8 +133,8 @@ class DLRM[DenseDim, D](nn.Module):
 
     def __init__(
         self,
-        dense_dim: Dim[DenseDim],
-        embed_dim: Dim[D],
+        dense_dim: Int[DenseDim],
+        embed_dim: Int[D],
         vocab1: int,
         vocab2: int,
         vocab3: int,
@@ -150,59 +150,59 @@ class DLRM[DenseDim, D](nn.Module):
         # Top MLP: D + 6 interaction features
         self.top_mlp = TopMLP(embed_dim + 6)
 
-    def interact_features[B](
+    def interact_features[B: IntVar](
         self,
-        dense: Tensor[B, D],
-        sparse1: Tensor[B, D],
-        sparse2: Tensor[B, D],
-        sparse3: Tensor[B, D],
-    ) -> Tensor[B, D + 6]:
+        dense: Tensor[[B, D]],
+        sparse1: Tensor[[B, D]],
+        sparse2: Tensor[[B, D]],
+        sparse3: Tensor[[B, D]],
+    ) -> Tensor[[B, D + 6]]:
         """Feature interaction via dot product.
 
         Stack 4 vectors → (B, 4, D) → BMM with transpose → (B, 4, 4)
         → extract upper triangle (6 elements) → concat with dense → (B, D+6)
         """
         b = dense.size(0)
-        assert_type(b, Dim[B])
+        assert_type(b, Int[B])
         # Stack: (B, 4, D)
         T = torch.stack((dense, sparse1, sparse2, sparse3), dim=1)
-        assert_type(T, Tensor[B, 4, D])
+        assert_type(T, Tensor[[B, 4, D]])
         # Pairwise dot products: (B, 4, D) @ (B, D, 4) → (B, 4, 4)
         Z = torch.bmm(T, T.transpose(1, 2))
-        assert_type(Z, Tensor[B, 4, 4])
+        assert_type(Z, Tensor[[B, 4, 4]])
         # Extract upper triangle (without diagonal): 6 elements
         # Annotation fallback: torch.tensor() returns bare Tensor
-        li: Tensor[6] = torch.tensor([0, 0, 0, 1, 1, 2])
-        lj: Tensor[6] = torch.tensor([1, 2, 3, 2, 3, 3])
-        interactions = Z[:, li, lj]
-        assert_type(interactions, Tensor[B, 6])
+        li: Tensor[[6]] = torch.tensor([0, 0, 0, 1, 1, 2])
+        lj: Tensor[[6]] = torch.tensor([1, 2, 3, 2, 3, 3])
+        interactions: Tensor[[B, 6]] = Z[:, li, lj]
+        assert_type(interactions, Tensor[[B, 6]])
         # Concat dense features with interactions
         result = torch.cat((dense, interactions), dim=1)
-        assert_type(result, Tensor[B, D + 6])
+        assert_type(result, Tensor[[B, D + 6]])
         return result
 
-    def forward[B](
+    def forward[B: IntVar](
         self,
-        dense_x: Tensor[B, DenseDim],
+        dense_x: Tensor[[B, DenseDim]],
         idx1: Tensor,
         off1: Tensor,
         idx2: Tensor,
         off2: Tensor,
         idx3: Tensor,
         off3: Tensor,
-    ) -> Tensor[B, 1]:
+    ) -> Tensor[[B, 1]]:
         # Bottom MLP on dense features
         x = self.bot_mlp(dense_x)
-        assert_type(x, Tensor[B, D])
+        assert_type(x, Tensor[[B, D]])
         # Embedding lookups (EmbeddingBag returns unrefined Tensor)
         b = dense_x.size(0)
-        assert_type(b, Dim[B])
-        e1: Tensor[B, D] = self.emb1(idx1, off1)
-        e2: Tensor[B, D] = self.emb2(idx2, off2)
-        e3: Tensor[B, D] = self.emb3(idx3, off3)
+        assert_type(b, Int[B])
+        e1: Tensor[[B, D]] = self.emb1(idx1, off1)
+        e2: Tensor[[B, D]] = self.emb2(idx2, off2)
+        e3: Tensor[[B, D]] = self.emb3(idx3, off3)
         # Feature interaction
         z = self.interact_features(x, e1, e2, e3)
-        assert_type(z, Tensor[B, D + 6])
+        assert_type(z, Tensor[[B, D + 6]])
         # Top MLP
         return self.top_mlp(z)
 
@@ -212,7 +212,7 @@ class DLRM[DenseDim, D](nn.Module):
 # ============================================================================
 
 
-class QREmbeddingBag[D](nn.Module):
+class QREmbeddingBag[D: IntVar](nn.Module):
     """Quotient-Remainder embedding compression.
 
     Original: dlrm_s_pytorch.py QREmbeddingBag.
@@ -232,7 +232,7 @@ class QREmbeddingBag[D](nn.Module):
     def __init__(
         self,
         num_categories: int,
-        embedding_dim: Dim[D],
+        embedding_dim: Int[D],
         q_factor: int,
     ) -> None:
         super().__init__()
@@ -260,7 +260,7 @@ class QREmbeddingBag[D](nn.Module):
 # ============================================================================
 
 
-class PREmbeddingBag[D](nn.Module):
+class PREmbeddingBag[D: IntVar](nn.Module):
     """Pruned-Row embedding compression via hashing.
 
     Original: dlrm_s_pytorch.py PREmbeddingBag.
@@ -278,7 +278,7 @@ class PREmbeddingBag[D](nn.Module):
     def __init__(
         self,
         num_rows: int,
-        embedding_dim: Dim[D],
+        embedding_dim: Int[D],
     ) -> None:
         super().__init__()
         self.num_rows = num_rows
@@ -350,7 +350,7 @@ def gather_emb_results(
 # ============================================================================
 
 
-class QuantizedEmbeddingBag[D](nn.Module):
+class QuantizedEmbeddingBag[D: IntVar](nn.Module):
     """Quantized embedding lookup for inference.
 
     Original: dlrm_s_pytorch.py — quantization support.
@@ -365,7 +365,7 @@ class QuantizedEmbeddingBag[D](nn.Module):
     def __init__(
         self,
         num_embeddings: int,
-        embedding_dim: Dim[D],
+        embedding_dim: Int[D],
     ) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim
@@ -402,66 +402,66 @@ class QuantizedEmbeddingBag[D](nn.Module):
 def test_bottom_mlp():
     """Test bottom MLP: (B, 13) → (B, 64)."""
     mlp = BottomMLP(13, 64)
-    x: Tensor[4, 13] = torch.randn(4, 13)
+    x: Tensor[[4, 13]] = torch.randn(4, 13)
     out = mlp(x)
-    assert_type(out, Tensor[4, 64])
+    assert_type(out, Tensor[[4, 64]])
 
 
 def test_top_mlp():
     """Test top MLP: (B, 70) → (B, 1)."""
     mlp = TopMLP(70)
-    x: Tensor[4, 70] = torch.randn(4, 70)
+    x: Tensor[[4, 70]] = torch.randn(4, 70)
     out = mlp(x)
-    assert_type(out, Tensor[4, 1])
+    assert_type(out, Tensor[[4, 1]])
 
 
 def test_interact_features():
     """Test feature interaction: 4 vectors → (B, D+6)."""
     model = DLRM(13, 64, 100, 200, 300)
-    dense: Tensor[4, 64] = torch.randn(4, 64)
-    s1: Tensor[4, 64] = torch.randn(4, 64)
-    s2: Tensor[4, 64] = torch.randn(4, 64)
-    s3: Tensor[4, 64] = torch.randn(4, 64)
+    dense: Tensor[[4, 64]] = torch.randn(4, 64)
+    s1: Tensor[[4, 64]] = torch.randn(4, 64)
+    s2: Tensor[[4, 64]] = torch.randn(4, 64)
+    s3: Tensor[[4, 64]] = torch.randn(4, 64)
     out = model.interact_features(dense, s1, s2, s3)
-    assert_type(out, Tensor[4, 70])
+    assert_type(out, Tensor[[4, 70]])
 
 
 def test_dlrm():
     """Test full DLRM: dense + sparse → prediction."""
     model = DLRM(13, 64, 100, 200, 300)
-    dense: Tensor[32, 13] = torch.randn(32, 13)
+    dense: Tensor[[32, 13]] = torch.randn(32, 13)
     # Sparse inputs: indices and offsets for each table
     idx1 = torch.randint(0, 100, (64,))
-    assert_type(idx1, Tensor[64])
+    assert_type(idx1, Tensor[[64]])
     off1 = torch.arange(0, 65, 2)
-    assert_type(off1, Tensor[32])
+    assert_type(off1, Tensor[[32]])
     idx2 = torch.randint(0, 200, (96,))
-    assert_type(idx2, Tensor[96])
+    assert_type(idx2, Tensor[[96]])
     off2 = torch.arange(0, 97, 3)
-    assert_type(off2, Tensor[32])
+    assert_type(off2, Tensor[[32]])
     idx3 = torch.randint(0, 300, (64,))
-    assert_type(idx3, Tensor[64])
+    assert_type(idx3, Tensor[[64]])
     off3 = torch.arange(0, 65, 2)
-    assert_type(off3, Tensor[32])
+    assert_type(off3, Tensor[[32]])
     out = model(dense, idx1, off1, idx2, off2, idx3, off3)
-    assert_type(out, Tensor[32, 1])
+    assert_type(out, Tensor[[32, 1]])
 
 
 def test_dlrm_different_dims():
     """Test DLRM with different dense/embed dimensions."""
     model = DLRM(26, 32, 500, 1000, 2000)
-    dense: Tensor[8, 26] = torch.randn(8, 26)
+    dense: Tensor[[8, 26]] = torch.randn(8, 26)
     idx1 = torch.randint(0, 500, (16,))
     off1 = torch.arange(0, 17, 2)
-    assert_type(off1, Tensor[8])
+    assert_type(off1, Tensor[[8]])
     idx2 = torch.randint(0, 1000, (24,))
     off2 = torch.arange(0, 25, 3)
-    assert_type(off2, Tensor[8])
+    assert_type(off2, Tensor[[8]])
     idx3 = torch.randint(0, 2000, (16,))
     off3 = torch.arange(0, 17, 2)
-    assert_type(off3, Tensor[8])
+    assert_type(off3, Tensor[[8]])
     out = model(dense, idx1, off1, idx2, off2, idx3, off3)
-    assert_type(out, Tensor[8, 1])
+    assert_type(out, Tensor[[8, 1]])
 
 
 def test_qr_embedding_bag():
@@ -469,7 +469,7 @@ def test_qr_embedding_bag():
     qr_emb = QREmbeddingBag(10000, 64, q_factor=50)
     indices = torch.randint(0, 10000, (32,))
     offsets = torch.arange(0, 33, 4)
-    assert_type(offsets, Tensor[8])
+    assert_type(offsets, Tensor[[8]])
     _out = qr_emb(indices, offsets)
 
 
@@ -478,7 +478,7 @@ def test_pr_embedding_bag():
     pr_emb = PREmbeddingBag(1000, 64)
     indices = torch.randint(0, 50000, (32,))
     offsets = torch.arange(0, 33, 4)
-    assert_type(offsets, Tensor[8])
+    assert_type(offsets, Tensor[[8]])
     _out = pr_emb(indices, offsets)
 
 
@@ -488,5 +488,5 @@ def test_quantized_embedding_bag():
     q_emb.quantize()
     indices = torch.randint(0, 10000, (32,))
     offsets = torch.arange(0, 33, 4)
-    assert_type(offsets, Tensor[8])
+    assert_type(offsets, Tensor[[8]])
     _out = q_emb(indices, offsets)

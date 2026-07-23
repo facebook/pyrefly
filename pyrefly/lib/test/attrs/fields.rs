@@ -218,8 +218,8 @@ C(5)  # E: not assignable to parameter `s` with type `list[int]`
 "#,
 );
 
-// A bare (unsubscripted) generic converter still works via the class-object path: `list` promotes
-// to `list[Unknown]`, so the `__init__` parameter is `Iterable[Unknown]`.
+// A bare (unsubscripted) generic converter takes its element type from the field annotation:
+// `list` for a `list[int]` field gives an `Iterable[int]` param.
 attrs_testcase!(
     test_attrs_field_bare_generic_converter,
     r#"
@@ -229,7 +229,140 @@ from attrs import define, field
 class C:
     xs: list[int] = field(converter=list)
 
-C(5)  # E: not assignable to parameter `xs` with type `Iterable[Unknown]`
+C(5)  # E: not assignable to parameter `xs` with type `Iterable[int]`
+"#,
+);
+
+// `tuple`'s constructor is `(Iterable[_T]) -> tuple[_T, ...]`. Solving that output against the
+// `Sequence[int]` annotation gives `_T = int`, so the `__init__` param is the converter's input,
+// `Iterable[int]`, while the attribute keeps the declared `Sequence[int]`.
+attrs_testcase!(
+    test_attrs_field_bare_tuple_converter_passthrough,
+    r#"
+from typing import Sequence, assert_type, reveal_type
+from attrs import define, field
+
+@define
+class C:
+    a: Sequence[int] = field(converter=tuple)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, a: Iterable[int]) -> None
+assert_type(C([1, 2, 3]).a, Sequence[int])
+C(["1", 2, 3])  # E: not assignable to parameter `a` with type `Iterable[int]`
+"#,
+);
+
+// When the converter's output cannot satisfy the annotation (`tuple[_T, ...]` is never an `int`),
+// there is no element type to solve, so the `__init__` param falls back to `Iterable[Unknown]`.
+attrs_testcase!(
+    test_attrs_field_bare_converter_incompatible_annotation,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class C:
+    a: int = field(converter=tuple)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, a: Iterable[Unknown]) -> None
+"#,
+);
+
+// The solved converter input type carries over to a field inherited from a base class.
+attrs_testcase!(
+    test_attrs_field_bare_converter_inherited,
+    r#"
+from typing import Sequence
+from attrs import define, field
+
+@define
+class Base:
+    a: Sequence[int] = field(converter=tuple)
+
+@define
+class Sub(Base):
+    pass
+
+Sub(["1", 2, 3])  # E: not assignable to parameter `a` with type `Iterable[int]`
+"#,
+);
+
+// A generic function converter (`def identity[T](x: T) -> T`) is type-preserving, so solving its
+// return against the `int` annotation gives an `__init__` param of `int` rather than a leaked `T`.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter,
+    r#"
+from typing import assert_type, reveal_type
+from attrs import define, field
+
+def identity[T](x: T) -> T:
+    return x
+
+@define
+class C:
+    x: int = field(converter=identity)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int) -> None
+assert_type(C(42).x, int)
+C("nope")  # E: not assignable to parameter `x`
+"#,
+);
+
+// A stdlib generic function converter is solved the same way, so its input is the field type
+// instead of a leaked type variable.
+attrs_testcase!(
+    test_attrs_field_deepcopy_converter,
+    r#"
+import copy
+from attrs import define, field
+
+@define
+class C:
+    x: int = field(converter=copy.deepcopy)
+
+C(42)     # OK
+C("no")   # E: not assignable to parameter `x`
+"#,
+);
+
+// A type argument is substituted into nested positions of the converter input, so a
+// `(list[T]) -> list[T]` converter against a `list[int]` field gives a `list[int]` param.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter_nested_typevar,
+    r#"
+from attrs import define, field
+
+def clone_all[T](xs: list[T]) -> list[T]:
+    return list(xs)
+
+@define
+class C:
+    xs: list[int] = field(converter=clone_all)
+
+C([1, 2])   # OK
+C(["a"])    # E: not assignable to parameter `xs`
+"#,
+);
+
+// The solved generic-function converter input carries over to a field inherited from a base class.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter_inherited,
+    r#"
+from attrs import define, field
+
+def identity[T](x: T) -> T:
+    return x
+
+@define
+class Base:
+    x: int = field(converter=identity)
+
+@define
+class Sub(Base):
+    pass
+
+Sub(5)       # OK
+Sub("nope")  # E: not assignable to parameter `x`
 "#,
 );
 
@@ -247,6 +380,84 @@ class C:
 
 C(None)     # OK: optional converter accepts None
 C([1, 2])   # E: not assignable to parameter `x`
+"#,
+);
+
+// `attr.converters.pipe(c1, ...)` runs `c1` first, so the `__init__` param takes `c1`'s input type
+// (here `int`'s) while the attribute keeps the declared output type. An argument `c1` can't accept
+// is rejected, even though a later converter (`str`) could.
+attrs_testcase!(
+    test_attrs_field_converters_pipe,
+    r#"
+from typing import assert_type
+from attrs import define, field
+import attr
+
+@define
+class C:
+    x: str = field(converter=attr.converters.pipe(int, str))
+
+assert_type(C(3.4).x, str)
+C("09")  # OK
+C({})    # E: not assignable to parameter `x`
+"#,
+);
+
+// In a `pipe`, the first converter's output feeds the next converter, not the field, so a bare
+// generic first converter is NOT solved against the field annotation: `tuple` here stays
+// `Iterable[Unknown]` rather than being (wrongly) solved to `Iterable[bool]` from `Sequence[bool]`.
+attrs_testcase!(
+    test_attrs_field_pipe_bare_generic_first_not_solved_from_annotation,
+    r#"
+from typing import Sequence, reveal_type
+from attrs import define, field
+import attr
+
+def widen(xs: tuple[int, ...]) -> Sequence[bool]: ...
+
+@define
+class C:
+    a: Sequence[bool] = field(converter=attr.converters.pipe(tuple, widen))
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, a: Iterable[Unknown]) -> None
+"#,
+);
+
+// `attr.converters.default_if_none(d)` replaces `None` with `d` and passes other values through, so
+// the `__init__` param is the field's declared type unioned with `None`, not a useless `Any`.
+attrs_testcase!(
+    test_attrs_field_converters_default_if_none,
+    r#"
+from typing import assert_type, reveal_type
+from attrs import define, field
+import attr
+
+@define
+class C:
+    x: int = field(converter=attr.converters.default_if_none(42))
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int | None) -> None
+assert_type(C(1).x, int)
+C(None)  # OK: None becomes the default
+C({})    # E: not assignable to parameter `x`
+"#,
+);
+
+// The `factory=` form behaves the same: non-`None` values pass through, so the input stays
+// `field type | None`.
+attrs_testcase!(
+    test_attrs_field_converters_default_if_none_factory,
+    r#"
+from attrs import define, field
+import attr
+
+@define
+class C:
+    xs: list[int] = field(converter=attr.converters.default_if_none(factory=list))
+
+C(None)    # OK
+C([1, 2])  # OK
+C("nope")  # E: not assignable to parameter `xs`
 "#,
 );
 
@@ -348,6 +559,186 @@ class C:
 assert_type(C("5").x, int)
 C(b"10")
 C([1, 2])  # E: not assignable to parameter `x`
+"#,
+);
+
+// A `@<field>.converter` decorator (attrs 26.2.0+) supplies the converter. attrs invokes it as
+// `converter(self, field, value)`, so the `value` parameter's type becomes the `__init__` param type
+// while the attribute keeps its declared output type.
+attrs_testcase!(
+    test_attrs_field_converter_decorator,
+    r#"
+from typing import assert_type, reveal_type
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value: str) -> int:
+        return int(value)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: str) -> None
+assert_type(C("5").x, int)
+C(5)  # E: not assignable to parameter `x`
+"#,
+);
+
+// A union `value` type flows to the `__init__` parameter, accepting either member and rejecting
+// anything else. (The runtime `int(...)` may still raise, but that is not a type error.)
+attrs_testcase!(
+    test_attrs_field_converter_decorator_union_input,
+    r#"
+from attrs import define, field
+
+@define
+class DecoratorConverter:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value: str | float) -> int:
+        return int(value)
+
+DecoratorConverter("foo")  # OK
+DecoratorConverter(1.5)    # OK
+DecoratorConverter([])     # E: not assignable to parameter `x`
+"#,
+);
+
+// An unannotated `value` parameter makes the `__init__` parameter `Any`, so any argument is accepted.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_unannotated_value,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value) -> int:
+        return int(value)
+
+C("anything")  # OK
+C(123)         # OK
+"#,
+);
+
+// attrs always calls the decorated converter as `converter(self, field, value)`. A method missing the
+// `field` parameter can never be called, so its signature is rejected (this is the naive 2-arg form).
+attrs_testcase!(
+    test_attrs_field_converter_decorator_too_few_params,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, value: str) -> int:  # E: The `@x.converter` method must accept `(self, field, value)`, but it accepts too few positional parameters
+        return int(value)
+"#,
+);
+
+// A converter with a required parameter beyond `(self, field, value)` can never be called by attrs.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_too_many_params,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value: str, extra: int) -> int:  # E: The `@x.converter` method must accept `(self, field, value)`, but it has required parameters that attrs does not pass
+        return int(value)
+"#,
+);
+
+// attrs passes converter arguments positionally, so a required keyword-only parameter can never be
+// filled.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_required_kwonly,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value: str, *, mode: int) -> int:  # E: The `@x.converter` method must accept `(self, field, value)`, but it has a required keyword-only parameter that attrs cannot pass
+        return int(value)
+"#,
+);
+
+// An explicit `converter=` composes before a `@<field>.converter` decorator (attrs `pipe`), so the
+// keyword converter's input type is what `__init__` accepts.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_kwarg_takes_precedence,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+def to_int(x: bytes) -> int:
+    return 0
+
+@define
+class C:
+    x: int = field(converter=to_int)
+
+    @x.converter
+    def _extra(self, attribute, value: str) -> int:
+        return 0
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: bytes) -> None
+"#,
+);
+
+// Multiple `@<field>.converter` methods compose via `pipe` in definition order, so the first one's
+// input type is what `__init__` accepts.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_first_wins,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _first(self, attribute, value: str) -> int:
+        return 0
+
+    @x.converter
+    def _second(self, attribute, value: bytes) -> int:
+        return 0
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: str) -> None
+"#,
+);
+
+// A `default=` feeds the converter, so it is checked against the converter's input type (`str`), not
+// the field's declared output type, and the field stays optional.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_with_default,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field(default="5")
+
+    @x.converter
+    def _to_int(self, attribute, value: str) -> int:
+        return int(value)
+
+C()     # OK
+C("9")  # OK
 "#,
 );
 
@@ -836,6 +1227,131 @@ class C:
 
 reveal_type(C.__init__)  # E: revealed type: (self: C, x: int = ...) -> None
 C(1)  # OK
+"#,
+);
+
+// A string `type=` is a forward reference: it resolves to the real type (here `list[int]`) for the
+// synthesized parameter, instead of being rejected as a `Literal[str]` value.
+attrs_testcase!(
+    test_attrs_legacy_attr_ib_type_string_forward_ref,
+    r#"
+import attr
+from typing import reveal_type
+
+@attr.s
+class C:
+    x = attr.ib(type='list[int]')
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: list[int]) -> None
+C([1])  # OK
+C(0)    # E: Argument `Literal[0]` is not assignable to parameter `x`
+"#,
+);
+
+// A forward reference to a class defined later in the module resolves too, since the string is
+// bound as a type during binding rather than evaluated as a value.
+attrs_testcase!(
+    test_attrs_legacy_attr_ib_type_string_later_class,
+    r#"
+import attr
+from typing import reveal_type
+
+@attr.s
+class C:
+    other = attr.ib(type='D')
+
+class D:
+    pass
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, other: D) -> None
+"#,
+);
+
+// A bare builtin name string resolves like an annotation, so construction is type-checked.
+attrs_testcase!(
+    test_attrs_attrib_type_string_builtin,
+    r#"
+import attr
+
+@attr.s
+class C:
+    x = attr.ib(type='int')
+
+attr.fields(C)  # keep `attr` used
+C(5)            # OK
+C("bad")        # E: Argument `Literal['bad']` is not assignable to parameter `x`
+"#,
+);
+
+// A dotted/qualified name string resolves through the module it names.
+attrs_testcase!(
+    test_attrs_attrib_type_string_qualified,
+    r#"
+from typing import assert_type
+import typing
+import attr
+
+@attr.s
+class C:
+    x = attr.ib(type='typing.List[int]')
+
+assert_type(C([1]).x, list[int])
+"#,
+);
+
+// A union written as a string resolves to the union type.
+attrs_testcase!(
+    test_attrs_attrib_type_string_union,
+    r#"
+from typing import assert_type
+import attr
+
+@attr.s
+class C:
+    x = attr.ib(type='int | None')
+
+assert_type(C(None).x, int | None)
+assert_type(C(5).x, int | None)
+"#,
+);
+
+// A string naming the enclosing class resolves (self-referential forward reference).
+attrs_testcase!(
+    test_attrs_attrib_type_string_self_reference,
+    r#"
+from typing import assert_type
+import attr
+
+@attr.s
+class C:
+    nxt = attr.ib(type='C | None')
+
+assert_type(C(None).nxt, "C | None")
+"#,
+);
+
+// Unlike legacy `attr.ib` (whose `type=` is typed `object`), next-gen `field` types `type=` as a
+// real `type[...]`, so a forward-reference string is rejected by the stub rather than resolved.
+attrs_testcase!(
+    test_attrs_field_type_string_rejected_by_stub,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x = field(type='str')  # E: Argument `Literal['str']` is not assignable to parameter `type`
+"#,
+);
+
+// An unresolvable name in the string is reported, like any bad forward reference.
+attrs_testcase!(
+    test_attrs_attrib_type_string_unknown_name,
+    r#"
+import attr
+
+@attr.s
+class C:
+    x = attr.ib(type='Nonexistent')  # E: Could not find name `Nonexistent`
 "#,
 );
 
@@ -1464,5 +1980,413 @@ class C:
 c = C(1, 2)
 c.x = 5  # E: Cannot set field `x`
 c.y = 5  # OK
+"#,
+);
+
+// A hook list bound to a variable still freezes (detection is type-based, not syntactic). The
+// separate overload error is `list` invariance on `on_setattr`, orthogonal to read-only detection.
+attrs_testcase!(
+    test_attrs_field_on_setattr_frozen_via_list_variable,
+    r#"
+from attr import define, field, setters
+
+hooks = [setters.frozen]
+
+@define
+class C:
+    x: int = field(on_setattr=hooks)  # E: No matching overload found for function `attrs.field`
+
+C(1).x = 5  # E: Cannot set field `x`
+"#,
+);
+
+// A list with several hooks infers a `list[<union of hook types>]`; `frozen` anywhere in the union
+// makes the field read-only (the union branch of the type walk).
+attrs_testcase!(
+    test_attrs_field_on_setattr_frozen_via_list_variable_union,
+    r#"
+from attr import define, field, setters
+
+hooks = [setters.validate, setters.frozen]
+
+@define
+class C:
+    x: int = field(on_setattr=hooks)  # E: No matching overload found for function `attrs.field`
+
+C(1).x = 5  # E: Cannot set field `x`
+"#,
+);
+
+// Negative: a variable holding only non-frozen hooks leaves the field writable.
+attrs_testcase!(
+    test_attrs_field_on_setattr_non_frozen_variable_writable,
+    r#"
+from attr import define, field, setters
+
+hooks = [setters.validate]
+
+@define
+class C:
+    x: int = field(on_setattr=hooks)  # E: No matching overload found for function `attrs.field`
+
+C(1).x = 5  # OK: no `frozen` hook
+"#,
+);
+
+// A single `frozen` hook bound to a variable freezes the field with no overload noise (a lone hook
+// is a plain callable the stub accepts, unlike an invariant `list`/`tuple` of hooks).
+attrs_testcase!(
+    test_attrs_field_on_setattr_frozen_single_hook_variable,
+    r#"
+from attr import define, field, setters
+
+hook = setters.frozen
+
+@define
+class C:
+    x: int = field(on_setattr=hook)
+
+C(1).x = 5  # E: Cannot set field `x`
+"#,
+);
+
+// Negative: a single non-frozen hook bound to a variable leaves the field writable.
+attrs_testcase!(
+    test_attrs_field_on_setattr_non_frozen_single_hook_variable,
+    r#"
+from attr import define, field, setters
+
+hook = setters.validate
+
+@define
+class C:
+    x: int = field(on_setattr=hook)
+
+C(1).x = 5  # OK: not the `frozen` hook
+"#,
+);
+
+// Read-only-ness from a variable hook is per-field: a sibling without `on_setattr` stays writable.
+attrs_testcase!(
+    test_attrs_field_on_setattr_frozen_variable_is_per_field,
+    r#"
+from attr import define, field, setters
+
+frozen_hook = setters.frozen
+
+@define
+class C:
+    x: int = field(on_setattr=frozen_hook)
+    y: int = field()
+
+c = C(1, 2)
+c.x = 5  # E: Cannot set field `x`
+c.y = 5  # OK
+"#,
+);
+
+// Tuple-unpacked assignment of parallel specifiers declares one field per name, just as if each
+// were written on its own line (so `type=`, `default=`, etc. all apply per element).
+attrs_testcase!(
+    test_attrs_tuple_unpacked_specifiers,
+    r#"
+from typing import reveal_type
+import attr
+
+@attr.s
+class A:
+    x, y, z = attr.ib(), attr.ib(type=int), attr.ib(default=17)
+
+reveal_type(A.__init__)  # E: revealed type: (self: A, x: Any, y: int, z: int = ...) -> None
+A(1, 2, 3)  # OK
+"#,
+);
+
+// Only the specifier elements become fields; a plain value bound alongside is an ordinary class var.
+attrs_testcase!(
+    test_attrs_tuple_unpacked_mixed,
+    r#"
+from typing import reveal_type
+import attr
+
+@attr.s
+class A:
+    x, y = attr.ib(), 5
+
+reveal_type(A.__init__)  # E: revealed type: (self: A, x: Any) -> None
+"#,
+);
+
+// Tuple-unpacked specifiers in a base class are inherited like any other attrs fields.
+attrs_testcase!(
+    test_attrs_tuple_unpacked_specifiers_inherited,
+    r#"
+from typing import reveal_type
+import attr
+
+@attr.s
+class Base:
+    x, y = attr.ib(), attr.ib(type=int)
+
+@attr.s
+class Sub(Base):
+    z = attr.ib()
+
+reveal_type(Sub.__init__)  # E: revealed type: (self: Sub, x: Any, y: int, z: Any) -> None
+"#,
+);
+
+// A string `type=` forward reference resolves for every chained name, just like a lone specifier.
+attrs_testcase!(
+    test_attrs_chained_specifier_type_forward_ref,
+    r#"
+import attr
+from typing import reveal_type
+
+@attr.s
+class C:
+    p = q = attr.ib(type='D')
+
+class D:
+    pass
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, p: D, q: D) -> None
+"#,
+);
+
+// One specifier chained to several names declares a field per name, matching runtime attrs.
+attrs_testcase!(
+    test_attrs_chained_specifier_makes_one_field_per_name,
+    r#"
+from typing import reveal_type
+import attr
+
+@attr.s
+class B:
+    p = q = attr.ib()
+
+reveal_type(B.__init__)  # E: revealed type: (self: B, p: Any, q: Any) -> None
+"#,
+);
+
+// A plain (non-attrs) tuple assignment is unaffected: both names are ordinary class variables.
+attrs_testcase!(
+    test_attrs_non_specifier_unpacking_unaffected,
+    r#"
+from typing import assert_type
+import attr
+
+@attr.s
+class A:
+    a, b = 1, 2
+    x = attr.ib()
+
+assert_type(A.a, int)
+assert_type(A.b, int)
+"#,
+);
+
+// A list-literal target unpacks the same way a tuple target does.
+attrs_testcase!(
+    test_attrs_list_target_unpacked_specifiers,
+    r#"
+import attr
+
+@attr.s
+class A:
+    [x, y] = attr.ib(), attr.ib()
+
+A(1, 2)  # OK
+A(1)     # E: Missing argument `y`
+"#,
+);
+
+// The right-hand side may itself be a list literal of specifiers.
+attrs_testcase!(
+    test_attrs_unpacked_specifiers_list_rhs,
+    r#"
+import attr
+
+@attr.s
+class A:
+    x, y = [attr.ib(), attr.ib()]
+
+A(1, 2)     # OK
+A(1, 2, 3)  # E: Expected 2 positional arguments
+"#,
+);
+
+// Next-gen `field()` works in an unpack too, including a per-element `default=`.
+attrs_testcase!(
+    test_attrs_unpacked_field_specifiers_with_default,
+    r#"
+from attrs import define, field
+
+@define
+class A:
+    x, y = field(), field(default=0)
+
+A(1)     # OK: y has a default
+A(1, 2)  # OK
+"#,
+);
+
+// Python evaluates the whole RHS tuple before binding any target name, so a later RHS element
+// that mentions an earlier target sees the *pre-assignment* binding (the module-level `x`), not
+// the field created on this same line.
+attrs_testcase!(
+    test_attrs_unpacked_specifier_rhs_evaluation_order,
+    r#"
+from typing import reveal_type
+import attr
+
+x = "outer"
+
+@attr.s
+class A:
+    x, y = attr.ib(), x
+
+reveal_type(A.y)  # E: revealed type: str
+"#,
+);
+
+// The same ordering applies inside a specifier's arguments: `default=x` refers to the outer `x`,
+// not the field being created on this line.
+attrs_testcase!(
+    test_attrs_unpacked_specifier_arg_evaluation_order,
+    r#"
+from typing import reveal_type
+import attr
+
+x = "outer"
+
+@attr.s
+class A:
+    x, y = attr.ib(), attr.ib(default=x)
+
+reveal_type(A.__init__)  # E: revealed type: (self: A, x: Any, y: str = ...) -> None
+"#,
+);
+
+// The next-gen `field()` specifier chains the same way.
+attrs_testcase!(
+    test_attrs_chained_field_specifier_makes_one_field_per_name,
+    r#"
+from attrs import define, field
+
+@define
+class B:
+    p = q = field()
+
+B(1, 2)  # OK
+B(1)     # E: Missing argument `q`
+"#,
+);
+
+// A chained specifier's arguments apply to every name, so `default=` makes each field optional.
+attrs_testcase!(
+    test_attrs_chained_specifier_with_default,
+    r#"
+import attr
+
+@attr.s
+class A:
+    p = q = attr.ib(default=0)
+
+A()      # OK: both have a default
+A(1, 2)  # OK
+"#,
+);
+
+// Chained-specifier fields in a base class are inherited like any other attrs fields.
+attrs_testcase!(
+    test_attrs_chained_specifier_inherited,
+    r#"
+from typing import reveal_type
+import attr
+
+@attr.s
+class B:
+    p = q = attr.ib()
+
+@attr.s
+class C(B):
+    x = attr.ib()
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, p: Any, q: Any, x: Any) -> None
+"#,
+);
+
+// In a class that is not attrs-decorated, a chained `attr.ib()` is ordinary Python: no fields.
+attrs_testcase!(
+    test_attrs_chained_specifier_in_non_attrs_class_ok,
+    r#"
+import attr
+
+class C:
+    p = q = attr.ib()  # OK: C is not an attrs class
+"#,
+);
+
+// A stdlib `@dataclass` is not attrs, so an unannotated chained `attr.ib()` declares no fields.
+attrs_testcase!(
+    test_attrs_chained_specifier_in_stdlib_dataclass_ok,
+    r#"
+from dataclasses import dataclass
+import attr
+
+@dataclass
+class C:
+    p = q = attr.ib()  # OK: C is a stdlib dataclass, not an attrs class
+"#,
+);
+
+// In a non-attrs dataclass the names are ordinary annotated fields; the chained `attr.ib()` is
+// just their default value.
+attrs_testcase!(
+    test_attrs_chained_specifier_non_attrs_dataclass_fields,
+    r#"
+from typing import reveal_type
+from dataclasses import dataclass
+import attr
+
+@dataclass
+class C:
+    p: int
+    q: int
+    p = q = attr.ib()
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, p: int = ..., q: int = ...) -> None
+"#,
+);
+
+// An arity mismatch is not the specifier pattern, so it falls back to ordinary unpacking (which
+// reports the size mismatch) rather than the per-name field treatment.
+attrs_testcase!(
+    test_attrs_unpacked_specifiers_arity_mismatch_falls_back,
+    r#"
+import attr
+
+@attr.s
+class A:
+    x, y = attr.ib(), attr.ib(), attr.ib()  # E: Cannot unpack
+"#,
+);
+
+// A starred RHS element is not the positional specifier pattern, so it falls back to ordinary
+// unpacking rather than binding a name to the `*` node.
+attrs_testcase!(
+    test_attrs_unpacked_specifiers_starred_rhs_falls_back,
+    r#"
+from typing import reveal_type
+import attr
+
+rest = (attr.ib(),)
+
+@attr.s
+class A:
+    x, y = attr.ib(), *rest
+
+reveal_type(A.__init__)  # E: revealed type: (self: A) -> None
 "#,
 );

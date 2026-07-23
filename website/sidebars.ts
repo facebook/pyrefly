@@ -82,6 +82,16 @@ let docsSidebar = [
             },
             {
                 type: 'doc' as const,
+                id: 'dataframes',
+                label: 'DataFrames (polars, pandas)',
+            },
+            {
+                type: 'doc' as const,
+                id: 'attrs',
+                label: 'attrs Support',
+            },
+            {
+                type: 'doc' as const,
                 id: 'pytest',
                 label: 'Pytest Support',
             },
@@ -113,6 +123,11 @@ let docsSidebar = [
         type: 'doc' as const,
         id: 'import-resolution',
         label: 'Import Resolution',
+    },
+    {
+        type: 'doc' as const,
+        id: 'bazel',
+        label: 'Bazel Integration',
     },
     {
         type: 'category' as const,
