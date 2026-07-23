@@ -32,6 +32,7 @@ use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
+use crate::types::types::AnnotatedMetadata;
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
@@ -575,9 +576,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
             SpecialForm::Annotated if arguments.len() > 1 => {
                 let inner = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
-                let metadata: Vec<Type> = arguments[1..]
+                let metadata: Vec<AnnotatedMetadata> = arguments[1..]
                     .iter()
-                    .map(|e| self.expr_infer(e, &self.error_swallower()))
+                    .map(|e| {
+                        let errors = self.error_swallower();
+                        AnnotatedMetadata {
+                            ty: self.expr_infer(e, &errors),
+                            callee_name: e.as_call_expr().and_then(|call| match &*call.func {
+                                Expr::Name(name) => Some(name.id.clone()),
+                                Expr::Attribute(attribute) => Some(attribute.attr.id.clone()),
+                                _ => None,
+                            }),
+                            first_arg: e
+                                .as_call_expr()
+                                .and_then(|call| call.arguments.args.first())
+                                .map(|arg| Box::new(self.expr_infer(arg, &errors))),
+                        }
+                    })
                     .collect();
                 Type::Annotated(Box::new(inner), metadata.into_boxed_slice())
             }

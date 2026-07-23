@@ -267,6 +267,10 @@ impl ModuleName {
         Self::from_str("pydantic.alias_generators")
     }
 
+    pub fn pydantic_functional_validators() -> Self {
+        Self::from_str("pydantic.functional_validators")
+    }
+
     pub fn django_models_enums() -> Self {
         Self::from_str("django.db.models.enums")
     }

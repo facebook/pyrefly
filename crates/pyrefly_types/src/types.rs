@@ -98,6 +98,17 @@ impl Var {
     }
 }
 
+/// Semantic information retained for an item in `Annotated[T, ...]`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, TypeEq)]
+pub struct AnnotatedMetadata {
+    /// The inferred type of the metadata value.
+    pub ty: Type,
+    /// The callee's final name when the metadata is a call.
+    pub callee_name: Option<Name>,
+    /// The inferred type of the first positional argument when the metadata is a call.
+    pub first_arg: Option<Box<Type>>,
+}
+
 #[derive(PartialEq, Eq)]
 pub enum TParamsSource {
     Class,
@@ -850,7 +861,7 @@ pub enum Type {
     /// This is transparent when resolving annotations, but is not callable and
     /// cannot be assigned to `type[T]`.
     /// The second field carries the metadata items (the `...` in `Annotated[T, ...]`).
-    Annotated(Box<Type>, Box<[Type]>),
+    Annotated(Box<Type>, Box<[AnnotatedMetadata]>),
     Unpack(Box<Type>),
     TypeVar(TypeVar),
     ParamSpec(ParamSpec),
