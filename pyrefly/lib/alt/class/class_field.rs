@@ -1371,9 +1371,8 @@ fn has_any_abstract(ty: &Type) -> bool {
 
 /// Determine if a class field should be treated as a method (getting method binding behavior). It is if:
 /// - It's a function type (including staticmethods), initialized on the class body
-/// - or, it's a Callable initialized on the class body and satisfying some special case:
-///   - it's marked as a ClassVar
-///   - it's assigned to a dunder name like `__add__`
+/// - or, it's a Callable initialized on the class body, unless it carries an explicit
+///   non-`ClassVar` annotation (see the Callable handling below)
 /// - or, it's a union where ANY element satisfies the above rules
 ///
 /// Note: staticmethods and union types that have at least one method type are included.
@@ -1396,16 +1395,22 @@ fn is_method(
         return true;
     }
 
-    // Special cases where Callable is assumed to be a method
+    // A `Callable` stored on the class body behaves like a method (binding `self`), mirroring
+    // the runtime, where a plain function object is a descriptor. This matches mypy & pyright:
+    // - an inferred assignment (no explicit annotation) binds `self`, so factory-produced
+    //   methods like `isNull = _unary_op(...)` are usable without passing `self`;
+    // - an explicit `x: Callable[...]` annotation is a data attribute, with no binding;
+    // - an explicit `x: ClassVar[Callable[...]]` is treated as a method again;
+    // - a dunder name (e.g. `__add__`) is always a method regardless of annotation.
+    // See https://discuss.python.org/t/when-should-we-assume-callable-types-are-method-descriptors/92938
     if matches!(ty, Type::Callable(_)) {
         if is_dunder(name.as_str()) {
             return true;
         }
-        if annotation
-            .is_some_and(|ann| ann.is_class_var() && matches!(ann.get_type(), Type::Callable(_)))
-        {
-            return true;
-        }
+        return match annotation {
+            None => true,
+            Some(ann) => ann.is_class_var() && matches!(ann.get_type(), Type::Callable(_)),
+        };
     }
 
     false
