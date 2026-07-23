@@ -2246,3 +2246,60 @@ from pkg import my_typing as mt
 x: mt.Annotated[int, "metadata"] = 5
 "#,
 );
+
+fn env_implicit_reexport() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+a: int = 1
+b: int = 2
+c: int = 3
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import a
+from foo import b as b
+from foo import c
+d: int = 4
+__all__ = ["c"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport,
+    env_implicit_reexport().enable_implicit_reexport_error(),
+    r#"
+from bar import a  # E: `a` is not exported from module `bar`
+from bar import b
+from bar import c
+from bar import d
+"#,
+);
+
+testcase!(
+    test_implicit_reexport_off_by_default,
+    env_implicit_reexport(),
+    r#"
+from bar import a
+"#,
+);
+
+fn env_implicit_reexport_wildcard() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add("foo", "a: int = 1");
+    t.add("bar", "from foo import *");
+    t
+}
+
+testcase!(
+    test_implicit_reexport_wildcard_ok,
+    env_implicit_reexport_wildcard().enable_implicit_reexport_error(),
+    r#"
+from bar import a
+"#,
+);

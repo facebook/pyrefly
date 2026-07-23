@@ -193,6 +193,12 @@ pub enum ErrorKind {
     ImplicitAnyTypeArgument,
     /// Usage of a module that was not actually imported, but does exist.
     ImplicitImport,
+    /// Importing a name from a module that only made it available via a plain
+    /// `import`/`from ... import ...` (an implicit re-export). Per the typing
+    /// spec such names are not part of the module's public interface; they are
+    /// only re-exported when redundantly aliased (`from x import y as y`),
+    /// listed in `__all__`, or brought in via a wildcard import.
+    ImplicitReexport,
     /// An attribute was implicitly defined by assignment to `self` in a method that we
     /// do not recognize as always executing (we recognize constructors and some test setup
     /// methods).
@@ -519,6 +525,7 @@ impl ErrorKind {
             ErrorKind::ImplicitAnyParameter => Severity::Ignore,
             ErrorKind::ImplicitAnyTypeArgument => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,
+            ErrorKind::ImplicitReexport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::IncompatibleComparison => Severity::Ignore,
             ErrorKind::InvalidAbstractMethod => Severity::Ignore,

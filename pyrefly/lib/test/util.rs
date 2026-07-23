@@ -134,6 +134,7 @@ pub struct TestEnv {
     implicit_any_lambda_error: bool,
     invalid_abstract_method_error: bool,
     unknown_variable_type_error: bool,
+    implicit_reexport_error: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
@@ -181,6 +182,7 @@ impl TestEnv {
             implicit_any_lambda_error: false,
             invalid_abstract_method_error: false,
             unknown_variable_type_error: false,
+            implicit_reexport_error: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             run_require: Require::Everything,
@@ -413,6 +415,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_implicit_reexport_error(mut self) -> Self {
+        self.implicit_reexport_error = true;
+        self
+    }
+
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
         self
@@ -554,6 +561,9 @@ impl TestEnv {
         }
         if self.no_any_return_implicit_error {
             errors.set_error_severity(ErrorKind::NoAnyReturnImplicit, Severity::Error);
+        }
+        if self.implicit_reexport_error {
+            errors.set_error_severity(ErrorKind::ImplicitReexport, Severity::Error);
         }
         if self.pytorch_efficiency_lint_error {
             config.root.pytorch_efficiency_lints = Some(true);

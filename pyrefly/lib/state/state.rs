@@ -211,6 +211,8 @@ pub enum ModuleDep {
     IsSpecialExport(Name),
     /// `LookupExport::reexport_source`.
     ReexportSource(Name),
+    /// `LookupExport::is_implicit_reexport`.
+    IsImplicitReexport(Name),
     /// `LookupExport::get_deprecated`.
     GetDeprecated(Name),
     /// `LookupExport::export_origin`.
@@ -331,6 +333,7 @@ impl ModuleDeps {
             ModuleDep::NameMetadata(name)
             | ModuleDep::IsSpecialExport(name)
             | ModuleDep::ReexportSource(name)
+            | ModuleDep::IsImplicitReexport(name)
             | ModuleDep::GetDeprecated(name)
             | ModuleDep::ExportOrigin(name)
             | ModuleDep::DocstringRange(name)
@@ -428,6 +431,7 @@ impl ModuleDep {
             ModuleDep::NameMetadata(_) => "name_metadata",
             ModuleDep::IsSpecialExport(_) => "is_special_export",
             ModuleDep::ReexportSource(_) => "reexport_source",
+            ModuleDep::IsImplicitReexport(_) => "is_implicit_reexport",
             ModuleDep::GetDeprecated(_) => "get_deprecated",
             ModuleDep::ExportOrigin(_) => "export_origin",
             ModuleDep::DocstringRange(_) => "docstring_range",
@@ -2896,6 +2900,15 @@ impl<'a> LookupExport for TransactionHandle<'a> {
             ModuleDep::ReexportSource(name.clone()),
         )
         .flatten()
+    }
+
+    fn is_implicit_reexport(&self, module: ModuleName, name: &Name) -> bool {
+        self.with_exports(
+            module,
+            |exports, _lookup| exports.is_implicit_reexport(name),
+            ModuleDep::IsImplicitReexport(name.clone()),
+        )
+        .unwrap_or(false)
     }
 
     fn is_special_export(&self, mut module: ModuleName, name: &Name) -> Option<SpecialExport> {

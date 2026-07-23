@@ -4780,6 +4780,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // `__init__.py`-defined name and a submodule of the same name
         // exist, Python prefers the submodule).
         if !is_self_import && self.exports.export_exists(m, name) {
+            if self.exports.is_implicit_reexport(m, name) && !fallback.is_unreachable {
+                errors
+                    .error_builder(
+                        fallback.stmt_range,
+                        ErrorKind::ImplicitReexport,
+                        format!("`{name}` is not exported from module `{m}`"),
+                    )
+                    .with_detail(format!(
+                        "`{name}` is imported by `{m}` but not re-exported (via `import ... as {name}`, `__all__`, or a wildcard import)"
+                    ))
+                    .emit();
+            }
             return resolve_export();
         }
         // Submodule lookup.

@@ -662,6 +662,34 @@ urllib.request.urlopen(...)
 
 ```
 
+## implicit-reexport
+
+Default severity: `ignore`
+
+This error is emitted when you import a name from a module that only made it
+available through a plain `import` or `from ... import ...` statement. Per the
+[typing spec](https://typing.python.org/en/latest/spec/distributing.html#import-conventions),
+such a name is not part of the module's public interface, so relying on it is
+fragile: the intermediate module may stop importing it at any time.
+
+A module explicitly re-exports a name when it is redundantly aliased
+(`from x import y as y` or `import x as x`), listed in `__all__`, or brought in
+via a wildcard (`from x import *`).
+
+```python
+# foo.py
+a = 1
+
+# bar.py
+from foo import a  # `a` is not re-exported from `bar`
+
+# baz.py
+from bar import a  # error: `a` is not exported from module `bar`
+
+# Fix in bar.py:
+from foo import a as a  # or add `a` to `__all__`
+```
+
 ## implicitly-defined-attribute
 
 Default severity: `ignore`
