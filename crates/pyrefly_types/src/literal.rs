@@ -31,6 +31,7 @@ use crate::types::Type;
 assert_words!(Lit, 3);
 
 static LITERAL_STR_MAX_SIZE: usize = 4096;
+static LITERAL_BYTES_MAX_SIZE: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -151,8 +152,13 @@ impl Lit {
         Some(Lit::Str(x.value.to_str().into()))
     }
 
-    pub fn from_bytes_literal(x: &ExprBytesLiteral) -> Self {
-        Lit::Bytes(x.value.bytes().collect())
+    /// Returns `None` for oversized literals, which are widened to `bytes` (mirrors
+    /// `from_string_literal`), to keep huge literals out of the type representation.
+    pub fn from_bytes_literal(x: &ExprBytesLiteral) -> Option<Self> {
+        if x.value.len() > LITERAL_BYTES_MAX_SIZE {
+            return None;
+        }
+        Some(Lit::Bytes(x.value.bytes().collect()))
     }
 
     pub fn from_fstring(x: &ExprFString) -> Option<Self> {

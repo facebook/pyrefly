@@ -244,7 +244,7 @@ impl<'a> Transaction<'a> {
             for field_idx in bindings.keys::<KeyClassField>() {
                 let field = bindings.get(field_idx);
                 if let ClassFieldDefinition::DefinedInMethod {
-                    value,
+                    values,
                     annotation: None,
                     ..
                 } = &field.definition
@@ -253,7 +253,10 @@ impl<'a> Transaction<'a> {
                         continue;
                     };
                     let ty = answers.solver().for_display(class_field.ty());
-                    let expr = match value.as_ref() {
+                    let expr = match values
+                        .first()
+                        .expect("DefinedInMethod must have at least one value")
+                    {
                         ExprOrBinding::Expr(e) => Some(e),
                         ExprOrBinding::Binding(_) => None,
                     };

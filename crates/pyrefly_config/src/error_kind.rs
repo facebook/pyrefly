@@ -134,6 +134,9 @@ pub enum ErrorKind {
     /// Attempting to return a value that does not match the function's return type.
     /// Can also arise when returning values from generators.
     BadReturn,
+    /// A `functools.singledispatch` implementation is registered with a dispatch type that is
+    /// not a subtype of the fallback function's first parameter, so it can never be dispatched to.
+    BadSingledispatchRegister,
     /// Attempting to specialize a generic class with incorrect type arguments.
     /// e.g. `type[int, str]` is an error because `type` accepts only 1 type arg.
     BadSpecialization,
@@ -146,6 +149,12 @@ pub enum ErrorKind {
     /// An error caused by unpacking.
     /// e.g. attempting to unpack an iterable into the wrong number of variables.
     BadUnpacking,
+    /// A Polars DataFrame column literal has an element that does not fit the column's first-element dtype.
+    ColumnTypeMismatch,
+    /// A symbol has no type coverage. Emitted only by `pyrefly coverage check`.
+    CoverageMissing,
+    /// A symbol has partial type coverage. Emitted only by `pyrefly coverage check`.
+    CoveragePartial,
     /// Calling a function marked with `@deprecated`
     Deprecated,
     /// Division, floor division, or modulo by a literal zero value.
@@ -160,15 +169,18 @@ pub enum ErrorKind {
     /// `implicit-any` itself is reserved for the umbrella suppression/config
     /// code (suppressing `implicit-any` suppresses every sub-kind).
     ImplicitAny,
-    /// An implicit `Any` introduced when a class attribute is defined by
-    /// assignment to `self.x = None` or `self.x = ()` without an explicit
-    /// annotation.
+    /// An implicit `Any` introduced when a class attribute without an explicit
+    /// annotation is defined by assignment to `self.x = None` or `self.x = ()`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyAttribute,
     /// An implicit `Any` introduced when an empty container (`[]`, `{}`) cannot
     /// be inferred from context and is pinned to a container of `Any`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyEmptyContainer,
+    /// An implicit `Any` introduced when a lambda parameter or return type cannot
+    /// be inferred from context.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyLambda,
     /// An implicit `Any` introduced because a function parameter has no
     /// annotation. The `self` and `cls` parameters of methods are excluded.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
@@ -225,6 +237,8 @@ pub enum ErrorKind {
     /// A use of `typing.Self` in a context where Pyrefly does not recognize it as
     /// mapping to a valid class type.
     InvalidSelfType,
+    /// An error caused by incorrect usage or definition of a Sentinel.
+    InvalidSentinel,
     /// Attempting to call `super()` in a way that is not allowed.
     /// e.g. calling `super(Y, x)` on an object `x` that does not match the class `Y`.
     InvalidSuperCall,
@@ -233,6 +247,10 @@ pub enum ErrorKind {
     InvalidSyntax,
     /// An error related to type alias usage or definition.
     InvalidTypeAlias,
+    /// A user-defined `TYPE_CHECKING` constant that is not typed as `bool`. Type checkers treat
+    /// `TYPE_CHECKING` as `True` while the runtime sees `False`, so it must be a `bool`
+    /// (conventionally `TYPE_CHECKING = False`).
+    InvalidTypeCheckingConstant,
     /// An error caused by incorrect usage or definition of a TypeVar.
     InvalidTypeVar,
     /// An error caused by incorrect usage or definition of a TypeVarTuple.
@@ -242,6 +260,10 @@ pub enum ErrorKind {
     /// Attempting to use `yield` in a way that is not allowed.
     /// e.g. `yield from` with something that's not an iterable.
     InvalidYield,
+    /// A file-level `# pyrefly: ignore-errors` (or `ignore-errors[code]`) directive
+    /// appears after the first line of code, where it is silently inert. File-level
+    /// suppressions are only honored in the preamble, at the top of the file.
+    MisplacedIgnore,
     /// An error caused by calling a function without all the required arguments.
     /// Should be used when we can name the specific arguments that are missing.
     MissingArgument,
@@ -261,6 +283,14 @@ pub enum ErrorKind {
     NameMismatch,
     /// The attribute exists but does not support this access pattern.
     NoAccess,
+    /// Umbrella error kind for cases where `Any` is returned from a function with a concrete return type.
+    NoAnyReturn,
+    /// An explicit `Any` returned from a function with a concrete return type.
+    /// This is a sub-kind of [NoAnyReturn]: suppressing `no-any-return` also suppresses this error.
+    NoAnyReturnExplicit,
+    /// An implicit `Any` returned from a function with a concrete return type.
+    /// This is a sub-kind of [NoAnyReturn]: suppressing `no-any-return` also suppresses this error.
+    NoAnyReturnImplicit,
     /// Attempting to call an overloaded function, but none of the signatures match.
     NoMatchingOverload,
     /// The SCC fixpoint iteration did not converge within the maximum number of
@@ -337,8 +367,14 @@ pub enum ErrorKind {
     UnexpectedPositionalArgument,
     /// Attempting to use a type checker directive without importing it from `typing`.
     UnimportedDirective,
+    /// An unannotated attribute assigned a value with unknown type.
+    UnknownAttributeType,
+    /// Accessing a DataFrame column that does not exist in the inferred schema.
+    UnknownColumn,
     /// Attempting to use a name that is not defined.
     UnknownName,
+    /// A variable assigned a value with unknown type without an explicit annotation.
+    UnknownVariableType,
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
     /// or between literals whose comparison result is statically known.
     UnnecessaryComparison,
@@ -362,12 +398,22 @@ pub enum ErrorKind {
     UnsupportedDelete,
     /// Attempting to apply an operation to arguments that do not support it.
     UnsupportedOperation,
+    /// A class decorator whose own type is `Any`, obscuring the decorated class type.
+    UntypedClassDecorator,
+    /// A function decorator whose own type is `Any`, obscuring the decorated function type.
+    UntypedFunctionDecorator,
     /// Import is missing an expected stubs package
     UntypedImport,
+    /// Result of a call expression is not used.
+    UnusedCallResult,
     /// Result of async function call is never used or awaited
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
     UnusedIgnore,
+    /// A `# type: ignore` comment is unused (no error to suppress on that line)
+    UnusedTypeIgnore,
+    /// `@overload` bodies are never executed, so executable body logic is usually dead code.
+    UselessOverloadBody,
     /// The inferred variance of a type variable does not match its declared variance.
     /// For example, a type variable used only in covariant positions in a protocol should be declared covariant.
     VarianceMismatch,
@@ -425,8 +471,12 @@ impl ErrorKind {
             }
             ErrorKind::ImplicitAnyAttribute
             | ErrorKind::ImplicitAnyEmptyContainer
+            | ErrorKind::ImplicitAnyLambda
             | ErrorKind::ImplicitAnyParameter
             | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
+            ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
+                Some(ErrorKind::NoAnyReturn)
+            }
             _ => None,
         }
     }
@@ -453,6 +503,8 @@ impl ErrorKind {
     pub fn default_severity(self) -> Severity {
         // IMPORTANT: When updating these, also update error-kinds.mdx in the docs
         match self {
+            ErrorKind::CoverageMissing => Severity::Warn,
+            ErrorKind::CoveragePartial => Severity::Warn,
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::ExplicitAny => Severity::Ignore,
@@ -466,9 +518,13 @@ impl ErrorKind {
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::IncompatibleComparison => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
+            ErrorKind::MisplacedIgnore => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
             ErrorKind::NameMismatch => Severity::Warn,
+            ErrorKind::NoAnyReturn => Severity::Ignore,
+            ErrorKind::NoAnyReturnExplicit => Severity::Ignore,
+            ErrorKind::NoAnyReturnImplicit => Severity::Ignore,
             ErrorKind::NonExhaustiveMatch => Severity::Warn,
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
@@ -484,14 +540,23 @@ impl ErrorKind {
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
+            ErrorKind::ImplicitAnyLambda => Severity::Ignore,
+            ErrorKind::UnknownAttributeType => Severity::Ignore,
+            ErrorKind::UnknownVariableType => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnreachableMatchCase => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            ErrorKind::UntypedClassDecorator => Severity::Ignore,
+            ErrorKind::UntypedFunctionDecorator => Severity::Ignore,
             ErrorKind::UntypedImport => Severity::Warn,
+            ErrorKind::UnusedCallResult => Severity::Ignore,
             ErrorKind::UnusedIgnore => Severity::Ignore,
+            ErrorKind::UnusedTypeIgnore => Severity::Ignore,
             ErrorKind::VarianceMismatch => Severity::Warn,
+            // Overload bodies are runtime-dead, so this should warn rather than fail CI by default.
+            ErrorKind::UselessOverloadBody => Severity::Warn,
             _ => Severity::Error,
         }
     }
@@ -509,6 +574,14 @@ impl ErrorKind {
     /// code pattern is suspicious.
     pub fn is_soft(self) -> bool {
         matches!(self, ErrorKind::StringAsIterable)
+    }
+
+    /// Coverage kinds are emitted only by `pyrefly coverage check`.
+    pub fn is_coverage(self) -> bool {
+        matches!(
+            self,
+            ErrorKind::CoverageMissing | ErrorKind::CoveragePartial
+        )
     }
 
     /// Returns the public documentation URL for this error kind.
@@ -548,9 +621,43 @@ mod tests {
     }
 
     #[test]
+    fn test_unknown_column_kind_exists() {
+        assert_eq!(ErrorKind::UnknownColumn.to_name(), "unknown-column");
+        assert_eq!(
+            "unknown-column".parse::<ErrorKind>(),
+            Ok(ErrorKind::UnknownColumn)
+        );
+    }
+
+    #[test]
+    fn test_column_type_mismatch_kind_exists() {
+        assert_eq!(
+            ErrorKind::ColumnTypeMismatch.to_name(),
+            "column-type-mismatch"
+        );
+        assert_eq!(
+            "column-type-mismatch".parse::<ErrorKind>(),
+            Ok(ErrorKind::ColumnTypeMismatch)
+        );
+        assert_eq!(
+            ErrorKind::ColumnTypeMismatch.default_severity(),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_unknown_column_default_severity() {
+        assert_eq!(ErrorKind::UnknownColumn.default_severity(), Severity::Error);
+    }
+
+    #[test]
     fn test_doc_headers() {
         // Verifies that the secondary headers in error-kinds.mdx contain the same variants as the ErrorKind enum and are sorted lexicographically.
-        let mut all_error_kinds = all::<ErrorKind>();
+
+        // Coverage kinds are only emitted by `pyrefly coverage check`, non-configurable, and
+        // therefore intentionally undocumented.
+        let mut all_error_kinds = all::<ErrorKind>().filter(|k| !k.is_coverage());
+
         let doc_path = std::env::var("ERROR_KINDS_DOC_PATH").expect(
             "ERROR_KINDS_DOC_PATH env var not set: cargo or buck should set this automatically",
         );
@@ -613,7 +720,7 @@ mod tests {
         );
         let doc_contents = std::fs::read_to_string(&doc_path)
             .unwrap_or_else(|e| panic!("Failed to read {doc_path}: {e}"));
-        for kind in all::<ErrorKind>() {
+        for kind in all::<ErrorKind>().filter(|k| !k.is_coverage()) {
             let header = format!("## {}", kind.to_name());
             let section_start = doc_contents.find(&header).expect(
                 "could not validate documented severities due to missing error kind header",

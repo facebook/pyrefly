@@ -5,7 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
+
+fn proxy_method_env() -> TestEnv {
+    TestEnv::one_with_path(
+        "shape_extensions",
+        "shape_extensions/__init__.pyi",
+        r#"
+class ProxyMethod[T]: ...
+"#,
+    )
+}
 
 testcase!(
     test_specified_variance_gets_respected,
@@ -96,6 +107,28 @@ square: Callable[[int], int] = lambda x: x ** 2
 
 a: Callable[[int], int] = ShouldBeInvariant[int]().f(square)
 b: Callable[[float], int]= ShouldBeInvariant[float]().f(square)  # E: # E:
+"#,
+);
+
+testcase!(
+    test_proxy_method_target_participates_in_variance_inference,
+    proxy_method_env(),
+    r#"
+from shape_extensions import ProxyMethod
+
+class ProxySink[T]:
+    __call__: ProxyMethod["put"]
+    def put(self, x: T) -> None: ...
+
+class ProxyBox[T]:
+    __call__: ProxyMethod["replace"]
+    def replace(self, x: T) -> T: ...
+
+sink_ok: ProxySink[int] = ProxySink[object]()
+sink_bad: ProxySink[object] = ProxySink[int]()  # E:
+
+box_bad_1: ProxyBox[float] = ProxyBox[int]()  # E:
+box_bad_2: ProxyBox[int] = ProxyBox[float]()  # E:
 "#,
 );
 
@@ -317,6 +350,67 @@ class C[T]:
 good: C[int] = C[int]()
 bad1: C[float] = C[int]()  # E:
 bad2: C[int] = C[float]()  # E:
+"#,
+);
+
+testcase!(
+    test_receiver_annotation_skipped_for_variance_inference,
+    r#"
+from typing import Callable
+
+class Container[T]:
+    def __init__(self, value: T):
+        self._value: T = value
+
+    def to_value_T(self: Container[T]) -> T:
+        return self._value
+
+check_covariant: Container[object] = Container[int](1)
+check_bad: Container[int] = Container[object](object())  # E:
+
+direct_call: int = Container.to_value_T(Container[int](1))
+direct_call_bad: str = Container.to_value_T(Container[int](1))  # E:
+
+class ReceiverAndValue[T]:
+    def put(self: ReceiverAndValue[T], value: T) -> None: ...
+
+receiver_ok: ReceiverAndValue[int] = ReceiverAndValue[object]()
+receiver_bad: ReceiverAndValue[object] = ReceiverAndValue[int]()  # E:
+
+class StaticInput[T]:
+    @staticmethod
+    def consume(value: T) -> None: ...
+
+static_ok: StaticInput[int] = StaticInput[object]()
+static_bad: StaticInput[object] = StaticInput[int]()  # E:
+
+class CallableField[T]:
+    callback: Callable[["CallableField[T]"], T]
+
+callable_field_bad: CallableField[object] = CallableField[int]()  # E:
+
+class PropertyGetter[T]:
+    @property
+    def value(self: PropertyGetter[T]) -> T: ...
+
+property_ok: PropertyGetter[object] = PropertyGetter[int]()
+property_bad: PropertyGetter[int] = PropertyGetter[object]()  # E:
+
+class PropertySetter[T]:
+    @property
+    def value(self: PropertySetter[T]) -> T: ...
+    @value.setter
+    def value(self: PropertySetter[T], value: T) -> None: ...
+
+property_setter_bad1: PropertySetter[object] = PropertySetter[int]()  # E:
+property_setter_bad2: PropertySetter[int] = PropertySetter[object]()  # E:
+
+class ClassGetter[T]:
+    @classmethod
+    def get(cls: type[ClassGetter[T]]) -> T: ...
+
+classmethod_ok: ClassGetter[object] = ClassGetter[int]()
+classmethod_bad: ClassGetter[int] = ClassGetter[object]()  # E:
 "#,
 );
 

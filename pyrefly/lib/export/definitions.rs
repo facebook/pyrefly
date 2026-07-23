@@ -111,6 +111,9 @@ pub struct Definition {
     /// definition, this equals `range`. Used to determine if a variable is
     /// reassigned after a given point (e.g. after a nested function definition).
     pub last_range: TextRange,
+    /// True while every definition site is inside an `if __name__ == "__main__":` body.
+    /// Such names resolve in-module but are not importable, so the export surface excludes them.
+    pub main_guard_only: bool,
 }
 
 impl Definition {
@@ -121,7 +124,8 @@ impl Definition {
         }
     }
 
-    fn merge(&mut self, other: DefinitionStyle, range: TextRange) {
+    fn merge(&mut self, other: DefinitionStyle, range: TextRange, in_main_guard: bool) {
+        self.main_guard_only &= in_main_guard;
         // To ensure binding code cannot produce invalid lookups, we ensure that
         // `self.style` and `self.range` always match.
         if other < self.style {
@@ -275,6 +279,7 @@ struct DefinitionsBuilder {
     is_init: bool,
     sys_info: SysInfo,
     inner: Definitions,
+    in_main_guard: bool,
 }
 
 fn is_private_name(name: &Name) -> bool {
@@ -328,19 +333,11 @@ impl Definitions {
             sys_info,
             is_init,
             inner: Definitions::default(),
+            in_main_guard: false,
         };
         builder.stmts(x);
 
         builder.inner
-    }
-
-    /// Add an implicit `from builtins import *` to the definitions.
-    /// Additional user-defined builtins are imported from `__builtins__.pyi`
-    pub fn inject_builtins(&mut self) {
-        self.import_all.entry(ModuleName::builtins()).or_default();
-        self.import_all
-            .entry(ModuleName::extra_builtins())
-            .or_default();
     }
 
     pub fn inject_implicit_globals(&mut self) {
@@ -353,6 +350,7 @@ impl Definitions {
                     needs_anywhere: false,
                     docstring_range: None,
                     last_range: TextRange::default(),
+                    main_guard_only: false,
                 },
             );
         }
@@ -361,11 +359,22 @@ impl Definitions {
     /// Ensure that `dunder_all` is populated, synthesising it if `__all__` isn't present
     /// or if `__all__` is present but cannot be statically analyzed.
     pub fn ensure_dunder_all(&mut self, style: ModuleStyle) {
+        // An `__all__` assigned only inside `if __name__ == "__main__":` never runs at
+        // import time, so it must be treated as absent and the default synthesized instead.
+        let all_main_guard_only = self
+            .definitions
+            .get(&dunder::ALL)
+            .is_some_and(|def| def.main_guard_only);
         if self.definitions.contains_key(&dunder::ALL)
             && !matches!(self.dunder_all.kind, DunderAllKind::Unresolvable(_))
+            && !all_main_guard_only
         {
             // Explicitly defined and resolvable, so don't redefine it
             return;
+        }
+        if all_main_guard_only {
+            // Discard the guard-only entries so synthesis starts from a clean slate.
+            self.dunder_all = DunderAll::default();
         }
         for (x, range) in self.import_all.iter() {
             self.dunder_all
@@ -374,6 +383,7 @@ impl Definitions {
         }
         for (name, def) in self.definitions.iter() {
             if !is_private_name(name)
+                && !def.main_guard_only
                 && (style == ModuleStyle::Executable
                     || matches!(
                         def.style,
@@ -428,9 +438,10 @@ impl DefinitionsBuilder {
         if x.is_empty() {
             return;
         }
+        let in_main_guard = self.in_main_guard;
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
-                e.get_mut().merge(style, range);
+                e.get_mut().merge(style, range, in_main_guard);
             }
             Entry::Vacant(e) => {
                 e.insert(Definition {
@@ -439,6 +450,7 @@ impl DefinitionsBuilder {
                     needs_anywhere: false,
                     docstring_range: body.and_then(Docstring::range_from_stmts),
                     last_range: range,
+                    main_guard_only: in_main_guard,
                 });
             }
         }
@@ -783,6 +795,7 @@ impl DefinitionsBuilder {
                     && DunderAllEntry::is_all(value)
                     && arguments.len() == 1
                     && arguments.keywords.is_empty()
+                    && !self.in_main_guard
                 {
                     self.inner.dunder_all.kind = DunderAllKind::Specified;
                     match attr.as_str() {
@@ -895,8 +908,11 @@ impl DefinitionsBuilder {
             Stmt::If(x) => {
                 self.named_in_expr(&x.test);
                 let sys_info = self.sys_info;
-                for (_, body) in sys_info.pruned_if_branches(x) {
+                for (test, body) in sys_info.pruned_if_branches(x) {
+                    let outer = self.in_main_guard;
+                    self.in_main_guard = outer || test.is_some_and(Ast::is_main_guard);
                     self.stmts(body);
+                    self.in_main_guard = outer;
                 }
                 return; // We went through the relevant branches already
             }

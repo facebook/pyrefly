@@ -5,12 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-pub mod report;
+mod check;
+mod collect;
+pub(crate) mod report;
+mod types;
 
 use clap::Subcommand;
 use pyrefly_util::thread_pool::ThreadCount;
 
 use crate::commands::config_finder::ConfigConfigurerWrapper;
+use crate::commands::coverage::check::CheckArgs;
 use crate::commands::coverage::report::ReportArgs;
 use crate::commands::util::CommandExitStatus;
 
@@ -20,6 +24,8 @@ use crate::commands::util::CommandExitStatus;
 pub enum CoverageCommand {
     /// Generate a machine-readable type-coverage report from pyrefly type checking results.
     Report(ReportArgs),
+    /// Check that type coverage from pyrefly type checking results meets a minimum threshold.
+    Check(CheckArgs),
 }
 
 impl CoverageCommand {
@@ -30,6 +36,7 @@ impl CoverageCommand {
     ) -> anyhow::Result<CommandExitStatus> {
         match self {
             CoverageCommand::Report(args) => args.run(config_configurer_wrapper, thread_count),
+            CoverageCommand::Check(args) => args.run(config_configurer_wrapper, thread_count),
         }
     }
 }

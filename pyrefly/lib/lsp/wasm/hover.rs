@@ -22,6 +22,7 @@ use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
@@ -29,8 +30,10 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
+use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::type_var::Variance;
 use pyrefly_types::types::Type;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::lined_buffer::LineNumber;
@@ -45,6 +48,7 @@ use ruff_text_size::TextSize;
 use vec1::Vec1;
 
 use crate::alt::answers_solver::AnswersSolver;
+use crate::binding::binding::Key;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::module_helpers::to_real_path;
@@ -57,6 +61,8 @@ use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
+use crate::state::lsp::IdentifierWithContext;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
 
@@ -108,14 +114,7 @@ impl HoverValue {
 
     fn resolve_symbol_kind(&self) -> Option<SymbolKind> {
         match self.kind {
-            Some(SymbolKind::Attribute) if self.type_.is_toplevel_callable() => self
-                .type_
-                .visit_toplevel_func_metadata(&|meta| match &meta.kind {
-                    FunctionKind::Def(func) if func.cls.is_some() => Some(SymbolKind::Method),
-                    _ => Some(SymbolKind::Function),
-                })
-                .unwrap_or(SymbolKind::Method)
-                .into(),
+            Some(SymbolKind::Attribute) => Some(attribute_symbol_kind_from_type(&self.type_)),
             Some(other) => Some(other),
             None => None,
         }
@@ -472,6 +471,117 @@ fn expand_callable_kwargs_for_hover<'a>(
     }
 }
 
+/// Given the position, if it corresponds to a class-scoped PEP695 type var declaration
+/// return the class. This only applies to the declaration of the type var, not to
+/// any usages.
+fn get_owner_class_of_pep695_type_parameter_at(
+    id: &IdentifierWithContext,
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<Class> {
+    if !matches!(id.context, IdentifierContext::TypeParameter) {
+        return None;
+    }
+    let module = transaction.get_ast(handle)?;
+    let owner = Ast::locate_node(&module, position)
+        .into_iter()
+        .rev()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtClassDef(class_def)
+                if class_def
+                    .type_params
+                    .as_ref()
+                    .is_some_and(|type_params| type_params.range().contains(position)) =>
+            {
+                Some(class_def.name.clone())
+            }
+            _ => None,
+        });
+    let key = Key::Definition(ShortIdentifier::new(&owner?));
+    match transaction.get_type_for_display(handle, &key)? {
+        Type::ClassDef(class) => Some(class),
+        _ => None,
+    }
+}
+
+fn display_variance_for_hover(variance: Variance) -> &'static str {
+    match variance {
+        Variance::Covariant => "covariant",
+        Variance::Contravariant => "contravariant",
+        // Bivariant is an internal result, it's treated as invariant.
+        Variance::Invariant | Variance::Bivariant => "invariant",
+    }
+}
+
+fn type_parameter_hover_display(
+    solver: &AnswersSolver<TransactionHandle<'_>>,
+    type_: &Type,
+    owner: &Class,
+) -> Option<String> {
+    let quantified = match type_ {
+        Type::Quantified(q) | Type::QuantifiedValue(q) => q,
+        _ => return None,
+    };
+    let variance = solver.type_order().get_variance_from_class(owner);
+    Some(format!(
+        "{}@{} ({})",
+        quantified.name(),
+        owner.name(),
+        display_variance_for_hover(variance.get(quantified.name()))
+    ))
+}
+
+fn class_hover_display(
+    solver: &AnswersSolver<TransactionHandle<'_>>,
+    type_: &Type,
+    name_for_display: Option<&str>,
+) -> Option<String> {
+    let enum_class = match type_ {
+        Type::ClassDef(cls) => Some(cls),
+        Type::ClassType(cls) => Some(cls.class_object()),
+        Type::Type(t) => match &**t {
+            Type::ClassType(cls) => Some(cls.class_object()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(cls) = enum_class
+        && solver.get_metadata_for_class(cls).is_enum()
+    {
+        let members: Vec<Type> = solver
+            .get_enum_members(cls)
+            .into_iter()
+            .map(|lit| lit.to_implicit_type())
+            .collect();
+        let enum_display_type = if members.is_empty() {
+            type_.clone()
+        } else {
+            solver.heap.mk_union(members)
+        };
+        return Some(
+            enum_display_type
+                .as_lsp_string_with_fallback_name(name_for_display, LspDisplayMode::Hover),
+        );
+    }
+
+    let mut constructor = match type_ {
+        Type::ClassDef(cls) if !solver.get_metadata_for_class(cls).is_typed_dict() => Some(
+            solver
+                .type_order()
+                .constructor_to_callable(&solver.promote_nontypeddict_silently_to_classtype(cls)),
+        ),
+        Type::Type(t) => match &**t {
+            Type::ClassType(cls) => Some(solver.type_order().constructor_to_callable(cls)),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    constructor.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(solver, c));
+    constructor = solver.for_display(constructor);
+    Some(constructor.as_lsp_string_with_fallback_name(name_for_display, LspDisplayMode::Hover))
+}
+
 fn parameter_documentation_for_callee(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -632,30 +742,45 @@ pub fn get_hover(
         });
     }
 
-    // Otherwise, fall through to the existing type hover logic
-    let mut type_ = transaction.get_type_at_for_display(handle, position)?;
+    let mut type_ = transaction
+        .subscript_operator_type_at(handle, position)
+        .or_else(|| transaction.get_type_at_for_display(handle, position))
+        .or_else(|| transaction.operator_type_at(handle, position))?;
 
-    // Helper function to check if we're hovering over a callee and get its range
-    let find_callee_range_at_position = || -> Option<TextRange> {
+    // Find the innermost call whose callee (func) encloses the cursor, returning the
+    // callee's range and whether the cursor is on the callee's own name — the attribute
+    // in `a.b()`, or the whole callee otherwise. A receiver like `a` in `a.b()` is inside
+    // the callee range but not on the name, so hovering it must not coerce its type.
+    let callee_at_position = || -> Option<(TextRange, bool)> {
         use ruff_python_ast::Expr;
         let mod_module = transaction.get_ast(handle)?;
         let mut result = None;
         mod_module.visit(&mut |expr: &Expr| {
-            if let Expr::Call(call) = expr {
-                // Check if position is within the callee (func) range
-                if call.func.range().contains(position) {
-                    result = Some(call.func.range());
+            if let Expr::Call(call) = expr
+                && call.func.range().contains(position)
+            {
+                let on_callee_name = match &*call.func {
+                    Expr::Attribute(attr) => attr.attr.range(),
+                    _ => call.func.range(),
                 }
+                .contains(position);
+                result = Some((call.func.range(), on_callee_name));
             }
         });
         result
     };
 
-    // Check both: hovering in arguments area OR hovering over the callee itself
-    let callee_range_opt = transaction
-        .get_callables_from_call(handle, position)
-        .map(|info| info.callee_range)
-        .or_else(find_callee_range_at_position);
+    // Prefer the enclosing call found from the argument list; only walk the AST for a
+    // callee hover when the cursor is not inside an argument. Hovering inside arguments
+    // is never "on the callee", so coercion stays disabled there.
+    let (callee_range_opt, hovering_over_callee) =
+        match transaction.get_callables_from_call(handle, position) {
+            Some(info) => (Some(info.callee_range), false),
+            None => match callee_at_position() {
+                Some((range, on_name)) => (Some(range), on_name),
+                None => (None, false),
+            },
+        };
 
     if let Some(callee_range) = callee_range_opt {
         let is_constructor = transaction
@@ -664,6 +789,8 @@ pub fn get_hover(
             .is_some_and(is_constructor_call);
         if is_constructor && let Some(new_type) = override_constructor_return_type(type_.clone()) {
             type_ = new_type;
+        } else if hovering_over_callee {
+            type_ = transaction.coerce_type_to_callable(handle, type_);
         }
     }
 
@@ -708,36 +835,27 @@ pub fn get_hover(
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let name_for_display = name.clone();
+    let hover_identifier = transaction.identifier_at(handle, position);
+    let type_parameter_owner_class = hover_identifier.as_ref().and_then(|id| {
+        get_owner_class_of_pep695_type_parameter_at(id, transaction, handle, position)
+    });
     let show_constructor = kind == Some(SymbolKind::Class)
-        && !transaction
-            .identifier_at(handle, position)
-            .is_some_and(|id| matches!(id.context, IdentifierContext::ClassDef { .. }));
+        && hover_identifier
+            .as_ref()
+            .is_some_and(|id| !matches!(id.context, IdentifierContext::ClassDef { .. }));
     let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
         let mut cloned = type_.clone();
         move |solver| {
-            if show_constructor {
-                let constructor = match cloned {
-                    Type::ClassDef(ref cls)
-                        if !solver.get_metadata_for_class(cls).is_typed_dict() =>
-                    {
-                        Some(solver.type_order().constructor_to_callable(
-                            &solver.promote_nontypeddict_silently_to_classtype(cls),
-                        ))
-                    }
-                    Type::Type(ref t) if let Type::ClassType(cls) = &**t => {
-                        Some(solver.type_order().constructor_to_callable(cls))
-                    }
-                    _ => None,
-                };
-                if let Some(mut constructor) = constructor {
-                    constructor.transform_toplevel_callable(|c| {
-                        expand_callable_kwargs_for_hover(&solver, c)
-                    });
-                    return constructor.as_lsp_string_with_fallback_name(
-                        name_for_display.as_deref(),
-                        LspDisplayMode::Hover,
-                    );
-                }
+            if let Some(owner) = &type_parameter_owner_class
+                && let Some(display) = type_parameter_hover_display(&solver, &cloned, owner)
+            {
+                return display;
+            }
+            if show_constructor
+                && let Some(display) =
+                    class_hover_display(&solver, &cloned, name_for_display.as_deref())
+            {
+                return display;
             }
             cloned.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
             cloned.as_lsp_string_with_fallback_name(

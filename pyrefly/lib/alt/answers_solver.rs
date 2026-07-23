@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use fxhash::FxHashMap;
+use fxhash::FxHashSet;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::calculation::ProposalResult;
 use pyrefly_graph::index::Idx;
@@ -32,6 +33,7 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedIdentity;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::quantified::QuantifiedOrigin;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::PreInferenceVariance;
@@ -91,6 +93,12 @@ use crate::types::stdlib::Stdlib;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
 use crate::types::types::Var;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum JaxtypingQuantifiedKey {
+    Dim(Name, QuantifiedKind),
+    ShapeCarrier(Name, QuantifiedKind),
+}
 
 pub struct TypeCheckOptions<'a> {
     errors: &'a ErrorCollector,
@@ -1588,7 +1596,10 @@ pub struct ThreadState {
     partial_answers: RefCell<FxHashMap<(Idx<Key>, usize), Arc<TypeInfo>>>,
     /// Solve-time mapping from per-module lambda parameter IDs to the
     /// thread-local Var that represents that parameter in the current solve.
-    lambda_param_vars: RefCell<FxHashMap<(ModuleName, LambdaParamId), Var>>,
+    ///
+    /// The `ModulePath` is needed to distinguish the in-memory and on-disk
+    /// versions of the same module, which can coexist in the IDE (issue #3789).
+    lambda_param_vars: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Var>>,
     /// Active trace side-effect sink for the current calculation.
     /// Set before `K::solve`, taken after. `None` when tracing is disabled
     /// or between calculations. Saved sinks form a stack to handle recursive
@@ -1599,6 +1610,10 @@ pub struct ThreadState {
     /// is pushed here. When the nested call takes its sink, the previous
     /// one is restored.
     trace_sink_stack: RefCell<Vec<Option<TraceSideEffects>>>,
+    /// `(self_type, self_param)` pairs whose overload-self-type compatibility
+    /// check is currently in progress, used as a coinductive guard against
+    /// self-referential protocols. See `filter_overloads_by_self_type`.
+    overload_self_filter_stack: RefCell<FxHashSet<(Type, Type)>>,
 }
 
 impl ThreadState {
@@ -1611,6 +1626,7 @@ impl ThreadState {
             lambda_param_vars: RefCell::new(FxHashMap::default()),
             trace_sink: RefCell::new(None),
             trace_sink_stack: RefCell::new(Vec::new()),
+            overload_self_filter_stack: RefCell::new(FxHashSet::default()),
         }
     }
 
@@ -1710,11 +1726,11 @@ pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     pub recurser: &'a VarRecurser,
     pub stdlib: &'a Stdlib,
     pub heap: &'a TypeHeap,
-    /// Cache for jaxtyping dimension name → Quantified type mappings.
-    /// Module-scoped: the same dimension name always maps to the same Quantified,
+    /// Cache for jaxtyping synthetic quantifieds.
+    /// Module-scoped: the same dimension key always maps to the same Quantified,
     /// which is correct because each function independently wraps its signature
     /// in a Forall (just like legacy TypeVars defined at module scope).
-    jaxtyping_dims: RefCell<FxHashMap<Name, Quantified>>,
+    jaxtyping_dims: RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
 }
 
 /// RAII guard that releases write locks on panic during SCC batch commit.
@@ -1792,28 +1808,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Get or create a Quantified type for a jaxtyping dimension name.
-    /// Cached per module: the same name always returns the same Quantified.
+    /// Cached per module on the `(name, kind)` pair: the same name reused with a
+    /// different `QuantifiedKind` intentionally yields a distinct Quantified.
     pub fn get_or_create_jaxtyping_dim(&self, name: Name, kind: QuantifiedKind) -> Quantified {
         let mut dims = self.jaxtyping_dims.borrow_mut();
-        dims.entry(name.clone())
+        // Jaxtyping dims have no real source location. Use the current map size as a
+        // collision-free ordinal to distinguish synthetic quantifieds at the same
+        // (default) anchor. Shared with `get_or_create_jaxtyping_shape_carrier`, which
+        // uses the same map, so ordinals stay unique across both.
+        let ordinal = dims.len() as u32;
+        dims.entry(JaxtypingQuantifiedKey::Dim(name.clone(), kind))
             .or_insert_with(|| {
-                // Jaxtyping dims have no real source location. Use a hash of the name
-                // as ordinal to distinguish different dims in the same module.
-                // The slot discriminates from other synthetic quantifieds at the same anchor.
-                let ordinal = {
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    name.hash(&mut h);
-                    h.finish() as u32
-                };
                 let identity = QuantifiedIdentity::new(
                     self.module().name(),
                     AnchorIndex::new(TextRange::default(), ordinal),
                     QuantifiedOrigin::SyntheticCallableResidual,
                 );
                 match kind {
-                    QuantifiedKind::TypeVar => Quantified::type_var(
-                        name,
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
                         identity,
+                        name,
+                        kind,
                         None,
                         Restriction::Unrestricted,
                         PreInferenceVariance::Invariant,
@@ -1823,6 +1838,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     QuantifiedKind::ParamSpec => {
                         unreachable!("jaxtyping dimensions cannot be ParamSpec")
+                    }
+                }
+            })
+            .clone()
+    }
+
+    /// Get or create a tuple-carrier TypeVar or IntVar for a jaxtyping variadic shape name.
+    ///
+    /// A variadic jaxtyping shape (`*name`) whose enclosing shaped-array class uses a
+    /// `TypeVar`/`IntVar` (IntTuple) shape parameter needs a carrier bounded by
+    /// `tuple[int, ...]`, rather than the `TypeVarTuple` produced for `*Shape` classes.
+    pub fn get_or_create_jaxtyping_shape_carrier(
+        &self,
+        name: Name,
+        kind: QuantifiedKind,
+    ) -> Quantified {
+        let mut dims = self.jaxtyping_dims.borrow_mut();
+        // See `get_or_create_jaxtyping_dim`: the shared map's size is a collision-free ordinal.
+        let ordinal = dims.len() as u32;
+        dims.entry(JaxtypingQuantifiedKey::ShapeCarrier(name.clone(), kind))
+            .or_insert_with(|| {
+                let identity = QuantifiedIdentity::new(
+                    self.module().name(),
+                    AnchorIndex::new(TextRange::default(), ordinal),
+                    QuantifiedOrigin::SyntheticCallableResidual,
+                );
+                match kind {
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
+                        identity,
+                        name,
+                        kind,
+                        None,
+                        Restriction::Bound(Type::Tuple(Tuple::Unbounded(Box::new(
+                            self.heap.mk_class_type(self.stdlib.int().clone()),
+                        )))),
+                        PreInferenceVariance::Invariant,
+                    ),
+                    QuantifiedKind::TypeVarTuple | QuantifiedKind::ParamSpec => {
+                        unreachable!("jaxtyping shape carriers must be TypeVar or IntVar")
                     }
                 }
             })
@@ -1870,14 +1924,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.thread_state
             .lambda_param_vars
             .borrow_mut()
-            .insert((self.module().name(), id), var);
+            .insert((self.module().name(), self.module().path().dupe(), id), var);
     }
 
     fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
         self.thread_state
             .lambda_param_vars
             .borrow()
-            .get(&(self.module().name(), id))
+            .get(&(self.module().name(), self.module().path().dupe(), id))
             .copied()
     }
 
@@ -1918,8 +1972,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Record an expected type trace.
     pub(crate) fn record_expected_type_trace(&self, loc: TextRange, ty: &Type) {
-        self.trace_state()
-            .record_expected_type_trace(loc, Arc::new(ty.clone()));
+        // Guard on the trace sink before cloning: in a normal (non-tracing) check
+        // there is no sink installed, so the clone would be pure waste.
+        if self.current().tracing_enabled() {
+            self.trace_state()
+                .record_expected_type_trace(loc, Arc::new(ty.clone()));
+        }
     }
 
     /// Store a partial answer for inline first-use pinning.
@@ -1957,6 +2015,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .borrow()
             .get(&(def_idx, height))
             .cloned()
+    }
+
+    /// Mark an overload-self-type compatibility check `(self_type, self_param)` as in
+    /// progress. Returns `true` if it was already active, signaling a coinductive cycle
+    /// (a self-referential protocol). See `filter_overloads_by_self_type`.
+    pub(crate) fn enter_overload_self_filter(&self, key: (Type, Type)) -> bool {
+        !self
+            .thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .insert(key)
+    }
+
+    pub(crate) fn exit_overload_self_filter(&self, key: &(Type, Type)) {
+        self.thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .remove(key);
     }
 
     /// Given the target idx of a ForwardToFirstUse binding, find the NameAssign's
@@ -3176,12 +3252,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if Self::type_contains_none(got) && !Self::type_contains_none(want) {
             let hint = match tcc().kind {
-                TypeCheckKind::ExplicitFunctionReturn => {
-                    format!(
-                        "The return type does not allow `None`. \
-                         Either handle the `None` case or change the return type to `{} | None`.",
+                TypeCheckKind::ExplicitFunctionReturn
+                | TypeCheckKind::AnnAssign
+                | TypeCheckKind::AnnotatedName(_)
+                    if !got.is_none() =>
+                {
+                    Some(format!(
+                        "Consider narrowing the value with an `is not None` check or changing the declared type to `{} | None`",
                         self.for_display(want.clone()),
-                    )
+                    ))
                 }
                 TypeCheckKind::ImplicitFunctionReturn(_) => {
                     // For implicit returns (missing return statement), the error message
@@ -3189,23 +3268,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // an explicit return" is already clear. Adding a None hint here is
                     // confusing because the user didn't explicitly return None.
                     // Skip the hint for implicit returns.
-                    builder.emit();
-                    return;
+                    None
                 }
-                TypeCheckKind::AnnAssign
-                | TypeCheckKind::AnnotatedName(_)
-                | TypeCheckKind::Attribute(_) => {
-                    format!(
-                        "The declared type does not allow `None`. \
-                         Either narrow with an `is not None` check or change the type to `{} | None`.",
-                        self.for_display(want.clone()),
-                    )
+                TypeCheckKind::Attribute(_)
+                | TypeCheckKind::CallArgument(..)
+                | TypeCheckKind::CallKwArgs(..)
+                | TypeCheckKind::CallUnpackKwArg(..)
+                | TypeCheckKind::CallVarArgs(..) => {
+                    if got.is_none() {
+                        // Skip the hint. Narrowing the value doesn't make sense if there's no
+                        // non-None part to narrow to, and changing the attribute or parameter type
+                        // is often unactionable, since the definition may be in third-party code.
+                        None
+                    } else {
+                        // We only suggest narrowing. Changing the attribute or parameter type is
+                        // often unactionable, since the definition may be in third-party code.
+                        Some("Consider narrowing the value with an `is not None` check".to_owned())
+                    }
                 }
-                _ => "The type includes `None` which is not accepted here. \
-                     Narrow the type with an `is not None` check."
-                    .to_owned(),
+                _ => Some(format!(
+                    "Consider changing the declared type to `{} | None`",
+                    self.for_display(want.clone())
+                )),
             };
-            builder = builder.with_detail(hint);
+            if let Some(hint) = hint {
+                builder = builder
+                    .with_detail(format!("The declared type does not allow `None`. {hint}."));
+            }
         }
         builder.emit();
     }

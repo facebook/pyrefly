@@ -1,0 +1,73 @@
+name: Notify Discord for new issues
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+jobs:
+  notify-discord:
+    name: Notify Discord
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord notification for external issue
+        uses: actions/github-script@v8
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_ISSUES_WEBHOOK_URL }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const webhookUrl = process.env.WEBHOOK_URL;
+            if (!webhookUrl) {
+              console.log('DISCORD_ISSUES_WEBHOOK_URL secret not set, skipping notification');
+              return;
+            }
+
+            const issue = context.payload.issue;
+            const author = issue.user.login;
+
+            const ownersFile = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: '.github/owners.json',
+            });
+            const owners = JSON.parse(
+              Buffer.from(ownersFile.data.content, 'base64').toString('utf8'),
+            ).map((owner) => owner.toLowerCase());
+
+            if (owners.includes(author.toLowerCase())) {
+              console.log(`${author} is in .github/owners.json, skipping notification`);
+              return;
+            }
+
+            const title = `New Pyrefly issue #${issue.number}: ${issue.title}`;
+            const truncatedTitle = title.length > 256 ? `${title.substring(0, 253)}...` : title;
+
+            const payload = {
+              embeds: [{
+                title: truncatedTitle,
+                url: issue.html_url,
+                color: 16744448,
+                fields: [{
+                  name: 'Author',
+                  value: `[${author}](${issue.user.html_url})`,
+                  inline: true,
+                }],
+              }],
+            };
+
+            const response = await fetch(webhookUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+              throw new Error(`Discord notification failed: ${response.status} ${response.statusText}`);
+            }
+
+            console.log(`Discord notification sent for issue #${issue.number}`);
