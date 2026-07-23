@@ -980,6 +980,16 @@ x = 2
 Bad: TypeAlias = x
 ```
 
+## invalid-type-checking-constant
+
+A module-level `TYPE_CHECKING` constant that is not typed as `bool`. Type checkers treat
+`TYPE_CHECKING` as `True`, while at runtime it is `False`, so a user-defined one must be a `bool`
+(conventionally `TYPE_CHECKING = False`).
+
+```python
+TYPE_CHECKING: str = ""  # error: not a bool
+```
+
 ## invalid-type-var
 
 An error caused by incorrect usage or definition of a TypeVar. A few examples:
@@ -1958,6 +1968,24 @@ Default severity: `warn`
 Type information for some third-party libraries is shipped in a stubs package separate from the
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
+
+## unused-call-result
+
+Default severity: `ignore`
+
+This rule is disabled by default and must be explicitly enabled. Once enabled, it reports when the
+result of a call expression is discarded and the result type is informative (not `None`, `Any`, or
+`Never`). This is often a sign of a mistake, such as forgetting to use the return value.
+
+```python
+def combine(a: list[int], b: list[int]) -> list[int]:
+    return a + b
+
+items = [1, 2, 3]
+combine(items, [4, 5])  # warning: result is discarded
+print(items)  # ok: print returns None
+x = combine(items, [4, 5])  # ok: result is used
+```
 
 ## unused-coroutine
 

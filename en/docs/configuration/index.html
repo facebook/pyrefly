@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.263c1008.js" defer="defer"></script>
-<script src="/assets/js/main.622e3116.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.a22cdd02.js" defer="defer"></script>
+<script src="/assets/js/main.21226554.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -365,12 +365,16 @@ against
 <a href="https://docs.python.org/3/library/sys.html#sys.platform" target="_blank" rel="noopener noreferrer"><code>sys.platform</code></a>
 values.</p>
 <ul>
-<li>Type: string</li>
+<li>Type: string or list of strings</li>
 <li>Default: result from <a href="#environment-autoconfiguration">Environment Autoconfiguration</a>, or
 &quot;linux&quot; if the Python interpreter cannot be queried</li>
-<li>Flag equivalent: <code>--python-platform</code></li>
+<li>Flag equivalent: <code>--python-platform</code>, which can be passed multiple times</li>
 <li>Equivalent configs: <code>pythonPlatform</code> in Pyright, <code>platform</code> in mypy</li>
 </ul>
+<p>Use <code>python-platform = &quot;all&quot;</code> to avoid pruning platform-specific branches, or
+provide a list such as <code>python-platform = [&quot;linux&quot;, &quot;win32&quot;]</code> to type check
+branches that may run on any of those platforms. On the CLI, pass
+<code>--python-platform</code> once per platform.</p>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="python-version"><code>python-version</code><a href="#python-version" class="hash-link" aria-label="Direct link to python-version" title="Direct link to python-version">​</a></h3>
 <p>The value used with conditions based on type checking
 against
@@ -530,7 +534,7 @@ shown regardless of this threshold.</li>
 <p>Default format for <code>pyrefly check</code> error output when <code>--output-format</code> is not
 set on the CLI.</p>
 <ul>
-<li>Type: <code>&quot;min-text&quot; | &quot;full-text&quot; | &quot;json&quot; | &quot;github&quot; | &quot;junit-xml&quot; | &quot;omit-errors&quot;</code></li>
+<li>Type: <code>&quot;min-text&quot; | &quot;full-text&quot; | &quot;json&quot; | &quot;github&quot; | &quot;junit-xml&quot; | &quot;code-climate&quot; | &quot;omit-errors&quot;</code></li>
 <li>Default: <code>full-text</code></li>
 <li>Flag equivalent: <code>--output-format</code></li>
 <li>Notes:<!-- -->
