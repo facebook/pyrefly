@@ -223,13 +223,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         | (Type::SelfType(self_cls), Type::ClassType(cls)) = (left, right)
             && self.as_superclass(cls, self_cls.class_object()).as_ref() == Some(self_cls)
         {
-            // ClassType(C) & SelfType(Parent) simplifies to ClassType(C) when C
-            // is a subclass of Parent with a matching inherited instantiation,
-            // because Self[Parent] represents "Parent or any subclass" and
-            // ClassType(C) is already such a subclass.
-            // Without this, an unsimplified Intersect(ClassType, SelfType) can
-            // leak to downstream consumers that don't handle Intersect types.
-            self.heap.mk_class_type(cls.clone())
+            // ClassType(C) & SelfType(Parent) simplifies to SelfType(C) when C
+            // is a subclass of Parent with a matching inherited instantiation.
+            // Self[Parent] represents "Parent or any subclass", so narrowing it
+            // to the subclass C keeps it a self-type anchored at C: attribute and
+            // constructor lookups resolve through C, while the value stays
+            // assignable back to Self[Parent] (all self-types are mutually
+            // assignable). Collapsing to a plain ClassType(C) instead would drop
+            // the self-ness and spuriously reject `return self`/`return cls()`
+            // against a declared `-> Self`.
+            // Producing a SelfType (rather than an unsimplified Intersect) also
+            // avoids leaking Intersect types to downstream consumers that don't
+            // handle them.
+            self.heap.mk_self_type(cls.clone())
         } else if left.is_scalar() || right.is_scalar() {
             // The only inhabited intersections of literals are things like
             // `Literal[0] & Literal[0]` or `Literal[0] & int` that would have already been
