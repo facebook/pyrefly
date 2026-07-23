@@ -19,6 +19,7 @@ pub enum SpecialExport {
     TypeAlias,
     TypeAliasType,
     TypeVar,
+    IntVar,
     ParamSpec,
     TypeVarTuple,
     Annotated,
@@ -30,6 +31,7 @@ pub enum SpecialExport {
     CollectionsNamedTuple,
     TypingNamedTuple,
     AssertType,
+    RevealType,
     NewType,
     Union,
     Optional,
@@ -74,9 +76,12 @@ pub enum SpecialExport {
     UsesShapeDsl,
     ShapeDslFunction,
     ShapedArray,
+    ProxyMethod,
     Sentinel,
     BuiltinsSentinel,
-    AttrsField,
+    AttrsLegacyAttrib,
+    AttrsNextGenField,
+    AttrsNothing,
 }
 
 impl SpecialExport {
@@ -86,6 +91,7 @@ impl SpecialExport {
             "classmethod" => Some(Self::ClassMethod),
             "abstractclassmethod" => Some(Self::AbstractClassMethod),
             "TypeVar" => Some(Self::TypeVar),
+            "IntVar" => Some(Self::IntVar),
             "ParamSpec" => Some(Self::ParamSpec),
             "TypeVarTuple" => Some(Self::TypeVarTuple),
             "Annotated" => Some(Self::Annotated),
@@ -97,6 +103,7 @@ impl SpecialExport {
             "namedtuple" => Some(Self::CollectionsNamedTuple),
             "NamedTuple" => Some(Self::TypingNamedTuple),
             "assert_type" => Some(Self::AssertType),
+            "reveal_type" => Some(Self::RevealType),
             "NewType" => Some(Self::NewType),
             "Union" => Some(Self::Union),
             "Optional" => Some(Self::Optional),
@@ -142,16 +149,21 @@ impl SpecialExport {
             "uses_shape_dsl" => Some(Self::UsesShapeDsl),
             "shape_dsl_function" => Some(Self::ShapeDslFunction),
             "shaped_array" => Some(Self::ShapedArray),
+            "ProxyMethod" => Some(Self::ProxyMethod),
             "Sentinel" => Some(Self::Sentinel),
             "sentinel" => Some(Self::BuiltinsSentinel),
-            "attr" | "attrib" | "ib" | "field" => Some(Self::AttrsField),
+            "attr" | "attrib" | "ib" => Some(Self::AttrsLegacyAttrib),
+            "field" => Some(Self::AttrsNextGenField),
+            "NOTHING" => Some(Self::AttrsNothing),
             _ => None,
         }
     }
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
-            Self::TypeVar | Self::TypeVarTuple => {
+            Self::IntVar => matches!(m.as_str(), "shape_extensions"),
+            Self::TypeVar => matches!(m.as_str(), "typing" | "typing_extensions"),
+            Self::TypeVarTuple => {
                 matches!(
                     m.as_str(),
                     "typing" | "typing_extensions" | "shape_extensions"
@@ -167,6 +179,7 @@ impl SpecialExport {
             | Self::Union
             | Self::Optional
             | Self::AssertType
+            | Self::RevealType
             | Self::TypeAliasType
             | Self::NoTypeCheck
             | Self::Overload
@@ -219,9 +232,12 @@ impl SpecialExport {
             Self::UsesShapeDsl => matches!(m.as_str(), "shape_extensions"),
             Self::ShapeDslFunction => matches!(m.as_str(), "shape_extensions.dsl"),
             Self::ShapedArray => matches!(m.as_str(), "shape_extensions"),
+            Self::ProxyMethod => matches!(m.as_str(), "shape_extensions"),
             Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
             Self::BuiltinsSentinel => matches!(m.as_str(), "builtins"),
-            Self::AttrsField => matches!(m.as_str(), "attr" | "attrs"),
+            Self::AttrsLegacyAttrib | Self::AttrsNextGenField | Self::AttrsNothing => {
+                matches!(m.as_str(), "attr" | "attrs")
+            }
         }
     }
 

@@ -105,9 +105,6 @@ impl ModulePathCache {
 /// should understand the relationship between targets and importable qualified
 /// paths to the files contained in the build system.
 pub trait SourceDatabase: Send + Sync + fmt::Debug {
-    /// Get the Handles for modules that should be checked. Used when targets are
-    /// specified with the sourcedb.
-    fn modules_to_check(&self) -> Vec<Handle>;
     /// Return whether this source database may contain `module`.
     ///
     /// Implementations should return `true` unless they can cheaply and exactly
@@ -125,6 +122,21 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// Get the handle for the given module path, including its Python platform and version
     /// settings.
     fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle>;
+    /// Returns live source database functionality, when this source database can be queried again.
+    ///
+    /// Implementations of `LiveSourceDatabase` must return `Some(self)`.
+    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase>;
+}
+
+/// A source database that can enumerate the module handles that should seed a
+/// checking run.
+pub trait ModuleEnumerator: SourceDatabase {
+    fn modules_to_check(&self) -> Vec<Handle>;
+}
+
+/// Source database functionality for build-system-backed databases that can be
+/// queried again as the project changes.
+pub trait LiveSourceDatabase: SourceDatabase {
     /// Queries this sourcedb for the provided set of open files. Will short-circuit querying
     /// if there are no changes from the set of files previously queried for, unless `force`
     /// is provided, which will unconditionally requery the source DB.

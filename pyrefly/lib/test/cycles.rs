@@ -644,82 +644,73 @@ def f(cond: bool):
 "#,
 );
 
-// Verify that mutually recursive functions (a true SCC, not just a LoopPhi)
-// converge correctly under iterative fixpoint solving. Functions `f` and `g`
-// each call the other, creating a cycle in the binding graph. The cold-start
-// iteration uses placeholders for the unknown return types; the warm-start
-// iteration substitutes the previous answers and should converge to the
-// annotated return types.
+// Verify that mutually recursive inferred returns stabilize under iterative
+// fixpoint solving. Each function's return answer depends on the other's, so
+// solving either answer enters the same SCC. The `Unknown` in the revealed
+// fixpoint witnesses the placeholder used to break the recursive backedge.
 testcase!(
     iterative_warm_start_mutual_recursion,
     r#"
-from typing import assert_type
+from typing import reveal_type
 
-def f(x: int) -> str:
+def f(x: int):
     if x <= 0:
         return "done"
     return g(x - 1)
 
-def g(x: int) -> str:
+def g(x: int):
     return f(x)
 
-assert_type(f(1), str)
-assert_type(g(1), str)
+reveal_type(f(1))  # E: revealed type: Literal['done'] | Unknown
+reveal_type(g(1))  # E: revealed type: Literal['done'] | Unknown
 "#,
 );
 
-// Verify that spurious errors from cold-start iteration 1 (which uses
-// placeholders via `error_swallower()`) do not leak into the final output.
-// A clean mutual recursion cycle with fully annotated signatures should
-// produce NO errors: the cold-start may temporarily see placeholder types
-// that look like mismatches, but those errors are swallowed. The warm-start
-// iterations use `error_collector()` and should see converged, correct types
-// that produce no errors.
+// Diagnostics produced from cold-start placeholders must not leak after
+// mutually recursive inferred returns stabilize. The inner reveal sees
+// `Unknown` during cold start and `int | Unknown` during warm iterations, so
+// its expectation only passes when the cold diagnostic is discarded.
 testcase!(
     iterative_error_suppression_no_spurious_errors,
     r#"
-from typing import assert_type
+from typing import reveal_type
 
-def f(x: int) -> int:
-    return g(x)
+def f(x: int):
+    if x <= 0:
+        return 0
+    return reveal_type(g(x - 1)) + 1  # E: revealed type: int | Unknown
 
-def g(x: int) -> int:
+def g(x: int):
     return f(x)
 
-assert_type(f(1), int)
-assert_type(g(1), int)
+reveal_type(f(1))  # E: revealed type: int | Unknown
+reveal_type(g(1))  # E: revealed type: int | Unknown
 "#,
 );
 
-// Verify that real type errors ARE reported after convergence in iterative
-// mode. While cold-start (iteration 1) errors are suppressed, errors from
-// iteration >= 2 are collected and committed. Here `g` has a return type
-// annotation of `str` but returns `x` (an `int`), which is a genuine
-// incompatible-return-type error that must survive across iterations.
+// Real errors discovered after mutually recursive inferred returns stabilize
+// must still be reported. Both answers contain `Literal['done'] | Unknown`,
+// making the inner call to `f` an invalid argument to the outer call.
 testcase!(
     iterative_error_suppression_real_errors_reported,
     r#"
-from typing import assert_type
+from typing import reveal_type
 
-def f(x: int) -> str:
+def f(x: int):
     if x <= 0:
         return "done"
     return g(x - 1)
 
-def g(x: int) -> str:
-    return x  # E: Returned type `int` is not assignable to declared return type `str`
+def g(x: int):
+    return f(f(x))  # E: Argument `Literal['done'] | Unknown` is not assignable to parameter `x` with type `int` in function `f`
 
-assert_type(f(1), str)
-assert_type(g(1), str)
+reveal_type(f(1))  # E: revealed type: Literal['done'] | Unknown
+reveal_type(g(1))  # E: revealed type: Literal['done'] | Unknown
 "#,
 );
 
-// Verify that the iterative solver handles SCCs spanning multiple modules.
-// Module `a` defines `f` which calls `g` from module `b`, and module `b`
-// defines `g` which calls `f` from module `a`. This creates a cross-module
-// cycle that exercises `solve_idx_erased` plumbing: the iterative solver
-// must detect the cross-module SCC and converge to the annotated return
-// types via cold-start placeholders followed by warm-start iterations.
+// Verify that mutually recursive inferred returns spanning modules form an
+// SCC and converge through the cross-module `solve_idx_erased` path.
 
 fn env_iterative_cross_module_cycle() -> TestEnv {
     let mut env = TestEnv::new();
@@ -728,8 +719,10 @@ fn env_iterative_cross_module_cycle() -> TestEnv {
         r#"
 from b import g
 
-def f(x: int) -> int:
-    return g(x)
+def f(x: int):
+    if x <= 0:
+        return 0
+    return g(x - 1)
 "#,
     );
     env.add(
@@ -737,7 +730,7 @@ def f(x: int) -> int:
         r#"
 from a import f
 
-def g(x: int) -> int:
+def g(x: int):
     return f(x)
 "#,
     );
@@ -748,42 +741,42 @@ testcase!(
     iterative_cross_module_scc_cycle,
     env_iterative_cross_module_cycle(),
     r#"
-from typing import assert_type
+from typing import reveal_type
 from a import f
 from b import g
-assert_type(f(1), int)
-assert_type(g(1), int)
+reveal_type(f(1))  # E: revealed type: Literal[0] | Unknown
+reveal_type(g(1))  # E: revealed type: Literal[0] | Unknown
 "#,
 );
 
-// Verify that two disjoint SCCs (no edges between them) solve independently
-// and correctly. When the iterative solver discovers a disjoint SCC during
-// iteration, it should solve that SCC to completion, commit its results,
-// and return without disturbing the iteration state of the other SCC.
-// Here SCC1 = {f, g} (int -> int) and SCC2 = {h, k} (str -> str) are
-// completely independent mutual-recursion pairs.
+// Verify that two disjoint inferred-return SCCs solve independently. Each
+// pair has its own concrete base case and no dependencies on the other pair.
 testcase!(
     iterative_disjoint_scc_independence,
     r#"
-from typing import assert_type
+from typing import reveal_type
 
 # SCC 1: f and g call each other
-def f(x: int) -> int:
-    return g(x)
+def f(x: int):
+    if x <= 0:
+        return 0
+    return g(x - 1)
 
-def g(x: int) -> int:
+def g(x: int):
     return f(x)
 
 # SCC 2: h and k call each other (completely independent of f/g)
-def h(x: str) -> str:
-    return k(x)
+def h(x: str):
+    if not x:
+        return "done"
+    return k(x[1:])
 
-def k(x: str) -> str:
+def k(x: str):
     return h(x)
 
-assert_type(f(1), int)
-assert_type(g(1), int)
-assert_type(h("a"), str)
-assert_type(k("a"), str)
+reveal_type(f(1))  # E: revealed type: Literal[0] | Unknown
+reveal_type(g(1))  # E: revealed type: Literal[0] | Unknown
+reveal_type(h("a"))  # E: revealed type: Literal['done'] | Unknown
+reveal_type(k("a"))  # E: revealed type: Literal['done'] | Unknown
 "#,
 );

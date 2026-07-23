@@ -1,0 +1,26 @@
+from types import TracebackType
+from typing import Optional, Type
+
+from .._models import Request, Response
+
+class BaseTransport:
+    def __enter__(self) -> "BaseTransport": ...
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]] = ...,
+        exc_value: Optional[BaseException] = ...,
+        traceback: Optional[TracebackType] = ...,
+    ) -> None: ...
+    def handle_request(self, request: Request) -> Response: ...
+    def close(self) -> None: ...
+
+class AsyncBaseTransport:
+    async def __aenter__(self) -> "AsyncBaseTransport": ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]] = ...,
+        exc_value: Optional[BaseException] = ...,
+        traceback: Optional[TracebackType] = ...,
+    ) -> None: ...
+    async def handle_async_request(self, request: Request) -> Response: ...
+    async def aclose(self) -> None: ...

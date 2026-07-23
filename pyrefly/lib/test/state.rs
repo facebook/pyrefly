@@ -16,8 +16,9 @@ use std::time::Duration;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::source_db::LiveSourceDatabase;
+use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::SourceDatabase;
-use pyrefly_build::source_db::Target;
 use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -27,12 +28,9 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
-use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
-use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
-use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_python_ast::name::Name;
 use starlark_map::small_set::SmallSet;
 use tempfile::TempDir;
@@ -77,14 +75,6 @@ impl MutableShapeExtensionsSourceDb {
 }
 
 impl SourceDatabase for MutableShapeExtensionsSourceDb {
-    fn modules_to_check(&self) -> Vec<Handle> {
-        vec![Handle::new(
-            ModuleName::from_str("main"),
-            ModulePath::memory(PathBuf::from("main.py")),
-            self.sys_info.dupe(),
-        )]
-    }
-
     fn may_contain_module(&self, module: ModuleName) -> bool {
         match module.as_str() {
             "shape_extensions" => *self.contains_shape_extensions.lock(),
@@ -121,24 +111,18 @@ impl SourceDatabase for MutableShapeExtensionsSourceDb {
         ))
     }
 
-    fn query_source_db(
-        &self,
-        _: SmallSet<InternedPath>,
-        _: bool,
-    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
-        (Ok(true), TelemetrySourceDbRebuildInstanceStats::default())
-    }
-
-    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern> {
-        SmallSet::new()
-    }
-
-    fn get_target(&self, _: Option<&Path>) -> Option<Target> {
+    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
         None
     }
+}
 
-    fn get_generated_files(&self) -> SmallSet<InternedPath> {
-        SmallSet::new()
+impl ModuleEnumerator for MutableShapeExtensionsSourceDb {
+    fn modules_to_check(&self) -> Vec<Handle> {
+        vec![Handle::new(
+            ModuleName::from_str("main"),
+            ModulePath::memory(PathBuf::from("main.py")),
+            self.sys_info.dupe(),
+        )]
     }
 }
 
@@ -167,16 +151,9 @@ else:
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(
-            &config_file,
-            name,
-            None,
-            None,
-            &DirEntryCache::new(true),
-            None,
-        )
-        .finding()
-        .unwrap();
+        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+            .finding()
+            .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -223,16 +200,9 @@ fn test_lookup_export_location_warm_with_multiple_sysinfos() {
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(
-            &config_file,
-            name,
-            None,
-            None,
-            &DirEntryCache::new(true),
-            None,
-        )
-        .finding()
-        .unwrap();
+        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+            .finding()
+            .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -287,16 +257,9 @@ fn test_resolve_export_location_inherits_source_sysinfo() {
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(
-            &config_file,
-            name,
-            None,
-            None,
-            &DirEntryCache::new(true),
-            None,
-        )
-        .finding()
-        .unwrap();
+        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+            .finding()
+            .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -333,16 +296,9 @@ fn test_cross_module_literal_promotion() {
     let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
     let f = |name: &str| {
         let name = ModuleName::from_str(name);
-        let path = find_import(
-            &config_file,
-            name,
-            None,
-            None,
-            &DirEntryCache::new(true),
-            None,
-        )
-        .finding()
-        .unwrap();
+        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+            .finding()
+            .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
     let handles = [f("main")];
@@ -381,6 +337,7 @@ fn test_multiple_path() {
             ModulePath::memory(PathBuf::from(path)),
         );
     }
+    let handles = sourcedb.modules_to_check();
     config.source_db = Some(ArcId::new(Box::new(sourcedb)));
     config.configure();
     let config = ArcId::new(config);
@@ -389,7 +346,6 @@ fn test_multiple_path() {
         ConfigFinder::new_constant(config.clone()),
         TEST_THREAD_COUNT,
     );
-    let handles = config.source_db.as_ref().unwrap().modules_to_check();
     let mut transaction = state.new_transaction(Require::Exports, None);
     transaction.set_memory(FILES.map(|(_, path, contents)| {
         (
@@ -420,16 +376,18 @@ fn test_tensor_shapes_availability_uses_origin_sensitive_resolution() {
 from typing import Any
 
 shaped_array: Any
+class IntTuple:
+    def __class_getitem__(cls, params: Any) -> Any: ...
 "#,
     )
     .unwrap();
     fs::write(
         pkg.join("torch.pyi"),
         r#"
-from shape_extensions import shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Tensor[*Shape]: ...
+class Tensor[Shape: IntTuple]: ...
 "#,
     )
     .unwrap();
@@ -540,10 +498,10 @@ fn test_tensor_shapes_find_invalidation_rebuilds_module() {
     fs::write(
         root.join("torch.pyi"),
         r#"
-from shape_extensions import shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Tensor[*Shape]: ...
+class Tensor[Shape: IntTuple]: ...
 "#,
     )
     .unwrap();
@@ -619,6 +577,8 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
 from typing import Any
 
 shaped_array: Any
+class IntTuple:
+    def __class_getitem__(cls, params: Any) -> Any: ...
 "#,
     )
     .unwrap();
@@ -724,10 +684,10 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
             PathBuf::from("torch.pyi"),
             Some(Arc::new(FileContents::from_source(
                 r#"
-from shape_extensions import shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Tensor[*Shape]: ...
+class Tensor[Shape: IntTuple]: ...
 "#
                 .to_owned(),
             ))),
@@ -748,6 +708,8 @@ class Float[*Shape]: ...
 from typing import Any
 
 shaped_array: Any
+class IntTuple:
+    def __class_getitem__(cls, params: Any) -> Any: ...
 "#
                 .to_owned(),
             ))),
@@ -819,16 +781,18 @@ fn test_tensor_shapes_find_invalidation_drops_shapes_on_removal() {
 from typing import Any
 
 shaped_array: Any
+class IntTuple:
+    def __class_getitem__(cls, params: Any) -> Any: ...
 "#,
     )
     .unwrap();
     fs::write(
         root.join("torch.pyi"),
         r#"
-from shape_extensions import shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Tensor[*Shape]: ...
+class Tensor[Shape: IntTuple]: ...
 "#,
     )
     .unwrap();

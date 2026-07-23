@@ -72,6 +72,44 @@ impl ClassId {
     }
 }
 
+/// Represents a unique identifier for a field **within a class**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct ClassFieldId(u32);
+
+impl ClassFieldId {
+    pub fn from_class_and_name(
+        class: &Class,
+        name: &Name,
+        context: &ModuleAnswersContext,
+    ) -> ClassFieldId {
+        // Regular fields occupy `[0, class_fields.len())`; synthesized fields are
+        // offset by the raw `class_fields` length.
+        let class_fields = context.bindings.get_class_fields(class.index());
+        if let Some(index) = class_fields.and_then(|fields| fields.get_index_of(name)) {
+            return ClassFieldId(index as u32);
+        }
+
+        let base = class_fields.map_or(0, ClassFields::len);
+        let synthesized_fields_idx = context
+            .bindings
+            .key_to_idx(&KeyClassSynthesizedFields(class.index()));
+        let synthesized_fields = context.answers.get_idx(synthesized_fields_idx).unwrap();
+        let index = synthesized_fields
+            .get_index_of(name)
+            .expect("class field must exist as either a regular or synthesized field");
+        ClassFieldId((base + index) as u32)
+    }
+
+    #[cfg(test)]
+    pub fn from_int(id: u32) -> ClassFieldId {
+        ClassFieldId(id)
+    }
+
+    pub fn to_int(self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClassRef {
     pub module_id: ModuleId,

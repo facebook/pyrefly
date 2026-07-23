@@ -9,13 +9,15 @@ use lsp_types::CodeLens;
 use lsp_types::CodeLensOptions;
 use lsp_types::Url;
 use lsp_types::request::CodeLensRequest;
-use pyrefly::commands::lsp::IndexingMode;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn runnable_code_lens_config() -> serde_json::Value {
     json!([{
@@ -211,7 +213,13 @@ fn test_code_lens_disabled_by_default() {
 
 #[test]
 fn test_initialize_advertises_code_lens_with_indexing() {
-    let interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction
         .client
@@ -236,7 +244,13 @@ fn test_code_lens_shows_reference_counts() {
     let root = get_test_files_root();
     let root_path = root.path().join("code_lens_references");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {

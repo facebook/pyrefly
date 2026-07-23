@@ -31,6 +31,141 @@ def anywhere():
     "#,
 );
 
+testcase!(
+    test_useless_overload_body,
+    r#"
+from typing import overload
+
+# should warn
+
+@overload
+def returns_expr(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    return x + 1
+
+@overload
+def returns_expr(x: str) -> str:
+    ...
+
+@overload
+def raises_other(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    raise ValueError("bad")
+
+@overload
+def raises_other(x: str) -> str:
+    ...
+
+@overload
+def has_assignment(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    x = 1
+    return x
+
+@overload
+def has_assignment(x: str) -> str:
+    ...
+
+@overload
+def has_multiple_stmts(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    print("side effect")
+    return x
+
+@overload
+def has_multiple_stmts(x: str) -> str:
+    ...
+
+def returns_expr(x: int | str) -> int | str:
+    return x
+
+def raises_other(x: int | str) -> int | str:
+    return x
+
+def has_assignment(x: int | str) -> int | str:
+    return x
+
+def has_multiple_stmts(x: int | str) -> int | str:
+    return x
+
+# should not warn 
+
+@overload
+def body_pass(x: int) -> int:
+    pass
+
+@overload
+def body_pass(x: str) -> str:
+    ...
+
+def body_pass(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_ellipsis(x: int) -> int:
+    ...
+
+@overload
+def body_ellipsis(x: str) -> str:
+    ...
+
+def body_ellipsis(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_docstring_only(x: int) -> int:
+    """This is fine."""
+
+@overload
+def body_docstring_only(x: str) -> str:
+    ...
+
+def body_docstring_only(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_raise_not_impl(x: int) -> int:
+    raise NotImplementedError
+
+@overload
+def body_raise_not_impl(x: str) -> str:
+    ...
+
+def body_raise_not_impl(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_raise_not_impl_msg(x: int) -> int:
+    raise NotImplementedError("not done")
+
+@overload
+def body_raise_not_impl_msg(x: str) -> str:
+    ...
+
+def body_raise_not_impl_msg(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_return_not_impl(x: int) -> int:
+    return NotImplemented
+
+@overload
+def body_return_not_impl(x: str) -> str:
+    ...
+
+def body_return_not_impl(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_docstring_then_pass(x: int) -> int:
+    """docstring stripped first, then pass is trivial."""
+    pass
+
+@overload
+def body_docstring_then_pass(x: str) -> str:
+    ...
+
+def body_docstring_then_pass(x: int | str) -> int | str:
+    return x
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2867
 testcase!(
     test_urlunparse_prefers_string_overload_for_parse_result,
@@ -721,7 +856,7 @@ def f(x: int) -> int: ...
 def f(x: str) -> str: ...
 
 @overload
-def f(x: int | str) -> int | str: # E: @overload decorator should not be used on function implementation
+def f(x: int | str) -> int | str: # E: @overload decorator should not be used on function implementation  # E: `@overload` bodies should not contain executable logic
     return x
     "#,
 );
@@ -765,7 +900,7 @@ from typing import overload, Any
 @overload
 def foo(a: int) -> int: ...
 @overload
-def foo(a: str) -> str:
+def foo(a: str) -> str:  # E: `@overload` bodies should not contain executable logic
     """Docstring"""
     return 123             # E: Returned type `Literal[123]` is not assignable to declared return type `str`
 def foo(*args, **kwargs) -> Any:
