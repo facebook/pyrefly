@@ -18,6 +18,7 @@ use crate::commands::util::CommandExitStatus;
 use crate::error::suppress;
 use crate::error::suppress::CommentLocation;
 use crate::error::suppress::SerializedError;
+use crate::error::suppress::UnusedIgnoreKind;
 
 /// Suppress type errors by adding ignore comments to source files.
 #[derive(Clone, Debug, Parser)]
@@ -35,13 +36,17 @@ pub struct SuppressArgs {
     #[arg(long)]
     json: Option<PathBuf>,
 
-    /// Remove unused ignore comments instead of adding suppressions.
-    #[arg(long)]
-    remove_unused: bool,
-
-    /// Remove unused `# type: ignore` comments in addition to unused Pyrefly ignores.
-    #[arg(long)]
-    remove_unused_type_ignores: bool,
+    /// Remove unused ignores instead of adding suppressions, optionally selecting `pyrefly`, `type`, or `all`.
+    /// Defaults to `pyrefly` when no kind is specified.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "KIND",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "pyrefly"
+    )]
+    remove_unused: Option<UnusedIgnoreKind>,
 
     /// Where to place suppression comments: on the line before the error
     /// (`line-before`, the default) or on the same line (`same-line`).
@@ -55,7 +60,7 @@ impl SuppressArgs {
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
-        if self.remove_unused || self.remove_unused_type_ignores {
+        if let Some(kind) = self.remove_unused {
             // Remove unused ignores mode
             let unused_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
                 // Parse errors from JSON file, filtering for unused suppression errors only.
@@ -64,12 +69,12 @@ impl SuppressArgs {
                 errors
                     .into_iter()
                     .filter(|e| {
-                        e.is_unused_ignore()
-                            || (self.remove_unused_type_ignores && e.is_unused_type_ignore())
+                        kind.includes_pyrefly_or_pyre() && e.is_unused_ignore()
+                            || kind.includes_type() && e.is_unused_type_ignore()
                     })
                     .collect()
             } else {
-                // Delegate to `check --remove-unused-[type-]ignores`, which
+                // Delegate to `check --remove-unused-ignores`, which
                 // collects unused ignore errors directly (bypassing severity
                 // filtering) and handles removal in one step.
                 self.config_override.validate()?;
@@ -78,10 +83,10 @@ impl SuppressArgs {
                     .clone()
                     .resolve(self.config_override.clone(), wrapper.clone())?;
 
-                let remove_unused_flag = if self.remove_unused_type_ignores {
-                    "--remove-unused-type-ignores"
-                } else {
-                    "--remove-unused-ignores"
+                let remove_unused_flag = match kind {
+                    UnusedIgnoreKind::Pyrefly => "--remove-unused-ignores=pyrefly",
+                    UnusedIgnoreKind::Type => "--remove-unused-ignores=type",
+                    UnusedIgnoreKind::All => "--remove-unused-ignores=all",
                 };
                 let check_args = CheckArgs::parse_from([
                     "check",
@@ -94,10 +99,7 @@ impl SuppressArgs {
             };
 
             // Remove unused ignores (JSON path only)
-            suppress::remove_unused_ignores_from_serialized(
-                unused_errors,
-                self.remove_unused_type_ignores,
-            );
+            suppress::remove_unused_ignores_from_serialized(unused_errors, kind);
         } else {
             // Add suppressions mode (existing behavior)
             let serialized_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
@@ -135,5 +137,30 @@ impl SuppressArgs {
         }
 
         Ok(CommandExitStatus::Success)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_unused_cli_values() {
+        for (argument, expected) in [
+            (None, None),
+            (Some("--remove-unused"), Some(UnusedIgnoreKind::Pyrefly)),
+            (
+                Some("--remove-unused=pyrefly"),
+                Some(UnusedIgnoreKind::Pyrefly),
+            ),
+            (Some("--remove-unused=type"), Some(UnusedIgnoreKind::Type)),
+            (Some("--remove-unused=all"), Some(UnusedIgnoreKind::All)),
+        ] {
+            let args = argument.map_or_else(
+                || SuppressArgs::parse_from(["suppress"]),
+                |argument| SuppressArgs::parse_from(["suppress", argument]),
+            );
+            assert_eq!(args.remove_unused, expected);
+        }
     }
 }
