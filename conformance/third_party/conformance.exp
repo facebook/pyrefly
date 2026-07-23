@@ -10832,17 +10832,6 @@
   "specialtypes_never.py": [
     {
       "code": -2,
-      "column": 22,
-      "concise_description": "Function declared to return `NoReturn` but is missing an explicit `return`",
-      "description": "Function declared to return `NoReturn` but is missing an explicit `return`",
-      "line": 19,
-      "name": "bad-return",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 19
-    },
-    {
-      "code": -2,
       "column": 21,
       "concise_description": "`list[Never]` is not assignable to `list[int]`",
       "description": "`list[Never]` is not assignable to `list[int]`",

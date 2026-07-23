@@ -389,6 +389,16 @@ def g():
 );
 
 testcase!(
+    test_no_explicit_return_if_return_type_is_never,
+    r#"
+from typing import Never
+
+def f() -> Never:
+    print("hello")
+"#,
+);
+
+testcase!(
     test_return_no_error,
     r#"
 def B() -> None:

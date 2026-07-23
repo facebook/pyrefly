@@ -5499,6 +5499,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         } else {
+            // If the annotation is `NoReturn` or `Never` and there is no explicit return, there is no need to check further.
+            if annotation.is_never() && !has_explicit_returns {
+                return;
+            }
             self.check_type(implicit_return.ty(), annotation, range, errors, &|| {
                 TypeCheckContext::of_kind(TypeCheckKind::ImplicitFunctionReturn(
                     has_explicit_returns,
