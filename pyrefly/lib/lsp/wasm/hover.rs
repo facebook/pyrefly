@@ -415,6 +415,61 @@ fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
     None
 }
 
+fn simple_python_string_literal_contents(snippet: &str) -> Option<&str> {
+    let mut rest = snippet.trim();
+    while let Some(ch) = rest.chars().next()
+        && matches!(ch, 'b' | 'B' | 'f' | 'F' | 'r' | 'R' | 'u' | 'U')
+    {
+        rest = &rest[ch.len_utf8()..];
+    }
+    let quote = if rest.starts_with("'''") {
+        "'''"
+    } else if rest.starts_with("\"\"\"") {
+        "\"\"\""
+    } else if rest.starts_with('\'') {
+        "'"
+    } else if rest.starts_with('"') {
+        "\""
+    } else {
+        return None;
+    };
+    if rest.len() < quote.len() * 2 || !rest.ends_with(quote) {
+        return None;
+    }
+    Some(&rest[quote.len()..rest.len() - quote.len()])
+}
+
+fn is_ascii_identifier_like(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn hover_name_from_definition_snippet(
+    snippet: &str,
+    display_name: Option<&str>,
+    fallback_name: Option<String>,
+) -> Option<String> {
+    let snippet = snippet.trim();
+    let fallback_name = display_name.map(ToOwned::to_owned).or(fallback_name);
+    if snippet.is_empty() {
+        return fallback_name;
+    }
+    if let Some(literal_contents) = simple_python_string_literal_contents(snippet) {
+        return fallback_name.or_else(|| {
+            if is_ascii_identifier_like(literal_contents) {
+                Some(literal_contents.to_owned())
+            } else {
+                Some(snippet.to_owned())
+            }
+        });
+    }
+    Some(snippet.to_owned())
+}
+
 /// Extract the identifier under the cursor so we can label hover results
 /// even when go-to-definition fails.
 fn identifier_text_at(
@@ -817,16 +872,11 @@ pub fn get_hover(
         .next()
     {
         let kind = metadata.symbol_kind();
-        let name = {
-            let snippet = module.code_at(definition_location);
-            if snippet.chars().any(|c| !c.is_whitespace()) {
-                Some(snippet.to_owned())
-            } else if let Some(name) = display_name.clone() {
-                Some(name)
-            } else {
-                fallback_name_from_type
-            }
-        };
+        let name = hover_name_from_definition_snippet(
+            module.code_at(definition_location),
+            display_name.as_deref(),
+            fallback_name_from_type,
+        );
         (kind, name, docstring_range, Some(module))
     } else {
         (None, fallback_name_from_type, None, None)
@@ -954,5 +1004,28 @@ mod tests {
         let ty = heap.mk_type(make_function_type(&heap, "pkg.subpkg", "run"));
         let fallback = fallback_hover_name_from_type(&ty);
         assert_eq!(fallback.as_deref(), Some("run"));
+    }
+
+    #[test]
+    fn hover_name_prefers_display_name_over_quoted_definition_snippet() {
+        let name = hover_name_from_definition_snippet("'array'", Some("array"), None);
+        assert_eq!(name.as_deref(), Some("array"));
+    }
+
+    #[test]
+    fn hover_name_uses_fallback_name_over_quoted_definition_snippet() {
+        let name =
+            hover_name_from_definition_snippet("  'array'  ", None, Some("array".to_owned()));
+        assert_eq!(name.as_deref(), Some("array"));
+    }
+
+    #[test]
+    fn hover_name_keeps_source_snippet_for_normal_definitions() {
+        let name = hover_name_from_definition_snippet(
+            "external_function",
+            Some("array"),
+            Some("array".to_owned()),
+        );
+        assert_eq!(name.as_deref(), Some("external_function"));
     }
 }
