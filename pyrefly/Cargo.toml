@@ -59,6 +59,7 @@ pyrefly_graph = { path = "../crates/pyrefly_graph" }
 pyrefly_python = { path = "../crates/pyrefly_python" }
 pyrefly_types = { path = "../crates/pyrefly_types" }
 pyrefly_util = { path = "../crates/pyrefly_util" }
+pyrefly_triton = { path = "../crates/pyrefly_triton" }
 rayon = "1.11.0"
 regex = "1.13.1"
 ruff_annotate_snippets = "0.0.4"

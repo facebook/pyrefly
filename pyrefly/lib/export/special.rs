@@ -79,6 +79,7 @@ pub enum SpecialExport {
     ProxyMethod,
     Sentinel,
     BuiltinsSentinel,
+    TritonJit,
     AttrsLegacyAttrib,
     AttrsNextGenField,
     AttrsNothing,
@@ -152,6 +153,7 @@ impl SpecialExport {
             "ProxyMethod" => Some(Self::ProxyMethod),
             "Sentinel" => Some(Self::Sentinel),
             "sentinel" => Some(Self::BuiltinsSentinel),
+            "jit" => Some(Self::TritonJit),
             "attr" | "attrib" | "ib" => Some(Self::AttrsLegacyAttrib),
             "field" => Some(Self::AttrsNextGenField),
             "NOTHING" => Some(Self::AttrsNothing),
@@ -235,6 +237,7 @@ impl SpecialExport {
             Self::ProxyMethod => matches!(m.as_str(), "shape_extensions"),
             Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
             Self::BuiltinsSentinel => matches!(m.as_str(), "builtins"),
+            Self::TritonJit => matches!(m.as_str(), "triton"),
             Self::AttrsLegacyAttrib | Self::AttrsNextGenField | Self::AttrsNothing => {
                 matches!(m.as_str(), "attr" | "attrs")
             }
