@@ -461,6 +461,16 @@ def two_elems() -> tuple:
 a, b, c = two_elems()
 ```
 
+## column-type-mismatch
+
+A Polars DataFrame column literal has an element whose type does not fit the column's dtype. Polars infers the dtype from the first element and requires every later element to fit it, so a mismatch raises `TypeError` at runtime.
+
+```python
+import polars as pl
+
+pl.DataFrame({"a": [1, 2.0]})  # column `a` is `int`, so the `float` does not fit
+```
+
 ## deprecated
 
 Default severity: `warn`
@@ -484,6 +494,20 @@ Division, floor division, or modulo by a literal zero value. This catches cases 
 x = 10 / 0   # error: division by zero
 y = 10 // 0  # error: division by zero
 z = 10 % 0   # error: division by zero
+```
+
+## empty-body
+
+Default severity: `ignore`
+
+A function body consists only of `...` even though the function declares a
+return type that `None` is not assignable to.
+
+Empty ellipsis bodies are allowed in stub files, protocol methods, abstract
+methods, overload declarations, and `if TYPE_CHECKING` blocks.
+
+```python
+def f() -> int: ...  # error: empty body
 ```
 
 ## explicit-any
@@ -540,6 +564,7 @@ Umbrella error code for cases where Pyrefly infers an implicit `Any`. Suppressin
 Most concrete diagnostics are emitted under one of the more specific sub-kinds:
 - [`implicit-any-attribute`](#implicit-any-attribute)
 - [`implicit-any-empty-container`](#implicit-any-empty-container)
+- [`implicit-any-lambda`](#implicit-any-lambda)
 - [`implicit-any-parameter`](#implicit-any-parameter)
 - [`implicit-any-type-argument`](#implicit-any-type-argument)
 
@@ -583,16 +608,29 @@ x: list[int] = []
 x = [1, 2, 3]
 ```
 
+## implicit-any-lambda
+
+Default severity: `ignore`
+
+A lambda whose parameter or return type cannot be inferred is treated as an implicit `Any`, hiding type errors in its body and at its call sites.
+
+When the lambda is used in a typed context (e.g. assigned to a `Callable` or passed to a function that expects one), the parameters are inferred from that context and no error is reported.
+
+```python
+f = lambda x: x  # error: implicit-any-lambda
+
+from typing import Callable
+g: Callable[[int], int] = lambda x: x  # OK: `x` is inferred as `int` from context
+```
+
 ## implicit-any-parameter
 
 Default severity: `ignore`
 
 A function parameter has no type annotation, so Pyrefly treats it as `Any`. Add an annotation. The `self` and `cls` parameters of methods are excluded from this check.
 
-This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
-
 ```python
-def f(x):  # implicit-any-parameter — `x` has type `Any`
+def f(x):
     return x + 1
 
 # Fix:
@@ -636,6 +674,34 @@ urllib.request.urlopen(...)
 import urllib.request
 urllib.request.urlopen(...)
 
+```
+
+## implicit-reexport
+
+Default severity: `ignore`
+
+This error is emitted when you import a name from a module that only made it
+available through a plain `import` or `from ... import ...` statement. Per the
+[typing spec](https://typing.python.org/en/latest/spec/distributing.html#import-conventions),
+such a name is not part of the module's public interface, so relying on it is
+fragile: the intermediate module may stop importing it at any time.
+
+A module explicitly re-exports a name when it is redundantly aliased
+(`from x import y as y` or `import x as x`), listed in `__all__`, or brought in
+via a wildcard (`from x import *`).
+
+```python
+# foo.py
+a = 1
+
+# bar.py
+from foo import a  # `a` is not re-exported from `bar`
+
+# baz.py
+from bar import a  # error: `a` is not exported from module `bar`
+
+# Fix in bar.py:
+from foo import a as a  # or add `a` to `__all__`
 ```
 
 ## implicitly-defined-attribute
@@ -741,6 +807,22 @@ def f(x: bool = False) -> int | None:
 ## internal-error
 
 Ideally you'll never see this one. If you do, please consider [filing a bug](https://github.com/facebook/pyrefly/issues).
+
+## invalid-abstract-method
+
+Default severity: `ignore`
+
+Pyrefly emits this error when a class that is not abstract (does not inherit from `abc.ABC`, use `abc.ABCMeta`, have any transitive abstract base, or define a `Protocol` or `NewType`) defines a method decorated with `@abstractmethod`. Such a class is directly instantiable at runtime, yet contains an unimplemented method — a likely programming mistake.
+
+```python
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod  # Error: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+    def fn(self) -> int: ...
+```
+
+To fix the issue, either inherit from `abc.ABC` to make the class abstract, define a `Protocol` if the class is an interface, or remove the `@abstractmethod` decorator and provide a concrete implementation.
 
 ## invalid-annotation
 
@@ -956,6 +1038,16 @@ x = 2
 Bad: TypeAlias = x
 ```
 
+## invalid-type-checking-constant
+
+A module-level `TYPE_CHECKING` constant that is not typed as `bool`. Type checkers treat
+`TYPE_CHECKING` as `True`, while at runtime it is `False`, so a user-defined one must be a `bool`
+(conventionally `TYPE_CHECKING = False`).
+
+```python
+TYPE_CHECKING: str = ""  # error: not a bool
+```
+
 ## invalid-type-var
 
 An error caused by incorrect usage or definition of a TypeVar. A few examples:
@@ -1029,6 +1121,23 @@ for _ in range(1, 10):
 def bad_yield_from() -> Generator[int, None, None]:
   # `yield from` can only be used with iterables.
   yield from 1
+```
+
+## misplaced-ignore
+
+Default severity: `warn`
+
+A file-level `# pyrefly: ignore-errors` (or `# pyrefly: ignore-errors[code]`) directive
+only takes effect when it appears at the top of the file, before any code. Placed after
+the first line of code it is silently inert — it suppresses nothing — so Pyrefly flags it.
+Move the directive to the top of the file, or use a line-level `# pyrefly: ignore[code]`
+to suppress a single line.
+
+```python
+import os
+
+# pyrefly: ignore-errors  # inert here — flagged as misplaced-ignore
+x: int = "not an int"  # this error is still reported
 ```
 
 ## missing-argument
@@ -1124,6 +1233,29 @@ happen if you install the `types-requests` package but forget to install `reques
 ## missing-source-for-stubs
 
 Pyrefly has bundled stubs for a package, but no corresponding source package was found.
+
+## missing-super-call
+
+Default severity: `ignore`
+
+A constructor-like method overrides a parent class method but does not call `super()`.
+
+```python
+class Base:
+    def __init__(self) -> None:
+        self.value: int = 1
+
+class Child(Base):
+    def __init__(self) -> None:  # missing-super-call
+        pass
+```
+
+To enable this check, set the severity to `error` in your configuration:
+
+```toml
+[tool.pyrefly]
+errors = { missing-super-call = "error" }
+```
 
 ## name-mismatch
 
@@ -1681,6 +1813,28 @@ reveal_type(1)  # error
 assert_type(1, int)  # error
 ```
 
+## unknown-attribute-type
+
+Default severity: `ignore`
+
+An unannotated attribute is assigned a value whose type is unknown, so the attribute is inferred as `Any`. Add an explicit attribute annotation or fix the right-hand side so Pyrefly can infer a concrete type.
+
+This is not a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` does not suppress this error.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.x = untyped(1)  # downstream users don't know what type `self.x` is
+        self.y: int = untyped(1)  # downstream users treat `self.y` as `int`
+```
+
+## unknown-column
+
+Accessing a DataFrame column that does not exist in the inferred schema.
+
 ## unknown-name
 
 A name is referenced but does not exist.
@@ -1693,6 +1847,20 @@ Even when no configuration file is present, this diagnostic is shown as a warnin
 def where() -> None:
   # There is no spoon: unknown-name
   global spoon
+```
+
+## unknown-variable-type
+
+Default severity: `ignore`
+
+A variable assigned a value of unknown type without an explicit annotation is inferred as `Any`, which hides type errors wherever it is used. Adding an annotation gives the variable a concrete type.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+y = untyped(1)  # downstream users don't know what type `y` is
+y2: int = untyped(1)  # downstream users treat `y2` as `int`
 ```
 
 ## unnecessary-comparison
@@ -1843,6 +2011,37 @@ This error arises when attempting to perform an operation between values of two 
 x = 1 + "oops"  # `+` is not supported between `int` and `str` [unsupported-operation]
 ```
 
+## untyped-class-decorator
+
+Default severity: `ignore`
+
+A class decorator whose own type is `Any` may modify the class in unexpected ways.
+
+```python
+from typing import Any
+
+my_decorator: Any = lambda cls: cls
+
+@my_decorator  # `my_decorator` is `Any`, so the type of `A` is lost [untyped-class-decorator]
+class A: ...
+```
+
+## untyped-function-decorator
+
+Default severity: `ignore`
+
+A function or method decorator whose own type is `Any` obscures the decorated function's type.
+
+```python
+from typing import Any
+
+my_decorator: Any = lambda f: f
+
+@my_decorator  # `my_decorator` is `Any`, so the type of `g` is lost [untyped-function-decorator]
+def g() -> int:
+    return 1
+```
+
 ## untyped-import
 
 Default severity: `warn`
@@ -1850,6 +2049,24 @@ Default severity: `warn`
 Type information for some third-party libraries is shipped in a stubs package separate from the
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
+
+## unused-call-result
+
+Default severity: `ignore`
+
+This rule is disabled by default and must be explicitly enabled. Once enabled, it reports when the
+result of a call expression is discarded and the result type is informative (not `None`, `Any`, or
+`Never`). This is often a sign of a mistake, such as forgetting to use the return value.
+
+```python
+def combine(a: list[int], b: list[int]) -> list[int]:
+    return a + b
+
+items = [1, 2, 3]
+combine(items, [4, 5])  # warning: result is discarded
+print(items)  # ok: print returns None
+x = combine(items, [4, 5])  # ok: result is used
+```
 
 ## unused-coroutine
 

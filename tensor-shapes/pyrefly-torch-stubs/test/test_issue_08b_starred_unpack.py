@@ -5,20 +5,28 @@
 
 from typing import assert_type, TYPE_CHECKING
 
+from shape_extensions import IntVar
+
+
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
-def test_starred_unpack[B, T, NHeads, HeadDim](
+def test_starred_unpack[
+    B: IntVar,
+    T: IntVar,
+    NHeads: IntVar,
+    HeadDim: IntVar,
+](
     x: Tensor[[B, T, NHeads, HeadDim]],
 ) -> None:
     # First check that tuple slicing works
     sizes = x.size()
-    assert_type(sizes, tuple[Dim[B], Dim[T], Dim[NHeads], Dim[HeadDim]])
+    assert_type(sizes, tuple[Int[B], Int[T], Int[NHeads], Int[HeadDim]])
 
     sliced = x.size()[:-1]
-    assert_type(sliced, tuple[Dim[B], Dim[T], Dim[NHeads]])
+    assert_type(sliced, tuple[Int[B], Int[T], Int[NHeads]])
 
     # Starred unpacking now preserves element types
     result = x.float().reshape(*sliced, -1, 2)

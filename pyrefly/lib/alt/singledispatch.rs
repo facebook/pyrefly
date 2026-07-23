@@ -286,9 +286,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty
     }
 
-    /// Handle a `@fn.register(...)` call. Validates the dispatch class against the fallback, then
-    /// tags the factory form `register(C)` so applying it returns the impl's own type; the functional
-    /// form `register(C, impl)` returns the impl from the stub unchanged.
+    /// Handle a `@fn.register(...)` call: validate the dispatch class against the fallback, then return
+    /// the impl's own type (`register(impl)`) or tag the factory form `register(C)` for later application.
     pub(crate) fn call_singledispatch_register(
         &self,
         fallback_first: Type,
@@ -302,20 +301,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let (cls_expr, has_func) = singledispatch_register_args(arguments);
-        // Infer the class as a value and unwrap it (not as a type form), so a class whose name
-        // collides with a special form isn't misread; a non-class arg stays untagged.
-        let mut dispatch_is_class = false;
-        if let Some(cls_expr) = cls_expr {
-            let arg_ty = self.expr_infer(cls_expr, errors);
-            if let Some((_, dispatch_ty)) = self.unwrap_class_object_silently(&arg_ty) {
+        // Infer the first argument as a value, not a type form, so a name colliding with a special
+        // form isn't misread: a class object is the dispatch type, a lone callable is the impl.
+        let arg_ty = cls_expr.map(|e| self.expr_infer(e, errors));
+        let dispatch_class = arg_ty
+            .as_ref()
+            .and_then(|t| self.unwrap_class_object_silently(t))
+            .map(|(_, dispatch_ty)| dispatch_ty);
+        if let Some(dispatch_ty) = &dispatch_class {
+            self.check_singledispatch_register(dispatch_ty, &fallback_first, callee_range, errors);
+        }
+        // Bare functional `register(impl)`: the lone argument is the impl and its first parameter (if
+        // any) is the dispatch type. Return the impl's own type so direct calls to it are checked.
+        if dispatch_class.is_none()
+            && arguments.args.len() == 1
+            && arguments.keywords.is_empty()
+            && let Some(impl_ty) = &arg_ty
+            && let [sig, ..] = impl_ty.callable_signatures().as_slice()
+        {
+            if let Some(dispatch_ty) = Self::first_positional_param_type(sig) {
                 self.check_singledispatch_register(
                     &dispatch_ty,
                     &fallback_first,
                     callee_range,
                     errors,
                 );
-                dispatch_is_class = true;
             }
+            return impl_ty.clone();
         }
         let return_ty = self.freeform_call_infer(
             register_ty.clone(),
@@ -326,7 +338,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             hint,
             errors,
         );
-        if dispatch_is_class && !has_func {
+        if dispatch_class.is_some() && !has_func {
             self.heap.mk_kw_call(KwCall {
                 func_metadata: FuncMetadata {
                     kind: FunctionKind::SingleDispatchRegister(Box::new(fallback_first)),
@@ -337,6 +349,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
         } else {
             return_ty
+        }
+    }
+
+    /// Applying the factory decorator `f.register(C)` to an impl returns the impl's own type, so
+    /// direct calls to it are argument-checked; the dispatch class was validated at `.register(C)`.
+    pub(crate) fn apply_singledispatch_register(
+        &self,
+        register_ty: &Type,
+        impl_arg: &Expr,
+        args: &[CallArg],
+        kws: &[CallKeyword],
+        callee_range: TextRange,
+        arg_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let impl_ty = self.expr_infer(impl_arg, errors);
+        // A non-callable argument is left to normal call checking.
+        if impl_ty.callable_signatures().is_empty() {
+            self.freeform_call_infer(
+                register_ty.clone(),
+                args,
+                kws,
+                callee_range,
+                arg_range,
+                hint,
+                errors,
+            )
+        } else {
+            impl_ty
         }
     }
 }

@@ -1096,10 +1096,10 @@ def catch(f: S | None = None, *, exception: T) -> S | T: ...
 testcase!(
     test_abstract,
     r#"
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import Literal, overload
 
-class Derp:
+class Derp(ABC):
     @overload
     @abstractmethod
     def f(self, m: Literal["x"] = "x") -> int: ...
@@ -2317,5 +2317,23 @@ def f(x, y="", z=0.0): return x
 
 y: Any = ...
 f(y=y)  # E: (x: int, y: str = ..., ...) -> int [closest match]\n    (x: str, y: int = ..., ...) -> str
+    "#,
+);
+
+testcase!(
+    test_arg_error_isolation,
+    r#"
+from typing import Callable, Literal, assert_type, overload
+
+@overload
+def f(tag: Literal[1], xs: list[Callable[[int], str]]) -> int: ...
+
+@overload
+def f(tag: Literal[2], xs: list[Callable[[str], str]]) -> str: ...
+
+def f(tag: Literal[1, 2], xs: list[Callable[..., str]]) -> int | str:
+    return 0 if tag == 1 else ""
+
+assert_type(f(2, [lambda value: value + "x"]), str)
     "#,
 );

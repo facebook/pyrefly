@@ -1730,7 +1730,7 @@ def test_union(x: A  | B):
 );
 
 testcase!(
-    bug = "type[ClassDef(..)] and type[ClassType(..)] should be type (or the direct metaclass?)",
+    bug = "type[ClassType(..)] should be type (or the direct metaclass?)",
     test_attribute_access_on_type_class,
     r#"
 # handy hack to get a type[X] for any X
@@ -1744,8 +1744,29 @@ class D[T]:
     @classmethod
     def m(cls, x: T): ...
 
-ty(C).m(0) # E: Expr::attr_infer_for_type attribute base undefined
+ty(C).m(0) # E: Class `type` has no class attribute `m`
 ty(D[int]).m(0) # E: Expr::attr_infer_for_type attribute base undefined
+"#,
+);
+
+testcase!(
+    test_attribute_access_on_classdef_metaclass,
+    r#"
+class Meta(type):
+    def __setattr__(cls, name: str, value: int) -> None: ...
+    def __getattribute__(cls, name: str) -> object: ...
+
+class C(metaclass=Meta):
+    pass
+
+C.__class__.__setattr__(C, "x", 0)
+C.__class__.__setattr__(C, "x", "bad") # E: Argument `Literal['bad']` is not assignable to parameter `value` with type `int`
+C.__class__.__getattribute__(C, "x")
+
+class DefaultMeta:
+    pass
+
+DefaultMeta.__class__.mro(DefaultMeta)
 "#,
 );
 
@@ -1762,7 +1783,7 @@ class TD(TypedDict):
     x: int
 
 ty(TD(x = 0))(x = 0)
-ty(TD).mro() # E: Expr::attr_infer_for_type attribute base undefined
+ty(TD).mro() # E: Missing argument `self` in function `type.mro`
 "#,
 );
 
@@ -2928,17 +2949,120 @@ def f(a: A):
 );
 
 testcase!(
-    test_self_referential_attribute_collapses_to_any,
+    test_self_referential_attribute,
     r#"
 from typing import Any, assert_type
 class C:
     def m(self) -> None:
         # `self.x = [self.x]` is self-referential and never converges (each fixpoint
-        # iteration nests another `list[...]`). Rather than commit the degenerate
-        # unrolled type, a non-convergent inferred attribute collapses to `Any`
-        # (the non-convergence is still reported).
+        # iteration nests another `list[...]`).
         self.x = [self.x]  # E: Fixpoint iteration did not converge
 def f(c: C):
-    assert_type(c.x, Any)
+    assert_type(c.x, list[list[list[list[list[Any]]]]])
     "#,
+);
+
+testcase!(
+    test_unknown_attribute_type_untyped_call,
+    TestEnv::new().enable_unknown_attribute_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.x = untyped(1)  # E: implicitly inferred to be `Any`
+"#,
+);
+
+testcase!(
+    test_unknown_attribute_type_class_body_untyped_call,
+    TestEnv::new().enable_unknown_attribute_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    x = untyped(1)  # E: implicitly inferred to be `Any`
+"#,
+);
+
+testcase!(
+    test_unknown_attribute_type_annotated_no_error,
+    TestEnv::new().enable_unknown_attribute_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.x: int = untyped(1)
+"#,
+);
+
+testcase!(
+    test_unknown_attribute_type_known_no_error,
+    TestEnv::new().enable_unknown_attribute_type_error(),
+    r#"
+class C:
+    def __init__(self) -> None:
+        self.x = 1
+        self.s = "hello"
+"#,
+);
+
+testcase!(
+    test_unknown_attribute_type_not_suppressed_by_implicit_any,
+    TestEnv::new().enable_unknown_attribute_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    def __init__(self) -> None:
+        # pyrefly: ignore[implicit-any]
+        self.x = untyped(1)  # E: implicitly inferred to be `Any`
+"#,
+);
+
+testcase!(
+    test_unknown_attribute_type_explicit_any_no_error,
+    TestEnv::new().enable_unknown_attribute_type_error(),
+    r#"
+from typing import Any, cast
+class C:
+    def __init__(self) -> None:
+        # An explicit `Any` is intentional, so only implicit `Any` should trigger.
+        self.x = cast(Any, 1)
+"#,
+);
+
+testcase!(
+    test_implicit_any_attribute_class_body_no_double_report,
+    TestEnv::new()
+        .enable_unknown_variable_type_error()
+        .enable_unknown_attribute_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+# With both rules enabled, a class-body attribute is reported ONLY by
+# unknown-attribute-type, not unknown-variable-type (the is_class_body_assignment
+# guard prevents a double report). Exactly one error must fire here.
+class C:
+    x = untyped(1)  # E: implicitly inferred to be `Any`
+"#,
+);
+
+testcase!(
+    test_bound_method_no_arbitrary_attr_set,
+    r#"
+class Foo:
+    def real_method(self) -> None: ...
+f: Foo = Foo()
+f.real_method.test = None  # E: has no attribute `test`
+del f.real_method.test  # E: has no attribute `test`
+# Known method attributes are still accessible.
+name: str = f.real_method.__name__
+"#,
 );

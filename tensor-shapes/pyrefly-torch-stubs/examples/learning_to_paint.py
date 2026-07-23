@@ -30,6 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 if TYPE_CHECKING:
+    from shape_extensions import IntVar
     from torch import Tensor
 
 
@@ -70,7 +71,7 @@ class FCN(nn.Module):
         self.conv6 = nn.Conv2d(8, 4, 3, stride=1, padding=1)
         self.pixel_shuffle = nn.PixelShuffle(2)
 
-    def forward[B](self, x: Tensor[[B, 10]]) -> Tensor[[B, 128, 128]]:
+    def forward[B: IntVar](self, x: Tensor[[B, 10]]) -> Tensor[[B, 128, 128]]:
         # MLP
         h1 = F.relu(self.fc1(x))
         assert_type(h1, Tensor[[B, 512]])

@@ -10,7 +10,7 @@ Functional neural network operations including convolution, pooling, activation,
 
 from typing import Literal, overload
 
-from shape_extensions import Elements, SizeTuple, uses_shape_dsl
+from shape_extensions import Elements, IntTuple, IntVar, uses_shape_dsl
 from torch._shapes import (
     adaptive_pool_ir,
     conv_ir,
@@ -380,59 +380,53 @@ def upsample(
     ...
 
 # Phase 2: Activation functions
-def relu[Shape: SizeTuple](
-    input: Tensor[Shape], inplace: bool = False
-) -> Tensor[Shape]:
+def relu[Shape: IntTuple](input: Tensor[Shape], inplace: bool = False) -> Tensor[Shape]:
     """ReLU activation. Shape inference via generic fixture signature."""
     ...
 
-def gelu[Shape: SizeTuple](
+def gelu[Shape: IntTuple](
     input: Tensor[Shape], approximate: str = "none"
 ) -> Tensor[Shape]:
     """GELU activation. Shape inference via generic fixture signature."""
     ...
 
-def silu[Shape: SizeTuple](
-    input: Tensor[Shape], inplace: bool = False
-) -> Tensor[Shape]:
+def silu[Shape: IntTuple](input: Tensor[Shape], inplace: bool = False) -> Tensor[Shape]:
     """SiLU (Swish) activation. Shape inference via generic fixture signature."""
     ...
 
-def selu[Shape: SizeTuple](
-    input: Tensor[Shape], inplace: bool = False
-) -> Tensor[Shape]:
+def selu[Shape: IntTuple](input: Tensor[Shape], inplace: bool = False) -> Tensor[Shape]:
     """SELU activation. Shape inference via generic fixture signature."""
     ...
 
-def elu[Shape: SizeTuple](
+def elu[Shape: IntTuple](
     input: Tensor[Shape], alpha: float = 1.0, inplace: bool = False
 ) -> Tensor[Shape]:
     """ELU activation. Shape inference via generic fixture signature."""
     ...
 
-def leaky_relu[Shape: SizeTuple](
+def leaky_relu[Shape: IntTuple](
     input: Tensor[Shape], negative_slope: float = 0.01, inplace: bool = False
 ) -> Tensor[Shape]:
     """Leaky ReLU activation. Shape inference via generic fixture signature."""
     ...
 
-def relu6[Shape: SizeTuple](
+def relu6[Shape: IntTuple](
     input: Tensor[Shape], inplace: bool = False
 ) -> Tensor[Shape]:
     """ReLU6 activation. Shape inference via generic fixture signature."""
     ...
 
-def softplus[Shape: SizeTuple](
+def softplus[Shape: IntTuple](
     input: Tensor[Shape], beta: float = 1, threshold: float = 20
 ) -> Tensor[Shape]:
     """Softplus activation. Shape inference via generic fixture signature."""
     ...
 
-def softsign[Shape: SizeTuple](input: Tensor[Shape]) -> Tensor[Shape]:
+def softsign[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Softsign activation. Shape inference via generic fixture signature."""
     ...
 
-def hardtanh[Shape: SizeTuple](
+def hardtanh[Shape: IntTuple](
     input: Tensor[Shape],
     min_val: float = -1.0,
     max_val: float = 1.0,
@@ -441,29 +435,27 @@ def hardtanh[Shape: SizeTuple](
     """Hardtanh activation. Shape inference via generic fixture signature."""
     ...
 
-def hardsigmoid[Shape: SizeTuple](
+def hardsigmoid[Shape: IntTuple](
     input: Tensor[Shape], inplace: bool = False
 ) -> Tensor[Shape]:
     """Hardsigmoid activation. Shape inference via generic fixture signature."""
     ...
 
-def hardswish[Shape: SizeTuple](
+def hardswish[Shape: IntTuple](
     input: Tensor[Shape], inplace: bool = False
 ) -> Tensor[Shape]:
     """Hardswish activation. Shape inference via generic fixture signature."""
     ...
 
-def sigmoid[Shape: SizeTuple](input: Tensor[Shape]) -> Tensor[Shape]:
+def sigmoid[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Sigmoid activation. Shape inference via generic fixture signature."""
     ...
 
-def tanh[Shape: SizeTuple](input: Tensor[Shape]) -> Tensor[Shape]:
+def tanh[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Tanh activation. Shape inference via generic fixture signature."""
     ...
 
-def mish[Shape: SizeTuple](
-    input: Tensor[Shape], inplace: bool = False
-) -> Tensor[Shape]:
+def mish[Shape: IntTuple](input: Tensor[Shape], inplace: bool = False) -> Tensor[Shape]:
     """Mish activation. Shape inference via generic fixture signature."""
     ...
 
@@ -471,11 +463,11 @@ def glu(input: Tensor, dim: int = -1) -> Tensor:
     """GLU activation. Shape inference via meta-shape: torch.nn.functional.glu"""
     ...
 
-def prelu[Shape: SizeTuple](input: Tensor[Shape], weight: Tensor) -> Tensor[Shape]:
+def prelu[Shape: IntTuple](input: Tensor[Shape], weight: Tensor) -> Tensor[Shape]:
     """PReLU activation. Shape inference via generic fixture signature."""
     ...
 
-def rrelu[Shape: SizeTuple](
+def rrelu[Shape: IntTuple](
     input: Tensor[Shape],
     lower: float = 0.125,
     upper: float = 0.333,
@@ -485,14 +477,14 @@ def rrelu[Shape: SizeTuple](
     """RReLU activation. Shape inference via generic fixture signature."""
     ...
 
-def celu[Shape: SizeTuple](
+def celu[Shape: IntTuple](
     input: Tensor[Shape], alpha: float = 1.0, inplace: bool = False
 ) -> Tensor[Shape]:
     """CELU activation. Shape inference via generic fixture signature."""
     ...
 
 # Normalization operations
-def batch_norm[Shape: SizeTuple](
+def batch_norm[Shape: IntTuple](
     input: Tensor[Shape],
     running_mean: Tensor | None,
     running_var: Tensor | None,
@@ -505,7 +497,7 @@ def batch_norm[Shape: SizeTuple](
     """Batch normalization. Shape inference via generic fixture signature."""
     ...
 
-def instance_norm[Shape: SizeTuple](
+def instance_norm[Shape: IntTuple](
     input: Tensor[Shape],
     running_mean: Tensor | None = None,
     running_var: Tensor | None = None,
@@ -518,7 +510,7 @@ def instance_norm[Shape: SizeTuple](
     """Instance normalization. Shape inference via generic fixture signature."""
     ...
 
-def layer_norm[Shape: SizeTuple](
+def layer_norm[Shape: IntTuple](
     input: Tensor[Shape],
     normalized_shape: tuple[int, ...],
     weight: Tensor | None = None,
@@ -528,7 +520,7 @@ def layer_norm[Shape: SizeTuple](
     """Layer normalization. Shape inference via generic fixture signature."""
     ...
 
-def group_norm[Shape: SizeTuple](
+def group_norm[Shape: IntTuple](
     input: Tensor[Shape],
     num_groups: int,
     weight: Tensor | None = None,
@@ -538,13 +530,13 @@ def group_norm[Shape: SizeTuple](
     """Group normalization. Shape inference via generic fixture signature."""
     ...
 
-def normalize[Shape: SizeTuple](
+def normalize[Shape: IntTuple](
     input: Tensor[Shape], p: float = 2.0, dim: int = 1, eps: float = 1e-12
 ) -> Tensor[Shape]:
     """Normalize tensor. Shape inference via generic fixture signature."""
     ...
 
-def local_response_norm[Shape: SizeTuple](
+def local_response_norm[Shape: IntTuple](
     input: Tensor[Shape],
     size: int,
     alpha: float = 0.0001,
@@ -555,48 +547,48 @@ def local_response_norm[Shape: SizeTuple](
     ...
 
 # Dropout operations
-def dropout[Shape: SizeTuple](
+def dropout[Shape: IntTuple](
     input: Tensor[Shape], p: float = 0.5, training: bool = True, inplace: bool = False
 ) -> Tensor[Shape]:
     """Dropout. Shape inference via generic fixture signature."""
     ...
 
-def alpha_dropout[Shape: SizeTuple](
+def alpha_dropout[Shape: IntTuple](
     input: Tensor[Shape], p: float = 0.5, training: bool = False, inplace: bool = False
 ) -> Tensor[Shape]:
     """Alpha dropout. Shape inference via generic fixture signature."""
     ...
 
-def feature_alpha_dropout[Shape: SizeTuple](
+def feature_alpha_dropout[Shape: IntTuple](
     input: Tensor[Shape], p: float = 0.5, training: bool = False, inplace: bool = False
 ) -> Tensor[Shape]:
     """Feature alpha dropout. Shape inference via generic fixture signature."""
     ...
 
 # Additional activation functions
-def threshold[Shape: SizeTuple](
+def threshold[Shape: IntTuple](
     input: Tensor[Shape], threshold: float, value: float, inplace: bool = False
 ) -> Tensor[Shape]:
     """Threshold activation. Shape inference via generic fixture signature."""
     ...
 
-def tanhshrink[Shape: SizeTuple](input: Tensor[Shape]) -> Tensor[Shape]:
+def tanhshrink[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Tanhshrink activation. Shape inference via generic fixture signature."""
     ...
 
-def softshrink[Shape: SizeTuple](
+def softshrink[Shape: IntTuple](
     input: Tensor[Shape], lambd: float = 0.5
 ) -> Tensor[Shape]:
     """Softshrink activation. Shape inference via generic fixture signature."""
     ...
 
-def hardshrink[Shape: SizeTuple](
+def hardshrink[Shape: IntTuple](
     input: Tensor[Shape], lambd: float = 0.5
 ) -> Tensor[Shape]:
     """Hardshrink activation. Shape inference via generic fixture signature."""
     ...
 
-def logsigmoid[Shape: SizeTuple](input: Tensor[Shape]) -> Tensor[Shape]:
+def logsigmoid[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Log-sigmoid activation. Shape inference via generic fixture signature."""
     ...
 
@@ -799,19 +791,19 @@ def pad(
     ...
 
 # Softmax activation
-def softmax[Shape: SizeTuple](
+def softmax[Shape: IntTuple](
     input: Tensor[Shape], dim: int | None = None, dtype: int | None = None
 ) -> Tensor[Shape]:
     """Softmax activation. Shape inference via generic fixture signature."""
     ...
 
-def log_softmax[Shape: SizeTuple](
+def log_softmax[Shape: IntTuple](
     input: Tensor[Shape], dim: int | None = None, dtype: int | None = None
 ) -> Tensor[Shape]:
     """Log-softmax activation. Shape inference via generic fixture signature."""
     ...
 
-def softmin[Shape: SizeTuple](
+def softmin[Shape: IntTuple](
     input: Tensor[Shape], dim: int | None = None, dtype: int | None = None
 ) -> Tensor[Shape]:
     """Softmin activation. Shape inference via generic fixture signature."""
@@ -821,7 +813,7 @@ def softmin[Shape: SizeTuple](
 # Linear
 # ==============================================================================
 
-def linear[Bs: SizeTuple, IN, OUT](
+def linear[Bs: IntTuple, IN: IntVar, OUT: IntVar](
     input: Tensor[[*Elements[Bs], IN]],
     weight: Tensor[[OUT, IN]],
     bias: Tensor[[OUT]] | None = None,
@@ -834,7 +826,7 @@ def linear[Bs: SizeTuple, IN, OUT](
 # ==============================================================================
 
 @overload
-def embedding[T, V, D](
+def embedding[T: IntVar, V: IntVar, D: IntVar](
     input: Tensor[[T]],
     weight: Tensor[[V, D]],
     padding_idx: int | None = None,
@@ -844,7 +836,7 @@ def embedding[T, V, D](
     sparse: bool = False,
 ) -> Tensor[[T, D]]: ...
 @overload
-def embedding[B, T, V, D](
+def embedding[B: IntVar, T: IntVar, V: IntVar, D: IntVar](
     input: Tensor[[B, T]],
     weight: Tensor[[V, D]],
     padding_idx: int | None = None,
@@ -858,7 +850,7 @@ def embedding[B, T, V, D](
 # Normalization (additional)
 # ==============================================================================
 
-def rms_norm[S: SizeTuple](
+def rms_norm[S: IntTuple](
     input: Tensor[S],
     normalized_shape: list[int] | tuple[int, ...],
     weight: Tensor | None = None,
@@ -871,19 +863,19 @@ def rms_norm[S: SizeTuple](
 # Dropout (additional)
 # ==============================================================================
 
-def dropout1d[S: SizeTuple](
+def dropout1d[S: IntTuple](
     input: Tensor[S], p: float = 0.5, training: bool = True, inplace: bool = False
 ) -> Tensor[S]:
     """1D channel-wise dropout. Shape inference via generic fixture signature."""
     ...
 
-def dropout2d[S: SizeTuple](
+def dropout2d[S: IntTuple](
     input: Tensor[S], p: float = 0.5, training: bool = True, inplace: bool = False
 ) -> Tensor[S]:
     """2D channel-wise dropout. Shape inference via generic fixture signature."""
     ...
 
-def dropout3d[S: SizeTuple](
+def dropout3d[S: IntTuple](
     input: Tensor[S], p: float = 0.5, training: bool = True, inplace: bool = False
 ) -> Tensor[S]:
     """3D channel-wise dropout. Shape inference via generic fixture signature."""
@@ -891,12 +883,12 @@ def dropout3d[S: SizeTuple](
 
 # Attention operations
 def scaled_dot_product_attention[
-    B,
-    H,
-    Tq,
-    Tkv,
-    D,
-    Dv,
+    B: IntVar,
+    H: IntVar,
+    Tq: IntVar,
+    Tkv: IntVar,
+    D: IntVar,
+    Dv: IntVar,
 ](
     query: Tensor[[B, H, Tq, D]],
     key: Tensor[[B, H, Tkv, D]],
@@ -920,8 +912,8 @@ def cosine_similarity(
     """
     ...
 
-def grid_sample[B, C, Hout, Wout](
-    input: Tensor[[B, C, *Elements[SizeTuple]]],
+def grid_sample[B: IntVar, C: IntVar, Hout: IntVar, Wout: IntVar](
+    input: Tensor[[B, C, *Elements[IntTuple]]],
     grid: Tensor[[B, Hout, Wout, 2]],
     mode: str = "bilinear",
     padding_mode: str = "zeros",

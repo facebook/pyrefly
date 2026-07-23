@@ -483,6 +483,7 @@ pub(super) fn type_to_indexed_shape(
         Type::Materialization => indexed_named_leaf(table, "Materialization"),
         Type::Var(_) => indexed_named_leaf(table, "typing.Any"),
         Type::ShapedArray(_) => indexed_named_leaf(table, "Tensor"),
+        Type::IntTuple(_) => indexed_named_leaf(table, "IntTuple"),
         Type::NNModule(module) => {
             let args = module
                 .class
@@ -499,11 +500,9 @@ pub(super) fn type_to_indexed_shape(
                 Vec::new(),
             )
         }
-        Type::Size(_) => indexed_named_leaf(table, "Size"),
-        Type::Dim(inner) => {
-            let inner = type_to_indexed_shape(context, inner, table);
-            insert_indexed_named(table, "Dim", vec![inner], None, Vec::new())
-        }
+        Type::DataFrame(schema) => type_to_indexed_shape(context, &schema.underlying_type(), table),
+        Type::Int(_) => indexed_named_leaf(table, "Int"),
+        Type::TypeLevelDslCall(_) => indexed_named_leaf(table, "type_level_dsl_call"),
         Type::TypeForm(inner) => {
             let inner = type_to_indexed_shape(context, inner, table);
             insert_indexed_named(table, "typing.TypeForm", vec![inner], None, Vec::new())
@@ -571,7 +570,9 @@ fn callable_param_indices(
     table: &mut TypeTableBuilder,
 ) -> Vec<usize> {
     match params {
-        Params::List(params) => param_list_to_indexed_shapes(context, params, table),
+        Params::List(params) | Params::Partial(params) => {
+            param_list_to_indexed_shapes(context, params, table)
+        }
         Params::ParamSpec(prefix, param_spec) => {
             let mut params = prefix
                 .iter()

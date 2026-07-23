@@ -196,6 +196,7 @@ table! {
 #[derive(Clone, Debug)]
 struct BindingsInner {
     module_info: ModuleInfo,
+    sys_info: SysInfo,
     table: BindingTable,
     metadata: Arc<BindingsMetadata>,
     /// Multi-line ranges and ignore-all directives, computed from the AST
@@ -309,6 +310,7 @@ pub struct BindingsBuilder<'a> {
     /// set by `stmts()` and consumed by namedtuple synthesis in `stmt()`.
     pub adjacent_namedtuple_defaults: Option<Vec<Expr>>,
     pub promote_ranges: SmallSet<TextRange>,
+    pub type_checking_depth: usize,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -351,11 +353,13 @@ impl Bindings {
         let module_info = Module::new(module_name, module_path, contents);
         Self(Arc::new(BindingsInner {
             module_info,
+            sys_info: SysInfo::default(),
             table: Default::default(),
             metadata: Arc::new(BindingsMetadata::new()),
             module_ranges: Arc::new(ModuleRanges {
                 multi_line: Vec::new(),
                 ignore_all: Vec::new(),
+                misplaced_ignore_all: Vec::new(),
             }),
             scope_trace: None,
             module_deletes: SmallSet::new(),
@@ -379,6 +383,10 @@ impl Bindings {
 
     pub fn module(&self) -> &ModuleInfo {
         &self.0.module_info
+    }
+
+    pub fn sys_info(&self) -> &SysInfo {
+        &self.0.sys_info
     }
 
     pub fn metadata(&self) -> &Arc<BindingsMetadata> {
@@ -638,6 +646,7 @@ impl Bindings {
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
+            type_checking_depth: 0,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -735,6 +744,7 @@ impl Bindings {
         let module_deletes = scope_trace.module_deletes().clone();
         Self(Arc::new(BindingsInner {
             module_info,
+            sys_info: builder.sys_info,
             table: builder.table,
             metadata: Arc::new(builder.metadata),
             module_ranges,
@@ -800,6 +810,7 @@ impl Bindings {
             | SemanticSyntaxErrorKind::NamedExpressionInComprehensionIterable
             | SemanticSyntaxErrorKind::NamedExpressionInClassBodyComprehension
             | SemanticSyntaxErrorKind::TypeParameterDefaultOrder(_)
+            | SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern
             | SemanticSyntaxErrorKind::ReturnInGenerator => false,
         }
     }
@@ -1254,6 +1265,39 @@ impl<'a> BindingsBuilder<'a> {
         self.as_special_export_inner(e, &mut visited_names, &mut visited_keys)
     }
 
+    pub fn as_direct_shape_intvar(&self, e: &Expr) -> bool {
+        let shape_extensions = ModuleName::from_str("shape_extensions");
+        match e {
+            Expr::Name(name) => {
+                if name.id == "IntVar" && self.module_info.name() == shape_extensions {
+                    return true;
+                }
+                matches!(
+                    self.scopes.binding_idx_for_name(&name.id),
+                    Some((
+                        _,
+                        FlowStyle::Import(module, upstream_name)
+                    )) if module == shape_extensions && upstream_name == "IntVar"
+                )
+            }
+            Expr::Attribute(ExprAttribute {
+                value, attr: name, ..
+            }) if name == "IntVar" => {
+                let Expr::Name(base_name) = &**value else {
+                    return false;
+                };
+                matches!(
+                    self.scopes.binding_idx_for_name(&base_name.id),
+                    Some((
+                        _,
+                        FlowStyle::MergeableImport(module) | FlowStyle::ImportAs(module)
+                    )) if module == shape_extensions
+                )
+            }
+            _ => false,
+        }
+    }
+
     pub fn class_object_is_generic(&self, idx: Idx<Key>) -> bool {
         let Some(Binding::ClassDef(class_idx, _)) = self.idx_to_binding(idx) else {
             return false;
@@ -1436,7 +1480,8 @@ impl<'a> BindingsBuilder<'a> {
         let inner_fn_range = self.scopes.current_scope_range();
         for name in captures.into_iter() {
             let hashed_name = Hashed::new(&name);
-            let name_read_info = self.look_up_name_for_read(hashed_name, &Usage::Narrowing(None));
+            let name_read_info =
+                self.look_up_name_for_read(hashed_name, &Usage::NonPinningValue(None));
             // We only seed captures that resolve to an enclosing static entry (`Anywhere`), which
             // includes already-materialized builtins. A not-yet-materialized builtin
             // (`ImplicitBuiltin`), a flow value, or a missing name are resolved when the inner
@@ -1570,7 +1615,7 @@ impl<'a> BindingsBuilder<'a> {
             let idx = if let Some(idx) = self.scopes.current_fork_base_idx(name) {
                 idx
             } else if let NameLookupResult::Found { idx, .. } =
-                self.lookup_name(Hashed::new(name), &mut Usage::Narrowing(None))
+                self.lookup_name(Hashed::new(name), &mut Usage::NonPinningValue(None))
             {
                 idx
             } else {
@@ -1644,15 +1689,13 @@ impl<'a> BindingsBuilder<'a> {
             self.follow_to_partial_type(deferred.lookup_result_idx);
 
         if let Some((def_idx, first_use)) = partial_type_info {
-            let is_narrowing = matches!(deferred.usage, Usage::Narrowing(_));
-
             // Determine side effects based on usage and first_use state.
             if matches!(
                 deferred.usage,
                 Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
             ) {
                 self.mark_does_not_pin_if_first_use(def_idx);
-            } else if !is_narrowing {
+            } else if deferred.usage.may_pin_partial_type() {
                 // Normal reads: if this is the first use, mark it.
                 if matches!(first_use, FirstUse::Undetermined)
                     && let Some(current_idx) = deferred.usage.current_idx()
@@ -1660,8 +1703,8 @@ impl<'a> BindingsBuilder<'a> {
                     self.mark_first_use(def_idx, current_idx);
                 }
             }
-            // Narrowing reads leave first_use as Undetermined so that the next
-            // non-narrowing read can still become the first use for pinning.
+            // Non-pinning reads leave first_use as Undetermined so that the next
+            // semantic read can still become the first use for pinning.
             // All partial type reads forward to the NameAssign (def_idx).
             self.insert_binding_idx(deferred.bound_name_idx, Binding::ForwardToFirstUse(def_idx));
         } else {
@@ -1962,14 +2005,32 @@ impl<'a> BindingsBuilder<'a> {
             };
             let kind = match x {
                 TypeParam::TypeVar(tv) => {
+                    let mut kind = QuantifiedKind::TypeVar;
                     if let Some(bound_expr) = &mut tv.bound {
                         if let Expr::Tuple(tuple) = &mut **bound_expr {
+                            let mut invalid_intvar_constraint = false;
                             let mut constraint_exprs = Vec::new();
                             for constraint in &mut tuple.elts {
-                                self.ensure_type_with_usage(constraint, &mut None, &mut usage);
-                                constraint_exprs.push(constraint.clone());
+                                if self.as_direct_shape_intvar(constraint) {
+                                    self.error(
+                                        constraint.range(),
+                                        ErrorKind::InvalidTypeVar,
+                                        "`IntVar` cannot be used as a TypeVar constraint"
+                                            .to_owned(),
+                                    );
+                                    invalid_intvar_constraint = true;
+                                    self.ensure_expr(constraint, &mut usage);
+                                } else {
+                                    self.ensure_type_with_usage(constraint, &mut None, &mut usage);
+                                    constraint_exprs.push(constraint.clone());
+                                }
                             }
-                            constraints = Some((constraint_exprs, bound_expr.range()))
+                            if !invalid_intvar_constraint {
+                                constraints = Some((constraint_exprs, bound_expr.range()))
+                            }
+                        } else if self.as_direct_shape_intvar(bound_expr) {
+                            self.ensure_expr(bound_expr, &mut usage);
+                            kind = QuantifiedKind::IntVar;
                         } else {
                             self.ensure_type_with_usage(bound_expr, &mut None, &mut usage);
                             bound = Some((**bound_expr).clone());
@@ -1979,7 +2040,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_type_with_usage(default_expr, &mut None, &mut usage);
                         default = Some((**default_expr).clone());
                     }
-                    QuantifiedKind::TypeVar
+                    kind
                 }
                 TypeParam::ParamSpec(x) => {
                     if let Some(default_expr) = &mut x.default {
@@ -2031,7 +2092,7 @@ impl<'a> BindingsBuilder<'a> {
             // Narrowing operations should not pin partial types, but they also
             // should not permanently block pinning. Leave the first-use state
             // as Undetermined so a subsequent non-narrowing read can still pin.
-            let mut narrowing_usage = Usage::narrowing_from(usage);
+            let mut narrowing_usage = Usage::non_pinning_value_from(usage);
             if let Some(initial_idx) = self.lookup_name(name, &mut narrowing_usage).found() {
                 let narrowed_idx = self.insert_binding(
                     Key::Narrow(Box::new((name.into_key().clone(), *op_range, use_location))),

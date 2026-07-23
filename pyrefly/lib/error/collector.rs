@@ -16,6 +16,7 @@ use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 
 use crate::config::error::ErrorConfig;
 use crate::config::error_kind::Severity;
@@ -267,6 +268,7 @@ impl ErrorCollector {
         error_config: &ErrorConfig,
         fstring_ranges: &[(LineNumber, LineNumber)],
         ignore_all: &[Suppression],
+        misplaced: &[LineNumber],
         result: &mut CollectedErrors,
     ) {
         let mut errors = self.errors.lock();
@@ -293,15 +295,70 @@ impl ErrorCollector {
                     }
                 }
             }
+            self.collect_misplaced_ignores(misplaced, error_config, result);
+        }
+    }
+
+    /// Emit a diagnostic for each pyrefly `ignore-errors` directive found outside
+    /// the preamble, where it is inert. These are synthesized here rather than
+    /// during type checking so that every display surface and the `testcase!`
+    /// path (both of which funnel through `collect_into`) report them uniformly.
+    ///
+    /// Like `unused-ignore`, this is a suppression-hygiene diagnostic: it is
+    /// controlled via config severity rather than a per-line
+    /// `# pyrefly: ignore[misplaced-ignore]`, so it is emitted directly instead
+    /// of being routed through `is_error_suppressed` (the fix is to move or
+    /// remove the directive, not to silence the warning about it).
+    fn collect_misplaced_ignores(
+        &self,
+        misplaced: &[LineNumber],
+        error_config: &ErrorConfig,
+        result: &mut CollectedErrors,
+    ) {
+        if misplaced.is_empty() {
+            return;
+        }
+        let severity = error_config
+            .display_config
+            .severity(ErrorKind::MisplacedIgnore);
+        for line in misplaced {
+            let buffer = self.module_info.lined_buffer();
+            let line_start = buffer.line_start(*line);
+            // Point the diagnostic at the directive itself — from the `#` to the
+            // end of the comment — rather than the leading whitespace at the line
+            // start, so editor underlines land on the offending directive.
+            let line_text = buffer.content_in_line_range(*line, *line);
+            let leading_ws = (line_text.len() - line_text.trim_start().len()) as u32;
+            let content_len = line_text.trim_end().len() as u32;
+            let range = TextRange::new(
+                line_start + TextSize::new(leading_ws),
+                line_start + TextSize::new(content_len),
+            );
+            let err = Error::new(
+                self.module_info.dupe(),
+                range,
+                MISPLACED_IGNORE_MESSAGE.to_owned(),
+                Vec::new(),
+                ErrorKind::MisplacedIgnore,
+            );
+            match severity {
+                Severity::Ignore => result.disabled.push(err),
+                sev => result.ordinary.push(err.with_severity(sev)),
+            }
         }
     }
 
     pub fn collect(&self, error_config: &ErrorConfig) -> CollectedErrors {
         let mut result = CollectedErrors::default();
-        self.collect_into(error_config, &[], &[], &mut result);
+        self.collect_into(error_config, &[], &[], &[], &mut result);
         result
     }
 }
+
+/// Message for the `misplaced-ignore` diagnostic. Kept as a shared constant so
+/// the wording stays consistent across every misplaced directive.
+const MISPLACED_IGNORE_MESSAGE: &str = "`# pyrefly: ignore-errors` has no effect here — a file-level suppression must appear before any code. \
+Move it to the top of the file, or use `# pyrefly: ignore[code]` to suppress a single line.";
 
 /// A builder for constructing and emitting errors incrementally.
 /// Chain decoration methods and call `.emit()` to push the error into the collector.

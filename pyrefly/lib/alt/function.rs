@@ -22,6 +22,7 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::dimension::Int;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
@@ -436,8 +437,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &FunctionDefData,
         def_index: FuncDefIndex,
         stub_or_impl: FunctionStubOrImpl,
+        has_ellipsis_body: bool,
         placeholder_body_kind: Option<PlaceholderBodyKind>,
         is_return_inferred: bool,
+        calls_super_method: bool,
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
@@ -466,6 +469,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_async: def.is_async,
             placeholder_body_kind,
             is_return_inferred,
+            calls_super_method,
             ..Default::default()
         };
         let mut found_class_property = false;
@@ -493,6 +497,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => {
                     if is_class_property_decorator_type(&decorator.ty) {
                         found_class_property = true;
+                    }
+                    if matches!(
+                        &decorator.ty,
+                        Type::Any(AnyStyle::Implicit | AnyStyle::Explicit)
+                    ) {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::UntypedFunctionDecorator,
+                            format!(
+                                "Untyped function decorator obscures the type of function `{}`",
+                                def.name
+                            ),
+                        );
                     }
                     true
                 }
@@ -663,6 +681,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params,
             paramspec,
             stub_or_impl,
+            has_ellipsis_body,
             defining_cls,
             resolved_param_types,
         })
@@ -685,6 +704,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 stmt.name.range(),
                 ErrorKind::UnannotatedReturn,
                 format!("`{}` is missing a return annotation", stmt.name),
+            );
+        }
+        if def.has_ellipsis_body
+            && has_return_annotation
+            && !def.metadata.flags.defined_in_stub_file
+            && !def.metadata.flags.is_overload
+            && !def.metadata.flags.is_abstract_method
+            && !def
+                .defining_cls
+                .as_ref()
+                .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol())
+            && !if stmt.is_async {
+                self.unwrap_coroutine(&ret)
+                    .is_some_and(|(_, _, return_ty)| {
+                        self.is_subset_eq(&self.heap.mk_none(), &return_ty)
+                    })
+            } else {
+                self.is_subset_eq(&self.heap.mk_none(), &ret)
+            }
+        {
+            self.error(
+                errors,
+                stmt.name.range(),
+                ErrorKind::EmptyBody,
+                "Function body cannot consist only of `...` when the return type is not `None`"
+                    .to_owned(),
             );
         }
         // The first parameter of a non-static method is the implicit self/cls
@@ -1112,12 +1157,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                     .with_annotation(annot_range, "declared type".to_owned())
                 };
-                // Integer literal defaults are valid for `Dim[...]` parameters: at
+                // Integer literal defaults are valid for symbolic integer parameters: at
                 // call time the dimension variable is bound from that default value.
                 let skip_check = matches!(
                     (&param_ty, default),
                     (
-                        Type::Dim(inner),
+                        Type::Int(Int::Symbolic(inner)),
                         Some(Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral {
                             value: ruff_python_ast::Number::Int(i),
                             ..
@@ -1783,8 +1828,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // the impl's own type so direct calls to the registered function are type-checked, rather
         // than the stub `register`'s erased `Callable[..., _T]` return.
         if let Some(fallback_first) = Self::singledispatch_register_first(&decorator) {
-            if let Some(sig) = decoratee.clone().to_callable()
-                && let Some(dispatch_ty) = Self::first_positional_param_type(&sig)
+            // `callable_signatures` recognizes overloaded and generic impls.
+            if let [sig, ..] = decoratee.callable_signatures().as_slice()
+                && let Some(dispatch_ty) = Self::first_positional_param_type(sig)
             {
                 self.check_singledispatch_register(&dispatch_ty, &fallback_first, range, errors);
             }

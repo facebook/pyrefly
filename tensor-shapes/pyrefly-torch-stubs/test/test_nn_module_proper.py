@@ -12,9 +12,10 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 # ============================================================================
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class LinearLayer[N, M](nn.Module):
+class LinearLayer[N: IntVar, M: IntVar](nn.Module):
     """
     Linear layer with class-level dimension parameters
     N and M should be visible in all methods
@@ -32,13 +33,13 @@ class LinearLayer[N, M](nn.Module):
     weight: Tensor[[M, N]]
     bias: Tensor[[M]]
 
-    def __init__(self, in_features: Dim[N], out_features: Dim[M]):
+    def __init__(self, in_features: Int[N], out_features: Int[M]):
         super().__init__()
         # Now N and M are bound via Literal params, so we can create tensors
         self.weight = torch.randn(out_features, in_features)
         self.bias = torch.randn(out_features)
 
-    def forward[B](self, x: Tensor[[B, N]]) -> Tensor[[B, M]]:
+    def forward[B: IntVar](self, x: Tensor[[B, N]]) -> Tensor[[B, M]]:
         """
         B is method-level generic (batch dimension)
         N, M come from class (input/output dimensions)
@@ -65,7 +66,7 @@ def test_linear_with_matmul():
 # ============================================================================
 
 
-class TwoLayerMLP[N, M, K](nn.Module):
+class TwoLayerMLP[N: IntVar, M: IntVar, K: IntVar](nn.Module):
     """
     Two-layer MLP with class-level dimension parameters
     """
@@ -76,16 +77,16 @@ class TwoLayerMLP[N, M, K](nn.Module):
 
     def __init__(
         self,
-        in_features: Dim[N],
-        hidden_features: Dim[M],
-        out_features: Dim[K],
+        in_features: Int[N],
+        hidden_features: Int[M],
+        out_features: Int[K],
     ):
         super().__init__()
         # Now N, M, K are bound via Literal params, so we can create tensors
         self.w1 = torch.randn(hidden_features, in_features)
         self.w2 = torch.randn(out_features, hidden_features)
 
-    def forward[B](self, x: Tensor[[B, N]]) -> Tensor[[B, K]]:
+    def forward[B: IntVar](self, x: Tensor[[B, N]]) -> Tensor[[B, K]]:
         """
         B is batch (method-level)
         N, M, K are dimensions (class-level)
@@ -114,10 +115,10 @@ def test_mlp_with_matmul():
 # ============================================================================
 
 
-class SelfAttention[D](nn.Module):
+class SelfAttention[D: IntVar](nn.Module):
     """Self-attention with class-level dimension"""
 
-    def forward[B, T](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
+    def forward[B: IntVar, T: IntVar](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
         """
         B, T are method-level (batch, sequence length)
         D is class-level (model dimension)
@@ -146,18 +147,20 @@ def test_self_attention():
 # ============================================================================
 
 
-class ConvBlock[C_in, C_out](nn.Module):
+class ConvBlock[C_in: IntVar, C_out: IntVar](nn.Module):
     """Convolutional block with class-level channel dims"""
 
     # Declare weight as class attribute with generic type
     weight: Tensor[[C_out, C_in, 3, 3]]
 
-    def __init__(self, in_channels: Dim[C_in], out_channels: Dim[C_out]):
+    def __init__(self, in_channels: Int[C_in], out_channels: Int[C_out]):
         super().__init__()
         # Now C_in and C_out are bound via Literal params
         self.weight = torch.randn(out_channels, in_channels, 3, 3)
 
-    def forward[B, H, W](self, x: Tensor[[B, C_in, H, W]]) -> Tensor[[B, C_out, H, W]]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C_in, H, W]]
+    ) -> Tensor[[B, C_out, H, W]]:
         """
         B, H, W are method-level (batch, spatial)
         C_in, C_out are class-level (channels)
@@ -182,18 +185,20 @@ def test_conv_block():
 # ============================================================================
 
 
-class ResidualBlock[C](nn.Module):
+class ResidualBlock[C: IntVar](nn.Module):
     """Residual block with class-level channel dimension"""
 
     # Declare weight as class attribute with generic type
     weight: Tensor[[C, C, 3, 3]]
 
-    def __init__(self, channels: Dim[C]):
+    def __init__(self, channels: Int[C]):
         super().__init__()
         # Now C is bound via Literal param
         self.weight = torch.randn(channels, channels, 3, 3)
 
-    def forward[B, H, W](self, x: Tensor[[B, C, H, W]]) -> Tensor[[B, C, H, W]]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]]
+    ) -> Tensor[[B, C, H, W]]:
         """
         B, H, W are method-level
         C is class-level (channels preserved in residual)

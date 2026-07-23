@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,25 +17,25 @@ use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
-use pyrefly_python::ignore::Ignore;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::PropertyRole;
-use pyrefly_types::class::ClassDefIndex;
+use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Type;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
+use pyrefly_util::lock::Mutex;
 use pyrefly_util::thread_pool::ThreadCount;
-use rayon::prelude::*;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -106,36 +107,20 @@ fn range_to_location(module: &Module, range: TextRange) -> Location {
     }
 }
 
-/// Parse type-ignore suppressions from source using the multi-tool parser from `ignore.rs`.
+/// Collect the module's type-ignore suppressions, each located at the `#` starting its comment.
 fn parse_suppressions(module: &Module) -> Vec<ReportSuppression> {
-    let source = module.lined_buffer().contents();
-    let ignore = Ignore::new(source);
     let mut suppressions = Vec::new();
-    let lines: Vec<&str> = source.lines().collect();
-
-    for (_line_number, supps) in ignore.iter() {
+    for (_, supps) in module.ignore().iter() {
         for supp in supps {
-            let comment_line_num = supp.comment_line().get() as usize;
-            let column = comment_line_num
-                .checked_sub(1)
-                .and_then(|idx| lines.get(idx))
-                .and_then(|line| line.find('#'))
-                .map(|c| c + 1);
-            let Some(column) = column else {
-                continue;
-            };
-
+            let offset = module.lined_buffer().line_start(supp.comment_line())
+                + TextSize::try_from(supp.comment_offset()).unwrap();
             suppressions.push(ReportSuppression {
                 kind: supp.tool(),
                 codes: supp.error_codes().to_vec(),
-                location: Location {
-                    line: comment_line_num,
-                    column,
-                },
+                location: range_to_location(module, TextRange::empty(offset)),
             });
         }
     }
-
     suppressions
 }
 
@@ -150,6 +135,31 @@ fn has_function_ancestor(parent: &NestingContext) -> bool {
             None => return false,
         }
     }
+}
+
+/// True if the class, or an enclosing class, was removed by a module-scope `del`.
+/// After `del X` at module scope the entire `X.*` subtree is unreachable, so a nested
+/// class (and its methods/attrs) must be excluded along with `X` itself. We therefore
+/// test the outermost enclosing name: function-nested classes are already filtered by
+/// `has_function_ancestor`, so every context reached here is a class.
+fn is_deleted_class(module: &Module, bindings: &Bindings, cls: &ClassBinding) -> bool {
+    let mut nesting = &cls.parent;
+    let outermost = loop {
+        match nesting.parent() {
+            None => break cls.def.name.id.as_str(),
+            Some(parent) if parent.is_toplevel() => {
+                let short_id = nesting
+                    .identifier()
+                    .expect("non-toplevel NestingContext must have an identifier");
+                break module.code_at(short_id.range());
+            }
+            Some(parent) => nesting = parent,
+        }
+    };
+    bindings
+        .module_deletes()
+        .iter()
+        .any(|n| n.as_str() == outermost)
 }
 
 /// Build a class's fully-qualified name: module prefix, nesting context, then class name. Returns
@@ -168,13 +178,9 @@ fn class_fqn(
     }
 }
 
-/// The module name with a trailing `.`, or empty for the unknown module; prefixed to symbol FQNs.
+/// The module name with a trailing `.`, prefixed to symbol FQNs.
 fn module_prefix(module: &Module) -> String {
-    if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    }
+    format!("{}.", module.name())
 }
 
 /// Merge overloads with the same qualified name into one entry,
@@ -313,24 +319,23 @@ const EXCLUDED_MODULE_DUNDERS: &[&str] = &[
     "__spec__",
 ];
 
-/// Walk re-exports to the defining module's FQN, `None` on cycle/miss.
+/// Walk re-exports to the defining module's handle and name, `None` on cycle/miss.
 fn trace_export_origin(
     handle: &Handle,
     mut cur_name: Name,
     transaction: &Transaction,
-) -> Option<String> {
+) -> Option<(Handle, Name)> {
     let mut seen = SmallSet::new();
     let mut cur_handle = handle.clone();
 
     loop {
-        let module_name = cur_handle.module();
-        if !seen.insert((module_name, cur_name.clone())) {
+        if !seen.insert((cur_handle.module(), cur_name.clone())) {
             return None;
         }
 
         match transaction.get_exports(&cur_handle).get(&cur_name) {
             Some(ExportLocation::ThisModule(_)) => {
-                return Some(format!("{module_name}.{cur_name}"));
+                return Some((cur_handle, cur_name));
             }
             None => return None,
             Some(ExportLocation::OtherModule(other_module, alias)) => {
@@ -345,43 +350,51 @@ fn trace_export_origin(
     }
 }
 
-/// Collect origin FQNs of all publicly exported names across public modules.
-fn compute_public_fqns(handles: &[Handle], transaction: &Transaction) -> HashSet<String> {
-    handles
-        .iter()
-        .filter(|h| is_public_module(h.module()))
-        .flat_map(|handle| {
-            let exports_data = transaction.get_exports_data(handle);
-            let exports = transaction.get_exports(handle);
+/// Collect origin FQNs of all publicly exported names across public modules, plus the deduped
+/// handles of cross-module re-export origins.
+fn compute_public_fqns(
+    handles: &[Handle],
+    transaction: &Transaction,
+) -> (HashSet<String>, SmallSet<Handle>) {
+    let mut fqns = HashSet::new();
+    let mut origins = SmallSet::new();
+    for handle in handles.iter().filter(|h| is_public_module(h.module())) {
+        let exports_data = transaction.get_exports_data(handle);
+        let exports = transaction.get_exports(handle);
 
-            // prioritize `__all__` if present, otherwise local defs + `import x as x`
-            let names: Vec<Name> =
-                if let Some(all_iter) = exports_data.get_explicit_dunder_all_names_iter() {
-                    all_iter.cloned().collect()
-                } else {
-                    exports
-                        .iter()
-                        .filter_map(|(name, loc)| {
-                            let is_local = matches!(loc, ExportLocation::ThisModule(_));
-                            let is_reexport = exports_data.is_explicit_reexport(name);
-                            (is_public_name(name.as_str()) && (is_local || is_reexport))
-                                .then_some(name.clone())
-                        })
-                        .collect()
-                };
+        // prioritize `__all__` if present, otherwise local defs + `import x as x`
+        let names: Vec<Name> =
+            if let Some(all_iter) = exports_data.get_explicit_dunder_all_names_iter() {
+                all_iter.cloned().collect()
+            } else {
+                exports
+                    .iter()
+                    .filter_map(|(name, loc)| {
+                        let is_local = matches!(loc, ExportLocation::ThisModule(_));
+                        let is_reexport = exports_data.is_explicit_reexport(name);
+                        (is_public_name(name.as_str()) && (is_local || is_reexport))
+                            .then_some(name.clone())
+                    })
+                    .collect()
+            };
 
-            // emit both the local FQN and the traced origin FQN so a file-scoped run matches
-            // whichever module was requested
-            names
-                .into_iter()
-                .filter(|n| !EXCLUDED_MODULE_DUNDERS.contains(&n.as_str()))
-                .flat_map(move |name| {
-                    let local = format!("{}.{}", handle.module(), name);
-                    let origin = trace_export_origin(handle, name, transaction);
-                    std::iter::once(local).chain(origin)
-                })
-        })
-        .collect()
+        // collect both the local and traced origin FQN so a file-scoped run matches the module
+        for name in names {
+            if EXCLUDED_MODULE_DUNDERS.contains(&name.as_str()) {
+                continue;
+            }
+            fqns.insert(format!("{}.{}", handle.module(), name));
+            if let Some((origin_handle, origin_name)) =
+                trace_export_origin(handle, name, transaction)
+            {
+                fqns.insert(format!("{}.{}", origin_handle.module(), origin_name));
+                if origin_handle != *handle {
+                    origins.insert(origin_handle);
+                }
+            }
+        }
+    }
+    (fqns, origins)
 }
 
 /// Retain only publicly reachable symbols and recalculate aggregates.
@@ -572,6 +585,55 @@ fn parse_variables(
     variables
 }
 
+/// The MRO of `class`, or `Cyclic` if unresolved.
+fn class_mro(bindings: &Bindings, answers: &Answers, class: &Class) -> Arc<ClassMro> {
+    answers
+        .get_idx(bindings.key_to_idx(&KeyClassMro(class.index())))
+        .unwrap_or_else(|| Arc::new(ClassMro::Cyclic))
+}
+
+/// Slots for `field_name` from the nearest base class annotating it in `class_idx`'s MRO (gh-3997).
+///
+/// Walks the MRO nearest-first and returns the first ancestor that *annotates* `field_name`, so the
+/// closest base's type quality wins. Ancestors that merely assign the field without an annotation
+/// contribute nothing (an unannotated base can't upgrade the subclass attr); returns `None` when no
+/// base annotates it.
+fn inherited_annotation_slots(
+    bindings: &Bindings,
+    answers: &Answers,
+    transaction: &Transaction,
+    handle: &Handle,
+    class_idx: Idx<KeyClass>,
+    field_name: &Name,
+) -> Option<SlotCounts> {
+    let class = answers.get_idx(class_idx).and_then(|r| r.0.clone())?;
+    class_mro(bindings, answers, &class)
+        .ancestors_no_object()
+        .iter()
+        .find_map(|ancestor| {
+            let cls = ancestor.class_object();
+            let h = Handle::new(
+                cls.module_name(),
+                cls.module_path().dupe(),
+                handle.sys_info().dupe(),
+            );
+            let b = transaction.get_bindings(&h)?;
+            let idx = b.key_to_idx_hashed_opt(Hashed::new(&KeyClassField(
+                cls.index(),
+                field_name.clone(),
+            )))?;
+            let annot = match &b.get(idx).definition {
+                ClassFieldDefinition::DeclaredByAnnotation { annotation, .. } => Some(*annotation),
+                ClassFieldDefinition::DefinedInMethod { annotation, .. }
+                | ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,
+                _ => None,
+            }?;
+            let m = transaction.get_module_info(&h)?;
+            let a = transaction.get_answers(&h)?;
+            Some(classify_annotation(&m, &b, &a, Some(annot)).1)
+        })
+}
+
 /// Extract instance attributes assigned in `__init__`/`__new__`/`__post_init__`,
 /// plus schema class body fields (dataclass, enum, TypedDict, NamedTuple).
 ///
@@ -588,6 +650,8 @@ fn parse_instance_attrs(
     module: &Module,
     bindings: &Bindings,
     answers: &Answers,
+    transaction: &Transaction,
+    handle: &Handle,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Variable> {
     let mut attrs = Vec::new();
@@ -614,7 +678,9 @@ fn parse_instance_attrs(
             BindingClass::ClassDef(cls) => cls,
             BindingClass::FunctionalClassDef(..) => continue,
         };
-        if has_function_ancestor(&cls_binding.parent) {
+        if has_function_ancestor(&cls_binding.parent)
+            || is_deleted_class(module, bindings, cls_binding)
+        {
             continue;
         }
 
@@ -628,7 +694,20 @@ fn parse_instance_attrs(
                 if !method.recognized_attribute_defining_method {
                     continue;
                 }
-                classify_annotation(module, bindings, answers, *annotation)
+                if annotation.is_none()
+                    && let Some(slots) = inherited_annotation_slots(
+                        bindings,
+                        answers,
+                        transaction,
+                        handle,
+                        field.class_idx,
+                        &field.name,
+                    )
+                {
+                    (None, slots)
+                } else {
+                    classify_annotation(module, bindings, answers, *annotation)
+                }
             }
             // Schema class fields are always IMPLICIT regardless of whether they're
             // also initialized in a recognized method — the class definition governs
@@ -685,6 +764,11 @@ fn parse_functions(
         {
             let decorated = bindings.get(*x);
             let fun = bindings.get(decorated.undecorated_idx);
+            // Skip functions nested inside other functions, even when the name collides with an
+            // exported module-level function (gh-4018).
+            if fun.outer_funcs.is_some() {
+                continue;
+            }
             // Skip @type_check_only decorated functions.
             if has_type_check_only_decorator(&fun.decorators, bindings) {
                 continue;
@@ -718,8 +802,10 @@ fn parse_functions(
             let func_name = if let Some(class_key) = fun.class_key {
                 match bindings.get(class_key) {
                     BindingClass::ClassDef(cls) => {
-                        // Skip methods of classes nested inside functions
-                        if has_function_ancestor(&cls.parent) {
+                        // Skip methods of function-nested and `del`eted classes
+                        if has_function_ancestor(&cls.parent)
+                            || is_deleted_class(module, bindings, cls)
+                        {
                             continue;
                         }
                         // Skip private class methods (single-underscore prefix).
@@ -907,31 +993,12 @@ fn parse_functions(
 
 fn return_annotation_range(bindings: &Bindings, return_idx: Idx<Key>) -> Option<TextRange> {
     if let Binding::ReturnType(ret) = bindings.get(return_idx)
-        && let ReturnTypeKind::ShouldValidateAnnotation { range, .. }
-        | ReturnTypeKind::ShouldTrustAnnotation { range, .. } = &ret.kind
+        && let ReturnTypeKind::ShouldTrustAnnotation { range, .. } = &ret.kind
     {
         Some(*range)
     } else {
         None
     }
-}
-
-/// Only the first parameter (`self`/`cls`) is allowed to be unannotated.
-fn is_function_completely_annotated(
-    bindings: &Bindings,
-    answers: &Answers,
-    undecorated_idx: Idx<KeyUndecoratedFunction>,
-) -> bool {
-    let fun = bindings.get(undecorated_idx);
-    let return_idx = bindings.key_to_idx(&Key::ReturnType(ShortIdentifier::new(&fun.def.name)));
-    if return_annotation_range(bindings, return_idx).is_none() {
-        return false;
-    }
-
-    let implicit_receiver = has_implicit_receiver(fun, answers, undecorated_idx);
-    params_with_keys(&fun.def.parameters, implicit_receiver)
-        .iter()
-        .all(|(key, param)| key.is_none() || param.annotation.is_some())
 }
 
 /// Only a bare `Any` counts as unknown; container types like `list[Any]` are known.
@@ -1131,37 +1198,16 @@ fn parse_classes(
     module: &Module,
     bindings: &Bindings,
     answers: &Answers,
-    transaction: &Transaction,
-    handle: &Handle,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<ReportClass> {
     let mut classes = Vec::new();
-    let deleted = bindings.module_deletes();
-
-    // group method definitions by class
-    let mut methods_by_class: HashMap<Idx<KeyClass>, Vec<Idx<KeyUndecoratedFunction>>> =
-        HashMap::new();
-    for idx in bindings.keys::<Key>() {
-        if let Key::Definition(_) = bindings.idx_to_key(idx)
-            && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
-        {
-            let undecorated_idx = bindings.get(*x).undecorated_idx;
-            if let Some(class_key) = bindings.get(undecorated_idx).class_key {
-                methods_by_class
-                    .entry(class_key)
-                    .or_default()
-                    .push(undecorated_idx);
-            }
-        }
-    }
 
     for class_idx in bindings.keys::<KeyClass>() {
         // Skip @type_check_only classes.
         if tco_classes.contains(&class_idx) {
             continue;
         }
-        let binding_class = bindings.get(class_idx);
-        let cls_binding = match binding_class {
+        let cls_binding = match bindings.get(class_idx) {
             BindingClass::ClassDef(cls) => cls,
             BindingClass::FunctionalClassDef(..) => continue,
         };
@@ -1171,71 +1217,16 @@ fn parse_classes(
         if has_function_ancestor(parent) {
             continue;
         }
-        // Skip top-level classes `del`eted at module scope.
-        if parent.is_toplevel() && deleted.contains(&name.id) {
+        if is_deleted_class(module, bindings, cls_binding) {
             continue;
         }
-        let class_type = match answers.get_idx(class_idx) {
-            Some(result) => match &result.0 {
-                Some(cls) => cls.clone(),
-                None => continue,
-            },
-            None => continue,
-        };
-        let class_name = class_fqn(module, parent, name);
-        let mro = answers
-            .get_idx(bindings.key_to_idx(&KeyClassMro(ClassDefIndex(class_type.index().0))))
-            .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
-        // Check methods defined directly on this class
-        let mut incomplete_attributes = Vec::new();
-        for &undecorated_idx in methods_by_class.get(&class_idx).into_iter().flatten() {
-            if !is_function_completely_annotated(bindings, answers, undecorated_idx) {
-                incomplete_attributes.push(IncompleteAttribute {
-                    name: bindings.get(undecorated_idx).def.name.to_string(),
-                    declared_in: class_name.clone(),
-                });
-            }
+        // Skip classes that fail to resolve.
+        if answers.get_idx(class_idx).is_none_or(|c| c.0.is_none()) {
+            continue;
         }
-        // Check inherited methods
-        for ancestor_class_type in mro.ancestors_no_object() {
-            let ancestor_class = ancestor_class_type.class_object();
-            // Skip methods inherited from builtins
-            if ancestor_class.module_name().as_str() == "builtins" {
-                continue;
-            }
-            let ancestor_name = class_fqn(
-                ancestor_class.module(),
-                ancestor_class.qname().parent(),
-                ancestor_class.name(),
-            );
-            let Some(ancestor_class_fields) = transaction.get_class_fields(handle, ancestor_class)
-            else {
-                continue;
-            };
-            for field_name in ancestor_class_fields.names() {
-                let field_name_str = field_name.to_string();
-                // Skip if we already have this attribute listed (it has been overridden
-                // by the current class or another class in the MRO)
-                if incomplete_attributes
-                    .iter()
-                    .any(|a| a.name == field_name_str)
-                {
-                    continue;
-                }
-                if !ancestor_class_fields.is_field_annotated(field_name) {
-                    incomplete_attributes.push(IncompleteAttribute {
-                        name: field_name_str,
-                        declared_in: ancestor_name.clone(),
-                    });
-                }
-            }
-        }
-        let location = range_to_location(module, cls_binding.def.range);
-        incomplete_attributes.sort();
         classes.push(ReportClass {
-            name: class_name,
-            incomplete_attributes,
-            location,
+            name: class_fqn(module, parent, name),
+            location: range_to_location(module, cls_binding.def.range),
         });
     }
     classes.sort();
@@ -1278,9 +1269,7 @@ fn collect_class_members(
 
         let fqname = class_fqn(module, &binding.parent, &binding.def.name);
 
-        let mro = answers
-            .get_idx(bindings.key_to_idx(&KeyClassMro(cls.index())))
-            .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
+        let mro = class_mro(bindings, answers, &cls);
         let ancestors = mro.ancestors_no_object();
         for obj in std::iter::once(&cls).chain(ancestors.iter().map(ClassType::class_object)) {
             if obj.module_name().as_str() == "builtins" {
@@ -1318,21 +1307,28 @@ fn collect_reexport_fqns(
         .collect()
 }
 
+/// Stub-side inputs of `merge_uncovered_py_symbols`, captured while the stub's
+/// bindings/answers are still live.
+struct StubMergeData {
+    class_members: SmallSet<String>,
+    all_filter: Option<(String, HashSet<String>)>,
+    reexports: SmallSet<String>,
+}
+
 struct ModuleSymbols {
     module: Module,
-    bindings: Bindings,
-    answers: Arc<Answers>,
-    exports: Arc<SmallMap<Name, ExportLocation>>,
-    dunder_all: SmallSet<Name>,
-    tco_classes: SmallSet<Idx<KeyClass>>,
     functions: Vec<Function>,
     variables: Vec<Variable>,
     classes: Vec<ReportClass>,
     suppressions: Vec<ReportSuppression>,
+    /// `Some` only when collected with `for_stub_merge`.
+    stub_merge: Option<StubMergeData>,
 }
 
 impl ModuleSymbols {
-    fn collect(transaction: &Transaction, handle: &Handle) -> Option<Self> {
+    /// Parse a solved module's symbols into plain data; `for_stub_merge` also captures
+    /// `StubMergeData`.
+    fn collect(transaction: &Transaction, handle: &Handle, for_stub_merge: bool) -> Option<Self> {
         let bindings = transaction.get_bindings(handle)?;
         let module = transaction.get_module_info(handle)?;
         let answers = transaction.get_answers(handle)?;
@@ -1348,14 +1344,7 @@ impl ModuleSymbols {
             &tco_classes,
         );
         merge_overloads(&mut functions);
-        let classes = parse_classes(
-            &module,
-            &bindings,
-            &answers,
-            transaction,
-            handle,
-            &tco_classes,
-        );
+        let mut classes = parse_classes(&module, &bindings, &answers, &tco_classes);
         let mut variables = parse_variables(
             &module,
             &bindings,
@@ -1369,20 +1358,53 @@ impl ModuleSymbols {
             &module,
             &bindings,
             &answers,
+            transaction,
+            handle,
             &tco_classes,
         ));
+
+        // A private name hides its whole subtree, unless exported via `__all__` (issue #3578).
+        let prefix = module_prefix(&module);
+        let is_visible = |name: &str| {
+            let relative = name
+                .strip_prefix(&prefix)
+                .expect("symbol FQNs start with the module prefix");
+            let mut components = relative.split('.');
+            let top = components
+                .next()
+                .expect("split yields at least one component");
+            (is_public_name(top) || dunder_all.iter().any(|n| n == top))
+                && components.all(is_public_name)
+        };
+        functions.retain(|f| is_visible(&f.name));
+        classes.retain(|c| is_visible(&c.name));
+        variables.retain(|v| is_visible(&v.name));
+
         let suppressions = parse_suppressions(&module);
+        let stub_merge = for_stub_merge.then(|| StubMergeData {
+            class_members: collect_class_members(
+                &module,
+                &bindings,
+                &answers,
+                transaction,
+                handle,
+                &tco_classes,
+            ),
+            all_filter: stub_merge_filter(transaction, handle),
+            reexports: collect_reexport_fqns(
+                &module,
+                &exports,
+                &transaction.get_exports_data(handle),
+                &dunder_all,
+            ),
+        });
         Some(ModuleSymbols {
             module,
-            bindings,
-            answers,
-            exports,
-            dunder_all,
-            tco_classes,
             functions,
             variables,
             classes,
             suppressions,
+            stub_merge,
         })
     }
 
@@ -1393,28 +1415,17 @@ impl ModuleSymbols {
     /// When this `.pyi` stub only covers a subset of its `.py` counterpart's public
     /// symbols, add the uncovered `py` symbols so that completeness metrics reflect
     /// the full module interface. Merged symbols count as fully untyped, since type
-    /// checkers ignore the `.py` when a stub exists. `transaction`/`handle` must be the stub's.
-    fn merge_uncovered_py_symbols(
-        &mut self,
-        transaction: &Transaction,
-        handle: &Handle,
-        py: ModuleSymbols,
-    ) {
-        let stub_class_members = collect_class_members(
-            &self.module,
-            &self.bindings,
-            &self.answers,
-            transaction,
-            handle,
-            &self.tco_classes,
-        );
-        let stub_filter = stub_merge_filter(transaction, handle);
-        let stub_reexports = collect_reexport_fqns(
-            &self.module,
-            &self.exports,
-            &transaction.get_exports_data(handle),
-            &self.dunder_all,
-        );
+    /// checkers ignore the `.py` when a stub exists.
+    fn merge_uncovered_py_symbols(&mut self, py: ModuleSymbols) {
+        let StubMergeData {
+            class_members,
+            all_filter,
+            reexports,
+        } = self
+            .stub_merge
+            .take()
+            .expect("stub must be collected with `for_stub_merge` to merge `.py` symbols");
+
         // Dedupe py-side symbols against all stub-side names regardless of kind, so a name defined
         // as a function or class in the stub isn't re-added as an untyped attr by a .py re-export.
         let stub_names: SmallSet<String> = self
@@ -1428,14 +1439,14 @@ impl ModuleSymbols {
         // Keep py-only names the stub neither defines nor omits from an explicit `__all__`.
         let keep = |name: &str| {
             !stub_names.contains(name)
-                && stub_filter
+                && all_filter
                     .as_ref()
                     .is_none_or(|(prefix, fqns)| is_public_fqn(name, prefix, fqns))
         };
         // A re-exported name owns its whole `Name.*` subtree: when the stub re-exports a class,
         // the .py class AND its attributes must drop together.
         let is_reexported = |name: &str| {
-            stub_reexports.iter().any(|reexport| {
+            reexports.iter().any(|reexport| {
                 name == reexport.as_str()
                     || name
                         .strip_prefix(reexport.as_str())
@@ -1444,7 +1455,7 @@ impl ModuleSymbols {
         };
         for mut py_func in py.functions {
             if keep(&py_func.name)
-                && !stub_class_members.contains(&py_func.name)
+                && !class_members.contains(&py_func.name)
                 && !is_reexported(&py_func.name)
             {
                 py_func.slots = py_func.slots.as_untyped();
@@ -1453,7 +1464,7 @@ impl ModuleSymbols {
         }
         for mut py_var in py.variables {
             if keep(&py_var.name)
-                && !stub_class_members.contains(&py_var.name)
+                && !class_members.contains(&py_var.name)
                 && !is_reexported(&py_var.name)
             {
                 py_var.slots = py_var.slots.as_untyped();
@@ -1648,12 +1659,6 @@ pub fn collect_module_reports(
     let state = State::new(config_finder, thread_count);
     let holder = Forgetter::new(state, false);
     let handles = Handles::new(expanded_file_list);
-    let mut forgetter = Forgetter::new(
-        holder.as_ref().new_transaction(Require::Exports, None),
-        true,
-    );
-
-    let transaction = forgetter.as_mut();
     let (handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
 
     if !sourcedb_errors.is_empty() {
@@ -1662,11 +1667,6 @@ pub fn collect_module_reports(
         }
         return Err(anyhow::anyhow!("Failed to query sourcedb."));
     }
-
-    let mut module_reports: Vec<ModuleReport> = Vec::new();
-    let mut errors: Vec<Error> = Vec::new();
-    transaction.run(handles.as_slice(), Require::Everything, None);
-    let public_fqns = public_only.then(|| compute_public_fqns(&handles, transaction));
 
     let shadowed = if prefer_stubs {
         py_paths_shadowed_by_pyi(&handles)
@@ -1693,7 +1693,6 @@ pub fn collect_module_reports(
             })
             .collect();
         // Fall back to site-package-path for stubs-only packages.
-        let mut external_handles = Vec::new();
         for h in handles.iter().filter(|h| h.path().is_interface()) {
             let pyi_path = h.path().as_path().to_path_buf();
             if map.contains_key(&pyi_path) {
@@ -1714,12 +1713,8 @@ pub fn collect_module_reports(
             .finding()
             {
                 let py_handle = config.handle_from_module_path(py_module_path);
-                external_handles.push(py_handle.clone());
                 map.insert(pyi_path, py_handle);
             }
-        }
-        if !external_handles.is_empty() {
-            transaction.run(&external_handles, Require::Everything, None);
         }
         map
     } else {
@@ -1727,78 +1722,136 @@ pub fn collect_module_reports(
     };
     let config_finder = holder.as_ref().config_finder();
     let dir_cache = DirEntryCache::new();
-    // Safe to parallelize: per-module collection is read-only and independent.
-    let transaction: &Transaction = transaction;
-    let collect_one = |handle: &Handle| -> Option<(ModuleReport, Vec<Error>)> {
-        if shadowed.contains(handle.path().as_path()) {
-            return None;
-        }
-
-        // gh-3632: skip files whose module name isn't importable (shadowed parent).
-        let module = handle.module();
-        if module != ModuleName::unknown() {
+    // gh-3632: skip files whose module name isn't importable (shadowed parent).
+    let importable = |handle: &Handle| {
+        handle.module() == ModuleName::unknown() || {
             let config = config_finder.python_file(handle.module_kind(), handle.path());
-            find_import_filtered(&config, module, None, None, &dir_cache, None).finding()?;
+            find_import_filtered(&config, handle.module(), None, None, &dir_cache, None)
+                .finding()
+                .is_some()
+        }
+    };
+    let mut targets: Vec<Handle> = handles
+        .iter()
+        .filter(|h| !shadowed.contains(h.path().as_path()) && importable(h))
+        .cloned()
+        .collect();
+    // Targets plus each stub's `.py` counterpart; the flag marks stubs that merge one.
+    let to_collect: HashMap<Handle, bool> = targets
+        .iter()
+        .map(|h| {
+            let merges_py = pyi_to_py.contains_key(&h.path().as_path().to_path_buf());
+            (h.dupe(), merges_py)
+        })
+        .chain(pyi_to_py.values().map(|h| (h.dupe(), false)))
+        .collect();
+    let run_set: Vec<Handle> = to_collect.keys().cloned().collect();
+    let collected: Mutex<HashMap<Handle, ModuleSymbols>> = Mutex::new(HashMap::new());
+
+    let mut forgetter = Forgetter::new(
+        holder.as_ref().new_transaction(Require::Exports, None),
+        true,
+    );
+    let transaction = forgetter.as_mut();
+    // Collect each module the moment it solves, before the run evicts its bindings/answers,
+    // so peak memory holds only the solver's working set (gh-3989).
+    transaction.set_solutions_hook(Some(Box::new(|handle, transaction| {
+        let Some(&for_stub_merge) = to_collect.get(handle) else {
+            return;
+        };
+        if let Some(symbols) = ModuleSymbols::collect(transaction, handle, for_stub_merge) {
+            collected.lock().insert(handle.dupe(), symbols);
+        }
+    })));
+    transaction.run(&run_set, Require::Errors, None);
+    // Later lazy computation must not fire the hook.
+    transaction.set_solutions_hook(None);
+
+    // gh-4034: a symbol re-exported from a public module stays counted even when
+    // `--project-excludes` drops its defining file; collect such origins in a 2nd pass.
+    let public_fqns = public_only.then(|| {
+        let (fqns, origins) = compute_public_fqns(&handles, transaction);
+        // Dedupe by path and module name so an origin that discovery already covers
+        // (e.g. an excluded .pyi of a discovered .py) isn't reported twice.
+        let mut seen_paths: HashSet<&Path> = handles.iter().map(|h| h.path().as_path()).collect();
+        let mut seen_modules: HashSet<ModuleName> = handles.iter().map(|h| h.module()).collect();
+        let extras: Vec<Handle> = origins
+            .iter()
+            .filter(|h| {
+                let path = h.path().as_path();
+                seen_paths.insert(path)
+                    && seen_modules.insert(h.module())
+                    && files_to_check.covers_ignoring_excludes(path)
+                    && !config_finder
+                        .python_file(h.module_kind(), h.path())
+                        .site_package_path()
+                        .any(|sp| path.starts_with(sp))
+            })
+            .cloned()
+            .collect();
+        if !extras.is_empty() {
+            // `Everything` retains bindings/answers so the extras can be collected after the run
+            transaction.run(&extras, Require::Everything, None);
+            collected.lock().extend(extras.iter().filter_map(|handle| {
+                ModuleSymbols::collect(transaction, handle, false).map(|s| (handle.dupe(), s))
+            }));
+            targets.extend(extras);
+        }
+        fqns
+    });
+
+    let mut module_reports: Vec<ModuleReport> = Vec::new();
+    let mut errors: Vec<Error> = Vec::new();
+    let mut collected = collected.lock();
+    for handle in &targets {
+        let Some(mut symbols) = collected.remove(handle) else {
+            continue;
+        };
+        // Per source module, so stub-merged `.py` symbols render against their own file.
+        if let Some(strict) = untyped_strict {
+            collect_untyped_errors(
+                &mut errors,
+                &symbols.module,
+                &symbols.functions,
+                &symbols.variables,
+                strict,
+                public_fqns.as_ref(),
+            );
         }
 
-        if let Some(mut symbols) = ModuleSymbols::collect(transaction, handle) {
-            let mut errors = Vec::new();
-            // Per source module, so stub-merged `.py` symbols render against their own file.
+        // When a .pyi stub shadows a .py file, include uncovered .py symbols.
+        if let Some(py_handle) = pyi_to_py.get(&handle.path().as_path().to_path_buf())
+            && let Some(py_symbols) = collected.remove(py_handle)
+        {
+            let py_module = py_symbols.module.dupe();
+            let own_functions = symbols.functions.len();
+            let own_variables = symbols.variables.len();
+            symbols.merge_uncovered_py_symbols(py_symbols);
             if let Some(strict) = untyped_strict {
                 collect_untyped_errors(
                     &mut errors,
-                    &symbols.module,
-                    &symbols.functions,
-                    &symbols.variables,
+                    &py_module,
+                    &symbols.functions[own_functions..],
+                    &symbols.variables[own_variables..],
                     strict,
                     public_fqns.as_ref(),
                 );
             }
-
-            // When a .pyi stub shadows a .py file, include uncovered .py symbols.
-            if let Some(py_handle) = pyi_to_py.get(&handle.path().as_path().to_path_buf())
-                && let Some(py_symbols) = ModuleSymbols::collect(transaction, py_handle)
-            {
-                let py_module = py_symbols.module.dupe();
-                let own_functions = symbols.functions.len();
-                let own_variables = symbols.variables.len();
-                symbols.merge_uncovered_py_symbols(transaction, handle, py_symbols);
-                if let Some(strict) = untyped_strict {
-                    collect_untyped_errors(
-                        &mut errors,
-                        &py_module,
-                        &symbols.functions[own_functions..],
-                        &symbols.variables[own_variables..],
-                        strict,
-                        public_fqns.as_ref(),
-                    );
-                }
-            }
-
-            let derived_name = handle.module().to_string();
-            let name = module_name_override.clone().unwrap_or(derived_name.clone());
-            let path = handle.path().as_path().display().to_string();
-            let module_report = build_module_report(
-                name,
-                path,
-                &derived_name,
-                symbols.line_count(),
-                &symbols.functions,
-                &symbols.variables,
-                &symbols.classes,
-                symbols.suppressions,
-            );
-            Some((module_report, errors))
-        } else {
-            None
         }
-    };
-    let collected: Vec<(ModuleReport, Vec<Error>)> = holder
-        .as_ref()
-        .install(|| handles.par_iter().filter_map(collect_one).collect());
-    for (report, module_errors) in collected {
-        module_reports.push(report);
-        errors.extend(module_errors);
+
+        let derived_name = handle.module().to_string();
+        let name = module_name_override.clone().unwrap_or(derived_name.clone());
+        let path = handle.path().as_path().display().to_string();
+        module_reports.push(build_module_report(
+            name,
+            path,
+            &derived_name,
+            symbols.line_count(),
+            &symbols.functions,
+            &symbols.variables,
+            &symbols.classes,
+            symbols.suppressions,
+        ));
     }
 
     if let Some(public_fqns) = &public_fqns {
@@ -1811,6 +1864,9 @@ pub fn collect_module_reports(
     // `handles` iterate in nondeterministic `HashSet` order; path disambiguates `--module`.
     module_reports.sort_by(|a, b| (&a.name, &a.path).cmp(&(&b.name, &b.path)));
     errors.sort_by_key(|e| (e.path().to_string(), e.range().start()));
+
+    // Surface config warnings, like `check` does.
+    config_finder.print_errors();
 
     Ok((module_reports, errors))
 }
@@ -1825,8 +1881,14 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
+    use pyrefly_util::globs::FilteredGlobs;
+    use pyrefly_util::globs::Globs;
+    use pyrefly_util::globs::HiddenDirFilter;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+    use tempfile::TempDir;
 
     use super::*;
+    use crate::commands::config_finder::default_config_finder;
     use crate::state::require::Require;
     use crate::test::util::TestEnv;
 
@@ -1876,7 +1938,7 @@ mod tests {
             .with_default_require_level(Require::Everything)
             .to_state();
         let handle = handle_fn("test");
-        let symbols = ModuleSymbols::collect(&state.transaction(), &handle).unwrap();
+        let symbols = ModuleSymbols::collect(&state.transaction(), &handle, false).unwrap();
         (symbols, module_path)
     }
 
@@ -1919,17 +1981,15 @@ mod tests {
     /// pipeline in `collect_module_reports` when `prefer_stubs` is true and both
     /// files exist for the same module.
     fn merged_stub_symbols(pyi_file: &str, py_file: &str) -> ModuleSymbols {
-        // Keep the state alive: the merge needs the stub's transaction.
         let pyi_code = load_test_file(pyi_file);
         let (pyi_state, pyi_handle_fn) = TestEnv::one_with_path("test", "test.pyi", &pyi_code)
             .with_default_require_level(Require::Everything)
             .to_state();
         let pyi_handle = pyi_handle_fn("test");
-        let pyi_txn = pyi_state.transaction();
-        let mut stub = ModuleSymbols::collect(&pyi_txn, &pyi_handle).unwrap();
+        let mut stub = ModuleSymbols::collect(&pyi_state.transaction(), &pyi_handle, true).unwrap();
 
         let (py, _) = parse_test_module(py_file, TestEnv::new());
-        stub.merge_uncovered_py_symbols(&pyi_txn, &pyi_handle, py);
+        stub.merge_uncovered_py_symbols(py);
         stub
     }
 
@@ -2622,6 +2682,14 @@ mod tests {
         compare_snapshot("del_module_level.expected.json", &report);
     }
 
+    /// Methods and instance attrs of a `del`eted class — and its whole nested
+    /// subtree — must not appear either (issue #4021).
+    #[test]
+    fn test_report_del_class() {
+        let report = build_module_report_for_test("del_class.py");
+        compare_snapshot("del_class.expected.json", &report);
+    }
+
     /// --module name override: symbol counts (n_functions vs n_methods) must
     /// be correct even when the output module name differs from the derived name.
     #[test]
@@ -2718,7 +2786,7 @@ def g(x: int) -> int:
             .with_default_require_level(Require::Everything)
             .to_state();
         let handle = handle_fn("test");
-        let symbols = ModuleSymbols::collect(&state.transaction(), &handle).unwrap();
+        let symbols = ModuleSymbols::collect(&state.transaction(), &handle, false).unwrap();
 
         // Only g should be reported; f is excluded due to @no_type_check.
         assert_eq!(symbols.functions.len(), 1);
@@ -2823,9 +2891,80 @@ def g(x: int) -> int:
         assert_eq!(report.symbols.n_attrs, 0);
     }
 
+    /// A config-less file whose path can't form a valid module name falls back to
+    /// `__unknown__`. Its symbol FQNs must carry the `__unknown__.` prefix, or
+    /// `--public-only` filtering (which rebuilds that prefix from the report name)
+    /// drops every symbol and reports "0 of N typable".
+    #[test]
+    fn test_unknown_module_public_only_keeps_symbols() {
+        let code = "def bar() -> int:\n    return 1\n";
+        let (state, handle_fn) = TestEnv::one_with_path("__unknown__", "__unknown__.py", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("__unknown__");
+        assert_eq!(handle.module(), ModuleName::unknown());
+
+        let transaction = state.transaction();
+        let symbols = ModuleSymbols::collect(&transaction, &handle, false).unwrap();
+        // The bug lives in symbol construction: FQNs must be prefixed with the module name.
+        assert_eq!(symbols.functions[0].name, "__unknown__.bar");
+
+        let (public_fqns, _) = compute_public_fqns(std::slice::from_ref(&handle), &transaction);
+        let mut report = build_module_report(
+            "__unknown__".to_owned(),
+            "__unknown__.py".to_owned(),
+            "__unknown__",
+            symbols.line_count(),
+            &symbols.functions,
+            &symbols.variables,
+            &symbols.classes,
+            symbols.suppressions,
+        );
+        filter_module_report_to_public(&mut report, &public_fqns);
+
+        assert!(
+            report.names.iter().any(|n| n == "__unknown__.bar"),
+            "public symbols in an __unknown__ module must survive --public-only filtering"
+        );
+    }
+
+    /// The `check`/untyped-error path (`collect_untyped_errors`) is the *other*
+    /// `--public-only` consumer: it rebuilds the `__unknown__.` prefix and matches
+    /// it against symbol FQNs. With bare FQNs an untyped public symbol in an
+    /// `__unknown__` module is silently never flagged, so the fix must reach this
+    /// path too — not just the report filter above.
+    #[test]
+    fn test_unknown_module_public_only_flags_untyped() {
+        let code = "def bar(x):\n    return x\n";
+        let (state, handle_fn) = TestEnv::one_with_path("__unknown__", "__unknown__.py", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("__unknown__");
+        let transaction = state.transaction();
+        let symbols = ModuleSymbols::collect(&transaction, &handle, false).unwrap();
+
+        let (public_fqns, _) = compute_public_fqns(std::slice::from_ref(&handle), &transaction);
+        let mut errors = Vec::new();
+        collect_untyped_errors(
+            &mut errors,
+            &symbols.module,
+            &symbols.functions,
+            &symbols.variables,
+            false,
+            Some(&public_fqns),
+        );
+
+        assert!(
+            !errors.is_empty(),
+            "an untyped public symbol in an __unknown__ module must be flagged under --public-only"
+        );
+    }
+
     #[test]
     fn test_compute_public_fqns() {
-        let compute = |modules: &[(&str, &str, &str)], handle_names: &[&str]| -> HashSet<String> {
+        let compute = |modules: &[(&str, &str, &str)],
+                       handle_names: &[&str]|
+         -> (HashSet<String>, HashSet<String>) {
             let mut env = TestEnv::new();
             for &(name, path, source) in modules {
                 env.add_with_path(name, path, source);
@@ -2834,12 +2973,14 @@ def g(x: int) -> int:
             let (state, handle_fn) = env.to_state();
             let transaction = state.transaction();
             let handles: Vec<_> = handle_names.iter().map(|n| handle_fn(n)).collect();
-            compute_public_fqns(&handles, &transaction)
+            let (fqns, origins) = compute_public_fqns(&handles, &transaction);
+            let origins = origins.iter().map(|h| h.module().to_string()).collect();
+            (fqns, origins)
         };
 
         // Re-export from a private module keeps both the local alias and the
         // traced origin, so reports covering either module stay non-empty.
-        let fqns = compute(
+        let (fqns, origins) = compute(
             &[
                 (
                     "pkg",
@@ -2856,9 +2997,10 @@ def g(x: int) -> int:
         );
         assert!(fqns.contains("pkg.Foo"));
         assert!(fqns.contains("pkg._internal.Foo"));
+        assert_eq!(origins, HashSet::from(["pkg._internal".to_owned()]));
 
         // Without __all__, non-underscore local names are exported
-        let fqns = compute(
+        let (fqns, _) = compute(
             &[(
                 "pkg",
                 "pkg/__init__.py",
@@ -2870,7 +3012,7 @@ def g(x: int) -> int:
         assert!(!fqns.contains("pkg._private"));
 
         // Regular imports (not `import x as x`) are not re-exports
-        let fqns = compute(
+        let (fqns, origins) = compute(
             &[
                 (
                     "pkg",
@@ -2887,9 +3029,10 @@ def g(x: int) -> int:
         );
         assert!(fqns.contains("pkg.local_fn"));
         assert!(!fqns.contains("pkg._internal.helper"));
+        assert_eq!(origins, HashSet::new());
 
         // `import x as x` is an implicit re-export when there is no __all__
-        let fqns = compute(
+        let (fqns, _) = compute(
             &[
                 (
                     "pkg",
@@ -2907,7 +3050,7 @@ def g(x: int) -> int:
         assert!(fqns.contains("pkg._internal.helper"));
 
         // __all__ takes precedence over `import x as x`
-        let fqns = compute(
+        let (fqns, _) = compute(
             &[
                 (
                     "pkg",
@@ -2933,7 +3076,7 @@ def g(x: int) -> int:
 
         // A re-export of a name its origin module doesn't define keeps the
         // local FQN but traces to no origin (github.com/facebook/pyrefly/issues/4025)
-        let fqns = compute(
+        let (fqns, origins) = compute(
             &[
                 (
                     "pkg",
@@ -2946,6 +3089,75 @@ def g(x: int) -> int:
         );
         assert!(fqns.contains("pkg.ghost"));
         assert!(!fqns.contains("pkg._internal.ghost"));
+        assert_eq!(origins, HashSet::new());
+    }
+
+    /// gh-4034: --project-excludes must not drop symbols of non-excluded public module re-exports.
+    #[test]
+    fn test_project_excludes_public_reexport() {
+        const FILES: [(&str, &str); 2] = [
+            (
+                "__init__.py",
+                "from foo._private import bar\n__all__ = ['bar']",
+            ),
+            ("_private.py", "def bar(a) -> None: ..."),
+        ];
+
+        // Returns foo._private's report, if any (never two).
+        let collect_private = |files: &[(&str, &str)], exclude: &str, public_only: bool| {
+            let dir = TempDir::new().unwrap();
+            let foo = dir.path().join("foo");
+            std::fs::create_dir(&foo).unwrap();
+            // Without a config, discovered files get unknown module names.
+            std::fs::write(dir.path().join("pyrefly.toml"), "search-path = ['.']").unwrap();
+            for &(name, source) in files {
+                std::fs::write(foo.join(name), source).unwrap();
+            }
+            let globs = FilteredGlobs::new(
+                Globs::new(vec![foo.display().to_string()]).unwrap(),
+                Globs::new(vec![foo.join(exclude).display().to_string()]).unwrap(),
+                None,
+                HiddenDirFilter::Disabled,
+            );
+            let (reports, _) = collect_module_reports(
+                Box::new(globs),
+                default_config_finder(None),
+                false,
+                None,
+                public_only,
+                None,
+                TEST_THREAD_COUNT,
+            )
+            .unwrap();
+            let mut private: Vec<_> = reports
+                .into_iter()
+                .filter(|r| r.name == "foo._private")
+                .collect();
+            assert!(private.len() <= 1);
+            private.pop()
+        };
+
+        // The excluded module's report keeps exactly its publicly re-exported symbol.
+        let private = collect_private(&FILES, FILES[1].0, true).unwrap();
+        let names: Vec<&str> = private
+            .symbol_reports
+            .iter()
+            .map(SymbolReport::name)
+            .collect();
+        assert_eq!(names, vec!["foo._private.bar"]);
+        assert_eq!((private.slots.n_typable, private.slots.n_typed), (2, 1));
+
+        // Without a public re-export the excluded module stays excluded.
+        let plain_import = [("__init__.py", "from foo._private import bar"), FILES[1]];
+        assert!(collect_private(&plain_import, FILES[1].0, true).is_none());
+
+        // Outside --public-only, excludes are respected unconditionally.
+        assert!(collect_private(&FILES, FILES[1].0, false).is_none());
+
+        // An excluded .pyi twin resolves as the origin (stubs win) but must not report twice.
+        let twins = [FILES[0], FILES[1], ("_private.pyi", FILES[1].1)];
+        let private = collect_private(&twins, twins[2].0, true).unwrap();
+        assert!(private.path.ends_with(FILES[1].0));
     }
 
     /// Dataclass and NamedTuple fields are IMPLICIT; methods on those classes count normally.

@@ -6,13 +6,16 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
-def test_complex_expression[HeadDim](n_elem: Dim[HeadDim], base: int = 10000) -> None:
+def test_complex_expression[HeadDim: IntVar](
+    n_elem: Int[HeadDim], base: int = 10000
+) -> None:
     # This is the exact pattern from precompute_freqs_cis
     # If Issue 6 is still present, freqs will be Tensor[[Any]] instead of Tensor[[HeadDim // 2]]
     freqs = 1.0 / (
@@ -21,7 +24,7 @@ def test_complex_expression[HeadDim](n_elem: Dim[HeadDim], base: int = 10000) ->
     assert_type(freqs, Tensor[[HeadDim // 2]])
 
 
-def test_intermediate_steps[HeadDim](n_elem: Dim[HeadDim]) -> None:
+def test_intermediate_steps[HeadDim: IntVar](n_elem: Int[HeadDim]) -> None:
     # Break down the complex expression to find where type info is lost
     step1 = torch.arange(0, n_elem, 2)
     assert_type(step1, Tensor[[HeadDim // 2]])

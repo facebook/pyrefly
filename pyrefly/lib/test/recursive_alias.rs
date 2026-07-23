@@ -86,8 +86,7 @@ def f(x: X) -> Y:
 );
 
 testcase!(
-    bug =
-        "Iterative fixpoint reports non-convergent-recursion for recursive class attribute aliases",
+    bug = "fixpoint reports non-convergent-recursion for recursive class attribute aliases",
     test_class_attr,
     r#"
 class C:

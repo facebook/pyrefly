@@ -8,12 +8,15 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-def accepts_symbolic_returns_symbolic[N](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
+def accepts_symbolic_returns_symbolic[N: IntVar](
+    x: Tensor[[N, 3]],
+) -> Tensor[[N, 3]]:
     """Identity function with symbolic dimension - preserves shape"""
     return x
 

@@ -11,8 +11,11 @@ where each element is Literal[n] for the corresponding dimension.
 
 from typing import Literal, TYPE_CHECKING
 
+from shape_extensions import IntVar
+
+
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
@@ -43,18 +46,22 @@ def test_shape_5d(
 # ============================================================================
 
 
-def test_shape_symbolic[N, M](x: Tensor[[N, M]]) -> tuple[Dim[N], Dim[M]]:
-    """Shape with symbolic dimensions returns Dim types"""
+def test_shape_symbolic[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> tuple[Int[N], Int[M]]:
+    """Shape with symbolic dimensions returns Int types"""
     return x.shape
 
 
-def test_shape_mixed[N](x: Tensor[[N, 3, 4]]) -> tuple[Dim[N], Literal[3], Literal[4]]:
+def test_shape_mixed[N: IntVar](
+    x: Tensor[[N, 3, 4]],
+) -> tuple[Int[N], Literal[3], Literal[4]]:
     """Shape with mix of symbolic and literal dimensions"""
     return x.shape
 
 
-def test_shape_arithmetic[N](
+def test_shape_arithmetic[N: IntVar](
     x: Tensor[[N + 1, N * 2]],
-) -> tuple[Dim[N + 1], Dim[N * 2]]:
+) -> tuple[Int[N + 1], Int[N * 2]]:
     """Shape with arithmetic expressions in dimensions"""
     return x.shape

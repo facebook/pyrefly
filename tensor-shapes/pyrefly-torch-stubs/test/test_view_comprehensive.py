@@ -8,6 +8,7 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -31,7 +32,9 @@ def test_literal_partial_infer():
     assert_type(y, Tensor[[2, 100]])
 
 
-def test_symbolic_flatten[N, M](x: Tensor[[N, M]]) -> Tensor[[N * M]]:
+def test_symbolic_flatten[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[N * M]]:
     """Flatten with symbolic dimensions"""
     y = x.view(-1)
     assert_type(y, Tensor[[(N * M)]])
@@ -44,7 +47,7 @@ result_flatten = test_symbolic_flatten(torch.randn(10, 20))
 assert_type(result_flatten, Tensor[[(10 * 20)]])
 
 
-def test_symbolic_partial_infer[C](x: Tensor[[C]]) -> Tensor[[1, C, 1, 1]]:
+def test_symbolic_partial_infer[C: IntVar](x: Tensor[[C]]) -> Tensor[[1, C, 1, 1]]:
     """Partial -1 inference with symbolic dimensions"""
     y = x.view(1, -1, 1, 1)
     assert_type(y, Tensor[[1, C, 1, 1]])
@@ -57,7 +60,7 @@ result_partial = test_symbolic_partial_infer(torch.randn(64))
 assert_type(result_partial, Tensor[[1, 64, 1, 1]])
 
 
-def test_symbolic_division[N](x: Tensor[[N]]) -> Tensor[[5, N // 5]]:
+def test_symbolic_division[N: IntVar](x: Tensor[[N]]) -> Tensor[[5, N // 5]]:
     """Division with symbolic dimensions"""
     y = x.view(5, -1)
     assert_type(y, Tensor[[5, (N // 5)]])
@@ -78,7 +81,7 @@ def test_no_inference():
     assert_type(y, Tensor[[200]])
 
 
-def test_incompatible_symbolic_shape[N](x: Tensor[[N]]):
+def test_incompatible_symbolic_shape[N: IntVar](x: Tensor[[N]]):
     """Test symbolic reshape with division"""
     # This works symbolically even if N isn't divisible by 3 at runtime
     y = x.view(3, -1)

@@ -7,6 +7,8 @@
 
 use lsp_types::Hover;
 use lsp_types::HoverContents;
+use lsp_types::Position;
+use lsp_types::Range;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
@@ -84,6 +86,30 @@ xyz = [foo.meth]
         report.contains("builtins.pyi"),
         "Expected link to builtins.pyi, got: {}",
         report
+    );
+}
+
+#[test]
+fn hover_on_overloaded_method_call_shows_implementation_docstring() {
+    let code = r#"
+from typing import overload
+
+class Foo:
+    @overload
+    def bar(self, x: int) -> int: ...
+    @overload
+    def bar(self, x: str) -> str: ...
+    def bar(self, x: int | str) -> int | str:
+        """Hello."""
+        return x
+
+Foo().bar(1)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Hello."),
+        "Expected implementation docstring in hover, got: {report}"
     );
 }
 
@@ -297,6 +323,61 @@ greeter("hi")
     assert!(
         report.contains("repeat: int = 1"),
         "Expected hover to show optional parameter, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_callable_protocol_attribute_uses_dunder_call_signature() {
+    let code = r#"
+from typing import Protocol, cast
+
+class Parametrize(Protocol):
+    def __call__(self, argnames: str, *, ids: list[str] | None = None) -> int: ...
+
+class Mark:
+    parametrize: Parametrize
+
+mark = cast(Mark, ...)
+mark.parametrize("role", ids=["owner"])
+#    ^^^^^^^^^^^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("__call__"),
+        "Expected hover to refer to __call__, got: {report}"
+    );
+    assert!(
+        report.contains("argnames: str"),
+        "Expected hover to show the positional parameter, got: {report}"
+    );
+    assert!(
+        report.contains("ids: list[str] | None = None"),
+        "Expected hover to show the keyword-only parameter, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_callable_receiver_of_method_call_is_not_coerced_to_dunder_call() {
+    // The receiver `c` in `c.run()` sits inside the callee range (`c.run`), but it is
+    // not the callee's own name. Hovering it must show the receiver's own type, not
+    // coerce a callable receiver class to its `__call__` signature.
+    let code = r#"
+class C:
+    def __call__(self, x: int) -> str: ...
+    def run(self) -> None: ...
+
+def f(c: C) -> None:
+    c.run()
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains(": C"),
+        "Expected receiver hover to show `c`'s own type `C`, got: {report}"
+    );
+    assert!(
+        !report.contains("x: int"),
+        "Receiver hover must not coerce `c` to its class `__call__` signature, got: {report}"
     );
 }
 
@@ -579,6 +660,25 @@ foo(x=1, y=2)
 }
 
 #[test]
+fn hover_shows_type_for_imported_keyword_argument() {
+    let lib = r#"
+def foo(x: int, y: str) -> None: ...
+"#;
+    let code = r#"
+from lib import foo
+
+foo(x=1, y="hello")
+#        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert!(
+        report.contains("y: str"),
+        "Expected keyword argument hover to show imported parameter type, got: {report}"
+    );
+}
+
+#[test]
 fn hover_returns_none_for_docstring_literals() {
     let code = r#"
 def foo():
@@ -738,6 +838,26 @@ lhs @ rhs
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn hover_over_augmented_assignment_operator_shows_in_place_dunder_name() {
+    let code = r#"
+class Counter:
+    def __iadd__(self, other: int) -> Counter:
+        return self
+
+c = Counter()
+c += 1
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains(
+            "```python\n(method) __iadd__: def __iadd__(\n    self: Counter,\n    other: int\n) -> Counter: ...\n```"
+        ),
+        "Expected __iadd__ signature in hover, got: {report}"
     );
 }
 
@@ -1255,6 +1375,65 @@ Widget docstring"#
 }
 
 #[test]
+fn hover_on_dict_constructor_is_multiline() {
+    let code = r#"
+x: dict[str, int]
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert_eq!(
+        r#"
+# main.py
+2 | x: dict[str, int]
+       ^
+```python
+(class) dict: ((
+    *args: Any,
+    **kwargs: Any
+) -> dict[Unknown, Unknown]) | Overload[
+  () -> dict[Unknown, Unknown]
+  (**kwargs: Unknown) -> dict[str, Unknown]
+  (map: SupportsKeysAndGetItem[Unknown, Unknown], /) -> dict[Unknown, Unknown]
+  (
+    map: SupportsKeysAndGetItem[str, Unknown],
+    /,
+    **kwargs: Unknown
+) -> dict[str, Unknown]
+  (iterable: Iterable[tuple[Unknown, Unknown]], /) -> dict[Unknown, Unknown]
+  (
+    iterable: Iterable[tuple[str, Unknown]],
+    /,
+    **kwargs: Unknown
+) -> dict[str, Unknown]
+  (iterable: Iterable[list[str]], /) -> dict[str, str]
+  (iterable: Iterable[list[bytes]], /) -> dict[bytes, bytes]
+]
+```
+---
+dict() -> new empty dictionary  
+dict(mapping) -> new dictionary initialized from a mapping object's  
+&nbsp;&nbsp;&nbsp;&nbsp;(key, value) pairs  
+dict(iterable) -> new dictionary initialized as if via:  
+&nbsp;&nbsp;&nbsp;&nbsp;d = {}  
+&nbsp;&nbsp;&nbsp;&nbsp;for k, v in iterable:  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;d[k] = v  
+dict(**kwargs) -> new dictionary initialized with the name=value pairs  
+&nbsp;&nbsp;&nbsp;&nbsp;in the keyword argument list.  For example:  dict(one=1, two=2)
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn hover_on_first_component_of_multi_part_import() {
     let mymod_init = r#"# mymod/__init__.py
 def version() -> str: ...
@@ -1402,6 +1581,104 @@ c = Container()
     assert!(
         report.contains("self: Container") && report.contains("item: int"),
         "Expected hover to show __contains__ method signature, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_operator_with_unknown_left_operand_shows_contains_dunder() {
+    let code = r#"
+languages: list[str] = []
+
+def supported_language(lang):
+    if lang in languages:
+#           ^
+        return lang
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) __contains__:")
+            && report.contains("self: list[str]")
+            && report.contains(") -> bool"),
+        "Expected hover to show list.__contains__ method signature, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_bool_operator_highlights_bool_expression() {
+    let code = r#"
+x = 1 and 2
+#     ^
+y = 1 or 2
+#     ^
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let handle = handle("main");
+    let ranges = extract_cursors_for_test(code)
+        .into_iter()
+        .map(
+            |position| match get_hover(&state.transaction(), &handle, position, false) {
+                Some(hover) => hover.range,
+                None => panic!("Expected hover result for boolean operator"),
+            },
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranges,
+        vec![
+            Some(Range {
+                start: Position::new(1, 4),
+                end: Position::new(1, 11),
+            }),
+            Some(Range {
+                start: Position::new(3, 4),
+                end: Position::new(3, 10),
+            }),
+        ]
+    );
+}
+
+#[test]
+fn hover_over_bool_operator_chain_highlights_whole_chain() {
+    // `a and b and c` is a single flat BoolOp, so hovering any operator in the
+    // chain highlights the entire boolean expression, not just the adjacent
+    // operands. The carets sit on the *second* operator to prove that.
+    let code = r#"
+x = 1 and 2 and 3
+#           ^
+y = 1 or 2 or 3
+#          ^
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let handle = handle("main");
+    let ranges = extract_cursors_for_test(code)
+        .into_iter()
+        .map(
+            |position| match get_hover(&state.transaction(), &handle, position, false) {
+                Some(hover) => hover.range,
+                None => panic!("Expected hover result for boolean operator"),
+            },
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranges,
+        vec![
+            Some(Range {
+                start: Position::new(1, 4),
+                end: Position::new(1, 17),
+            }),
+            Some(Range {
+                start: Position::new(3, 4),
+                end: Position::new(3, 15),
+            }),
+        ]
     );
 }
 
@@ -1567,6 +1844,28 @@ Box[str]("hello")
     assert!(
         report.contains("Box[str]"),
         "Expected generic constructor to show Box[str], got: {report}"
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3240
+#[test]
+fn hover_on_generic_metaclass_constructor_does_not_show_inference_var() {
+    let code = r#"
+class DeclarativeAttributeIntercept(type):
+    pass
+
+class DCTransformDeclarative(DeclarativeAttributeIntercept):
+#                            ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        !report.contains("-> @"),
+        "Hover must not expose an internal inference variable, got: {report}"
+    );
+    assert!(
+        report.contains(") -> Self@DeclarativeAttributeIntercept: ..."),
+        "Hover should resolve the constructor's return type, got: {report}"
     );
 }
 

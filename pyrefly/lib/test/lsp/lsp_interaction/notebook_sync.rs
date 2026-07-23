@@ -7,12 +7,12 @@
 
 use lsp_types::Url;
 use lsp_types::notification::DidOpenNotebookDocument;
+use pyrefly_lsp_test::object_model::CellKind;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::CellKind;
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_notebook_publish_diagnostics() {

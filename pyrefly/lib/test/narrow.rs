@@ -4061,3 +4061,28 @@ def f(cond: bool, other: object, value: int | str) -> None:
         assert_type(value, int)
     "#,
 );
+
+testcase!(
+    test_narrow_attribute_facet_isinstance_filters_union,
+    r#"
+from typing import assert_type
+class A:
+    tag: str
+class B:
+    tag: int
+class C:
+    tag: bytes
+def f(x: A | B | C) -> None:
+    if isinstance(x.tag, str):
+        assert_type(x, A)
+    elif isinstance(x.tag, int):
+        assert_type(x, B)
+    else:
+        assert_type(x, C)
+def g(x: A | B | C) -> None:
+    if not isinstance(x.tag, str):
+        assert_type(x, B | C)
+    else:
+        assert_type(x, A)
+"#,
+);

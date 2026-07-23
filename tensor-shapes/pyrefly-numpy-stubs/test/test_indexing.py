@@ -23,7 +23,9 @@ def test_arange_from_array_length() -> None:
 def test_paired_row_column_indexing() -> None:
     logits = np.ones((5, 3))
     targets = np.zeros(5, dtype=np.intp)
-    selected = logits[np.arange(len(targets)), targets]
+    selected: np.ndarray[[5], np.dtype[np.float64]] = logits[
+        np.arange(len(targets)), targets
+    ]
 
     assert_shape(selected, (5,))
     assert_type(selected.dtype, np.dtype[np.float64])
@@ -33,16 +35,22 @@ def test_paired_row_column_indexing_accepts_integer_dtypes() -> None:
     logits = np.ones((5, 3))
     int64_targets = np.zeros(5, dtype=np.int64)
     int32_targets = np.zeros(5, dtype=np.int32)
+    selected_int64: np.ndarray[[5], np.dtype[np.float64]] = logits[
+        np.arange(len(int64_targets)), int64_targets
+    ]
+    selected_int32: np.ndarray[[5], np.dtype[np.float64]] = logits[
+        np.arange(len(int32_targets)), int32_targets
+    ]
 
-    assert_shape(logits[np.arange(len(int64_targets)), int64_targets], (5,))
-    assert_shape(logits[np.arange(len(int32_targets)), int32_targets], (5,))
+    assert_shape(selected_int64, (5,))
+    assert_shape(selected_int32, (5,))
 
 
 def test_paired_row_column_indexing_uses_index_shape() -> None:
     logits = np.ones((5, 3))
     rows = np.arange(2)
     columns = np.zeros(2, dtype=np.int64)
-    selected = logits[rows, columns]
+    selected: np.ndarray[[2], np.dtype[np.float64]] = logits[rows, columns]
 
     assert_shape(selected, (2,))
 

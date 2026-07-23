@@ -361,7 +361,7 @@ fn export_function_parameter(param: &Param, context: &ModuleContext) -> Function
 
 fn export_function_parameters(params: &Params, context: &ModuleContext) -> FunctionParameters {
     match params {
-        Params::List(params) => FunctionParameters::List(
+        Params::List(params) | Params::Partial(params) => FunctionParameters::List(
             params
                 .items()
                 .iter()

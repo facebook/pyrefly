@@ -55,8 +55,8 @@ A fixture stub provides a shape-generic type signature. For example,
 class Linear[N, M](Module):
     def __init__(
         self,
-        in_features: Dim[N],
-        out_features: Dim[M],
+        in_features: SymInt[N],
+        out_features: SymInt[M],
         bias: bool = True,
     ) -> None: ...
 
@@ -71,7 +71,7 @@ dimensions.
 
 1. Identify the shape signature: input dimensions, output dimensions, and how
    they relate.
-2. Use `Dim[X]` for parameters that determine tensor dimensions. Non-shape
+2. Use `SymInt[X]` for parameters that determine tensor dimensions. Non-shape
    parameters like `bias` and `dropout` stay as their original types.
 3. Write the method or function signature expressing the shape transform. Use
    `*Xs` or `*Bs` for batch dimensions that pass through unchanged.
@@ -86,8 +86,8 @@ Suppose you want to add `nn.GroupNorm`, which preserves spatial dimensions:
 class GroupNorm[NumGroups, NumChannels](Module):
     def __init__(
         self,
-        num_groups: Dim[NumGroups],
-        num_channels: Dim[NumChannels],
+        num_groups: SymInt[NumGroups],
+        num_channels: SymInt[NumChannels],
         eps: float = 1e-5,
         affine: bool = True,
     ) -> None: ...

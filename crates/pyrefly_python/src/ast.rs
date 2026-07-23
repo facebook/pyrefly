@@ -39,6 +39,8 @@ use ruff_python_ast::StringLiteral;
 use ruff_python_ast::StringLiteralFlags;
 use ruff_python_ast::StringLiteralValue;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor;
+use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
@@ -91,6 +93,39 @@ impl<'a> SourceOrderVisitor<'a> for CoveringNodeVisitor<'a> {
 
     fn leave_node(&mut self, _: AnyNodeRef<'a>) {
         self.level -= 1;
+    }
+}
+
+/// Finds a syntactic `yield`/`yield from`, stopping at nested scopes (function
+/// definitions, class definitions, lambdas) since yields there belong to those
+/// scopes, not the enclosing one. Shared by `Ast::body_contains_yield` and
+/// `Ast::expr_contains_yield`.
+struct YieldFinder {
+    found: bool,
+}
+
+impl<'a> visitor::Visitor<'a> for YieldFinder {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if self.found {
+            return;
+        }
+        match stmt {
+            // Nested function/class definitions create new scopes.
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+            _ => visitor::walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.found {
+            return;
+        }
+        match expr {
+            Expr::Yield(_) | Expr::YieldFrom(_) => self.found = true,
+            // Lambda creates a new scope.
+            Expr::Lambda(_) => {}
+            _ => visitor::walk_expr(self, expr),
+        }
     }
 }
 
@@ -399,7 +434,7 @@ impl Ast {
 
     /// The tightest AST node that strictly contains `target` — i.e. the parent
     /// of the node whose range is `target`, or `None` at module top level.
-    pub fn parent_node(module: &ModModule, target: TextRange) -> Option<AnyNodeRef> {
+    pub fn parent_node(module: &ModModule, target: TextRange) -> Option<AnyNodeRef<'_>> {
         Ast::locate_node(module, target.start())
             .into_iter()
             .find(|node| node.range() != target && node.range().contains_range(target))
@@ -477,38 +512,6 @@ impl Ast {
     /// statically-dead branch like `if False:`, where the binding phase skips
     /// traversal but Python still treats the function as a generator.
     pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
-        use ruff_python_ast::visitor;
-        use ruff_python_ast::visitor::Visitor;
-
-        struct YieldFinder {
-            found: bool,
-        }
-
-        impl<'a> Visitor<'a> for YieldFinder {
-            fn visit_stmt(&mut self, stmt: &'a Stmt) {
-                if self.found {
-                    return;
-                }
-                match stmt {
-                    // Nested function/class definitions create new scopes.
-                    Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
-                    _ => visitor::walk_stmt(self, stmt),
-                }
-            }
-
-            fn visit_expr(&mut self, expr: &'a Expr) {
-                if self.found {
-                    return;
-                }
-                match expr {
-                    Expr::Yield(_) | Expr::YieldFrom(_) => self.found = true,
-                    // Lambda creates a new scope.
-                    Expr::Lambda(_) => {}
-                    _ => visitor::walk_expr(self, expr),
-                }
-            }
-        }
-
         let mut finder = YieldFinder { found: false };
         for stmt in stmts {
             finder.visit_stmt(stmt);
@@ -517,6 +520,16 @@ impl Ast {
             }
         }
         false
+    }
+
+    /// Same as `body_contains_yield`, but for a single expression. Used to detect
+    /// generators when a `yield`/`yield from` is hidden in the statically-dead
+    /// branch of a ternary (e.g. `(yield 1) if sys.platform == "win32" else 0`),
+    /// which the binding phase skips traversing when the branch is unreachable.
+    pub fn expr_contains_yield(expr: &Expr) -> bool {
+        let mut finder = YieldFinder { found: false };
+        finder.visit_expr(expr);
+        finder.found
     }
 
     pub fn is_mangled_attr(name: &Name) -> bool {

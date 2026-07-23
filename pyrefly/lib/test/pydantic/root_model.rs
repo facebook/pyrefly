@@ -102,8 +102,7 @@ m3 = B(3)
 );
 
 pydantic_testcase!(
-    bug =
-        "we should not error on the call with a str argument because it could be coercible to int ",
+    bug = "we should not error on the call with a str argument since it is coercible to int",
     test_directly_use_root_model,
     r#"
 from typing import Any, assert_type

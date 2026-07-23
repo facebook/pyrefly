@@ -78,19 +78,38 @@ impl BundledStub for BundledTypeshedStdlib {
                 Some(path) => vec![path],
                 None => Vec::new(),
             };
-            let error_overrides = HashMap::from([
-                // The stdlib is full of deliberately incorrect overrides, so ignore them
-                (ErrorKind::BadOverride, Severity::Ignore),
-                (ErrorKind::BadOverrideParamName, Severity::Ignore),
-                // The stdlib has variance violations in typing.pyi, so ignore them
-                (ErrorKind::InvalidVariance, Severity::Ignore),
-            ]);
-            let config_file =
-                create_bundled_stub_config(Some(search_paths), Some(error_overrides), Some(true));
+            let config_file = create_bundled_stub_config(
+                Some(search_paths),
+                Some(stdlib_error_overrides()),
+                Some(true),
+            );
             ArcId::new(config_file)
         });
         CONFIG.dupe()
     }
+}
+
+/// Error kinds that must be ignored when type-checking the stdlib stubs themselves.
+/// The stdlib deliberately contains incorrect overrides and variance violations
+/// (e.g. in `typing.pyi`) that are not real errors for our purposes.
+fn stdlib_error_overrides() -> HashMap<ErrorKind, Severity> {
+    HashMap::from([
+        (ErrorKind::BadOverride, Severity::Ignore),
+        (ErrorKind::BadOverrideParamName, Severity::Ignore),
+        (ErrorKind::InvalidVariance, Severity::Ignore),
+    ])
+}
+
+/// Config used to load the `Stdlib` from a user-provided typeshed directory from the
+/// `typeshed_path` config option. Stdlib modules will be resolved from
+/// `<typeshed_path>/stdlib` on disk; missing modules fall back to the bundled typeshed,
+/// matching how `typeshed_path` already behaves for ordinary import resolution.
+pub fn custom_typeshed_stdlib_config(typeshed_path: PathBuf) -> ArcId<ConfigFile> {
+    let mut config_file =
+        create_bundled_stub_config(None, Some(stdlib_error_overrides()), Some(true));
+    config_file.typeshed_path = Some(typeshed_path);
+    config_file.configure();
+    ArcId::new(config_file)
 }
 
 static BUNDLED_TYPESHED: LazyLock<anyhow::Result<BundledTypeshedStdlib>> =

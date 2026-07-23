@@ -28,6 +28,7 @@ use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::pydantic::PydanticModelKind;
+use crate::binding::pydantic::PydanticAliasGenerator;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::class::Class;
@@ -571,8 +572,6 @@ pub struct TypedDictMetadata {
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct EnumMetadata {
     pub cls: ClassType,
-    /// Whether this enum inherits from enum.Flag.
-    pub is_flag: bool,
     /// Is there any `_value_` field present.
     pub has_value: bool,
     /// Whether this is a special Django enum.
@@ -594,6 +593,7 @@ pub struct NamedTupleMetadata {
 pub struct InitDefaults {
     pub init_by_name: bool,
     pub init_by_alias: bool,
+    pub alias_generator: Option<PydanticAliasGenerator>,
 }
 
 impl Default for InitDefaults {
@@ -601,6 +601,7 @@ impl Default for InitDefaults {
         Self {
             init_by_name: false,
             init_by_alias: true,
+            alias_generator: None,
         }
     }
 }

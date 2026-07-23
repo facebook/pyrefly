@@ -49,8 +49,8 @@ use crate::types::facet::UnresolvedFacetChain;
 use crate::types::facet::UnresolvedFacetKind;
 use crate::types::types::Type;
 
-assert_words!(AtomicNarrowOp, 11);
-assert_words!(NarrowOp, 13);
+assert_words!(AtomicNarrowOp, 10);
+assert_words!(NarrowOp, 12);
 
 /// Indicates where an isinstance-style narrow operation originated from.
 /// This determines whether validation needs to happen during narrowing.
@@ -118,6 +118,13 @@ pub enum AtomicNarrowOp {
     /// narrowing for name `x` from `x is None or y is None`). We need to
     /// preserve its existence in order to handle control flow and negation
     Placeholder,
+    /// `ClassCoverageGate` is a no-op. Its negation `ClassCoverageGateNeg` narrows the class away only
+    /// when *every* referenced slot-coverage `Key::Exhaustive` solves to `Never` -- i.e. each
+    /// positional sub-pattern exhausts its matched slot. This lets a refutable but exhaustive
+    /// nested pattern subtract its class without the unsound blanket subtraction that a bare
+    /// `IsInstance` negation would perform.
+    ClassCoverageGate(Box<[Idx<Key>]>),
+    ClassCoverageGateNeg(Box<[Idx<Key>]>),
 }
 
 #[derive(Clone, Debug)]
@@ -218,6 +225,8 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::IsTruthy => write!(f, "IsTruthy"),
             AtomicNarrowOp::IsFalsy => write!(f, "IsFalsy"),
             AtomicNarrowOp::Placeholder => write!(f, "Placeholder"),
+            AtomicNarrowOp::ClassCoverageGate(ks) => write!(f, "ClassCoverageGate({ks:?})"),
+            AtomicNarrowOp::ClassCoverageGateNeg(ks) => write!(f, "ClassCoverageGateNeg({ks:?})"),
         }
     }
 }
@@ -339,6 +348,7 @@ impl AtomicNarrowOp {
                 snippet(arguments.range()).unwrap_or_default()
             )),
             Self::Placeholder => None,
+            Self::ClassCoverageGate(_) | Self::ClassCoverageGateNeg(_) => None,
         }
     }
 
@@ -381,6 +391,8 @@ impl AtomicNarrowOp {
             Self::IsTruthy => Self::IsFalsy,
             Self::IsFalsy => Self::IsTruthy,
             Self::Placeholder => Self::Placeholder,
+            Self::ClassCoverageGate(ks) => Self::ClassCoverageGateNeg(ks.clone()),
+            Self::ClassCoverageGateNeg(ks) => Self::ClassCoverageGate(ks.clone()),
         }
     }
 }
@@ -1134,7 +1146,7 @@ impl NarrowOps {
         name: &Name,
     ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
         let name_read_info =
-            builder.look_up_name_for_read(Hashed::new(name), &Usage::Narrowing(None));
+            builder.look_up_name_for_read(Hashed::new(name), &Usage::NonPinningValue(None));
         match name_read_info {
             NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
             // Only flow values have a narrowable original binding; anywhere-static entries,
@@ -1187,12 +1199,18 @@ impl NarrowOps {
                 // (True vs. False, empty vs. non-empty tuple, etc.) are immutable.
                 | AtomicNarrowOp::IsTruthy
                 | AtomicNarrowOp::IsFalsy
-                | AtomicNarrowOp::Placeholder => match builder.scopes.binding_idx_for_name(name) {
-                    // Make sure the last definition of `name` is before the narrowing operation,
-                    // so we know that `name` hasn't been redefined post-narrowing.
-                    Some((idx, _)) => builder.idx_to_key(idx).range().end() <= op_range.start(),
-                    None => true,
-                },
+                | AtomicNarrowOp::Placeholder
+                | AtomicNarrowOp::ClassCoverageGate(..)
+                | AtomicNarrowOp::ClassCoverageGateNeg(..) => {
+                    match builder.scopes.binding_idx_for_name(name) {
+                        // Make sure the last definition of `name` is before the narrowing
+                        // operation, so we know `name` hasn't been redefined post-narrowing.
+                        Some((idx, _)) => {
+                            builder.idx_to_key(idx).range().end() <= op_range.start()
+                        }
+                        None => true,
+                    }
+                }
                 _ => false,
             },
         }

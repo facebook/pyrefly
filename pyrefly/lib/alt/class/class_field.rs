@@ -1101,6 +1101,19 @@ impl ClassField {
         }
     }
 
+    fn calls_super_method(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Method { ty, .. } => {
+                ty.visit_toplevel_func_metadata(&|meta| meta.flags.calls_super_method)
+            }
+            _ => false,
+        }
+    }
+
+    fn requires_super_method_call(name: &Name) -> bool {
+        name == &dunder::INIT || name == &dunder::NEW || name == &dunder::INIT_SUBCLASS
+    }
+
     /// Check if this field is read-only for any reason.
     fn is_read_only(&self) -> bool {
         match &self.0 {
@@ -1509,7 +1522,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     ClassFieldInitialization::Magic
                 } else if let Some(flags) =
-                    self.extract_pydantic_field_from_annotation(*annot, &metadata)
+                    self.extract_pydantic_field_from_annotation(*annot, name, &metadata)
                 {
                     ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
                 } else {
@@ -1608,7 +1621,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             });
                         }
                     }
-                    let mut flags = self.compute_dataclass_field_initialization(call, dm);
+                    let mut flags = self.compute_dataclass_field_initialization(
+                        call,
+                        name,
+                        direct_annotation.as_ref().and_then(|a| a.ty.as_ref()),
+                        dm,
+                    );
                     if flags.is_some() {
                         // A field specifier with no type annotation is a definition-time error,
                         // except under classic attrs (`auto_attribs=False`), where an unannotated
@@ -1690,6 +1708,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         } else {
                             f.default = Some(self.heap.mk_any_implicit());
                         }
+                    }
+                    // A `@<field>.converter` decorator sets the `__init__` input type like an
+                    // explicit `converter=`, which composes first (`pipe`) and so takes precedence.
+                    if let Some(f) = &mut flags
+                        && f.converter_param.is_none()
+                        && let Some(method_range) = self
+                            .get_class_fields(class)
+                            .and_then(|cf| cf.attrs_converter_decorator_method_range(name))
+                    {
+                        f.converter_param =
+                            Some(self.attrs_converter_decorator_param(method_range));
                     }
                     ClassFieldInitialization::ClassBody(flags.map(Box::new))
                 } else {
@@ -1890,9 +1919,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
 
         // Determine the final type, promoting literals when appropriate.
-        // Skip literal promotion for NNModule types: their fields are captured
-        // constructor args that must preserve literal types for shape inference.
-        let (ty, unpromoted_ty) = if matches!(value_ty, Type::NNModule(_)) {
+        // Skip literal promotion for NNModule and DataFrame types: their captured
+        // fields/columns must preserve literal types for shape/column inference.
+        let (ty, unpromoted_ty) = if matches!(value_ty, Type::NNModule(_) | Type::DataFrame(_)) {
             (value_ty, None)
         } else {
             let mut has_implicit_literal = value_ty.is_implicit_literal();
@@ -2323,6 +2352,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (None, _) => self.expr_infer(x, errors),
         };
         self.expand_mut(&mut ty);
+        // An unannotated attribute whose value has a bare implicit `Any` type (e.g. from an
+        // untyped call) is reported separately from the `None`/empty-tuple sentinel cases above.
+        if annotation.is_none() && matches!(&ty, Type::Any(AnyStyle::Implicit)) {
+            self.error(
+                errors,
+                x.range(),
+                ErrorKind::UnknownAttributeType,
+                "This expression is implicitly inferred to be `Any`. Please provide an explicit type annotation.".to_owned(),
+            );
+        }
         ty
     }
 
@@ -2900,6 +2939,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn compute_dataclass_field_initialization(
         &self,
         call: &ExprCall,
+        field_name: &Name,
+        annotated_field_ty: Option<&Type>,
         dm: &DataclassMetadata,
     ) -> Option<DataclassFieldKeywords> {
         let ExprCall {
@@ -2916,7 +2957,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(func_kind) = func_kind
             && dm.kind.field_specifiers().contains(&func_kind)
         {
-            let flags = self.dataclass_field_keywords(&func_ty, arguments, dm, &ignore_errors);
+            let flags = self.dataclass_field_keywords(
+                &func_ty,
+                field_name,
+                arguments,
+                annotated_field_ty,
+                dm,
+                &ignore_errors,
+            );
             Some(flags)
         } else {
             None
@@ -3185,9 +3233,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .signatures
             .iter()
             .filter(|sig| {
-                let func = match sig {
-                    OverloadType::Function(f) => f,
-                    OverloadType::Forall(forall) => &forall.body,
+                let (func, tparams) = match sig {
+                    OverloadType::Function(f) => (f, None),
+                    OverloadType::Forall(forall) => (&forall.body, Some(&forall.tparams)),
                 };
                 // Only instance methods have a `self` first parameter; static and
                 // class methods' first parameter is a regular argument.
@@ -3195,6 +3243,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return true;
                 }
                 func.signature.get_first_param().is_none_or(|p| {
+                    // Replace the overload's own type params in `self:` with `Any`
+                    // (e.g. `self: Array[S, T]` -> `Array[Any, Any]`), matching against a gradual
+                    // `self:` rather than a rigid, unsolvable variable.
+                    let p = match tparams {
+                        Some(tparams) => {
+                            let any = self.heap.mk_any_implicit();
+                            p.subst(&tparams.iter().map(|q| (q, &any)).collect())
+                        }
+                        None => p,
+                    };
                     // A non-protocol `self:` can't re-enter protocol conformance, so check
                     // it directly. A protocol-typed `self:`, however, makes
                     // `is_subset_eq(self_type, p)` re-enter this same filtering on the same
@@ -3686,6 +3744,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         true
     }
 
+    fn check_missing_super_call_for_field(
+        &self,
+        cls: &Class,
+        field_name: &Name,
+        class_field: &ClassField,
+        bases: &ClassBases,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if !(ClassField::requires_super_method_call(field_name)
+            && class_field.can_have_override_decorator()
+            && !class_field.calls_super_method())
+        {
+            return;
+        }
+        // If any base derives from `Any`, we can't reliably tell whether the method
+        // overrides a concrete parent method, so suppress the check. Gather this
+        // across all bases first so the decision is independent of base order.
+        if bases.iter().any(|parent| {
+            self.get_metadata_for_class(parent.class_object())
+                .has_base_any()
+        }) {
+            return;
+        }
+        for parent in bases.iter() {
+            let parent_cls = parent.class_object();
+            let Some(want_field) =
+                self.get_class_member_with_defining_class(parent_cls, field_name)
+            else {
+                continue;
+            };
+            if want_field.defining_class.is_builtin("object") {
+                continue;
+            }
+            self.error(
+                errors,
+                range,
+                ErrorKind::MissingSuperCall,
+                format!(
+                    "Method `{}.{}` does not call the method of the same name in a parent class",
+                    cls.name(),
+                    field_name,
+                ),
+            );
+            return;
+        }
+    }
+
     pub fn check_consistent_override_for_field(
         &self,
         cls: &Class,
@@ -3695,18 +3801,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         let is_explicit_override = class_field.is_override();
-        if matches!(class_field.1, IsInherited::No) && !is_explicit_override {
-            return;
-        }
         let metadata = self.get_metadata_for_class(cls);
-        if !self.should_check_field_for_override_consistency(
-            field_name,
-            &metadata,
-            is_explicit_override,
-        ) {
-            return;
-        }
-
         let Some(cls_fields) = self.get_class_fields(cls) else {
             return;
         };
@@ -3715,6 +3810,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             return;
         };
+
+        self.check_missing_super_call_for_field(cls, field_name, class_field, bases, range, errors);
+
+        if matches!(class_field.1, IsInherited::No) && !is_explicit_override {
+            return;
+        }
+        if !self.should_check_field_for_override_consistency(
+            field_name,
+            &metadata,
+            is_explicit_override,
+        ) {
+            return;
+        }
 
         let mut got_attribute = None;
         let mut parent_attr_found = false;

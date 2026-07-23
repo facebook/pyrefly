@@ -121,7 +121,7 @@ impl Callable {
             return false;
         }
         match &self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 let items = params.items();
                 items.iter().any(|p| matches!(p, Param::Varargs(..)))
                     && items.iter().any(|p| matches!(p, Param::Kwargs(..)))
@@ -143,7 +143,9 @@ impl Callable {
             return true;
         }
         match &self.params {
-            Params::List(params) => params.items().iter().any(|p| p.as_type().any(check)),
+            Params::List(params) | Params::Partial(params) => {
+                params.items().iter().any(|p| p.as_type().any(check))
+            }
             Params::ParamSpec(prefix, p) => {
                 prefix.iter().any(|pp| {
                     let ty = match pp {
@@ -163,7 +165,7 @@ impl Callable {
             return false;
         }
         match &self.params {
-            Params::List(params) => params
+            Params::List(params) | Params::Partial(params) => params
                 .items()
                 .iter()
                 .all(|p| matches!(p.as_type(), Type::Any(AnyStyle::Implicit))),
@@ -421,6 +423,10 @@ impl PrefixParam {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Params {
     List(ParamList),
+    /// The residual parameter list of a `functools.partial(...)`: behaves like `List` for
+    /// call-checking, but is additionally recognized as assignable to `functools.partial[ret]`
+    /// (see the subtyping rule in `subset.rs`). Carries the parameters left after binding a prefix.
+    Partial(ParamList),
     Ellipsis,
     /// All possible materializations of `...`. A subset check with Callable[Materialization, R]
     /// succeeds only if it would succeed with Materialization replaced with any parameter list.
@@ -436,7 +442,7 @@ pub enum Params {
 impl Params {
     fn arg_counts(&self) -> ArgCounts {
         match self {
-            Self::List(params) => {
+            Self::List(params) | Self::Partial(params) => {
                 let mut counts = ArgCounts {
                     positional: ArgCount::none_allowed(),
                     keyword: ArgCount::none_allowed(),
@@ -711,6 +717,8 @@ pub struct FuncFlags {
     /// which lets override-consistency logic relax inferred placeholder returns
     /// without overriding what the user explicitly declared.
     pub is_return_inferred: bool,
+    /// Whether the function body directly calls `super(...).<this function>(...)`.
+    pub calls_super_method: bool,
     /// A function decorated with `typing.dataclass_transform(...)`, turning it into a
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See
@@ -861,6 +869,10 @@ impl FuncId {
 pub enum FunctionKind {
     IsInstance,
     IsSubclass,
+    /// The builtin `len`. Special-cased so that when the argument's `__len__`
+    /// returns a subtype of `int` (e.g. a shaped array's `Int[N]`), `len(x)`
+    /// yields that type instead of typeshed's plain `int`.
+    Len,
     Dataclass,
     DataclassField,
     DataclassReplace,
@@ -902,9 +914,6 @@ pub enum FunctionKind {
     NumbaJit,
     /// `numba.njit()`
     NumbaNjit,
-    /// `attr.converters.optional` / `attrs.converters.optional`, which wraps an
-    /// inner converter so the field also accepts `None`.
-    AttrsConvertersOptional,
     /// A function whose return type is computed by a shape DSL definition.
     /// The `FuncId` provides identity (module, class, name) for display and
     /// lookup; the `ShapeDslFunction` carries the parsed DSL IR.
@@ -926,7 +935,7 @@ impl Callable {
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match &self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 output.write_str("(")?;
                 params.fmt_with_type(output, write_type, &ParamOverlay::All)?;
                 output.write_str(") -> ")?;
@@ -984,7 +993,7 @@ impl Callable {
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match &self.params {
-            Params::List(params) if params.len() > 1 => {
+            Params::List(params) | Params::Partial(params) if params.len() > 1 => {
                 // For multiple parameters, put each on a new line with indentation
                 output.write_str("(\n    ")?;
                 params.fmt_with_type_with_newlines(output, write_type)?;
@@ -992,6 +1001,7 @@ impl Callable {
                 write_type(&self.ret, output)
             }
             Params::List(..)
+            | Params::Partial(..)
             | Params::ParamSpec(..)
             | Params::Ellipsis
             | Params::Materialization => self.fmt_with_type(output, write_type),
@@ -1001,6 +1011,14 @@ impl Callable {
     pub fn list(params: ParamList, ret: Type) -> Self {
         Self {
             params: Params::List(params),
+            ret,
+        }
+    }
+
+    /// Build a `Callable` carrying a [`Params::Partial`] residual signature, returning `ret`.
+    pub fn partial(params: ParamList, ret: Type) -> Self {
+        Self {
+            params: Params::Partial(params),
             ret,
         }
     }
@@ -1049,6 +1067,20 @@ impl Callable {
                 }
             }
             Self {
+                params: Params::Partial(params),
+                ret,
+            } => {
+                let (first, rest) = params.0.split_first()?;
+                if let Param::Varargs(_, first) = first {
+                    Some((first, self.clone()))
+                } else {
+                    Some((
+                        first.as_type(),
+                        Self::partial(ParamList(rest.to_vec()), ret.clone()),
+                    ))
+                }
+            }
+            Self {
                 params: Params::ParamSpec(ts, p),
                 ret,
             } => {
@@ -1076,7 +1108,7 @@ impl Callable {
     /// don't prevent it.
     pub fn accepts_single_positional_arg(&self) -> bool {
         match &self.params {
-            Params::List(params) => match params.0.split_first() {
+            Params::List(params) | Params::Partial(params) => match params.0.split_first() {
                 Some((_, rest)) => !rest.iter().any(|p| {
                     matches!(
                         p,
@@ -1266,6 +1298,7 @@ impl FunctionKind {
         match (module.name().as_str(), cls.as_ref(), func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
             ("builtins", None, "issubclass") => Self::IsSubclass,
+            ("builtins", None, "len") => Self::Len,
             ("builtins", None, "classmethod") => Self::ClassMethod,
             ("dataclasses", None, "dataclass") => Self::Dataclass,
             ("dataclasses", None, "field") => Self::DataclassField,
@@ -1293,9 +1326,6 @@ impl FunctionKind {
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
             ("numba.core.decorators", None, "jit") => Self::NumbaJit,
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
-            ("attr.converters" | "attrs.converters", None, "optional") => {
-                Self::AttrsConvertersOptional
-            }
             ("shape_extensions", None, "uses_shape_dsl") => Self::UsesShapeDsl,
             ("shape_extensions", None, "defines_assert_shape") => Self::DefinesAssertShape,
             _ => Self::Def(Arc::new(FuncId {
@@ -1312,6 +1342,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => ModuleName::builtins(),
             Self::IsSubclass => ModuleName::builtins(),
+            Self::Len => ModuleName::builtins(),
             Self::ClassMethod => ModuleName::builtins(),
             Self::Dataclass => ModuleName::dataclasses(),
             Self::DataclassField => ModuleName::dataclasses(),
@@ -1339,7 +1370,6 @@ impl FunctionKind {
             Self::DisjointBase => ModuleName::typing(),
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
-            Self::AttrsConvertersOptional => ModuleName::from_str("attr.converters"),
             Self::Def(func_id) => func_id.module.name().dupe(),
             Self::ShapeDsl(id, _, _) => id.module.name().dupe(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
@@ -1351,6 +1381,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => Cow::Owned(Name::new_static("isinstance")),
             Self::IsSubclass => Cow::Owned(Name::new_static("issubclass")),
+            Self::Len => Cow::Owned(Name::new_static("len")),
             Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
             Self::DataclassField => Cow::Owned(Name::new_static("field")),
@@ -1378,7 +1409,6 @@ impl FunctionKind {
             Self::DisjointBase => Cow::Owned(Name::new_static("disjoint_base")),
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
-            Self::AttrsConvertersOptional => Cow::Owned(Name::new_static("optional")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
             Self::ShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
@@ -1390,6 +1420,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => None,
             Self::IsSubclass => None,
+            Self::Len => None,
             Self::ClassMethod => None,
             Self::Dataclass => None,
             Self::DataclassField => None,
@@ -1411,7 +1442,6 @@ impl FunctionKind {
             Self::RuntimeCheckable => None,
             Self::NumbaJit => None,
             Self::NumbaNjit => None,
-            Self::AttrsConvertersOptional => None,
             Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
             Self::SingleDispatchRegister(_) => None,
             Self::AbstractMethod => None,

@@ -595,3 +595,134 @@ class A(metaclass=Meta2):
 A()  # E: Cannot instantiate `A`
     "#,
 );
+
+// Tests for invalid-abstract-method: @abstractmethod in a non-abstract class.
+
+testcase!(
+    test_invalid_abstract_method_basic,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod
+    def fn(self) -> int:  # E: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_multiple,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod
+    def fn(self) -> int:  # E: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+
+    @abstractmethod
+    def gn(self) -> str:  # E: `Foo.gn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_abc_base_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Foo(ABC):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_abcmeta_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABCMeta, abstractmethod
+
+class Foo(metaclass=ABCMeta):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_transitive_abc_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    pass
+
+class Child(Base):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_protocol_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+from typing import Protocol
+
+class Foo(Protocol):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_abstract_property,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @property
+    @abstractmethod
+    def fn(self) -> int:  # E: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_inherited_only_no_error,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+
+class Child(Base):
+    # Child only inherits the abstract method, does not define its own @abstractmethod
+    pass
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_off_by_default,
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);

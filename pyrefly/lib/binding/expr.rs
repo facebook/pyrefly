@@ -104,9 +104,9 @@ pub enum Usage {
     /// Normal usage context that may pin partial types.
     /// The idx is the current binding being computed.
     CurrentIdx(Idx<Key>),
-    /// Narrowing context that should not pin partial types.
+    /// Value context that should not pin partial types.
     /// The idx (if present) is used for secondary-read detection.
-    Narrowing(Option<Idx<Key>>),
+    NonPinningValue(Option<Idx<Key>>),
     /// Static type context that should not pin partial types.
     /// When `is_annotation` is true, implicit alias validation is applied.
     StaticTypeInformation { is_annotation: bool },
@@ -118,12 +118,12 @@ pub enum Usage {
 }
 
 impl Usage {
-    /// Create a narrowing usage from another usage context.
-    pub fn narrowing_from(other: &Self) -> Self {
+    /// Create a non-pinning value usage from another usage context.
+    pub fn non_pinning_value_from(other: &Self) -> Self {
         match other {
-            Self::CurrentIdx(idx) => Self::Narrowing(Some(*idx)),
-            Self::Narrowing(idx) => Self::Narrowing(*idx),
-            Self::StaticTypeInformation { .. } | Self::TypeAliasRhs => Self::Narrowing(None),
+            Self::CurrentIdx(idx) => Self::NonPinningValue(Some(*idx)),
+            Self::NonPinningValue(idx) => Self::NonPinningValue(*idx),
+            Self::StaticTypeInformation { .. } | Self::TypeAliasRhs => Self::NonPinningValue(None),
         }
     }
 
@@ -131,13 +131,12 @@ impl Usage {
     pub fn current_idx(&self) -> Option<Idx<Key>> {
         match self {
             Usage::CurrentIdx(idx) => Some(*idx),
-            Usage::Narrowing(idx) => *idx,
+            Usage::NonPinningValue(idx) => *idx,
             Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs => None,
         }
     }
 
     /// Whether this usage context may pin partial types.
-    #[allow(dead_code)] // Will be used in Phase 5 of deferred BoundName implementation
     pub fn may_pin_partial_type(&self) -> bool {
         matches!(self, Usage::CurrentIdx(_))
     }
@@ -508,7 +507,7 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::Forward(iterable_value_idx)
             });
             for x in comp.ifs.iter_mut() {
-                self.ensure_expr(x, &mut Usage::narrowing_from(usage));
+                self.ensure_expr(x, &mut Usage::non_pinning_value_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(x));
                 self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(comp.range), usage);
             }
@@ -787,21 +786,62 @@ impl<'a> BindingsBuilder<'a> {
                 // Ternary operation. We treat it like an if/else statement.
                 // Process the test before forking so walrus-defined names are
                 // in the base flow and visible to both branches.
-                self.ensure_expr(&mut x.test, &mut Usage::narrowing_from(usage));
+                self.ensure_expr(&mut x.test, &mut Usage::non_pinning_value_from(usage));
+                let static_test = self.sys_info.evaluate_bool_with_sys_info(&x.test);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.start_fork_and_branch(x.range);
-                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
-                self.ensure_expr(&mut x.body, usage);
-                // Negate the narrow ops for the `orelse`, then merge the Flows.
-                // TODO(stroxler): We eventually want to drop all narrows but merge values.
-                self.next_branch();
-                self.bind_narrow_ops(
-                    &narrow_ops.negate(),
-                    NarrowUseLocation::Span(x.range),
-                    usage,
-                );
-                self.ensure_expr(&mut x.orelse, usage);
-                self.finish_branch();
+                match static_test {
+                    Some(true) => {
+                        // Skip the `orelse` branch - it typically means a check (e.g. a sys
+                        // version, platform, or TYPE_CHECKING check) where the branch is not
+                        // statically analyzable. However, we still need to check for
+                        // `yield`/`yield from` in the skipped branch, because Python
+                        // determines generator status syntactically at compile time,
+                        // regardless of reachability.
+                        if Ast::expr_contains_yield(&x.orelse) {
+                            self.scopes.mark_has_yield_in_dead_code();
+                        }
+                        self.bind_narrow_ops(
+                            &narrow_ops,
+                            NarrowUseLocation::Span(x.body.range()),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.body, usage);
+                        self.finish_branch();
+                    }
+                    Some(false) => {
+                        if Ast::expr_contains_yield(&x.body) {
+                            self.scopes.mark_has_yield_in_dead_code();
+                        }
+                        self.abandon_branch();
+                        self.start_branch();
+                        self.bind_narrow_ops(
+                            &narrow_ops.negate(),
+                            NarrowUseLocation::Span(x.range),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.orelse, usage);
+                        self.finish_branch();
+                    }
+                    None => {
+                        self.bind_narrow_ops(
+                            &narrow_ops,
+                            NarrowUseLocation::Span(x.body.range()),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.body, usage);
+                        // Negate the narrow ops for the `orelse`, then merge the Flows.
+                        // TODO(stroxler): We eventually want to drop all narrows but merge values.
+                        self.next_branch();
+                        self.bind_narrow_ops(
+                            &narrow_ops.negate(),
+                            NarrowUseLocation::Span(x.range),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.orelse, usage);
+                        self.finish_branch();
+                    }
+                }
                 self.finish_exhaustive_fork();
             }
             Expr::BoolOp(ExprBoolOp {
@@ -827,7 +867,7 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(value) = values.next() {
                     // The first operation runs unconditionally, so any walrus-defined
                     // names will be added to the base flow.
-                    self.ensure_expr(value, &mut Usage::narrowing_from(usage));
+                    self.ensure_expr(value, &mut Usage::non_pinning_value_from(usage));
                     self.start_fork_and_branch(*range);
                     let mut narrow_ops = get_narrow_ops(self, value, *op);
 
@@ -844,7 +884,7 @@ impl<'a> BindingsBuilder<'a> {
                             NarrowUseLocation::Span(value.range()),
                             usage,
                         );
-                        self.ensure_expr(value, &mut Usage::narrowing_from(usage));
+                        self.ensure_expr(value, &mut Usage::non_pinning_value_from(usage));
                         let new_narrow_ops = get_narrow_ops(self, value, *op);
                         narrow_ops.and_all(new_narrow_ops);
                         if self.sys_info.evaluate_bool(value) == short_circuit_trigger {
@@ -988,6 +1028,36 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     _ => {}
                 }
+                // `reveal_type` observes a value without pinning partial types.
+                // It fires both when imported (`SpecialExport::RevealType`) and when
+                // used as a bare unimported name, which resolves to `special.is_none()`;
+                // the latter can't be a `match special` arm, so it's handled here.
+                let is_unimported_reveal_type = match &*call.func {
+                    Expr::Name(name) if special.is_none() && name.id.as_str() == "reveal_type" => {
+                        self.scopes.binding_idx_for_name(&name.id).is_none()
+                    }
+                    _ => false,
+                };
+                if special == Some(SpecialExport::RevealType) || is_unimported_reveal_type {
+                    self.ensure_expr(&mut call.func, usage);
+                    let args = call.arguments.args.split_first_mut();
+                    if let Some((first_arg, remaining_args)) = args {
+                        // `reveal_type` observes its first positional argument.
+                        // Extra arguments are analyzed normally.
+                        if matches!(first_arg, Expr::Name(_)) {
+                            self.ensure_expr(first_arg, &mut Usage::non_pinning_value_from(usage));
+                        } else {
+                            self.ensure_expr(first_arg, usage);
+                        }
+                        for arg in remaining_args {
+                            self.ensure_expr(arg, usage);
+                        }
+                    }
+                    for kw in call.arguments.keywords.iter_mut() {
+                        self.ensure_expr(&mut kw.value, usage);
+                    }
+                    return;
+                }
                 // `as_assert_in_test` is *not* a SpecialExport — it is a
                 // different classification of the callee. Its relative
                 // order with respect to the Exit/Quit/OsExit branch is
@@ -997,7 +1067,7 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.ensure_expr(&mut call.func, usage);
                     for arg in call.arguments.args.iter_mut() {
-                        self.ensure_expr(arg, &mut Usage::narrowing_from(usage));
+                        self.ensure_expr(arg, &mut Usage::non_pinning_value_from(usage));
                     }
                     for kw in call.arguments.keywords.iter_mut() {
                         self.ensure_expr(&mut kw.value, usage);
@@ -1088,7 +1158,9 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut x.value, usage);
                 let in_async_def = self.scopes.is_in_async_def();
                 let in_generator_element = self.in_generator_await_context();
-                if !in_async_def && !in_generator_element && !self.module_info.path().is_notebook()
+                if !in_async_def
+                    && !in_generator_element
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),

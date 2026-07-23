@@ -13,26 +13,26 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-from shape_extensions import Elements, SizeTuple
+from shape_extensions import Elements, IntTuple, IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
 # --- view on Linear output with variadic *Bs ---
 
 
-class Reshaper[K, D](nn.Module):
-    """Linear whose out_features is a Dim expression, followed by view."""
+class Reshaper[K: IntVar, D: IntVar](nn.Module):
+    """Linear whose out_features is a Int expression, followed by view."""
 
-    def __init__(self, k: Dim[K], d: Dim[D]) -> None:
+    def __init__(self, k: Int[K], d: Int[D]) -> None:
         super().__init__()
         self.k = k
         self.d = d
         self.proj = nn.Linear(256, k * d)
 
-    def forward[B](self, x: Tensor[[B, 256]]) -> Tensor[[B, K, D]]:
+    def forward[B: IntVar](self, x: Tensor[[B, 256]]) -> Tensor[[B, K, D]]:
         # proj(x) returns Tensor[[*Elements[Bs], K*D]] — *Elements[Bs] is unresolved variadic.
         # view should fall back to bare rather than crashing.
         p = self.proj(x)
@@ -42,7 +42,7 @@ class Reshaper[K, D](nn.Module):
 
 
 def test_view_on_variadic_linear():
-    """view() on Linear output with Dim expression doesn't crash."""
+    """view() on Linear output with Int expression doesn't crash."""
     m = Reshaper(16, 8)
     x: Tensor[[4, 256]] = torch.randn(4, 256)
     out = m(x)
@@ -52,8 +52,8 @@ def test_view_on_variadic_linear():
 # --- reshape on explicitly variadic function param ---
 
 
-def reshape_variadic[Bs: SizeTuple, C](
-    x: Tensor[[*Elements[Bs], C]], c: Dim[C]
+def reshape_variadic[Bs: IntTuple, C: IntVar](
+    x: Tensor[[*Elements[Bs], C]], c: Int[C]
 ) -> Tensor[[*Elements[Bs], C]]:
     """reshape on a variadic tensor should not crash."""
     y = x.reshape(-1, c)

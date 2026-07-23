@@ -8,6 +8,7 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -29,7 +30,7 @@ def test_view_with_partial_minus_one():
     assert_type(y, Tensor[[2, 100]])
 
 
-def test_view_1d_to_4d[C](x: Tensor[[C]]) -> Tensor[[1, C, 1, 1]]:
+def test_view_1d_to_4d[C: IntVar](x: Tensor[[C]]) -> Tensor[[1, C, 1, 1]]:
     """Test reshaping 1D to 4D with -1
 
     Takes a 1D tensor and reshapes it to [1, C, 1, 1] using -1 for automatic inference.

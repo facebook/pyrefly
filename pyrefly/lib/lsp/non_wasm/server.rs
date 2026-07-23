@@ -114,6 +114,9 @@ use lsp_types::RenameFilesParams;
 use lsp_types::RenameOptions;
 use lsp_types::RenameParams;
 use lsp_types::SaveOptions;
+use lsp_types::SelectionRange;
+use lsp_types::SelectionRangeParams;
+use lsp_types::SelectionRangeProviderCapability;
 use lsp_types::SemanticTokens;
 use lsp_types::SemanticTokensFullOptions;
 use lsp_types::SemanticTokensOptions;
@@ -194,6 +197,7 @@ use lsp_types::request::RegisterCapability;
 use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
 use lsp_types::request::ResolveCompletionItem;
+use lsp_types::request::SelectionRangeRequest;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SemanticTokensRefresh;
@@ -213,6 +217,7 @@ use pyrefly_config::config::ConfigSource;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::folding::FoldKind;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
@@ -269,6 +274,7 @@ use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
+use crate::config::config::ConfigScope;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
@@ -319,6 +325,7 @@ use crate::lsp::non_wasm::unsaved_file_tracker::UnsavedFileTracker;
 use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::DiagnosticMode;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
+use crate::lsp::non_wasm::workspace::ServerMode;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::completion::CompletionOptions as CompletionRequestOptions;
@@ -351,6 +358,7 @@ use crate::state::state::Transaction;
 use crate::state::subscriber::CompositeSubscriber;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
 use crate::state::subscriber::Subscriber;
+use crate::tsp::type_conversion::StdlibClasses;
 use crate::tsp::type_conversion::convert_type_with_resolvers;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassType;
@@ -364,6 +372,17 @@ impl From<Cancelled> for RequestError {
     fn from(Cancelled: Cancelled) -> Self {
         RequestError::Cancelled
     }
+}
+
+/// Bundled parameters for finding references, grouped to keep function signatures small.
+struct FindReferencesRequest {
+    request_id: RequestId,
+    handle: Handle,
+    uri: Url,
+    position: Position,
+    find_preference: FindPreference,
+    include_declaration: bool,
+    activity_key: Option<ActivityKey>,
 }
 
 pub struct InitializeInfo {
@@ -403,7 +422,7 @@ pub trait TspInterface: Send + Sync + 'static {
     fn pending_watched_file_changes(&self) -> &Mutex<Vec<FileEvent>>;
 
     /// Get access to the recheck queue for async task processing
-    fn run_recheck_queue(&self, telemetry: &impl Telemetry);
+    fn run_recheck_queue(&self, telemetry: &dyn Telemetry);
 
     fn stop_recheck_queue(&self);
 
@@ -414,7 +433,7 @@ pub trait TspInterface: Send + Sync + 'static {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
+        telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
@@ -549,6 +568,10 @@ impl ServerConnection {
 }
 
 const PROGRESS_REPORT_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Default inlay hint debounce window, applied when the client doesn't set
+/// `analysis.inlayHintDebounceMs`. See [`Server::inlay_hint_debounce_remaining`].
+const DEFAULT_INLAY_HINT_DEBOUNCE_MS: u64 = 150;
 
 struct LspProgressSubscriber<'a> {
     server: &'a Server,
@@ -851,6 +874,11 @@ pub struct Server {
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
+    /// Whether Pyrefly is its own language server or another editor's backing
+    /// type server. In [`ServerMode::TypeServer`] the forwarded `pyrefly.*`
+    /// client settings are ignored — see
+    /// [`Workspaces::apply_client_configuration`].
+    server_mode: ServerMode,
     state: State,
     /// This is a mapping from open notebook cells to the paths of the notebooks they belong to,
     /// which can be used to look up the notebook contents in `open_files`.
@@ -1314,6 +1342,7 @@ pub fn capabilities(
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         // Call hierarchy needs indexing to find cross-file callers/callees
         call_hierarchy_provider: match indexing_mode {
             IndexingMode::None => None,
@@ -1414,7 +1443,7 @@ pub fn lsp_loop(
     build_system_blocking: bool,
     path_remapper: Option<PathRemapper>,
     thrift_remapper: Option<ThriftRemapper>,
-    telemetry: &impl Telemetry,
+    telemetry: &dyn Telemetry,
     external_references: Arc<dyn ExternalProvider>,
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
@@ -1433,6 +1462,7 @@ pub fn lsp_loop(
         indexing_mode,
         workspace_indexing_limit,
         build_system_blocking,
+        ServerMode::LanguageServer,
         from,
         agent_session_id,
         agent_invocation_id,
@@ -1744,7 +1774,7 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
+        telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         // After this event there is another mutation
         subsequent_mutation: bool,
@@ -1931,8 +1961,11 @@ impl Server {
                     info!("Response for unknown request: {x:?}");
                 }
             }
-            LspEvent::LspRequest(mut x) => {
-                telemetry_event.set_activity_key(std::mem::take(&mut x.activity_key));
+            LspEvent::LspRequest(x) => {
+                // Clone (not take): a debounced inlay hint is re-enqueued below
+                // and re-enters this arm, so `x` must retain its activity_key for
+                // the re-delivered request's telemetry.
+                telemetry_event.set_activity_key(x.activity_key.clone());
                 telemetry_event.request_id = Some(x.id.to_string());
 
                 // Extract file stats from the raw JSON params so all requests
@@ -1981,6 +2014,27 @@ impl Server {
                         ErrorCode::RequestCanceled as i32,
                         message,
                     ));
+                    return Ok(ProcessEvent::Continue);
+                }
+
+                // Debounce inlay hints so their widths don't jitter on every
+                // keystroke (#4138). If the document was edited within the
+                // debounce window, hold the request in the queue until editing
+                // pauses, then cancel any older held request it supersedes so the
+                // client isn't left waiting on a request we'll never answer.
+                if x.method == InlayHintRequest::METHOD
+                    && let Some(remaining) = self.inlay_hint_debounce_remaining(&x)
+                {
+                    if let Some(superseded) =
+                        self.lsp_queue.send_delayed(x, Instant::now() + remaining)
+                    {
+                        canceled_requests.remove(&superseded.id);
+                        self.send_response(Response::new_err(
+                            superseded.id,
+                            ErrorCode::RequestCanceled as i32,
+                            "Superseded by a newer inlay hint request".to_owned(),
+                        ));
+                    }
                     return Ok(ProcessEvent::Continue);
                 }
 
@@ -2384,6 +2438,21 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(result)));
                     }
+                } else if let Some(params) = as_request::<SelectionRangeRequest>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<SelectionRangeRequest>(
+                            params, &x.id,
+                        )
+                    {
+                        let response = match self.selection_ranges(&transaction, params) {
+                            Ok(response) => response,
+                            Err(reason) => {
+                                telemetry_event.set_empty_response_reason(reason);
+                                None
+                            }
+                        };
+                        self.send_response(new_response(x.id, Ok(response)));
+                    }
                 } else if let Some(params) = as_request::<CallHierarchyPrepare>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<CallHierarchyPrepare>(
@@ -2534,6 +2603,7 @@ impl Server {
         indexing_mode: IndexingMode,
         workspace_indexing_limit: usize,
         build_system_blocking: bool,
+        server_mode: ServerMode,
         surface: Option<String>,
         agent_session_id: Option<String>,
         agent_invocation_id: Option<String>,
@@ -2589,6 +2659,7 @@ impl Server {
             indexing_mode,
             workspace_indexing_limit,
             build_system_blocking,
+            server_mode,
             state: State::new(config_finder, thread_count),
             open_notebook_cells: RwLock::new(HashMap::new()),
             open_files: RwLock::new(HashMap::new()),
@@ -2631,14 +2702,19 @@ impl Server {
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
             let mut modified = false;
-            s.workspaces
-                .apply_client_configuration(&mut modified, &None, init_options.clone());
+            s.workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                init_options.clone(),
+                server_mode,
+            );
             if let Some(workspace_folders) = &s.initialize_params.workspace_folders {
                 for folder in workspace_folders {
                     s.workspaces.apply_client_configuration(
                         &mut modified,
                         &Some(folder.uri.clone()),
                         init_options.clone(),
+                        server_mode,
                     );
                 }
             }
@@ -3311,7 +3387,7 @@ impl Server {
 
         info!("Populating all files in the config ({:?}).", config.source);
 
-        let project_path_blobs = config.get_filtered_globs(None);
+        let project_path_blobs = config.get_filtered_globs(None, ConfigScope::Default);
         let mut handles = Vec::new();
         if let Ok(paths) = project_path_blobs.files_iter() {
             for path in paths {
@@ -3477,7 +3553,7 @@ impl Server {
     /// invalidate find and perform a recheck.
     fn queue_source_db_rebuild_and_recheck(
         &self,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         force: bool,
     ) {
@@ -3533,7 +3609,7 @@ impl Server {
     fn did_open<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         url: Url,
@@ -3859,7 +3935,7 @@ impl Server {
     fn did_change_watched_files(
         &self,
         params: DidChangeWatchedFilesParams,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
     ) {
         let events = CategorizedEvents::new_lsp(params.changes);
@@ -3932,7 +4008,7 @@ impl Server {
         &self,
         url: Url,
         kind: DidCloseKind,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
     ) {
         let Some(path) = self.path_for_uri(&url) else {
@@ -4059,8 +4135,12 @@ impl Server {
 
         let mut modified = false;
         if let Some(python) = params.settings.get(PYTHON_SECTION) {
-            self.workspaces
-                .apply_client_configuration(&mut modified, &None, python.clone());
+            self.workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                python.clone(),
+                self.server_mode,
+            );
         }
 
         if modified {
@@ -4086,6 +4166,7 @@ impl Server {
                     &mut modified,
                     &id.scope_uri,
                     value.clone(),
+                    self.server_mode,
                 );
                 info!(
                     "Client configuration applied to workspace: {:?}",
@@ -4851,15 +4932,19 @@ impl Server {
     /// the common case of finding references, including external references.
     fn async_find_references_helper<'a, V: serde::Serialize>(
         &'a self,
-        request_id: RequestId,
         transaction: &Transaction<'a>,
-        handle: Handle,
-        uri: &Url,
-        position: Position,
-        include_declaration: bool,
-        activity_key: Option<ActivityKey>,
+        request: FindReferencesRequest,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) -> Result<(), EmptyResponseReason> {
+        let FindReferencesRequest {
+            request_id,
+            handle,
+            uri,
+            position,
+            find_preference,
+            include_declaration,
+            activity_key,
+        } = request;
         let path_remapper = self.path_remapper.clone();
         let external_references = self.external_references.clone();
         let source_uri = uri.clone();
@@ -4869,12 +4954,9 @@ impl Server {
             request_id,
             transaction,
             handle,
-            uri,
+            &uri,
             position,
-            FindPreference {
-                import_behavior: ImportBehavior::StopAtRenamedImports,
-                ..Default::default()
-            },
+            find_preference,
             activity_key,
             move |transaction, handle, definition, telemetry, telemetry_event| {
                 let qualified_name =
@@ -4969,13 +5051,19 @@ impl Server {
         let uri = &params.text_document_position.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(References::METHOD))?;
         self.async_find_references_helper(
-            request_id,
             transaction,
-            handle,
-            uri,
-            params.text_document_position.position,
-            params.context.include_declaration,
-            activity_key,
+            FindReferencesRequest {
+                request_id,
+                handle,
+                uri: uri.clone(),
+                position: params.text_document_position.position,
+                find_preference: FindPreference {
+                    import_behavior: ImportBehavior::StopAtRenamedImports,
+                    ..Default::default()
+                },
+                include_declaration: params.context.include_declaration,
+                activity_key,
+            },
             move |results| {
                 let mut locations = Vec::new();
                 for (uri, ranges) in results {
@@ -5000,14 +5088,22 @@ impl Server {
     ) -> Result<(), EmptyResponseReason> {
         let uri = &params.text_document_position.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
+        let new_name = params.new_name.clone();
         self.async_find_references_helper(
-            request_id,
             transaction,
-            handle,
-            uri,
-            params.text_document_position.position,
-            true,
-            activity_key,
+            FindReferencesRequest {
+                request_id,
+                handle,
+                uri: uri.clone(),
+                position: params.text_document_position.position,
+                find_preference: FindPreference {
+                    import_behavior: ImportBehavior::StopAtRenamedImports,
+                    resolve_call_dunders: false,
+                    ..Default::default()
+                },
+                include_declaration: true,
+                activity_key,
+            },
             move |results| {
                 let mut changes = HashMap::new();
                 for (uri, ranges) in results {
@@ -5015,7 +5111,7 @@ impl Server {
                         uri,
                         ranges.into_map(|range| TextEdit {
                             range,
-                            new_text: params.new_name.clone(),
+                            new_text: new_name.clone(),
                         }),
                     );
                 }
@@ -5075,6 +5171,37 @@ impl Server {
             .and_then(|c| c.show_hover_go_to_links)
             .unwrap_or(true);
         Ok(get_hover(transaction, &handle, position, show_go_to_links))
+    }
+
+    /// How long an inlay hint request should be deferred to debounce it, or
+    /// `None` if it can run now. VS Code has no client-side inlay-hint debounce
+    /// (microsoft/vscode#133730), so without this, hints recompute on every
+    /// keystroke and their widths jitter distractingly (#4138). We defer the
+    /// request while the document is still being edited so hints only settle
+    /// once typing pauses. The window is `analysis.inlayHintDebounceMs`
+    /// (default [`DEFAULT_INLAY_HINT_DEBOUNCE_MS`]); `0` disables debouncing.
+    fn inlay_hint_debounce_remaining(&self, request: &Request) -> Option<Duration> {
+        // No edit has happened yet (e.g. right after startup): nothing to
+        // debounce against, so run immediately.
+        let time_since_last_edit = self.lsp_queue.time_since_last_edit()?;
+        let debounce_ms = request
+            .params
+            .get("textDocument")
+            .and_then(|td| td.get("uri"))
+            .and_then(|u| u.as_str())
+            .and_then(|s| Url::parse(s).ok())
+            .and_then(|uri| self.path_for_uri_or_notebook_cell(&uri))
+            .and_then(|path| {
+                self.workspaces.get_with(path, |(_, workspace)| {
+                    workspace
+                        .lsp_analysis_config
+                        .and_then(|c| c.inlay_hint_debounce_ms)
+                })
+            })
+            .unwrap_or(DEFAULT_INLAY_HINT_DEBOUNCE_MS);
+        Duration::from_millis(debounce_ms)
+            .checked_sub(time_since_last_edit)
+            .filter(|remaining| !remaining.is_zero())
     }
 
     fn inlay_hints(
@@ -5273,7 +5400,7 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         query: &str,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
     ) -> anyhow::Result<Vec<SymbolInformation>> {
         let external_provider = self.external_references.clone();
@@ -5409,7 +5536,7 @@ impl Server {
                     range: lsp_range,
                     severity: Some(DiagnosticSeverity::HINT),
                     source: Some("Pyrefly".to_owned()),
-                    message: format!("Import `{}` is unused", unused.name.as_str()).into(),
+                    message: format!("Import `{}` may be unused", unused.name.as_str()).into(),
                     code: Some(NumberOrString::String("unused-import".to_owned())),
                     code_description: None,
                     related_information: None,
@@ -5494,10 +5621,16 @@ impl Server {
                     {
                         return None;
                     }
-                    // Filter out comment section folding ranges (Region) unless enabled
-                    if !self.comment_folding_ranges && kind == Some(FoldingRangeKind::Region) {
+                    if !self.comment_folding_ranges && kind == FoldKind::CommentSection {
                         return None;
                     }
+                    let kind = match kind {
+                        FoldKind::Code => None,
+                        FoldKind::Comment => Some(FoldingRangeKind::Comment),
+                        FoldKind::CommentSection | FoldKind::Region => {
+                            Some(FoldingRangeKind::Region)
+                        }
+                    };
                     let lsp_range = module.to_lsp_range(range);
                     if lsp_range.start.line >= lsp_range.end.line {
                         return None;
@@ -5520,6 +5653,60 @@ impl Server {
                         kind,
                         collapsed_text: None,
                     })
+                })
+                .collect(),
+        ))
+    }
+
+    fn selection_ranges(
+        &self,
+        transaction: &Transaction<'_>,
+        params: SelectionRangeParams,
+    ) -> Result<Option<Vec<SelectionRange>>, EmptyResponseReason> {
+        let uri = &params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, Some(SelectionRangeRequest::METHOD))?;
+        let module = transaction
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        let ast = transaction
+            .get_ast(&handle)
+            .ok_or(EmptyResponseReason::AstNotFound)?;
+        let notebook_cell = self.maybe_get_code_cell_index(uri);
+        let document_range = if let Some(cell) = notebook_cell {
+            module
+                .notebook()
+                .expect("a notebook cell URI should map to a notebook module")
+                .cell_offsets()
+                .content_ranges()
+                .nth(cell)
+                .expect("a notebook cell URI should have a matching code cell")
+        } else {
+            TextRange::up_to(TextSize::of(module.lined_buffer().contents().as_str()))
+        };
+
+        Ok(Some(
+            params
+                .positions
+                .into_iter()
+                .map(|position| {
+                    let position = self.from_lsp_position(uri, &module, position);
+                    let mut selection = SelectionRange {
+                        range: module.to_lsp_range(document_range),
+                        parent: None,
+                    };
+                    let mut last_range = Some(document_range);
+                    for node in Ast::locate_node(&ast, position).into_iter().rev() {
+                        let range = node.range();
+                        if !document_range.contains_range(range) || last_range == Some(range) {
+                            continue;
+                        }
+                        selection = SelectionRange {
+                            range: module.to_lsp_range(range),
+                            parent: Some(Box::new(selection)),
+                        };
+                        last_range = Some(range);
+                    }
+                    selection
                 })
                 .collect(),
         ))
@@ -6295,6 +6482,44 @@ impl Server {
         )
     }
 
+    /// Build a read transaction and the handle the type checker analyzes `path`
+    /// under, so `(uri, range)` queries resolve for any analyzable file rather
+    /// than only open documents.
+    ///
+    /// Open files are served from their in-memory overlay (already committed by
+    /// the recheck that ran on `didOpen`). For anything else we reuse the handle
+    /// the file was already analyzed under — an imported dependency's filesystem
+    /// handle, or a bundled stdlib stub's `BundledTypeshed` handle whose
+    /// `SysInfo` we can't reconstruct here, hence the by-path lookup — and force
+    /// a full solve (`Require::Everything` is the only level that retains
+    /// bindings/answers, which the type lookup reads) so narrowed/computed types
+    /// are available. A file that isn't analyzed yet falls back to a fresh
+    /// filesystem handle read from disk.
+    fn query_transaction_and_handle<'a>(&'a self, path: &Path) -> (Transaction<'a>, Handle) {
+        if self.open_files.read().contains_key(path) {
+            return (
+                self.state.transaction(),
+                make_open_handle(&self.state, path),
+            );
+        }
+        let mut transaction = self.state.transaction();
+        // Imported dependencies live under a filesystem handle we can rebuild
+        // directly; only scan when that misses (bundled stubs, unusual SysInfo).
+        let fs_handle =
+            handle_from_module_path(&self.state, ModulePath::filesystem(path.to_owned()));
+        let handle = if transaction.get_module_info(&fs_handle).is_some() {
+            fs_handle
+        } else {
+            transaction
+                .handles()
+                .into_iter()
+                .find(|h| !h.path().is_memory() && to_real_path(h.path()).as_deref() == Some(path))
+                .unwrap_or(fs_handle)
+        };
+        transaction.run(&[handle.dupe()], Require::Everything, None);
+        (transaction, handle)
+    }
+
     /// Open `uri` at `(line, character)`: resolve the path, build a handle, and
     /// start a transaction, returning it alongside the handle and the resolved
     /// in-file position.
@@ -6310,8 +6535,7 @@ impl Server {
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
+        let (transaction, handle) = self.query_transaction_and_handle(&path);
         let module_info = transaction.get_module_info(&handle)?;
         let position =
             module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
@@ -6364,11 +6588,21 @@ impl Server {
         let resolve_export = |module_name: ModuleName, name: &Name| {
             resolve_export_location(transaction, source_handle, module_name, name)
         };
+        // Sentinel-like types (`None`, `TypeGuard`/`TypeIs`, `Size`/`Dim`) are
+        // encoded as the stdlib's version-aware classes. Computing `ty` already
+        // populated this transaction's `Stdlib`, so `get_stdlib` stays on the
+        // warm path (see the doc comment above).
+        let stdlib = transaction.get_stdlib(source_handle);
         convert_type_with_resolvers(
             ty,
             Some(&resolve_func_range),
             Some(&resolve_module_path),
             Some(&resolve_export),
+            StdlibClasses {
+                none_type: stdlib.none_type(),
+                bool_type: stdlib.bool(),
+                int_type: stdlib.int(),
+            },
         )
     }
 }
@@ -6421,7 +6655,7 @@ impl TspInterface for Server {
         dispatch_lsp_events(self, reader);
     }
 
-    fn run_recheck_queue(&self, telemetry: &impl Telemetry) {
+    fn run_recheck_queue(&self, telemetry: &dyn Telemetry) {
         self.recheck_queue.run_until_stopped(self, telemetry);
     }
 
@@ -6433,7 +6667,7 @@ impl TspInterface for Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
+        telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
@@ -6528,8 +6762,7 @@ impl TspInterface for Server {
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
+        let (transaction, handle) = self.query_transaction_and_handle(&path);
         let module_info = transaction.get_module_info(&handle)?;
         let start = module_info.from_lsp_position(
             lsp_types::Position {

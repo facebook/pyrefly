@@ -2,14 +2,18 @@
 
 ## Core concepts
 
-**`Tensor[B, C, H, W]`** — a tensor with typed dimensions. Each dimension can
-be a literal (`3`, `64`), a type variable (`B`, `C`), or an arithmetic
-expression (`D // NHead`, `2 * H - 1`, `H * W`).
+**`Tensor[[B, C, H, W]]`** — a tensor with typed dimensions. `Tensor` takes a
+single shape parameter (`class Tensor[Shape: _Shape = _AnyShape]`), so a
+multi-dim shape goes in DOUBLE brackets. Each dimension can be a literal
+(`3`, `64`), a type variable (`B`, `C`), or an arithmetic expression
+(`D // NHead`, `2 * H - 1`, `H * W`). Single-bracket multi-dim
+(`Tensor[B, C, H, W]`) is obsolete and does not type-check. Single brackets are
+for a whole-shape carrier: `Tensor[S]` where `S: IntTuple`.
 
-**`Dim[X]`** — bridges a runtime integer to a type-level symbol. When a
-function takes `dim: Dim[D]` and receives `64`, the checker binds `D = 64`.
-All arithmetic on Dim values produces Dim results: `dim // 2` is `Dim[D // 2]`,
-`dim * 3` is `Dim[D * 3]`, etc. These expressions propagate through constructor
+**`Int[X]`** — bridges a runtime integer to a type-level symbol. When a
+function takes `dim: Int[D]` and receives `64`, the checker binds `D = 64`.
+All arithmetic on Int values produces Int results: `dim // 2` is `Int[D // 2]`,
+`dim * 3` is `Int[D * 3]`, etc. These expressions propagate through constructor
 args, method params, and tensor shapes.
 
 **Type variables model symbolic integers.** A method `forward[B, T]` has two
@@ -33,19 +37,22 @@ it lives elsewhere. `pyrefly dump-config` reports the resolved location.
 `.pyi` files with type signatures for PyTorch classes and functions. Common
 patterns:
 - `Self` return — preserves exact shape (e.g., `.float()`, `.contiguous()`)
-- `Tensor[*S] → Tensor[*S]` — shape-preserving (e.g., `F.relu`, `nn.LayerNorm`)
+- `Tensor[S] → Tensor[S]` with `S: IntTuple` — shape-preserving whole-shape
+  carrier (e.g., `F.relu`, `nn.LayerNorm`). For a *trailing* dim after any batch
+  shape, use `Tensor[[*Elements[Bs], D]]` with `Bs: IntTuple`.
 - Generic params — capture constructor args, compute output shape in `forward`
   (e.g., `nn.Linear[In, Out]`, `nn.Conv2d[InC, OutC, K, S, P, D]`)
-- `_Dim[N]` capture — captures runtime int args as type-level dims
+- `Int[N]` capture — binds a runtime int arg to a type-level dim
 
 **How to check if an op is supported:** Open the `.pyi` file and search for the
 class or function. If the return type is bare `Tensor`, shapes aren't tracked —
-unless the declaration has `@uses_shape_dsl(...)`. If it uses `Self`, `[*S]`,
-generics, or a `@uses_shape_dsl(...)` decorator, it's tracked.
+unless the declaration has `@uses_shape_dsl(...)`. If it uses `Self`, a
+whole-shape `Tensor[S]` (`S: IntTuple`), generics, or a `@uses_shape_dsl(...)`
+decorator, it's tracked.
 
 **How to recover a missing shape (only if the user opted into stub changes):**
-Change the stub's return type. Use `Self` for identity ops, `Tensor[*S]` for
-shape-preserving ops, generic params for transforms, or `@uses_shape_dsl(...)`
+Change the stub's return type. Use `Self` for identity ops, `Tensor[S]`
+(`S: IntTuple`) for shape-preserving ops, generic params for transforms, or `@uses_shape_dsl(...)`
 for shape functions that need argument-dependent computation. If stubs are
 off-limits, leave the op untracked — it degrades to a bare `Tensor`, which you
 record as a gap rather than fixing.
@@ -99,8 +106,8 @@ not the problem. Trace back:
 
 1. **Is the INPUT already bare?** No op can recover shapes from bare `Tensor`.
    Find where shapes were actually lost — that's the real fix.
-2. **`int` where `Dim` needed?** Shapes enter as unrefined when a function
-   takes `int` instead of `Dim[X]`. Fix: change the param type.
+2. **`int` where `Int` needed?** Shapes enter as unrefined when a function
+   takes `int` instead of `Int[X]`. Fix: change the param type.
 3. **`list` where `tuple` needed?** `torch.cat([a, b])` homogenizes element
    types. Fix: `torch.cat((a, b))`.
 4. **Branch join widening?** Two branches produce different types → widening.
@@ -125,3 +132,44 @@ Very few patterns truly can't be tracked:
 
 Everything else should be trackable. If you think something is shapeless, check
 the three mechanisms first — stubs, DSL, special handlers.
+
+## Current API surface
+
+The `shape_extensions` package is what your port imports. Its public exports:
+
+- **`Int`** — binds a runtime integer to a type-level symbol (`dim: Int[D]`).
+- **`IntVar`** — the bound for a *scalar* dimension type param
+  (`class Net[D: IntVar]`, `def forward[B: IntVar]`). Bare PEP 695 params
+  (`forward[B]`) are obsolete — always give the bound.
+- **`IntTuple`** — the bound for a *variadic / whole-shape* type param
+  (`Bs: IntTuple`, `Shape: IntTuple`). A whole-shape tensor is `Tensor[S]`
+  with `S: IntTuple`.
+- **`Elements`** — unpacks a variadic batch inside a shape:
+  `Tensor[[*Elements[Bs], D]]` with `Bs: IntTuple`.
+- **`assert_shape`** — runtime shape assertion (companion to compile-time
+  `assert_type`).
+- **`enable_torchscript_runtime_compat`** — call once to make shape annotations
+  survive TorchScript compilation.
+- **`shaped_array`** — `@shaped_array(shape=...)` class decorator for non-torch
+  array types (numpy-style).
+- **`uses_shape_dsl`**, **`ProxyMethod`**, **`TypeVarTuple`** — stub-authoring
+  primitives; you rarely write these in a port.
+
+There is NO exported `TypeVar`; use `IntVar`.
+
+**Variadic batch idiom** (any number of leading batch dims):
+
+```python
+def forward[Bs: IntTuple](
+    self, x: Tensor[[*Elements[Bs], D]]
+) -> Tensor[[*Elements[Bs], D]]: ...
+```
+
+(see `examples/tacotron2.py`, `examples/nanogpt.py`). The old `*Bs` / `Tensor[*S]`
+/ `Tensor[*Bs, D]` PEP-646 style is obsolete.
+
+**DSL internals** live in `shape_extensions.dsl`: `shape_dsl_function`, `symint`,
+`ShapedArray`, `Unknown`, `Error`, `prod`, `sum`, `parse_einsum_equation`. You only touch
+these when authoring a shape-DSL rule (see `modify-shaped-array-dsl`). Note: the
+lowercase DSL surface markers `symint` / `int` inside `_shapes.pyi` and the DSL
+are INTENTIONAL DSL syntax — they are not stale names to purge.

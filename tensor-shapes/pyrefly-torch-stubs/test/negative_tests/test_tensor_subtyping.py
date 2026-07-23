@@ -14,6 +14,9 @@ These tests verify that Tensor types follow proper subtyping:
 
 from typing import TYPE_CHECKING
 
+from shape_extensions import IntVar
+
+
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -64,24 +67,28 @@ def shapeless_to_shaped(x: Tensor) -> Tensor[[2, 3]]:
 # ============================================================================
 
 
-def tensor_generic_identity[N, M](x: Tensor[[N, M]]) -> Tensor[[N, M]]:
+def tensor_generic_identity[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[N, M]]:
     """Generic identity preserves shape"""
     return x
 
 
-def tensor_generic_wrong_order[N, M](x: Tensor[[N, M]]) -> Tensor[[M, N]]:
+def tensor_generic_wrong_order[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[M, N]]:
     """Swapped dimensions."""
     # E: Returned type `Tensor[[N, M]]` is not assignable
     #    to declared return type `Tensor[[M, N]]`
     return x
 
 
-def tensor_generic_first_dim[N](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
+def tensor_generic_first_dim[N: IntVar](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
     """Generic in first dimension only"""
     return x
 
 
-def tensor_generic_first_dim_wrong[N](x: Tensor[[N, 3]]) -> Tensor[[N, 5]]:
+def tensor_generic_first_dim_wrong[N: IntVar](x: Tensor[[N, 3]]) -> Tensor[[N, 5]]:
     """Second dimension mismatch even with generic first."""
     # E: Returned type `Tensor[[N, 3]]` is not assignable
     #    to declared return type `Tensor[[N, 5]]`
@@ -93,31 +100,37 @@ def tensor_generic_first_dim_wrong[N](x: Tensor[[N, 3]]) -> Tensor[[N, 5]]:
 # ============================================================================
 
 
-def tensor_add_dims[N, M](x: Tensor[[N, M]]) -> Tensor[[N + M]]:
+def tensor_add_dims[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N + M]]:
     """Cannot return a 2D tensor as 1D with sum dimension."""
     # E: Returned type `Tensor[[N, M]]` is not assignable
     #    to declared return type `Tensor[[(N + M)]]`
     return x
 
 
-def tensor_same_arithmetic[N](x: Tensor[[N + 1, 3]]) -> Tensor[[N + 1, 3]]:
+def tensor_same_arithmetic[N: IntVar](x: Tensor[[N + 1, 3]]) -> Tensor[[N + 1, 3]]:
     """Same arithmetic expression."""
     return x
 
 
-def tensor_different_arithmetic[N](x: Tensor[[N + 1, 3]]) -> Tensor[[N + 2, 3]]:
+def tensor_different_arithmetic[N: IntVar](
+    x: Tensor[[N + 1, 3]],
+) -> Tensor[[N + 2, 3]]:
     """Different arithmetic expression."""
     # E: Returned type `Tensor[[(1 + N), 3]]` is not assignable
     #    to declared return type `Tensor[[(2 + N), 3]]`
     return x
 
 
-def tensor_mul_dims[N, M](x: Tensor[[N * M, 3]]) -> Tensor[[N * M, 3]]:
+def tensor_mul_dims[N: IntVar, M: IntVar](
+    x: Tensor[[N * M, 3]],
+) -> Tensor[[N * M, 3]]:
     """Same multiplication expression."""
     return x
 
 
-def tensor_add_vs_mul[N, M](x: Tensor[[N + M, 3]]) -> Tensor[[N * M, 3]]:
+def tensor_add_vs_mul[N: IntVar, M: IntVar](
+    x: Tensor[[N + M, 3]],
+) -> Tensor[[N * M, 3]]:
     """Addition vs multiplication."""
     # E: Returned type `Tensor[[(N + M), 3]]` is not assignable
     #    to declared return type `Tensor[[(N * M), 3]]`

@@ -185,6 +185,17 @@ tes
                 '```python\n(function) test: def test(x: int) -> int: ...\n```'
             );
         });
+
+        it('should return type information for None', () => {
+            if (!wasmAvailable) return;
+            pyreService.updateSingleFile('main.py', 'None\n');
+
+            const hoverInfo = pyreService.hover(1, 1);
+
+            expect(hoverInfo.contents[0].value).toEqual(
+                '```python\n(class) NoneType: None\n```'
+            );
+        });
     });
 
     describe('inlayHint', () => {
