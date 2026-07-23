@@ -428,7 +428,10 @@ impl Transaction<'_> {
             handle,
             &attr_info.name,
             definition,
-            FindPreference::default(),
+            FindPreference {
+                prefer_pyi: false,
+                ..Default::default()
+            },
         );
 
         let (definition, Some(docstring_range)) = attribute_definition? else {
