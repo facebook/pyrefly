@@ -190,8 +190,10 @@ impl<'a> Transaction<'a> {
                     if inlay_hint_config.variable_types
                         && let Some(ty) = self.get_type_for_display(handle, key) =>
                 {
-                    // For unpacked values, extract the element expression if available
-                    let (e, is_unpacked) = match bindings.get(idx) {
+                    // Inspect the value-producing binding before deciding whether to show a hint.
+                    let binding = bindings.get(idx);
+                    let is_pattern_capture = matches!(binding, Binding::PatternCapture(_));
+                    let (e, is_unpacked) = match Self::get_inlay_hint_source(&bindings, binding) {
                         // Pinned assignments (explicit annotation or
                         // receiver-constrained class rebind) are already
                         // authoritatively typed; suggesting an explicit
@@ -230,7 +232,12 @@ impl<'a> Transaction<'a> {
                         is_unpacked && !ty.is_any()
                     };
                     if should_show {
-                        res.push(make_type_hint(": ", key.range().end(), &ty, !is_unpacked));
+                        res.push(make_type_hint(
+                            ": ",
+                            key.range().end(),
+                            &ty,
+                            !is_unpacked && !is_pattern_capture,
+                        ));
                     }
                 }
                 _ => {}
@@ -298,6 +305,16 @@ impl<'a> Transaction<'a> {
         }
 
         Some(res)
+    }
+
+    /// Return the binding that carries the value provenance used to decide whether an inlay hint
+    /// should be shown. Pattern captures are definition boundaries for IDE navigation, but remain
+    /// transparent when examining how their type was produced.
+    fn get_inlay_hint_source<'b>(bindings: &'b Bindings, binding: &'b Binding) -> &'b Binding {
+        match binding {
+            Binding::PatternCapture(source_idx) => bindings.get(*source_idx),
+            _ => binding,
+        }
     }
 
     /// Helper to extract the element expression from an unpacked source.

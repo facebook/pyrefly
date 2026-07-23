@@ -265,6 +265,44 @@ token-type: keyword
 }
 
 #[test]
+fn pattern_capture_test() {
+    let code = r#"
+def unpack(value):
+    match value:
+        case [head, *tail]:
+            return head, tail
+"#;
+    // Capture names are plain variables, including names that look like constants or parameters.
+    // The class-pattern keyword `child` and the wildcards `_` and `*_` do not produce tokens.
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 4, length: 6, text: unpack
+token-type: function
+
+line: 1, column: 11, length: 5, text: value
+token-type: parameter
+
+line: 2, column: 10, length: 5, text: value
+token-type: parameter
+
+line: 3, column: 14, length: 4, text: head
+token-type: variable
+
+line: 3, column: 21, length: 4, text: tail
+token-type: variable
+
+line: 4, column: 19, length: 4, text: head
+token-type: variable
+
+line: 4, column: 25, length: 4, text: tail
+token-type: variable
+"#,
+    );
+}
+
+#[test]
 fn multiline_syntax_token_test() {
     let code = r##"x = """one
 two"""
