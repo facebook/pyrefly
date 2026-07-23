@@ -12,6 +12,7 @@
  */
 
 use pyrefly_types::callable::FuncMetadata;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
@@ -134,6 +135,72 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(errors, range, ErrorKind::UnexpectedKeyword, msg);
                 },
                 "reveal_type",
+                keyword,
+            );
+        }
+        ret
+    }
+
+    pub fn call_assert_shape(
+        &self,
+        args: &[Expr],
+        keywords: &[Keyword],
+        range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let ret = if args.len() == 2 {
+            let actual = self
+                .solver()
+                .force(self.expr_infer_with_hint(&args[0], hint, errors));
+            if let Type::ShapedArray(shaped_array) = &actual {
+                if let Some(shape) = self.parse_assert_shape_expr(&args[1], errors) {
+                    let expected = self
+                        .shaped_array_with_shape(shaped_array, shape.clone())
+                        .to_type();
+                    if !self.is_equivalent(&actual, &expected) {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::AssertType,
+                            format!(
+                                "assert_shape({}, {}) failed",
+                                format_assert_shape_shape(&shaped_array.shape()),
+                                format_assert_shape_shape(&shape)
+                            ),
+                        );
+                    }
+                }
+            } else {
+                self.error(
+                    errors,
+                    args[0].range(),
+                    ErrorKind::BadArgumentType,
+                    format!(
+                        "First argument to `assert_shape` must be a shaped array, got `{}`",
+                        self.for_display(actual.clone())
+                    ),
+                );
+            }
+            actual
+        } else {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadArgumentCount,
+                format!(
+                    "assert_shape needs 2 positional arguments, got {}",
+                    args.len()
+                ),
+            );
+            self.heap.mk_any_error()
+        };
+        for keyword in keywords {
+            unexpected_keyword(
+                &|msg| {
+                    self.error(errors, range, ErrorKind::UnexpectedKeyword, msg);
+                },
+                "assert_shape",
                 keyword,
             );
         }
@@ -645,5 +712,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             None
         }
+    }
+}
+
+fn format_assert_shape_shape(shape: &IntTuple) -> String {
+    match shape.as_concrete() {
+        Some([]) => "()".to_owned(),
+        Some([dim]) => format!("({dim},)"),
+        _ => format!("({shape})"),
     }
 }

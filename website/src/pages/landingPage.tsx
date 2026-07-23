@@ -17,6 +17,7 @@ import LandingPageHeader from '../components/landing-page/landingPageHeader';
 import IDECarousel from '../components/landing-page/IDECarousel';
 import Banner from '../components/Banner';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
+import { log, LoggingEvent } from '../utils/LoggingUtils';
 
 export default function LandingPage(): React.ReactElement {
     const { siteConfig } = useDocusaurusContext();
@@ -33,6 +34,13 @@ export default function LandingPage(): React.ReactElement {
                 cta={{
                     text: 'Read the blog',
                     href: '/blog/v1.1',
+                    onClick: () =>
+                        log(LoggingEvent.CLICK, {
+                            button_id: 'banner_v1.1_blog',
+                            // Use the beacon transport so the event survives the
+                            // synchronous navigation that follows this click.
+                            transport_type: 'beacon',
+                        }),
                 }}
             />
             <LandingPageSection

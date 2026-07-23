@@ -37,7 +37,7 @@ a: Solutions
 b: Answers
 c: Answers
 
-(57 builtin demands hidden)
+(54 builtin demands hidden)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)
 a -> b::Exports(get_deprecated)

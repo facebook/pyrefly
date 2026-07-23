@@ -12,8 +12,10 @@ use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::Suppression;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::ignore::misplaced_ignore_errors;
 use pyrefly_python::ignore::parse_ignore_all;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
@@ -233,7 +235,10 @@ pub struct ModuleRanges {
     /// Multi-line string and backslash-continuation ranges.
     pub multi_line: Vec<(LineNumber, LineNumber)>,
     /// Top-level ignore-all directives (e.g. `# pyrefly: ignore-errors`).
-    pub ignore_all: SmallMap<Tool, LineNumber>,
+    pub ignore_all: Vec<Suppression>,
+    /// Lines of pyrefly `ignore-errors` directives placed after the preamble,
+    /// where they are inert. Surfaced as `misplaced-ignore` warnings.
+    pub misplaced_ignore_all: Vec<LineNumber>,
 }
 
 impl ModuleRanges {
@@ -244,9 +249,11 @@ impl ModuleRanges {
         multi_line.extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
         multi_line.sort();
         let ignore_all = parse_ignore_all(module_info.contents(), &multi_line);
+        let misplaced_ignore_all = misplaced_ignore_errors(module_info.contents(), &multi_line);
         Self {
             multi_line,
             ignore_all,
+            misplaced_ignore_all,
         }
     }
 }
@@ -291,6 +298,7 @@ impl Errors {
                 &error_config,
                 &ranges.multi_line,
                 &ranges.ignore_all,
+                &ranges.misplaced_ignore_all,
                 &mut errors,
             );
         }
@@ -312,6 +320,57 @@ impl Errors {
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
         }
         errors
+    }
+
+    /// Collect display errors for the language server, partitioned by whether or not they
+    /// appear in a baseline file. Returns `(normal, baselined)`.
+    ///
+    /// Each baseline is loaded once (cached per config) and resolved relative to its
+    /// config's source root, falling back to the baseline file's own directory.
+    pub fn collect_lsp_errors_with_baselines(&self) -> (Vec<Error>, Vec<Error>) {
+        let collected = self.collect_errors();
+        let unused = self.collect_unused_ignore_errors_for_display(&collected);
+        let config_by_path: SmallMap<&ModulePath, &ArcId<ConfigFile>> = self
+            .loads
+            .iter()
+            .map(|(load, _, config)| (load.module_info.path(), config))
+            .collect();
+        let mut baseline_processors: SmallMap<usize, Option<BaselineProcessor>> = SmallMap::new();
+        let mut errors = collected;
+        let mut ordinary = Vec::new();
+
+        for error in errors.ordinary.drain(..) {
+            let Some(config) = config_by_path.get(&error.path()) else {
+                ordinary.push(error);
+                continue;
+            };
+            let Some(baseline_path) = config.baseline.as_deref() else {
+                ordinary.push(error);
+                continue;
+            };
+            let processor = baseline_processors.entry(config.id()).or_insert_with(|| {
+                let relative_to = config
+                    .source
+                    .root()
+                    .or_else(|| baseline_path.parent())
+                    .unwrap_or_else(|| Path::new(""));
+                BaselineProcessor::from_file(baseline_path, relative_to).ok()
+            });
+            if processor
+                .as_ref()
+                .is_some_and(|processor| processor.matches_baseline(&error))
+            {
+                errors.baseline.push(error);
+            } else {
+                ordinary.push(error);
+            }
+        }
+
+        ordinary.extend(unused.ordinary);
+        (
+            Self::merge_display_errors(ordinary, errors.directives),
+            Self::merge_display_errors(errors.baseline, Vec::new()),
+        )
     }
 
     pub fn collect_display_errors(&self) -> Vec<Error> {
@@ -602,6 +661,7 @@ impl Errors {
                 &error_config,
                 &ranges.multi_line,
                 &ranges.ignore_all,
+                &ranges.misplaced_ignore_all,
                 &mut result,
             );
             let output_errors = Self::merge_display_errors(result.ordinary, result.directives);

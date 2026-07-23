@@ -128,9 +128,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return instance.to_type(self.heap);
         }
-        let e = self.get_enum_from_class(instance.class).unwrap();
+        self.get_enum_from_class(instance.class)
+            .expect("enum subtraction requires an enum class");
         // Enums derived from enum.Flag cannot be treated as a union of their members
-        if e.is_flag {
+        if self.has_superclass(instance.class, self.stdlib.enum_flag().class_object()) {
             return instance.to_type(self.heap);
         }
         self.unions(
@@ -181,8 +182,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn intersect_impl(&self, left: &Type, right: &Type, fallback: IntersectFallback) -> Type {
-        let is_literal =
-            |t: &Type| matches!(t, Type::Literal(_) | Type::LiteralString(_) | Type::None);
         if self.is_subset_eq(right, left) {
             if left.is_toplevel_callable()
                 && right.is_toplevel_callable()
@@ -231,7 +230,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Without this, an unsimplified Intersect(ClassType, SelfType) can
             // leak to downstream consumers that don't handle Intersect types.
             self.heap.mk_class_type(cls.clone())
-        } else if is_literal(left) || is_literal(right) {
+        } else if left.is_scalar() || right.is_scalar() {
             // The only inhabited intersections of literals are things like
             // `Literal[0] & Literal[0]` or `Literal[0] & int` that would have already been
             // intercepted by the is_subset_eq checks above. type(None) cannot be subclassed.
@@ -495,6 +494,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
         if narrow_heterogeneous_tuple {
             Some(self.instantiate_type_var_tuple())
+        } else if matches!(right, Type::ClassDef(c) if c == self.stdlib.builtins_type().class_object())
+        {
+            // `isinstance(x, type)` narrows `x` to its class-object part. When `x` is already a
+            // type-expression value, that part is `type[inner]`: `type[int]` stays precise and
+            // gradual `type[Any]` stays gradual.
+            match left {
+                Type::Type(_) => Some((TParams::empty(), left.clone())),
+                Type::TypeForm(inner) => {
+                    Some((TParams::empty(), self.heap.mk_type_of((**inner).clone())))
+                }
+                _ => self.unwrap_class_object_silently(right),
+            }
         } else {
             self.unwrap_class_object_silently(right)
         }
@@ -590,10 +601,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.distribute_over_union(left, |l| {
             self.with_fresh_class_info_target(l, right, |right| {
                 if right.is_any() {
-                    // This is essentially `isinstance(..., Any)`, which gives no useful narrowing information.
-                    // We currently emit `left & Any` directly with `left` as the fallback to land on the middle
-                    // ground between strictness and gradualness. Subject to future behavioral adjustments.
-                    intersect(vec![l.clone(), right], l.clone(), self.heap)
+                    // NOTE(grievejia): The most precise refinement would be `left`:
+                    // `isinstance(x, Any)` provides no concrete evidence about the type
+                    // of `x`, so keeping the original type is sound. In practice, that is
+                    // currently too strict for some primer projects. Refining to `Any` is
+                    // a gradual-typing compromise; we can revisit `left` in strict mode.
+                    right.clone()
                 } else {
                     // TODO: falling back to Never when the lhs is a union is a hack to get
                     // reasonable behavior in cases like this:
@@ -1215,6 +1228,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         match op {
             AtomicNarrowOp::Placeholder => ty.clone(),
+            AtomicNarrowOp::ClassCoverageGate(_) => ty.clone(),
+            AtomicNarrowOp::ClassCoverageGateNeg(keys) => {
+                // Subtract the class only when every positional slot's sub-pattern exhausts its
+                // matched slot, i.e. all slot-coverage keys resolved to `Never`.
+                if !keys.is_empty() && keys.iter().all(|key| self.get_idx(*key).ty().is_never()) {
+                    self.heap.mk_never()
+                } else {
+                    ty.clone()
+                }
+            }
             AtomicNarrowOp::LenEq(v) => {
                 let right = self.expr_infer(v, errors);
                 let Type::Literal(f) = &right else {
@@ -2068,9 +2091,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn is_flag_enum(&self, cls: &ClassType) -> bool {
-        self.get_metadata_for_class(cls.class_object())
-            .enum_metadata()
-            .is_some_and(|meta| meta.is_flag)
+        self.get_enum_from_class(cls.class_object()).is_some()
+            && self.has_superclass(cls.class_object(), self.stdlib.enum_flag().class_object())
     }
 
     pub(crate) fn with_type_for_exhaustiveness_check(&self, info: Arc<TypeInfo>) -> TypeInfo {
@@ -2139,9 +2161,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn check_match_exhaustiveness(
         &self,
         subject_idx: &Idx<Key>,
-        narrowing_subject: &NarrowingSubject,
+        narrowing_subject: Option<&NarrowingSubject>,
         narrow_ops_for_fall_through: &(Box<NarrowOp>, TextRange),
         subject_range: &TextRange,
+        show_subject_expr: bool,
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
@@ -2153,11 +2176,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ignore_errors = self.error_swallower();
         // Get the narrowed type of the match subject when none of the cases match
         let mut remaining_ty = match narrowing_subject {
-            NarrowingSubject::Name(_) => self
+            None | Some(NarrowingSubject::Name(_)) => self
                 .narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors)
                 .ty()
                 .clone(),
-            NarrowingSubject::Facets(_, facets) => {
+            Some(NarrowingSubject::Facets(_, facets)) => {
                 let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
                     return;
                 };
@@ -2183,14 +2206,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let subject_display = self.for_display(subject_info.into_ty());
         let remaining_display = self.for_display(remaining_ty.clone());
         let ctx = TypeDisplayContext::new(&[&subject_display, &remaining_display]);
-        let mut builder = errors.error_builder(
-            *subject_range,
-            ErrorKind::NonExhaustiveMatch,
-            format!(
-                "Match on `{}` is not exhaustive",
-                ctx.display(&subject_display)
-            ),
-        );
+        let displayed_subject = if show_subject_expr {
+            self.module().code_at(*subject_range).to_owned()
+        } else {
+            ctx.display(&subject_display).to_string()
+        };
+        let message = format!("Match on `{displayed_subject}` is not exhaustive");
+        let mut builder =
+            errors.error_builder(*subject_range, ErrorKind::NonExhaustiveMatch, message);
         if let Some(missing_cases) = self.format_missing_cases(&remaining_ty) {
             builder = builder.with_detail(format!("Missing cases: {}", missing_cases));
         }
@@ -2200,7 +2223,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn check_match_case_reachability(
         &self,
         subject_idx: &Idx<Key>,
-        narrowing_subject: &NarrowingSubject,
+        narrowing_subject: Option<&NarrowingSubject>,
         narrow_ops_for_case: &(Box<NarrowOp>, TextRange),
         case_range: &TextRange,
         errors: &ErrorCollector,
@@ -2218,14 +2241,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let ignore_errors = self.error_swallower();
         let (mut narrowed_ty, has_never_trigger_facet) = match narrowing_subject {
-            NarrowingSubject::Name(_) => {
+            None | Some(NarrowingSubject::Name(_)) => {
                 let narrowed =
                     self.narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors);
                 let has_never_trigger_facet =
                     self.has_never_match_trigger_facet(&narrowed, op, *case_range);
                 (narrowed.ty().clone(), has_never_trigger_facet)
             }
-            NarrowingSubject::Facets(_, facets) => {
+            Some(NarrowingSubject::Facets(_, facets)) => {
                 let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
                     return;
                 };
@@ -2360,6 +2383,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(FacetKind::Key(s.to_string()))
                     }
                     _ => None,
+                }
+            }
+            UnresolvedFacetKind::MatchArg { class, index } => {
+                // Resolve the positional slot to an attribute name via the class's `__match_args__`
+                let suppress_errors = self.error_swallower();
+                let class_range = class.range();
+                let Type::ClassDef(cls) = self.expr_infer(&class, &suppress_errors) else {
+                    return None;
+                };
+                let instance = self.promote_silently(&cls);
+                let match_args = self.attr_infer_for_type(
+                    &instance,
+                    &dunder::MATCH_ARGS,
+                    class_range,
+                    &suppress_errors,
+                    None,
+                );
+                if let Type::Tuple(Tuple::Concrete(ts)) = &match_args
+                    && let Some(Type::Literal(lit)) = ts.get(index)
+                    && let Lit::Str(attr_name) = &lit.value
+                {
+                    Some(FacetKind::Attribute(Name::new(attr_name)))
+                } else {
+                    None
                 }
             }
         }

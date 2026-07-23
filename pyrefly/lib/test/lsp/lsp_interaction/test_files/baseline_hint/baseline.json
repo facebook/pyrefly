@@ -1,0 +1,15 @@
+{
+  "errors": [
+    {
+      "line": 6,
+      "column": 10,
+      "stop_line": 6,
+      "stop_column": 11,
+      "path": "bad.py",
+      "code": -2,
+      "name": "bad-assignment",
+      "description": "test",
+      "concise_description": "test"
+    }
+  ]
+}

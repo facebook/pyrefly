@@ -83,6 +83,7 @@ pub fn runnable_lsp_code_lens(
             title: title.to_owned(),
             command: command.to_owned(),
             arguments,
+            tooltip: None,
         }),
         data: None,
     }

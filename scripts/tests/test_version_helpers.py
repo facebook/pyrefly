@@ -17,6 +17,7 @@ from pyrefly.scripts.version_helpers import (
     parse_semver,
     previous_minor,
     to_marketplace,
+    to_pypi,
 )
 
 
@@ -191,6 +192,40 @@ class ToMarketplaceTest(unittest.TestCase):
             to_marketplace("garbage")
 
 
+class ToPypiTest(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("stable_zero", "0.0.0", "0.0.0"),
+            ("stable_minor", "1.2.0", "1.2.0"),
+            ("stable_patch", "1.2.3", "1.2.3"),
+            ("canonical_dev", "1.2.0-dev.4", "1.2.0.dev4"),
+            ("canonical_dev_zero", "1.2.0-dev.0", "1.2.0.dev0"),
+            ("canonical_dev_patch", "1.2.3-dev.4", "1.2.3.dev4"),
+            ("pypi_dev", "1.2.0.dev4", "1.2.0.dev4"),
+            ("pypi_dev_zero", "1.2.0.dev0", "1.2.0.dev0"),
+        ]
+    )
+    def test_mapping(self, _name: str, version: str, expected: str) -> None:
+        self.assertEqual(to_pypi(version), expected)
+
+    @parameterized.expand(
+        [
+            ("empty", ""),
+            ("garbage", "not-a-version"),
+            ("missing_dev_number", "1.2.0.dev"),
+            ("unsupported_rc", "1.2.0rc1"),
+            ("leading_zero_major", "01.2.0"),
+            ("leading_zero_minor", "1.02.0"),
+            ("leading_zero_patch", "1.2.03"),
+            ("canonical_leading_zero_dev", "1.2.0-dev.04"),
+            ("pypi_leading_zero_dev", "1.2.0.dev04"),
+        ]
+    )
+    def test_invalid_raises(self, _name: str, version: str) -> None:
+        with self.assertRaises(ValueError):
+            to_pypi(version)
+
+
 class CliTest(unittest.TestCase):
     def _run(
         self,
@@ -211,6 +246,16 @@ class CliTest(unittest.TestCase):
         code, out, _ = self._run(["to-marketplace", "1.2.0-dev.4"])
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "1.1.9004")
+
+    def test_to_pypi_dev(self) -> None:
+        code, out, _ = self._run(["to-pypi", "1.2.0-dev.4"])
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "1.2.0.dev4")
+
+    def test_to_pypi_already_normalized_dev(self) -> None:
+        code, out, _ = self._run(["to-pypi", "1.2.0.dev4"])
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "1.2.0.dev4")
 
     def test_is_prerelease_true(self) -> None:
         code, out, _ = self._run(["is-prerelease", "1.2.0-dev.4"])

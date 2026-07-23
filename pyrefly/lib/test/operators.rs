@@ -584,7 +584,8 @@ def test1(x: Any) -> None:
     assert_type(x != 1, Any)
     assert_type(x is None, Any)
     assert_type(x is not None, Any)
-    assert_type(x in [1, 2], Any)
+    assert_type(x in [1, 2], bool)
+    assert_type(x not in [1, 2], bool)
     assert_type(1 in x, Any)
 
 def test2(x: float, y: Any) -> None:

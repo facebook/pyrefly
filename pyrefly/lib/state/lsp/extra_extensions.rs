@@ -14,6 +14,7 @@ use pyrefly_types::types::Type;
 use pyrefly_util::telemetry::EmptyResponseReason;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged as _;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -189,13 +190,13 @@ impl Transaction<'_> {
                 return Some(vec1![item]);
             }
         }
-        // Nested attribute fallback: handles `module.Container.member`
-        // where `module` is a non-Python file (e.g. .thrift). The base
-        // expression `module.Container` resolves to Any/Unknown because
-        // the type system can't resolve attributes on non-Python modules.
-        // We look at the AST to find the base's own base expression,
-        // check if it's a Module type, and if so search for the member
-        // as a whole-word match in the module source file.
+        // Fallback for base expressions that resolve to Any/Unknown.
+        // Two cases:
+        // 1. Nested attribute: `module.Container.member` — the base
+        //    `module.Container` is an ExprAttribute whose inner value
+        //    has Type::Module.
+        // 2. From-import: `from module import Name; Name.member` — the
+        //    base `Name` is an ExprName imported from a non-Python module.
         if base_type.is_any()
             && let Some(mod_module) = self.get_ast(handle)
         {
@@ -212,6 +213,27 @@ impl Transaction<'_> {
                         && !item.is_python_module()
                     {
                         return Some(vec1![item]);
+                    }
+                    break;
+                }
+                if let AnyNodeRef::ExprName(expr_name) = node
+                    && expr_name.range() == base_range
+                {
+                    let id = Ast::expr_name_identifier((*expr_name).clone());
+                    if let Ok(Some(def_item)) =
+                        self.find_definition_for_name_use(handle, &id, preference)
+                        && !def_item.is_python_module()
+                    {
+                        let definition_range =
+                            find_symbol_range_in_text(def_item.module.contents(), name)
+                                .unwrap_or_default();
+                        return Some(vec1![FindDefinitionItemWithDocstring {
+                            metadata: DefinitionMetadata::Module,
+                            definition_range,
+                            module: def_item.module,
+                            docstring_range: None,
+                            display_name: Some(name.to_owned()),
+                        }]);
                     }
                     break;
                 }
@@ -265,6 +287,34 @@ impl Transaction<'_> {
         } else {
             Ok(vec1![item])
         }
+    }
+
+    /// For extra-extension modules (e.g. .thrift, .cinc), the file
+    /// extension is part of the module name. Clicking on a filename
+    /// component like `TranslationCheckConfig` in
+    /// `from pkg.TranslationCheckConfig.thrift import XYZ` truncates
+    /// to `pkg.TranslationCheckConfig`, which doesn't resolve. Try
+    /// extending with subsequent components until a module is found.
+    pub(crate) fn fallback_find_definition_module_name_with_suffix(
+        &self,
+        handle: &Handle,
+        preference: FindPreference,
+        components: &[Name],
+        target_idx: usize,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        if self.config_has_extra_extensions(handle) {
+            // Start at target_idx + 2: components[..=target_idx] was
+            // already tried above, so the first new slice is [..target_idx+2].
+            for end in (target_idx + 2)..=components.len() {
+                let extended = ModuleName::from_parts(&components[..end]);
+                if let Ok(Some(item)) =
+                    self.find_definition_for_imported_module(handle, extended, preference)
+                {
+                    return Some(item);
+                }
+            }
+        }
+        None
     }
 }
 

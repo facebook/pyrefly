@@ -11,6 +11,7 @@ use clap::Subcommand;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::thread_pool::ThreadCount;
 
+use crate::commands::bazel_check::BazelCheckArgs;
 use crate::commands::buck_check::BuckCheckArgs;
 use crate::commands::check::CheckResult;
 use crate::commands::check::FullCheckArgs;
@@ -43,6 +44,9 @@ pub enum Command {
 
     /// Entry point for Buck integration
     BuckCheck(BuckCheckArgs),
+
+    /// Entry point for Bazel integration.
+    BazelCheck(BazelCheckArgs),
 
     /// Initialize a new pyrefly config in the given directory,
     /// or migrate an existing mypy or pyright config to pyrefly.
@@ -82,6 +86,7 @@ impl Command {
             Command::Check(args) => args.run(config_configurer_wrapper, thread_count).await,
             Command::Snippet(args) => args.run(thread_count).await,
             Command::BuckCheck(args) => Ok((args.run(thread_count)?, None)),
+            Command::BazelCheck(args) => Ok((args.run(thread_count)?, None)),
             Command::Lsp(args) => Ok((
                 args.run(
                     version,
