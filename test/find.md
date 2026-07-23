@@ -27,11 +27,9 @@ $ mkdir $TMPDIR/globbing && touch $TMPDIR/globbing/pyrefly.toml && \
 ## --search-path takes precedence over default typeshed
 
 ```scrut
-$ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib --output-format=min-text --use-ignore-files=false --permissive-ignores=true 2>&1 | grep -v "overrides"
+$ touch $TYPESHED_ROOT/pyrefly.toml && \
+> PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib --output-format=min-text --use-ignore-files=false --permissive-ignores=true 2>&1 | grep -v "overrides"
  INFO * errors* (glob)
-No `pyrefly.toml` found — using preset `basic`.
-Run `pyrefly init` to continue setting up Pyrefly.
-Docs: * (glob)
 [0]
 ```
 
@@ -85,7 +83,7 @@ $ mkdir $TMPDIR/relative_ignore && \
 
 ```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_project/src/foo/bar.py && echo "from foo.bar import x" > $TMPDIR/src_project/src/foo/baz.py && cd $TMPDIR/src_project && $PYREFLY check
- INFO Checking current directory with default configuration
+ INFO Checking current directory with auto configuration
  INFO 0 errors
 No `pyrefly.toml` found — using preset `basic`.
 Run `pyrefly init` to continue setting up Pyrefly.

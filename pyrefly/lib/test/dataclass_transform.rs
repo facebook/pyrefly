@@ -27,6 +27,50 @@ C(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type
 );
 
 testcase!(
+    test_field_named_like_builtin,
+    {
+        let mut env = TestEnv::new();
+        env.add(
+            "util.schemaclass",
+            r#"
+from typing import Callable, TypeVar, dataclass_transform
+
+T = TypeVar("T")
+
+@dataclass_transform()
+def schemaclass(
+    c: type[T] | None = None,
+    /,
+    *,
+    frozen: bool = False,
+) -> type[T] | Callable[[type[T]], type[T]]: ...
+"#,
+        );
+        env
+    },
+    r#"
+from __future__ import annotations
+from util.schemaclass import schemaclass
+from typing import Mapping
+
+@schemaclass(frozen=True)
+class C:
+    k: int | None
+    pname: str | None
+    bln: int | None
+    str: str | None
+    i64: int | None
+    dbl: float | None
+    li: str | None
+    _raw_data: Mapping[str, object] | None
+
+C(k=0, pname=None, bln=None, str="", i64=None, dbl=None, li=None, _raw_data=None)
+def f(c: C) -> str | None:
+    return c.str
+    "#,
+);
+
+testcase!(
     test_class_basic,
     r#"
 from typing import dataclass_transform
@@ -134,6 +178,134 @@ f.y = "world"  # E: frozen dataclass member
 # A non-frozen subclass of a frozen class is not allowed.
 class MutableChild(FrozenChild, frozen=False):  # E: Cannot inherit non-frozen dataclass `MutableChild` from frozen dataclass `FrozenChild`
     z: int
+    "#,
+);
+
+testcase!(
+    test_kw_only_inherited_by_subclass,
+    r#"
+from typing import dataclass_transform
+
+# SQLAlchemy-style: the transform comes from a metaclass, which re-applies the dataclass
+# keywords to every subclass.
+@dataclass_transform()
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+# `kw_only=True` on the base configures the whole subtree (facebook/pyrefly#3881), so a field
+# without a default may follow one with a default.
+class Base(ModelBase, kw_only=True): ...
+
+class SomeClass(Base):
+    some_str: str = ""
+    some_number: int
+
+SomeClass(some_str="x", some_number=1)
+# Positional construction is rejected, confirming the fields are actually keyword-only.
+SomeClass("x", some_number=1)  # E: Expected 0 positional arguments, got 1
+    "#,
+);
+
+testcase!(
+    test_kw_only_inherited_through_multiple_levels,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+class Base(ModelBase, kw_only=True): ...
+
+# `kw_only` keeps propagating past the first subclass: neither `b` nor `d` triggers a
+# field-ordering error.
+class Mid(Base):
+    a: str = ""
+    b: int
+class Leaf(Mid):
+    c: str = ""
+    d: int
+
+Leaf(a="x", b=1, c="y", d=2)
+    "#,
+);
+
+testcase!(
+    test_kw_only_not_propagated_without_metaclass,
+    r#"
+from typing import dataclass_transform
+
+# A plain `@dataclass_transform` base (not a metaclass) does not re-apply keywords to
+# subclasses, so `kw_only=True` configures `Base` only, not `Sub`.
+@dataclass_transform()
+class ModelBase: ...
+
+class Base(ModelBase, kw_only=True): ...
+
+class Sub(Base):
+    a: str = ""
+    b: int  # E: Dataclass field `b` without a default may not follow dataclass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_still_errors_without_kw_only,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+class Base(ModelBase, kw_only=False): ...
+
+class SomeClass(Base):
+    some_str: str = ""
+    some_number: int  # E: Dataclass field `some_number` without a default may not follow dataclass field with a default
+    "#,
+);
+
+testcase!(
+    test_order_inherited_by_subclass,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+# `order=True` on a base propagates to subclasses, so comparison operators are synthesized.
+class Base(ModelBase, order=True): ...
+
+class C(Base):
+    x: int
+
+C(x=1) < C(x=2)
+    "#,
+);
+
+testcase!(
+    test_eq_inherited_by_subclass,
+    r#"
+from typing import dataclass_transform, Hashable
+
+# Start from a hashable base (eq_default=False) so the propagated `eq=True` is observable:
+# it synthesizes `__eq__` and sets `__hash__ = None`, making instances unhashable.
+@dataclass_transform(eq_default=False)
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+class EqBase(ModelBase, eq=True): ...
+class Eq(EqBase):
+    x: int
+
+# Control: a subclass that doesn't inherit `eq=True` stays hashable.
+class Plain(ModelBase):
+    y: int
+
+def f(x: Hashable): pass
+f(Plain(y=1))
+f(Eq(x=1))  # E: Argument `Eq` is not assignable to parameter `x` with type `Hashable`
     "#,
 );
 
@@ -567,5 +739,64 @@ class SmallModule(Module):
     x: int
 
 SmallModule(x=1)
+    "#,
+);
+
+testcase!(
+    test_classmethod_shadowing_base_annotation_ignored,
+    r#"
+from typing import Any, dataclass_transform, reveal_type
+
+@dataclass_transform()
+class ModuleBase:
+    field: Any | None
+
+class Module(ModuleBase):
+  @classmethod
+  def foo(cls) -> None:
+    cls.field: Any = None
+
+reveal_type(Module.__init__)  # E: revealed type: (self: Module) -> None
+Module()
+    "#,
+);
+
+testcase!(
+    test_method_shadowing_base_annotation_ignored,
+    r#"
+from typing import Any, dataclass_transform, reveal_type
+
+@dataclass_transform()
+class ModuleBase:
+    field: Any | None
+
+class Module(ModuleBase):
+  def foo(self) -> None:
+    self.field: Any = None
+
+reveal_type(Module.__init__)  # E: revealed type: (self: Module) -> None
+Module()
+    "#,
+);
+
+testcase!(
+    test_property_override_field,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class Base: ...
+
+class A(Base):
+    foo: int
+
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+# `foo` keeps `A`'s required `int` field rather than the property's type.
+B(foo=5)
+B(foo="x")  # E: `Literal['x']` is not assignable to parameter `foo` with type `int`
+B()  # E: Missing argument `foo`
     "#,
 );

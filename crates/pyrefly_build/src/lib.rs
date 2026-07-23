@@ -22,7 +22,6 @@
 #![deny(clippy::inefficient_to_string)]
 #![deny(clippy::str_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
-#![feature(const_type_name)]
 
 use std::fmt::Display;
 use std::path::Path;
@@ -39,6 +38,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub mod handle;
+pub mod module_resolver;
 pub mod source_db;
 use source_db::SourceDatabase;
 use starlark_map::small_map::SmallMap;
@@ -51,7 +51,8 @@ use crate::query::SourceDbQuerier;
 use crate::query::buck::BxlArgs;
 use crate::query::buck::BxlQuerier;
 use crate::query::custom::CustomQuerier;
-use crate::query::custom::CustomQueryArgs;
+pub use crate::query::custom::CustomQueryArgs;
+use crate::source_db::Target;
 use crate::source_db::query_source_db::QuerySourceDatabase;
 
 /// A cache of previously loaded build systems, keyed on their project root
@@ -59,7 +60,7 @@ use crate::source_db::query_source_db::QuerySourceDatabase;
 static BUILD_SYSTEM_CACHE: LazyLock<
     Mutex<
         SmallMap<
-            (PathBuf, BuildSystemArgs),
+            (PathBuf, BuildSystemArgs, Vec<Target>, bool),
             WeakArcId<Box<dyn source_db::SourceDatabase + 'static>>,
         >,
     >,
@@ -107,13 +108,22 @@ impl Display for BuildSystemArgs {
 #[serde(rename_all = "kebab-case")]
 pub struct BuildSystem {
     #[serde(flatten)]
-    args: BuildSystemArgs,
+    pub args: BuildSystemArgs,
     #[serde(default)]
-    ignore_if_build_system_missing: bool,
+    pub ignore_if_build_system_missing: bool,
     // TODO(connernilsen): remove once internal stubs are deprecated
     /// Are there any sources we should use before looking at the build system (like stubs)?
     #[serde(default)]
     pub search_path_prefix: Vec<PathBuf>,
+    // TODO(connernilsen): pull this out into per-config lookup, so build system can be shared with
+    // different settings.
+    /// Are there any targets that should be included as a catch-all if the standard
+    /// search strategy fails?
+    #[serde(default)]
+    pub catch_all_targets: Vec<Target>,
+    /// Should we only use the catch_all_targets?
+    #[serde(default)]
+    pub catch_all_targets_only: bool,
 }
 
 impl BuildSystem {
@@ -122,12 +132,16 @@ impl BuildSystem {
         extras: Option<Vec<String>>,
         ignore_if_build_system_missing: bool,
         search_path_prefix: Vec<PathBuf>,
+        catch_all_targets: Vec<Target>,
+        catch_all_targets_only: bool,
     ) -> Self {
         let args = BuildSystemArgs::Buck(BxlArgs::new(isolation_dir, extras));
         Self {
             args,
             ignore_if_build_system_missing,
             search_path_prefix,
+            catch_all_targets,
+            catch_all_targets_only,
         }
     }
 
@@ -156,7 +170,12 @@ impl BuildSystem {
         }
 
         let mut cache = BUILD_SYSTEM_CACHE.lock();
-        let key = (repo_root.clone(), self.args.clone());
+        let key = (
+            repo_root.clone(),
+            self.args.clone(),
+            self.catch_all_targets.clone(),
+            self.catch_all_targets_only,
+        );
         if let Some(maybe_result) = cache.get(&key)
             && let Some(result) = maybe_result.upgrade()
         {
@@ -173,9 +192,12 @@ impl BuildSystem {
             BuildSystemArgs::Buck(args) => Arc::new(BxlQuerier::new(args.clone())),
             BuildSystemArgs::Custom(args) => Arc::new(CustomQuerier::new(args.clone())),
         };
-        let source_db = ArcId::new(
-            Box::new(QuerySourceDatabase::new(repo_root, querier)) as Box<dyn SourceDatabase>
-        );
+        let source_db = ArcId::new(Box::new(QuerySourceDatabase::new(
+            repo_root,
+            querier,
+            self.catch_all_targets.clone(),
+            self.catch_all_targets_only,
+        )) as Box<dyn SourceDatabase>);
         cache.insert(key, source_db.downgrade());
         Some(Ok(source_db))
     }
@@ -200,6 +222,8 @@ mod tests {
                 PathBuf::from("path/to/project"),
                 PathBuf::from("/absolute/path/to/project"),
             ],
+            catch_all_targets: vec![],
+            catch_all_targets_only: false,
         };
         let mut bs2 = bs.clone();
 
@@ -243,6 +267,8 @@ mod tests {
             }),
             ignore_if_build_system_missing: false,
             search_path_prefix: vec![],
+            catch_all_targets: vec![],
+            catch_all_targets_only: false,
         };
         let root = Path::new("/root");
 
@@ -255,6 +281,8 @@ mod tests {
             }),
             ignore_if_build_system_missing: true,
             search_path_prefix: vec![],
+            catch_all_targets: vec![],
+            catch_all_targets_only: false,
         };
         assert!(bs.get_source_db(root.to_path_buf()).is_none());
     }

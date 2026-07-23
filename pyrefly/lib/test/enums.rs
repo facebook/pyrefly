@@ -69,6 +69,22 @@ def foo(member: MyEnum) -> None:
 );
 
 testcase!(
+    test_enum_string_getitem_with_future_annotations,
+    r#"
+from __future__ import annotations
+from enum import Enum
+from typing import Literal, assert_type
+
+class DEFAULT_TYPES(Enum):
+    EXE = "EXE"
+    LIB = "LIB"
+
+assert_type(DEFAULT_TYPES["EXE"], Literal[DEFAULT_TYPES.EXE])
+assert_type(DEFAULT_TYPES["LIB"], Literal[DEFAULT_TYPES.LIB])
+"#,
+);
+
+testcase!(
     test_enum_class_value,
     r#"
 from enum import Enum
@@ -375,6 +391,16 @@ def foo(f: MyFlag) -> None:
         pass
     else:
         assert_type(f, MyFlag)
+"#,
+);
+
+testcase!(
+    test_recursive_enum_class,
+    r#"
+import enum
+
+class C(C, enum.Enum):  # E: Class `C` inheriting from `C` creates a cycle  # E: Cannot extend final class `C`
+    a = 1
 "#,
 );
 
@@ -853,7 +879,7 @@ testcase!(
     test_enum_call_uses_metaclass_signature,
     r#"
 from enum import Enum
-from typing import Callable, assert_type
+from typing import Callable, Self, assert_type
 
 class SeFileType(Enum):
     ALL = ("a", "all files")
@@ -867,7 +893,7 @@ class SeFileType(Enum):
 
     @classmethod
     def from_code(cls, code: str) -> "SeFileType":
-        assert_type(cls(code), SeFileType)
+        assert_type(cls(code), Self)
         return cls(code)
 
 assert_type(SeFileType("a"), SeFileType)

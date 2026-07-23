@@ -220,7 +220,7 @@ from typing import Any, Generic, TypeVar, assert_type
 T = TypeVar('T')
 class A(Generic[T]):
     x: T
-def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A[T]`
     assert_type(a.x, Any)
     "#,
 );
@@ -235,7 +235,7 @@ U = TypeVar('U', default=int)
 class A(Generic[T, U]):
     x: T
     y: U
-def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A[T, U]`
     assert_type(a.x, Any)
     assert_type(a.y, int)
     "#,
@@ -289,6 +289,16 @@ from typing import TypeVar, ParamSpec, TypeVarTuple
 T = TypeVar(name = "T")
 P = ParamSpec(name = "P")
 Ts = TypeVarTuple(name = "Ts")
+    "#,
+);
+
+testcase!(
+    test_tvar_bare_call,
+    r#"
+from typing import TypeVar, ParamSpec, TypeVarTuple
+TypeVar("T")  # E: TypeVar must be assigned to a variable
+ParamSpec("P")  # E: ParamSpec must be assigned to a variable
+TypeVarTuple("Ts")  # E: TypeVarTuple must be assigned to a variable
     "#,
 );
 
@@ -704,6 +714,27 @@ class C4(Generic[int]):  # E: Expected a type variable, got `int`
     "#,
 );
 
+testcase!(
+    test_typevar_not_treated_as_bad_implicit_alias,
+    r#"
+from typing import Callable, ParamSpec, TypeVar, TypeVarTuple, assert_type
+
+T = TypeVar("T")
+P = ParamSpec("P")
+Ts = TypeVarTuple("Ts")
+
+def f(x: T) -> T:
+    assert_type(x, T)
+    return x
+
+def g(cb: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    return cb(*args, **kwargs)
+
+def h(x: tuple[*Ts]) -> tuple[*Ts]:
+    return x
+    "#,
+);
+
 fn env_exported_type_var() -> TestEnv {
     TestEnv::one(
         "lib",
@@ -771,6 +802,46 @@ from typing import assert_type, Generic
 
 class A(Generic[lib.T]):
     x: lib.T
+assert_type(A[int]().x, int)
+    "#,
+);
+
+fn env_pkg_exported_type_var() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path("Foo", "Foo/__init__.py", "");
+    t.add_with_path(
+        "Foo.Bar",
+        "Foo/Bar.py",
+        r#"
+from typing import TypeVar
+ImportedT = TypeVar("ImportedT")
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_function_legacy_typevar_nested_dotted_name,
+    env_pkg_exported_type_var(),
+    r#"
+import Foo.Bar
+from typing import assert_type
+
+def myFunc(t: Foo.Bar.ImportedT) -> Foo.Bar.ImportedT:
+    return t
+assert_type(myFunc(0), int)
+    "#,
+);
+
+testcase!(
+    test_class_legacy_typevar_nested_dotted_name,
+    env_pkg_exported_type_var(),
+    r#"
+import Foo.Bar
+from typing import assert_type, Generic
+
+class A(Generic[Foo.Bar.ImportedT]):
+    x: Foo.Bar.ImportedT
 assert_type(A[int]().x, int)
     "#,
 );

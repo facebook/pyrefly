@@ -18,7 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use anstream::ColorChoice;
 use anstream::eprintln;
+use anstream::stderr;
 use anstream::stdout;
 use anyhow::Context as _;
 use clap::Parser;
@@ -52,6 +54,7 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
 use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::unix_path::path_to_unix_string;
 use pyrefly_util::watcher::Watcher;
 use ruff_text_size::Ranged;
 use starlark_map::small_map::SmallMap;
@@ -66,7 +69,9 @@ use crate::commands::files::get_config_finder_for_snippet;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
+use crate::error::code_climate::CodeClimateIssues;
 use crate::error::error::Error;
+use crate::error::error::ErrorRenderer;
 use crate::error::error::print_error_counts;
 use crate::error::legacy::LegacyError;
 use crate::error::legacy::LegacyErrors;
@@ -429,13 +434,18 @@ fn write_errors_to_file(
     match format {
         OutputFormat::MinText => write_error_text_to_file(path, relative_to, errors, false),
         OutputFormat::FullText => write_error_text_to_file(path, relative_to, errors, true),
+        OutputFormat::FullTextWithGithub => {
+            write_error_full_text_with_github_to_file(path, relative_to, errors)
+        }
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
+        OutputFormat::JunitXml => write_error_junit_xml_to_file(path, relative_to, errors),
+        OutputFormat::CodeClimate => write_error_codeclimate_to_file(path, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
 
-fn write_errors_to_console(
+pub(crate) fn write_errors_to_console(
     format: OutputFormat,
     relative_to: &Path,
     errors: &[Error],
@@ -443,8 +453,13 @@ fn write_errors_to_console(
     match format {
         OutputFormat::MinText => write_error_text_to_console(relative_to, errors, false),
         OutputFormat::FullText => write_error_text_to_console(relative_to, errors, true),
+        OutputFormat::FullTextWithGithub => {
+            write_error_full_text_with_github_to_console(relative_to, errors)
+        }
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
+        OutputFormat::JunitXml => write_error_junit_xml_to_console(relative_to, errors),
+        OutputFormat::CodeClimate => write_error_codeclimate_to_console(relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -455,11 +470,11 @@ fn write_error_text_to_file(
     errors: &[Error],
     verbose: bool,
 ) -> anyhow::Result<()> {
-    let mut file = BufWriter::new(File::create(path)?);
+    let mut renderer = ErrorRenderer::plain(BufWriter::new(File::create(path)?));
     for e in errors {
-        e.write_line(&mut file, relative_to, verbose)?;
+        renderer.write(e, relative_to, verbose)?;
     }
-    file.flush()?;
+    renderer.flush()?;
     Ok(())
 }
 
@@ -468,9 +483,30 @@ fn write_error_text_to_console(
     errors: &[Error],
     verbose: bool,
 ) -> anyhow::Result<()> {
+    let stdout = stdout();
+    let color_choice = stdout.current_choice();
+    let mut renderer = ErrorRenderer::new(BufWriter::new(stdout.lock()), color_choice);
     for error in errors {
-        error.print_colors(relative_to, verbose);
+        renderer.write(error, relative_to, verbose)?;
+        renderer.flush()?;
     }
+    renderer.flush()?;
+    Ok(())
+}
+
+pub(crate) fn write_errors_to_stderr(
+    relative_to: &Path,
+    errors: &[Error],
+    verbose: bool,
+) -> anyhow::Result<()> {
+    let stderr = stderr();
+    let color_choice = stderr.current_choice();
+    let mut renderer = ErrorRenderer::new(BufWriter::new(stderr.lock()), color_choice);
+    for error in errors {
+        renderer.write(error, relative_to, verbose)?;
+        renderer.flush()?;
+    }
+    renderer.flush()?;
     Ok(())
 }
 
@@ -537,6 +573,162 @@ fn write_error_github_to_console(errors: &[Error]) -> anyhow::Result<()> {
     buffered_write_error_github(stdout(), errors)
 }
 
+fn write_error_full_text_with_github(
+    writer: impl Write,
+    color_choice: ColorChoice,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    {
+        let mut renderer = ErrorRenderer::new(&mut writer, color_choice);
+        for error in errors {
+            renderer.write(error, relative_to, true)?;
+        }
+        renderer.flush()?;
+    }
+    write_error_github(&mut writer, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_full_text_with_github_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    write_error_full_text_with_github(File::create(path)?, ColorChoice::Never, relative_to, errors)
+}
+
+fn write_error_full_text_with_github_to_console(
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let stdout = stdout();
+    let color_choice = stdout.current_choice();
+    write_error_full_text_with_github(stdout.lock(), color_choice, relative_to, errors)
+}
+
+/// True for characters allowed by the XML 1.0 `Char` production. Everything else
+/// (NUL and most other C0 controls, U+FFFE, U+FFFF) is illegal *anywhere* in an
+/// XML document — including inside CDATA, which has no escape mechanism — so such
+/// characters must be dropped or the document is not well-formed. Rust `char`
+/// already excludes surrogates, so they need no special handling here.
+fn is_xml_char(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF
+    )
+}
+
+fn xml_escape_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            // Tabs/newlines are valid but get normalized to spaces in attribute
+            // values, so emit them as character references to preserve them.
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            '\t' => out.push_str("&#9;"),
+            c if is_xml_char(c) => out.push(c),
+            _ => {} // drop characters illegal in XML
+        }
+    }
+    out
+}
+
+fn xml_escape_cdata(s: &str) -> String {
+    // CDATA admits any valid XML character except the delimiter "]]>", which
+    // would close the section early — split it across CDATA boundaries. Illegal
+    // XML characters have no CDATA escape, so they are dropped outright.
+    s.chars()
+        .filter(|c| is_xml_char(*c))
+        .collect::<String>()
+        .replace("]]>", "]]]]><![CDATA[>")
+}
+
+/// Render diagnostics as a JUnit `<testsuites>` report. JUnit XML has no notion
+/// of severity, so every diagnostic is emitted as a `<failure>` whose `type` is
+/// the Pyrefly error kind (the conventional "failure type" slot). Severity
+/// filtering happens upstream via `--min-severity`, so by default only errors
+/// reach us; warnings appear only when the caller lowers the threshold.
+fn write_error_junit_xml<W: Write>(
+    mut writer: W,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let n = errors.len();
+
+    writeln!(writer, r#"<?xml version="1.0" encoding="UTF-8"?>"#)?;
+    writeln!(writer, "<testsuites>")?;
+    writeln!(
+        writer,
+        r#"  <testsuite name="pyrefly" tests="{n}" failures="{n}" errors="0" time="0">"#
+    )?;
+
+    for err in errors {
+        let error_path = err.path().as_path();
+        let path = error_path
+            .strip_prefix(relative_to)
+            .unwrap_or(error_path)
+            .to_string_lossy()
+            .into_owned();
+        let line = err.display_range().start.line_within_cell().get();
+        let kind = err.error_kind().to_name();
+
+        writeln!(
+            writer,
+            r#"    <testcase classname="{}" name="{}:L{}" file="{}" line="{}" time="0">"#,
+            xml_escape_attr(&path),
+            xml_escape_attr(kind),
+            line,
+            xml_escape_attr(&path),
+            line,
+        )?;
+        writeln!(
+            writer,
+            r#"      <failure type="{}" message="{}"><![CDATA[{}]]></failure>"#,
+            xml_escape_attr(kind),
+            xml_escape_attr(err.msg_header()),
+            xml_escape_cdata(&err.msg()),
+        )?;
+        writeln!(writer, "    </testcase>")?;
+    }
+
+    writeln!(writer, "  </testsuite>")?;
+    writeln!(writer, "</testsuites>")?;
+    Ok(())
+}
+
+fn buffered_write_error_junit_xml(
+    writer: impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    write_error_junit_xml(&mut writer, relative_to, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_junit_xml_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let file = File::create(path)?;
+    buffered_write_error_junit_xml(file, relative_to, errors)
+}
+
+fn write_error_junit_xml_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    buffered_write_error_junit_xml(stdout(), relative_to, errors)
+}
+
 fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
     let normalized = severity_to_str(severity);
     match normalized.as_str() {
@@ -551,7 +743,7 @@ fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
 fn github_actions_command(error: &Error) -> Option<String> {
     let command = severity_to_github_command(error.severity())?;
     let range = error.display_range();
-    let file = github_actions_path(error.path().as_path());
+    let file = path_to_unix_string(error.path().as_path());
     let params = format!(
         "file={},line={},col={},endLine={},endColumn={},title={}",
         escape_workflow_property(&file),
@@ -568,20 +760,50 @@ fn github_actions_command(error: &Error) -> Option<String> {
 const WORKFLOW_DATA_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'%');
 const WORKFLOW_PROPERTY_ENCODE_SET: &AsciiSet = &WORKFLOW_DATA_ENCODE_SET.add(b':').add(b',');
 
-fn github_actions_path(path: &Path) -> String {
-    let mut path_str = path.to_string_lossy().into_owned();
-    if std::path::MAIN_SEPARATOR != '/' {
-        path_str = path_str.replace(std::path::MAIN_SEPARATOR, "/");
-    }
-    path_str
-}
-
 fn escape_workflow_data(value: &str) -> String {
     utf8_percent_encode(value, WORKFLOW_DATA_ENCODE_SET).to_string()
 }
 
 fn escape_workflow_property(value: &str) -> String {
     utf8_percent_encode(value, WORKFLOW_PROPERTY_ENCODE_SET).to_string()
+}
+
+fn write_error_codeclimate(
+    writer: &mut impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let issues = CodeClimateIssues::from_errors(relative_to, errors);
+    serde_json::to_writer_pretty(writer, &issues)?;
+    Ok(())
+}
+
+fn buffered_write_error_codeclimate(
+    writer: impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    write_error_codeclimate(&mut writer, relative_to, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_codeclimate_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    fn f(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+        let file = File::create(path)?;
+        buffered_write_error_codeclimate(file, relative_to, errors)
+    }
+    f(path, relative_to, errors)
+        .with_context(|| format!("while writing CodeClimate issues to `{}`", path.display()))
+}
+
+fn write_error_codeclimate_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    buffered_write_error_codeclimate(stdout(), relative_to, errors)
 }
 
 /// A data structure to facilitate the creation of handles for all the files we want to check.
@@ -592,7 +814,7 @@ pub struct Handles {
 }
 
 impl Handles {
-    pub fn new(files: Vec<PathBuf>) -> Self {
+    pub fn new(files: impl IntoIterator<Item = PathBuf>) -> Self {
         let mut handles = Self {
             path_data: HashSet::new(),
         };
@@ -600,6 +822,14 @@ impl Handles {
             handles.path_data.insert(ModulePath::filesystem(file));
         }
         handles
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.path_data.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.path_data.len()
     }
 
     pub fn all(
@@ -759,9 +989,9 @@ fn decide_upsell(
 /// `SynthesizedPresetReason`. Pure function of the reason — trivial to
 /// unit-test against a `Vec<u8>` without spinning up a real check run.
 ///
-/// `IdeOverride` is intentionally suppressed: it can only be produced by
-/// the LSP path, and even if it leaks in here we don't want to nag a user
-/// who has explicitly set `typeCheckingMode`.
+/// `UserOverride` is intentionally suppressed: the user chose the
+/// preset themselves (via `--preset` or the IDE `typeCheckingMode`
+/// setting), so nagging them to configure pyrefly would be noise.
 fn write_unconfigured_upsell<W: Write>(
     reason: SynthesizedPresetReason,
     out: &mut W,
@@ -794,9 +1024,7 @@ fn write_unconfigured_upsell<W: Write>(
             writeln!(out, "Run `pyrefly init` to continue setting up Pyrefly.")?;
             writeln!(out, "Docs: {UPSELL_DOCS_URL}")?;
         }
-        // CLI never produces an IdeOverride; if one slips in (e.g.
-        // tests), suppress the upsell rather than emit confusing copy.
-        SynthesizedPresetReason::IdeOverride => {}
+        SynthesizedPresetReason::UserOverride => {}
     }
     Ok(())
 }
@@ -813,14 +1041,15 @@ impl CheckArgs {
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>, CheckResult)> {
         let mut timings = Timings::new();
         let list_files_start = Instant::now();
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         timings.list_files = list_files_start.elapsed();
+        let handles = Handles::new(expanded_file_list);
         debug!(
             "Checking {} files (listing took {})",
-            expanded_file_list.len(),
+            handles.len(),
             Timings::show(timings.list_files),
         );
-        if expanded_file_list.is_empty() {
+        if handles.is_empty() {
             return Ok((
                 CommandExitStatus::Success,
                 Vec::new(),
@@ -832,7 +1061,6 @@ impl CheckArgs {
         }
 
         let state = Forgetter::new(State::new(config_finder, thread_count), true);
-        let handles = Handles::new(expanded_file_list);
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
             state.as_ref().new_transaction(require_levels.default, None),
@@ -933,7 +1161,7 @@ impl CheckArgs {
     ) -> anyhow::Result<()> {
         // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
         // - Config search is stable across incremental runs.
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder, thread_count);
@@ -1198,12 +1426,7 @@ impl CheckArgs {
 
         // Count only ordinary errors for exit code determination. Directives
         // (e.g. reveal_type) do not contribute to the error count.
-        let mut ordinary_errors_count = config_errors_count;
-        for error in &ordinary_errors {
-            if error.severity() >= Severity::Error {
-                ordinary_errors_count += 1;
-            }
-        }
+        let ordinary_errors_count = config_errors_count + ordinary_errors.len();
 
         // Merge directives into the display list, re-sorting by module
         // name, path, and source range so output preserves file/line
@@ -1235,7 +1458,12 @@ impl CheckArgs {
 
         if self.output.summary != Summary::None {
             let suppress_count = errors.suppressed.len();
-            let mut parts = vec![count(ordinary_errors_count, "error")];
+            let label = if min_severity < Severity::Error {
+                "diagnostic"
+            } else {
+                "error"
+            };
+            let mut parts = vec![count(ordinary_errors_count, label)];
             if suppress_count > 0 {
                 parts.push(format!("{} suppressed", number_thousands(suppress_count)));
             }
@@ -1378,12 +1606,10 @@ mod tests {
     use pyrefly_python::module_path::ModulePath;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
-    use vec1::Vec1;
-    use vec1::vec1;
 
     use super::*;
 
-    fn sample_error(msg: Vec1<String>) -> Error {
+    fn sample_error(msg: String) -> Error {
         let module = Module::new(
             ModuleName::from_str("sample"),
             ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
@@ -1393,14 +1619,14 @@ mod tests {
             module,
             TextRange::new(TextSize::from(0), TextSize::from(1)),
             msg,
+            Vec::new(),
             ErrorKind::BadAssignment,
         )
     }
 
     #[test]
     fn github_actions_command_includes_full_path_and_metadata() {
-        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]))
-            .expect("should emit command");
+        let cmd = github_actions_command(&sample_error("bad".into())).expect("should emit command");
         assert!(cmd.starts_with("::error "), "{cmd}");
         assert!(
             cmd.contains("file=/repo/foo.py"),
@@ -1415,9 +1641,9 @@ mod tests {
 
     #[test]
     fn github_actions_command_respects_severity_mapping() {
-        let warning = sample_error(vec1!["bad".into()]).with_severity(Severity::Warn);
-        let notice = sample_error(vec1!["bad".into()]).with_severity(Severity::Info);
-        let ignored = sample_error(vec1!["bad".into()]).with_severity(Severity::Ignore);
+        let warning = sample_error("bad".into()).with_severity(Severity::Warn);
+        let notice = sample_error("bad".into()).with_severity(Severity::Info);
+        let ignored = sample_error("bad".into()).with_severity(Severity::Ignore);
         assert!(
             github_actions_command(&warning)
                 .unwrap()
@@ -1444,12 +1670,99 @@ mod tests {
 
     #[test]
     fn github_output_format_writes_commands() {
-        let errors = vec![sample_error(vec1!["bad".into()])];
+        let errors = vec![sample_error("bad".into())];
         let mut buf = Vec::new();
         write_error_github(&mut buf, &errors).unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("::error file=/repo/foo.py"));
         assert!(output.ends_with("::bad\n"));
+    }
+
+    #[test]
+    fn full_text_with_github_output_format_writes_both() {
+        let errors = vec![sample_error("bad".into())];
+        let mut buf = Vec::new();
+        write_error_full_text_with_github(&mut buf, ColorChoice::Never, Path::new("/"), &errors)
+            .unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("ERROR bad [bad-assignment]"));
+        assert!(output.contains("::error file=/repo/foo.py"));
+        assert!(output.ends_with("::bad\n"));
+    }
+
+    #[test]
+    fn junit_xml_output_format_writes_well_formed_xml() {
+        let errors = vec![
+            sample_error("first error".into()),
+            sample_error("second error".into()),
+        ];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#),
+            "missing XML declaration: {output}"
+        );
+        assert!(
+            output.contains(r#"<testsuite name="pyrefly" tests="2" failures="2""#),
+            "missing testsuite element: {output}"
+        );
+        assert!(
+            output.contains("<failure type="),
+            "missing failure element: {output}"
+        );
+        assert!(
+            output.contains("repo/foo.py"),
+            "missing file path: {output}"
+        );
+        assert!(
+            output.ends_with("</testsuites>\n"),
+            "missing closing tag: {output}"
+        );
+    }
+
+    #[test]
+    fn junit_xml_escapes_special_chars_in_messages() {
+        let errors = vec![sample_error(r#"a < b & c > d "e" 'f'"#.into())];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("&lt;"), "< not escaped: {output}");
+        assert!(output.contains("&amp;"), "& not escaped: {output}");
+        assert!(output.contains("&gt;"), "> not escaped: {output}");
+        assert!(output.contains("&quot;"), "\" not escaped: {output}");
+        assert!(output.contains("&apos;"), "' not escaped: {output}");
+
+        // CDATA split for ]]>
+        let errors2 = vec![sample_error("x ]]> y".into())];
+        let mut buf2 = Vec::new();
+        write_error_junit_xml(&mut buf2, Path::new("/"), &errors2).unwrap();
+        let output2 = String::from_utf8(buf2).unwrap();
+        assert!(
+            output2.contains("]]]]><![CDATA["),
+            "CDATA ]]> was not split across CDATA boundaries: {output2}"
+        );
+    }
+
+    #[test]
+    fn junit_xml_strips_invalid_control_chars() {
+        // NUL and other C0 control characters are illegal in XML even inside a
+        // CDATA section, so they must be dropped (not just escaped) to keep the
+        // document well-formed. The surrounding text must survive.
+        let errors = vec![sample_error("bad\u{0}\u{8}\u{1f}msg".into())];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            !output
+                .chars()
+                .any(|c| !matches!(c, '\n' | '\t') && (c as u32) < 0x20),
+            "illegal control char leaked into output: {output:?}"
+        );
+        assert!(
+            output.contains("badmsg"),
+            "surrounding message text was lost: {output}"
+        );
     }
 
     #[test]
@@ -1539,13 +1852,11 @@ mod tests {
         assert!(s.contains("`pyrefly init`"), "{s}");
     }
 
-    /// `IdeOverride` is suppressed: the user explicitly chose a behavior
-    /// via the IDE setting, so we don't pester them with an upsell. This
-    /// also documents that the CLI never emits an `IdeOverride`-flavored
-    /// upsell even if one accidentally reaches this code path.
+    /// `UserOverride` is suppressed: the user explicitly chose a
+    /// preset via the IDE setting or `--preset` flag.
     #[test]
-    fn upsell_is_silent_for_ide_override() {
-        let s = upsell_string(SynthesizedPresetReason::IdeOverride);
+    fn upsell_is_silent_for_user_override() {
+        let s = upsell_string(SynthesizedPresetReason::UserOverride);
         assert!(s.is_empty(), "expected no upsell, got {s:?}");
     }
 }

@@ -22,9 +22,9 @@ impl<T: TspInterface> TspConnection<T> {
     /// For example, `a: int | str` has declared type `int | str` even if
     /// type narrowing later restricts the computed type to `int`.
     ///
-    /// Currently piggy-backs on `get_type_at_position`, which returns the
-    /// computed type. A future improvement can separate the annotation type
-    /// from the inferred type in the binding infrastructure.
+    /// Currently piggy-backs on `type_at_position`, which returns the computed
+    /// type. A future improvement can separate the annotation type from the
+    /// inferred type in the binding infrastructure.
     pub fn handle_get_declared_type(
         &self,
         params: GetTypeParams,
@@ -32,12 +32,11 @@ impl<T: TspInterface> TspConnection<T> {
         self.validate_snapshot(params.snapshot)?;
         // Validate the URI is parseable (rejects malformed strings).
         // Any valid scheme is accepted — notebook cell URIs are resolved
-        // to notebook paths inside get_type_at_position.
+        // to notebook paths inside type_at_position.
         parse_uri(params.uri())?;
         let position = params.position();
-        let ty = self
+        Ok(self
             .inner()
-            .get_type_at_position(params.uri(), position.line, position.character);
-        Ok(ty.map(|t| self.convert_type(&t, Some(params.uri()))))
+            .type_at_position(params.uri(), position.line, position.character))
     }
 }

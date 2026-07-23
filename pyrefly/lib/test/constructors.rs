@@ -343,6 +343,56 @@ assert_type(x, Any)
 );
 
 testcase!(
+    test_type_self_constructor_ignores_concrete_new_return,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls) -> C:
+        return object.__new__(cls)
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(), Self)
+        return cls()
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_ignores_bad_new_return,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls) -> int:
+        return 0
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(), Self)
+        return cls()
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_checks_new_params,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls, x: int, y: str) -> "C":
+        return object.__new__(cls)
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(1, "a"), Self)
+        cls(1, 2)  # E: Argument `Literal[2]` is not assignable to parameter `y` with type `str`
+        cls()  # E: Missing argument `x`  # E: Missing argument `y`
+        return cls(1, "a")
+    "#,
+);
+
+testcase!(
     test_new_returns_error,
     r#"
 from typing import assert_type, overload, Self
@@ -942,8 +992,8 @@ class C:
     def __new__(cls) -> "C": ...
 
     def method(self) -> None:
-        # __new__ explicitly returns C, not Self, so type(self)() returns C.
-        reveal_type(type(self)())  # E: revealed type: C
+        # `type[Self]` construction returns Self, even when __new__ returns C.
+        reveal_type(type(self)())  # E: revealed type: Self@C
 
 class D(C): ...
 
@@ -961,8 +1011,8 @@ class C:
     def __new__(cls) -> list[Self]: ...
 
     def method(self) -> None:
-        # __new__ returns list[Self], so type(self)() preserves Self.
-        reveal_type(type(self)())  # E: revealed type: list[Self@C]
+        # `type[Self]` construction returns Self, even when __new__ returns another type.
+        reveal_type(type(self)())  # E: revealed type: Self@C
 
 class D(C): ...
 
@@ -1078,7 +1128,9 @@ def g() -> list[ParentItem] | None:
 
 // Overloaded __new__ where one overload has an explicit return annotation
 // and one doesn't. The unannotated overload should assume Self; the
-// annotated overload should keep its declared return type.
+// annotated overload should keep its declared return type. The explicit-return
+// overload is an inconsistent overload error because `C` is not a subtype of
+// the implementation's `Self@C`.
 testcase!(
     test_overloaded_new_mixed_annotation,
     r#"
@@ -1086,7 +1138,7 @@ from typing import assert_type, overload
 
 class C:
     @overload
-    def __new__(cls, x: int) -> "C": ...
+    def __new__(cls, x: int) -> "C": ...  # E: Overload return type `C` is not assignable to implementation return type `Self@C`
     @overload
     def __new__(cls, x: str): ...
     def __new__(cls, x: int | str):

@@ -93,11 +93,14 @@
             }
         ],
         "configurationDefaults": {
+            "basedpyright.disableLanguageServices": true,
+            "cursorpyright.disableLanguageServices": true,
             "editor.semanticTokenColorCustomizations": {
                 "rules": {
                     "variable.readonly:python": "#4EC9B0"
                 }
-            }
+            },
+            "windsurfPyright.disableLanguageServices": true
         },
         "configuration": {
             "properties": {
@@ -140,7 +143,8 @@
                         "basic",
                         "legacy",
                         "default",
-                        "strict"
+                        "strict",
+                        "all"
                     ],
                     "scope": "resource"
                 },
@@ -255,6 +259,72 @@
                     "description": "Automatically insert parentheses when completing a function or method.",
                     "scope": "resource"
                 },
+                "python.analysis.autoImportCompletions": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement.",
+                    "scope": "resource"
+                },
+                "python.analysis.diagnosticMode": {
+                    "type": "string",
+                    "default": "openFilesOnly",
+                    "enum": [
+                        "openFilesOnly",
+                        "workspace"
+                    ],
+                    "description": "Controls the scope of diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files currently open in the editor. When set to 'workspace', diagnostics are computed and published for all files in the workspace. If `python.pyrefly.diagnosticMode` is set, it takes precedence.",
+                    "scope": "resource"
+                },
+                "python.analysis.importFormat": {
+                    "type": "string",
+                    "default": "absolute",
+                    "enum": [
+                        "absolute",
+                        "relative"
+                    ],
+                    "description": "Format used when Pyrefly auto-inserts an import.",
+                    "scope": "resource"
+                },
+                "python.analysis.inlayHints": {
+                    "type": "object",
+                    "default": {},
+                    "description": "Controls which inlay hints Pyrefly displays.",
+                    "scope": "resource",
+                    "properties": {
+                        "callArgumentNames": {
+                            "type": "string",
+                            "default": "off",
+                            "enum": [
+                                "all",
+                                "off",
+                                "partial"
+                            ],
+                            "description": "Show inlay hints for argument names at call sites. 'partial' shows hints only when the argument is a literal."
+                        },
+                        "functionReturnTypes": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Show inferred return type as an inlay hint on function definitions."
+                        },
+                        "pytestParameters": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Show inlay hints for pytest fixture parameter types."
+                        },
+                        "variableTypes": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Show inferred variable types as inlay hints on assignments."
+                        }
+                    }
+                },
+                "python.analysis.inlayHintDebounceMs": {
+                    "type": "number",
+                    "default": 150,
+                    "minimum": 0,
+                    "description": "Debounce window, in milliseconds, for inlay hints. While a file is being edited, inlay hint updates are held until editing pauses for this long, so hint widths don't jitter on every keystroke. Set to 0 to update inlay hints immediately.",
+                    "scope": "resource"
+                },
                 "python.pyrefly.syncNotebooks": {
                     "type": "boolean",
                     "default": true,
@@ -313,7 +383,7 @@
         "@vscode/test-cli": "^0.0.10",
         "@vscode/test-electron": "^2.5.2",
         "@vscode/vsce": "^2.9.2",
-        "esbuild": "^0.25.1",
+        "esbuild": "^0.28.1",
         "npm-run-all": "^4.1.5",
         "typescript": "^4.4.3"
     },

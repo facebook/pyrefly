@@ -193,10 +193,9 @@ class ErrorContext:
 );
 
 testcase!(
-    bug = "Subscript assignment narrows getter type to RHS even with asymmetric __setitem__/__getitem__ (#3299)",
     test_subscript_assign_with_asymmetric_getitem_setitem,
     r#"
-from typing import Any, Protocol
+from typing import Any, Protocol, assert_type
 
 class Series(Protocol):
     def astype(self, dtype: Any) -> "Series": ...
@@ -207,9 +206,87 @@ class DataFrame(Protocol):
 
 def main(df: DataFrame) -> None:
     df['a'] = '!'
-    # df['a'] should still have type Series, since __getitem__ returns Series
-    # and __setitem__ accepts `object` independently. But pyrefly narrows it to str.
-    df['a'].astype(int)  # E: Object of class `str` has no attribute `astype`
+    assert_type(df['a'], Series)
+    df['a'].astype(int)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_union_of_asymmetric_and_symmetric,
+    r#"
+from typing import Any, Protocol, assert_type
+
+class Series(Protocol):
+    def astype(self, dtype: Any) -> "Series": ...
+
+class DataFrame(Protocol):
+    def __setitem__(self, key: str, value: object) -> None: ...
+    def __getitem__(self, key: str) -> Series: ...
+
+def main(c: DataFrame | dict[str, str]) -> None:
+    c['a'] = '!'
+    assert_type(c['a'], Series | str)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_heterogeneous_builtin_container,
+    r#"
+from typing import assert_type
+
+class Point:
+    x_cord: int
+    z_cord: int
+
+def main(p: Point) -> None:
+    s: list[int] = [0] * 5
+    s[0] = p  # E: No matching overload found for function `list.__setitem__`
+    assert_type(s[0], Point)
+
+    d: dict[str, int] = {}
+    d["entries"] = p  # E: `Point` is not assignable to parameter `value` with type `int`
+    assert_type(d["entries"], Point)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_immutable_builtin_does_not_narrow,
+    r#"
+from typing import assert_type
+
+def main(s: str) -> None:
+    s[0] = "z"  # E: Object of class `str` has no attribute `__setitem__`
+    assert_type(s[0], str)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_asymmetric_setter_does_not_narrow,
+    r#"
+from typing import assert_type
+
+class C:
+    def __setitem__(self, k: str, value: object) -> None: ...
+    def __getitem__(self, k: str) -> int | str: ...
+
+def main(c: C) -> None:
+    c['a'] = 5
+    assert_type(c['a'], int | str)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_symmetric_user_class_narrows,
+    r#"
+from typing import assert_type
+
+class Sym:
+    def __setitem__(self, k: str, v: int) -> None: ...
+    def __getitem__(self, k: str) -> int: ...
+
+def main(c: Sym) -> None:
+    c['a'] = 5
+    assert_type(c['a'], int)
 "#,
 );
 
@@ -247,6 +324,33 @@ def use(options: dict[str, str]) -> None:
         assert_type(options["contains"], str)
     else:
         assert_type(options.get("contains"), str | None)
+"#,
+);
+
+testcase!(
+    test_dict_contains_wrong_key_type_get_still_errors,
+    r#"
+def use(d: dict[int, str]) -> None:
+    if "x" in d:
+        d["x"]  # E: Cannot index into `dict[int, str]`
+        d.get("x")  # E: Cannot index into `dict[int, str]`
+"#,
+);
+
+testcase!(
+    test_typed_dict_contains_merge_value_narrow_and_presence,
+    TestEnv::new().enable_not_required_key_access_error(),
+    r#"
+from typing import TypedDict, assert_type
+
+class TD(TypedDict, total=False):
+    k: str
+
+def f(o: TD, cond: bool) -> None:
+    if "k" in o:
+        if cond:
+            o["k"] = "value"
+        assert_type(o["k"], str)
 "#,
 );
 

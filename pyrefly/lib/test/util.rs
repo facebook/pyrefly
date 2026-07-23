@@ -107,16 +107,30 @@ pub struct TestEnv {
     infer_with_first_use: bool,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
+    explicit_any_error: bool,
     implicit_any_error: bool,
     unannotated_return_error: bool,
     implicit_any_parameter_error: bool,
     implicit_any_attribute_error: bool,
+    unknown_attribute_type_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
     not_required_key_access_error: bool,
+    pytorch_efficiency_lint_error: bool,
+    incompatible_comparison_error: bool,
+    untyped_class_decorator_error: bool,
+    untyped_function_decorator_error: bool,
+    unused_call_result_error: bool,
+    string_as_iterable_warning: bool,
     strict_callable_subtyping: bool,
+    strict_partial_subtyping: bool,
     spec_compliant_overloads: bool,
+    no_any_return_error: bool,
+    no_any_return_explicit_error: bool,
+    no_any_return_implicit_error: bool,
+    implicit_any_lambda_error: bool,
+    unknown_variable_type_error: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
@@ -137,16 +151,30 @@ impl TestEnv {
             infer_with_first_use: true,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
+            explicit_any_error: false,
             implicit_any_error: false,
             unannotated_return_error: false,
             implicit_any_parameter_error: false,
             implicit_any_attribute_error: false,
+            unknown_attribute_type_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
             missing_override_decorator_error: false,
             not_required_key_access_error: false,
+            pytorch_efficiency_lint_error: false,
+            incompatible_comparison_error: false,
+            untyped_class_decorator_error: false,
+            untyped_function_decorator_error: false,
+            unused_call_result_error: false,
+            string_as_iterable_warning: false,
             strict_callable_subtyping: false,
+            strict_partial_subtyping: false,
             spec_compliant_overloads: false,
+            no_any_return_error: false,
+            no_any_return_explicit_error: false,
+            no_any_return_implicit_error: false,
+            implicit_any_lambda_error: false,
+            unknown_variable_type_error: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             run_require: Require::Everything,
@@ -244,6 +272,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_explicit_any_error(mut self) -> Self {
+        self.explicit_any_error = true;
+        self
+    }
+
     pub fn enable_implicit_any_error(mut self) -> Self {
         self.implicit_any_error = true;
         self
@@ -251,6 +284,11 @@ impl TestEnv {
 
     pub fn enable_implicit_any_attribute_error(mut self) -> Self {
         self.implicit_any_attribute_error = true;
+        self
+    }
+
+    pub fn enable_unknown_attribute_type_error(mut self) -> Self {
+        self.unknown_attribute_type_error = true;
         self
     }
 
@@ -284,13 +322,73 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_pytorch_efficiency_lint_error(mut self) -> Self {
+        self.pytorch_efficiency_lint_error = true;
+        self
+    }
+
+    pub fn enable_incompatible_comparison_error(mut self) -> Self {
+        self.incompatible_comparison_error = true;
+        self
+    }
+
+    pub fn enable_untyped_class_decorator_error(mut self) -> Self {
+        self.untyped_class_decorator_error = true;
+        self
+    }
+
+    pub fn enable_untyped_function_decorator_error(mut self) -> Self {
+        self.untyped_function_decorator_error = true;
+        self
+    }
+
+    pub fn enable_unused_call_result_error(mut self) -> Self {
+        self.unused_call_result_error = true;
+        self
+    }
+
+    pub fn enable_string_as_iterable_warning(mut self) -> Self {
+        self.string_as_iterable_warning = true;
+        self
+    }
+
     pub fn enable_strict_callable_subtyping(mut self) -> Self {
         self.strict_callable_subtyping = true;
         self
     }
 
+    pub fn enable_strict_partial_subtyping(mut self) -> Self {
+        self.strict_partial_subtyping = true;
+        self
+    }
+
     pub fn enable_spec_compliant_overloads(mut self) -> Self {
         self.spec_compliant_overloads = true;
+        self
+    }
+
+    pub fn enable_no_any_return_error(mut self) -> Self {
+        self.no_any_return_error = true;
+        self
+    }
+
+    pub fn enable_no_any_return_explicit_error(mut self) -> Self {
+        self.no_any_return_explicit_error = true;
+        self
+    }
+
+    pub fn enable_no_any_return_implicit_error(mut self) -> Self {
+        self.no_any_return_implicit_error = true;
+        self
+    }
+
+    pub fn enable_implicit_any_lambda_error(mut self) -> Self {
+        self.implicit_any_lambda_error = true;
+        self
+    }
+
+    pub fn enable_unknown_variable_type_error(mut self) -> Self {
+        self.unknown_variable_type_error = true;
         self
     }
 
@@ -384,6 +482,7 @@ impl TestEnv {
         config.root.infer_return_types = Some(self.infer_return_types);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
+        config.root.strict_partial_subtyping = Some(self.strict_partial_subtyping);
         config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
@@ -392,11 +491,17 @@ impl TestEnv {
         if self.implicitly_defined_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitlyDefinedAttribute, Severity::Error);
         }
+        if self.explicit_any_error {
+            errors.set_error_severity(ErrorKind::ExplicitAny, Severity::Error);
+        }
         if self.implicit_any_error {
             errors.set_error_severity(ErrorKind::ImplicitAny, Severity::Error);
         }
         if self.implicit_any_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyAttribute, Severity::Error);
+        }
+        if self.unknown_attribute_type_error {
+            errors.set_error_severity(ErrorKind::UnknownAttributeType, Severity::Error);
         }
         if self.unannotated_return_error {
             errors.set_error_severity(ErrorKind::UnannotatedReturn, Severity::Error);
@@ -415,6 +520,39 @@ impl TestEnv {
         }
         if self.not_required_key_access_error {
             errors.set_error_severity(ErrorKind::NotRequiredKeyAccess, Severity::Error);
+        }
+        if self.no_any_return_error {
+            errors.set_error_severity(ErrorKind::NoAnyReturn, Severity::Error);
+        }
+        if self.no_any_return_explicit_error {
+            errors.set_error_severity(ErrorKind::NoAnyReturnExplicit, Severity::Error);
+        }
+        if self.no_any_return_implicit_error {
+            errors.set_error_severity(ErrorKind::NoAnyReturnImplicit, Severity::Error);
+        }
+        if self.pytorch_efficiency_lint_error {
+            config.root.pytorch_efficiency_lints = Some(true);
+        }
+        if self.incompatible_comparison_error {
+            errors.set_error_severity(ErrorKind::IncompatibleComparison, Severity::Error);
+        }
+        if self.untyped_class_decorator_error {
+            errors.set_error_severity(ErrorKind::UntypedClassDecorator, Severity::Error);
+        }
+        if self.untyped_function_decorator_error {
+            errors.set_error_severity(ErrorKind::UntypedFunctionDecorator, Severity::Error);
+        }
+        if self.unused_call_result_error {
+            errors.set_error_severity(ErrorKind::UnusedCallResult, Severity::Error);
+        }
+        if self.string_as_iterable_warning {
+            errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);
+        }
+        if self.implicit_any_lambda_error {
+            errors.set_error_severity(ErrorKind::ImplicitAnyLambda, Severity::Error);
+        }
+        if self.unknown_variable_type_error {
+            errors.set_error_severity(ErrorKind::UnknownVariableType, Severity::Error);
         }
         config.extra_file_extensions = self.extra_file_extensions.clone();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
@@ -465,16 +603,9 @@ impl TestEnv {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                find_import(
-                    &config_file,
-                    name,
-                    None,
-                    None,
-                    &DirEntryCache::new(true),
-                    None,
-                )
-                .finding()
-                .unwrap(),
+                find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+                    .finding()
+                    .unwrap(),
                 config.dupe(),
             )
         })

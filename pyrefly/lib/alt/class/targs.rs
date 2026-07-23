@@ -10,6 +10,9 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Function;
+use pyrefly_types::dimension::Int;
+use pyrefly_types::dimension::gradual_size;
+use pyrefly_util::display::commas_iter;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
@@ -21,15 +24,16 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::targs_cursor::TArgsCursor;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::QuantifiedHandle;
+use crate::solver::solver::type_as_intvar_solution;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::literal::Lit;
 use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedIdentity;
@@ -45,6 +49,19 @@ use crate::types::types::TArgs;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
+/// Format a generic entity for implicit-any error messages, e.g.
+/// `` class `Foo[T, *Ts]` `` (or `` class `Foo` `` when there are no tparams).
+fn format_generic_entity(noun: &str, name: &Name, tparams: &TParams) -> String {
+    if tparams.is_empty() {
+        format!("{noun} `{name}`")
+    } else {
+        format!(
+            "{noun} `{name}[{}]`",
+            commas_iter(|| tparams.iter().map(|t| t.display_name_with_prefix()))
+        )
+    }
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
     /// caller to ensure they are not calling this method on a TypedDict class, which should be
@@ -53,6 +70,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ClassType::new(
             cls.dupe(),
             self.create_default_targs(self.get_class_tparams(cls), None),
+        )
+    }
+
+    /// Specialize a non-TypedDict class and return the underlying `ClassType`.
+    ///
+    /// This is for callers that wrap the class in another type form but still need
+    /// ordinary class type-argument validation and substitution.
+    pub(crate) fn specialize_nontypeddict_to_classtype(
+        &self,
+        cls: &Class,
+        targs: Vec<Type>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> ClassType {
+        ClassType::new(
+            cls.dupe(),
+            self.create_targs(
+                cls.name(),
+                self.get_class_tparams(cls),
+                targs,
+                range,
+                true,
+                errors,
+            ),
         )
     }
 
@@ -170,13 +211,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
+        let tparams = self.get_class_tparams(cls);
+        let tparams_for_error = tparams.dupe();
         let targs = self.create_default_targs(
-            self.get_class_tparams(cls),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("class `{}`", cls.name()),
+                    format_generic_entity("class", cls.name(), &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -190,13 +233,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        let tparams = forall.tparams.dupe();
+        let tparams_for_error = tparams.dupe();
+        let alias_name = forall.body.name();
         let targs = self.create_default_targs(
-            forall.tparams.dupe(),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("type alias `{}`", forall.body.name()),
+                    format_generic_entity("type alias", &alias_name, &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -430,6 +476,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                         ));
                     }
+                    QuantifiedKind::IntVar => {
+                        checked_targs.push(self.create_next_intvar_arg(
+                            param,
+                            targs_cursor.consume_for_typevar_arg(),
+                            range,
+                            errors,
+                        ));
+                    }
                 }
             } else {
                 // We've run out of arguments, and we have type parameters left to consume.
@@ -451,7 +505,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                ErrorKind::BadSpecialization,
                 format!(
                     "Expected {} for `{}`, got {}",
                     count(nparams, "type argument"),
@@ -475,7 +529,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut suffix = Vec::new();
         for arg in args {
             match arg {
-                Type::Unpack(box Type::Tuple(Tuple::Concrete(elts))) => {
+                Type::Unpack(inner) if let Type::Tuple(Tuple::Concrete(elts)) = &**inner => {
                     if middle.is_empty() {
                         prefix.extend_from_slice(elts);
                     } else {
@@ -495,7 +549,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                            ErrorKind::InvalidTypeVarTuple,
                             "`TypeVarTuple` must be unpacked".to_owned(),
                         )
                     } else {
@@ -552,7 +606,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
+                ErrorKind::InvalidParamSpec,
                 format!(
                     "Expected a valid ParamSpec expression, got `{}`",
                     self.for_display(arg.clone())
@@ -574,7 +628,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Unpack(_) => self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadUnpacking),
+                ErrorKind::BadUnpacking,
                 format!(
                     "Unpacked argument cannot be used for type parameter {}",
                     param.name()
@@ -585,18 +639,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                        ErrorKind::InvalidTypeVarTuple,
                         "`TypeVarTuple` must be unpacked".to_owned(),
+                    )
+                } else if matches!(arg, Type::Ellipsis) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidAnnotation,
+                        "`...` cannot be used for type parameter".to_owned(),
                     )
                 } else if arg.is_kind_param_spec() {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
+                        ErrorKind::InvalidParamSpec,
                         "`ParamSpec` cannot be used for type parameter".to_owned(),
                     )
                 } else {
                     let restriction = param.restriction();
+                    // Match the cheap `arg` literal shape before materializing the
+                    // parameter's upper bound, so only an integer literal argument
+                    // pays for computing the bound.
+                    let arg =
+                        if let Type::Literal(lit) = arg
+                            && let Lit::Int(i) = &lit.value
+                            && matches!(param.upper_bound(self.stdlib, self.heap), Type::Int(_))
+                        {
+                            Type::Int(i.as_i64().map(Int::Literal).unwrap_or_else(|| {
+                                Int::Symbolic(Box::new(Type::Literal(lit.clone())))
+                            }))
+                        } else {
+                            arg.clone()
+                        };
                     if validate_restriction && restriction.is_restricted() {
                         let tcc = &|| {
                             TypeCheckContext::of_kind(TypeCheckKind::TypeVarSpecialization(
@@ -609,21 +684,62 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let arg = arg.clone();
                             arg.transform(&mut |x| {
                                 if let Type::TypeVar(tv) = x {
-                                    *x = tv.bound_type(self.stdlib, self.heap);
+                                    *x = tv.upper_bound(self.stdlib, self.heap);
                                 }
                             })
                         };
                         self.check_type(
                             &arg_for_check,
-                            &param.bound_type(self.stdlib, self.heap),
+                            &param.upper_bound(self.stdlib, self.heap),
                             range,
                             errors,
                             tcc,
                         );
                     }
-                    arg.clone()
+                    arg
                 }
             }
+        }
+    }
+
+    fn create_next_intvar_arg(
+        &self,
+        param: &Quantified,
+        arg: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match arg {
+            Type::Unpack(_) => {
+                // Shape argument parsing normally rejects this first; keep the
+                // targ-level recovery path for callers that bypass that parser.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadUnpacking,
+                    format!(
+                        "Unpacked argument cannot be used for type parameter {}",
+                        param.name()
+                    ),
+                );
+                gradual_size()
+            }
+            _ => type_as_intvar_solution(arg).unwrap_or_else(|| {
+                // Shape argument parsing normally rejects concrete source errors
+                // first; this is the class-targ recovery path for invalid values
+                // that reach specialization directly.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadSpecialization,
+                    format!(
+                        "Expected a valid Int expression for type parameter `{}`, got `{}`",
+                        param.name(),
+                        self.for_display(arg.clone())
+                    ),
+                );
+                gradual_size()
+            }),
         }
     }
 
@@ -678,7 +794,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                ErrorKind::BadSpecialization,
                 format!(
                     "Expected {} for `{}`, got {}",
                     count(tparams.len(), "type argument"),

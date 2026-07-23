@@ -19,7 +19,6 @@ use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
-use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprStringLiteral;
@@ -117,8 +116,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => {
                 self.get_django_field_type_from_class(cls, class, field_name, initial_value_expr)
             }
-            Type::Union(box Union { members: union, .. }) => {
-                let transformed: Vec<_> = union
+            Type::Union(f) => {
+                let transformed: Vec<_> = f
+                    .members
                     .iter()
                     .map(|variant| {
                         self.get_django_field_type(variant, class, field_name, initial_value_expr)
@@ -126,7 +126,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                     .collect();
 
-                if transformed != union.to_vec() {
+                if transformed != f.members.to_vec() {
                     Some(unions(transformed, self.heap))
                 } else {
                     None
@@ -253,8 +253,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn resolve_target(&self, to_expr: &Expr, class: &Class) -> Option<Type> {
         match to_expr {
-            // Use expr_infer to resolve the name in the current scope
-            Expr::Name(_) => {
+            // Use expr_infer to resolve the model in the current scope.
+            Expr::Name(_) | Expr::Attribute(_) => {
                 let model_type = self.expr_infer(to_expr, &self.error_swallower());
                 Some(self.class_def_to_instance_type(&model_type))
             }
@@ -262,9 +262,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if value.to_str() == "self" {
                     Some(self.instantiate(class))
                 } else {
-                    // Handle forward reference - look up the model by name in the current module
-                    // This requires that the model class is imported or defined in the current module
-                    let class_name = Name::new(value.to_str());
+                    // Django string references may include an app label, but the imported model is
+                    // still looked up by its class name in the current module.
+                    let target = value.to_str();
+                    let class_name = Name::new(
+                        target
+                            .rsplit_once('.')
+                            .map_or(target, |(_, model_name)| model_name),
+                    );
                     let module_name = class.module_name();
 
                     if self.exports.export_exists(module_name, &class_name) {
@@ -516,9 +521,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Get the related model type from the field
         let ty = class_field.ty();
         let (related_cls, is_foreign_key_nullable) = match ty {
-            Type::Union(box Union { members: union, .. }) => {
+            Type::Union(f) => {
                 // Nullable foreign key: extract the class type from the union
-                let cls = union.iter().find_map(|variant| match variant {
+                let cls = f.members.iter().find_map(|variant| match variant {
                     Type::ClassType(cls) => Some(cls.clone()),
                     _ => None,
                 })?;

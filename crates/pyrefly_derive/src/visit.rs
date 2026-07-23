@@ -174,13 +174,11 @@ fn derive_visit_impl(
             ));
         }
     };
-    let contains = quote! { #(<#types as #trait_name<To>>::VISIT_CONTAINS || )* false };
-
     Ok(quote! {
         impl <#generics_lt To, #generics_before > #trait_name<To> for #name < #generics_after > where
             #(#types : #trait_name<To>,)*
          {
-            const RECURSE_CONTAINS: bool = #contains;
+            const RECURSE_CONTAINS: bool = true;
 
             #signature {
                 #body

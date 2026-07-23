@@ -6,6 +6,7 @@
  */
 
 use crate::test::util::TestEnv;
+use crate::test::util::testcase_for_macro;
 use crate::testcase;
 
 testcase!(
@@ -99,6 +100,86 @@ p1_3 = Point2()  # Okay
 Point3 = NamedTuple('Point3', [('x', int), ('y', int)])
 Point3(1, 2)
 Point3(1)  # E: Missing argument `y` in function `Point3.__new__`
+    "#,
+);
+
+testcase!(
+    test_named_tuple_replace,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+p = Point(1, "")
+assert_type(p._replace(x=2), Point)
+p._replace()
+p._replace(z=5)  # E: Unexpected keyword argument `z`
+p._replace(x="str")  # E: is not assignable to parameter `x`
+p._replace(1)  # E: Expected 0 positional arguments
+    "#,
+);
+
+testcase!(
+    test_named_tuple_functional_replace,
+    r#"
+from collections import namedtuple
+from typing import NamedTuple
+
+Point1 = namedtuple("Point1", ["x", "y"])
+Point2 = NamedTuple("Point2", [("x", int), ("y", str)])
+
+Point1(1, "")._replace(x="anything")
+Point1(1, "")._replace(z=5)  # E: Unexpected keyword argument `z`
+Point2(1, "")._replace(x="str")  # E: is not assignable to parameter `x`
+Point2(1, "")._replace(y="str")
+    "#,
+);
+
+// `_replace` returns `Self`: it must preserve subclasses, generic type
+// arguments, and `TypeVar`-bound receivers rather than collapsing to the
+// concrete base class.
+testcase!(
+    test_named_tuple_replace_returns_self,
+    r#"
+from typing import NamedTuple, Generic, TypeVar, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+class SubPoint(Point):
+    def norm(self) -> int: ...
+
+assert_type(SubPoint(1, "")._replace(x=2), SubPoint)
+
+T = TypeVar("T")
+class Box(NamedTuple, Generic[T]):
+    item: T
+
+b: Box[int] = Box(1)
+assert_type(b._replace(item=2), Box[int])
+
+TP = TypeVar("TP", bound=Point)
+def f(p: TP) -> TP:
+    return p._replace(x=2)
+    "#,
+);
+
+// With dynamic fields, `_replace` accepts any keyword and still returns the
+// namedtuple type.
+testcase!(
+    test_named_tuple_replace_dynamic_fields,
+    r#"
+import collections
+from typing import assert_type
+
+Base = collections.namedtuple("Base", ["name"])
+Ext = collections.namedtuple("Ext", [*Base._fields, "extra"])
+e = Ext("n", "x")
+assert_type(e._replace(extra="new"), Ext)
+e._replace(anything="ok")
     "#,
 );
 
@@ -331,7 +412,10 @@ class Pair(NamedTuple, Foo):  # E: Named tuples do not support multiple inherita
 class Pair2(NamedTuple):
     x: int
     y: int
-class Pair3(Pair2, Foo):  # E: Named tuples do not support multiple inheritance
+# CPython allows mixing concrete NamedTuple subclasses with other bases.
+class Pair3(Pair2, Foo):
+    pass
+class Pair4(Foo, Pair2):
     pass
     "#,
 );
@@ -643,6 +727,18 @@ class E(NamedTuple("E", 42)):  # E: Expected valid functional named tuple defini
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3354
+#[test]
+fn test_named_tuple_in_malformed_for_target() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nfor NamedTuple(\"\n",
+        file!(),
+        line!(),
+    );
+}
+
 testcase!(
     test_named_tuple_dynamic_fields,
     r#"
@@ -670,7 +766,6 @@ assert_type(instance2[1], Any)
 );
 
 testcase!(
-    bug = "namedtuple + mixin is valid in CPython but we reject it",
     test_named_tuple_base_class_call_with_mixin,
     r#"
 from typing import assert_type, Any
@@ -680,7 +775,7 @@ class Mixin:
     def greet(self) -> str:
         return "hi"
 
-class B(namedtuple("B", ["x"]), Mixin):  # E: Named tuples do not support multiple inheritance
+class B(namedtuple("B", ["x"]), Mixin):
     pass
 
 b = B(1)
@@ -693,14 +788,13 @@ testcase!(
     bug = "only the first namedtuple base's fields should be used",
     test_named_tuple_base_class_call_two_namedtuples,
     r#"
-from typing import assert_type, Any
 from collections import namedtuple
 
-class C(namedtuple("C1", ["x"]), namedtuple("C2", ["y"])):  # E: Named tuples do not support multiple inheritance
+class C(namedtuple("C1", ["x"]), namedtuple("C2", ["y"])):
     pass
 
 c = C(1)
-assert_type(c.x, Any)
+c.y  # This should probably be an error, but it's not today
     "#,
 );
 
@@ -708,19 +802,19 @@ testcase!(
     bug = "only the first namedtuple base's fields should be used",
     test_named_tuple_base_class_call_namedtuple_mixin_namedtuple,
     r#"
-from typing import assert_type, Any
+from typing import assert_type
 from collections import namedtuple
 
 class Mixin:
     def greet(self) -> str:
         return "hi"
 
-class D(namedtuple("D1", ["x"]), Mixin, namedtuple("D2", ["y"])):  # E: Named tuples do not support multiple inheritance
+class D(namedtuple("D1", ["x"]), Mixin, namedtuple("D2", ["y"])):
     pass
 
 d = D(1)
-assert_type(d.x, Any)
 assert_type(d.greet(), str)
+d.y  # This should probably be an error, but it's not today
     "#,
 );
 
@@ -875,6 +969,39 @@ q3 = Query()
 "#,
 );
 
+testcase!(
+    test_typing_namedtuple_adjacent_defaults_with_non_trivial_expressions,
+    r#"
+from typing import NamedTuple, assert_type
+
+A = NamedTuple('A', [('x', int)])
+B = NamedTuple('B', [('a', A)])
+B.__new__.__defaults__ = (A(1),)
+b = B()  # should succeed
+assert_type(b.a, A)
+
+D = NamedTuple('D', [('a', A)])
+D.__new__.__defaults__ = (C(),)  # E: Could not find name `C`
+"#,
+);
+
+testcase!(
+    test_collections_namedtuple_adjacent_defaults_with_non_trivial_expressions,
+    r#"
+import collections
+from typing import assert_type, Any
+
+A = collections.namedtuple('A', ['x'])
+B = collections.namedtuple('B', ['a'])
+B.__new__.__defaults__ = (A(1),)
+b = B()  # should succeed
+assert_type(b.a, Any)
+
+D = collections.namedtuple('D', ['a'])
+D.__new__.__defaults__ = (C(),)  # E: Could not find name `C`
+"#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2622
 // `import collections.abc` should not break special handling of `collections.namedtuple`.
 testcase!(
@@ -922,7 +1049,6 @@ assert_type(o, ImplementedModel)
 
 // https://github.com/facebook/pyrefly/issues/2924
 testcase!(
-    bug = "Should reject overriding reserved NamedTuple methods like _asdict and _make",
     test_named_tuple_reserved_method_override,
     r#"
 from typing import NamedTuple
@@ -931,12 +1057,26 @@ class Record(NamedTuple):
     name: str
     value: int
 
-    def _asdict(self) -> dict[str, object]:
+    def _asdict(self) -> dict[str, object]:  # E: Cannot override NamedTuple reserved attribute `_asdict`
         return {}
 
     @classmethod
-    def _make(cls, iterable: object) -> "Record":
+    def _make(cls, iterable: object) -> "Record":  # E: Cannot override NamedTuple reserved attribute `_make`
         return cls("", 0)
+"#,
+);
+
+testcase!(
+    test_named_tuple_regular_method_ok,
+    r#"
+from typing import NamedTuple
+
+class Record(NamedTuple):
+    name: str
+    value: int
+
+    def describe(self) -> str:
+        return f"{self.name}={self.value}"
 "#,
 );
 
@@ -1003,6 +1143,19 @@ assert_type(info.anything, Any)
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2458
+testcase!(
+    test_namedtuple_from_function_missing_attribute,
+    r#"
+from collections import namedtuple
+
+def f():
+    return namedtuple("X", "a b c")
+
+f().d  # E: has no class attribute `d`
+"#,
+);
+
 testcase!(
     test_named_tuple_final_field_name_shadowed,
     r#"
@@ -1013,5 +1166,106 @@ X: Final = "x"
 
 def f(X: int) -> None:
     N = namedtuple("N", [X])  # E: Expected a string literal
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3763
+testcase!(
+    test_named_tuple_super_call_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> int:
+        super()  # E: NamedTuple
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_super_attr_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> str:
+        return super().__repr__()  # E: NamedTuple
+"#,
+);
+
+testcase!(
+    test_named_tuple_classmethod_super_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    @classmethod
+    def c(cls) -> int:
+        super()  # E: NamedTuple
+        return 0
+"#,
+);
+
+testcase!(
+    test_named_tuple_staticmethod_super_single_error,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    @staticmethod
+    def s() -> int:
+        super()  # E: `super` call with no arguments is not valid inside a staticmethod
+        return 0
+"#,
+);
+
+testcase!(
+    test_named_tuple_subclass_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+class G(F):
+    def m(self) -> int:
+        super()
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_deep_subclass_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+class G(F):
+    pass
+class H(G):
+    def m(self) -> int:
+        super()
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_no_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> int:
+        return self.x
+"#,
+);
+
+testcase!(
+    bug = "explicit super(F, self) in a NamedTuple also fails at runtime but is not flagged",
+    test_named_tuple_explicit_super_args_not_flagged,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> str:
+        return super(F, self).__repr__()
 "#,
 );

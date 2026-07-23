@@ -562,7 +562,7 @@ class A: ...
 class B(A): ...
 x: list[A]
 y: list[B]
-x = y = [B()]  # E: Wrong type for assignment, expected `list[A]` and got `list[B]`
+x = y = [B()]  # E: `list[B]` is not assignable to `list[A]`
     "#,
 );
 
@@ -835,5 +835,49 @@ class Seq(Protocol[_T_co]):
 U = Seq[str] | Seq[int]
 def f(x: U) -> None: ...
 f(list())
+    "#,
+);
+
+testcase!(
+    // Regression: a list/set literal against `Alias | Collection[Alias]`, where the
+    // `Literal[...]` alias is wide, must still pick up the `Collection` element hint.
+    // Flattening the alias used to count its members against `MAX_DECOMPOSE_HINT_WIDTH`,
+    // incorrectly triggering the cap so the literal fell back to `list[str]`.
+    test_list_hint_with_wide_literal_alias_union,
+    r#"
+from typing import Literal, TypeAlias
+from collections.abc import Collection
+L: TypeAlias = Literal["a", "b", "c", "d", "e", "f", "g", "h"]
+def f(*, x: L | Collection[L] = "a") -> None: ...
+f(x=["a", "b"])
+f(x={"a", "b"})
+f(x=["a", "bad"])  # E: `list[str]` is not assignable to parameter `x`
+    "#,
+);
+
+testcase!(
+    // Regression: when a TypeVar's only constraints are upper bounds, multiple
+    // such bounds where one is a subtype of the other must collapse to the
+    // *narrowest* one. Previously `get_new_bound`'s absorb logic kept the wider
+    // type for both lower and upper bounds, which is correct for lower bounds
+    // but throws away the tighter constraint for upper bounds.
+    //
+    // Here `f(bar)` against return hint `int | Callable[[], int]` records:
+    //   T <: int                  (from callback contravariance)
+    //   T <: int                  (from `() -> T` arm matching `() -> int`)
+    //   T <: int | Callable[[], int]  (from bare `T` arm matching the hint)
+    // No lower bounds. Without the fix, the wider union wins and the call's
+    // return becomes `(int | () -> int) | () -> (int | () -> int)`, producing a
+    // spurious bad-return. With the fix, T solves to `int` and the return matches.
+    test_typevar_upper_bound_narrowing,
+    r#"
+from typing import Callable, TypeVar
+T = TypeVar('T')
+
+def f(g: Callable[[T], None]) -> T | Callable[[], T]: ...
+def bar(x: int) -> None: ...
+
+def make() -> int | Callable[[], int]:
+    return f(bar)
     "#,
 );

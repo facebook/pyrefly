@@ -24,7 +24,6 @@ use pyrefly_types::class::Class;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Type;
-use pyrefly_types::types::Union;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
@@ -41,6 +40,7 @@ use crate::report::pysa::ModuleContext;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::resolve_decorator_callees;
 use crate::report::pysa::captured_variable::CapturedVariableRef;
+use crate::report::pysa::class::ClassFieldId;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_all_classes;
@@ -65,7 +65,10 @@ pub enum FunctionId {
     /// Implicit function containing the class body.
     ClassTopLevel { class_id: ClassId },
     /// Function-like class field that is not a `def` statement.
-    ClassField { class_id: ClassId, name: Name },
+    ClassField {
+        class_id: ClassId,
+        field_id: ClassFieldId,
+    },
     /// Decorated target, which represents an artificial function containing all
     /// decorators of a function, inlined as an expression.
     /// For e.g, `@foo` on `def bar()` -> `return foo(bar)`
@@ -78,8 +81,8 @@ impl FunctionId {
             FunctionId::Function { func_def_index } => format!("F:{}", func_def_index.0),
             FunctionId::ModuleTopLevel => "MTL".to_owned(),
             FunctionId::ClassTopLevel { class_id } => format!("CTL:{}", class_id.to_int()),
-            FunctionId::ClassField { class_id, name } => {
-                format!("CF:{}:{}", class_id.to_int(), name)
+            FunctionId::ClassField { class_id, field_id } => {
+                format!("CF:{}:{}", class_id.to_int(), field_id.to_int())
             }
             FunctionId::FunctionDecoratedTarget { func_def_index } => {
                 format!("FDT:{}", func_def_index.0)
@@ -358,7 +361,7 @@ fn export_function_parameter(param: &Param, context: &ModuleContext) -> Function
 
 fn export_function_parameters(params: &Params, context: &ModuleContext) -> FunctionParameters {
     match params {
-        Params::List(params) => FunctionParameters::List(
+        Params::List(params) | Params::Partial(params) => FunctionParameters::List(
             params
                 .items()
                 .iter()
@@ -481,7 +484,8 @@ fn export_signatures_from_type(ty: &Type, context: &ModuleContext) -> Vec<Functi
             BoundMethodType::Overload(overload) => export_overload_signatures(overload, context),
         },
         Type::Overload(overload) => export_overload_signatures(overload, context),
-        Type::Union(box Union { members: union, .. }) => union
+        Type::Union(u) => u
+            .members
             .iter()
             .flat_map(|ty| export_signatures_from_type(ty, context))
             .collect::<Vec<_>>(),
@@ -648,7 +652,7 @@ impl FunctionNode {
                 module_name: class.module().name(),
                 function_id: FunctionId::ClassField {
                     class_id: ClassId::from_class(class),
-                    name: name.clone(),
+                    field_id: ClassFieldId::from_class_and_name(class, name, context),
                 },
                 function_name: name.clone(),
             },

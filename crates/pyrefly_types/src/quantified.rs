@@ -23,6 +23,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
 use crate::class::ClassType;
+use crate::dimension::gradual_size;
 use crate::heap::TypeHeap;
 use crate::stdlib::Stdlib;
 use crate::type_var::PreInferenceVariance;
@@ -206,6 +207,7 @@ impl PartialOrd for Quantified {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum QuantifiedKind {
     TypeVar,
+    IntVar,
     ParamSpec,
     TypeVarTuple,
 }
@@ -214,6 +216,7 @@ impl QuantifiedKind {
     fn empty_value(self) -> Type {
         match self {
             QuantifiedKind::TypeVar => Type::any_implicit(),
+            QuantifiedKind::IntVar => gradual_size(),
             QuantifiedKind::ParamSpec => Type::Ellipsis,
             QuantifiedKind::TypeVarTuple => Type::any_tuple(),
         }
@@ -221,7 +224,7 @@ impl QuantifiedKind {
 
     fn class_type(self, stdlib: &Stdlib) -> &ClassType {
         match self {
-            QuantifiedKind::TypeVar => stdlib.type_var(),
+            QuantifiedKind::TypeVar | QuantifiedKind::IntVar => stdlib.type_var(),
             QuantifiedKind::ParamSpec => stdlib.param_spec(),
             QuantifiedKind::TypeVarTuple => stdlib.type_var_tuple(),
         }
@@ -291,9 +294,10 @@ impl Quantified {
 
     /// Creates a Quantified from a TypeVar, extracting all relevant fields.
     pub fn from_type_var(tv: &TypeVar, identity: QuantifiedIdentity) -> Self {
-        Self::type_var(
-            tv.qname().id().clone(),
+        Self::new(
             identity,
+            tv.qname().id().clone(),
+            tv.kind(),
             tv.default().cloned(),
             tv.restriction().clone(),
             tv.variance(),
@@ -350,25 +354,24 @@ impl Quantified {
         &self.restriction
     }
 
-    /// The upper bound of this type parameter as a type, accounting for the parameter's kind.
-    /// For TypeVar the bound is `object`, for ParamSpec it's `...` (any params), and for
-    /// TypeVarTuple it's an unbounded tuple. Explicit bounds and constraints are used as-is.
-    pub fn bound_type(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
-        match &self.restriction {
-            Restriction::Unrestricted => match self.kind {
-                QuantifiedKind::TypeVar => stdlib.object().clone().to_type(),
-                QuantifiedKind::ParamSpec => Type::Ellipsis,
-                QuantifiedKind::TypeVarTuple => Type::any_tuple(),
-            },
-            r => r.as_type(stdlib, heap),
-        }
+    /// Display this type parameter name with the `*`/`**` kind prefix
+    /// (e.g. `*Ts` for TypeVarTuple, `**P` for ParamSpec).
+    pub fn display_name_with_prefix(&self) -> impl Display + '_ {
+        Fmt(move |f| {
+            if self.is_param_spec() {
+                write!(f, "**")?;
+            } else if self.is_type_var_tuple() {
+                write!(f, "*")?;
+            }
+            write!(f, "{}", self.name)
+        })
     }
 
     /// Display this type parameter with its bounds/constraints and default,
     /// in the format used for type parameter lists (e.g. `T: int = str`).
     pub fn display_with_bounds(&self) -> impl Display + '_ {
         Fmt(move |f| {
-            write!(f, "{}", self.name)?;
+            write!(f, "{}", self.display_name_with_prefix())?;
             match self.restriction() {
                 Restriction::Bound(t) => write!(f, ": {}", t)?,
                 Restriction::Constraints(ts) => {
@@ -395,7 +398,7 @@ impl Quantified {
     }
 
     pub fn is_type_var(&self) -> bool {
-        matches!(self.kind, QuantifiedKind::TypeVar)
+        matches!(self.kind, QuantifiedKind::TypeVar | QuantifiedKind::IntVar)
     }
 
     pub fn is_param_spec(&self) -> bool {

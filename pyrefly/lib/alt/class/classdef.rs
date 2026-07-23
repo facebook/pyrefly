@@ -10,8 +10,8 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
-use pyrefly_types::types::Union;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
@@ -21,15 +21,18 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
+use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::binding::binding::ClassDefData;
 use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyClassBaseType;
+use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::error::collector::ErrorCollector;
 use crate::types::callable::Param;
 use crate::types::callable::Required;
@@ -51,7 +54,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SelfType(ty_cls) | Type::ClassType(ty_cls) => {
                 self.has_superclass(ty_cls.class_object(), class)
             }
-            Type::Union(box Union { members: xs, .. }) => xs
+            Type::Union(f) => f
+                .members
                 .iter()
                 .all(|x| self.is_compatible_constructor_return(x, class)),
             _ => false,
@@ -63,6 +67,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def_index: ClassDefIndex,
         x: &ClassDefData,
         parent: &NestingContext,
+        is_protocol: bool,
         tparams_require_binding: bool,
         errors: &ErrorCollector,
     ) -> Class {
@@ -78,6 +83,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             parent.dupe(),
             self.module().dupe(),
             precomputed_tparams,
+            is_protocol,
         )
     }
 
@@ -93,6 +99,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             parent.dupe(),
             self.module().dupe(),
             Some(Arc::new(TParams::default())),
+            false,
         )
     }
 
@@ -101,9 +108,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .unwrap_or_else(|| Arc::new(ClassMetadata::recursive()))
     }
 
+    pub fn shaped_array_shape_for_class(&self, cls: &Class) -> Option<Quantified> {
+        // Shaped-array registration is explicit per class, via the `@shaped_array` decorator.
+        self.get_metadata_for_class(cls)
+            .shaped_array_shape()
+            .cloned()
+    }
+
+    pub fn shaped_array_shape_for_class_type(&self, cls: &ClassType) -> Option<Quantified> {
+        self.shaped_array_shape_for_class(cls.class_object())
+    }
+
     pub fn get_abstract_members_for_class(&self, cls: &Class) -> Arc<AbstractClassMembers> {
         self.get_from_class(cls, &KeyAbstractClassCheck(cls.index()))
             .unwrap_or_else(|| Arc::new(AbstractClassMembers::recursive()))
+    }
+
+    pub fn get_subscript_symmetry_for_class(&self, cls: &Class) -> Arc<bool> {
+        self.get_from_class(cls, &KeyClassSubscriptSymmetry(cls.index()))
+            .unwrap_or_else(|| Arc::new(true))
     }
 
     pub fn get_base_types_for_class(&self, cls: &Class) -> Arc<ClassBases> {
@@ -114,6 +137,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_mro_for_class(&self, cls: &Class) -> Arc<ClassMro> {
         self.get_from_class(cls, &KeyClassMro(cls.index()))
             .unwrap_or_else(|| Arc::new(ClassMro::recursive()))
+    }
+
+    pub fn get_disjoint_base_for_class(&self, cls: &Class) -> Arc<ClassDisjointBase> {
+        self.get_from_class(cls, &KeyClassDisjointBase(cls.index()))
+            .unwrap_or_else(|| Arc::new(ClassDisjointBase::recursive()))
     }
 
     pub fn get_class_field_map(&self, cls: &Class) -> SmallMap<Name, Arc<ClassField>> {
@@ -145,22 +173,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Note that for the purposes of type narrowing, we always unwrap Type::Type(Type::ClassType),
             // but it's not always a valid argument to isinstance/issubclass. expr_infer separately checks
             // whether the argument is valid.
-            Type::Type(box ty @ (Type::ClassType(_) | Type::Quantified(_) | Type::SelfType(_))) => {
-                Some((TParams::empty(), ty.clone()))
+            Type::Type(f)
+                if matches!(
+                    &**f,
+                    Type::ClassType(_) | Type::Quantified(_) | Type::SelfType(_)
+                ) =>
+            {
+                Some((TParams::empty(), (**f).clone()))
             }
-            Type::Type(box Type::Tuple(_)) => Some(self.instantiate_unbounded_tuple()),
-            Type::Type(box Type::Any(a)) => Some((TParams::empty(), a.propagate())),
+            Type::Type(f) if matches!(&**f, Type::Tuple(_)) => {
+                Some(self.instantiate_unbounded_tuple())
+            }
+            Type::Type(f) if let Type::Any(a) = &**f => Some((TParams::empty(), a.propagate())),
             // type[type[Any]] is what we get when `type` appears in an annotation position.
             // We treat it as type[Any].
-            Type::Type(box ty @ Type::Type(box Type::Any(_))) => {
-                Some((TParams::empty(), ty.clone()))
+            Type::Type(f) if matches!(&**f, Type::Type(inner) if inner.is_any()) => {
+                Some((TParams::empty(), (**f).clone()))
             }
-            Type::Type(box Type::SpecialForm(SpecialForm::Callable)) => Some((
+            Type::Type(f) if matches!(&**f, Type::SpecialForm(SpecialForm::Callable)) => Some((
                 TParams::empty(),
                 self.heap
                     .mk_callable_from(Callable::ellipsis(self.heap.mk_any_implicit())),
             )),
-            Type::None | Type::Type(box Type::None) => {
+            Type::None => Some((TParams::empty(), self.heap.mk_none())),
+            Type::Type(f) if matches!(&**f, Type::None) => {
                 Some((TParams::empty(), self.heap.mk_none()))
             }
             // Instances of `type` subclasses are class objects too, so metaclass-narrowed

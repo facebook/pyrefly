@@ -13,6 +13,18 @@ $ mkdir $TMPDIR/test && echo "" > $TMPDIR/test/empty.py && \
 [0]
 ```
 
+## Coverage commands also warn on a non-existent search-path/site-package-path
+
+```scrut {output_stream: stderr}
+$ mkdir $TMPDIR/covwarn && echo "def f(): pass" > $TMPDIR/covwarn/f.py && \
+> echo -e "project_includes = [\"$TMPDIR/covwarn/f.py\"]\nsite_package_path = [\"$TMPDIR/covwarn/abcd\"]\nsearch_path = [\"$TMPDIR/covwarn/efgh\"]" > $TMPDIR/covwarn/pyrefly.toml && \
+> $PYREFLY coverage report -c $TMPDIR/covwarn/pyrefly.toml > /dev/null
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ WARN */pyrefly.toml: Invalid site-package-path: */abcd` does not exist (glob)
+ WARN */pyrefly.toml: Invalid search-path: */efgh` does not exist (glob)
+[0]
+```
+
 ## Dump config
 
 ```scrut
@@ -50,7 +62,7 @@ $ echo "x: str = 0" > $TMPDIR/oops.py && echo "errors = { bad-assignment = false
 
 ```scrut {output_stream: stderr}
 $ mkdir $TMPDIR/bad_config && touch $TMPDIR/bad_config/empty.py && echo "oops oops" > $TMPDIR/bad_config/pyrefly.toml && cd $TMPDIR/bad_config && $PYREFLY check
- WARN Config at `*/pyrefly.toml` failed to parse, checking with default configuration (glob)
+ WARN Config at `*/pyrefly.toml` failed to parse, checking with auto configuration (glob)
 ERROR */pyrefly.toml: TOML parse error* (glob)
   |
 1 | oops oops
@@ -83,7 +95,7 @@ Fatal configuration error
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check -c $TMPDIR/bad_config/pyrefly.toml
- WARN Config at `*/pyrefly.toml` failed to parse, checking with default configuration (glob)
+ WARN Config at `*/pyrefly.toml` failed to parse, checking with auto configuration (glob)
 ERROR */pyrefly.toml: TOML parse error* (glob)
   |
 1 | oops oops
@@ -214,4 +226,16 @@ $ mkdir -p $TMPDIR/.hidden_workspace/project && \
 > $PYREFLY check --output-format=min-text $TMPDIR/.hidden_workspace/project
 ERROR *main.py* ?bad-assignment? (glob)
 [1]
+```
+
+## We can also find hidden pyrefly configs (.pyrefly.toml)
+
+
+```scrut {output_stream: stdout}
+$ mkdir $TMPDIR/hidden_config && touch $TMPDIR/hidden_config/.pyrefly.toml && \
+> touch $TMPDIR/hidden_config/main.py && \
+> $PYREFLY dump-config $TMPDIR/hidden_config/main.py
+Configuration at `*/hidden_config/.pyrefly.toml` (glob)
+* (glob+)
+[0]
 ```

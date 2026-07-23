@@ -21,6 +21,7 @@ use starlark_map::Hashed;
 
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AssignToAttribute;
+use crate::binding::binding::AttrsSpecifier;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTypeAlias;
@@ -31,6 +32,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::MethodSelfKind;
+use crate::binding::binding::MultiTargetReceiver;
 use crate::binding::binding::NameAssign;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::TypeAliasBinding;
@@ -43,6 +45,7 @@ use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
+use crate::types::class::AttrsFieldSpecifierKind;
 
 impl<'a> BindingsBuilder<'a> {
     /// Bind one level of an unpacked LHS target, for example in `x, (y, [*z]), q = foo`
@@ -103,6 +106,7 @@ impl<'a> BindingsBuilder<'a> {
                             unpack_idx,
                             range,
                             UnpackedPosition::Slice(i, j),
+                            None,
                         )
                     };
                     self.bind_target_no_expr(&mut e.value, &make_nested_binding);
@@ -115,8 +119,9 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         UnpackedPosition::Index(i)
                     };
-                    let make_nested_binding =
-                        |ann| Binding::UnpackedValue(ann, unpack_idx, range, unpacked_position);
+                    let make_nested_binding = |ann| {
+                        Binding::UnpackedValue(ann, unpack_idx, range, unpacked_position, None)
+                    };
                     self.bind_target_no_expr(e, &make_nested_binding);
                 }
             }
@@ -138,11 +143,15 @@ impl<'a> BindingsBuilder<'a> {
     /// as defined downstream.
     fn narrow_if_name_is_defined(&mut self, identifier: Identifier, narrowed_idx: Idx<Key>) {
         let name = Hashed::new(&identifier.id);
-        let name_is_defined = !matches!(
-            self.scopes
-                .look_up_name_for_read(name, &Usage::Narrowing(None)),
-            NameReadInfo::NotFound,
-        );
+        let usage = Usage::NonPinningValue(None);
+        let name_is_defined = match self.look_up_name_for_read(name, &usage) {
+            NameReadInfo::Flow { .. } | NameReadInfo::Anywhere { .. } => true,
+            // This helper only runs after attribute/subscript assignment targets. If the base is an
+            // implicit builtin, binding the assigned expression has already materialized it. A still
+            // unmaterialized builtin here is indistinguishable from any other name that is absent
+            // from local flow, so leave it un-narrowed.
+            NameReadInfo::ImplicitBuiltin { .. } | NameReadInfo::NotFound => false,
+        };
         if name_is_defined {
             self.scopes.narrow_in_current_flow(name, narrowed_idx);
         }
@@ -337,9 +346,16 @@ impl<'a> BindingsBuilder<'a> {
                 //
                 // We ignore such names for first-usage-tracking purposes, since
                 // we are not going to analyze the code at all.
-                self.ensure_expr(illegal_target, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    illegal_target,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
                 // Make sure the RHS is properly bound, so that we can report errors there.
-                let mut user = self.declare_current_idx(Key::Anon(illegal_target.range()));
+                // `ensure_expr` may itself create a `Key::Anon` for this range (for example,
+                // functional NamedTuple syntax recovered as an invalid `for` target).
+                let mut user = self.declare_current_idx(Key::InvalidTarget(illegal_target.range()));
                 if ensure_assigned && let Some(assigned) = &mut assigned {
                     self.ensure_expr(assigned, user.usage());
                 }
@@ -387,6 +403,36 @@ impl<'a> BindingsBuilder<'a> {
         match targets {
             [] => {}
             [target] => {
+                // attrs collects one field per binding site, so `x, y = attr.ib(), field()` binds
+                // each name to its own specifier rather than opaque unpacking that drops the fields.
+                // Ensure the whole RHS once before binding any name (like `bind_unpacking`) so a later
+                // specifier mentioning an earlier name (`x, y = attr.ib(), x`) sees the outer binding.
+                if self.scopes.in_class_body()
+                    && self
+                        .attrs_unpacked_specifier_elements(target, value)
+                        .is_some()
+                {
+                    let mut rhs = self.declare_current_idx(Key::Anon(value.range()));
+                    self.ensure_expr(value, rhs.usage());
+                    self.insert_binding_current(rhs, Binding::Expr(None, Box::new(value.clone())));
+                    let (target_elements, value_elements) = self
+                        .attrs_unpacked_specifier_elements(target, value)
+                        .expect("structure is unchanged by ensure_expr");
+                    for (t, v) in target_elements.iter().zip(value_elements) {
+                        let Expr::Name(name) = t else {
+                            unreachable!(
+                                "attrs_unpacked_specifier_elements guarantees name targets"
+                            )
+                        };
+                        self.bind_single_name_assign(
+                            &Ast::expr_name_identifier(name.clone()),
+                            Box::new(v.clone()),
+                            None,
+                            false,
+                        );
+                    }
+                    return;
+                }
                 self.bind_target_impl(
                     target,
                     Some(value),
@@ -395,20 +441,56 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
             _ => {
+                // Bind the RHS once; every target shares it via `MultiTargetAssign`.
                 let mut user = self.declare_current_idx(Key::Anon(value.range()));
                 self.ensure_expr(value, user.usage());
                 let rhs_idx =
                     self.insert_binding_current(user, Binding::Expr(None, Box::new(value.clone())));
-                for target in targets.iter_mut() {
-                    let range = target.range();
-                    self.bind_target_impl(
-                        target,
-                        None,
-                        &|_, ann| {
-                            ExprOrBinding::Binding(Binding::MultiTargetAssign(ann, rhs_idx, range))
-                        },
-                        false,
-                    );
+                // A specifier chained to several names (`p = q = attr.ib()`) declares one field per
+                // name, matching runtime attrs, so tag each name a class field carrying the specifier.
+                if self.scopes.in_class_body()
+                    && self.is_attrs_specifier_call(value)
+                    && targets.iter().all(|t| matches!(t, Expr::Name(_)))
+                {
+                    self.ensure_attrs_specifier_type_forward_ref(value);
+                    for target in targets.iter_mut() {
+                        let Expr::Name(name) = target else {
+                            unreachable!("guarded above: every chained specifier target is a name")
+                        };
+                        let user = self
+                            .declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
+                        let ann = self.bind_current(
+                            &name.id,
+                            &user,
+                            FlowStyle::ClassField {
+                                initial_value: Some(value.clone()),
+                            },
+                        );
+                        // These names flow through the generic `MultiTargetAssign`, not the
+                        // attrs-aware `NameAssign { attrs_field_specifier }` of the single-name
+                        // path, so a chained specifier skips its converter-aware
+                        // default-vs-annotation check (a `converter=` default can be wrongly
+                        // flagged) and `@p.default` sibling attribution (`q` may look
+                        // defaultless).
+                        self.insert_binding_current(
+                            user,
+                            Binding::MultiTargetAssign(ann, rhs_idx, name.range(), None),
+                        );
+                    }
+                } else {
+                    for target in targets.iter_mut() {
+                        let range = target.range();
+                        self.bind_target_impl(
+                            target,
+                            None,
+                            &|_, ann| {
+                                ExprOrBinding::Binding(Binding::MultiTargetAssign(
+                                    ann, rhs_idx, range, None,
+                                ))
+                            },
+                            false,
+                        );
+                    }
                 }
             }
         }
@@ -418,7 +500,11 @@ impl<'a> BindingsBuilder<'a> {
     /// - Ensure the expression, if there is one we are supposed to ensure
     /// - Update the bindings table and flow info to note that:
     ///   - the name is now bound to a `Key::Definition` + the computed binding
-    ///   - the flow style is `FlowStyle::Other`
+    ///   - the flow style is `FlowStyle::Other`, unless this is a
+    ///     receiver-constrained class rebind (in which case the non-pristine
+    ///     `FlowStyle::ClassDef` is used and the binding is augmented with a
+    ///     `MultiTargetReceiver` so the solver applies the same receiver
+    ///     check as a single-target rebind)
     fn bind_target_name(
         &mut self,
         name: &ExprName,
@@ -430,7 +516,12 @@ impl<'a> BindingsBuilder<'a> {
             // Parser error recovery can synthesize empty identifiers. Skip creating a definition
             // binding, but still analyze any assigned value so we surface downstream errors.
             if ensure_assigned && let Some(assigned) = &mut assigned {
-                self.ensure_expr(assigned, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    assigned,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
             }
             return;
         }
@@ -439,6 +530,21 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
+        // Receiver detection mirrors `bind_single_name_assign`: a same-scope
+        // rebind of a name originally bound to a class behaves as if the
+        // original `class` declaration were an implicit annotation. We restrict
+        // to non-class-body scopes (class-body assignments stay class-field
+        // shaped). For the targets that flow through this helper, only
+        // `MultiTargetAssign` and `UnpackedValue` participate — the for-loop,
+        // with-stmt, and comprehension forms construct other binding kinds
+        // and intentionally retain `FlowStyle::Other`.
+        let receiver_idx = if !self.scopes.in_class_body() {
+            self.scopes
+                .current_flow_style(&name.id)
+                .and_then(|s| s.canonical_class_receiver_idx())
+        } else {
+            None
+        };
         // If the name was annotation-only (`x: T`, `FlowStyle::Uninitialized`) before this
         // assignment, it is the initialization rather than a reassignment — record it so
         // the solver can suppress the "Final must be initialized" error.
@@ -446,12 +552,61 @@ impl<'a> BindingsBuilder<'a> {
             .scopes
             .current_flow_style(&name.id)
             .is_some_and(|s| matches!(s, FlowStyle::Uninitialized));
-        let ann = self.bind_current(&name.id, &user, FlowStyle::Other);
+        let style = match receiver_idx {
+            // `pristine: false` because the visible binding is this
+            // multi-target / unpacked assignment, not the original class
+            // definition. Sticky across both compatible and incompatible
+            // writes so future same-scope rebinds keep checking against the
+            // original receiver.
+            Some(idx) => FlowStyle::ClassDef {
+                class_idx: idx,
+                pristine: false,
+            },
+            None => FlowStyle::Other,
+        };
+        let ann = self.bind_current(&name.id, &user, style);
         if was_uninitialized && let Some(ann_idx) = ann {
             self.insert_subsequently_initialized(ann_idx);
         }
         let binding = make_binding(assigned.as_deref(), ann);
+        let binding = match (receiver_idx, binding) {
+            (Some(idx), Binding::MultiTargetAssign(a, rhs, range, _)) => {
+                let receiver = Box::new(MultiTargetReceiver {
+                    name: name.id.clone(),
+                    idx,
+                });
+                Binding::MultiTargetAssign(a, rhs, range, Some(receiver))
+            }
+            (Some(idx), Binding::UnpackedValue(a, src, range, pos, _)) => {
+                let receiver = Box::new(MultiTargetReceiver {
+                    name: name.id.clone(),
+                    idx,
+                });
+                Binding::UnpackedValue(a, src, range, pos, Some(receiver))
+            }
+            (_, binding) => binding,
+        };
         self.insert_binding_current(user, binding);
+    }
+
+    /// A string `type=` on a legacy `attr.ib` specifier (`attr.ib(type="D")`) is a forward
+    /// reference; bind it as a type so the string's names resolve. Call once per specifier (a
+    /// chained `p = q = attr.ib(type="D")` shares one specifier, so binding it per-name would
+    /// double-insert the string's type binding).
+    fn ensure_attrs_specifier_type_forward_ref(&mut self, value: &mut Expr) {
+        if self.scopes.in_class_body()
+            && let Expr::Call(call) = value
+            && self.attrs_field_specifier_kind(&call.func) == Some(AttrsFieldSpecifierKind::Attrib)
+        {
+            for kw in call.arguments.keywords.iter_mut() {
+                if kw.arg.as_ref().is_some_and(|id| id.as_str() == "type")
+                    && let Expr::StringLiteral(lit) = &kw.value
+                    && lit.as_single_part_string().is_some()
+                {
+                    self.ensure_type(&mut kw.value, &mut None);
+                }
+            }
+        }
     }
 
     /// Handle single assignment: this is closely related to `bind_target_name`, but
@@ -470,11 +625,17 @@ impl<'a> BindingsBuilder<'a> {
     ///
     /// The pinned definition is the one that goes into scopes, and normal name lookups
     /// will see that - only a first use binding may see the raw, unpinned result.
+    ///
+    /// `ensure_assigned` selects who resolves the RHS `value`. When `true`, this function
+    /// resolves it. When `false`, the caller has already resolved the whole RHS once (e.g.
+    /// parallel/tuple unpacking, which evaluates it before binding any name), so this call
+    /// leaves `value` untouched.
     pub fn bind_single_name_assign(
         &mut self,
         name: &Identifier,
         mut value: Box<Expr>,
         direct_ann: Option<(&Expr, Idx<KeyAnnotation>)>,
+        ensure_assigned: bool,
     ) -> Option<Idx<KeyAnnotation>> {
         if Ast::is_synthesized_empty_identifier(name) {
             let range = value.range();
@@ -503,7 +664,8 @@ impl<'a> BindingsBuilder<'a> {
         let has_type_alias_qualifier = direct_ann
             .is_some_and(|(e, _)| self.as_special_export(e) == Some(SpecialExport::TypeAlias));
         let is_definitely_type_alias = receiver_idx.is_none()
-            && (has_type_alias_qualifier || self.is_definitely_type_alias_rhs(value.as_ref()));
+            && (has_type_alias_qualifier
+                || (direct_ann.is_none() && self.is_definitely_type_alias_rhs(value.as_ref())));
         let has_typeform_annotation = direct_ann.is_some_and(|(e, _)| {
             self.as_special_export(e) == Some(SpecialExport::TypeForm)
                 || matches!(e, Expr::Subscript(x) if self.as_special_export(&x.value) == Some(SpecialExport::TypeForm))
@@ -515,17 +677,26 @@ impl<'a> BindingsBuilder<'a> {
             !is_definitely_type_alias && receiver_idx.is_none() && self.infer_with_first_use();
         let scope_idx = current.idx();
         let mut tparams = None;
-        if is_definitely_type_alias {
-            let mut legacy = Some(LegacyTParamCollector::new(false));
-            self.ensure_type_with_usage(&mut value, &mut legacy, &mut Usage::TypeAliasRhs);
-            if let Some(collector) = legacy {
-                tparams = Some(collector.lookup_keys().into_boxed_slice());
+        if ensure_assigned {
+            if is_definitely_type_alias {
+                let mut legacy = Some(LegacyTParamCollector::new(false));
+                self.ensure_type_with_usage(&mut value, &mut legacy, &mut Usage::TypeAliasRhs);
+                if let Some(collector) = legacy {
+                    tparams = Some(collector.lookup_keys().into_boxed_slice());
+                }
+            } else if has_typeform_annotation && value.is_string_literal_expr() {
+                self.ensure_type_with_usage(
+                    &mut value,
+                    &mut None,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
+            } else {
+                self.ensure_expr(&mut value, current.usage());
             }
-        } else if has_typeform_annotation && value.is_string_literal_expr() {
-            self.ensure_type_with_usage(&mut value, &mut None, &mut Usage::StaticTypeInformation);
-        } else {
-            self.ensure_expr(&mut value, current.usage());
         }
+        self.ensure_attrs_specifier_type_forward_ref(value.as_mut());
         let style = if self.scopes.in_class_body() {
             FlowStyle::ClassField {
                 initial_value: Some((*value).clone()),
@@ -563,6 +734,19 @@ impl<'a> BindingsBuilder<'a> {
         // Compute def_idx before building the binding, since the NameAssign needs
         // its own idx for partial type inference support.
         let def_idx = current.into_idx();
+        // Only an in-class-body `field()`/`attr.ib()` is an attrs field specifier; gating on the
+        // class body keeps this off the hot path for ordinary assignments.
+        let attrs_field_specifier = if let Expr::Call(call) = value.as_ref()
+            && let Some(class_def_index) = self.scopes.current_class_def_index()
+            && let Some(kind) = self.attrs_field_specifier_kind(&call.func)
+        {
+            Some(AttrsSpecifier {
+                kind,
+                class_def_index,
+            })
+        } else {
+            None
+        };
         let binding = if is_definitely_type_alias {
             let range = value.range();
             let key_type_alias = KeyTypeAlias(self.type_alias_index());
@@ -587,9 +771,11 @@ impl<'a> BindingsBuilder<'a> {
                 expr: value,
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
+                is_class_body_assignment: self.scopes.in_class_body(),
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
                 receiver_idx,
+                attrs_field_specifier,
             }))
         };
         self.insert_binding_idx(def_idx, binding);

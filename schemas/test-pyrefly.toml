@@ -28,7 +28,6 @@ untyped-def-behavior = "check-and-infer-return-type"
 infer-with-first-use = true
 ignore-errors-in-generated-code = false
 disable-type-errors-in-ide = false
-tensor-shapes = false
 strict-callable-subtyping = false
 recursion-depth-limit = 100
 recursion-overflow-handler = "break-with-placeholder"
@@ -53,6 +52,11 @@ bad-assignment = false
 bad-return = true
 missing-import = "warn"
 invalid-argument = "error"
+
+# Coverage command include/exclude overrides
+[coverage]
+includes = ["src/**"]
+excludes = ["src/vendored/**"]
 
 # SubConfig example 1: Test files
 [[sub-config]]

@@ -1,7 +1,7 @@
 ---
-title: Report
+title: Coverage
 
-description: Measure type coverage in your Python codebase with the Pyrefly report command.
+description: Measure and enforce type coverage in your Python codebase with Pyrefly.
 ---
 
 {/*
@@ -11,45 +11,87 @@ description: Measure type coverage in your Python codebase with the Pyrefly repo
  * LICENSE file in the root directory of this source tree.
  */}
 
-# Pyrefly Report
+# Pyrefly Coverage
 
-Understanding how much of your codebase is annotated with types can help you track progress toward full type coverage. The `pyrefly report` command produces a machine-readable JSON report with information about functions, classes, and error suppressions in your code.
+`pyrefly coverage` measures how much of your code is annotated with types. It has two subcommands:
+
+- [`pyrefly coverage check`](#checking-coverage-against-a-threshold) fails when coverage is below
+  a threshold, useful as a CI gate.
+- [`pyrefly coverage report`](#generating-a-json-report) emits a JSON report with per-module
+  statistics.
 
 :::warning Experimental
-This feature is experimental. The output format and behavior may change in future releases without notice.
+The output format and behavior may change in future releases without notice.
 :::
 
-## Usage
+## How coverage is measured
 
-Run `pyrefly report` on a file or directory:
+Coverage is counted over _typables_: function return types, function parameters, module-level
+variables, and class attributes. Each typable is either **typed** (annotated, no `Any` in the
+resolved type), **any** (annotated, but the resolved type contains `Any`), or **untyped** (no
+annotation).
+
+- **Coverage** is the percentage of typables that are annotated; `Any` counts as covered.
+- **Strict coverage** is the percentage of typables that are typed; `Any` doesn't count.
+
+Only public symbols count: names without a leading underscore, plus anything in `__all__`.
+`self`/`cls` are not typable, overloads are merged, and `.py` files are skipped when their `.pyi`
+stub is also analyzed (`--prefer-stubs=false` disables this). With `--public-only`, only symbols
+reachable from public modules via re-export chains count: the library's public API.
+
+## Checking coverage against a threshold
+
+```sh
+pyrefly coverage check robot/ --fail-under 60
+```
+
+On success it prints a one-line summary and exits 0:
 
 ```
-pyrefly report path/to/file.py
-pyrefly report path/to/directory/
+ INFO type coverage 66.67% (4 of 6 typable)
 ```
 
-The command outputs a JSON object with two top-level keys: `files` (per-file reports) and `summary` (aggregate statistics). For each file, the report includes:
+Otherwise it exits non-zero and reports every offending symbol in the same style as
+`pyrefly check`, as `coverage-missing` (no annotations at all) or `coverage-partial` (only some):
 
-- **Line count** — the total number of lines in the file.
-- **Functions** — every function and method, including its fully-qualified name, parameter annotations, and return annotation.
-- **Classes** — every class, along with a list of incompletely-annotated attributes (including those inherited from base classes).
-- **Suppressions** — every `# pyrefly: ignore[...]` comment, with the suppressed error codes.
-- **Annotation completeness** — the percentage of functions that are fully annotated (0.0–100.0).
-- **Type completeness** — the percentage of fully-annotated functions whose resolved types contain no `Any` (0.0–100.0).
+```
+ WARN `walk` is not fully typed [coverage-partial]
+ --> robot/legs.py:1:1
+  |
+1 | / def walk(speed, direction: str) -> None:
+2 | |     print(f"walking {speed} {direction}")
+  | |_________________________________________-
+  |
+ WARN `stop` is untyped [coverage-missing]
+ --> robot/legs.py:5:1
+  |
+5 | / def stop():
+6 | |     print("stopping")
+  | |_____________________-
+  |
+ERROR type coverage 66.67% (4 of 6 typable) is below the 100.00% threshold
+```
 
-Each function entry also includes `is_type_known` (whether the function's resolved types all contain no `Any`) and `is_return_type_known`. Each parameter includes `is_type_known`.
+With `--strict`, annotations that resolve to `Any` count as untyped. The findings format is
+configurable with `--output-format`. See `pyrefly coverage check --help` for all flags.
 
-The `summary` object provides aggregate statistics across all files:
+## Generating a JSON report
 
-- **total_files** — number of files analyzed.
-- **total_functions** — total functions across all files.
-- **fully_annotated_functions** — number of functions with complete annotations.
-- **type_complete_functions** — number of fully-annotated functions whose resolved types contain no `Any`.
-- **aggregate_annotation_completeness** — overall annotation completeness percentage, weighted by function count (not averaged per file).
-- **aggregate_type_completeness** — percentage of fully-annotated functions that are type-complete (denominator is `fully_annotated_functions`, not `total_functions`).
+```sh
+pyrefly coverage report path/to/directory/ > coverage.json
+```
 
-A function is considered **fully annotated** if it has a return type annotation and all parameters have type annotations. The first parameter is exempt if it is named `self` or `cls`.
+The report contains a `"major.minor"` `schema_version`, a `summary`, and one entry per module in
+`module_reports`, with:
 
-A function is considered **type-complete** only if it is fully annotated AND all of its resolved types (return type and parameter types) contain no `Any`. Type-complete functions are always a subset of fully-annotated functions. Tracking both metrics helps you first achieve full annotation coverage, then progressively replace `Any` with more precise types.
+- per-symbol typed/any/untyped counts and locations (`symbol_reports`)
+- the module's public names (`names`)
+- error-suppression comments (`type_ignores`)
+- typable totals, `coverage` and `strict_coverage` percentages, and counts of functions, methods,
+  parameters, classes, attributes, and properties
 
-You can pipe the output to other tools (e.g. `jq`) or ingest it into dashboards to track annotation coverage over time.
+See `pyrefly coverage report --help` for all flags. The output is easy to consume with e.g. `jq`:
+
+```sh
+pyrefly coverage report path/to/directory/ | jq .summary.strict_coverage
+```

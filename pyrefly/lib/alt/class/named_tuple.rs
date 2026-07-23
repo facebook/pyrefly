@@ -16,7 +16,6 @@ use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -28,11 +27,36 @@ use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
 
+const NAMED_TUPLE_REPLACE: Name = Name::new_static("_replace");
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_named_tuple_elements(&self, cls: &Class, errors: &ErrorCollector) -> SmallSet<Name> {
         let Some(class_fields) = self.get_class_fields(cls) else {
             return SmallSet::new();
         };
+        // Names NamedTuple reserves for its own machinery. Overriding any of them in
+        // the class body is a runtime error
+        const RESERVED: &[&str] = &[
+            "__getnewargs__",
+            "_asdict",
+            "_field_defaults",
+            "_fields",
+            "_make",
+            "_replace",
+            "_source",
+        ];
+        for name in class_fields.class_body_fields() {
+            if RESERVED.contains(&name.as_str())
+                && let Some(range) = class_fields.field_decl_range(name)
+            {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadClassDefinition,
+                    format!("Cannot override NamedTuple reserved attribute `{name}`"),
+                );
+            }
+        }
         let mut elements = Vec::with_capacity(class_fields.len());
         for name in class_fields.names() {
             if !class_fields.is_field_annotated(name) {
@@ -50,7 +74,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     *range,
-                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    ErrorKind::BadClassDefinition,
                     format!(
                         "NamedTuple field '{name}' without a default may not follow NamedTuple field with a default"
                     ),
@@ -94,6 +118,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Param::Pos(name.clone(), ty, required)
             })
             .collect()
+    }
+
+    /// Declared type of a namedtuple element, or implicit `Any` when the member
+    /// can't be resolved (e.g. during error recovery on malformed input).
+    fn named_tuple_member_type(&self, cls: &Class, name: &Name) -> Type {
+        match self.get_non_synthesized_class_member(cls, name) {
+            None => self.heap.mk_any_implicit(),
+            Some(c) => c.as_named_tuple_type(),
+        }
     }
 
     /// Synthesize `__new__` for a namedtuple. When `has_dynamic_fields` is true,
@@ -146,6 +179,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ClassSynthesizedField::new(ty)
     }
 
+    fn get_named_tuple_replace(
+        &self,
+        cls: &Class,
+        elements: &SmallSet<Name>,
+        has_dynamic_fields: bool,
+    ) -> ClassSynthesizedField {
+        let mut params = vec![self.class_self_param(cls, true)];
+        if has_dynamic_fields {
+            params.push(Param::Kwargs(None, self.heap.mk_any_implicit()));
+        } else {
+            params.extend(elements.iter().map(|name| {
+                Param::KwOnly(
+                    name.clone(),
+                    self.named_tuple_member_type(cls, name),
+                    Required::Optional(None),
+                )
+            }));
+        }
+        // `_replace` returns `type(self)(...)` at runtime, so the return type is `Self`.
+        let ty = self.synthesized_method(
+            cls,
+            NAMED_TUPLE_REPLACE,
+            params,
+            self.heap.mk_self_type(self.as_class_type_unchecked(cls)),
+        );
+        ClassSynthesizedField::new(ty)
+    }
+
     fn get_named_tuple_iter(
         &self,
         cls: &Class,
@@ -154,21 +215,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let params = vec![self.class_self_param(cls, false)];
         let element_types: Vec<Type> = elements
             .iter()
-            .map(
-                |name| match self.get_non_synthesized_class_member(cls, name) {
-                    None => self.heap.mk_any_implicit(),
-                    Some(c) => c.as_named_tuple_type(),
-                },
-            )
+            .map(|name| self.named_tuple_member_type(cls, name))
             .collect();
-        let ty = self.heap.mk_function(Function {
-            signature: Callable::list(
-                ParamList::new(params),
-                self.heap
-                    .mk_class_type(self.stdlib.iterable(self.unions(element_types))),
-            ),
-            metadata: FuncMetadata::method(cls, dunder::ITER),
-        });
+        let ty = self.synthesized_method(
+            cls,
+            dunder::ITER,
+            params,
+            self.heap
+                .mk_class_type(self.stdlib.iterable(self.unions(element_types))),
+        );
         ClassSynthesizedField::new(ty)
     }
 
@@ -191,6 +246,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(ClassSynthesizedFields::new(smallmap! {
             dunder::NEW => self.get_named_tuple_new(cls, &named_tuple.elements, named_tuple.has_dynamic_fields),
             dunder::INIT => self.get_named_tuple_init(cls),
+            NAMED_TUPLE_REPLACE => self.get_named_tuple_replace(cls, &named_tuple.elements, named_tuple.has_dynamic_fields),
             dunder::MATCH_ARGS => self.get_named_tuple_match_args(&named_tuple.elements),
             dunder::ITER => self.get_named_tuple_iter(cls, &named_tuple.elements)
         }))

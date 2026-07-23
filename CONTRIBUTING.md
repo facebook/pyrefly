@@ -20,7 +20,20 @@ When looking for an issue to pick up, consider the following things:
 4. the issue still reproduces in the sandbox, or locally on a build from the main branch
 5. the issue is part of an upcoming milestone - these are the highest priority issues to focus on
 6. the issue does not have the "needs discussion" tag - typically issues with that tag don't have a clear solution that everyone agrees on yet so they are not "shovel ready", but feel free to participate in the discussion!
-7. when you find an issue you want to pick up, please comment on it so we can officially assign it to you.
+7. when you find an issue you want to pick up, comment `#claim` on it to self-assign (see [Repository automation](#repository-automation) below).
+
+## Repository automation
+
+GitHub bots help manage issues and pull requests.
+
+### Claiming issues: `#claim` / `#unclaim`
+
+To pick up an issue, comment `#claim` on it and the bot will assign it to you. When you're done — or if you decide not to work on it after all — comment `#unclaim` to release it so someone else can take over.
+
+- `#claim` only works on **unassigned** issues. If the issue is already claimed by someone else, the bot leaves the existing assignee in place and tells you to coordinate with them — it won't reassign the issue to you. If it's already assigned to you, it just confirms that.
+- `#unclaim` only removes *your own* assignment, and only if you're currently assigned.
+- Both commands are case-insensitive and can appear anywhere in a comment (e.g. "I'd like to work on this, #claim").
+- If the bot can't assign you automatically (GitHub only allows assigning users with repository access), it leaves a comment so a maintainer can assign you manually.
 
 ## Developing Pyrefly
 
@@ -76,7 +89,7 @@ the command line.
 ## Coding conventions
 
 We follow the
-[Buck2 coding conventions](https://github.com/facebook/buck2/blob/main/HACKING.md#coding-conventions),
+[Buck2 coding convention](https://github.com/facebook/buck2/blob/main/docs/developers/basics.md),
 with the caveat that we use our internal error framework for errors reported by
 the type checker.
 
@@ -152,16 +165,21 @@ and inspect variables. Many code editors,
 for breakpoints and variable watch. You can also use the command line debuggers
 like [lldb](https://docs.rs/lldb/latest/lldb/#installation):
 
+`dev` builds carry only line tables to keep `target/` small. When you need to step
+through code in a debugger, build with the `dbg` profile (`cargo build --profile dbg`)
+for full debug info.
+
 ## Making a Pull Request
 
 Contributing a pull request (PR) is the main way to propose changes to Pyrefly. To ensure your PR is reviewed efficiently and has the best chance of being accepted, please make sure you have done the following:
 
-[ ] Updated or added new tests to cover your changes (see testing section for details)
-[] Made sure all continuous integration (CI) checks pass before requesting a review. Fix any errors or warnings, or ask us about any CI results you don't understand.
-[ ] Written a clear description: Provide a concise summary of what your PR does. Explain the motivation, the approach, and any important details.
-[] If your PR addresses a specific issue, reference the issue(s) in the description using the special GitHub keywords (e.g., “Fixes #123”). This will automatically link your PR to the relevant issue and helps us keep track of things
-[ ] Try to limit your PR to a single purpose or issue. Avoid mixing unrelated changes, as this makes review harder.
-[ ] Clean up any temporary debugging statements or code before submitting.
+- [ ] **IMPORTANT** [Comment on the issue](https://github.com/facebook/pyrefly/issues) so we can assign it to you
+- [ ] Updated or added new tests to cover your changes (see testing section for details)
+- [ ] Made sure all continuous integration (CI) checks pass before requesting a review. Fix any errors or warnings, or ask us about any CI results you don't understand.
+- [ ] Written a clear description: Provide a concise summary of what your PR does. Explain the motivation, the approach, and any important details.
+- [ ] If your PR addresses a specific issue, reference the issue(s) in the description using the special GitHub keywords (e.g., “Fixes #123”). This will automatically link your PR to the relevant issue and helps us keep track of things
+- [ ] Try to limit your PR to a single purpose or issue. Avoid mixing unrelated changes, as this makes review harder.
+- [ ] Clean up any temporary debugging statements or code before submitting.
 
 We aim to respond to all PRs in a timely manner, but please note we prioritise reviews for work that is highest priority (e.g. critical bug fixes, upcoming milestones). If you haven’t received a response to your PR within a week of submitting, you can nudge maintainers by tagging us in a comment or sending a reminder in discord.
 

@@ -31,6 +31,7 @@ use crate::solver::solver::SubsetError;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::quantified::Quantified;
 use crate::types::stdlib::Stdlib;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
@@ -73,6 +74,10 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.as_class_type_unchecked(class)
     }
 
+    pub fn shaped_array_shape_for_class_type(self, cls: &ClassType) -> Option<Quantified> {
+        self.0.shaped_array_shape_for_class_type(cls)
+    }
+
     pub fn has_metaclass(self, cls: &Class, metaclass: &ClassType) -> bool {
         let metadata = self.0.get_metadata_for_class(cls);
         self.0
@@ -82,7 +87,11 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
     }
 
     pub fn is_protocol(self, cls: &Class) -> bool {
-        self.0.get_metadata_for_class(cls).is_protocol()
+        cls.is_protocol()
+    }
+
+    pub fn is_final(self, cls: &Class) -> bool {
+        self.0.get_metadata_for_class(cls).is_final()
     }
 
     pub fn is_new_type(self, cls: &Class) -> bool {

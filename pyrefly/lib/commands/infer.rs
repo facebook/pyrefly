@@ -14,7 +14,6 @@ use pyrefly_config::base::InferReturnTypes;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
-use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
@@ -85,6 +84,9 @@ pub struct InferFlags {
         num_args = 0..=1
     )]
     pub imports: Option<bool>,
+    /// Print what would change and exit (1 if any changes, else 0), without writing any files.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 impl InferFlags {
@@ -94,6 +96,7 @@ impl InferFlags {
             return_types: Some(true),
             parameter_types: Some(true),
             imports: Some(true),
+            dry_run: false,
         }
     }
 
@@ -111,6 +114,10 @@ impl InferFlags {
 
     pub fn imports(&self) -> bool {
         self.imports.unwrap_or(true)
+    }
+
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
     }
 }
 
@@ -265,9 +272,7 @@ fn hint_to_string(
     let hint = hint.promote_implicit_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
-        Type::Union(box Union { members: types, .. }) => {
-            unions_with_literals(types, stdlib, enum_members, heap)
-        }
+        Type::Union(u) => unions_with_literals(u.members, stdlib, enum_members, heap),
         _ => hint,
     };
     let mut ctx = TypeDisplayContext::new(&[&hint]);
@@ -300,7 +305,7 @@ impl InferArgs {
         flags: InferFlags,
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         let state = State::new(config_finder, thread_count);
         let holder = Forgetter::new(state, false);
         let handles = Handles::new(expanded_file_list);
@@ -324,6 +329,7 @@ impl InferArgs {
         // Type-check all handles at once so the work can be parallelised across
         // the thread pool, instead of checking one file at a time sequentially.
         transaction.run(&handles, Require::Everything, None);
+        let mut any_changes = false;
         for handle in handles {
             let stdlib = transaction.get_stdlib(&handle);
             let inferred_types: Option<Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>> =
@@ -361,9 +367,8 @@ impl InferArgs {
                 );
                 let sorted = sort_inlay_hints(formatted);
                 let file_path = handle.path().as_path();
-                Self::add_annotations_to_file(file_path, sorted)?;
-                // Add imports for types used in the new annotations
-                if flags.imports()
+                // Build import edits once so dry-run and write share them.
+                let imports: Vec<(TextSize, String, String)> = if flags.imports()
                     && !needed_imports.is_empty()
                     && let Some(ast) = transaction.get_ast(&handle)
                 {
@@ -381,11 +386,33 @@ impl InferArgs {
                         })
                         .collect();
                     imports.sort_by(|(_, a, _), (_, b, _)| a.cmp(b));
-                    Self::add_imports_to_file(file_path, imports)?;
+                    imports
+                } else {
+                    Vec::new()
+                };
+                if flags.dry_run() {
+                    if !sorted.is_empty() || !imports.is_empty() {
+                        any_changes = true;
+                        println!(
+                            "{}: would add {} annotation(s) and {} import(s)",
+                            file_path.display(),
+                            sorted.len(),
+                            imports.len()
+                        );
+                    }
+                } else {
+                    Self::add_annotations_to_file(file_path, sorted)?;
+                    if !imports.is_empty() {
+                        Self::add_imports_to_file(file_path, imports)?;
+                    }
                 }
             }
         }
-        Ok(CommandExitStatus::Success)
+        Ok(if flags.dry_run() && any_changes {
+            CommandExitStatus::UserError
+        } else {
+            CommandExitStatus::Success
+        })
     }
 
     fn add_annotations_to_file(
@@ -1013,6 +1040,130 @@ def foo() -> ExampleA:
     return get_a()
 "#;
         assert_imports_and_annotations(file_one, file_two, output);
+        Ok(())
+    }
+
+    // -- dry-run tests --
+
+    fn run_dry_run(input: &str) -> (CommandExitStatus, String) {
+        let flags = InferFlags {
+            dry_run: true,
+            ..InferFlags::default()
+        };
+        let tdir = tempfile::tempdir().unwrap();
+        let path = tdir.path().join("test.py");
+        fs_anyhow::write(&path, input).unwrap();
+        let mut t = TestEnv::new();
+        t.add(&path.display().to_string(), input);
+        let includes =
+            Globs::new(vec![format!("{}/**/*", tdir.path().display()).to_owned()]).unwrap();
+        let f_globs = Box::new(FilteredGlobs::new(
+            includes,
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        ));
+        let config_finder = t.config_finder();
+        let status = InferArgs::run_inner(f_globs, config_finder, flags, TEST_THREAD_COUNT)
+            .expect("run_inner should not error");
+        let on_disk = fs_anyhow::read_to_string(&path).unwrap();
+        (status, on_disk)
+    }
+
+    #[test]
+    fn test_dry_run_changes_present_exits_1_and_file_unchanged() -> anyhow::Result<()> {
+        // A file that would receive annotations: dry-run must leave it unchanged
+        // and return UserError (exit 1).
+        let input = r#"
+def foo():
+    return 1
+"#;
+        let (status, on_disk) = run_dry_run(input);
+        assert_eq!(
+            status,
+            CommandExitStatus::UserError,
+            "dry-run with changes should return UserError"
+        );
+        assert_str_eq!(input, on_disk, "dry-run must not modify the file");
+        Ok(())
+    }
+
+    #[test]
+    fn test_dry_run_no_changes_exits_0() -> anyhow::Result<()> {
+        // A fully-annotated file: dry-run must return Success (exit 0).
+        let input = r#"
+def foo() -> int:
+    return 1
+"#;
+        let (status, on_disk) = run_dry_run(input);
+        assert_eq!(
+            status,
+            CommandExitStatus::Success,
+            "dry-run with no changes should return Success"
+        );
+        assert_str_eq!(input, on_disk, "dry-run must not modify the file");
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_dry_run_still_writes_regression() -> anyhow::Result<()> {
+        // Without --dry-run, infer must still annotate the file (R6 regression guard).
+        let input = r#"
+def foo():
+    return 1
+"#;
+        let expected = r#"
+def foo() -> int:
+    return 1
+"#;
+        assert_annotations(input, expected, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dry_run_multiple_files_any_change_exits_1() -> anyhow::Result<()> {
+        // Two files: one missing annotations, one fully annotated.
+        // Dry-run must exit 1 (any file would change) and leave BOTH files unmodified.
+        let unannotated = "def foo():\n    return 1\n";
+        let annotated = "def bar() -> int:\n    return 2\n";
+        let configuration =
+            "project_includes = [\"unannotated.py\", \"annotated.py\"]\nproject_excludes = []\n";
+        let tdir = tempfile::TempDir::with_prefix("pyrefly_infer_test_multi").unwrap();
+        let unannotated_path = tdir.path().join("unannotated.py");
+        let annotated_path = tdir.path().join("annotated.py");
+        let config_path = tdir.path().join("pyrefly.toml");
+        fs_anyhow::write(&unannotated_path, unannotated).unwrap();
+        fs_anyhow::write(&annotated_path, annotated).unwrap();
+        fs_anyhow::write(&config_path, configuration).unwrap();
+
+        let mut t = TestEnv::new();
+        t.add(&unannotated_path.display().to_string(), unannotated);
+        t.add(&annotated_path.display().to_string(), annotated);
+        t.add(&config_path.display().to_string(), configuration);
+
+        let args = InferArgs::parse_from([
+            "infer",
+            "--dry-run",
+            "--config",
+            &config_path.display().to_string(),
+        ]);
+        let status = args.run(None, TEST_THREAD_COUNT)?;
+
+        assert_eq!(
+            status,
+            CommandExitStatus::UserError,
+            "dry-run with at least one changed file should return UserError"
+        );
+        assert_str_eq!(
+            unannotated,
+            fs_anyhow::read_to_string(&unannotated_path).unwrap(),
+            "dry-run must not modify unannotated.py"
+        );
+        assert_str_eq!(
+            annotated,
+            fs_anyhow::read_to_string(&annotated_path).unwrap(),
+            "dry-run must not modify annotated.py"
+        );
         Ok(())
     }
 }

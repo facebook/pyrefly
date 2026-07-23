@@ -11,15 +11,18 @@ use std::slice;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::AtomicNodeIndex;
+use ruff_python_ast::CmpOp;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprBooleanLiteral;
+use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Parameter;
 use ruff_python_ast::ParameterWithDefault;
@@ -40,12 +43,14 @@ use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
 use ruff_python_parser::ParseOptions;
+use ruff_python_parser::Parsed;
 use ruff_python_parser::UnsupportedSyntaxError;
 use ruff_python_parser::parse_expression_range;
 use ruff_python_parser::parse_unchecked;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use thin_vec::ThinVec;
 
 use crate::sys_info::PythonVersion;
 
@@ -94,14 +99,24 @@ impl Ast {
         contents: &str,
         source_type: PySourceType,
     ) -> (ModModule, Vec<ParseError>, Vec<UnsupportedSyntaxError>) {
-        Ast::parse_with_version(contents, PythonVersion::default(), source_type)
+        let (parsed, parse_errors, unsupported_syntax_errors) =
+            Ast::parse_with_version(contents, PythonVersion::default(), source_type);
+        (
+            parsed.into_syntax(),
+            parse_errors,
+            unsupported_syntax_errors,
+        )
     }
 
     pub fn parse_with_version(
         contents: &str,
         version: PythonVersion,
         source_type: PySourceType,
-    ) -> (ModModule, Vec<ParseError>, Vec<UnsupportedSyntaxError>) {
+    ) -> (
+        Parsed<ModModule>,
+        Vec<ParseError>,
+        Vec<UnsupportedSyntaxError>,
+    ) {
         // PySourceType of Python vs Stub doesn't actually change the parsing
         let options = ParseOptions::from(source_type).with_target_version(RuffPythonVersion {
             major: version.major as u8,
@@ -112,7 +127,7 @@ impl Ast {
             .unwrap();
         let parse_errors = res.errors().to_owned();
         let unsupported_syntax_errors = res.unsupported_syntax_errors().to_owned();
-        (res.into_syntax(), parse_errors, unsupported_syntax_errors)
+        (res, parse_errors, unsupported_syntax_errors)
     }
 
     pub fn parse_expr(contents: &str, pos: TextSize) -> anyhow::Result<Expr> {
@@ -177,13 +192,50 @@ impl Ast {
     /// Like `if_branches`, but returns owned values.
     pub fn if_branches_owned(
         x: StmtIf,
-    ) -> impl Iterator<Item = (TextRange, Option<Expr>, Vec<Stmt>)> {
+    ) -> impl Iterator<Item = (TextRange, Option<Expr>, ThinVec<Stmt>)> {
         let first = iter::once((x.range, Some(*x.test), x.body));
         let elses = x
             .elif_else_clauses
             .into_iter()
             .map(|x| (x.range, x.test, x.body));
         first.chain(elses)
+    }
+
+    pub fn is_main_guard(test: &Expr) -> bool {
+        let Expr::Compare(ExprCompare {
+            left,
+            ops,
+            comparators,
+            ..
+        }) = test
+        else {
+            return false;
+        };
+
+        if ops.len() != 1 || comparators.len() != 1 {
+            return false;
+        }
+
+        let op = ops[0];
+        if !matches!(op, CmpOp::Eq | CmpOp::Is) {
+            return false;
+        }
+
+        let left = left.as_ref();
+        let right = &comparators[0];
+        (Self::is_name_dunder_name(left) && Self::is_main_string(right))
+            || (Self::is_main_string(left) && Self::is_name_dunder_name(right))
+    }
+
+    fn is_name_dunder_name(expr: &Expr) -> bool {
+        matches!(expr, Expr::Name(name) if name.id.as_str() == "__name__")
+    }
+
+    fn is_main_string(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) if value.to_str() == "__main__"
+        )
     }
 
     /// Iterates over parameters, returning the parameters and defaults
@@ -212,6 +264,18 @@ impl Ast {
     /// But there, there isn't an identifier, but morally should be, so create the implicit one.
     pub fn expr_name_identifier(x: ExprName) -> Identifier {
         Identifier::new(x.id, x.range)
+    }
+
+    /// The trailing identifier of a decorator expression, looking through calls and
+    /// attribute access: `foo`, `mod.foo`, `foo(...)`, and `mod.foo(...)` all yield
+    /// `foo`. `None` for shapes with no trailing name (e.g. a subscript).
+    pub fn decorator_trailing_name(decorator: &Expr) -> Option<&str> {
+        match decorator {
+            Expr::Name(name) => Some(name.id.as_str()),
+            Expr::Attribute(attribute) => Some(attribute.attr.as_str()),
+            Expr::Call(call) => Self::decorator_trailing_name(&call.func),
+            _ => None,
+        }
     }
 
     /// Returns true if this is a synthesized empty name from parser error recovery.
@@ -333,6 +397,51 @@ impl Ast {
         covering_nodes
     }
 
+    /// The tightest AST node that strictly contains `target` — i.e. the parent
+    /// of the node whose range is `target`, or `None` at module top level.
+    pub fn parent_node(module: &ModModule, target: TextRange) -> Option<AnyNodeRef<'_>> {
+        Ast::locate_node(module, target.start())
+            .into_iter()
+            .find(|node| node.range() != target && node.range().contains_range(target))
+    }
+
+    /// Whether `node` must be wrapped in parentheses to preserve its meaning
+    /// when spliced in as a direct child of `parent` (the node that will contain
+    /// it, or `None` when the containing node is unknown).
+    ///
+    /// Self-delimiting expressions — names; string/bytes/bool/`None`/`...`
+    /// literals; f-strings; calls; subscripts; attribute access; and bracketed
+    /// containers — never need brackets. An integer literal is the only
+    /// context-sensitive case, so it is the only one that consults `parent`.
+    /// Everything else (tuples, boolean/binary/comparison/unary operations,
+    /// conditionals, lambdas, walrus, generators, await/yield) binds loosely and
+    /// is bracketed conservatively wherever it becomes a sub-expression,
+    /// regardless of `parent`.
+    pub fn needs_brackets(parent: Option<AnyNodeRef>, node: &Expr) -> bool {
+        match node {
+            Expr::Name(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+            | Expr::FString(_)
+            | Expr::List(_)
+            | Expr::Dict(_)
+            | Expr::Set(_)
+            | Expr::Call(_)
+            | Expr::Subscript(_)
+            | Expr::Attribute(_) => false,
+            Expr::NumberLiteral(number) => {
+                // `42.bit_length()` parses `42.` as a float, so an integer
+                // literal needs brackets only directly before attribute access.
+                matches!(number.value, Number::Int(_))
+                    && matches!(parent, Some(AnyNodeRef::ExprAttribute(_)))
+            }
+            _ => true,
+        }
+    }
+
     pub fn str_expr(s: &str, range: TextRange) -> Expr {
         Expr::StringLiteral(ExprStringLiteral {
             node_index: AtomicNodeIndex::default(),
@@ -414,6 +523,16 @@ impl Ast {
         name.starts_with("__") && !name.ends_with("__")
     }
 
+    // Parameters and variables that are prefixed (but not suffixed) with a single underscore
+    // are potentially unused, so we should skip some diagnostics/errors.
+    // Examples: `_`, `_x`
+    // Non-examples: `x`, `__x__`, `__x`, `_x_`
+    pub fn is_intentionally_unused(name: &str) -> bool {
+        name.starts_with('_')
+            && !name.starts_with("__")
+            && (name.len() == 1 || !name.ends_with('_'))
+    }
+
     pub fn is_list_literal_or_comprehension(expr: &Expr) -> bool {
         matches!(expr, Expr::List(_) | Expr::ListComp(_))
     }
@@ -464,5 +583,57 @@ impl Ast {
             Expr::BinOp(..) => Some("Binary operation"),
             _ => Some("Expression"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_expr_stmt(code: &str) -> Expr {
+        let (module, errors, _) = Ast::parse(code, PySourceType::Python);
+        assert!(errors.is_empty(), "unexpected parse errors in {code:?}");
+        match module.body.into_iter().next() {
+            Some(Stmt::Expr(stmt)) => *stmt.value,
+            other => panic!("expected an expression statement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn needs_brackets_classifies_by_node() {
+        // Self-delimiting expressions never need brackets.
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("name")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("f(x)")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("x[0]")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("[1, 2]")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("\"s\"")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("42")));
+
+        // Loosely-binding expressions must be bracketed when nested. A bare
+        // tuple is the case the previous per-feature heuristics disagreed on.
+        assert!(Ast::needs_brackets(None, &parse_expr_stmt("1, 2")));
+        assert!(Ast::needs_brackets(None, &parse_expr_stmt("a and b")));
+        assert!(Ast::needs_brackets(None, &parse_expr_stmt("a + b")));
+        assert!(Ast::needs_brackets(None, &parse_expr_stmt("lambda: 1")));
+    }
+
+    #[test]
+    fn needs_brackets_wraps_int_literal_only_before_attribute_access() {
+        // `42.bit_length()` would parse `42.` as a float, so the integer needs
+        // brackets when it becomes the value of an attribute access.
+        let expr = parse_expr_stmt("(42).bit_length()\n");
+        let Expr::Call(call) = &expr else {
+            panic!("expected a call expression");
+        };
+        let Expr::Attribute(attribute) = call.func.as_ref() else {
+            panic!("expected an attribute access");
+        };
+        let int_literal = attribute.value.as_ref();
+        assert!(Ast::needs_brackets(
+            Some(AnyNodeRef::from(attribute)),
+            int_literal
+        ));
+        // The same literal in any other position stands alone.
+        assert!(!Ast::needs_brackets(None, int_literal));
     }
 }
