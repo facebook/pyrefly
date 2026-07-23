@@ -2223,13 +2223,15 @@ impl Scopes {
 
     /// PEP 572: walrus operators inside comprehensions bind to the enclosing
     /// non-comprehension scope. This method updates the flow of the nearest
-    /// enclosing non-comprehension scope with the given name and binding idx.
+    /// enclosing non-comprehension scope with the given name and binding idx,
+    /// and returns that scope's `NameWriteInfo` so callers can record the
+    /// `Anywhere` bind (mirroring `define_in_current_flow`).
     pub fn define_in_enclosing_non_comprehension_scope(
         &mut self,
         name: Hashed<&Name>,
         idx: Idx<Key>,
         style: FlowStyle,
-    ) {
+    ) -> Option<NameWriteInfo> {
         let len = self.scopes.len();
         for i in (0..len - 1).rev() {
             if !matches!(self.scopes[i].scope.kind, ScopeKind::Comprehension { .. }) {
@@ -2242,9 +2244,15 @@ impl Scopes {
                         *e.get_mut() = e.get().updated_value(idx, style, in_loop);
                     }
                 }
-                break;
+                return self.scopes[i]
+                    .scope
+                    .stat
+                    .0
+                    .get_hashed(name)
+                    .map(StaticInfo::as_name_write_info);
             }
         }
+        None
     }
 
     /// Handle a delete operation by marking a name as uninitialized in this flow.

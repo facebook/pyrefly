@@ -1060,11 +1060,7 @@ impl<'a> BindingsBuilder<'a> {
                     && let Expr::Name(name) = &*x.target
                     && let Some(idx) = self.scopes.get_current_flow_idx(&name.id)
                 {
-                    self.scopes.define_in_enclosing_non_comprehension_scope(
-                        Hashed::new(&name.id),
-                        idx,
-                        FlowStyle::Other,
-                    );
+                    self.bind_walrus_target_in_enclosing_scope(&name.id, idx);
                 }
             }
             Expr::Lambda(x) => {
