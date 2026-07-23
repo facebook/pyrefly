@@ -881,3 +881,22 @@ def make() -> int | Callable[[], int]:
     return f(bar)
     "#,
 );
+
+testcase!(
+    test_typeddict_in_lambda,
+    r#"
+from typing import Callable, TypedDict
+
+class A: ...
+class B: ...
+class B2(B): ...
+
+class DA(TypedDict):
+    x: A
+
+class DB(TypedDict):
+    x: B
+
+f: Callable[[], DA] | Callable[[], DB] = lambda: {"x": B2()}
+    "#,
+);

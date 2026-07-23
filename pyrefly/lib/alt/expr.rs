@@ -608,11 +608,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let _specialization_errors =
                                 self.solver().finish_all_quantified(hint, self.type_order());
                         }
-                        let ret = self.expr_infer_impl_helper(
-                            &lambda.body,
-                            HintRef::with_ty_opt(hint, return_hint.as_ref()),
-                            callable_errors,
-                        );
+                        let return_hint = return_hint.as_ref().map(|return_hint| {
+                            HintRef::new(
+                                return_hint,
+                                hint.and_then(|hint| hint.errors().map(|_| callable_errors)),
+                            )
+                        });
+                        let ret =
+                            self.expr_infer_impl_helper(&lambda.body, return_hint, callable_errors);
                         let (yield_keys, yield_from_keys) =
                             self.bindings().lambda_yield_keys(lambda.range);
                         let ret = if !(yield_keys.is_empty() && yield_from_keys.is_empty()) {
