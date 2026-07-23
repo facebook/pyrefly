@@ -2062,21 +2062,31 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
             }
             (Type::Overload(overload), want) => self.is_subset_overload(overload, want),
-            (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
+            (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_)) => {
                 if let Some(l_no_self) =
                     self.type_order.bind_boundmethod(method, &mut |got, want| {
                         self.is_subset_eq(got, want).is_ok()
-                    }) =>
-            {
-                self.is_subset_eq(&l_no_self, want)
+                    })
+                {
+                    self.is_subset_eq(&l_no_self, want)
+                } else {
+                    Err(SubsetError::BoundMethodMissingSelf(
+                        method.func.metadata().kind.function_name().into_owned(),
+                    ))
+                }
             }
-            (Type::Callable(_) | Type::Function(_), Type::BoundMethod(method))
+            (Type::Callable(_) | Type::Function(_), Type::BoundMethod(method)) => {
                 if let Some(u_no_self) =
                     self.type_order.bind_boundmethod(method, &mut |got, want| {
                         self.is_subset_eq(got, want).is_ok()
-                    }) =>
-            {
-                self.is_subset_eq(got, &u_no_self)
+                    })
+                {
+                    self.is_subset_eq(got, &u_no_self)
+                } else {
+                    Err(SubsetError::BoundMethodMissingSelf(
+                        method.func.metadata().kind.function_name().into_owned(),
+                    ))
+                }
             }
             (Type::BoundMethod(l), Type::BoundMethod(u))
                 if let Some(l_no_self) = self

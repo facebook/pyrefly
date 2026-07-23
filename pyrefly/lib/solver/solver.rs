@@ -3297,6 +3297,9 @@ pub enum SubsetError {
     /// A function without **kwargs is not assignable to a function with Unpack-ed TypedDict **kwargs
     /// unless the TypedDict is closed.
     OpenTypedDictKwargs(Name),
+    /// A bound method cannot be converted to a callable because there is no
+    /// receiver parameter to bind.
+    BoundMethodMissingSelf(Name),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -3334,6 +3337,9 @@ impl SubsetError {
             )),
             SubsetError::OpenTypedDictKwargs(td) => Some(format!(
                 "Callable without `**kwargs` cannot be assigned to callable with `**kwargs: Unpack[{td}]`, because `{td}` is not closed and may have additional unknown keys"
+            )),
+            SubsetError::BoundMethodMissingSelf(function) => Some(format!(
+                "Function `{function}` is treated as a method when accessed from an instance, but its signature does not accept a bound `self` argument"
             )),
             SubsetError::Other => None,
         }
