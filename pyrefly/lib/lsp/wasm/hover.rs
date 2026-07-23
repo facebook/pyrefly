@@ -14,6 +14,7 @@ use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
+use lsp_types::Range;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -75,6 +76,7 @@ pub struct HoverValue {
     pub kind: Option<SymbolKind>,
     pub name: Option<String>,
     pub type_: Type,
+    pub range: Option<Range>,
     pub docstring: Option<Docstring>,
     pub parameter_doc: Option<(String, String)>,
     pub type_sources: Vec<String>,
@@ -291,7 +293,7 @@ impl HoverValue {
                     symbol_def_formatted
                 ),
             }),
-            range: None,
+            range: self.range,
         }
     }
 }
@@ -690,8 +692,10 @@ pub fn get_hover(
     position: TextSize,
     show_go_to_links: bool,
 ) -> Option<Hover> {
+    let module_info = transaction.get_module_info(handle);
+
     // Handle hovering over an ignore comment
-    if let Some(module) = transaction.get_module_info(handle) {
+    if let Some(module) = &module_info {
         let display_pos = module.display_pos(position);
         let line_text = module.lined_buffer().content_in_line_range(
             display_pos.line_within_file(),
@@ -746,6 +750,24 @@ pub fn get_hover(
         .subscript_operator_type_at(handle, position)
         .or_else(|| transaction.get_type_at_for_display(handle, position))
         .or_else(|| transaction.operator_type_at(handle, position))?;
+    let ast = transaction.get_ast(handle);
+    // `a and b and c` is a single flat BoolOp, so hovering any operator in the
+    // chain highlights the whole expression. Reuses the hoisted `module_info` and
+    // the single `ast` fetched here (also used by the callee lookup below).
+    let range = ast
+        .as_ref()
+        .zip(module_info.as_ref())
+        .and_then(|(ast, module_info)| {
+            Ast::locate_node(ast, position)
+                .into_iter()
+                .find(|node| node.as_expr_ref().is_some())
+                .and_then(|node| match node {
+                    AnyNodeRef::ExprBoolOp(bool_op) => {
+                        Some(module_info.to_lsp_range(bool_op.range()))
+                    }
+                    _ => None,
+                })
+        });
 
     // Find the innermost call whose callee (func) encloses the cursor, returning the
     // callee's range and whether the cursor is on the callee's own name — the attribute
@@ -753,9 +775,9 @@ pub fn get_hover(
     // the callee range but not on the name, so hovering it must not coerce its type.
     let callee_at_position = || -> Option<(TextRange, bool)> {
         use ruff_python_ast::Expr;
-        let mod_module = transaction.get_ast(handle)?;
+        let ast = ast.as_ref()?;
         let mut result = None;
-        mod_module.visit(&mut |expr: &Expr| {
+        ast.visit(&mut |expr: &Expr| {
             if let Expr::Call(call) = expr
                 && call.func.range().contains(position)
             {
@@ -901,6 +923,7 @@ pub fn get_hover(
             kind,
             name,
             type_,
+            range,
             docstring,
             parameter_doc,
             type_sources: type_sources_for_hover(transaction, handle, position),

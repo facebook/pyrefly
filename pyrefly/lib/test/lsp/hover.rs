@@ -7,6 +7,8 @@
 
 use lsp_types::Hover;
 use lsp_types::HoverContents;
+use lsp_types::Position;
+use lsp_types::Range;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
@@ -1579,6 +1581,85 @@ def supported_language(lang):
             && report.contains("self: list[str]")
             && report.contains(") -> bool"),
         "Expected hover to show list.__contains__ method signature, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_bool_operator_highlights_bool_expression() {
+    let code = r#"
+x = 1 and 2
+#     ^
+y = 1 or 2
+#     ^
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let handle = handle("main");
+    let ranges = extract_cursors_for_test(code)
+        .into_iter()
+        .map(
+            |position| match get_hover(&state.transaction(), &handle, position, false) {
+                Some(hover) => hover.range,
+                None => panic!("Expected hover result for boolean operator"),
+            },
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranges,
+        vec![
+            Some(Range {
+                start: Position::new(1, 4),
+                end: Position::new(1, 11),
+            }),
+            Some(Range {
+                start: Position::new(3, 4),
+                end: Position::new(3, 10),
+            }),
+        ]
+    );
+}
+
+#[test]
+fn hover_over_bool_operator_chain_highlights_whole_chain() {
+    // `a and b and c` is a single flat BoolOp, so hovering any operator in the
+    // chain highlights the entire boolean expression, not just the adjacent
+    // operands. The carets sit on the *second* operator to prove that.
+    let code = r#"
+x = 1 and 2 and 3
+#           ^
+y = 1 or 2 or 3
+#          ^
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let handle = handle("main");
+    let ranges = extract_cursors_for_test(code)
+        .into_iter()
+        .map(
+            |position| match get_hover(&state.transaction(), &handle, position, false) {
+                Some(hover) => hover.range,
+                None => panic!("Expected hover result for boolean operator"),
+            },
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranges,
+        vec![
+            Some(Range {
+                start: Position::new(1, 4),
+                end: Position::new(1, 17),
+            }),
+            Some(Range {
+                start: Position::new(3, 4),
+                end: Position::new(3, 15),
+            }),
+        ]
     );
 }
 
