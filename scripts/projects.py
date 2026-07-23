@@ -138,6 +138,28 @@ def get_mypy_primer_projects() -> list[Project]:
             expected_mypy_success=True,
         ),
         Project(
+            location="https://github.com/twisted/twisted",
+            mypy_cmd="{mypy} src/twisted",
+            pyright_cmd="{pyright} src/twisted",
+            pyrefly_cmd="{pyrefly} src/twisted",
+            deps=[
+                "attrs",
+                "automat",
+                "constantly",
+                "hyperlink",
+                "incremental",
+                "zope.interface",
+                "typing_extensions",
+            ],
+        ),
+        Project(
+            location="https://github.com/hypothesisworks/hypothesis",
+            mypy_cmd="{mypy} hypothesis/src/hypothesis",
+            pyright_cmd="{pyright} hypothesis/src/hypothesis",
+            pyrefly_cmd="{pyrefly} hypothesis/src/hypothesis",
+            deps=["attrs", "sortedcontainers"],
+        ),
+        Project(
             location="https://github.com/sphinx-doc/sphinx",
             mypy_cmd="{mypy} sphinx",
             pyright_cmd="{pyright} sphinx",
@@ -1467,6 +1489,20 @@ def get_mypy_primer_projects() -> list[Project]:
             ],
         ),
         Project(
+            location="https://github.com/JakobGM/patito",
+            mypy_cmd="{mypy} src/patito",
+            pyright_cmd="{pyright} src/patito",
+            pyrefly_cmd="{pyrefly} src/patito",
+            deps=["polars", "pydantic", "typing-extensions"],
+        ),
+        Project(
+            location="https://github.com/quantco/dataframely",
+            mypy_cmd="{mypy} dataframely",
+            pyright_cmd="{pyright} dataframely",
+            pyrefly_cmd="{pyrefly} dataframely",
+            deps=["polars", "numpy", "fsspec", "pydantic"],
+        ),
+        Project(
             location="https://github.com/pytorch/helion",
             mypy_cmd="{mypy}",
             pyright_cmd="{pyright}",
@@ -1664,5 +1700,12 @@ def get_mypy_primer_projects() -> list[Project]:
             pyright_cmd="{pyright} src/pytest_autoprofile tests",
             pyrefly_cmd="{pyrefly} src/pytest_autoprofile tests",
             deps=["pytest", "pluggy", "line_profiler", "typing-extensions"],
+        ),
+        Project(
+            location="https://github.com/python-attrs/cattrs",
+            mypy_cmd="{mypy} src",
+            pyright_cmd="{pyright} src",
+            pyrefly_cmd="{pyrefly} src",
+            deps=["attrs"],
         ),
     ]

@@ -259,6 +259,12 @@
                     "description": "Automatically insert parentheses when completing a function or method.",
                     "scope": "resource"
                 },
+                "python.analysis.autoImportCompletions": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement.",
+                    "scope": "resource"
+                },
                 "python.analysis.diagnosticMode": {
                     "type": "string",
                     "default": "openFilesOnly",
@@ -311,6 +317,13 @@
                             "description": "Show inferred variable types as inlay hints on assignments."
                         }
                     }
+                },
+                "python.analysis.inlayHintDebounceMs": {
+                    "type": "number",
+                    "default": 150,
+                    "minimum": 0,
+                    "description": "Debounce window, in milliseconds, for inlay hints. While a file is being edited, inlay hint updates are held until editing pauses for this long, so hint widths don't jitter on every keystroke. Set to 0 to update inlay hints immediately.",
+                    "scope": "resource"
                 },
                 "python.pyrefly.syncNotebooks": {
                     "type": "boolean",

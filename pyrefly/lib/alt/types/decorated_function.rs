@@ -98,7 +98,9 @@ pub enum SpecialDecorator<'a> {
     DataclassTransformCall(&'a TypeMap),
     EnumNonmember,
     AbstractMethod,
+    NoTypeCheck,
     UsesShapeDsl,
+    DefinesAssertShape,
     DisjointBase,
 }
 

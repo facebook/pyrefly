@@ -23,9 +23,12 @@
 //!  - `Tensor`/`NNModule` → TSP `ClassType` from their base class.
 //!  - `TypeAlias` → unwraps to the aliased type.
 //!  - `SpecialForm` → TSP `BuiltInType` with the form name.
-//!  - `Any`, `Never`, `None`, `Ellipsis` → TSP `BuiltInType`.
+//!  - `Any`, `Never`, `Ellipsis` → TSP `BuiltInType`.
 //!  - Solver-internal types → TSP `BuiltInType` with a representative name.
 //!
+//! Note: `None` is emitted as a `NoneType` `ClassType`, not as a `BuiltInType`,
+//! because `BuiltInType.name` is restricted to protocol sentinel names. See
+//! [`convert_type_with_resolvers`] for how the version-correct class is sourced.
 //! All `Type` variants are explicitly handled; no types fall through to a
 //! generic `SynthesizedType` stub.
 
@@ -35,6 +38,8 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use lsp_types::Url;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
@@ -43,10 +48,15 @@ use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType as PyreflyClassType;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedOrigin;
+use pyrefly_types::sentinel::Sentinel;
 use pyrefly_types::type_alias::TypeAliasData;
+use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::Type as PyreflyType;
+use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use tsp_types::BuiltInType;
 use tsp_types::ClassType as TspClassType;
@@ -62,6 +72,7 @@ use tsp_types::OverloadedType as TspOverloadedType;
 use tsp_types::Position as TspPosition;
 use tsp_types::Range as TspRange;
 use tsp_types::RegularDeclaration;
+use tsp_types::SentinelLiteral;
 use tsp_types::SpecializedFunctionTypes;
 use tsp_types::SynthesizedDeclaration;
 use tsp_types::Type as TspType;
@@ -91,16 +102,46 @@ pub type FuncRangeResolver<'a> = dyn Fn(&FuncId) -> Option<TextRange> + 'a;
 pub type ModulePathResolver<'a> =
     dyn Fn(&pyrefly_types::module::ModuleType) -> Option<PathBuf> + 'a;
 
+/// Callback that resolves an exported symbol (by defining module and name) to
+/// the `ModulePath` and `lsp_types::Range` of its original definition,
+/// following re-exports. Used to give real source locations to special forms,
+/// `typing` classes, and functions whose `FuncId` lacks a `def_index` (e.g.
+/// imported user functions and special functions like `typing.overload`).
+pub type ExportLocationResolver<'a> =
+    dyn Fn(ModuleName, &Name) -> Option<(ModulePath, lsp_types::Range)> + 'a;
+
+/// The stdlib classes used to encode pyrefly types that would otherwise be
+/// emitted as off-spec `BuiltInType` sentinels: the protocol restricts
+/// `BuiltInType.name` to a fixed set that excludes names like `none`, `bool`,
+/// and `int`. Passing the real classes (rather than re-deriving them by name)
+/// keeps each declaration version-correct — e.g. `NoneType` is sourced from
+/// `types` on Python 3.10+ and `_typeshed` before — and identical to writing
+/// the annotation explicitly.
+#[derive(Clone, Copy)]
+pub struct StdlibClasses<'a> {
+    /// `NoneType`, encoding `None`.
+    pub none_type: &'a PyreflyClassType,
+    /// `bool`, encoding `TypeGuard`/`TypeIs` (their runtime type).
+    pub bool_type: &'a PyreflyClassType,
+    /// `int`, encoding `Size`/`Dim` (integer tensor dimensions).
+    pub int_type: &'a PyreflyClassType,
+}
+
 /// Convert a pyrefly `Type` to a TSP protocol `Type` using optional
-/// source-range and module-URI resolvers.
+/// source-range and module-URI resolvers, plus the stdlib classes used to
+/// encode sentinel-like types (see [`StdlibClasses`]).
 pub fn convert_type_with_resolvers<'a>(
     ty: &PyreflyType,
     func_range_resolver: Option<&'a FuncRangeResolver<'a>>,
     module_path_resolver: Option<&'a ModulePathResolver<'a>>,
+    export_location_resolver: Option<&'a ExportLocationResolver<'a>>,
+    stdlib: StdlibClasses<'a>,
 ) -> TspType {
     TypeConverter {
         resolve_func_range: func_range_resolver,
         resolve_module_path: module_path_resolver,
+        resolve_export: export_location_resolver,
+        stdlib,
     }
     .convert(ty)
 }
@@ -112,13 +153,71 @@ pub fn convert_type_with_resolvers<'a>(
 /// locations are needed.
 #[cfg(test)]
 pub fn convert_type(ty: &PyreflyType) -> TspType {
-    convert_type_with_resolvers(ty, None, None)
+    let stdlib = TestStdlib::new();
+    convert_type_with_resolvers(ty, None, None, None, stdlib.classes())
+}
+
+/// Stand-in for the real `Stdlib` classes used by the resolver-free tests,
+/// which have no stdlib. Each class mirrors its real counterpart closely enough
+/// to exercise the production path: a top-level class in its bundled module.
+#[cfg(test)]
+struct TestStdlib {
+    none_type: PyreflyClassType,
+    bool_type: PyreflyClassType,
+    int_type: PyreflyClassType,
+}
+
+#[cfg(test)]
+impl TestStdlib {
+    fn new() -> Self {
+        Self {
+            none_type: test_class(ModuleName::types(), "NoneType"),
+            bool_type: test_class(ModuleName::builtins(), "bool"),
+            int_type: test_class(ModuleName::builtins(), "int"),
+        }
+    }
+
+    fn classes(&self) -> StdlibClasses<'_> {
+        StdlibClasses {
+            none_type: &self.none_type,
+            bool_type: &self.bool_type,
+            int_type: &self.int_type,
+        }
+    }
+}
+
+/// Build a top-level `name` class in bundled `module_name` (`<module>.pyi`).
+#[cfg(test)]
+fn test_class(module_name: ModuleName, name: &str) -> PyreflyClassType {
+    use pyrefly_python::module::Module;
+    use pyrefly_python::nesting_context::NestingContext;
+    use pyrefly_types::class::ClassDefIndex;
+    use pyrefly_types::types::TArgs;
+    use ruff_python_ast::Identifier;
+
+    let module = Module::new(
+        module_name,
+        ModulePath::bundled_typeshed(PathBuf::from(format!("{module_name}.pyi"))),
+        Arc::new(String::new()),
+    );
+    let class = Class::new(
+        ClassDefIndex(0),
+        Identifier::new(Name::new(name), TextRange::default()),
+        NestingContext::toplevel(),
+        module,
+        None,
+        false,
+    );
+    PyreflyClassType::new(class, TArgs::default())
 }
 
 /// Holds an optional range resolver and drives recursive type conversion.
 struct TypeConverter<'a> {
     resolve_func_range: Option<&'a FuncRangeResolver<'a>>,
     resolve_module_path: Option<&'a ModulePathResolver<'a>>,
+    resolve_export: Option<&'a ExportLocationResolver<'a>>,
+    /// Stdlib classes used to encode sentinel-like types; see [`StdlibClasses`].
+    stdlib: StdlibClasses<'a>,
 }
 
 impl TypeConverter<'_> {
@@ -128,7 +227,10 @@ impl TypeConverter<'_> {
             // --- Built-in special types ---
             PyreflyType::Any(_) => builtin("any"),
             PyreflyType::Never(_) => builtin("never"),
-            PyreflyType::None => builtin("none"),
+            // `None` → the stdlib's real `NoneType` class (see `stdlib`).
+            PyreflyType::None => {
+                self.convert_class_type(self.stdlib.none_type, TypeFlags::INSTANCE)
+            }
             PyreflyType::Ellipsis => builtin("ellipsis"),
 
             // --- Class instances (int, str, list[int], user-defined classes, etc.) ---
@@ -258,17 +360,10 @@ impl TypeConverter<'_> {
             }
 
             // --- type[X] wrapper ---
-            PyreflyType::Type(inner) => {
-                let inner_tsp = self.convert(inner);
-                // Return the inner type but mark it as instantiable
-                match inner_tsp {
-                    TspType::Class(mut c) => {
-                        c.flags = TypeFlags::INSTANTIABLE;
-                        TspType::Class(c)
-                    }
-                    other => other,
-                }
-            }
+            // `type[X]` is the class object (instantiable), not an instance,
+            // whatever TSP shape `X` converted to: a `Class` for `type[C]`, a
+            // `Var` for `type[T]`, a `Union` for `type[A | B]`, etc.
+            PyreflyType::Type(inner) => mark_instantiable(self.convert(inner)),
 
             // --- SelfType is a class type ---
             PyreflyType::SelfType(ct) => self.convert_class_type(ct, TypeFlags::INSTANCE),
@@ -291,7 +386,7 @@ impl TypeConverter<'_> {
             // These are TypeVar-like solver-internal placeholders. Emit them as
             // TSP TypeVar so consumers don't see them as malformed BuiltIns.
             PyreflyType::Quantified(q) | PyreflyType::QuantifiedValue(q) => {
-                synthesized_typevar(q.name.as_str())
+                self.convert_quantified(q)
             }
 
             // --- LiteralString → typing.LiteralString class ---
@@ -302,8 +397,13 @@ impl TypeConverter<'_> {
             // --- Annotated[X, ...] → unwrap to X ---
             PyreflyType::Annotated(inner, _) => self.convert(inner),
 
-            // --- TypeGuard[X] / TypeIs[X] → convert as bool (the runtime return type) ---
-            PyreflyType::TypeGuard(_) | PyreflyType::TypeIs(_) => builtin("bool"),
+            // --- TypeGuard[X] / TypeIs[X] → the stdlib `bool` class (their runtime type) ---
+            // Emitted as the real class, not `builtin("bool")`: the protocol
+            // restricts `BuiltInType.name` to a fixed sentinel set that excludes
+            // `bool`, so a bare builtin surfaces as Unknown on the consumer.
+            PyreflyType::TypeGuard(_) | PyreflyType::TypeIs(_) => {
+                self.convert_class_type(self.stdlib.bool_type, TypeFlags::INSTANCE)
+            }
 
             // --- SuperInstance → convert as the class type ---
             PyreflyType::SuperInstance(si) => self.convert_class_type(&si.0, TypeFlags::INSTANCE),
@@ -313,8 +413,13 @@ impl TypeConverter<'_> {
                 self.convert_class_type(&t.base_class, TypeFlags::INSTANCE)
             }
 
+            PyreflyType::IntTuple(_) => builtin("tuple"),
+
             // --- NNModule → ClassType from class ---
             PyreflyType::NNModule(m) => self.convert_class_type(&m.class, TypeFlags::INSTANCE),
+
+            // --- DataFrame → convert the underlying instance type ---
+            PyreflyType::DataFrame(schema) => self.convert(&schema.underlying_type()),
 
             // --- TypeAlias → unwrap to the aliased type, or typing class for refs ---
             PyreflyType::TypeAlias(ta) | PyreflyType::UntypedAlias(ta) => {
@@ -362,8 +467,13 @@ impl TypeConverter<'_> {
             // --- KwCall → convert the return type ---
             PyreflyType::KwCall(kw) => self.convert(&kw.return_ty),
 
-            // --- Size / Dim → int (they represent integer dimensions) ---
-            PyreflyType::Size(_) | PyreflyType::Dim(_) => builtin("int"),
+            // --- Int → the stdlib `int` class (symbolic integers represent dimensions) ---
+            // Emitted as the real class, not `builtin("int")`: the protocol
+            // restricts `BuiltInType.name` to a fixed sentinel set that excludes
+            // `int`, so a bare builtin surfaces as Unknown on the consumer.
+            PyreflyType::Int(_) => {
+                self.convert_class_type(self.stdlib.int_type, TypeFlags::INSTANCE)
+            }
 
             // --- Solver-internal variable → built-in unknown ---
             PyreflyType::Var(_) => builtin("unknown"),
@@ -371,8 +481,13 @@ impl TypeConverter<'_> {
             // --- Materialization is a solver artifact ---
             PyreflyType::Materialization => builtin("unknown"),
 
-            // --- Sentinel type ---
-            PyreflyType::Sentinel(_) => builtin("sentinel"),
+            // --- Sentinel → a `ClassType` carrying a `SentinelLiteral` ---
+            // The protocol has a dedicated sentinel literal (class name plus its
+            // defining location), so emit that rather than an off-spec
+            // `sentinel` `BuiltInType` that surfaces as Unknown. The location
+            // comes from the sentinel's own `QName`, so no stdlib class is
+            // needed.
+            PyreflyType::Sentinel(s) => convert_sentinel(s),
         }
     }
 
@@ -402,8 +517,14 @@ impl TypeConverter<'_> {
     }
 
     /// Convert a `typing.Callable` to a TSP `FunctionType` with synthesized declaration.
+    ///
+    /// Like [`convert_function`](Self::convert_function), the parameter and
+    /// return types are carried in `specialized_types` so the consumer can
+    /// reconstruct the signature; a synthesized callable has no source
+    /// declaration, so this is the only channel for its parameter types.
     fn convert_callable(&self, callable: &Callable) -> TspType {
         let ret = self.convert(&callable.ret);
+        let specialized_types = self.specialized_types(callable, &ret);
         TspType::Function(TspFunctionType {
             bound_to_type: None,
             declaration: Declaration::Synthesized(SynthesizedDeclaration {
@@ -414,21 +535,52 @@ impl TypeConverter<'_> {
             id: next_id(),
             kind: TypeKind::Function,
             return_type: Some(Box::new(ret)),
-            specialized_types: None,
+            specialized_types,
             type_alias_info: None,
         })
     }
 
     /// Convert the body of a type alias. A value alias unwraps to its aliased
-    /// type; a `Ref` (a bare reference such as `typing.List`) has no backing
-    /// class, so it is emitted as a `typing.<name>` class rather than an opaque
-    /// builtin (which the consumer would render as `Unknown`). Shared by the
-    /// direct `TypeAlias` arm and the `Forall`-wrapped one so they stay in sync.
+    /// type; a `Ref` (a bare, not-yet-expanded reference, e.g. the recursive
+    /// `X` in `type X = int | list[X]`) has no backing class, so it is emitted
+    /// as a resolvable class handle pointing at the alias's own definition.
+    /// Shared by the direct `TypeAlias` arm and the `Forall`-wrapped one so
+    /// they stay in sync.
     fn convert_type_alias_data(&self, ta: &TypeAliasData) -> TspType {
         match ta {
             TypeAliasData::Value(alias) => self.convert(&alias.as_type()),
-            TypeAliasData::Ref(r) => self.typing_class(r.name.as_str(), TypeFlags::INSTANTIABLE),
+            TypeAliasData::Ref(r) => self.alias_ref_class(r),
         }
+    }
+
+    /// Build a TSP `ClassType` for a type-alias reference, resolving its
+    /// declaration against the alias's *own* defining module (`r.module_name`)
+    /// rather than assuming `typing`. The export resolver pins the exact
+    /// definition range; when it is unavailable we fall back to a zero range in
+    /// the alias's real module file (`r.module_path`) — still the correct file,
+    /// just an imprecise position — never a bare builtin or the wrong module.
+    fn alias_ref_class(&self, r: &TypeAliasRef) -> TspType {
+        let (uri, range) = self
+            .resolve_export
+            .and_then(|resolve| resolve(r.module_name, &r.name))
+            .map_or_else(
+                || (path_to_uri(&r.module_path), zero_range()),
+                |(module_path, lsp_range)| (path_to_uri(&module_path), lsp_range_to_tsp(lsp_range)),
+            );
+        TspType::Class(TspClassType {
+            declaration: Declaration::Regular(RegularDeclaration {
+                kind: DeclarationKind::Regular,
+                category: DeclarationCategory::Class,
+                name: Some(r.name.to_string()),
+                node: Node { range, uri },
+            }),
+            flags: TypeFlags::INSTANTIABLE,
+            id: next_id(),
+            kind: TypeKind::Class,
+            literal_value: None,
+            type_alias_info: None,
+            type_args: None,
+        })
     }
 
     /// Convert a pyrefly function to a TSP `FunctionType` with declaration info.
@@ -444,29 +596,7 @@ impl TypeConverter<'_> {
         bound_to_type: Option<Box<TspType>>,
     ) -> TspType {
         let ret = self.convert(&callable.ret);
-        let declaration = if let FunctionKind::Def(func_id) = kind {
-            let module_path = func_id.module.path();
-            let uri = path_to_uri(module_path);
-            let range = self
-                .resolve_func_range
-                .and_then(|resolver| resolver(func_id))
-                .unwrap_or_default();
-            let lsp_range = func_id.module.to_lsp_range(range);
-            Declaration::Regular(RegularDeclaration {
-                category: DeclarationCategory::Function,
-                kind: DeclarationKind::Regular,
-                name: Some(func_id.name.to_string()),
-                node: Node {
-                    range: lsp_range_to_tsp(lsp_range),
-                    uri,
-                },
-            })
-        } else {
-            Declaration::Synthesized(SynthesizedDeclaration {
-                kind: DeclarationKind::Synthesized,
-                uri: String::new(),
-            })
-        };
+        let declaration = self.function_declaration(kind);
         let specialized_types = self.specialized_types(callable, &ret);
 
         TspType::Function(TspFunctionType {
@@ -512,14 +642,119 @@ impl TypeConverter<'_> {
         })
     }
 
-    /// Build a TSP `ClassType` whose declaration points at `typing.<name>`.
+    /// Convert a `Quantified` (solver-internal TypeVar placeholder) to a TSP
+    /// `TypeVar`.
+    ///
+    /// A `Quantified` carries a `QuantifiedIdentity` pinning the source module
+    /// and range where its TypeVar was declared. When the export-location
+    /// resolver can map that `(module, name)` back to a real definition we
+    /// build a `RegularDeclaration` with the true source location, so Pylance
+    /// resolves the declaration and renders the TypeVar's name instead of
+    /// `Unknown`. Otherwise we fall back to a synthesized (locationless)
+    /// declaration.
+    fn convert_quantified(&self, q: &Quantified) -> TspType {
+        if let Some(resolve) = self.resolve_export {
+            let identity = q.identity();
+            if let Some((module_path, lsp_range)) = resolve(identity.module, &q.name) {
+                // A PEP 695 type parameter (`def f[T]()`) is a real type-param
+                // declaration; a legacy `T = TypeVar("T")` resolves to a module-
+                // level *variable* in the consumer. Use the matching category so
+                // Pylance's declaration lookup succeeds.
+                let category = match identity.origin {
+                    QuantifiedOrigin::Pep695 => DeclarationCategory::Typeparam,
+                    _ => DeclarationCategory::Variable,
+                };
+                return TspType::Var(DeclaredType {
+                    declaration: Declaration::Regular(RegularDeclaration {
+                        category,
+                        kind: DeclarationKind::Regular,
+                        name: Some(q.name.to_string()),
+                        node: Node {
+                            range: lsp_range_to_tsp(lsp_range),
+                            uri: path_to_uri(&module_path),
+                        },
+                    }),
+                    flags: TypeFlags::NONE,
+                    id: next_id(),
+                    kind: TypeKind::Typevar,
+                    type_alias_info: None,
+                });
+            }
+        }
+
+        synthesized_typevar(q.name.as_str())
+    }
+
+    /// Build a declaration for a function described by `kind`.
+    ///
+    /// Resolution order:
+    ///  1. A `Def` whose `FuncId` carries a `def_index`: use the binding-table
+    ///     range via `resolve_func_range`.
+    ///  2. Otherwise, resolve the function by `(module, name)` through the
+    ///     export-location resolver. This covers imported user functions whose
+    ///     `FuncId` lacks a `def_index`, and special functions that are not
+    ///     `Def` at all (e.g. `typing.overload`).
+    ///  3. Fall back to a zero range pointing at the defining module (for
+    ///     `Def`), or a synthesized declaration when even the module is unknown.
+    fn function_declaration(&self, kind: &FunctionKind) -> Declaration {
+        if let FunctionKind::Def(func_id) = kind
+            && let Some(range) = self.resolve_func_range.and_then(|resolve| resolve(func_id))
+        {
+            let lsp_range = func_id.module.to_lsp_range(range);
+            return Declaration::Regular(RegularDeclaration {
+                category: DeclarationCategory::Function,
+                kind: DeclarationKind::Regular,
+                name: Some(func_id.name.to_string()),
+                node: Node {
+                    range: lsp_range_to_tsp(lsp_range),
+                    uri: path_to_uri(func_id.module.path()),
+                },
+            });
+        }
+
+        let name = kind.function_name();
+        if let Some((module_path, lsp_range)) = self
+            .resolve_export
+            .and_then(|resolve| resolve(kind.module_name(), name.as_ref()))
+        {
+            return Declaration::Regular(RegularDeclaration {
+                category: DeclarationCategory::Function,
+                kind: DeclarationKind::Regular,
+                name: Some(name.to_string()),
+                node: Node {
+                    range: lsp_range_to_tsp(lsp_range),
+                    uri: path_to_uri(&module_path),
+                },
+            });
+        }
+
+        if let FunctionKind::Def(func_id) = kind {
+            return Declaration::Regular(RegularDeclaration {
+                category: DeclarationCategory::Function,
+                kind: DeclarationKind::Regular,
+                name: Some(func_id.name.to_string()),
+                node: Node {
+                    range: zero_range(),
+                    uri: path_to_uri(func_id.module.path()),
+                },
+            });
+        }
+
+        Declaration::Synthesized(SynthesizedDeclaration {
+            kind: DeclarationKind::Synthesized,
+            uri: String::new(),
+        })
+    }
+
+    /// Build a TSP `ClassType` whose declaration points at `typing.<name>`,
+    /// resolving the real definition range from the typeshed when possible.
     /// Used for `SpecialForm`, anonymous `TypedDict`, `LiteralString`,
     /// `Concatenate`, `ParamSpec`, and `TypeAlias::Ref` where pyrefly does not
     /// have an explicit `Class` backing but the consumer needs a typed handle
     /// it can render and resolve via the typeshed.
     fn typing_class(&self, name: &str, flags: TypeFlags) -> TspType {
         TspType::Class(TspClassType {
-            declaration: Declaration::Regular(make_typing_class_declaration(name)),
+            declaration: Declaration::Regular(self.typing_class_declaration(name)),
             flags,
             id: next_id(),
             kind: TypeKind::Class,
@@ -527,6 +762,28 @@ impl TypeConverter<'_> {
             type_alias_info: None,
             type_args: None,
         })
+    }
+
+    /// Build a class declaration for `typing.<name>`. Resolves the real source
+    /// range via the export-location resolver; falls back to a zero range
+    /// pointing at bundled `typing.pyi` when unavailable.
+    fn typing_class_declaration(&self, name: &str) -> RegularDeclaration {
+        let symbol = Name::new(name);
+        if let Some((module_path, lsp_range)) = self
+            .resolve_export
+            .and_then(|resolve| resolve(ModuleName::typing(), &symbol))
+        {
+            return RegularDeclaration {
+                kind: DeclarationKind::Regular,
+                category: DeclarationCategory::Class,
+                name: Some(name.to_owned()),
+                node: Node {
+                    range: lsp_range_to_tsp(lsp_range),
+                    uri: path_to_uri(&module_path),
+                },
+            };
+        }
+        make_typing_class_declaration(name)
     }
 
     /// Convert a pyrefly `Overload` to a TSP `OverloadedType`.
@@ -561,6 +818,26 @@ impl TypeConverter<'_> {
             type_alias_info: None,
         })
     }
+}
+
+/// Force the `INSTANTIABLE` flag on any TSP type variant, overwriting other
+/// flags (e.g. clearing `INSTANCE`). Used for `type[X]`, whose inner type may
+/// convert to any TSP shape but always denotes a class object. Exhaustive so
+/// the compiler flags new variants.
+fn mark_instantiable(mut ty: TspType) -> TspType {
+    match &mut ty {
+        TspType::BuiltInType(t) => t.flags = TypeFlags::INSTANTIABLE,
+        TspType::Declared(t) => t.flags = TypeFlags::INSTANTIABLE,
+        TspType::Function(t) => t.flags = TypeFlags::INSTANTIABLE,
+        TspType::Class(t) => t.flags = TypeFlags::INSTANTIABLE,
+        TspType::Union(t) => t.flags = TypeFlags::INSTANTIABLE,
+        TspType::Module(t) => t.flags = TypeFlags::INSTANTIABLE,
+        TspType::Var(t) => t.flags = TypeFlags::INSTANTIABLE,
+        TspType::Overloaded(t) => t.flags = TypeFlags::INSTANTIABLE,
+        TspType::Synthesized(t) => t.flags = TypeFlags::INSTANTIABLE,
+        TspType::Reference(t) => t.flags = TypeFlags::INSTANTIABLE,
+    }
+    ty
 }
 
 /// Convert a pyrefly `Class` (class definition object) to a TSP `ClassType`
@@ -633,6 +910,35 @@ fn convert_literal(lit: &pyrefly_types::literal::Literal) -> TspType {
             }
         }
     }
+}
+
+/// Convert a `Sentinel` to a TSP `ClassType` carrying a `SentinelLiteral`. The
+/// sentinel's `QName` supplies both the enclosing class declaration and the
+/// literal's class name and defining location.
+fn convert_sentinel(sentinel: &Sentinel) -> TspType {
+    let qname = sentinel.qname();
+    let node = Node {
+        range: lsp_range_to_tsp(qname.module().to_lsp_range(qname.range())),
+        uri: path_to_uri(qname.module_path()),
+    };
+    TspType::Class(TspClassType {
+        declaration: Declaration::Regular(RegularDeclaration {
+            category: DeclarationCategory::Class,
+            kind: DeclarationKind::Regular,
+            name: Some(qname.id().to_string()),
+            node: node.clone(),
+        }),
+        flags: TypeFlags::INSTANCE.with_literal(),
+        id: next_id(),
+        kind: TypeKind::Class,
+        literal_value: Some(LiteralValue::Sentinel(SentinelLiteral {
+            class_name: qname.id().to_string(),
+            class_node: node,
+            module_name: qname.module_name().to_string(),
+        })),
+        type_alias_info: None,
+        type_args: None,
+    })
 }
 
 /// Build a declaration for a class in `builtins.pyi`.
@@ -805,17 +1111,15 @@ mod tests {
     use pyrefly_types::literal::LitStyle;
     use pyrefly_types::module::ModuleType;
     use pyrefly_types::quantified::AnchorIndex;
-    use pyrefly_types::quantified::Quantified;
     use pyrefly_types::quantified::QuantifiedIdentity;
-    use pyrefly_types::quantified::QuantifiedOrigin;
     use pyrefly_types::special_form::SpecialForm;
+    use pyrefly_types::type_alias::TypeAliasIndex;
     use pyrefly_types::type_var::PreInferenceVariance;
     use pyrefly_types::type_var::Restriction;
     use pyrefly_types::types::AnyStyle;
     use pyrefly_types::types::NeverStyle;
     use pyrefly_types::types::Type as PyreflyType;
     use pyrefly_types::types::Var;
-    use ruff_python_ast::name::Name;
     use tsp_types::SynthesizedType;
     use tsp_types::SynthesizedTypeMetadata;
 
@@ -892,8 +1196,20 @@ mod tests {
     fn test_convert_none() {
         let tsp = convert_type(&PyreflyType::None);
         match tsp {
-            TspType::BuiltInType(b) => assert_eq!(b.name, "none"),
-            other => panic!("expected BuiltInType, got {other:?}"),
+            TspType::Class(c) => {
+                assert!(c.flags.contains(TypeFlags::INSTANCE));
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("NoneType"));
+                assert_eq!(decl.category, DeclarationCategory::Class);
+                assert!(
+                    decl.node.uri.contains("types.pyi"),
+                    "expected types URI, got {}",
+                    decl.node.uri
+                );
+            }
+            other => panic!("expected Class, got {other:?}"),
         }
     }
 
@@ -907,12 +1223,95 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_type_guard_and_type_is_are_bool_class() {
+        // `TypeGuard`/`TypeIs` erase to their runtime type `bool`, emitted as
+        // the real `bool` class rather than an off-spec `bool` `BuiltInType`.
+        for ty in [
+            PyreflyType::TypeGuard(Box::new(PyreflyType::None)),
+            PyreflyType::TypeIs(Box::new(PyreflyType::None)),
+        ] {
+            match convert_type(&ty) {
+                TspType::Class(c) => {
+                    assert!(c.flags.contains(TypeFlags::INSTANCE));
+                    let Declaration::Regular(decl) = c.declaration else {
+                        panic!("expected RegularDeclaration");
+                    };
+                    assert_eq!(decl.name.as_deref(), Some("bool"));
+                    assert_eq!(decl.category, DeclarationCategory::Class);
+                }
+                other => panic!("expected bool Class, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_convert_int_is_int_class() {
+        use pyrefly_types::dimension::Int;
+
+        // A `Int` is an integer tensor dimension, emitted as the real `int`
+        // class rather than an off-spec `int` `BuiltInType`.
+        for ty in [PyreflyType::Int(Int::literal(6))] {
+            match convert_type(&ty) {
+                TspType::Class(c) => {
+                    assert!(c.flags.contains(TypeFlags::INSTANCE));
+                    let Declaration::Regular(decl) = c.declaration else {
+                        panic!("expected RegularDeclaration");
+                    };
+                    assert_eq!(decl.name.as_deref(), Some("int"));
+                    assert_eq!(decl.category, DeclarationCategory::Class);
+                }
+                other => panic!("expected int Class, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_convert_sentinel_is_sentinel_literal_class() {
+        use pyrefly_python::module::Module;
+        use pyrefly_python::nesting_context::NestingContext;
+        use ruff_python_ast::Identifier;
+
+        // A sentinel is emitted as a `ClassType` carrying a `SentinelLiteral`
+        // sourced from its own definition, not an off-spec `sentinel`
+        // `BuiltInType`.
+        let module = Module::new(
+            ModuleName::from_str("dataclasses"),
+            ModulePath::bundled_typeshed(PathBuf::from("dataclasses.pyi")),
+            Arc::new(String::new()),
+        );
+        let sentinel = Sentinel::new(
+            Identifier::new(Name::new("_MISSING_TYPE"), TextRange::default()),
+            NestingContext::toplevel(),
+            module,
+        );
+        match convert_type(&PyreflyType::Sentinel(sentinel)) {
+            TspType::Class(c) => {
+                let Some(LiteralValue::Sentinel(lit)) = c.literal_value else {
+                    panic!("expected SentinelLiteral, got {:?}", c.literal_value);
+                };
+                assert_eq!(lit.class_name, "_MISSING_TYPE");
+                assert_eq!(lit.module_name, "dataclasses");
+                assert!(
+                    lit.class_node.uri.contains("dataclasses.pyi"),
+                    "expected dataclasses URI, got {}",
+                    lit.class_node.uri
+                );
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("_MISSING_TYPE"));
+            }
+            other => panic!("expected sentinel Class, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_unique_ids() {
         let a = convert_type(&PyreflyType::None);
         let b = convert_type(&PyreflyType::Ellipsis);
         let id_a = match &a {
-            TspType::BuiltInType(b) => b.id,
-            _ => panic!("expected BuiltInType"),
+            TspType::Class(c) => c.id,
+            _ => panic!("expected Class"),
         };
         let id_b = match &b {
             TspType::BuiltInType(b) => b.id,
@@ -989,10 +1388,15 @@ mod tests {
                 assert_eq!(u.kind, TypeKind::Union);
                 assert_eq!(u.flags, TypeFlags::NONE);
                 assert_eq!(u.sub_types.len(), 2);
-                // First member should be BuiltIn "none"
+                // First member should be `types.NoneType`.
                 match &u.sub_types[0] {
-                    TspType::BuiltInType(b) => assert_eq!(b.name, "none"),
-                    other => panic!("expected BuiltInType for first member, got {other:?}"),
+                    TspType::Class(c) => {
+                        let Declaration::Regular(decl) = &c.declaration else {
+                            panic!("expected RegularDeclaration");
+                        };
+                        assert_eq!(decl.name.as_deref(), Some("NoneType"));
+                    }
+                    other => panic!("expected Class for first member, got {other:?}"),
                 }
                 // Second member should be BuiltIn "any"
                 match &u.sub_types[1] {
@@ -1142,6 +1546,24 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_type_of_typevar_is_instantiable() {
+        // `type[T]` where T is a TypeVar must stay instantiable. The inner
+        // TypeVar converts to a `TspType::Var`, and the `Type(inner)` arm must
+        // propagate the INSTANTIABLE flag onto it rather than dropping it.
+        let tv = make_quantified("T", "mod", QuantifiedOrigin::Pep695);
+        let ty = PyreflyType::type_of(PyreflyType::Quantified(Box::new(tv)));
+        let tsp = convert_type(&ty);
+        match tsp {
+            TspType::Var(v) => assert!(
+                v.flags.contains(TypeFlags::INSTANTIABLE),
+                "type[T] should be instantiable, got flags {:?}",
+                v.flags
+            ),
+            other => panic!("expected Var, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_convert_module_without_resolver_has_empty_uri() {
         let ty = PyreflyType::Module(ModuleType::new_as(ModuleName::from_str("pkg")));
         let tsp = convert_type(&ty);
@@ -1164,7 +1586,14 @@ mod tests {
                 None
             }
         };
-        let tsp = convert_type_with_resolvers(&ty, None, Some(&module_path_resolver));
+        let stdlib = TestStdlib::new();
+        let tsp = convert_type_with_resolvers(
+            &ty,
+            None,
+            Some(&module_path_resolver),
+            None,
+            stdlib.classes(),
+        );
         match tsp {
             TspType::Module(m) => {
                 assert_eq!(m.module_name, "pkg");
@@ -1208,6 +1637,51 @@ mod tests {
                 };
                 assert_eq!(decl.name.as_deref(), Some("Literal"));
                 assert_eq!(decl.category, DeclarationCategory::Class);
+                assert!(
+                    decl.node.uri.contains("typing.pyi"),
+                    "expected typing URI, got {}",
+                    decl.node.uri
+                );
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_special_form_uses_export_resolver_location() {
+        // When an export resolver is available, the typing class declaration
+        // should carry the resolved source location instead of a zero range.
+        let ty = PyreflyType::SpecialForm(SpecialForm::Final);
+        let range = lsp_types::Range {
+            start: lsp_types::Position {
+                line: 99,
+                character: 0,
+            },
+            end: lsp_types::Position {
+                line: 99,
+                character: 5,
+            },
+        };
+        let resolver = |module: ModuleName, name: &Name| {
+            assert_eq!(module, ModuleName::typing());
+            assert_eq!(name.as_str(), "Final");
+            Some((
+                ModulePath::filesystem(PathBuf::from("/typeshed/typing.pyi")),
+                range,
+            ))
+        };
+        match convert_type_with_resolvers(
+            &ty,
+            None,
+            None,
+            Some(&resolver),
+            TestStdlib::new().classes(),
+        ) {
+            TspType::Class(c) => {
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.node.range.start.line, 99);
                 assert!(
                     decl.node.uri.contains("typing.pyi"),
                     "expected typing URI, got {}",
@@ -1268,6 +1742,78 @@ mod tests {
     }
 
     #[test]
+    fn test_type_alias_ref_resolves_against_own_module_not_typing() {
+        let make_ref = || TypeAliasRef {
+            name: Name::new_static("MyAlias"),
+            args: None,
+            module_name: ModuleName::from_str("mymod"),
+            module_path: ModulePath::filesystem(PathBuf::from("/repo/mymod.py")),
+            index: TypeAliasIndex(0),
+        };
+
+        // Without a resolver, the fallback points at the alias's own module
+        // file (not `typing.pyi`) — the correct file, just a zero range.
+        let ty = PyreflyType::TypeAlias(Box::new(TypeAliasData::Ref(make_ref())));
+        match convert_type(&ty) {
+            TspType::Class(c) => {
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("MyAlias"));
+                assert!(
+                    decl.node.uri.contains("mymod.py"),
+                    "expected the alias's own module URI, got {}",
+                    decl.node.uri
+                );
+                assert!(
+                    !decl.node.uri.contains("typing"),
+                    "must not fall back to typing, got {}",
+                    decl.node.uri
+                );
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+
+        // With a resolver, the declaration carries the real definition range
+        // resolved against the alias's defining module.
+        let range = lsp_types::Range {
+            start: lsp_types::Position {
+                line: 7,
+                character: 5,
+            },
+            end: lsp_types::Position {
+                line: 7,
+                character: 12,
+            },
+        };
+        let resolver = |module: ModuleName, name: &Name| {
+            assert_eq!(module, ModuleName::from_str("mymod"));
+            assert_eq!(name.as_str(), "MyAlias");
+            Some((
+                ModulePath::filesystem(PathBuf::from("/repo/mymod.py")),
+                range,
+            ))
+        };
+        let ty = PyreflyType::TypeAlias(Box::new(TypeAliasData::Ref(make_ref())));
+        match convert_type_with_resolvers(
+            &ty,
+            None,
+            None,
+            Some(&resolver),
+            TestStdlib::new().classes(),
+        ) {
+            TspType::Class(c) => {
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.node.range.start.line, 7);
+                assert!(decl.node.uri.contains("mymod.py"));
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_convert_quantified_without_resolver_is_synthesized_typevar() {
         // No export resolver → a locationless synthesized TypeVar.
         let ty = PyreflyType::Quantified(Box::new(make_quantified(
@@ -1284,6 +1830,87 @@ mod tests {
                 assert_eq!(decl.name.as_deref(), Some("T"));
                 assert_eq!(decl.category, DeclarationCategory::Typeparam);
                 assert_eq!(decl.node.uri, "");
+            }
+            other => panic!("expected Var, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_pep695_quantified_with_resolver_uses_source_location() {
+        // A PEP 695 type parameter resolves to a Typeparam declaration at the
+        // resolved source location.
+        let ty = PyreflyType::Quantified(Box::new(make_quantified(
+            "T",
+            "mymod",
+            QuantifiedOrigin::Pep695,
+        )));
+        let range = lsp_types::Range {
+            start: lsp_types::Position {
+                line: 3,
+                character: 6,
+            },
+            end: lsp_types::Position {
+                line: 3,
+                character: 7,
+            },
+        };
+        let resolver = |module: ModuleName, name: &Name| {
+            assert_eq!(module, ModuleName::from_str("mymod"));
+            assert_eq!(name.as_str(), "T");
+            Some((
+                ModulePath::filesystem(PathBuf::from("/repo/mymod.py")),
+                range,
+            ))
+        };
+        match convert_type_with_resolvers(
+            &ty,
+            None,
+            None,
+            Some(&resolver),
+            TestStdlib::new().classes(),
+        ) {
+            TspType::Var(v) => {
+                let Declaration::Regular(decl) = v.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.category, DeclarationCategory::Typeparam);
+                assert_eq!(decl.node.range.start.line, 3);
+                assert!(
+                    decl.node.uri.contains("mymod.py"),
+                    "expected resolved URI, got {}",
+                    decl.node.uri
+                );
+            }
+            other => panic!("expected Var, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_legacy_quantified_with_resolver_is_variable_category() {
+        // A legacy `T = TypeVar("T")` resolves to a module-level *variable*.
+        let ty = PyreflyType::Quantified(Box::new(make_quantified(
+            "T",
+            "mymod",
+            QuantifiedOrigin::ScopedLegacy,
+        )));
+        let resolver = |_module: ModuleName, _name: &Name| {
+            Some((
+                ModulePath::filesystem(PathBuf::from("/repo/mymod.py")),
+                lsp_types::Range::default(),
+            ))
+        };
+        match convert_type_with_resolvers(
+            &ty,
+            None,
+            None,
+            Some(&resolver),
+            TestStdlib::new().classes(),
+        ) {
+            TspType::Var(v) => {
+                let Declaration::Regular(decl) = v.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.category, DeclarationCategory::Variable);
             }
             other => panic!("expected Var, got {other:?}"),
         }
@@ -1338,14 +1965,119 @@ mod tests {
                 let specialized = f.specialized_types.expect("expected specialized_types");
                 assert_eq!(specialized.parameter_types.len(), 2);
                 match &specialized.parameter_types[0] {
-                    TspType::BuiltInType(b) => assert_eq!(b.name, "none"),
-                    other => panic!("expected BuiltInType, got {other:?}"),
+                    TspType::Class(c) => {
+                        let Declaration::Regular(decl) = &c.declaration else {
+                            panic!("expected RegularDeclaration");
+                        };
+                        assert_eq!(decl.name.as_deref(), Some("NoneType"));
+                    }
+                    other => panic!("expected Class, got {other:?}"),
                 }
                 match &specialized.parameter_types[1] {
                     TspType::BuiltInType(b) => assert_eq!(b.name, "ellipsis"),
                     other => panic!("expected BuiltInType, got {other:?}"),
                 }
+                match specialized.return_type.as_deref() {
+                    Some(TspType::Class(c)) => {
+                        let Declaration::Regular(decl) = &c.declaration else {
+                            panic!("expected RegularDeclaration");
+                        };
+                        assert_eq!(decl.name.as_deref(), Some("NoneType"));
+                    }
+                    other => panic!("expected NoneType Class return type, got {other:?}"),
+                }
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_callable_populates_specialized_types() {
+        // A `typing.Callable`'s parameter and return types are carried in
+        // `specialized_types`, mirroring `convert_function`. For a return
+        // annotation like `Callable[[int], str]`, the consumer can recover the
+        // parameter types instead of rendering them as Unknown/Any.
+        let callable = Callable::list(
+            ParamList::new(vec![Param::Pos(
+                Name::new_static("a"),
+                PyreflyType::None,
+                Required::Required,
+            )]),
+            PyreflyType::Ellipsis,
+        );
+        let ty = PyreflyType::Callable(Box::new(callable));
+        match convert_type(&ty) {
+            TspType::Function(f) => {
+                assert!(f.flags.contains(TypeFlags::CALLABLE));
+                assert!(f.return_type.is_some(), "return type should be preserved");
+                let specialized = f
+                    .specialized_types
+                    .expect("Callable parameter types must be carried in specialized_types");
+                assert_eq!(specialized.parameter_types.len(), 1);
+                match &specialized.parameter_types[0] {
+                    TspType::Class(c) => {
+                        let Declaration::Regular(decl) = &c.declaration else {
+                            panic!("expected RegularDeclaration");
+                        };
+                        assert_eq!(decl.name.as_deref(), Some("NoneType"));
+                    }
+                    other => panic!("expected Class, got {other:?}"),
+                }
                 assert!(specialized.return_type.is_some());
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_function_declaration_resolves_special_function_via_export() {
+        // `typing.overload` is FunctionKind::Overload (not a Def). The export
+        // resolver should give it a real declaration location.
+        let callable = Callable::list(ParamList::new(vec![]), PyreflyType::None);
+        let func = Function {
+            signature: callable,
+            metadata: FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            },
+        };
+        let ty = PyreflyType::Function(Box::new(func));
+        let range = lsp_types::Range {
+            start: lsp_types::Position {
+                line: 12,
+                character: 4,
+            },
+            end: lsp_types::Position {
+                line: 12,
+                character: 12,
+            },
+        };
+        // The `None` return converts through the stdlib `NoneType` class, not
+        // the export resolver, so the only lookup here is `typing.overload`;
+        // any other lookup is a regression.
+        let resolver = |module: ModuleName, name: &Name| {
+            if module == ModuleName::typing() && name.as_str() == "overload" {
+                return Some((
+                    ModulePath::filesystem(PathBuf::from("/typeshed/typing.pyi")),
+                    range,
+                ));
+            }
+            panic!("unexpected export lookup for {module}.{name}");
+        };
+        match convert_type_with_resolvers(
+            &ty,
+            None,
+            None,
+            Some(&resolver),
+            TestStdlib::new().classes(),
+        ) {
+            TspType::Function(f) => {
+                let Declaration::Regular(decl) = f.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("overload"));
+                assert_eq!(decl.category, DeclarationCategory::Function);
+                assert_eq!(decl.node.range.start.line, 12);
             }
             other => panic!("expected Function, got {other:?}"),
         }

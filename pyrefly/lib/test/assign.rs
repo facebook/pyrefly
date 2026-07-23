@@ -954,24 +954,7 @@ assert_type(y, str)
 testcase!(
     test_unpack_string_too_many,
     r#"
-a, b = "abc"  # E: Cannot unpack
-"#,
-);
-
-testcase!(
-    test_unpack_string_exact_length,
-    r#"
-a, b = "12"
-"#,
-);
-
-testcase!(
-    test_unpack_string_splat,
-    r#"
-x, *y = "123"
-x, *y = "12"
-x, *y = "1"
-x, *y = ""  # E: Cannot unpack
+ a, b = "abc"  # E: Cannot unpack Literal['abc'] (of size 3) into 2 values
 "#,
 );
 
@@ -979,7 +962,36 @@ x, *y = ""  # E: Cannot unpack
 testcase!(
     test_unpack_string_too_few,
     r#"
-a, b = "x"  # E: Cannot unpack
+ a, b = "x"  # E: Cannot unpack Literal['x'] (of size 1) into 2 values
+"#,
+);
+
+testcase!(
+    test_unpack_string_exact,
+    r#"
+a, b, c = "abc"
+"#,
+);
+
+testcase!(
+    test_unpack_string_splat,
+    r#"
+a, *b = "abc"
+x, y, *z = "w"  # E: Cannot unpack Literal['w'] (of size 1) into 2+ values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_too_many,
+    r#"
+a, b = b"abc"  # E: Cannot unpack Literal[b'abc'] (of size 3) into 2 values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_exact,
+    r#"
+ a, b, c = b"abc"
 "#,
 );
 
