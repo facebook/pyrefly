@@ -40,6 +40,8 @@ pub enum UnconfiguredOverride {
     Default,
     /// Force `Strict`.
     Strict,
+    /// Force All.
+    All,
 }
 
 impl UnconfiguredOverride {
@@ -52,6 +54,7 @@ impl UnconfiguredOverride {
             Self::Legacy => Some(Preset::Legacy),
             Self::Default => Some(Preset::Default),
             Self::Strict => Some(Preset::Strict),
+            Self::All => Some(Preset::All),
         }
     }
 }
@@ -65,6 +68,7 @@ impl From<Option<Preset>> for UnconfiguredOverride {
             Some(Preset::Legacy) => Self::Legacy,
             Some(Preset::Default) => Self::Default,
             Some(Preset::Strict) => Self::Strict,
+            Some(Preset::All) => Self::All,
         }
     }
 }
@@ -212,6 +216,35 @@ mod tests {
         // includes — the backfill must kick in so Pyrefly still
         // discovers project files.
         assert!(!cfg.project_includes.is_empty());
+        Ok(())
+    }
+
+    /// The in-memory migration path (used when running pyrefly with no
+    /// `pyrefly.toml`) must expand `$MYPY_CONFIG_FILE_DIR` too — not only the
+    /// on-disk `pyrefly init` path. The variable denotes the config's
+    /// directory, which is the same base the caller
+    /// (`apply_unconfigured_resolver_if_applicable`) later resolves relative
+    /// paths against, so it migrates to a relative path that absolutizes back
+    /// to the original location.
+    #[test]
+    fn test_auto_expands_config_file_dir_in_memory() -> anyhow::Result<()> {
+        use std::path::PathBuf;
+
+        let tmp = tempfile::tempdir()?;
+        fs_anyhow::write(
+            &tmp.path().join("mypy.ini"),
+            b"[mypy]\nmypy_path = $MYPY_CONFIG_FILE_DIR/src\n",
+        )?;
+
+        let mut cfg = resolve_unconfigured_config(tmp.path(), UnconfiguredOverride::Auto);
+        // In-memory migration expanded the variable to a portable relative path.
+        assert_eq!(cfg.search_path_from_file, vec![PathBuf::from("src")]);
+
+        // Mirroring `apply_unconfigured_resolver_if_applicable`, the caller then
+        // resolves relative paths against the same root, recovering the real
+        // `$MYPY_CONFIG_FILE_DIR/src` location.
+        cfg.rewrite_with_path_to_config(tmp.path());
+        assert_eq!(cfg.search_path_from_file, vec![tmp.path().join("src")]);
         Ok(())
     }
 

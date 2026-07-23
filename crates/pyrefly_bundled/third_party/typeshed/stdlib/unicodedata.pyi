@@ -10,14 +10,11 @@ UnicodeData File Format 15.0.0.
 
 import sys
 from _typeshed import ReadOnlyBuffer
-from typing import Any, Final, Literal, TypeVar, final, overload
-from typing_extensions import TypeAlias
+from collections.abc import Iterator
+from typing import Final, Literal, TypeAlias, TypeVar, final, overload
 
 ucd_3_2_0: UCD
 unidata_version: Final[str]
-
-if sys.version_info < (3, 10):
-    ucnhash_CAPI: Any
 
 _T = TypeVar("_T")
 
@@ -40,6 +37,7 @@ def combining(chr: str, /) -> int:
     Returns 0 if no combining class is defined.
     """
     ...
+
 @overload
 def decimal(chr: str, /) -> int:
     """
@@ -60,6 +58,7 @@ def decimal(chr: str, default: _T, /) -> int | _T:
     ValueError is raised.
     """
     ...
+
 def decomposition(chr: str, /) -> str:
     """
     Returns the character decomposition mapping assigned to the character chr as string.
@@ -67,6 +66,7 @@ def decomposition(chr: str, /) -> str:
     An empty string is returned in case no such mapping is defined.
     """
     ...
+
 @overload
 def digit(chr: str, /) -> int:
     """
@@ -100,6 +100,16 @@ def is_normalized(form: _NormalizationForm, unistr: str, /) -> bool:
     Valid values for form are 'NFC', 'NFKC', 'NFD', and 'NFKD'.
     """
     ...
+
+if sys.version_info >= (3, 15):
+    def block(chr: str, /) -> str: ...
+    def extended_pictographic(chr: str, /) -> bool: ...
+    def grapheme_cluster_break(chr: str, /) -> str: ...
+    def indic_conjunct_break(chr: str, /) -> str: ...
+    def isxidstart(chr: str, /) -> bool: ...
+    def isxidcontinue(chr: str, /) -> bool: ...
+    def iter_graphemes(unistr: str, start: int = 0, end: int = sys.maxsize, /) -> Iterator[str]: ...
+
 def lookup(name: str | ReadOnlyBuffer, /) -> str:
     """
     Look up character by name.
@@ -116,6 +126,7 @@ def mirrored(chr: str, /) -> int:
     character in bidirectional text, 0 otherwise.
     """
     ...
+
 @overload
 def name(chr: str, /) -> str:
     """
@@ -134,6 +145,7 @@ def name(chr: str, default: _T, /) -> str | _T:
     ValueError is raised.
     """
     ...
+
 def normalize(form: _NormalizationForm, unistr: str, /) -> str:
     """
     Return the normal form 'form' for the Unicode string unistr.
@@ -141,6 +153,7 @@ def normalize(form: _NormalizationForm, unistr: str, /) -> str:
     Valid values for form are 'NFC', 'NFKC', 'NFD', and 'NFKD'.
     """
     ...
+
 @overload
 def numeric(chr: str, /) -> float:
     """
@@ -161,6 +174,7 @@ def numeric(chr: str, default: _T, /) -> float | _T:
     ValueError is raised.
     """
     ...
+
 @final
 class UCD:
     # The methods below are constructed from the same array in C
@@ -183,6 +197,7 @@ class UCD:
         Returns 0 if no combining class is defined.
         """
         ...
+
     @overload
     def decimal(self, chr: str, /) -> int:
         """
@@ -203,6 +218,7 @@ class UCD:
         ValueError is raised.
         """
         ...
+
     def decomposition(self, chr: str, /) -> str:
         """
         Returns the character decomposition mapping assigned to the character chr as string.
@@ -210,6 +226,7 @@ class UCD:
         An empty string is returned in case no such mapping is defined.
         """
         ...
+
     @overload
     def digit(self, chr: str, /) -> int:
         """
@@ -230,6 +247,7 @@ class UCD:
         ValueError is raised.
         """
         ...
+
     def east_asian_width(self, chr: str, /) -> _EastAsianWidth:
         """Returns the east asian width assigned to the character chr as string."""
         ...
@@ -256,6 +274,7 @@ class UCD:
         character in bidirectional text, 0 otherwise.
         """
         ...
+
     @overload
     def name(self, chr: str, /) -> str:
         """
@@ -274,6 +293,7 @@ class UCD:
         ValueError is raised.
         """
         ...
+
     def normalize(self, form: _NormalizationForm, unistr: str, /) -> str:
         """
         Return the normal form 'form' for the Unicode string unistr.
@@ -281,6 +301,7 @@ class UCD:
         Valid values for form are 'NFC', 'NFKC', 'NFD', and 'NFKD'.
         """
         ...
+
     @overload
     def numeric(self, chr: str, /) -> float:
         """

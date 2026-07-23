@@ -493,6 +493,32 @@ files = ["a.py"]
     }
 
     #[test]
+    fn test_run_pyproject_mypy_config_file_dir() -> anyhow::Result<()> {
+        // End-to-end airflow scenario: a pyproject.toml whose [tool.mypy]
+        // `mypy_path` uses `$MYPY_CONFIG_FILE_DIR`. The migrated [tool.pyrefly]
+        // section must contain clean, portable relative paths — no leftover
+        // variable, and no absolutized paths.
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("pyproject.toml");
+        let pyproject = r#"[tool.mypy]
+mypy_path = ["$MYPY_CONFIG_FILE_DIR/airflow-core/src"]
+"#;
+        fs_anyhow::write(&original_config_path, pyproject)?;
+        config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+        let output = fs_anyhow::read_to_string(&original_config_path)?;
+        assert!(output.contains("[tool.pyrefly]"));
+        // The migrated [tool.pyrefly] search-path is a clean, portable relative
+        // path with `$MYPY_CONFIG_FILE_DIR` expanded away. The original
+        // [tool.mypy] section is left intact (it still mentions the variable),
+        // so we assert on the migrated line specifically, not the whole file.
+        assert!(
+            output.contains(r#"search-path = ["airflow-core/src"]"#),
+            "expected clean relative migrated search path; got:\n{output}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_run_pyproject_pyright() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let original_config_path = tmp.path().join("pyproject.toml");

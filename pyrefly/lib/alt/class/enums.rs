@@ -439,7 +439,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Lit::Enum(Box::new(LitEnum {
                     class: enum_.cls.clone(),
                     member: name.clone(),
-                    ty: self.solver().deep_force(ty.clone()),
+                    ty: self.solver().force(ty.clone()),
                 }))
                 .to_implicit_type(),
             )

@@ -138,6 +138,7 @@ fn find_usages_code_action(
         command: Some(Command {
             title,
             command: "pyrefly.findFileUsages".to_owned(),
+            tooltip: None,
             arguments: Some(vec![json!({
                 "uri": uri,
                 "locations": locations,

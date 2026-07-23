@@ -656,7 +656,6 @@ def test(x: tuple[int, ...] | tuple[int, *tuple[int, ...], int] | tuple[int, int
 );
 
 testcase!(
-    bug = "we don't narrow attributes in a positional pattern",
     test_match_class_union,
     r#"
 from typing import assert_type, assert_never, Literal
@@ -673,17 +672,16 @@ class Bar:
 def test(x: Foo | Bar) -> None:
     match x:
         case Foo(1, "a"):
-            # we should narrow x.x and x.y to literals
             assert_type(x, Foo)
-            assert_type(x.x, int)
-            assert_type(x.y, str)
+            assert_type(x.x, Literal[1])
+            assert_type(x.y, Literal["a"])
         case Foo(x = 1, y = ""):
             assert_type(x, Foo)
             assert_type(x.x, Literal[1])
             assert_type(x.y, Literal[""])
         case Bar("bar"):
             assert_type(x, Bar)
-            assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
+            assert_type(x.x, Literal["bar"])
 
 def test_keyword_irrefutable(x: Foo | Bar) -> None:
     match x:
@@ -1047,6 +1045,144 @@ if E.A:  # E: Enum literal `E.A` used as condition
 while E.B:  # E: Enum literal `E.B` used as condition
     ...
 [x for x in range(42) if E.C]  # E: Enum literal `E.C` used as condition
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_instance_always_truthy,
+    r#"
+class NoBool:
+    pass
+
+class HasBool:
+    def __bool__(self) -> bool: ...
+
+class HasLen:
+    def __len__(self) -> int: ...
+
+class InheritsHasBool(HasBool):
+    pass
+
+class InheritsHasLen(HasLen):
+    pass
+
+def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen) -> None:
+    if x:  # E: Instance of `NoBool` used as condition
+        ...
+    while x:  # E: Instance of `NoBool` used as condition
+        ...
+    [i for i in range(10) if x]  # E: Instance of `NoBool` used as condition
+    if y:
+        ...
+    if z:
+        ...
+    if a:
+        ...
+    if b:
+        ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_no_false_positives_for_abstract_types,
+    r#"
+from typing import Hashable, Iterable
+from collections.abc import Sized
+import abc
+
+class MyABC(abc.ABC):
+    pass
+
+# Custom metaclass that mixes ABCMeta with other type-level behavior.
+# Real-world frameworks (e.g. Home Assistant's `ABCCachedProperties`) define
+# such metaclasses, and classes using them should be treated as abstract.
+class MyMixedMeta(abc.ABCMeta):
+    pass
+
+class WithMixedMeta(metaclass=MyMixedMeta):
+    pass
+
+class WithMixedMetaSub(WithMixedMeta):
+    pass
+
+def test(
+    o: object,
+    h: Hashable,
+    it: Iterable[int],
+    sz: Sized,
+    ab: MyABC,
+    mm: WithMixedMeta,
+    mms: WithMixedMetaSub,
+) -> None:
+    # None of these should warn: static type is abstract/protocol/object,
+    # so the concrete runtime instance may define __bool__ or __len__.
+    if o:
+        ...
+    if h:
+        ...
+    if it:
+        ...
+    if sz:
+        ...
+    if ab:
+        ...
+    if mm:
+        ...
+    if mms:
+        ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_no_false_positives_for_descriptors_and_special_classes,
+    r#"
+from dataclasses import dataclass
+from datetime import datetime
+import asyncio
+
+class Descriptor:
+    def __get__(self, obj, objtype=None) -> int: ...
+
+class HasGetattr:
+    def __getattr__(self, name: str) -> object: ...
+
+class HasGetattribute:
+    def __getattribute__(self, name: str) -> object: ...
+
+@dataclass
+class MyData:
+    x: int
+    y: str
+
+def test(
+    d: Descriptor,
+    g1: HasGetattr,
+    g2: HasGetattribute,
+    md: MyData,
+    dt: datetime,
+    fut: asyncio.Future[int],
+    lk: asyncio.Lock,
+) -> None:
+    # None of these should warn:
+    # - descriptor classes (with __get__) might intercept attribute access
+    # - classes with __getattr__/__getattribute__ have dynamic attribute behavior
+    # - dataclasses are commonly used with `if obj:` as a defensive guard
+    # - stdlib types come from bundled stubs and often have runtime behavior
+    #   not modeled in the stubs
+    if d:
+        ...
+    if g1:
+        ...
+    if g2:
+        ...
+    if md:
+        ...
+    if dt:
+        ...
+    if fut:
+        ...
+    if lk:
+        ...
     "#,
 );
 
@@ -2612,5 +2748,52 @@ def f(a: int) -> int:
     if a > 0:
         return b  # E: `b` may be uninitialized
     return 9
+    "#,
+);
+
+fn env_try_except_typevar() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "compat_typing",
+        r#"
+from typing import TypeVar
+try:
+    from typing import AnyStr
+except ImportError:
+    AnyStr = TypeVar("AnyStr", str, bytes)
+__all__ = ["AnyStr"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_merge_compatible_typevars,
+    env_try_except_typevar(),
+    r#"
+from typing import assert_type
+from collections.abc import Iterable
+from compat_typing import AnyStr
+
+def process(lines: Iterable[AnyStr]) -> None:
+    pass
+
+patterns: list[str] = ["*.pyc"]
+process(lines=patterns)
+    "#,
+);
+
+testcase!(
+    test_do_not_merge_incompatible_typevars,
+    r#"
+from typing import TypeVar
+
+try:
+    T = TypeVar("T", str, bytes)
+except:
+    T = TypeVar("T", int, float)
+
+def f(x: T) -> T:  # E: not in scope  # E: not in scope
+    return x
     "#,
 );

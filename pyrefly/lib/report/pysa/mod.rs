@@ -113,6 +113,8 @@ pub struct PysaProjectModule {
     pub is_init: bool, // Is this a __init__.py(i) file?
     #[serde(skip_serializing_if = "<&bool>::not")]
     pub is_internal: bool, // Is this a module from the project (as opposed to a dependency)?
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    pub failed_to_load: bool, // Source file could not be loaded (common case: non-UTF-8 encoding)
 }
 
 /// Format of the index file `pyrefly.pysa.json`
@@ -227,7 +229,7 @@ impl PysaReporter {
         handles: &[Handle],
         format: PysaFormat,
     ) -> anyhow::Result<Box<Self>> {
-        tracing::info!("Writing pysa results to `{}`", pysa_directory.display());
+        tracing::debug!("Writing pysa results to `{}`", pysa_directory.display());
 
         pyrefly_util::fs_anyhow::create_dir_all(pysa_directory)?;
         let definitions_directory = pysa_directory.join("definitions");
@@ -422,6 +424,9 @@ fn build_module_mapping(
     let mut project_modules = HashMap::new();
     for handle in handles {
         let module_id = module_ids.get_from_handle(handle);
+        let failed_to_load = transaction
+            .get_load(handle)
+            .is_some_and(|load| load.module_info.contents().is_empty() && !load.errors.is_empty());
 
         // Path where we will store the information on the module.
         let info_filename = match handle.path().details() {
@@ -485,6 +490,7 @@ fn build_module_mapping(
                         is_interface: handle.path().is_interface(),
                         is_init: handle.path().is_init(),
                         is_internal: project_handles.contains(handle),
+                        failed_to_load,
                         python_version: handle.sys_info().version(),
                         platform: handle.sys_info().platform().clone(),
                     }

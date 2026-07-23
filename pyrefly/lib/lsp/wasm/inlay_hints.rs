@@ -27,7 +27,10 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::ClassFieldDefinition;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
 use crate::state::lsp::AllOffPartial;
@@ -136,6 +139,22 @@ impl<'a> Transaction<'a> {
         };
         let bindings = self.get_bindings(handle)?;
         let stdlib = self.get_stdlib(handle);
+        let make_type_hint =
+            |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
+                let type_parts = ty.get_types_with_locations(Some(&stdlib));
+                let label_parts = once((prefix.to_owned(), None))
+                    .chain(
+                        type_parts
+                            .iter()
+                            .map(|(text, loc)| (text.clone(), loc.clone())),
+                    )
+                    .collect();
+                InlayHintData {
+                    position,
+                    label_parts,
+                    insertable,
+                }
+            };
         let mut res = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
@@ -156,20 +175,12 @@ impl<'a> Transaction<'a> {
                                 {
                                     ty = return_ty;
                                 }
-                                // Use get_types_with_locations to get type parts with location info
-                                let type_parts = ty.get_types_with_locations(Some(&stdlib));
-                                let label_parts = once((" -> ".to_owned(), None))
-                                    .chain(
-                                        type_parts
-                                            .iter()
-                                            .map(|(text, loc)| (text.clone(), loc.clone())),
-                                    )
-                                    .collect();
-                                res.push(InlayHintData {
-                                    position: fun.def.parameters.range.end(),
-                                    label_parts,
-                                    insertable: true,
-                                });
+                                res.push(make_type_hint(
+                                    " -> ",
+                                    fun.def.parameters.range.end(),
+                                    &ty,
+                                    true,
+                                ));
                             }
                         }
                         _ => {}
@@ -186,10 +197,11 @@ impl<'a> Transaction<'a> {
                         // authoritatively typed; suggesting an explicit
                         // annotation here would be redundant and, for the
                         // receiver case, could mislead users into
-                        // annotating with the RHS-derived type.
+                        // annotating with the RHS-derived type. The same
+                        // applies to receiver-bearing unpacked rebinds.
                         Binding::NameAssign(x) if !x.is_pinned() => (Some(&*x.expr), false),
                         Binding::Expr(None, e) => (Some(&**e), false),
-                        Binding::UnpackedValue(None, unpack_idx, _, pos) => {
+                        Binding::UnpackedValue(None, unpack_idx, _, pos, None) => {
                             // Try to get the element expression from the unpacked source
                             let element_expr =
                                 Self::get_unpacked_element_expr(&bindings, *unpack_idx, *pos);
@@ -218,23 +230,58 @@ impl<'a> Transaction<'a> {
                         is_unpacked && !ty.is_any()
                     };
                     if should_show {
-                        // Use get_types_with_locations to get type parts with location info
-                        let type_parts = ty.get_types_with_locations(Some(&stdlib));
-                        let label_parts = once((": ".to_owned(), None))
-                            .chain(
-                                type_parts
-                                    .iter()
-                                    .map(|(text, loc)| (text.clone(), loc.clone())),
-                            )
-                            .collect();
-                        res.push(InlayHintData {
-                            position: key.range().end(),
-                            label_parts,
-                            insertable: !is_unpacked,
-                        });
+                        res.push(make_type_hint(": ", key.range().end(), &ty, !is_unpacked));
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // Inlay hints for unannotated class attributes defined in methods (e.g. self.x = value in __init__)
+        if inlay_hint_config.variable_types
+            && let Some(answers) = self.get_answers(handle)
+        {
+            for field_idx in bindings.keys::<KeyClassField>() {
+                let field = bindings.get(field_idx);
+                if let ClassFieldDefinition::DefinedInMethod {
+                    values,
+                    annotation: None,
+                    ..
+                } = &field.definition
+                {
+                    let Some(class_field) = answers.get_idx::<KeyClassField>(field_idx) else {
+                        continue;
+                    };
+                    let ty = answers.solver().for_display(class_field.ty());
+                    let expr = match values
+                        .first()
+                        .expect("DefinedInMethod must have at least one value")
+                    {
+                        ExprOrBinding::Expr(e) => Some(e),
+                        ExprOrBinding::Binding(_) => None,
+                    };
+                    // Suppress self.x = x where the RHS is a bare name matching the
+                    // attribute name. The type is already visible at the parameter.
+                    if let Some(Expr::Name(name)) = expr
+                        && *name.id() == *field.name
+                    {
+                        continue;
+                    }
+                    let class_name = if let Type::ClassType(cls) = &ty
+                        && cls.targs().is_empty()
+                    {
+                        Some(cls.name())
+                    } else {
+                        None
+                    };
+                    let should_show = match expr {
+                        Some(e) => is_interesting(e, &ty, class_name),
+                        None => !ty.is_any(),
+                    };
+                    if should_show {
+                        res.push(make_type_hint(": ", field.range.end(), &ty, true));
+                    }
+                }
             }
         }
 

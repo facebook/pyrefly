@@ -45,6 +45,57 @@ mod tests {
         let mut t = TestEnv::new();
         t.add(&path.display().to_string(), input);
         let includes = Globs::new(vec![format!("{}/**/*", tdir.path().display())]).unwrap();
+        run_stubgen_inner(&mut t, includes, config)
+    }
+
+    /// Pydantic shim providing `@dataclass_transform` on `BaseModel` so the
+    /// type checker synthesizes `__init__` for pydantic model subclasses.
+    const PYDANTIC_SHIM: &str = r#"from typing import dataclass_transform
+
+def Field(**kwargs): ...
+
+def computed_field(fn=None, **_kw):
+    return fn
+
+@dataclass_transform(
+    kw_only_default=False,
+    field_specifiers=(Field,),
+)
+class BaseModel:
+    pass
+"#;
+
+    /// Like `run_stubgen`, but injects a minimal pydantic shim so that
+    /// `BaseModel` subclasses get synthesized `__init__` in the stub output.
+    fn run_stubgen_pydantic(input: &str) -> String {
+        let config = ExtractConfig {
+            include_private: false,
+            include_docstrings: false,
+        };
+        let tdir = tempfile::tempdir().unwrap();
+
+        // Write the pydantic shim as a real package on disk.
+        let pydantic_dir = tdir.path().join("pydantic");
+        fs_anyhow::create_dir_all(&pydantic_dir).unwrap();
+        let pydantic_init = pydantic_dir.join("__init__.py");
+        fs_anyhow::write(&pydantic_init, PYDANTIC_SHIM).unwrap();
+
+        // Write the test input alongside the shim.
+        let path = tdir.path().join("input.py");
+        fs_anyhow::write(&path, input).unwrap();
+
+        let mut t = TestEnv::new();
+        t.add(&path.display().to_string(), input);
+        t.add_real_path("pydantic", pydantic_init);
+
+        // Only process the input file — not the pydantic shim.
+        let includes = Globs::new(vec![path.display().to_string()]).unwrap();
+        run_stubgen_inner(&mut t, includes, &config)
+    }
+
+    /// Shared stubgen runner: sets up `FilteredGlobs`, `State`, and
+    /// `Transaction`, then extracts and emits stubs for the matched files.
+    fn run_stubgen_inner(t: &mut TestEnv, includes: Globs, config: &ExtractConfig) -> String {
         let f_globs = Box::new(FilteredGlobs::new(
             includes,
             Globs::empty(),
@@ -53,7 +104,7 @@ mod tests {
         ));
         let config_finder = t.config_finder();
 
-        let expanded = config_finder.checkpoint(f_globs.files()).unwrap();
+        let expanded = config_finder.checkpoint(f_globs.files_iter()).unwrap();
         let state = State::new(config_finder, TEST_THREAD_COUNT);
         let holder = Forgetter::new(state, false);
 
@@ -87,6 +138,18 @@ mod tests {
 
     /// Run a snapshot test for a specific test case directory.
     fn assert_stubgen_snapshot(test_name: &str) {
+        assert_stubgen_snapshot_with(test_name, run_stubgen);
+    }
+
+    /// Like `assert_stubgen_snapshot` but injects the pydantic shim so
+    /// `BaseModel` subclasses get synthesized `__init__` in the output.
+    fn assert_stubgen_pydantic_snapshot(test_name: &str) {
+        assert_stubgen_snapshot_with(test_name, run_stubgen_pydantic);
+    }
+
+    /// Shared snapshot runner: reads `input.py`, produces a stub via
+    /// `stub_fn`, and compares against `expected.pyi`.
+    fn assert_stubgen_snapshot_with(test_name: &str, stub_fn: impl Fn(&str) -> String) {
         let test_dir = get_test_dir().join(test_name);
         let input_path = test_dir.join("input.py");
         let expected_path = test_dir.join("expected.pyi");
@@ -98,7 +161,7 @@ mod tests {
         );
 
         let input = fs_anyhow::read_to_string(&input_path).unwrap();
-        let actual = run_stubgen(&input);
+        let actual = stub_fn(&input);
 
         if std::env::var("STUBGEN_UPDATE_SNAPSHOTS").is_ok() {
             fs_anyhow::create_dir_all(&test_dir).unwrap();
@@ -149,8 +212,23 @@ mod tests {
     }
 
     #[test]
+    fn test_stubgen_unpack_assignments() {
+        assert_stubgen_snapshot("unpack_assignments");
+    }
+
+    #[test]
     fn test_stubgen_imports() {
         assert_stubgen_snapshot("imports");
+    }
+
+    #[test]
+    fn test_stubgen_try_except_imports() {
+        assert_stubgen_snapshot("try_except_imports");
+    }
+
+    #[test]
+    fn test_stubgen_type_checking_or_guard() {
+        assert_stubgen_snapshot("type_checking_or_guard");
     }
 
     #[test]
@@ -161,6 +239,21 @@ mod tests {
     #[test]
     fn test_stubgen_overloads() {
         assert_stubgen_snapshot("overloads");
+    }
+
+    #[test]
+    fn test_stubgen_callable_values() {
+        assert_stubgen_snapshot("callable_values");
+    }
+
+    #[test]
+    fn test_stubgen_class_vars() {
+        assert_stubgen_snapshot("class_vars");
+    }
+
+    #[test]
+    fn test_stubgen_literal_import() {
+        assert_stubgen_snapshot("literal_import");
     }
 
     #[test]
@@ -181,6 +274,16 @@ mod tests {
     #[test]
     fn test_stubgen_dunder_all() {
         assert_stubgen_snapshot("dunder_all");
+    }
+
+    #[test]
+    fn test_stubgen_dunder_all_reexport() {
+        assert_stubgen_snapshot("dunder_all_reexport");
+    }
+
+    #[test]
+    fn test_stubgen_async_generator() {
+        assert_stubgen_snapshot("async_generator");
     }
 
     #[test]
@@ -276,6 +379,62 @@ class A:
             .trim(),
             actual.trim(),
         );
+    }
+
+    /// Parenthesized multi-line annotations, return types, and values stay valid
+    /// when collapsed onto one logical line. See <https://github.com/facebook/pyrefly/issues/3887>.
+    #[test]
+    fn test_stubgen_multiline_parenthesized() {
+        let actual = run_stubgen(
+            r#"
+from typing import Callable
+
+class Agent:
+    instructions: (
+        str
+        | Callable[[int], str]
+        | None
+    ) = None
+
+    def f(
+        self,
+        x: (
+            int
+            | str
+        ),
+    ) -> (
+        int
+        | None
+    ): ...
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+from typing import Callable
+
+
+class Agent:
+    instructions: (str
+        | Callable[[int], str]
+        | None) = None
+
+    def f(self, x: (int
+            | str)) -> (int
+        | None): ...
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
+
+    #[test]
+    fn test_stubgen_dataclass() {
+        assert_stubgen_snapshot("dataclass");
+    }
+
+    #[test]
+    fn test_stubgen_pydantic() {
+        assert_stubgen_pydantic_snapshot("pydantic");
     }
 
     /// Instance attrs from `__init__` are emitted in alphabetical order by name (not assignment

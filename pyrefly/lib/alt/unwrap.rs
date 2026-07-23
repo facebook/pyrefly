@@ -427,30 +427,63 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect()
     }
 
-    pub fn infer_with_decomposed_hint<'b, D>(
+    pub fn infer_with_decomposed_hint<D>(
         &self,
-        hint: Option<HintRef<'_, 'b>>,
-        decompose: impl Fn(&'b Type) -> Option<D>,
+        hint: Option<HintRef<'_, '_>>,
+        decompose: impl Fn(&Type) -> Option<D>,
         infer: impl Fn(Option<D>) -> Type,
     ) -> Type {
-        if let Some(hint) = hint
-            && hint.types().len() <= MAX_DECOMPOSE_HINT_WIDTH
-        {
-            for (hint, vs) in self.solver().partial_sort_by_vars(hint.types()) {
-                let mut ret = None;
-                match self.solver().with_snapshot(&vs, || {
-                    let d = decompose(hint);
-                    if d.is_none() {
-                        return Err(SubsetError::Other);
+        if let Some(hint) = hint {
+            let raw_hints = hint.types();
+            let flattened_hints = self.flatten_alias_union_hints(raw_hints);
+            let hints = flattened_hints.as_ref().map_or(raw_hints, |x| x);
+            let decomposable_width = hints.iter().filter(|h| !h.is_scalar()).count();
+            if decomposable_width <= MAX_DECOMPOSE_HINT_WIDTH {
+                for (hint, vs) in self.solver().partial_sort_by_vars(hints) {
+                    if hint.is_scalar() {
+                        continue;
                     }
-                    ret = Some(infer(d));
-                    self.is_subset_eq_with_reason(ret.as_ref().unwrap(), hint)
-                }) {
-                    SubsetWithSnapshotResult::Ok => return ret.unwrap(),
-                    SubsetWithSnapshotResult::Err(_) => {}
+                    let mut ret = None;
+                    match self.solver().with_snapshot(&vs, || {
+                        let d = decompose(hint);
+                        if d.is_none() {
+                            return Err(SubsetError::Other);
+                        }
+                        ret = Some(infer(d));
+                        self.is_subset_eq_with_reason(ret.as_ref().unwrap(), hint)
+                    }) {
+                        SubsetWithSnapshotResult::Ok => return ret.unwrap(),
+                        SubsetWithSnapshotResult::Err(_) => {}
+                    }
                 }
             }
         }
         infer(None)
+    }
+
+    /// Flatten the hint candidates produced by `HintRef::split`, additionally looking through type
+    /// aliases. Otherwise, if the alias is a union, the solver pins the decomposition vars to
+    /// whichever union arm matches first, which is usually the wrong one.
+    fn flatten_alias_union_hints(&self, hints: &[Type]) -> Option<Vec<Type>> {
+        if !hints
+            .iter()
+            .any(|hint| matches!(hint, Type::UntypedAlias(_)))
+        {
+            return None;
+        }
+        let mut flattened_hints = Vec::new();
+        for hint in hints {
+            if let Type::UntypedAlias(data) = hint {
+                let expanded_alias = self.untype_alias(data);
+                if let Type::Union(u) = expanded_alias {
+                    flattened_hints.extend(u.members);
+                } else {
+                    flattened_hints.push(expanded_alias);
+                }
+            } else {
+                flattened_hints.push(hint.clone());
+            }
+        }
+        Some(flattened_hints)
     }
 }

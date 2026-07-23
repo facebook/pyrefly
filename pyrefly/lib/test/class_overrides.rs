@@ -159,6 +159,29 @@ class C(A):
 );
 
 testcase!(
+    test_override_typevartuple_varargs,
+    r#"
+from typing import Callable
+
+class Base[*Ts]:
+    def encode(self, *values: *Ts) -> str:
+        raise NotImplementedError
+
+class Child[*Ts](Base[*Ts]):
+    def encode(self, *values: *Ts) -> str:
+        return "".join(str(v) for v in values)
+
+def f[*Ts](b: Base[*Ts]) -> None:
+    fn: Callable[[*Ts], str] = b.encode
+
+def sink[*Ts](cb: Callable[[*Ts], str]) -> None: ...
+
+def g[*Ts](b: Base[*Ts]) -> None:
+    sink(b.encode)
+    "#,
+);
+
+testcase!(
     test_override_generic_bounds,
     r#"
 class A: ...
@@ -1277,6 +1300,31 @@ class A:
 
 class B(A):
     x: ClassVar[int]  # OK - ClassVar, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_classproperty,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override, Callable
+
+class classproperty[T, R]:
+    def __init__(self, fget: Callable[[type[T]], R]) -> None: ...
+    def __get__(self, obj: object, obj_cls_type: type[T]) -> R: ...
+
+class Base:
+    @classproperty
+    def foo(cls) -> None: ...
+
+class DerivedValid(Base):
+    @override
+    @classproperty
+    def foo(cls) -> None: ...
+
+class Derived(Base):
+    @classproperty
+    def foo(cls) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
     "#,
 );
 

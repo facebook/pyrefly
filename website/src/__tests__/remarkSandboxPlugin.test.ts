@@ -197,7 +197,7 @@ describe('buildSandboxUrl (via real lz-string)', () => {
     test('URL is decodable back to original files', () => {
         const files = {
             'sandbox.py': 'import torch\nx = torch.randn(3)',
-            'pyrefly.toml': 'tensor-shapes = true',
+            'pyrefly.toml': 'python-version = "3.12"',
         };
         const url = buildUrl(files, 'sandbox.py');
 

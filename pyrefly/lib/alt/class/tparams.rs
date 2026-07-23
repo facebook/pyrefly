@@ -73,8 +73,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("Expected a {kind}, got `{}`", self.for_display(t.clone())),
                 );
             }
-            q.and_then(|q| {
-                let p = legacy_map.get(&q);
+            q.and_then(|(q, _)| {
+                let p = legacy_map.get(q);
                 if p.is_none() {
                     self.error(
                         errors,

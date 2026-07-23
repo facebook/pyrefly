@@ -9,13 +9,13 @@
 //! `StructuredType` representation used in CinderX reports.
 
 use pyrefly_types::callable::Params;
+use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
-use pyrefly_types::types::CallableResidualKind;
 use pyrefly_types::types::Type;
 use pyrefly_types::types::Union;
 use pyrefly_util::display::Fmt;
@@ -56,7 +56,7 @@ fn callable_to_structured(
     pending_class_traits: &mut Vec<(usize, Class)>,
 ) -> usize {
     let param_indices: Vec<usize> = match params {
-        Params::List(param_list) => param_list
+        Params::List(param_list) | Params::Partial(param_list) => param_list
             .items()
             .iter()
             .map(|p| type_to_structured(p.as_type(), table, pending_class_traits))
@@ -432,10 +432,12 @@ pub(crate) fn type_to_structured(
         | Type::ParamSpec(_)
         | Type::TypeVarTuple(_)
         | Type::TypeForm(_)
+        | Type::Sentinel(_)
         | Type::ElementOfTypeVarTuple(_)
-        | Type::Tensor(_)
+        | Type::ShapedArray(_)
+        | Type::IntTuple(_)
         | Type::NNModule(_)
-        | Type::Size(_)
-        | Type::Dim(_) => insert_simple_other_form("typing.Any", table),
+        | Type::DataFrame(_)
+        | Type::Int(_) => insert_simple_other_form("typing.Any", table),
     }
 }

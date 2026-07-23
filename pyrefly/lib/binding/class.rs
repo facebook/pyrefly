@@ -6,6 +6,7 @@
  */
 
 use std::mem;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe as _;
@@ -17,6 +18,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use regex::Regex;
+use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
@@ -32,6 +34,8 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
+use crate::binding::attrs::AttrsDecoratorMethods;
+use crate::binding::attrs::collect_attrs_decorator_methods;
 use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
@@ -41,16 +45,17 @@ use crate::binding::binding::BindingAbstractClassCheck;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassBaseType;
+use crate::binding::binding::BindingClassChecks;
+use crate::binding::binding::BindingClassDisjointBase;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
 use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
-use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingExpect;
+use crate::binding::binding::BindingShapedArrayMetadata;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingVariance;
-use crate::binding::binding::BindingVarianceCheck;
 use crate::binding::binding::ClassBinding;
 use crate::binding::binding::ClassDefData;
 use crate::binding::binding::ClassFieldDefinition;
@@ -60,16 +65,16 @@ use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassBaseType;
+use crate::binding::binding::KeyClassChecks;
+use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
-use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
-use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -131,11 +136,10 @@ impl<'a> BindingsBuilder<'a> {
             base_type_idx: self.idx_for_promise(KeyClassBaseType(def_index)),
             metadata_idx: self.idx_for_promise(KeyClassMetadata(def_index)),
             mro_idx: self.idx_for_promise(KeyClassMro(def_index)),
+            disjoint_base_idx: self.idx_for_promise(KeyClassDisjointBase(def_index)),
             synthesized_fields_idx: self.idx_for_promise(KeyClassSynthesizedFields(def_index)),
             variance_idx: self.idx_for_promise(KeyVariance(def_index)),
-            variance_check_idx: self.idx_for_promise(KeyVarianceCheck(def_index)),
-            consistent_override_check_idx: self
-                .idx_for_promise(KeyConsistentOverrideCheck(def_index)),
+            class_checks_idx: self.idx_for_promise(KeyClassChecks(def_index)),
             abstract_class_check_idx: self.idx_for_promise(KeyAbstractClassCheck(def_index)),
             subscript_symmetry_idx: self.idx_for_promise(KeyClassSubscriptSymmetry(def_index)),
         };
@@ -246,6 +250,10 @@ impl<'a> BindingsBuilder<'a> {
         let body = mem::take(&mut x.body);
         let field_docstrings = self.extract_field_docstrings(&body);
         let pydantic_before_validator_fields = self.extract_field_validator_fields(&body);
+        let mut attrs_decorators = AttrsDecoratorMethods::default();
+        collect_attrs_decorator_methods(&body, &mut attrs_decorators);
+        let capture_init = self.extract_capture_init(&body);
+        let shaped_array_metadata = self.extract_shaped_array_metadata(&x.decorator_list);
         let decorators =
             self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list), class_object.usage());
 
@@ -259,6 +267,23 @@ impl<'a> BindingsBuilder<'a> {
                 self.type_params_with_owner(tp, owner)
             })
             .unwrap_or_default();
+        let shaped_array_metadata = match shaped_array_metadata {
+            Some(metadata) if x.type_params.is_none() => {
+                // TODO(stroxler): This restriction seems 100% fine with experiments, I see no reason
+                // to support legacy-style class tparams right now. We may eventually need to, at which point
+                // we'd have to move this check to solve time.
+                self.error(
+                    metadata.range,
+                    ErrorKind::InvalidAnnotation,
+                    format!(
+                        "Shape parameter `{}` must be a scoped (PEP-695-style) type parameter of class `{}`",
+                        metadata.shape_name, x.name.id
+                    ),
+                );
+                None
+            }
+            metadata => metadata,
+        };
 
         let mut legacy = Some(LegacyTParamCollector::new(x.type_params.is_some()));
         let bases = x.bases().map(|base| {
@@ -373,18 +398,25 @@ impl<'a> BindingsBuilder<'a> {
                 }
             });
         }
+        let bases: Arc<[BaseClass]> = Arc::from(bases.into_boxed_slice());
 
         self.insert_binding_idx(
             class_indices.base_type_idx,
             BindingClassBaseType {
                 class_idx: class_indices.class_idx,
                 is_new_type: false,
-                bases: bases.clone().into_boxed_slice(),
+                bases: bases.dupe(),
             },
         );
         self.insert_binding_idx(
             class_indices.mro_idx,
             BindingClassMro {
+                class_idx: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.disjoint_base_idx,
+            BindingClassDisjointBase {
                 class_idx: class_indices.class_idx,
             },
         );
@@ -440,12 +472,16 @@ impl<'a> BindingsBuilder<'a> {
 
             let docstring_range = field_docstrings.get(&range).copied();
 
+            let attrs_field_specifier =
+                self.attrs_field_specifier(&definition, name.key(), range, &attrs_decorators);
+
             fields.insert_hashed(
                 name.clone(),
                 ClassFieldProperties::new(
                     is_annotated,
                     is_initialized_on_class,
                     is_defined_in_class_body,
+                    attrs_field_specifier,
                     range,
                     docstring_range,
                 ),
@@ -505,6 +541,7 @@ impl<'a> BindingsBuilder<'a> {
                 def_index: class_indices.def_index,
                 def: ClassDefData::new(x),
                 parent: parent.dupe(),
+                is_protocol: has_protocol_base,
                 tparams_require_binding,
                 docstring_range,
             }),
@@ -517,22 +554,16 @@ impl<'a> BindingsBuilder<'a> {
             },
         );
         self.insert_binding_idx(
-            class_indices.variance_check_idx,
-            BindingVarianceCheck {
+            class_indices.class_checks_idx,
+            BindingClassChecks {
                 class_idx: class_indices.class_idx,
-            },
-        );
-        self.insert_binding_idx(
-            class_indices.consistent_override_check_idx,
-            BindingConsistentOverrideCheck {
-                class_key: class_indices.class_idx,
             },
         );
         self.insert_binding_idx(
             class_indices.metadata_idx,
             BindingClassMetadata {
                 class_idx: class_indices.class_idx,
-                bases: bases.clone().into_boxed_slice(),
+                bases,
                 keywords: keywords.into_boxed_slice(),
                 decorators: decorators.into_boxed_slice(),
                 is_new_type: false,
@@ -540,6 +571,8 @@ impl<'a> BindingsBuilder<'a> {
                 pydantic_before_validator_fields: pydantic_before_validator_fields
                     .into_boxed_slice(),
                 django_field_info: Box::new(django_field_info),
+                capture_init: capture_init.map(|v| v.into_boxed_slice()),
+                shaped_array_metadata,
             },
         );
         self.insert_binding_idx(
@@ -556,6 +589,156 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
+    fn is_shaped_array_decorator(&self, expr: &Expr) -> bool {
+        self.as_special_export(expr) == Some(SpecialExport::ShapedArray)
+    }
+
+    /// Extract `@shaped_array(shape="Shape")` from class decorators.
+    fn extract_shaped_array_metadata(
+        &mut self,
+        decorators: &[Decorator],
+    ) -> Option<Box<BindingShapedArrayMetadata>> {
+        let mut metadata = None;
+        let mut seen_shaped_array = false;
+        for decorator in decorators {
+            let Some(call) = decorator.expression.as_call_expr() else {
+                if self.is_shaped_array_decorator(&decorator.expression) {
+                    if seen_shaped_array {
+                        self.error(
+                            decorator.range(),
+                            ErrorKind::InvalidArgument,
+                            "Duplicate `@shaped_array` decorator".to_owned(),
+                        );
+                        continue;
+                    }
+                    seen_shaped_array = true;
+                    self.error(
+                        decorator.range(),
+                        ErrorKind::InvalidArgument,
+                        "`@shaped_array` requires a `shape` keyword argument".to_owned(),
+                    );
+                }
+                continue;
+            };
+            if !self.is_shaped_array_decorator(&call.func) {
+                continue;
+            }
+            if seen_shaped_array {
+                self.error(
+                    decorator.range(),
+                    ErrorKind::InvalidArgument,
+                    "Duplicate `@shaped_array` decorator".to_owned(),
+                );
+                continue;
+            }
+            seen_shaped_array = true;
+
+            let mut invalid = false;
+            if let Some(arg) = call.arguments.args.first() {
+                self.error(
+                    arg.range(),
+                    ErrorKind::InvalidArgument,
+                    "`@shaped_array` expects `shape` as a keyword argument".to_owned(),
+                );
+                invalid = true;
+            }
+
+            let mut shape_keyword = None;
+            for keyword in &call.arguments.keywords {
+                let Some(arg) = &keyword.arg else {
+                    self.error(
+                        keyword.range(),
+                        ErrorKind::InvalidArgument,
+                        "Unpacking is not supported in `@shaped_array`".to_owned(),
+                    );
+                    invalid = true;
+                    continue;
+                };
+                if arg.as_str() == "shape" {
+                    if shape_keyword.is_none() {
+                        shape_keyword = Some(keyword);
+                    }
+                } else {
+                    self.error(
+                        keyword.range(),
+                        ErrorKind::InvalidArgument,
+                        format!(
+                            "Unexpected keyword argument `{}` for `@shaped_array`; expected `shape`",
+                            arg.id
+                        ),
+                    );
+                    invalid = true;
+                }
+            }
+
+            let Some(shape_keyword) = shape_keyword else {
+                if !invalid {
+                    self.error(
+                        call.range(),
+                        ErrorKind::InvalidArgument,
+                        "`@shaped_array` requires a `shape` keyword argument".to_owned(),
+                    );
+                }
+                continue;
+            };
+            let Expr::StringLiteral(shape) = &shape_keyword.value else {
+                self.error(
+                    shape_keyword.value.range(),
+                    ErrorKind::InvalidArgument,
+                    "`@shaped_array` `shape` argument must be a string literal".to_owned(),
+                );
+                continue;
+            };
+            if !invalid {
+                metadata = Some(Box::new(BindingShapedArrayMetadata {
+                    shape_name: Name::new(shape.value.to_str()),
+                    range: shape_keyword.value.range(),
+                }));
+            }
+        }
+        metadata
+    }
+
+    /// Scan a class body for a `forward` method decorated with
+    /// `@uses_shape_dsl(..., capture_init=[...])` and return the list of `__init__`
+    /// parameter names to capture for shape inference.
+    fn extract_capture_init(&mut self, body: &[Stmt]) -> Option<Vec<Name>> {
+        let forward = body
+            .iter()
+            .filter_map(|stmt| stmt.as_function_def_stmt())
+            .find(|func_def| func_def.name.as_str() == "forward")?;
+
+        forward.decorator_list.iter().find_map(|decorator| {
+            let call = decorator.expression.as_call_expr()?;
+            if self.as_special_export(&call.func) != Some(SpecialExport::UsesShapeDsl) {
+                return None;
+            }
+            let capture_init_kw = call.arguments.keywords.iter().find(|kw| {
+                kw.arg
+                    .as_ref()
+                    .is_some_and(|a| a.as_str() == "capture_init")
+            })?;
+            let list = capture_init_kw.value.as_list_expr()?;
+            let names: Vec<Name> = list
+                .elts
+                .iter()
+                .filter_map(|elt| {
+                    if let Some(s) = elt.as_string_literal_expr() {
+                        Some(Name::new(s.value.to_str()))
+                    } else {
+                        self.error(
+                            elt.range(),
+                            ErrorKind::InvalidArgument,
+                            "`capture_init` entries must be string literals".to_owned(),
+                        );
+                        None
+                    }
+                })
+                .collect();
+            Some(names)
+        })
+    }
+
     /// Extracts docstrings for each field, mapping the field's range to the docstring's range.
     fn extract_field_docstrings(
         &self,
@@ -565,6 +748,7 @@ impl<'a> BindingsBuilder<'a> {
         use ruff_python_ast::Stmt;
 
         let mut field_docstrings = SmallMap::new();
+        let mut first_function_ranges = SmallMap::new();
         let mut i = 0;
 
         while i < body.len() {
@@ -573,8 +757,14 @@ impl<'a> BindingsBuilder<'a> {
             let is_field = matches!(stmt, Stmt::AnnAssign(_) | Stmt::Assign(_));
 
             if let Stmt::FunctionDef(func_def) = stmt {
+                let first_range = *first_function_ranges
+                    .entry(func_def.name.id.clone())
+                    .or_insert(func_def.name.range);
                 if let Some(docstring_range) = Docstring::range_from_stmts(&func_def.body) {
                     field_docstrings.insert(func_def.name.range, docstring_range);
+                    // Class field metadata points at the first declaration in an overload chain,
+                    // while its documentation belongs to the implementation.
+                    field_docstrings.insert(first_range, docstring_range);
                 }
             } else if let Stmt::ClassDef(class_def) = stmt {
                 if let Some(docstring_range) = Docstring::range_from_stmts(&class_def.body) {
@@ -905,6 +1095,7 @@ impl<'a> BindingsBuilder<'a> {
                     member_annotation.is_some() || class_kind == SynthesizedClassKind::NamedTuple,
                     member_value.is_some(),
                     true, // Synthesized fields are class body fields
+                    None, // Synthesized fields are never attrs field specifiers
                     range,
                     None, // Synthesized fields don't have docstrings
                 ),
@@ -974,31 +1165,40 @@ impl<'a> BindingsBuilder<'a> {
             .map(|base| self.base_class_of(base))
             .chain(special_base)
             .collect::<Vec<_>>();
+        let base_classes: Arc<[BaseClass]> = Arc::from(base_classes.into_boxed_slice());
         let is_new_type = class_kind == SynthesizedClassKind::NewType;
         self.insert_binding_idx(
             class_indices.base_type_idx,
             BindingClassBaseType {
                 class_idx: class_indices.class_idx,
                 is_new_type,
-                bases: base_classes.clone().into_boxed_slice(),
+                bases: base_classes.dupe(),
             },
         );
         self.insert_binding_idx(
             class_indices.metadata_idx,
             BindingClassMetadata {
                 class_idx: class_indices.class_idx,
-                bases: base_classes.into_boxed_slice(),
+                bases: base_classes,
                 keywords,
                 decorators: Box::new([]),
                 is_new_type,
                 pydantic_config_dict: PydanticConfigDict::default(),
                 pydantic_before_validator_fields: Box::default(),
                 django_field_info: Box::default(),
+                capture_init: None,
+                shaped_array_metadata: None,
             },
         );
         self.insert_binding_idx(
             class_indices.mro_idx,
             BindingClassMro {
+                class_idx: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.disjoint_base_idx,
+            BindingClassDisjointBase {
                 class_idx: class_indices.class_idx,
             },
         );
@@ -1045,15 +1245,9 @@ impl<'a> BindingsBuilder<'a> {
             },
         );
         self.insert_binding_idx(
-            class_indices.variance_check_idx,
-            BindingVarianceCheck {
+            class_indices.class_checks_idx,
+            BindingClassChecks {
                 class_idx: class_indices.class_idx,
-            },
-        );
-        self.insert_binding_idx(
-            class_indices.consistent_override_check_idx,
-            BindingConsistentOverrideCheck {
-                class_key: class_indices.class_idx,
             },
         );
         self.insert_binding_idx(
@@ -1209,10 +1403,12 @@ impl<'a> BindingsBuilder<'a> {
         let (member_definitions, has_dynamic_fields) =
             self.parse_collections_namedtuple_fields(members, class_name.range);
         let n_members = member_definitions.len();
+        for kw in keywords.iter_mut() {
+            self.ensure_expr(&mut kw.value, class_object.usage());
+        }
         let mut illegal_identifier_handling = IllegalIdentifierHandling::Error;
         let mut defaults: Vec<Option<Expr>> = vec![None; n_members];
-        for kw in keywords {
-            self.ensure_expr(&mut kw.value, class_object.usage());
+        for kw in keywords.iter() {
             if let Some(name) = &kw.arg
                 && name.id == "rename"
                 && let Expr::BooleanLiteral(lit) = &kw.value
@@ -1252,8 +1448,11 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
         }
-        if let Some(ref default_elts) = adjacent_defaults {
-            apply_adjacent_defaults(default_elts, n_members, &mut defaults);
+        if let Some(mut default_elts) = adjacent_defaults {
+            for elt in default_elts.iter_mut() {
+                self.ensure_expr(elt, class_object.usage());
+            }
+            apply_adjacent_defaults(&default_elts, n_members, &mut defaults);
         }
         let member_definitions_with_defaults: Vec<(
             String,
@@ -1309,19 +1508,23 @@ impl<'a> BindingsBuilder<'a> {
             self.parse_typing_namedtuple_fields(members, class_name.range);
         let n_members = parsed_fields.len();
         let mut defaults: Vec<Option<Expr>> = vec![None; n_members];
-        if let Some(ref default_elts) = adjacent_defaults {
-            apply_adjacent_defaults(default_elts, n_members, &mut defaults);
+        if let Some(mut default_elts) = adjacent_defaults {
+            for elt in default_elts.iter_mut() {
+                self.ensure_expr(elt, class_object.usage());
+            }
+            apply_adjacent_defaults(&default_elts, n_members, &mut defaults);
         }
         let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)> =
             parsed_fields
                 .into_iter()
                 .zip(defaults)
                 .map(|((name, range, annotation), default)| {
+                    let bound_default = default.map(ExprOrBinding::Expr);
                     if let Some(mut ann) = annotation {
                         self.ensure_type(&mut ann, &mut None);
-                        (name, range, Some(ann), default.map(ExprOrBinding::Expr))
+                        (name, range, Some(ann), bound_default)
                     } else {
-                        (name, range, None, default.map(ExprOrBinding::Expr))
+                        (name, range, None, bound_default)
                     }
                 })
                 .collect();

@@ -10,13 +10,12 @@ use std::iter;
 use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
-use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitEnum;
+use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::shaped_array::shape_to_tuple_carrier;
+use pyrefly_types::shaped_array::shape_to_tuple_carrier_arg;
 use pyrefly_types::special_form::SpecialForm;
-use pyrefly_types::tensor::TensorShape;
-use pyrefly_types::tensor::TensorType;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
@@ -31,6 +30,7 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::expr::TypeOrExpr;
@@ -45,6 +45,7 @@ use crate::error::style::ErrorStyle;
 use crate::solver::solver::SubsetError;
 use crate::state::loader::FindingOrError;
 use crate::types::callable::FunctionKind;
+use crate::types::callable::Params;
 use crate::types::callable::PropertyMetadata;
 use crate::types::callable::PropertyRole;
 use crate::types::class::Class;
@@ -54,7 +55,6 @@ use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::read_only::ReadOnlyReason;
-use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -274,6 +274,10 @@ pub enum NoAccessReason {
     SettingReadOnlyDescriptor(Class),
     /// Calling a method via `super()` when no implementation is available (e.g. abstract protocol or abstract base method).
     SuperMethodNeedsImplementation(Class),
+    /// A proxy method was accessed on the class object rather than an instance.
+    ProxyMethodClassAccess(Class),
+    /// A proxy method declaration exists, but its target cannot be used as an instance method.
+    ProxyMethodTargetInvalid { class: Class, target: Name },
 }
 
 #[derive(Debug)]
@@ -327,6 +331,18 @@ impl NoAccessReason {
                 let class_name = class.name();
                 format!(
                     "Method `{attr_name}` inherited from class `{class_name}` has no implementation and cannot be accessed via `super()`"
+                )
+            }
+            NoAccessReason::ProxyMethodClassAccess(class) => {
+                let class_name = class.name();
+                format!(
+                    "Proxy method `{attr_name}` of class `{class_name}` can only be accessed on instances"
+                )
+            }
+            NoAccessReason::ProxyMethodTargetInvalid { class, target } => {
+                let class_name = class.name();
+                format!(
+                    "Proxy method `{attr_name}` of class `{class_name}` cannot resolve target method `{target}`"
                 )
             }
         }
@@ -483,22 +499,22 @@ enum AttributeBase1 {
     /// Bound methods prefer exposing builtin `types.MethodType` attributes but fall back to the
     /// underlying function's attributes when the builtin ones are missing.
     BoundMethod(BoundMethodType),
-    /// Tensor instance with shape information preserved for method resolution.
+    /// Shaped-array instance with shape information preserved for method resolution.
     ///
-    /// This variant exists to handle `Type::Tensor` specially during attribute lookup.
-    /// Unlike `ClassInstance`, which only tracks the class type, `TensorInstance` preserves
-    /// the full `TensorType` including shape information.
+    /// This variant exists to handle `Type::ShapedArray` specially during attribute lookup.
+    /// Unlike `ClassInstance`, which only tracks the class type, `ShapedArrayInstance` preserves
+    /// the full `ShapedArrayType` including shape information.
     ///
     /// **Why this is needed:**
-    /// Tensor methods often use `Self` in their return type (e.g., `def reshape(self, ...) -> Self`).
+    /// Tensor-like methods often use `Self` in their return type (e.g., `def reshape(self, ...) -> Self`).
     /// When we look up such a method on `Tensor[N, M]`, we need to substitute `Self` with the
-    /// full tensor type so the result type is `Tensor[...]` with proper shape tracking, not
+    /// full shaped-array type so the result type is `Tensor[...]` with proper shape tracking, not
     /// just the base class.
     ///
-    /// **Invariant:** The `TensorType::base_class` is always a valid class type from which
-    /// attributes are looked up. The shape information in the tensor type is preserved through
+    /// **Invariant:** The `ShapedArrayType::base_class` is always a valid class type from which
+    /// attributes are looked up. The shape information in the shaped-array type is preserved through
     /// the substitution of `Self` in attribute types.
-    TensorInstance(TensorType),
+    ShapedArrayInstance(ShapedArrayType),
 }
 
 impl AttributeBase1 {
@@ -610,7 +626,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Both types and error messages can be duplicated if elements in `attr_base` gets duplicated (can happen with
         // if base type contain vars). Make sure that dedup logic applies to both branches.
         if success {
-            self.unions(types)
+            // `.register` on a singledispatch dispatcher needs the fallback's first param, only
+            // available here; the tagging logic lives in `singledispatch.rs`.
+            self.tag_singledispatch_register(base, attr_name, self.unions(types))
         } else if !error_messages.is_empty() {
             error_messages.sort();
             error_messages.dedup();
@@ -1066,7 +1084,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // the class to special-case dataclass converters.
                     let instance_class = match &found_on {
                         AttributeBase1::ClassInstance(cls) => Some(cls),
-                        AttributeBase1::TensorInstance(tensor) => Some(&tensor.base_class),
+                        AttributeBase1::ShapedArrayInstance(tensor) => Some(&tensor.base_class),
                         _ => None,
                     };
                     let class_base = match &found_on {
@@ -1108,7 +1126,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         narrowed_types: &mut Vec<Type>,
     ) {
         let ty = match &got {
-            TypeOrExpr::Expr(got) => self.expr(
+            TypeOrExpr::Expr(got) => self.expr_check(
                 got,
                 Some((&attr_ty, &|| {
                     TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
@@ -1146,7 +1164,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Some((names, has_dict));
         }
         let slots = metadata.slots_info()?;
-        Some((slots.names.clone(), slots.has_dict))
+        Some((slots.names.clone(), slots.has_dict()))
     }
 
     /// Compute the effective slots policy for a class instance write.
@@ -1206,6 +1224,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return true;
         }
         false
+    }
+
+    /// Returns `false` if `cls` or any of its non-object ancestors defines a dunder that
+    /// could affect truthiness or attribute resolution at runtime: `__bool__`, `__len__`,
+    /// `__getattr__`, `__getattribute__` (which can intercept `__bool__` dynamically), or
+    /// `__get__` (descriptor classes whose instances are typically used via the descriptor
+    /// protocol rather than as standalone values).
+    /// Used to detect class instances that are always truthy.
+    pub fn class_instances_always_truthy(&self, cls: &Class) -> bool {
+        let relevant_dunders = [
+            &dunder::BOOL,
+            &dunder::LEN,
+            &dunder::GETATTR,
+            &dunder::GETATTRIBUTE,
+            &dunder::GET,
+        ];
+        !relevant_dunders.iter().any(|dunder: &&Name| {
+            let field = self.get_class_member_with_defining_class(cls, dunder);
+            field.is_some_and(|field| !field.defining_class.is_builtin("object"))
+        })
     }
 
     fn has_custom_setattr(&self, cls: &Class) -> bool {
@@ -1281,6 +1319,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// During a protocol structural-subtyping check, the got-side member is looked
+    /// up and bound normally, so an overloaded method keeps every overload. Drop the
+    /// overloads whose explicit `self:` annotation is incompatible with the
+    /// (fully-known) receiver, so the subset solver doesn't bind type variables from
+    /// an inapplicable overload.
+    ///
+    /// Returns a filtered copy of the attribute, or `None` if nothing
+    /// changed.
+    ///
+    /// Filtering is skipped when the receiver still contains free type variables or
+    /// unsolved inference vars, since dropping overloads then could be premature.
+    fn filter_got_overloads_for_protocol(&self, attr: &Attribute) -> Option<Attribute> {
+        let Attribute::ClassAttribute(class_attr) = attr else {
+            return None;
+        };
+        let ty = match class_attr {
+            ClassAttribute::ReadWrite(ty) | ClassAttribute::ReadOnly(ty, _) => ty,
+            _ => return None,
+        };
+        let Type::BoundMethod(bound_method) = ty else {
+            return None;
+        };
+        let BoundMethodType::Overload(overload) = &bound_method.func else {
+            return None;
+        };
+        let self_type = &bound_method.obj;
+        let mut quantifieds = SmallSet::new();
+        self_type.collect_quantifieds(&mut quantifieds);
+        if !quantifieds.is_empty() || !self_type.collect_maybe_placeholder_vars().is_empty() {
+            return None;
+        }
+        let filtered_overload = self.filter_overloads_by_self_type(overload, self_type)?;
+        if &filtered_overload == overload {
+            return None;
+        }
+        let mut new_bound_method = (**bound_method).clone();
+        new_bound_method.func = BoundMethodType::Overload(filtered_overload);
+        let new_method = self.heap.mk_bound_method(new_bound_method);
+        Some(Attribute::ClassAttribute(match class_attr {
+            ClassAttribute::ReadWrite(_) => ClassAttribute::ReadWrite(new_method),
+            ClassAttribute::ReadOnly(_, reason) => {
+                ClassAttribute::ReadOnly(new_method, reason.clone())
+            }
+            _ => unreachable!("matched ReadWrite/ReadOnly above"),
+        }))
+    }
+
     /// Predicate for whether a specific attribute name matches a protocol during structural
     /// subtyping checks.
     ///
@@ -1319,6 +1404,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
                 for (got_attr, _) in got_attrs.iter() {
+                    // Filter overloaded got-side methods by self-type so the subset
+                    // solver doesn't match an overload whose `self:` is incompatible
+                    // with the receiver.
+                    let filtered = self.filter_got_overloads_for_protocol(got_attr);
+                    let got_attr = filtered.as_ref().unwrap_or(got_attr);
                     self.is_attribute_subset(got_attr, &want, &mut |got, want| {
                         is_subset(got, want)
                     })
@@ -1484,41 +1574,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     base,
                 )),
             },
-            AttributeBase1::TensorInstance(tensor) => {
-                // Special handling for .shape property - return tuple of dimensions.
-                // Converts SizeExpr::Literal to Literal[n] and other dim types to Dim[...].
-                // For Unpacked shapes (including shapeless), this naturally produces an
-                // Unpacked tuple, e.g. Tensor[B, *Ts] → tuple[Dim[B], *Ts].
+            AttributeBase1::ShapedArrayInstance(tensor) => {
                 if attr_name.as_str() == "shape" {
-                    let dim_to_type = |dim: &Type| -> Type {
-                        match dim {
-                            Type::Size(SizeExpr::Literal(n)) => {
-                                Lit::Int(LitInt::new(*n)).to_implicit_type()
-                            }
-                            _ => self.heap.mk_dim(dim.clone()),
-                        }
+                    if let Some(attr) = self.get_shaped_array_attribute(tensor, attr_name) {
+                        acc.found_class_attribute(attr, base);
+                        return;
+                    }
+                    let shape = if tensor.tuple_carrier_shape_arg_index().is_some() {
+                        shape_to_tuple_carrier_arg(&tensor.shape())
+                    } else {
+                        shape_to_tuple_carrier(&tensor.shape())
                     };
-                    let tuple_type = match &tensor.shape {
-                        TensorShape::Concrete(dims) => {
-                            Type::concrete_tuple(dims.iter().map(dim_to_type).collect())
-                        }
-                        TensorShape::Unpacked(f) => {
-                            let (prefix, middle, suffix) = &**f;
-                            Type::Tuple(Tuple::Unpacked(Box::new((
-                                prefix.iter().map(dim_to_type).collect(),
-                                middle.clone(),
-                                suffix.iter().map(dim_to_type).collect(),
-                            ))))
-                        }
-                    };
-                    acc.found_type(tuple_type, base);
+                    acc.found_type(shape, base);
                     return;
                 }
 
-                // For all other attributes, delegate to get_tensor_attribute which
-                // handles Self-type substitution via InstanceKind::Tensor.
+                // For all other attributes, delegate to get_shaped_array_attribute which
+                // handles Self-type substitution via InstanceKind::ShapedArray.
                 let metadata = self.get_metadata_for_class(tensor.base_class.class_object());
-                match self.get_tensor_attribute(tensor, attr_name) {
+                match self.get_shaped_array_attribute(tensor, attr_name) {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
                         acc.found_type(Type::Any(AnyStyle::Implicit), base)
@@ -1944,7 +2018,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 acc.not_found(NotFoundOn::ClassInstance(cls.class_object().clone(), base))
             }
-            AttributeBase1::TensorInstance(tensor)
+            AttributeBase1::ShapedArrayInstance(tensor)
                 if (*dunder_name == dunder::SETATTR
                     || *dunder_name == dunder::DELATTR
                     || *dunder_name == dunder::GETATTRIBUTE)
@@ -2024,6 +2098,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.apply_getattr_fallback(attr_name, direct_lookup_result)
     }
 
+    /// Whether accessing `attr_name` on the package `module_name` should resolve to the
+    /// directly-imported same-named submodule, shadowing any package export of that name.
+    ///
+    /// A directly-imported submodule normally shadows the package namespace, because the import
+    /// system binds the submodule onto its package *after* the package's `__init__` toplevel has
+    /// executed. The exception is when `__init__` re-exports the same-named symbol *from* the
+    /// same-named submodule (e.g. unittest's `from .main import main as main`, where
+    /// `main = TestProgram`): the `from .main` loads the submodule as a side effect of
+    /// `__init__`, so it is already in `sys.modules` and the subsequent `main = ...` binding
+    /// wins; a later `import pkg.main` in user code is then a no-op for the attribute. The
+    /// re-export must originate from the same-named submodule for this to hold: a re-export
+    /// sourced from a *different* module (`from .other import main as main`) does not trigger
+    /// that side-effect load, so the directly-imported submodule still shadows it — even when
+    /// `__init__` also happens to import the submodule via an unrelated statement.
+    /// See https://github.com/facebook/pyrefly/issues/322
+    fn direct_submodule_shadows_export(
+        &self,
+        submodule: &ModuleType,
+        module_name: ModuleName,
+        attr_name: &Name,
+    ) -> bool {
+        submodule.is_submodules_imported_directly()
+            && self.exports.reexport_source(module_name, attr_name)
+                != Some(module_name.append(attr_name))
+    }
+
     fn get_module_attr(&self, module: &ModuleType, attr_name: &Name) -> Option<Attribute> {
         // `module_name` could refer to a package, in which case we need to check if
         // `module_name.attr_name`:
@@ -2038,11 +2138,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // would always bind the submodule name `attr_name` to the namespace of `module_name` *after* the module
         // toplevel of `module_name` has been executed.
         let submodule = module.push_part(attr_name.clone());
-        if submodule.is_submodules_imported_directly() {
+        let module_name = ModuleName::from_parts(module.parts());
+
+        if self.direct_submodule_shadows_export(&submodule, module_name, attr_name) {
             return Some(Attribute::simple(submodule.to_type(self.heap)));
         }
-
-        let module_name = ModuleName::from_parts(module.parts());
 
         match self.exports.module_exists(module_name) {
             FindingOrError::Finding(_) => (),
@@ -2094,12 +2194,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Extract the ClassType to use for attribute lookup on a quantified (TypeVar)
     /// type from the attribute base of its bound.
-    fn quantified_bound_class(&self, base: AttributeBase1) -> Option<ClassType> {
-        match base {
+    fn quantified_bound_class(&self, bound: AttributeBase1) -> Option<ClassType> {
+        match bound {
             AttributeBase1::ClassInstance(cls) => Some(cls),
+            AttributeBase1::TypedDict(typed_dict) => Some(
+                self.stdlib.dict(
+                    self.stdlib.str().clone().to_type(),
+                    self.get_typed_dict_value_type_as_builtins_dict(&TypedDict::TypedDict(
+                        typed_dict,
+                    ))
+                    .unwrap_or_else(|| self.stdlib.object().clone().to_type()),
+                ),
+            ),
             // Handle `type[Any]`, which happens for TypeVars w/ `bound=type`
             AttributeBase1::TypeAny(_) => Some(self.stdlib.builtins_type().clone()),
             _ => None,
+        }
+    }
+
+    /// Construct an AttributeBase1 to use for attribute lookup on a quantified (TypeVar)
+    /// type from the attribute base of its bound.
+    ///
+    /// This includes special handling for when the base is `type[C]`
+    fn attribute_base_for_bounded_quantified(
+        &self,
+        quantified: Quantified,
+        bound: AttributeBase1,
+    ) -> Option<AttributeBase1> {
+        match bound {
+            AttributeBase1::ClassObject(ClassBase::ClassDef(cls) | ClassBase::ClassType(cls)) => {
+                Some(AttributeBase1::ClassObject(ClassBase::Quantified(
+                    quantified, cls,
+                )))
+            }
+            _ => self
+                .quantified_bound_class(bound)
+                .map(|cls| AttributeBase1::Quantified(quantified, cls)),
         }
     }
 
@@ -2109,9 +2239,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Vec1::try_from_vec(acc).map(AttributeBase).ok()
     }
 
+    pub(crate) fn try_reproject_class_type_to_shaped_array(
+        &self,
+        cls: &ClassType,
+    ) -> Option<ShapedArrayType> {
+        // Cheap syntactic pre-filter, kept before any metadata lookup to preserve
+        // laziness: a shaped-array class always carries its shape as a tuple
+        // carrier, a first-class `IntTuple`, or an as-yet-unbound shape variable.
+        // Bailing here for any other class (notably scalar returns like `int`)
+        // avoids forcing that class's metadata on every call-return reprojection.
+        if !cls.targs().as_slice().iter().any(|arg| {
+            matches!(
+                arg,
+                Type::Tuple(_) | Type::IntTuple(_) | Type::Quantified(_) | Type::TypeVar(_)
+            )
+        }) {
+            return None;
+        }
+        let shape_param = self.shaped_array_shape_for_class_type(cls)?;
+        if !shape_param.is_type_var() {
+            return None;
+        }
+        // Decline reprojection when the shape argument does not project to a shape.
+        // `shaped_array_classtype_to_shaped_array_type` below shapeless-falls-back
+        // on an unconvertible arg (it is called from already-validated paths), but
+        // here we want to leave the class un-reprojected in that case. The builder
+        // recomputes this projection; that duplicate lookup is bounded by the cheap
+        // syntactic pre-filter above, so it only runs for plausible shaped arrays.
+        let shape_arg = self.shaped_array_shape_arg(cls)?;
+        self.shaped_array_shape_arg_to_shape(&shape_arg)?;
+        Some(self.shaped_array_classtype_to_shaped_array_type(cls))
+    }
+
     fn as_attribute_base1(&self, ty: Type, acc: &mut Vec<AttributeBase1>) {
         match ty {
-            Type::ClassType(class_type) => acc.push(AttributeBase1::ClassInstance(class_type)),
+            Type::ClassType(class_type) => {
+                if let Some(shaped_array) =
+                    self.try_reproject_class_type_to_shaped_array(&class_type)
+                {
+                    acc.push(AttributeBase1::ShapedArrayInstance(shaped_array))
+                } else {
+                    acc.push(AttributeBase1::ClassInstance(class_type))
+                }
+            }
             Type::ClassDef(cls) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
                 self.as_class_type_unchecked(&cls),
             ))),
@@ -2138,22 +2308,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .push(AttributeBase1::ClassObject(ClassBase::ClassDef(
                     self.stdlib.typed_dict_fallback().clone(),
                 ))),
-            Type::Tensor(tensor) => {
-                // Use TensorInstance to preserve shape information through attribute lookup
-                acc.push(AttributeBase1::TensorInstance((*tensor).clone()))
+            Type::ShapedArray(tensor) => {
+                // Use ShapedArrayInstance to preserve shape information through attribute lookup
+                acc.push(AttributeBase1::ShapedArrayInstance((*tensor).clone()))
             }
             Type::NNModule(module) => {
                 // NNModule delegates attribute access to its underlying class
                 acc.push(AttributeBase1::ClassInstance(module.class.clone()))
             }
-            Type::Size(_) => {
+            Type::DataFrame(schema) => {
+                // A DataFrame delegates attribute access to its underlying instance type.
+                self.as_attribute_base1(schema.underlying_type(), acc)
+            }
+            Type::Int(_) => {
                 // Dimension values behave like int for attribute access
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
             }
-            Type::Dim(_) => {
-                // Symbolic integers behave like int for attribute access
-                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
-            }
+            Type::IntTuple(int_tuple) => acc.push(AttributeBase1::ClassInstance(
+                self.erase_tuple_type(int_tuple.to_tuple()),
+            )),
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
             }
@@ -2226,6 +2399,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     acc.push(class_base)
                 }
+            }
+            Type::Type(f) if matches!(&*f, Type::ClassDef(_)) => {
+                let Type::ClassDef(class) = *f else {
+                    unreachable!("guarded by matches! above")
+                };
+                // type[ClassDef(C)] is C.__class__: C's metaclass, viewed as a class object.
+                let metaclass = self
+                    .get_metadata_for_class(&class)
+                    .metaclass(self.stdlib)
+                    .clone();
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(metaclass)))
             }
             Type::QuantifiedValue(q) => acc.push(AttributeBase1::QuantifiedValue(*q)),
             Type::Type(f) if matches!(&*f, Type::Quantified(_)) => {
@@ -2315,6 +2499,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Module(module) => acc.push(AttributeBase1::Module(module)),
             Type::TypeVar(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.type_var().clone(),
+            )),
+            Type::Sentinel(_) => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.sentinel().clone(),
             )),
             Type::ParamSpec(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.param_spec().clone(),
@@ -2416,6 +2603,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     deleter: metadata.has_deleter,
                 }));
             }
+            // A `functools.partial(...)` result is a `Callable` with `Params::Partial`; resolve its
+            // attributes (`func`, `args`, `keywords`, ...) against `functools.partial[ret]`.
+            Type::Callable(c) if matches!(c.params, Params::Partial(_)) => acc.push(
+                AttributeBase1::ClassInstance(self.stdlib.partial(c.ret.clone())),
+            ),
             Type::Callable(_) | Type::CallableResidual(_) => acc.push(
                 AttributeBase1::ClassInstance(self.stdlib.function_type().clone()),
             ),
@@ -2487,8 +2679,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut use_fallback = false;
                     if let Some(base) = self.as_attribute_base(ty.clone()) {
                         for base1 in base.0 {
-                            if let Some(cls) = self.quantified_bound_class(base1) {
-                                acc.push(AttributeBase1::Quantified((*quantified).clone(), cls));
+                            if let Some(quantified_base) = self
+                                .attribute_base_for_bounded_quantified((*quantified).clone(), base1)
+                            {
+                                acc.push(quantified_base);
                             } else {
                                 use_fallback = true;
                             }
@@ -2506,11 +2700,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for ty in constraints {
                         if let Some(base) = self.as_attribute_base(ty.clone()) {
                             for base1 in base.0 {
-                                if let Some(cls) = self.quantified_bound_class(base1) {
-                                    acc.push(AttributeBase1::Quantified(
+                                if let Some(quantified_base) = self
+                                    .attribute_base_for_bounded_quantified(
                                         (*quantified).clone(),
-                                        cls,
-                                    ));
+                                        base1,
+                                    )
+                                {
+                                    acc.push(quantified_base);
                                 } else {
                                     use_fallback = true;
                                 }
@@ -2529,6 +2725,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.stdlib.object().clone(),
                 )),
             },
+            Type::Intersect(_)
+                if let Some((q, Some(Type::ClassType(cls)))) = ty.as_quantified() =>
+            {
+                acc.push(AttributeBase1::Quantified(q.clone(), cls.clone()));
+            }
             Type::Intersect(x) => {
                 let mut acc_intersect = Vec::new();
                 for t in x.0 {
@@ -2618,8 +2819,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             if let Some(dunder_bool_ty) = dunder_bool_ty
                 && !dunder_bool_ty.is_never()
-                && self.as_call_target(dunder_bool_ty.clone()).is_error()
             {
+                let dunder_bool_ty = match self.as_call_target(dunder_bool_ty) {
+                    CallTargetLookup::Ok(_) => return,
+                    CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => ty,
+                };
                 self.error(
                     errors,
                     range,
@@ -2627,7 +2831,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!(
                         "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
                         self.for_display(union_member_ty.clone()),
-                        self.for_display(dunder_bool_ty.clone()),
+                        self.for_display(dunder_bool_ty),
                     ),
                 );
             }
@@ -2763,10 +2967,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         // Check for submodule access first (takes precedence over exports, same as get_module_attr).
         // This handles cases like `a.b.c` where `import a.b.c` was used - accessing `b` on `a`
-        // should resolve to the submodule `a.b`, not look for an export named `b` in `a`.
+        // should resolve to the submodule `a.b`, not look for an export named `b` in `a`. The
+        // `direct_submodule_shadows_export` exception (a re-export from the same-named submodule
+        // wins over the submodule binding) applies here identically.
         if let Some(attr_name) = expected_attribute_name {
             let submodule = module.push_part(attr_name.clone());
-            if submodule.is_submodules_imported_directly() {
+            let module_name = ModuleName::from_parts(module.parts());
+            if self.direct_submodule_shadows_export(&submodule, module_name, attr_name) {
                 res.push(AttrInfo {
                     name: attr_name.clone(),
                     ty: None,
@@ -2791,7 +2998,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         definition: AttrDefinition::PartiallyResolvedImportedModuleAttribute {
                             module_name,
                         },
-                        is_reexport: self.exports.is_reexport(module_name, name),
+                        is_reexport: self.exports.reexport_source(module_name, name).is_some(),
                     });
                 }
             }
@@ -2804,7 +3011,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         definition: AttrDefinition::PartiallyResolvedImportedModuleAttribute {
                             module_name,
                         },
-                        is_reexport: self.exports.is_reexport(module_name, name),
+                        is_reexport: self.exports.reexport_source(module_name, name).is_some(),
                     }));
                 }
             }
@@ -2872,7 +3079,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | AttributeBase1::Quantified(_, class) => {
                 self.completions_class_type(class, expected_attribute_name, res)
             }
-            AttributeBase1::TensorInstance(tensor) => {
+            AttributeBase1::ShapedArrayInstance(tensor) => {
                 self.completions_class_type(&tensor.base_class, expected_attribute_name, res)
             }
             AttributeBase1::LiteralString => {

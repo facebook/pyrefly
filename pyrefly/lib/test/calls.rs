@@ -160,6 +160,48 @@ f(0)  # E: `f` is deprecated
     "#,
 );
 
+fn test_env_string_as_iterable() -> TestEnv {
+    TestEnv::new().enable_string_as_iterable_warning()
+}
+
+testcase!(
+    test_string_as_iterable_warning,
+    test_env_string_as_iterable(),
+    r#"
+from typing import Iterable, Sequence
+
+def takes_iter(xs: Iterable[str]) -> None: ...
+def takes_seq(xs: Sequence[str]) -> None: ...
+def takes_iter_or_str(xs: Iterable[str] | str) -> None: ...
+
+s: str = "hello"
+takes_iter(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+takes_seq(s)  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+takes_iter_or_str(s)
+takes_iter(["hello"])
+
+x: Iterable[str] = s  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+y: Sequence[str] = s  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+
+takes_iter("hello")  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+z: Iterable[str] = "hello"  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+    "#,
+);
+
+testcase!(
+    test_string_as_iterable_warning_does_not_break_overload_matching,
+    test_env_string_as_iterable(),
+    r#"
+from traceback import format_exception
+
+def f(exc: BaseException) -> None:
+    "".join(format_exception(exc))
+
+s: str = "hello"
+"".join(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+    "#,
+);
+
 testcase!(
     test_deprecated_overloaded_signature,
     r#"
@@ -476,4 +518,147 @@ class Uncallable:
 obj = Uncallable()
 obj()  # E: Expected a callable, got `Uncallable`
 "#,
+);
+
+// Verify **kwargs unpacking correctly suppresses missing-argument errors.
+testcase!(
+    test_kwargs_unpacking_provides_required_args,
+    r#"
+class Config:
+    def __init__(self, name: str, value: int) -> None: ...
+
+data = {"name": "test", "value": 42}
+Config(**data)
+
+def make(**kwargs) -> Config:
+    return Config(**kwargs)
+    "#,
+);
+
+// Verify object.__init__(self) is accepted when self is the only argument.
+testcase!(
+    test_object_init_explicit_self,
+    r#"
+class MyClass:
+    def __init__(self) -> None:
+        object.__init__(self)
+
+class MyClass2:
+    def __new__(cls) -> "MyClass2":
+        return object.__new__(cls)
+    "#,
+);
+
+// Verify explicit kwarg + **dict_mapping doesn't falsely report conflicts.
+testcase!(
+    test_explicit_kwarg_with_mapping_kwargs,
+    r#"
+class Config:
+    def __init__(self, name: str, value: int, **kwargs) -> None: ...
+
+extra = {"debug": True}
+Config(name="test", value=42, **extra)
+    "#,
+);
+
+testcase!(
+    test_bad_argument_type_none_hint,
+    r#"
+def takes_str(x: str) -> None: ...
+
+maybe: str | None = "hello"
+takes_str(maybe)  # E: Consider narrowing the value with an `is not None` check  # !E: changing the declared type
+
+takes_str(None)  # E:  # !E: `is not None` check  # !E: changing the declared type
+
+if maybe is not None:
+    takes_str(maybe)  # OK — narrowed
+    "#,
+);
+
+testcase!(
+    test_bad_assignment_none_hint,
+    r#"
+maybe: str | None = "hello"
+x: int | str = maybe  # E: Consider narrowing the value with an `is not None` check or changing the declared type to `int | str | None`
+    "#,
+);
+
+testcase!(
+    test_bad_return_none_hint,
+    r#"
+def foo(x: bool) -> str:
+    if x:
+        y = "hello"
+    else:
+        y = None
+    return y  # E: Consider narrowing the value with an `is not None` check or changing the declared type to `str | None`
+    "#,
+);
+
+testcase!(
+    test_implicit_return_no_none_hint,
+    r#"
+def f() -> str:  # E:  # !E: does not allow `None`
+    pass
+def g(x: str) -> str:  # E:  # !E: does not allow `None`
+    if x:
+        return x
+    "#,
+);
+
+testcase!(
+    test_bad_default_none_hint,
+    r#"
+def default() -> int | None: ...
+def f(x: int = default()):  # E: Consider changing the declared type to `int | None`  # !E: `is not None` check
+    pass
+    "#,
+);
+
+testcase!(
+    test_bare_none_hint,
+    r#"
+x: str = None  # E: Consider changing the declared type to `str | None`  # !E: `is not None` check
+    "#,
+);
+
+testcase!(
+    test_attribute_assignment_none_hint,
+    r#"
+class A:
+    def __init__(self):
+        self.x = 42
+
+def f(a: A, x: int | None):
+    a.x = x  # E: Consider narrowing the value with an `is not None` check  # !E: changing the declared type
+
+def g(a: A):
+    a.x = None  # E:  # !E: `is not None` check  # !E: changing the declared type
+    "#,
+);
+
+testcase!(
+    test_return_hint_not_used_if_detrimental,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+def first[T](items: list[T], matcher: Callable[[T], bool]) -> T | None: ...
+def foo(items: list[int]) -> int | None:
+    return first(items, lambda i: reveal_type(i) == 3)  # E: revealed type: int
+    "#,
+);
+
+testcase!(
+    test_uses_return_hint_even_if_some_arg_error,
+    r#"
+from collections.abc import Iterable
+from typing import Any
+
+def collect[T](xs: Iterable[T], unrelated: Any) -> list[T]: ...
+
+def f() -> list[object]:
+    return collect(["x"], 1 + "oops")  # E: `+` is not supported between `Literal[1]` and `Literal['oops']`
+    "#,
 );

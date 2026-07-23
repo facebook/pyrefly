@@ -12,6 +12,7 @@
  */
 
 use pyrefly_types::callable::FuncMetadata;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
@@ -24,6 +25,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
+use crate::alt::expr::ExprOptions;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::unwrap::HintRef;
@@ -51,8 +53,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let expr_b = &args[1];
             let a = self
                 .solver()
-                .deep_force(self.expr_infer_with_hint(expr_a, hint, errors));
-            let b = self.solver().deep_force(self.expr_untype(
+                .force(self.expr_infer_with_hint(expr_a, hint, errors));
+            let b = self.solver().force(self.expr_untype(
                 expr_b,
                 TypeFormContext::FunctionArgument,
                 errors,
@@ -103,7 +105,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let ret = if args.len() == 1 {
-            let mut type_info = self.expr_infer_type_info_with_hint(&args[0], hint, errors);
+            let mut type_info = self.expr_with_options(&args[0], ExprOptions::infer(errors, hint));
             let ret = type_info.ty().clone();
             type_info.visit_mut(&mut |ty| {
                 *ty = self.for_display(ty.clone());
@@ -133,6 +135,72 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(errors, range, ErrorKind::UnexpectedKeyword, msg);
                 },
                 "reveal_type",
+                keyword,
+            );
+        }
+        ret
+    }
+
+    pub fn call_assert_shape(
+        &self,
+        args: &[Expr],
+        keywords: &[Keyword],
+        range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let ret = if args.len() == 2 {
+            let actual = self
+                .solver()
+                .force(self.expr_infer_with_hint(&args[0], hint, errors));
+            if let Type::ShapedArray(shaped_array) = &actual {
+                if let Some(shape) = self.parse_assert_shape_expr(&args[1], errors) {
+                    let expected = self
+                        .shaped_array_with_shape(shaped_array, shape.clone())
+                        .to_type();
+                    if !self.is_equivalent(&actual, &expected) {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::AssertType,
+                            format!(
+                                "assert_shape({}, {}) failed",
+                                format_assert_shape_shape(&shaped_array.shape()),
+                                format_assert_shape_shape(&shape)
+                            ),
+                        );
+                    }
+                }
+            } else {
+                self.error(
+                    errors,
+                    args[0].range(),
+                    ErrorKind::BadArgumentType,
+                    format!(
+                        "First argument to `assert_shape` must be a shaped array, got `{}`",
+                        self.for_display(actual.clone())
+                    ),
+                );
+            }
+            actual
+        } else {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadArgumentCount,
+                format!(
+                    "assert_shape needs 2 positional arguments, got {}",
+                    args.len()
+                ),
+            );
+            self.heap.mk_any_error()
+        };
+        for keyword in keywords {
+            unexpected_keyword(
+                &|msg| {
+                    self.error(errors, range, ErrorKind::UnexpectedKeyword, msg);
+                },
+                "assert_shape",
                 keyword,
             );
         }
@@ -383,6 +451,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // fresh vars and solve them during the `is_subset_eq` check below.
                         let class_info_protocol = class_info_metadata.protocol_metadata().unwrap();
                         if let Some(object_type) = &object_or_class
+                            && !object_type.is_never()
                             && let (vs, Type::ClassType(protocol_class_type)) =
                                 self.instantiate_fresh_class(class_info_cls)
                         {
@@ -409,9 +478,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     ));
                                 }
                             }
-                            if let Err(specialization_errors) =
-                                self.solver().finish_quantified(vs, false)
-                            {
+                            if let Err(specialization_errors) = self.finish_quantified(vs, false) {
                                 for e in specialization_errors {
                                     unsafe_overlap_errors.push(e.to_error_msg(self))
                                 }
@@ -645,5 +712,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             None
         }
+    }
+}
+
+fn format_assert_shape_shape(shape: &IntTuple) -> String {
+    match shape.as_concrete() {
+        Some([]) => "()".to_owned(),
+        Some([dim]) => format!("({dim},)"),
+        _ => format!("({shape})"),
     }
 }

@@ -77,6 +77,8 @@ impl UnsavedFileTracker {
             }
         } else if matches!(language_id, "python") {
             file_name.push_str(".py");
+        } else if matches!(language_id, "jupyter") {
+            file_name.push_str(".ipynb");
         }
         path.push(file_name);
 

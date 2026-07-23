@@ -61,6 +61,11 @@ impl ErrorDisplayConfig {
         self.0.insert(kind, severity);
     }
 
+    /// Sets the severity only if this error kind is not already explicitly configured.
+    pub fn set_default_severity(&mut self, kind: ErrorKind, severity: Severity) {
+        self.0.entry(kind).or_insert(severity);
+    }
+
     /// Iterate over `(ErrorKind, Severity)` entries in this config.
     pub fn iter(&self) -> impl Iterator<Item = (ErrorKind, Severity)> + '_ {
         self.0.iter().map(|(&k, &s)| (k, s))
@@ -174,6 +179,15 @@ impl<'a> ErrorConfig<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unknown_column_can_be_downgraded() {
+        for severity in [Severity::Warn, Severity::Ignore] {
+            let config =
+                ErrorDisplayConfig::new(HashMap::from([(ErrorKind::UnknownColumn, severity)]));
+            assert_eq!(config.severity(ErrorKind::UnknownColumn), severity);
+        }
+    }
 
     #[test]
     fn test_severity_parent_kind_fallback() {

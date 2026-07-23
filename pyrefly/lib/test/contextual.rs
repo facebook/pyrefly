@@ -562,7 +562,7 @@ class A: ...
 class B(A): ...
 x: list[A]
 y: list[B]
-x = y = [B()]  # E: Wrong type for assignment, expected `list[A]` and got `list[B]`
+x = y = [B()]  # E: `list[B]` is not assignable to `list[A]`
     "#,
 );
 
@@ -835,6 +835,23 @@ class Seq(Protocol[_T_co]):
 U = Seq[str] | Seq[int]
 def f(x: U) -> None: ...
 f(list())
+    "#,
+);
+
+testcase!(
+    // Regression: a list/set literal against `Alias | Collection[Alias]`, where the
+    // `Literal[...]` alias is wide, must still pick up the `Collection` element hint.
+    // Flattening the alias used to count its members against `MAX_DECOMPOSE_HINT_WIDTH`,
+    // incorrectly triggering the cap so the literal fell back to `list[str]`.
+    test_list_hint_with_wide_literal_alias_union,
+    r#"
+from typing import Literal, TypeAlias
+from collections.abc import Collection
+L: TypeAlias = Literal["a", "b", "c", "d", "e", "f", "g", "h"]
+def f(*, x: L | Collection[L] = "a") -> None: ...
+f(x=["a", "b"])
+f(x={"a", "b"})
+f(x=["a", "bad"])  # E: `list[str]` is not assignable to parameter `x`
     "#,
 );
 

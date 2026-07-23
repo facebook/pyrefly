@@ -135,6 +135,38 @@ def f(c: C):
 );
 
 testcase!(
+    test_deprecated_overloaded_property_setter,
+    r#"
+from typing import overload
+from warnings import deprecated
+
+class C:
+    @property
+    def x(self) -> int:
+        ...
+
+    @x.setter
+    @overload
+    @deprecated("Setting x to None is deprecated")
+    def x(self, value: None) -> None:
+        ...
+
+    @x.setter
+    @overload
+    def x(self, value: int) -> None:
+        ...
+
+    @x.setter
+    def x(self, value: int | None) -> None:
+        ...
+
+c = C()
+c.x = None  # E: Call to deprecated overload `C.x`
+c.x = 1
+    "#,
+);
+
+testcase!(
     test_property_with_setter_and_deleter,
     r#"
 from typing import assert_type, reveal_type
@@ -273,8 +305,18 @@ def f(x: T) -> None:
 
 // Test descriptor semantics for class-level annotation-only fields vs. method-initialized
 // instance attributes. Annotation-only fields in the class body are treated as descriptors
+//
 // (so reads invoke `__get__` and writes without `__set__` are rejected); method-initialized
 // attributes are plain instance attributes and bypass the descriptor protocol.
+//
+// The behavior of annotation-only attributes is ambiguous, since if they are actually assigned
+// to instances then the runtime behavior is *not* descriptor-based. But in practice it's not
+// unusual for metaclass logic to be involved, and in addition parts of the ecosystem assume
+// this behavior because mypy and pyright chose it.
+//
+// TODO(stroxler): Consider whether we could implement a false-positive-resistant approach
+// for ambiguous cases someday. This would probably require something like an intersection;
+// the same kind of ambiguity also pops up with Callables and callback protocols.
 testcase!(
     test_annotation_only_attribute_has_descriptor_semantics,
     r#"
@@ -768,6 +810,33 @@ class B[T: A]:
 );
 
 testcase!(
+    test_overloaded_descriptor_get_preserves_specialized_owner,
+    r#"
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, overload, reveal_type
+
+Storage: TypeAlias = Literal["python", "pyarrow"]
+StorageT = TypeVar("StorageT", bound=Storage)
+_StorageT = TypeVar("_StorageT", bound=Storage | None, default=None)
+
+class _CatStorageDescriptor:
+    @overload
+    def __get__(self, instance: Cat[None], owner: type[Cat[None]]) -> Storage: ...
+    @overload
+    def __get__(
+        self, instance: Cat[StorageT], owner: type[Cat[StorageT]]
+    ) -> StorageT: ...
+
+    def __get__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class Cat(Generic[_StorageT]):
+    storage = _CatStorageDescriptor()
+
+def main(cat: Cat[Literal["pyarrow"]]) -> None:
+    reveal_type(cat.storage)  # E: revealed type: Literal['pyarrow']
+    "#,
+);
+
+testcase!(
     test_property_constructor_non_callable_arg,
     r#"
 from typing import Any, assert_type
@@ -900,5 +969,75 @@ class C:
     x = property(_get_x)
 def f(c: C):
     assert_type(c.x, str | None)
+    "#,
+);
+
+testcase!(
+    // A `__get__` whose type is itself a descriptor must not recurse forever; the
+    // read falls back to the descriptor's instance type, so the call below is reported
+    // as not callable rather than overflowing the stack.
+    test_self_referential_descriptor_get_no_crash,
+    r#"
+class C:
+    def d() -> C: ...
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __get__():
+        pass
+C.__get__()  # E: Expected a callable, got `C`
+    "#,
+);
+
+testcase!(
+    // A protocol used as a decorator return type that defines both `__call__` and
+    // `__get__` is a descriptor: attribute access must go through `__get__`, not be
+    // treated as a callback protocol. See GitHub issue #3345.
+    test_callable_descriptor_protocol,
+    r#"
+from typing import Any, Callable, Concatenate, Protocol, Self, assert_type, overload
+
+
+class Method[**P, R](Protocol):
+    def __call__(self, __self__: Any, /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type[Any]) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Any, owner: type[Any] | None = None) -> Callable[P, R]: ...
+
+    def __get__(self, instance: Any | None, owner: type[Any] | None = None) -> Self | Callable[P, R]: ...
+
+
+def wrap[**P, R](method: Callable[Concatenate[Any, P], R]) -> Method[P, R]: ...
+
+
+class Foo:
+    @wrap
+    def bar(self) -> None: ...
+
+
+def f(foo: Foo) -> None:
+    assert_type(foo.bar, Callable[[], None])
+    foo.bar()
+    "#,
+);
+
+testcase!(
+    // Assignment resolves a descriptor through its getter too, so the same guard keeps
+    // the write path from overflowing the stack.
+    test_self_referential_descriptor_set_no_crash,
+    r#"
+class C:
+    def d() -> C: ...
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __get__():
+        pass
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __set__():
+        pass
+class Host:
+    x: C = C()
+def f(h: Host) -> None:
+    h.x = 5  # E: Expected a callable, got `C`
     "#,
 );
