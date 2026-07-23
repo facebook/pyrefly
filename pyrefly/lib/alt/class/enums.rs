@@ -276,31 +276,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_any_implicit()
             };
         }
-        if let Some(mixed_in) = mixed_in {
-            return mixed_in;
-        }
         // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type.
         let enum_value_types: Vec<_> = self
             .get_enum_members(class.class_object())
             .into_iter()
             .filter_map(|lit| {
-                if let Lit::Enum(lit_enum) = lit {
-                    let value_ty =
-                        self.enum_literal_to_value_type(*lit_enum, enum_metadata.is_django);
-                    if value_ty.is_implicit_literal() {
-                        Some(value_ty.promote_implicit_literals(self.stdlib))
+                let Lit::Enum(lit_enum) = lit else {
+                    return None;
+                };
+                let value_ty = self.enum_literal_to_value_type(*lit_enum, enum_metadata.is_django);
+                Some(if let Some(ref mixed_in) = mixed_in {
+                    let promoted = value_ty.clone().promote_implicit_literals(self.stdlib);
+                    if &promoted == mixed_in {
+                        value_ty
                     } else {
-                        Some(value_ty)
+                        mixed_in.clone()
                     }
+                } else if value_ty.is_implicit_literal() {
+                    value_ty.promote_implicit_literals(self.stdlib)
                 } else {
-                    None
-                }
+                    value_ty
+                })
             })
             .collect();
         if enum_value_types.is_empty() {
-            // Don't assume Never if there are no members, because they may
-            // be created dynamically and we don't want false-positives downstream.
-            self.heap.mk_any_implicit()
+            // Don't assume Never if there are no members, because they may be created
+            // dynamically and we don't want false-positives downstream.
+            if let Some(mixed_in) = mixed_in {
+                mixed_in
+            } else {
+                self.heap.mk_any_implicit()
+            }
         } else {
             self.unions(enum_value_types)
         }
