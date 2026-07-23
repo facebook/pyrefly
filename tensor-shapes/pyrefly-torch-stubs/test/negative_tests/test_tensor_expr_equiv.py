@@ -11,7 +11,7 @@ For example, Tensor[[2 + 3]] should be assignable to Tensor[[5]].
 
 from typing import TYPE_CHECKING
 
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 
 if TYPE_CHECKING:
@@ -48,12 +48,12 @@ def literal_sub_equals_literal(x: Tensor[[10 - 3, 4]]) -> Tensor[[7, 4]]:
 # ============================================================================
 
 
-def add_commutative[N: SymVar, M: SymVar](x: Tensor[[N + M]]) -> Tensor[[M + N]]:
+def add_commutative[N: IntVar, M: IntVar](x: Tensor[[N + M]]) -> Tensor[[M + N]]:
     """Addition is commutative: N + M = M + N"""
     return x
 
 
-def mul_commutative[N: SymVar, M: SymVar](x: Tensor[[N * M]]) -> Tensor[[M * N]]:
+def mul_commutative[N: IntVar, M: IntVar](x: Tensor[[N * M]]) -> Tensor[[M * N]]:
     """Multiplication is commutative: N * M = M * N"""
     return x
 
@@ -63,17 +63,17 @@ def mul_commutative[N: SymVar, M: SymVar](x: Tensor[[N * M]]) -> Tensor[[M * N]]
 # ============================================================================
 
 
-def concrete_plus_symbolic[N: SymVar](x: Tensor[[N + 0]]) -> Tensor[[N]]:
+def concrete_plus_symbolic[N: IntVar](x: Tensor[[N + 0]]) -> Tensor[[N]]:
     """N + 0 = N (additive identity)"""
     return x
 
 
-def concrete_times_one[N: SymVar](x: Tensor[[N * 1]]) -> Tensor[[N]]:
+def concrete_times_one[N: IntVar](x: Tensor[[N * 1]]) -> Tensor[[N]]:
     """N * 1 = N (multiplicative identity)"""
     return x
 
 
-def double_is_times_two[N: SymVar](x: Tensor[[N + N]]) -> Tensor[[N * 2]]:
+def double_is_times_two[N: IntVar](x: Tensor[[N + N]]) -> Tensor[[N * 2]]:
     """N + N = N * 2"""
     return x
 
@@ -83,14 +83,16 @@ def double_is_times_two[N: SymVar](x: Tensor[[N + N]]) -> Tensor[[N * 2]]:
 # ============================================================================
 
 
-def add_not_equal_mul[N: SymVar, M: SymVar](x: Tensor[[N + M]]) -> Tensor[[N * M]]:
+def add_not_equal_mul[N: IntVar, M: IntVar](
+    x: Tensor[[N + M]],
+) -> Tensor[[N * M]]:
     """N + M != N * M in general."""
     # E: Returned type `Tensor[[(N + M)]]` is not assignable
     #    to declared return type `Tensor[[(N * M)]]`
     return x
 
 
-def different_constants[N: SymVar](x: Tensor[[N + 1]]) -> Tensor[[N + 2]]:
+def different_constants[N: IntVar](x: Tensor[[N + 1]]) -> Tensor[[N + 2]]:
     """N + 1 != N + 2."""
     # E: Returned type `Tensor[[(1 + N)]]` is not assignable
     #    to declared return type `Tensor[[(2 + N)]]`

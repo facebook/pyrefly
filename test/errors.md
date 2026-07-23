@@ -69,6 +69,23 @@ ERROR */bad.py:1:1-8: `+` is not supported * (glob)
 [1]
 ```
 
+## `full-text-with-github` preserves diagnostics in GitHub Actions logs
+
+```scrut
+$ echo "x: str = 0" > $TMPDIR/bad_combined.py && \
+> $PYREFLY check $TMPDIR/bad_combined.py --preset strict --output-format=full-text-with-github --summary=none
+ERROR `Literal[0]` is not assignable to `str` [bad-assignment]
+ --> */bad_combined.py:1:10 (glob)
+  |
+1 | x: str = 0
+  |    ---   ^
+  |    |
+  |    declared type
+  |
+::error file=*/bad_combined.py,line=1,col=10,endLine=1,endColumn=11,title=Pyrefly bad-assignment::`Literal[0]` is not assignable to `str` (glob)
+[1]
+```
+
 ## Source code snippet
 
 ```scrut
@@ -120,6 +137,16 @@ $ touch $TMPDIR/pyrefly.toml && \
 $ echo "x: str = 0" > $TMPDIR/test.py && \
 > $PYREFLY check $TMPDIR/test.py --warn=bad-assignment --min-severity=warn --output-format=min-text
  WARN */test.py:1:10-11: `Literal[0]` is not assignable to `str` [bad-assignment] (glob)
+[1]
+```
+
+## `--min-severity info` causes nonzero exit on directives
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> printf "from typing import reveal_type\nreveal_type(1)\n" > $TMPDIR/test.py && \
+> $PYREFLY check $TMPDIR/test.py --min-severity=info --output-format=min-text
+ INFO */test.py:2:12-15: revealed type: Literal[1] [reveal-type] (glob)
 [1]
 ```
 

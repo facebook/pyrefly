@@ -223,13 +223,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         | (Type::SelfType(self_cls), Type::ClassType(cls)) = (left, right)
             && self.as_superclass(cls, self_cls.class_object()).as_ref() == Some(self_cls)
         {
-            // ClassType(C) & SelfType(Parent) simplifies to ClassType(C) when C
-            // is a subclass of Parent with a matching inherited instantiation,
-            // because Self[Parent] represents "Parent or any subclass" and
-            // ClassType(C) is already such a subclass.
-            // Without this, an unsimplified Intersect(ClassType, SelfType) can
-            // leak to downstream consumers that don't handle Intersect types.
-            self.heap.mk_class_type(cls.clone())
+            // ClassType(C) & SelfType(Parent) simplifies to SelfType(C) when C
+            // is a subclass of Parent with a matching inherited instantiation.
+            // Self[Parent] represents "Parent or any subclass", so narrowing it
+            // to the subclass C keeps it a self-type anchored at C: attribute and
+            // constructor lookups resolve through C, while the value stays
+            // assignable back to Self[Parent] (all self-types are mutually
+            // assignable). Collapsing to a plain ClassType(C) instead would drop
+            // the self-ness and spuriously reject `return self`/`return cls()`
+            // against a declared `-> Self`.
+            // Producing a SelfType (rather than an unsimplified Intersect) also
+            // avoids leaking Intersect types to downstream consumers that don't
+            // handle them.
+            self.heap.mk_self_type(cls.clone())
         } else if left.is_scalar() || right.is_scalar() {
             // The only inhabited intersections of literals are things like
             // `Literal[0] & Literal[0]` or `Literal[0] & int` that would have already been
@@ -1067,6 +1073,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         base: &Type,
         facet: &FacetKind,
         op: &AtomicNarrowOp,
+        allow_never_collapse: bool,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
@@ -1151,6 +1158,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }))
             }
+            // If `allow_never_collapse` is not set, we only filter members of a union
+            // to avoid inferring `Never` excessively
+            AtomicNarrowOp::IsInstance(_, _) | AtomicNarrowOp::IsNotInstance(_, _)
+                if base.is_union() || allow_never_collapse =>
+            {
+                let suppress_errors = self.error_swallower();
+                Some(self.distribute_over_union(base, |t| {
+                    let base_info = TypeInfo::of_ty(t.clone());
+                    let facet_ty = self.get_facet_chain_type(
+                        &base_info,
+                        &FacetChain::new(Vec1::new(facet.clone())),
+                        range,
+                    );
+                    let narrowed_facet = self.atomic_narrow(&facet_ty, op, range, &suppress_errors);
+                    if narrowed_facet.is_never() {
+                        self.heap.mk_never()
+                    } else {
+                        t.clone()
+                    }
+                }))
+            }
             _ => None,
         }
     }
@@ -1228,6 +1256,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         match op {
             AtomicNarrowOp::Placeholder => ty.clone(),
+            AtomicNarrowOp::ClassCoverageGate(_) => ty.clone(),
+            AtomicNarrowOp::ClassCoverageGateNeg(keys) => {
+                // Subtract the class only when every positional slot's sub-pattern exhausts its
+                // matched slot, i.e. all slot-coverage keys resolved to `Never`.
+                if !keys.is_empty() && keys.iter().all(|key| self.get_idx(*key).ty().is_never()) {
+                    self.heap.mk_never()
+                } else {
+                    ty.clone()
+                }
+            }
             AtomicNarrowOp::LenEq(v) => {
                 let right = self.expr_infer(v, errors);
                 let Type::Literal(f) = &right else {
@@ -2000,6 +2038,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &base_ty,
                                 last,
                                 &op_for_narrow,
+                                facet_subject.allow_never_collapse,
                                 range,
                                 errors,
                             ) && narrowed_ty != base_ty
@@ -2018,6 +2057,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 base_ty,
                                 last,
                                 &op_for_narrow,
+                                facet_subject.allow_never_collapse,
                                 range,
                                 errors,
                             ) && narrowed_ty != *base_ty
@@ -2373,6 +2413,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(FacetKind::Key(s.to_string()))
                     }
                     _ => None,
+                }
+            }
+            UnresolvedFacetKind::MatchArg { class, index } => {
+                // Resolve the positional slot to an attribute name via the class's `__match_args__`
+                let suppress_errors = self.error_swallower();
+                let class_range = class.range();
+                let Type::ClassDef(cls) = self.expr_infer(&class, &suppress_errors) else {
+                    return None;
+                };
+                let instance = self.promote_silently(&cls);
+                let match_args = self.attr_infer_for_type(
+                    &instance,
+                    &dunder::MATCH_ARGS,
+                    class_range,
+                    &suppress_errors,
+                    None,
+                );
+                if let Type::Tuple(Tuple::Concrete(ts)) = &match_args
+                    && let Some(Type::Literal(lit)) = ts.get(index)
+                    && let Lit::Str(attr_name) = &lit.value
+                {
+                    Some(FacetKind::Attribute(Name::new(attr_name)))
+                } else {
+                    None
                 }
             }
         }

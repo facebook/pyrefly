@@ -71,6 +71,7 @@ pub struct Stdlib {
     exception_group: Option<StdlibResult<(Class, Arc<TParams>)>>,
     list: StdlibResult<(Class, Arc<TParams>)>,
     dict: StdlibResult<(Class, Arc<TParams>)>,
+    partial: StdlibResult<(Class, Arc<TParams>)>,
     deque: StdlibResult<(Class, Arc<TParams>)>,
     frozenset: StdlibResult<(Class, Arc<TParams>)>,
     dict_items: StdlibResult<(Class, Arc<TParams>)>,
@@ -234,6 +235,7 @@ impl Stdlib {
                 .then(|| lookup_generic(builtins, "ExceptionGroup", 1)),
             list: lookup_generic(builtins, "list", 1),
             dict: lookup_generic(builtins, "dict", 2),
+            partial: lookup_generic(ModuleName::from_str("functools"), "partial", 1),
             deque: lookup_generic(ModuleName::collections(), "deque", 1),
             frozenset: lookup_generic(builtins, "frozenset", 1),
             dict_items: lookup_generic(collections_abc, "dict_items", 2),
@@ -462,6 +464,10 @@ impl Stdlib {
 
     pub fn list(&self, x: Type) -> ClassType {
         Self::apply(&self.list, vec![x])
+    }
+
+    pub fn partial(&self, ret: Type) -> ClassType {
+        Self::apply(&self.partial, vec![ret])
     }
 
     pub fn list_object(&self) -> &Class {

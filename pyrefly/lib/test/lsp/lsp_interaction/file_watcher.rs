@@ -11,18 +11,18 @@ use lsp_types::RegistrationParams;
 use lsp_types::Url;
 use lsp_types::request::RegisterCapability;
 use lsp_types::request::Request as _;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::commands::lsp::LspArgs;
-use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
+use pyrefly_lsp_test::object_model::LspMessageError;
 use serde::Deserialize;
 use serde_json::json;
 use tempfile::TempDir;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspInteractionArgs;
-use crate::object_model::LspMessageError;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 pub fn expect_watched_files(
     interaction: &LspInteraction,

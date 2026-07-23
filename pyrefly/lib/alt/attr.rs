@@ -12,7 +12,6 @@ use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::LitEnum;
-use pyrefly_types::shaped_array::ShapedArrayShapeArgStyle;
 use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier_arg;
@@ -27,10 +26,10 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::expr::TypeOrExpr;
@@ -45,6 +44,7 @@ use crate::error::style::ErrorStyle;
 use crate::solver::solver::SubsetError;
 use crate::state::loader::FindingOrError;
 use crate::types::callable::FunctionKind;
+use crate::types::callable::Params;
 use crate::types::callable::PropertyMetadata;
 use crate::types::callable::PropertyRole;
 use crate::types::class::Class;
@@ -631,7 +631,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if !error_messages.is_empty() {
             error_messages.sort();
             error_messages.dedup();
-            let mut msg = vec1![error_messages.join("\n")];
+            let (header, mut details) = if error_messages.len() > 1 {
+                (
+                    format!(
+                        "Object of type `{}` has no attribute `{attr_name}`",
+                        self.for_display(base.clone())
+                    ),
+                    error_messages,
+                )
+            } else {
+                (error_messages.remove(0), Vec::new())
+            };
             // Skip suggestions when we have a partial union failure to avoid suggesting
             // attributes from the types that have them when the problem is that some types
             // don't have the attribute at all.
@@ -640,9 +650,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_ref()
                     .and_then(|attr_base| self.suggest_attribute_name(attr_name, attr_base))
             {
-                msg.push(format!("Did you mean `{suggestion}`?"));
+                details.push(format!("Did you mean `{suggestion}`?"));
             }
-            let (header, details) = msg.split_off_first();
             errors
                 .error_builder(range, ErrorKind::MissingAttribute, header)
                 .with_details(details)
@@ -1575,13 +1584,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             AttributeBase1::ShapedArrayInstance(tensor) => {
                 if attr_name.as_str() == "shape" {
-                    let shape = if matches!(
-                        tensor.shape_arg_style,
-                        ShapedArrayShapeArgStyle::TupleCarrier { .. }
-                    ) {
-                        shape_to_tuple_carrier_arg(&tensor.shape)
+                    if let Some(attr) = self.get_shaped_array_attribute(tensor, attr_name) {
+                        acc.found_class_attribute(attr, base);
+                        return;
+                    }
+                    let shape = if tensor.tuple_carrier_shape_arg_index().is_some() {
+                        shape_to_tuple_carrier_arg(&tensor.shape())
                     } else {
-                        shape_to_tuple_carrier(&tensor.shape)
+                        shape_to_tuple_carrier(&tensor.shape())
                     };
                     acc.found_type(shape, base);
                     return;
@@ -2016,6 +2026,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 acc.not_found(NotFoundOn::ClassInstance(cls.class_object().clone(), base))
             }
+            // A bound method is a `types.MethodType`, which does not override
+            // `__setattr__`/`__delattr__`, so it does not accept arbitrary attribute
+            // assignment (this fails at runtime). Without this arm the base would fall
+            // through to the general lookup and resolve the dunder via
+            // `MethodType.__getattr__`, incorrectly permitting the assignment.
+            AttributeBase1::BoundMethod(_)
+                if (*dunder_name == dunder::SETATTR || *dunder_name == dunder::DELATTR)
+                    && self.field_is_inherited_from(
+                        self.stdlib.method_type().class_object(),
+                        dunder_name,
+                        (ModuleName::builtins().as_str(), "object"),
+                    ) =>
+            {
+                acc.not_found(NotFoundOn::ClassInstance(
+                    self.stdlib.method_type().class_object().clone(),
+                    base,
+                ))
+            }
             AttributeBase1::ShapedArrayInstance(tensor)
                 if (*dunder_name == dunder::SETATTR
                     || *dunder_name == dunder::DELATTR
@@ -2241,18 +2269,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &ClassType,
     ) -> Option<ShapedArrayType> {
-        if !cls
-            .targs()
-            .as_slice()
-            .iter()
-            .any(|arg| matches!(arg, Type::Tuple(_)))
-        {
+        // Cheap syntactic pre-filter, kept before any metadata lookup to preserve
+        // laziness: a shaped-array class always carries its shape as a tuple
+        // carrier, a first-class `IntTuple`, or an as-yet-unbound shape variable.
+        // Bailing here for any other class (notably scalar returns like `int`)
+        // avoids forcing that class's metadata on every call-return reprojection.
+        if !cls.targs().as_slice().iter().any(|arg| {
+            matches!(
+                arg,
+                Type::Tuple(_) | Type::IntTuple(_) | Type::Quantified(_) | Type::TypeVar(_)
+            )
+        }) {
             return None;
         }
         let shape_param = self.shaped_array_shape_for_class_type(cls)?;
         if !shape_param.is_type_var() {
             return None;
         }
+        // Decline reprojection when the shape argument does not project to a shape.
+        // `shaped_array_classtype_to_shaped_array_type` below shapeless-falls-back
+        // on an unconvertible arg (it is called from already-validated paths), but
+        // here we want to leave the class un-reprojected in that case. The builder
+        // recomputes this projection; that duplicate lookup is bounded by the cheap
+        // syntactic pre-filter above, so it only runs for plausible shaped arrays.
+        let shape_arg = self.shaped_array_shape_arg(cls)?;
+        self.shaped_array_shape_arg_to_shape(&shape_arg)?;
         Some(self.shaped_array_classtype_to_shaped_array_type(cls))
     }
 
@@ -2301,14 +2342,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // NNModule delegates attribute access to its underlying class
                 acc.push(AttributeBase1::ClassInstance(module.class.clone()))
             }
-            Type::Size(_) => {
+            Type::DataFrame(schema) => {
+                // A DataFrame delegates attribute access to its underlying instance type.
+                self.as_attribute_base1(schema.underlying_type(), acc)
+            }
+            Type::Int(_) => {
                 // Dimension values behave like int for attribute access
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
             }
-            Type::Dim(_) => {
-                // Symbolic integers behave like int for attribute access
-                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
-            }
+            Type::IntTuple(int_tuple) => acc.push(AttributeBase1::ClassInstance(
+                self.erase_tuple_type(int_tuple.to_tuple()),
+            )),
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
             }
@@ -2585,6 +2629,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     deleter: metadata.has_deleter,
                 }));
             }
+            // A `functools.partial(...)` result is a `Callable` with `Params::Partial`; resolve its
+            // attributes (`func`, `args`, `keywords`, ...) against `functools.partial[ret]`.
+            Type::Callable(c) if matches!(c.params, Params::Partial(_)) => acc.push(
+                AttributeBase1::ClassInstance(self.stdlib.partial(c.ret.clone())),
+            ),
             Type::Callable(_) | Type::CallableResidual(_) => acc.push(
                 AttributeBase1::ClassInstance(self.stdlib.function_type().clone()),
             ),
@@ -2728,6 +2777,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SpecialForm(_)
             | Type::Type(_)
             | Type::TypeForm(_)
+            | Type::TypeLevelDslCall(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)
@@ -2796,8 +2846,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             if let Some(dunder_bool_ty) = dunder_bool_ty
                 && !dunder_bool_ty.is_never()
-                && self.as_call_target(dunder_bool_ty.clone()).is_error()
             {
+                let dunder_bool_ty = match self.as_call_target(dunder_bool_ty) {
+                    CallTargetLookup::Ok(_) => return,
+                    CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => ty,
+                };
                 self.error(
                     errors,
                     range,
@@ -2805,7 +2858,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!(
                         "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
                         self.for_display(union_member_ty.clone()),
-                        self.for_display(dunder_bool_ty.clone()),
+                        self.for_display(dunder_bool_ty),
                     ),
                 );
             }

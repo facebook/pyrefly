@@ -206,6 +206,7 @@ fn test_class(module_name: ModuleName, name: &str) -> PyreflyClassType {
         NestingContext::toplevel(),
         module,
         None,
+        false,
     );
     PyreflyClassType::new(class, TArgs::default())
 }
@@ -412,8 +413,13 @@ impl TypeConverter<'_> {
                 self.convert_class_type(&t.base_class, TypeFlags::INSTANCE)
             }
 
+            PyreflyType::IntTuple(_) => builtin("tuple"),
+
             // --- NNModule → ClassType from class ---
             PyreflyType::NNModule(m) => self.convert_class_type(&m.class, TypeFlags::INSTANCE),
+
+            // --- DataFrame → convert the underlying instance type ---
+            PyreflyType::DataFrame(schema) => self.convert(&schema.underlying_type()),
 
             // --- TypeAlias → unwrap to the aliased type, or typing class for refs ---
             PyreflyType::TypeAlias(ta) | PyreflyType::UntypedAlias(ta) => {
@@ -461,11 +467,11 @@ impl TypeConverter<'_> {
             // --- KwCall → convert the return type ---
             PyreflyType::KwCall(kw) => self.convert(&kw.return_ty),
 
-            // --- Size / Dim → the stdlib `int` class (they represent integer dimensions) ---
+            // --- Int → the stdlib `int` class (symbolic integers represent dimensions) ---
             // Emitted as the real class, not `builtin("int")`: the protocol
             // restricts `BuiltInType.name` to a fixed sentinel set that excludes
             // `int`, so a bare builtin surfaces as Unknown on the consumer.
-            PyreflyType::Size(_) | PyreflyType::Dim(_) => {
+            PyreflyType::Int(_) => {
                 self.convert_class_type(self.stdlib.int_type, TypeFlags::INSTANCE)
             }
 
@@ -474,6 +480,9 @@ impl TypeConverter<'_> {
 
             // --- Materialization is a solver artifact ---
             PyreflyType::Materialization => builtin("unknown"),
+
+            // --- Type-level DSL calls are forced at function-call return boundaries ---
+            PyreflyType::TypeLevelDslCall(_) => builtin("unknown"),
 
             // --- Sentinel → a `ClassType` carrying a `SentinelLiteral` ---
             // The protocol has a dedicated sentinel literal (class name plus its
@@ -579,7 +588,7 @@ impl TypeConverter<'_> {
 
     /// Convert a pyrefly function to a TSP `FunctionType` with declaration info.
     ///
-    /// For `FunctionKind::Def`, produces a `RegularDeclaration` pointing to the
+    /// For a source-defined function, produces a `RegularDeclaration` pointing to the
     /// module where the function is defined. The source range is resolved via
     /// the `resolve_func_range` callback when available; otherwise a zero range
     /// is used.
@@ -682,16 +691,16 @@ impl TypeConverter<'_> {
     /// Build a declaration for a function described by `kind`.
     ///
     /// Resolution order:
-    ///  1. A `Def` whose `FuncId` carries a `def_index`: use the binding-table
+    ///  1. A source definition whose `FuncId` carries a `def_index`: use the binding-table
     ///     range via `resolve_func_range`.
     ///  2. Otherwise, resolve the function by `(module, name)` through the
     ///     export-location resolver. This covers imported user functions whose
     ///     `FuncId` lacks a `def_index`, and special functions that are not
-    ///     `Def` at all (e.g. `typing.overload`).
+    ///     source definitions at all (e.g. `typing.overload`).
     ///  3. Fall back to a zero range pointing at the defining module (for
-    ///     `Def`), or a synthesized declaration when even the module is unknown.
+    ///     source definition), or a synthesized declaration when even the module is unknown.
     fn function_declaration(&self, kind: &FunctionKind) -> Declaration {
-        if let FunctionKind::Def(func_id) = kind
+        if let Some(func_id) = kind.definition_id()
             && let Some(range) = self.resolve_func_range.and_then(|resolve| resolve(func_id))
         {
             let lsp_range = func_id.module.to_lsp_range(range);
@@ -722,7 +731,7 @@ impl TypeConverter<'_> {
             });
         }
 
-        if let FunctionKind::Def(func_id) = kind {
+        if let Some(func_id) = kind.definition_id() {
             return Declaration::Regular(RegularDeclaration {
                 category: DeclarationCategory::Function,
                 kind: DeclarationKind::Regular,
@@ -1239,15 +1248,12 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_size_and_dim_are_int_class() {
-        use pyrefly_types::dimension::SizeExpr;
+    fn test_convert_int_is_int_class() {
+        use pyrefly_types::dimension::Int;
 
-        // `Size`/`Dim` are integer tensor dimensions, emitted as the real `int`
+        // A `Int` is an integer tensor dimension, emitted as the real `int`
         // class rather than an off-spec `int` `BuiltInType`.
-        for ty in [
-            PyreflyType::Size(SizeExpr::literal(6)),
-            PyreflyType::Dim(Box::new(PyreflyType::Size(SizeExpr::literal(3)))),
-        ] {
+        for ty in [PyreflyType::Int(Int::literal(6))] {
             match convert_type(&ty) {
                 TspType::Class(c) => {
                     assert!(c.flags.contains(TypeFlags::INSTANCE));

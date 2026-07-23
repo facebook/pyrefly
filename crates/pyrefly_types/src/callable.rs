@@ -41,6 +41,8 @@ use crate::equality::TypeEqCtx;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::meta_shape_dsl::ShapeTransform;
+use crate::type_level_dsl::TypeShapeDslDomain;
+use crate::type_level_dsl::ValidatedTypeShapeDslFunction;
 use crate::type_output::DisplayOutput;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
@@ -308,33 +310,39 @@ impl ParamList {
     pub fn fmt_with_type_with_newlines<O: TypeOutput>(
         &self,
         output: &mut O,
-        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
+        write_type: &impl Fn(&Type, &mut O, usize) -> fmt::Result,
+        indent: usize,
     ) -> fmt::Result {
         let mut named_posonly = false;
         let mut kwonly = false;
 
         for (i, param) in self.0.iter().enumerate() {
             if i > 0 {
-                output.write_str(",\n    ")?;
+                output.write_str(",\n")?;
+                write_indent(output, indent)?;
             }
 
             if matches!(param, Param::PosOnly(Some(_), _, _)) {
                 named_posonly = true;
             } else if named_posonly {
                 named_posonly = false;
-                output.write_str("/,\n    ")?;
+                output.write_str("/,\n")?;
+                write_indent(output, indent)?;
             }
 
             if !kwonly && matches!(param, Param::KwOnly(..)) {
                 kwonly = true;
-                output.write_str("*,\n    ")?;
+                output.write_str("*,\n")?;
+                write_indent(output, indent)?;
             }
 
-            param.fmt_with_type(output, write_type)?;
+            param.fmt_with_type(output, &|t, o| write_type(t, o, indent))?;
         }
 
         if named_posonly {
-            output.write_str(",\n    /")?;
+            output.write_str(",\n")?;
+            write_indent(output, indent)?;
+            output.write_str("/")?;
         }
 
         Ok(())
@@ -367,6 +375,13 @@ impl ParamList {
             Param::Kwargs(None, Type::any_implicit()),
         ])
     }
+}
+
+fn write_indent<O: TypeOutput>(output: &mut O, indent: usize) -> fmt::Result {
+    for _ in 0..indent {
+        output.write_str(" ")?;
+    }
+    Ok(())
 }
 
 /// Represents a prefix parameter in `Concatenate`.
@@ -717,6 +732,8 @@ pub struct FuncFlags {
     /// which lets override-consistency logic relax inferred placeholder returns
     /// without overriding what the user explicitly declared.
     pub is_return_inferred: bool,
+    /// Whether the function body directly calls `super(...).<this function>(...)`.
+    pub calls_super_method: bool,
     /// A function decorated with `typing.dataclass_transform(...)`, turning it into a
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See
@@ -867,6 +884,10 @@ impl FuncId {
 pub enum FunctionKind {
     IsInstance,
     IsSubclass,
+    /// The builtin `len`. Special-cased so that when the argument's `__len__`
+    /// returns a subtype of `int` (e.g. a shaped array's `Int[N]`), `len(x)`
+    /// yields that type instead of typeshed's plain `int`.
+    Len,
     Dataclass,
     DataclassField,
     DataclassReplace,
@@ -915,6 +936,12 @@ pub enum FunctionKind {
         Arc<FuncId>,
         Arc<ShapeDslFunction>,
         IdentityIgnored<Arc<Vec<Arc<ShapeDslFunction>>>>,
+    ),
+    /// A validated user-defined type-level shape DSL function.
+    TypeShapeDsl(
+        Arc<FuncId>,
+        TypeShapeDslDomain,
+        Arc<ValidatedTypeShapeDslFunction>,
     ),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,
@@ -984,21 +1011,82 @@ impl Callable {
     pub fn fmt_with_type_with_newlines<O: TypeOutput>(
         &self,
         output: &mut O,
-        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
+        write_type: &impl Fn(&Type, &mut O, usize) -> fmt::Result,
+        indent: usize,
     ) -> fmt::Result {
         match &self.params {
             Params::List(params) | Params::Partial(params) if params.len() > 1 => {
                 // For multiple parameters, put each on a new line with indentation
-                output.write_str("(\n    ")?;
-                params.fmt_with_type_with_newlines(output, write_type)?;
-                output.write_str("\n) -> ")?;
-                write_type(&self.ret, output)
+                let param_indent = indent + 4;
+                output.write_str("(\n")?;
+                write_indent(output, param_indent)?;
+                params.fmt_with_type_with_newlines(output, write_type, param_indent)?;
+                output.write_str("\n")?;
+                write_indent(output, indent)?;
+                output.write_str(") -> ")?;
+                write_type(&self.ret, output, indent)
+            }
+            Params::ParamSpec(args, _) if !args.is_empty() => {
+                let param_indent = indent + 4;
+                output.write_str("(\n")?;
+                write_indent(output, param_indent)?;
+                self.fmt_param_spec_with_newlines(output, write_type, param_indent)?;
+                output.write_str("\n")?;
+                write_indent(output, indent)?;
+                output.write_str(") -> ")?;
+                write_type(&self.ret, output, indent)
             }
             Params::List(..)
             | Params::Partial(..)
             | Params::ParamSpec(..)
             | Params::Ellipsis
-            | Params::Materialization => self.fmt_with_type(output, write_type),
+            | Params::Materialization => {
+                self.fmt_with_type(output, &|t, o| write_type(t, o, indent))
+            }
+        }
+    }
+
+    fn fmt_param_spec_with_newlines<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O, usize) -> fmt::Result,
+        indent: usize,
+    ) -> fmt::Result {
+        let Params::ParamSpec(args, pspec) = &self.params else {
+            unreachable!("only ParamSpec callables can be formatted as ParamSpec")
+        };
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                output.write_str(",\n")?;
+                write_indent(output, indent)?;
+            }
+            write_type(arg.ty(), output, indent)?;
+        }
+        match pspec {
+            Type::ParamSpecValue(params) if !params.is_empty() => {
+                if !args.is_empty() {
+                    output.write_str(",\n")?;
+                    write_indent(output, indent)?;
+                }
+                params.fmt_with_type_with_newlines(output, write_type, indent)
+            }
+            Type::ParamSpecValue(_) => Ok(()),
+            Type::Ellipsis => {
+                if !args.is_empty() {
+                    output.write_str(",\n")?;
+                    write_indent(output, indent)?;
+                }
+                output.write_str("...")
+            }
+            _ => {
+                if !args.is_empty() {
+                    output.write_str(",\n")?;
+                    write_indent(output, indent)?;
+                }
+                output.write_str("ParamSpec(")?;
+                write_type(pspec, output, indent)?;
+                output.write_str(")")
+            }
         }
     }
 
@@ -1282,6 +1370,16 @@ impl Display for Param {
 }
 
 impl FunctionKind {
+    /// Return source-definition identity for variants that preserve an ordinary function def.
+    pub fn definition_id(&self) -> Option<&FuncId> {
+        match self {
+            Self::Def(func_id) | Self::ShapeDsl(func_id, ..) | Self::TypeShapeDsl(func_id, ..) => {
+                Some(func_id)
+            }
+            _ => None,
+        }
+    }
+
     pub fn from_name(
         module: Module,
         cls: Option<Class>,
@@ -1292,6 +1390,7 @@ impl FunctionKind {
         match (module.name().as_str(), cls.as_ref(), func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
             ("builtins", None, "issubclass") => Self::IsSubclass,
+            ("builtins", None, "len") => Self::Len,
             ("builtins", None, "classmethod") => Self::ClassMethod,
             ("dataclasses", None, "dataclass") => Self::Dataclass,
             ("dataclasses", None, "field") => Self::DataclassField,
@@ -1335,6 +1434,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => ModuleName::builtins(),
             Self::IsSubclass => ModuleName::builtins(),
+            Self::Len => ModuleName::builtins(),
             Self::ClassMethod => ModuleName::builtins(),
             Self::Dataclass => ModuleName::dataclasses(),
             Self::DataclassField => ModuleName::dataclasses(),
@@ -1363,7 +1463,7 @@ impl FunctionKind {
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Def(func_id) => func_id.module.name().dupe(),
-            Self::ShapeDsl(id, _, _) => id.module.name().dupe(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.module.name().dupe(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
             Self::DefinesAssertShape => ModuleName::from_str("shape_extensions"),
         }
@@ -1373,6 +1473,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => Cow::Owned(Name::new_static("isinstance")),
             Self::IsSubclass => Cow::Owned(Name::new_static("issubclass")),
+            Self::Len => Cow::Owned(Name::new_static("len")),
             Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
             Self::DataclassField => Cow::Owned(Name::new_static("field")),
@@ -1401,7 +1502,7 @@ impl FunctionKind {
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
-            Self::ShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
             Self::DefinesAssertShape => Cow::Owned(Name::new_static("defines_assert_shape")),
         }
@@ -1411,6 +1512,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => None,
             Self::IsSubclass => None,
+            Self::Len => None,
             Self::ClassMethod => None,
             Self::Dataclass => None,
             Self::DataclassField => None,
@@ -1439,7 +1541,7 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
-            Self::ShapeDsl(id, _, _) => id.cls.clone(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.cls.clone(),
             Self::UsesShapeDsl => None,
             Self::DefinesAssertShape => None,
         }
@@ -1447,7 +1549,9 @@ impl FunctionKind {
 
     pub fn outer_funcs(&self) -> Option<&Name> {
         match self {
-            Self::Def(func_id) | Self::ShapeDsl(func_id, _, _) => func_id.outer_funcs.as_ref(),
+            Self::Def(func_id)
+            | Self::ShapeDsl(func_id, _, _)
+            | Self::TypeShapeDsl(func_id, _, _) => func_id.outer_funcs.as_ref(),
             _ => None,
         }
     }

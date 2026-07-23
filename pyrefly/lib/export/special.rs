@@ -19,7 +19,7 @@ pub enum SpecialExport {
     TypeAlias,
     TypeAliasType,
     TypeVar,
-    SymVar,
+    IntVar,
     ParamSpec,
     TypeVarTuple,
     Annotated,
@@ -53,6 +53,9 @@ pub enum SpecialExport {
     Generic,
     Protocol,
     PydanticConfigDict,
+    PydanticToCamel,
+    PydanticToPascal,
+    PydanticToSnake,
     HasAttr,
     GetAttr,
     Callable,
@@ -75,6 +78,7 @@ pub enum SpecialExport {
     TypeForm,
     UsesShapeDsl,
     ShapeDslFunction,
+    TypeShapeDslFunction,
     ShapedArray,
     ProxyMethod,
     Sentinel,
@@ -91,7 +95,7 @@ impl SpecialExport {
             "classmethod" => Some(Self::ClassMethod),
             "abstractclassmethod" => Some(Self::AbstractClassMethod),
             "TypeVar" => Some(Self::TypeVar),
-            "SymVar" => Some(Self::SymVar),
+            "IntVar" => Some(Self::IntVar),
             "ParamSpec" => Some(Self::ParamSpec),
             "TypeVarTuple" => Some(Self::TypeVarTuple),
             "Annotated" => Some(Self::Annotated),
@@ -125,6 +129,9 @@ impl SpecialExport {
             "override" => Some(Self::Override),
             "abstractmethod" => Some(Self::AbstractMethod),
             "ConfigDict" => Some(Self::PydanticConfigDict),
+            "to_camel" => Some(Self::PydanticToCamel),
+            "to_pascal" => Some(Self::PydanticToPascal),
+            "to_snake" => Some(Self::PydanticToSnake),
             "hasattr" => Some(Self::HasAttr),
             "getattr" => Some(Self::GetAttr),
             "TypeAliasType" => Some(Self::TypeAliasType),
@@ -148,6 +155,7 @@ impl SpecialExport {
             "TypeForm" => Some(Self::TypeForm),
             "uses_shape_dsl" => Some(Self::UsesShapeDsl),
             "shape_dsl_function" => Some(Self::ShapeDslFunction),
+            "type_shape_dsl_function" => Some(Self::TypeShapeDslFunction),
             "shaped_array" => Some(Self::ShapedArray),
             "ProxyMethod" => Some(Self::ProxyMethod),
             "Sentinel" => Some(Self::Sentinel),
@@ -161,7 +169,7 @@ impl SpecialExport {
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
-            Self::SymVar => matches!(m.as_str(), "shape_extensions"),
+            Self::IntVar => matches!(m.as_str(), "shape_extensions"),
             Self::TypeVar => matches!(m.as_str(), "typing" | "typing_extensions"),
             Self::TypeVarTuple => {
                 matches!(
@@ -224,6 +232,9 @@ impl SpecialExport {
             Self::OsExit => matches!(m.as_str(), "os"),
             Self::AbstractMethod | Self::AbstractClassMethod => matches!(m.as_str(), "abc"),
             Self::PydanticConfigDict => matches!(m.as_str(), "pydantic"),
+            Self::PydanticToCamel | Self::PydanticToPascal | Self::PydanticToSnake => {
+                m == ModuleName::pydantic_alias_generators()
+            }
             Self::Callable => matches!(
                 m.as_str(),
                 "typing" | "typing_extensions" | "collections.abc"
@@ -231,6 +242,7 @@ impl SpecialExport {
             Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
             Self::UsesShapeDsl => matches!(m.as_str(), "shape_extensions"),
             Self::ShapeDslFunction => matches!(m.as_str(), "shape_extensions.dsl"),
+            Self::TypeShapeDslFunction => matches!(m.as_str(), "shape_extensions"),
             Self::ShapedArray => matches!(m.as_str(), "shape_extensions"),
             Self::ProxyMethod => matches!(m.as_str(), "shape_extensions"),
             Self::Sentinel => matches!(m.as_str(), "typing_extensions"),

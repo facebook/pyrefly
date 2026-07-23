@@ -787,20 +787,61 @@ impl<'a> BindingsBuilder<'a> {
                 // Process the test before forking so walrus-defined names are
                 // in the base flow and visible to both branches.
                 self.ensure_expr(&mut x.test, &mut Usage::non_pinning_value_from(usage));
+                let static_test = self.sys_info.evaluate_bool_with_sys_info(&x.test);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.start_fork_and_branch(x.range);
-                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
-                self.ensure_expr(&mut x.body, usage);
-                // Negate the narrow ops for the `orelse`, then merge the Flows.
-                // TODO(stroxler): We eventually want to drop all narrows but merge values.
-                self.next_branch();
-                self.bind_narrow_ops(
-                    &narrow_ops.negate(),
-                    NarrowUseLocation::Span(x.range),
-                    usage,
-                );
-                self.ensure_expr(&mut x.orelse, usage);
-                self.finish_branch();
+                match static_test {
+                    Some(true) => {
+                        // Skip the `orelse` branch - it typically means a check (e.g. a sys
+                        // version, platform, or TYPE_CHECKING check) where the branch is not
+                        // statically analyzable. However, we still need to check for
+                        // `yield`/`yield from` in the skipped branch, because Python
+                        // determines generator status syntactically at compile time,
+                        // regardless of reachability.
+                        if Ast::expr_contains_yield(&x.orelse) {
+                            self.scopes.mark_has_yield_in_dead_code();
+                        }
+                        self.bind_narrow_ops(
+                            &narrow_ops,
+                            NarrowUseLocation::Span(x.body.range()),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.body, usage);
+                        self.finish_branch();
+                    }
+                    Some(false) => {
+                        if Ast::expr_contains_yield(&x.body) {
+                            self.scopes.mark_has_yield_in_dead_code();
+                        }
+                        self.abandon_branch();
+                        self.start_branch();
+                        self.bind_narrow_ops(
+                            &narrow_ops.negate(),
+                            NarrowUseLocation::Span(x.range),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.orelse, usage);
+                        self.finish_branch();
+                    }
+                    None => {
+                        self.bind_narrow_ops(
+                            &narrow_ops,
+                            NarrowUseLocation::Span(x.body.range()),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.body, usage);
+                        // Negate the narrow ops for the `orelse`, then merge the Flows.
+                        // TODO(stroxler): We eventually want to drop all narrows but merge values.
+                        self.next_branch();
+                        self.bind_narrow_ops(
+                            &narrow_ops.negate(),
+                            NarrowUseLocation::Span(x.range),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.orelse, usage);
+                        self.finish_branch();
+                    }
+                }
                 self.finish_exhaustive_fork();
             }
             Expr::BoolOp(ExprBoolOp {
@@ -1117,7 +1158,9 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut x.value, usage);
                 let in_async_def = self.scopes.is_in_async_def();
                 let in_generator_element = self.in_generator_await_context();
-                if !in_async_def && !in_generator_element && !self.module_info.path().is_notebook()
+                if !in_async_def
+                    && !in_generator_element
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),
@@ -1317,8 +1360,8 @@ impl<'a> BindingsBuilder<'a> {
                     allow_proxy_method,
                 );
             }
-            Expr::StringLiteral(literal)
-                if let Some(literal) = as_forward_ref(literal, in_string_literal) =>
+            Expr::StringLiteral(expr_literal)
+                if let Some(literal) = as_forward_ref(expr_literal, in_string_literal) =>
             {
                 if literal.flags.prefix().is_raw() {
                     self.error(
@@ -1327,7 +1370,7 @@ impl<'a> BindingsBuilder<'a> {
                         "Raw string literals are not allowed in type expressions".to_owned(),
                     );
                 }
-                match Ast::parse_type_literal(literal) {
+                match Ast::parse_type_literal(expr_literal, self.module_info.contents()) {
                     Ok(expr) => {
                         *x = expr;
                         self.ensure_type_impl(

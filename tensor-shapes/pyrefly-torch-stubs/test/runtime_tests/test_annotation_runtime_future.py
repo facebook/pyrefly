@@ -11,7 +11,7 @@
 With postponed evaluation, annotations are stored as strings and never
 evaluated at definition time. This additionally avoids the TypeVar
 arithmetic crash (N + 1 etc.), which remains a problem without future
-annotations when using PEP 695 TypeVar (shape_extensions.SymVar solves it differently).
+annotations when using PEP 695 TypeVar (shape_extensions.IntVar solves it differently).
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import unittest
 from typing import assert_type, Generic
 
 import torch
-from shape_extensions import assert_shape, Dim, SymVar
+from shape_extensions import assert_shape, Int, IntVar
 
 
 class TestSubscriptRuntime(unittest.TestCase):
@@ -142,36 +142,36 @@ class TestClassAnnotationRuntime(unittest.TestCase):
 
 
 class TestDimRuntime(unittest.TestCase):
-    """Dim[...] with future annotations — all work since annotations are strings."""
+    """Int[...] with future annotations — all work since annotations are strings."""
 
     def test_dim_concrete(self):
-        """Dim[3] — works."""
+        """Int[3] — works."""
 
-        def f(x: Dim[3]) -> Dim[3]:
+        def f(x: Int[3]) -> Int[3]:
             return x
 
         f(42)
 
     def test_dim_typevar(self):
-        """Dim[N] — works."""
+        """Int[N] — works."""
 
-        def f[N](x: Dim[N]) -> Dim[N]:
+        def f[N](x: Int[N]) -> Int[N]:
             return x
 
         f(42)
 
     def test_dim_arithmetic(self):
-        """Dim[N+1] — works with future annotations (annotation is a string)."""
+        """Int[N+1] — works with future annotations (annotation is a string)."""
 
-        def f[N](x: Dim[N]) -> Dim[N + 1]:
+        def f[N](x: Int[N]) -> Int[N + 1]:
             return x
 
         f(42)
 
     def test_dim_two_typevars(self):
-        """Dim[N+M] — works with future annotations."""
+        """Int[N+M] — works with future annotations."""
 
-        def f[N, M](x: Dim[N]) -> Dim[N + M]:
+        def f[N, M](x: Int[N]) -> Int[N + M]:
             return x
 
         f(42)
@@ -210,12 +210,12 @@ class TestAssertTypeRuntime(unittest.TestCase):
 
 
 class TestTypeVarWithFutureAnnotations(unittest.TestCase):
-    """shape_extensions.SymVar combined with future annotations — everything works."""
+    """shape_extensions.IntVar combined with future annotations — everything works."""
 
     def test_in_annotation(self):
-        """shape_extensions.SymVar in annotations with future annotations."""
-        N = SymVar("N")
-        M = SymVar("M")
+        """shape_extensions.IntVar in annotations with future annotations."""
+        N = IntVar("N")
+        M = IntVar("M")
 
         def f(x: torch.Tensor[[N, M]]) -> torch.Tensor[[N, M]]:
             return x
@@ -225,8 +225,8 @@ class TestTypeVarWithFutureAnnotations(unittest.TestCase):
         assert_shape(result, (3, 4))
 
     def test_arithmetic_in_annotation(self):
-        """shape_extensions.SymVar arithmetic in annotations with future annotations."""
-        N = SymVar("N")
+        """shape_extensions.IntVar arithmetic in annotations with future annotations."""
+        N = IntVar("N")
 
         def f(x: torch.Tensor[[N, 3]]) -> torch.Tensor[[N + 1, 3]]:
             return x
@@ -237,8 +237,8 @@ class TestTypeVarWithFutureAnnotations(unittest.TestCase):
 
     def test_generic_class(self):
         """Generic class with future annotations."""
-        N = SymVar("N")
-        M = SymVar("M")
+        N = IntVar("N")
+        M = IntVar("M")
 
         class Layer(Generic[N, M]):
             def forward(self, x: torch.Tensor[[N]]) -> torch.Tensor[[M]]:

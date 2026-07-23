@@ -456,10 +456,10 @@ impl Transaction<'_> {
             .finding()
         {
             let builtin_exports = self.get_exports(&builtin_handle);
+            let matcher = SkimMatcherV2::default().smart_case();
             for (name, location) in builtin_exports.iter() {
                 if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .smart_case()
+                    && matcher
                         .fuzzy_match(name.as_str(), identifier.as_str())
                         .is_none()
                 {
@@ -517,6 +517,7 @@ impl Transaction<'_> {
         if let Some(bindings) = self.get_bindings(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
+            let matcher = SkimMatcherV2::default();
             for idx in bindings.available_definitions(position) {
                 let key = bindings.idx_to_key(idx);
                 let binding = bindings.get(idx);
@@ -529,9 +530,7 @@ impl Transaction<'_> {
                     _ => continue,
                 };
                 if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .fuzzy_match(label, identifier.as_str())
-                        .is_none()
+                    && matcher.fuzzy_match(label, identifier.as_str()).is_none()
                 {
                     continue;
                 }
@@ -641,7 +640,7 @@ impl Transaction<'_> {
             if identifier_text.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
                 return;
             }
-            for (handle_to_import_from, name, export) in self
+            for (_, handle_to_import_from, name, export) in self
                 .search_exports_fuzzy(identifier_text, custom_thread_pool)
                 .unwrap_or_default()
             {
@@ -658,7 +657,7 @@ impl Transaction<'_> {
                         self.config_finder(),
                         handle.dupe(),
                         handle_to_import_from,
-                        &name,
+                        name.as_str(),
                         import_format,
                     );
                     let import_text_edit = TextEdit {
@@ -676,12 +675,12 @@ impl Transaction<'_> {
                     || is_deprecated_stdlib_alias(
                         handle.sys_info().version(),
                         &imported_module,
-                        &name,
+                        name.as_str(),
                     );
 
                 completions.push(RankedCompletion {
                     item: CompletionItem {
-                        label: name,
+                        label: name.to_string(),
                         detail: Some(detail_text),
                         kind: export
                             .symbol_kind
@@ -1041,6 +1040,10 @@ impl Transaction<'_> {
             .as_deref()
             .and_then(Self::identifier_from_covering_nodes)
         {
+            Some(IdentifierWithContext {
+                context: IdentifierContext::AliasDefinition,
+                ..
+            }) => return (Vec::new(), false),
             Some(IdentifierWithContext {
                 identifier,
                 context:

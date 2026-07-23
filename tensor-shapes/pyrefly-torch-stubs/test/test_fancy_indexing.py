@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 
@@ -28,21 +28,21 @@ def test_tuple_indexing():
     assert_type(y3, Tensor[[2, 3, 4]])
 
 
-def test_list_indexing_not_supported():
-    """Lists don't preserve compile-time length - dimension becomes Any"""
+def test_list_indexing_preserves_literal_length():
+    """A list literal has a statically known length, so the indexed dimension is concrete."""
     x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
 
-    # List with single element - can't determine length at compile time
+    # List with single element
     y1 = x[:, [-1], :]
-    assert_type(y1, Tensor[[2, Any, 4]])  # Unknown dimension
+    assert_type(y1, Tensor[[2, 1, 4]])
 
-    # List with multiple elements - can't determine length at compile time
+    # List with multiple elements
     y2 = x[:, [0, 2], :]
-    assert_type(y2, Tensor[[2, Any, 4]])  # Unknown dimension
+    assert_type(y2, Tensor[[2, 2, 4]])
 
-    # List with all indices - can't determine length at compile time
+    # List with all indices
     y3 = x[:, [0, 1, 2], :]
-    assert_type(y3, Tensor[[2, Any, 4]])  # Unknown dimension
+    assert_type(y3, Tensor[[2, 3, 4]])
 
 
 def test_mixed_indexing():

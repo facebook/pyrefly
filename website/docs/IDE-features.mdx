@@ -472,6 +472,7 @@ We reuse Pyright's `python.analysis.inlayHints.*` settings for backwards compati
 | `python.analysis.inlayHints.functionReturnTypes` | `boolean` | `true` | Show return type hints on functions without a return type annotation. |
 | `python.analysis.inlayHints.variableTypes` | `boolean` | `true` | Show type hints on variable assignments without a type annotation. |
 | `python.analysis.inlayHints.pytestParameters` | `boolean` | `false` | Show type hints for pytest fixture parameters. |
+| `python.analysis.inlayHintDebounceMs` | `number` | `150` | Debounce window, in milliseconds, for inlay hints. While a file is being edited, updates are held until editing pauses for this long, so hint widths don't jitter on every keystroke. Set to `0` to update immediately. |
 
 Inlay hints can be double clicked to insert them as an annotation.
 <video

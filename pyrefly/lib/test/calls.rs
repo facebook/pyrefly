@@ -662,3 +662,113 @@ def f() -> list[object]:
     return collect(["x"], 1 + "oops")  # E: `+` is not supported between `Literal[1]` and `Literal['oops']`
     "#,
 );
+
+testcase!(
+    test_unknown_argument_type,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_known_no_error,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def f(n: int) -> None: ...
+
+f(1)
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_disabled_no_error,
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))
+f(n=untyped(1))
+f(*untyped(1))
+f(**untyped(1))
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_keyword,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(n=untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_overload_no_duplicate,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+from typing import overload
+
+def untyped(x):
+    return x
+
+@overload
+def f(n: int) -> int: ...
+@overload
+def f(n: str) -> str: ...
+def f(n: int | str) -> int | str:
+    return n
+
+f(untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_suppressed_by_implicit_any,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))  # pyrefly: ignore[implicit-any]
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_args_unpack,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(*untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_kwargs_unpack,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(**untyped(1))  # E: The type of this argument is unknown
+"#,
+);

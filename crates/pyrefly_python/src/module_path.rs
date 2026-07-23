@@ -196,10 +196,6 @@ impl ModulePath {
         matches!(self.0, ModulePathDetails::Memory(_))
     }
 
-    pub fn is_notebook(&self) -> bool {
-        self.as_path().extension() == Some("ipynb".as_ref())
-    }
-
     /// Attempt to match the given [`ModuleName`]'s components to this `ModulePath`,
     /// returning the directory that is the import root for the `ModuleName`, if
     /// *all* module components could be matched to directories. `ModulePath`s

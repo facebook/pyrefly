@@ -8,7 +8,7 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -24,7 +24,7 @@ assert_type(result1, int)
 
 
 # Test 2: Generic function with Tensor using Dim
-def identity_tensor[N: SymVar](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
+def identity_tensor[N: IntVar](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
     return x
 
 

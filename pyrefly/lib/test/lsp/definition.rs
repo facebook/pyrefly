@@ -838,14 +838,14 @@ Definition Result:
 4 | import import_provider as ip
                               ^
 Definition Result:
-1 | 
-    ^
+4 | import import_provider as ip
+                              ^^
 
 7 | def f(x: ip.Foo, y: F):
              ^
 Definition Result:
-1 | 
-    ^
+4 | import import_provider as ip
+                              ^^
 
 7 | def f(x: ip.Foo, y: F):
                         ^

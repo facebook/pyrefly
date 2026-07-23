@@ -41,6 +41,7 @@ use pyrefly_types::type_var::Restriction;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -56,11 +57,9 @@ use crate::alt::answers::OverloadedCallee;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers::TraceSideEffects;
-use crate::alt::class::class_field::ClassField;
 use crate::alt::traits::Solve;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
-use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
@@ -84,6 +83,7 @@ use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallContext;
+use crate::solver::solver::PinError;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
@@ -98,7 +98,7 @@ use crate::types::types::Var;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum JaxtypingQuantifiedKey {
-    Dim(Name),
+    Dim(Name, QuantifiedKind),
     ShapeCarrier(Name, QuantifiedKind),
 }
 
@@ -1810,7 +1810,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Get or create a Quantified type for a jaxtyping dimension name.
-    /// Cached per module: the same name always returns the same Quantified.
+    /// Cached per module on the `(name, kind)` pair: the same name reused with a
+    /// different `QuantifiedKind` intentionally yields a distinct Quantified.
     pub fn get_or_create_jaxtyping_dim(&self, name: Name, kind: QuantifiedKind) -> Quantified {
         let mut dims = self.jaxtyping_dims.borrow_mut();
         // Jaxtyping dims have no real source location. Use the current map size as a
@@ -1818,7 +1819,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // (default) anchor. Shared with `get_or_create_jaxtyping_shape_carrier`, which
         // uses the same map, so ordinals stay unique across both.
         let ordinal = dims.len() as u32;
-        dims.entry(JaxtypingQuantifiedKey::Dim(name.clone()))
+        dims.entry(JaxtypingQuantifiedKey::Dim(name.clone(), kind))
             .or_insert_with(|| {
                 let identity = QuantifiedIdentity::new(
                     self.module().name(),
@@ -1826,7 +1827,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     QuantifiedOrigin::SyntheticCallableResidual,
                 );
                 match kind {
-                    QuantifiedKind::TypeVar | QuantifiedKind::SymVar => Quantified::new(
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
                         identity,
                         name,
                         kind,
@@ -1845,10 +1846,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .clone()
     }
 
-    /// Get or create a tuple-carrier TypeVar or SymVar for a jaxtyping variadic shape name.
+    /// Get or create a tuple-carrier TypeVar or IntVar for a jaxtyping variadic shape name.
     ///
     /// A variadic jaxtyping shape (`*name`) whose enclosing shaped-array class uses a
-    /// `TypeVar`/`SymVar` (SizeTuple) shape parameter needs a carrier bounded by
+    /// `TypeVar`/`IntVar` (IntTuple) shape parameter needs a carrier bounded by
     /// `tuple[int, ...]`, rather than the `TypeVarTuple` produced for `*Shape` classes.
     pub fn get_or_create_jaxtyping_shape_carrier(
         &self,
@@ -1866,7 +1867,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     QuantifiedOrigin::SyntheticCallableResidual,
                 );
                 match kind {
-                    QuantifiedKind::TypeVar | QuantifiedKind::SymVar => Quantified::new(
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
                         identity,
                         name,
                         kind,
@@ -1877,7 +1878,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         PreInferenceVariance::Invariant,
                     ),
                     QuantifiedKind::TypeVarTuple | QuantifiedKind::ParamSpec => {
-                        unreachable!("jaxtyping shape carriers must be TypeVar or SymVar")
+                        unreachable!("jaxtyping shape carriers must be TypeVar or IntVar")
                     }
                 }
             })
@@ -2223,18 +2224,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         };
 
-        // For exported keys, eagerly resolve all type variables in the answer.
-        // This avoids redundant clone+force work in solve_exported_key and post_solve,
-        // which would otherwise repeat this work on every cross-module lookup.
-        // Arc::unwrap_or_clone avoids cloning since the refcount is 1 here.
-        let raw_answer = if K::EXPORTED {
-            let mut forced = Arc::unwrap_or_clone(raw_answer);
-            forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
-            Arc::new(forced)
-        } else {
-            raw_answer
-        };
-
         if self.stack().is_scc_participant(&current) {
             // Became an SCC member during computation: an SCC was discovered by
             // a dependency chain during K::solve above, and this node is now in
@@ -2250,6 +2239,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 raw_answer
             };
+            self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
+            let answer = self.force_exported_answer::<K>(answer);
             // Also store in SccNodeState::Done for SCC-local isolation (the SCC
             // uses these answers via SccLocalAnswer without touching Calculation).
             let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
@@ -2267,6 +2258,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Not an SCC member even after computation: write directly to
             // Calculation. No recursive placeholder can exist because
             // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
+            self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
+            let raw_answer = self.force_exported_answer::<K>(raw_answer);
             let (answer, did_write) = calculation.record_value(raw_answer);
             if did_write {
                 self.base_errors.extend(local_errors);
@@ -2276,6 +2269,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             answer
+        }
+    }
+
+    fn force_exported_answer<K: Solve<Ans>>(&self, answer: Arc<K::Answer>) -> Arc<K::Answer> {
+        if K::EXPORTED {
+            let mut forced = Arc::unwrap_or_clone(answer);
+            forced.visit_mut(&mut |ty| self.current.solver().force_mut(ty));
+            Arc::new(forced)
+        } else {
+            answer
+        }
+    }
+
+    fn sanitize_answer_vars<K: Solve<Ans>>(
+        &self,
+        answer: &K::Answer,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let mut vars = Vec::new();
+        answer.visit(&mut |ty| vars.extend(ty.collect_all_vars()));
+        for error in self.solver().sanitize_vars(vars, true) {
+            self.report_pin_error(error, range, errors);
+        }
+    }
+
+    pub(crate) fn report_pin_error(
+        &self,
+        error: PinError,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        match error {
+            PinError::ImplicitPartialContained(container_range) => errors
+                .error_builder(
+                    container_range,
+                    ErrorKind::ImplicitAnyEmptyContainer,
+                    "Cannot infer type of empty container; it will be treated as containing `Any`"
+                        .to_owned(),
+                )
+                .with_detail(
+                    "Consider adding a type annotation or initializing with a non-empty value"
+                        .to_owned(),
+                )
+                .emit(),
+            PinError::UnfinishedQuantified(q) => {
+                errors.internal_error(range, format!("Unfinished Variable::Quantified: {q}"))
+            }
         }
     }
 
@@ -2407,6 +2448,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             raw_answer
         };
+
+        self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
 
         // Deep-force the answer to resolve all type variables. This is required
         // for convergence comparisons: without forcing, structurally identical
@@ -2825,29 +2868,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             Vec::new()
         };
-
-        if exceeded_max_iterations {
-            // An *inferred* instance attribute whose type never converges is
-            // degenerately recursive (each iteration nests another container layer,
-            // e.g. `list[list[...]]`). Commit `Any` for those fields instead of the
-            // unrolled blowup, so it does not produce spurious downstream errors.
-            // Restricted to `DefinedInMethod` fields: annotated members and class-body
-            // type aliases (e.g. `type X = int | list[C.X]`) are intentional recursion
-            // whose errors must be preserved, not collapsed to `Any`.
-            let any_field: Arc<dyn Any + Send + Sync> =
-                Arc::new(Arc::new(ClassField::recursive(self.heap)));
-            for (calc_id, state) in scc.node_state.iter_mut() {
-                if let AnyIdx::KeyClassField(idx) = &calc_id.1
-                    && matches!(
-                        calc_id.0.get(*idx).definition,
-                        ClassFieldDefinition::DefinedInMethod { .. }
-                    )
-                    && let SccNodeState::Done { answer, .. } = state
-                {
-                    *answer = any_field.dupe();
-                }
-            }
-        }
 
         let did_commit = self.commit_final_answers(scc);
         if did_commit {

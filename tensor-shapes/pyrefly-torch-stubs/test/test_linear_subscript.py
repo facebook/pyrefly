@@ -7,14 +7,14 @@
 
 from typing import assert_type, TYPE_CHECKING
 
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch.nn import Linear
 
 
-def test_subscript[N: SymVar](n: Dim[N]):
+def test_subscript[N: IntVar](n: Int[N]):
     # What type does Linear[N, 3 * N] produce?
     assert_type(Linear[N, (3 * N)], type[Linear[N, (3 * N)]])
     x = Linear(n, 3 * n)

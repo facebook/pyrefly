@@ -739,6 +739,18 @@ fn test_named_tuple_in_malformed_for_target() {
     );
 }
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4177
+#[test]
+fn test_named_tuple_in_malformed_with_item() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nwith NamedTuple('\n",
+        file!(),
+        line!(),
+    );
+}
+
 testcase!(
     test_named_tuple_dynamic_fields,
     r#"
@@ -1049,7 +1061,6 @@ assert_type(o, ImplementedModel)
 
 // https://github.com/facebook/pyrefly/issues/2924
 testcase!(
-    bug = "Should reject overriding reserved NamedTuple methods like _asdict and _make",
     test_named_tuple_reserved_method_override,
     r#"
 from typing import NamedTuple
@@ -1058,12 +1069,26 @@ class Record(NamedTuple):
     name: str
     value: int
 
-    def _asdict(self) -> dict[str, object]:
+    def _asdict(self) -> dict[str, object]:  # E: Cannot override NamedTuple reserved attribute `_asdict`
         return {}
 
     @classmethod
-    def _make(cls, iterable: object) -> "Record":
+    def _make(cls, iterable: object) -> "Record":  # E: Cannot override NamedTuple reserved attribute `_make`
         return cls("", 0)
+"#,
+);
+
+testcase!(
+    test_named_tuple_regular_method_ok,
+    r#"
+from typing import NamedTuple
+
+class Record(NamedTuple):
+    name: str
+    value: int
+
+    def describe(self) -> str:
+        return f"{self.name}={self.value}"
 "#,
 );
 

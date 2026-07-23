@@ -810,6 +810,33 @@ class B[T: A]:
 );
 
 testcase!(
+    test_overloaded_descriptor_get_preserves_specialized_owner,
+    r#"
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, overload, reveal_type
+
+Storage: TypeAlias = Literal["python", "pyarrow"]
+StorageT = TypeVar("StorageT", bound=Storage)
+_StorageT = TypeVar("_StorageT", bound=Storage | None, default=None)
+
+class _CatStorageDescriptor:
+    @overload
+    def __get__(self, instance: Cat[None], owner: type[Cat[None]]) -> Storage: ...
+    @overload
+    def __get__(
+        self, instance: Cat[StorageT], owner: type[Cat[StorageT]]
+    ) -> StorageT: ...
+
+    def __get__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class Cat(Generic[_StorageT]):
+    storage = _CatStorageDescriptor()
+
+def main(cat: Cat[Literal["pyarrow"]]) -> None:
+    reveal_type(cat.storage)  # E: revealed type: Literal['pyarrow']
+    "#,
+);
+
+testcase!(
     test_property_constructor_non_callable_arg,
     r#"
 from typing import Any, assert_type
@@ -945,10 +972,10 @@ def f(c: C):
     "#,
 );
 
+// A `__get__` whose type is itself a descriptor must not recurse forever; the
+// read falls back to the descriptor's instance type, so the call below is reported
+// as not callable rather than overflowing the stack.
 testcase!(
-    // A `__get__` whose type is itself a descriptor must not recurse forever; the
-    // read falls back to the descriptor's instance type, so the call below is reported
-    // as not callable rather than overflowing the stack.
     test_self_referential_descriptor_get_no_crash,
     r#"
 class C:
@@ -960,10 +987,10 @@ C.__get__()  # E: Expected a callable, got `C`
     "#,
 );
 
+// A protocol used as a decorator return type that defines both `__call__` and
+// `__get__` is a descriptor: attribute access must go through `__get__`, not be
+// treated as a callback protocol. See GitHub issue #3345.
 testcase!(
-    // A protocol used as a decorator return type that defines both `__call__` and
-    // `__get__` is a descriptor: attribute access must go through `__get__`, not be
-    // treated as a callback protocol. See GitHub issue #3345.
     test_callable_descriptor_protocol,
     r#"
 from typing import Any, Callable, Concatenate, Protocol, Self, assert_type, overload
@@ -995,9 +1022,9 @@ def f(foo: Foo) -> None:
     "#,
 );
 
+// Assignment resolves a descriptor through its getter too, so the same guard keeps
+// the write path from overflowing the stack.
 testcase!(
-    // Assignment resolves a descriptor through its getter too, so the same guard keeps
-    // the write path from overflowing the stack.
     test_self_referential_descriptor_set_no_crash,
     r#"
 class C:

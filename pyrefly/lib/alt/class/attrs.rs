@@ -536,12 +536,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ) {
             return None;
         }
-        let first_input = || {
-            Some(self.get_converter_param(&self.expr_infer(call.arguments.args.first()?, errors)))
-        };
+        let first_input =
+            |hint| {
+                Some(self.get_converter_param(
+                    &self.expr_infer(call.arguments.args.first()?, errors),
+                    hint,
+                ))
+            };
         match id.name.as_str() {
-            "optional" => Some(self.union(first_input()?, self.heap.mk_none())),
-            "pipe" => first_input(),
+            // `optional(c)` feeds `c`'s output straight to the field, so its type parameters solve
+            // against the annotation.
+            "optional" => Some(self.union(first_input(annotated_field_ty)?, self.heap.mk_none())),
+            // In `pipe(c1, ...)`, `c1`'s output feeds the next converter, not the field, so the
+            // annotation must not solve `c1`'s type parameters (only the last output must match it).
+            "pipe" => first_input(None),
             "default_if_none" => Some(self.union(annotated_field_ty?.clone(), self.heap.mk_none())),
             _ => None,
         }

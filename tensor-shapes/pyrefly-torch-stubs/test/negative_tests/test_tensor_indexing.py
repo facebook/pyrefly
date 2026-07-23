@@ -11,7 +11,7 @@ Slice indexing preserves rank: result dim = stop - start.
 
 from typing import assert_type, TYPE_CHECKING
 
-from shape_extensions import Elements, SizeTuple, SymVar
+from shape_extensions import Elements, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -72,17 +72,19 @@ def slice_no_bounds(x: Tensor[[10, 20]]) -> Tensor[[10, 20]]:
 # ============================================================================
 
 
-def slice_upper_symbolic[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> None:
+def slice_upper_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> None:
     """Slice [:5] on symbolic → stop - start = 5 - 0 = 5"""
     assert_type(x[:5], Tensor[[5, M]])
 
 
-def slice_lower_symbolic[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> Tensor[[N - 3, M]]:
+def slice_lower_symbolic[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[N - 3, M]]:
     """Slice [3:] on symbolic → stop - start = N - 3"""
     return x[3:]
 
 
-def slice_no_bounds_symbolic[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> None:
+def slice_no_bounds_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> None:
     """Slice [:] on symbolic → stop - start = N - 0 = N"""
     assert_type(x[:], Tensor[[N, M]])
 
@@ -112,12 +114,12 @@ def slice_neg_both(x: Tensor[[10, 20]]) -> Tensor[[2, 20]]:
 # ============================================================================
 
 
-def index_symbolic[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> Tensor[[M]]:
+def index_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[M]]:
     """Integer index on symbolic tensor reduces rank"""
     return x[0]
 
 
-def index_3d_symbolic[B: SymVar, N: SymVar, M: SymVar](
+def index_3d_symbolic[B: IntVar, N: IntVar, M: IntVar](
     x: Tensor[[B, N, M]],
 ) -> Tensor[[N, M]]:
     """Integer index on 3D symbolic tensor"""
@@ -154,28 +156,33 @@ def tuple_neg_slice(x: Tensor[[10, 20]]) -> None:
 # ============================================================================
 
 
-def tuple_unpacked_int_slice[B: SymVar, D: SymVar, Ts: SizeTuple, C: SymVar](
+def tuple_unpacked_int_slice[B: IntVar, D: IntVar, Ts: IntTuple, C: IntVar](
     x: Tensor[[B, D, *Elements[Ts], C]],
 ) -> None:
     """Int + slice within prefix: remove B, keep D"""
     assert_type(x[0, :], Tensor[[D, *Elements[Ts], C]])
 
 
-def tuple_unpacked_slice_int[B: SymVar, D: SymVar, Ts: SizeTuple, C: SymVar](
+def tuple_unpacked_slice_int[B: IntVar, D: IntVar, Ts: IntTuple, C: IntVar](
     x: Tensor[[B, D, *Elements[Ts], C]],
 ) -> None:
     """Slice + int within prefix: slice B, remove D"""
     assert_type(x[:5, 0], Tensor[[5, *Elements[Ts], C]])
 
 
-def tuple_unpacked_all_slices[B: SymVar, D: SymVar, Ts: SizeTuple, C: SymVar](
+def tuple_unpacked_all_slices[
+    B: IntVar,
+    D: IntVar,
+    Ts: IntTuple,
+    C: IntVar,
+](
     x: Tensor[[B, D, *Elements[Ts], C]],
 ) -> None:
     """All slices within prefix: shape preserved"""
     assert_type(x[:, :], Tensor[[B, D, *Elements[Ts], C]])
 
 
-def tuple_unpacked_exceeds_prefix[B: SymVar, Ts: SizeTuple, C: SymVar](
+def tuple_unpacked_exceeds_prefix[B: IntVar, Ts: IntTuple, C: IntVar](
     x: Tensor[[B, *Elements[Ts], C]],
 ) -> None:
     """Indices exceed prefix → hits middle → shapeless"""
@@ -222,28 +229,44 @@ def slice_ellipsis_slice(x: Tensor[[5, 10, 15]]) -> None:
 # ============================================================================
 
 
-def ellipsis_unpacked_post_suffix[B: SymVar, Ts: SizeTuple, C: SymVar, D: SymVar](
+def ellipsis_unpacked_post_suffix[
+    B: IntVar,
+    Ts: IntTuple,
+    C: IntVar,
+    D: IntVar,
+](
     x: Tensor[[B, *Elements[Ts], C, D]],
 ) -> None:
     """Ellipsis then int on suffix: removes last suffix dim"""
     assert_type(x[..., 0], Tensor[[B, *Elements[Ts], C]])
 
 
-def ellipsis_unpacked_pre_prefix[B: SymVar, D: SymVar, Ts: SizeTuple, C: SymVar](
+def ellipsis_unpacked_pre_prefix[
+    B: IntVar,
+    D: IntVar,
+    Ts: IntTuple,
+    C: IntVar,
+](
     x: Tensor[[B, D, *Elements[Ts], C]],
 ) -> None:
     """Int then ellipsis on prefix: removes first prefix dim"""
     assert_type(x[0, ...], Tensor[[D, *Elements[Ts], C]])
 
 
-def ellipsis_unpacked_both[B: SymVar, D: SymVar, Ts: SizeTuple, C: SymVar, E: SymVar](
+def ellipsis_unpacked_both[
+    B: IntVar,
+    D: IntVar,
+    Ts: IntTuple,
+    C: IntVar,
+    E: IntVar,
+](
     x: Tensor[[B, D, *Elements[Ts], C, E]],
 ) -> None:
     """Int, ellipsis, int: removes from prefix and suffix"""
     assert_type(x[0, ..., 0], Tensor[[D, *Elements[Ts], C]])
 
 
-def ellipsis_unpacked_exceeds_suffix[B: SymVar, Ts: SizeTuple, C: SymVar](
+def ellipsis_unpacked_exceeds_suffix[B: IntVar, Ts: IntTuple, C: IntVar](
     x: Tensor[[B, *Elements[Ts], C]],
 ) -> None:
     """Post-ellipsis indices exceed suffix → shapeless"""
@@ -305,7 +328,7 @@ def stride_multi_dim(x: Tensor[[4, 3, 100]]) -> None:
     assert_type(x[:, :, ::2], Tensor[[4, 3, 50]])
 
 
-def stride_symbolic[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> None:
+def stride_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> None:
     """Stride on symbolic dim: ceil_div(N, 2) = (N + 1) // 2"""
     y = x[::2]
     assert_type(y, Tensor[[(N + 1) // 2, M]])

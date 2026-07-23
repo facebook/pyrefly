@@ -16,8 +16,8 @@ class Project:
     deps: list[str] | None = None
 
     # BELOW ARE UNUSED FIELDS
-    mypy_cmd: str
-    pyright_cmd: str | None
+    mypy_cmd: str | None = None
+    pyright_cmd: str | None = None
 
     install_cmd: str | None = None
     needs_mypy_plugins: bool = False
@@ -442,6 +442,11 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} dulwich",
             deps=["types-certifi", "types-paramiko"],
             expected_mypy_success=True,
+        ),
+        Project(
+            location="https://github.com/numpy/numpy",
+            pyrefly_cmd="{pyrefly} check --search-path=. numpy/typing/tests/data",
+            deps=["pytest"],
         ),
         Project(
             location="https://github.com/optuna/optuna",
@@ -1487,6 +1492,20 @@ def get_mypy_primer_projects() -> list[Project]:
                 "hypothesis",
                 "orjson",
             ],
+        ),
+        Project(
+            location="https://github.com/JakobGM/patito",
+            mypy_cmd="{mypy} src/patito",
+            pyright_cmd="{pyright} src/patito",
+            pyrefly_cmd="{pyrefly} src/patito",
+            deps=["polars", "pydantic", "typing-extensions"],
+        ),
+        Project(
+            location="https://github.com/quantco/dataframely",
+            mypy_cmd="{mypy} dataframely",
+            pyright_cmd="{pyright} dataframely",
+            pyrefly_cmd="{pyrefly} dataframely",
+            deps=["polars", "numpy", "fsspec", "pydantic"],
         ),
         Project(
             location="https://github.com/pytorch/helion",

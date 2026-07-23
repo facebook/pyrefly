@@ -444,11 +444,25 @@ impl Errors {
                 .get(&module_path)
                 .cloned()
                 .unwrap_or_else(Tool::default_enabled);
-            if error.is_ignored(&enabled_ignores) {
-                let module_path = error.path();
-                let start_line = error.display_range().start.line_within_file();
-                let end_line = error.display_range().end.line_within_file();
+            let start_line = error.display_range().start.line_within_file();
+            let end_line = error.display_range().end.line_within_file();
 
+            let containing_range = fstring_ranges_by_module
+                .get(&module_path)
+                .and_then(|ranges| find_containing_range(ranges, start_line));
+
+            let is_ignored = error.is_ignored(&enabled_ignores)
+                || containing_range.is_some_and(|(fs_start, fs_end)| {
+                    let ignore = error.module().ignore();
+                    error.error_kind().suppression_names().any(|kind| {
+                        (fs_start != start_line
+                            && ignore.is_ignored(fs_start, kind, &enabled_ignores))
+                            || (fs_end != start_line
+                                && ignore.is_ignored(fs_end, kind, &enabled_ignores))
+                    })
+                });
+
+            if is_ignored {
                 let module_codes = suppressed_codes_by_module.entry(module_path).or_default();
 
                 // Track both this kind's name and any parent kind's name, so that
@@ -473,9 +487,7 @@ impl Errors {
                 // If the error is inside a multi-line f/t-string, also track
                 // the code at the f-string's start and end lines so that a
                 // suppression comment placed there is recognized as "used".
-                if let Some(ranges) = fstring_ranges_by_module.get(&module_path)
-                    && let Some((fs_start, fs_end)) = find_containing_range(ranges, start_line)
-                {
+                if let Some((fs_start, fs_end)) = containing_range {
                     for code in &error_codes {
                         module_codes
                             .entry(fs_start)
@@ -875,6 +887,22 @@ def f() -> int:
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("type: ignore"));
+    }
+
+    #[test]
+    fn test_used_ignore_multiline_fstring() {
+        let contents = r#"
+def f(some_condition: bool):
+    if some_condition:
+        foo = 1
+    # pyrefly: ignore[unbound-name]
+    bar = f"""The result is:
+{foo}"""
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
     }
 
     #[test]

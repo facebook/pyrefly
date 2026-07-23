@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.linalg module (Phase 4: Advanced Linear Algebra)
-from shape_extensions import Elements, SizeTuple, SymVar, uses_shape_dsl
+from shape_extensions import Elements, IntTuple, IntVar, uses_shape_dsl
 from torch import Tensor
 from torch._shapes import eig_ir, eigvals_ir, slogdet_ir, solve_ir, solve_reversed_ir
 
@@ -21,7 +21,7 @@ def eigvals(self: Tensor) -> Tensor: ...
 def eigvalsh(self: Tensor, UPLO: str = "L") -> Tensor: ...
 
 # Cholesky decomposition
-def cholesky[Shape: SizeTuple](
+def cholesky[Shape: IntTuple](
     input: Tensor[Shape], upper: bool = False
 ) -> Tensor[Shape]: ...
 
@@ -34,10 +34,10 @@ def solve_triangular(self: Tensor, other: Tensor, upper: bool = False) -> Tensor
 def cholesky_solve(self: Tensor, other: Tensor, upper: bool = False) -> Tensor: ...
 
 # Matrix inverse
-def inv[Shape: SizeTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
+def inv[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 
 # Determinant
-def det[Batch: SizeTuple, M: SymVar, N: SymVar](
+def det[Batch: IntTuple, M: IntVar, N: IntVar](
     input: Tensor[[*Elements[Batch], M, N]],
 ) -> Tensor[Batch]: ...
 
@@ -46,12 +46,12 @@ def det[Batch: SizeTuple, M: SymVar, N: SymVar](
 def slogdet(self: Tensor) -> tuple[Tensor, Tensor]: ...
 
 # Matrix power
-def matrix_power[Shape: SizeTuple](input: Tensor[Shape], n: int) -> Tensor[Shape]: ...
+def matrix_power[Shape: IntTuple](input: Tensor[Shape], n: int) -> Tensor[Shape]: ...
 
 # Matrix exponential
-def matrix_exp[Shape: SizeTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
+def matrix_exp[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 
 # Matrix rank
-def matrix_rank[Batch: SizeTuple, M: SymVar, N: SymVar](
+def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
     input: Tensor[[*Elements[Batch], M, N]], tol: float = None, hermitian: bool = False
 ) -> Tensor[Batch]: ...

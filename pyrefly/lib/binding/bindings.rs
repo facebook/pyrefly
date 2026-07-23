@@ -196,6 +196,7 @@ table! {
 #[derive(Clone, Debug)]
 struct BindingsInner {
     module_info: ModuleInfo,
+    sys_info: SysInfo,
     table: BindingTable,
     metadata: Arc<BindingsMetadata>,
     /// Multi-line ranges and ignore-all directives, computed from the AST
@@ -309,6 +310,7 @@ pub struct BindingsBuilder<'a> {
     /// set by `stmts()` and consumed by namedtuple synthesis in `stmt()`.
     pub adjacent_namedtuple_defaults: Option<Vec<Expr>>,
     pub promote_ranges: SmallSet<TextRange>,
+    pub type_checking_depth: usize,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -351,6 +353,7 @@ impl Bindings {
         let module_info = Module::new(module_name, module_path, contents);
         Self(Arc::new(BindingsInner {
             module_info,
+            sys_info: SysInfo::default(),
             table: Default::default(),
             metadata: Arc::new(BindingsMetadata::new()),
             module_ranges: Arc::new(ModuleRanges {
@@ -380,6 +383,10 @@ impl Bindings {
 
     pub fn module(&self) -> &ModuleInfo {
         &self.0.module_info
+    }
+
+    pub fn sys_info(&self) -> &SysInfo {
+        &self.0.sys_info
     }
 
     pub fn metadata(&self) -> &Arc<BindingsMetadata> {
@@ -548,7 +555,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for lambda parameter `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -564,7 +571,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for parameter `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -583,7 +590,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for return type `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -639,6 +646,7 @@ impl Bindings {
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
+            type_checking_depth: 0,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -736,6 +744,7 @@ impl Bindings {
         let module_deletes = scope_trace.module_deletes().clone();
         Self(Arc::new(BindingsInner {
             module_info,
+            sys_info: builder.sys_info,
             table: builder.table,
             metadata: Arc::new(builder.metadata),
             module_ranges,
@@ -801,6 +810,7 @@ impl Bindings {
             | SemanticSyntaxErrorKind::NamedExpressionInComprehensionIterable
             | SemanticSyntaxErrorKind::NamedExpressionInClassBodyComprehension
             | SemanticSyntaxErrorKind::TypeParameterDefaultOrder(_)
+            | SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern
             | SemanticSyntaxErrorKind::ReturnInGenerator => false,
         }
     }
@@ -1255,11 +1265,11 @@ impl<'a> BindingsBuilder<'a> {
         self.as_special_export_inner(e, &mut visited_names, &mut visited_keys)
     }
 
-    pub fn as_direct_shape_symvar(&self, e: &Expr) -> bool {
+    pub fn as_direct_shape_intvar(&self, e: &Expr) -> bool {
         let shape_extensions = ModuleName::from_str("shape_extensions");
         match e {
             Expr::Name(name) => {
-                if name.id == "SymVar" && self.module_info.name() == shape_extensions {
+                if name.id == "IntVar" && self.module_info.name() == shape_extensions {
                     return true;
                 }
                 matches!(
@@ -1267,12 +1277,12 @@ impl<'a> BindingsBuilder<'a> {
                     Some((
                         _,
                         FlowStyle::Import(module, upstream_name)
-                    )) if module == shape_extensions && upstream_name == "SymVar"
+                    )) if module == shape_extensions && upstream_name == "IntVar"
                 )
             }
             Expr::Attribute(ExprAttribute {
                 value, attr: name, ..
-            }) if name == "SymVar" => {
+            }) if name == "IntVar" => {
                 let Expr::Name(base_name) = &**value else {
                     return false;
                 };
@@ -1998,29 +2008,29 @@ impl<'a> BindingsBuilder<'a> {
                     let mut kind = QuantifiedKind::TypeVar;
                     if let Some(bound_expr) = &mut tv.bound {
                         if let Expr::Tuple(tuple) = &mut **bound_expr {
-                            let mut invalid_symvar_constraint = false;
+                            let mut invalid_intvar_constraint = false;
                             let mut constraint_exprs = Vec::new();
                             for constraint in &mut tuple.elts {
-                                if self.as_direct_shape_symvar(constraint) {
+                                if self.as_direct_shape_intvar(constraint) {
                                     self.error(
                                         constraint.range(),
                                         ErrorKind::InvalidTypeVar,
-                                        "`SymVar` cannot be used as a TypeVar constraint"
+                                        "`IntVar` cannot be used as a TypeVar constraint"
                                             .to_owned(),
                                     );
-                                    invalid_symvar_constraint = true;
+                                    invalid_intvar_constraint = true;
                                     self.ensure_expr(constraint, &mut usage);
                                 } else {
                                     self.ensure_type_with_usage(constraint, &mut None, &mut usage);
                                     constraint_exprs.push(constraint.clone());
                                 }
                             }
-                            if !invalid_symvar_constraint {
+                            if !invalid_intvar_constraint {
                                 constraints = Some((constraint_exprs, bound_expr.range()))
                             }
-                        } else if self.as_direct_shape_symvar(bound_expr) {
+                        } else if self.as_direct_shape_intvar(bound_expr) {
                             self.ensure_expr(bound_expr, &mut usage);
-                            kind = QuantifiedKind::SymVar;
+                            kind = QuantifiedKind::IntVar;
                         } else {
                             self.ensure_type_with_usage(bound_expr, &mut None, &mut usage);
                             bound = Some((**bound_expr).clone());
