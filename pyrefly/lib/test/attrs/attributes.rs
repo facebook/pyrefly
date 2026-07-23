@@ -394,6 +394,20 @@ A()  # E: Missing argument `x`
 "#,
 );
 
+attrs_testcase!(
+    test_ordered_attrs_inheritance,
+    r#"
+import attr
+
+@attr.s()
+class Parent:
+    x: int
+
+class Child(Parent):
+    pass
+"#,
+);
+
 // Under `auto_attribs=True`, attrs collects fields from annotations, so an unannotated
 // `attr.ib()` is not a valid field and attrs raises `UnannotatedAttributeError` at runtime.
 attrs_testcase!(

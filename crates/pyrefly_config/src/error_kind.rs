@@ -321,6 +321,8 @@ pub enum ErrorKind {
     NotRequiredKeyAccess,
     /// Unpacking an open TypedDict that may contain a bad key via inheritance.
     OpenUnpacking,
+    /// A class inherits from a stdlib dataclass with `order=True`.
+    OrderedDataclassInheritance,
     /// An error related to parsing or syntax.
     ParseError,
     /// A potential conflict between an explicit keyword argument and a NotRequired
@@ -487,6 +489,7 @@ impl ErrorKind {
             ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
                 Some(ErrorKind::NoAnyReturn)
             }
+            ErrorKind::OrderedDataclassInheritance => Some(ErrorKind::InvalidInheritance),
             _ => None,
         }
     }
@@ -542,6 +545,7 @@ impl ErrorKind {
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::OrderedDataclassInheritance => Severity::Warn,
             ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintPrintTensor => Severity::Ignore,
