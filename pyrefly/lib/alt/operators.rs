@@ -534,10 +534,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Reflected operator implementation: This deviates from the runtime semantics by calling the reflected dunder if the regular dunder call errors.
             // At runtime, the reflected dunder is called only if the regular dunder method doesn't exist or if it returns NotImplemented.
             // This deviation is necessary, given that the typeshed stubs don't record when NotImplemented is returned
-            let calls_to_try = [
-                (&Name::new_static(op.dunder()), lhs, rhs),
-                (&Name::new_static(op.reflected_dunder()), rhs, lhs),
-            ];
+            let forward = Name::new_static(op.dunder());
+            let reflected = Name::new_static(op.reflected_dunder());
+            let forward_call = (&forward, lhs, rhs);
+            let reflected_call = (&reflected, rhs, lhs);
+            // Python data model: when the right operand's type is a *proper* subclass of the
+            // left operand's type, the reflected dunder is tried first. This lets e.g.
+            // `int_val & some_IntFlag_member` resolve through `IntFlag.__rand__` (which returns
+            // the flag type) rather than `int.__and__` (which widens back to `int`). A subclass
+            // that does not override the reflected dunder inherits it unchanged, and
+            // `try_binop_calls` still falls back to the forward dunder, so non-overriding
+            // subclasses are unaffected.
+            let reflected_first = match (lhs, rhs) {
+                (Type::ClassType(lhs_cls), Type::ClassType(rhs_cls)) => {
+                    let lhs_obj = lhs_cls.class_object();
+                    let rhs_obj = rhs_cls.class_object();
+                    lhs_obj != rhs_obj && self.has_superclass(rhs_obj, lhs_obj)
+                }
+                _ => false,
+            };
+            let calls_to_try = if reflected_first {
+                [reflected_call, forward_call]
+            } else {
+                [forward_call, reflected_call]
+            };
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
         self.distribute_over_union(lhs, |lhs| {
