@@ -2949,24 +2949,22 @@ def f(a: A):
 );
 
 testcase!(
-    test_self_referential_attribute_collapses_to_any,
+    test_self_referential_attribute,
     r#"
 from typing import Any, assert_type
 class C:
     def m(self) -> None:
         # `self.x = [self.x]` is self-referential and never converges (each fixpoint
-        # iteration nests another `list[...]`). Rather than commit the degenerate
-        # unrolled type, a non-convergent inferred attribute collapses to `Any`
-        # (the non-convergence is still reported).
+        # iteration nests another `list[...]`).
         self.x = [self.x]  # E: Fixpoint iteration did not converge
 def f(c: C):
-    assert_type(c.x, Any)
+    assert_type(c.x, list[list[list[list[list[Any]]]]])
     "#,
 );
 
 testcase!(
-    test_implicit_any_attribute_untyped_call,
-    TestEnv::new().enable_implicit_any_attribute_error(),
+    test_unknown_attribute_type_untyped_call,
+    TestEnv::new().enable_unknown_attribute_type_error(),
     r#"
 def untyped(x):
     return x
@@ -2978,8 +2976,8 @@ class C:
 );
 
 testcase!(
-    test_implicit_any_attribute_class_body_untyped_call,
-    TestEnv::new().enable_implicit_any_attribute_error(),
+    test_unknown_attribute_type_class_body_untyped_call,
+    TestEnv::new().enable_unknown_attribute_type_error(),
     r#"
 def untyped(x):
     return x
@@ -2990,8 +2988,8 @@ class C:
 );
 
 testcase!(
-    test_implicit_any_attribute_annotated_no_error,
-    TestEnv::new().enable_implicit_any_attribute_error(),
+    test_unknown_attribute_type_annotated_no_error,
+    TestEnv::new().enable_unknown_attribute_type_error(),
     r#"
 def untyped(x):
     return x
@@ -3003,8 +3001,8 @@ class C:
 );
 
 testcase!(
-    test_implicit_any_attribute_known_no_error,
-    TestEnv::new().enable_implicit_any_attribute_error(),
+    test_unknown_attribute_type_known_no_error,
+    TestEnv::new().enable_unknown_attribute_type_error(),
     r#"
 class C:
     def __init__(self) -> None:
@@ -3014,21 +3012,22 @@ class C:
 );
 
 testcase!(
-    test_implicit_any_attribute_suppressed_by_implicit_any,
-    TestEnv::new().enable_implicit_any_attribute_error(),
+    test_unknown_attribute_type_not_suppressed_by_implicit_any,
+    TestEnv::new().enable_unknown_attribute_type_error(),
     r#"
 def untyped(x):
     return x
 
 class C:
     def __init__(self) -> None:
-        self.x = untyped(1)  # pyrefly: ignore[implicit-any]
+        # pyrefly: ignore[implicit-any]
+        self.x = untyped(1)  # E: implicitly inferred to be `Any`
 "#,
 );
 
 testcase!(
-    test_implicit_any_attribute_explicit_any_no_error,
-    TestEnv::new().enable_implicit_any_attribute_error(),
+    test_unknown_attribute_type_explicit_any_no_error,
+    TestEnv::new().enable_unknown_attribute_type_error(),
     r#"
 from typing import Any, cast
 class C:
@@ -3041,14 +3040,14 @@ class C:
 testcase!(
     test_implicit_any_attribute_class_body_no_double_report,
     TestEnv::new()
-        .enable_implicit_any_variable_error()
-        .enable_implicit_any_attribute_error(),
+        .enable_unknown_variable_type_error()
+        .enable_unknown_attribute_type_error(),
     r#"
 def untyped(x):
     return x
 
 # With both rules enabled, a class-body attribute is reported ONLY by
-# implicit-any-attribute, not unknown-variable-type (the is_class_body_assignment
+# unknown-attribute-type, not unknown-variable-type (the is_class_body_assignment
 # guard prevents a double report). Exactly one error must fire here.
 class C:
     x = untyped(1)  # E: implicitly inferred to be `Any`

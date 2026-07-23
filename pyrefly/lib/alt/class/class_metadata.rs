@@ -557,7 +557,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     *range,
                     ErrorKind::InvalidAnnotation,
                     format!(
-                        "Shape parameter `{}` must be a `TypeVar` or `SymVar`, got `{}`",
+                        "Shape parameter `{}` must be a `TypeVar` or `IntVar`, got `{}`",
                         shape_name, param.kind
                     ),
                 );
@@ -1164,6 +1164,60 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         pseudo_field_names
     }
 
+    /// Report the "`@dataclass` cannot be applied to X" diagnostics for the class
+    /// kinds dataclass rejects. Shared by the decorator path (`dataclass_metadata`)
+    /// and the call form `dataclass(C)` so both reject the same kinds with the same
+    /// messages. `Protocol` is a soft reject (diagnostic only; it still becomes a
+    /// dataclass at runtime); `Enum`/`TypedDict`/`NamedTuple` are hard rejects.
+    /// Returns `true` on a hard reject so the decorator path can abort metadata.
+    pub fn report_forbidden_dataclass_target(
+        &self,
+        name: &Name,
+        is_protocol: bool,
+        is_enum: bool,
+        is_typed_dict: bool,
+        is_named_tuple: bool,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
+        if is_protocol {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("`@dataclass` cannot be applied to Protocol `{}`", name),
+            );
+        }
+        if is_enum {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("Cannot apply `@dataclass` to Enum `{}`", name),
+            );
+            return true;
+        }
+        if is_typed_dict {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("Cannot apply `@dataclass` to TypedDict `{}`", name),
+            );
+            return true;
+        }
+        if is_named_tuple {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("Cannot apply `@dataclass` to NamedTuple `{}`", name),
+            );
+            return true;
+        }
+        false
+    }
+
     fn dataclass_metadata(
         &self,
         cls: &Class,
@@ -1271,48 +1325,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         // @dataclass cannot be applied to Protocol, Enum, TypedDict, or NamedTuple classes.
-        // Protocols still become dataclasses at runtime, so preserve their metadata after
-        // reporting the spec violation. The other cases do not have useful dataclass runtime
-        // behavior to model.
-        if has_dataclass_decorator {
-            if is_protocol {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!(
-                        "`@dataclass` cannot be applied to Protocol `{}`",
-                        cls.name()
-                    ),
-                );
-            }
-            if is_enum {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!("Cannot apply `@dataclass` to Enum `{}`", cls.name()),
-                );
-                return (None, false);
-            }
-            if is_typed_dict {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!("Cannot apply `@dataclass` to TypedDict `{}`", cls.name()),
-                );
-                return (None, false);
-            }
-            if is_named_tuple {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!("Cannot apply `@dataclass` to NamedTuple `{}`", cls.name()),
-                );
-                return (None, false);
-            }
+        // Protocols still become dataclasses at runtime, so preserve their metadata; the
+        // hard-reject kinds have no useful dataclass runtime behavior to model, so abort.
+        if has_dataclass_decorator
+            && self.report_forbidden_dataclass_target(
+                cls.name(),
+                is_protocol,
+                is_enum,
+                is_typed_dict,
+                is_named_tuple,
+                cls.range(),
+                errors,
+            )
+        {
+            return (None, false);
         }
         if let Some(TransformDataclass {
             keywords: kws,

@@ -97,6 +97,18 @@ impl MatchSubject {
 struct PatternNarrowOps {
     scope: NarrowOps,
     subject: Option<(NarrowOp, TextRange)>,
+    /// Narrows that apply positively to the case body but are deliberately excluded
+    /// from the subject's negation. We use this to exclude any sub-patterns within
+    /// a class pattern to avoid poisoning exhaustiveness checks.
+    ///
+    /// Example: for a class with 2 string fields, `Cls(str(), str())` is an exhaustive pattern
+    /// However, the generated narrows include `isinstance(cls.x, str) & isinstance(cls.y, str)`
+    /// which negates to `!isinstance(cls.x, str) or !isinstance(cls.y, str)`, causing us to
+    /// infer an incorrect remainder type.
+    ///
+    /// Instead, we use the `ClassCoverageGate` mechanism to consider all sub-patterns of a class
+    /// together when determining exhaustiveness.
+    body_only: NarrowOps,
 }
 
 impl PatternNarrowOps {
@@ -108,6 +120,7 @@ impl PatternNarrowOps {
         Self {
             scope,
             subject: None,
+            body_only: NarrowOps::new(),
         }
     }
 
@@ -115,6 +128,7 @@ impl PatternNarrowOps {
         Self {
             scope: NarrowOps::new(),
             subject: Some((op, range)),
+            body_only: NarrowOps::new(),
         }
     }
 
@@ -132,11 +146,13 @@ impl PatternNarrowOps {
 
     fn and_all(&mut self, other: Self) {
         self.scope.and_all(other.scope);
+        self.body_only.and_all(other.body_only);
         self.and_subject(other.subject);
     }
 
     fn or_all(&mut self, other: Self) {
         self.scope.or_all(other.scope);
+        self.body_only.or_all(other.body_only);
         self.subject = match (self.subject.take(), other.subject) {
             (Some((op, range)), Some((other_op, other_range))) => {
                 // Cover both operands so the merged range is independent of subpattern order.
@@ -153,6 +169,8 @@ impl PatternNarrowOps {
                 .subject
                 .as_ref()
                 .map(|(op, range)| (op.negate(), *range)),
+            // Body-only narrows are intentionally dropped from the negation.
+            body_only: NarrowOps::new(),
         }
     }
 }
@@ -494,12 +512,22 @@ impl<'a> BindingsBuilder<'a> {
                         .keywords
                         .iter()
                         .all(|kw| kw.pattern.is_irrefutable() || kw.pattern.is_wildcard());
+                // Positional-only class patterns (no keywords) with at least one refutable
+                // sub-pattern use a solve-time coverage gate (below) instead of a
+                // `Placeholder`, so the class is narrowed away when *every* positional slot's
+                // sub-pattern exhausts its slot.
+                let positional_coverage = !x.arguments.patterns.is_empty()
+                    && x.arguments.keywords.is_empty()
+                    && !all_args_irrefutable
+                    && !is_exhaustive_single_slot
+                    && match_subject.as_single().is_some();
 
                 let mut narrow_ops = match_subject
                     .subject_narrow_op(NarrowOp::Atomic(None, narrow_op.clone()), x.cls.range());
                 if (!x.arguments.patterns.is_empty() || !x.arguments.keywords.is_empty())
                     && !is_exhaustive_single_slot
                     && !all_args_irrefutable
+                    && !positional_coverage
                 {
                     narrow_ops.and_all(match_subject.subject_narrow_op(
                         NarrowOp::Atomic(None, AtomicNarrowOp::Placeholder),
@@ -524,27 +552,72 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 // Normal MatchClass handling
                 // TODO: narrow class type vars based on pattern arguments
-                x.arguments
-                    .patterns
-                    .into_iter()
-                    .enumerate()
-                    .for_each(|(idx, pattern)| {
-                        let attr_key = self.insert_binding(
-                            Key::Anon(pattern.range()),
-                            Binding::PatternMatchClassPositional(
-                                x.cls.clone(),
-                                idx,
-                                subject_idx,
-                                pattern.range(),
-                            ),
-                        );
-                        // TODO: narrow attributes in positional patterns
-                        narrow_ops.and_all(self.bind_pattern(
-                            MatchSubject::None,
-                            pattern.clone(),
-                            attr_key,
+                let mut coverage_keys: Vec<Idx<Key>> = Vec::new();
+                for (idx, pattern) in x.arguments.patterns.into_iter().enumerate() {
+                    let attr_key = self.insert_binding(
+                        Key::Anon(pattern.range()),
+                        Binding::PatternMatchClassPositional(
+                            x.cls.clone(),
+                            idx,
+                            subject_idx,
+                            pattern.range(),
+                        ),
+                    );
+                    // Narrow the matched attribute (`__match_args__[idx]`) as a facet
+                    // of the subject, so sub-pattern narrowing flows to the parent.
+                    let subject_for_slot = if let Some(subject) = match_subject.as_single() {
+                        MatchSubject::Single(subject.clone().with_facet(
+                            UnresolvedFacetKind::MatchArg {
+                                class: x.cls.clone(),
+                                index: idx,
+                            },
                         ))
-                    });
+                    } else {
+                        MatchSubject::None
+                    };
+                    let sub_ops = self.bind_pattern(subject_for_slot, pattern.clone(), attr_key);
+                    if positional_coverage {
+                        if !pattern.is_irrefutable() {
+                            // Build this slot's coverage probe: narrow the subject to this class
+                            // first (so other union members don't pollute the slot), then require
+                            // the negated sub-pattern residual to be `Never`. Irrefutable slots are
+                            // already exhausted, so only refutable slots need solve-time probes.
+                            let mut coverage_scope = match_subject
+                                .subject_narrow_op(
+                                    NarrowOp::Atomic(None, narrow_op.clone()),
+                                    x.cls.range(),
+                                )
+                                .scope;
+                            coverage_scope.and_all(sub_ops.scope.negate());
+                            let narrow_entries = self.build_narrow_entries(&coverage_scope);
+                            coverage_keys.push(self.insert_binding(
+                                Key::Exhaustive(
+                                    ExhaustivenessKind::ClassPatternCoverage,
+                                    pattern.range(),
+                                ),
+                                Binding::Exhaustive(Box::new(ExhaustiveBinding {
+                                    kind: ExhaustivenessKind::ClassPatternCoverage,
+                                    narrow_entries,
+                                })),
+                            ));
+                        }
+                        narrow_ops.body_only.and_all(sub_ops.scope);
+                        narrow_ops.body_only.and_all(sub_ops.body_only);
+                    } else {
+                        narrow_ops.and_all(sub_ops);
+                    }
+                }
+                if positional_coverage {
+                    // The class is subtracted from later cases only when every refutable slot
+                    // probe resolves to `Never` (checked by `ClassCoverageGateNeg` at solve time).
+                    narrow_ops.and_all(match_subject.subject_narrow_op(
+                        NarrowOp::Atomic(
+                            None,
+                            AtomicNarrowOp::ClassCoverageGate(coverage_keys.into()),
+                        ),
+                        x.cls.range(),
+                    ));
+                }
                 x.arguments.keywords.into_iter().for_each(
                     |PatternKeyword {
                          node_index: _,
@@ -712,6 +785,13 @@ impl<'a> BindingsBuilder<'a> {
                 self.bind_pattern(match_subject.clone(), pattern, case_subject_idx);
             self.bind_narrow_ops(
                 &new_narrow_ops.scope,
+                NarrowUseLocation::Span(case_range),
+                &Usage::NonPinningValue(None),
+            );
+            // Body-only narrows (e.g. sub-pattern facet narrows) apply positively to the
+            // case body but are excluded from the negation accumulated below.
+            self.bind_narrow_ops(
+                &new_narrow_ops.body_only,
                 NarrowUseLocation::Span(case_range),
                 &Usage::NonPinningValue(None),
             );

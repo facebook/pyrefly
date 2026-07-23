@@ -112,6 +112,7 @@ pub struct TestEnv {
     unannotated_return_error: bool,
     implicit_any_parameter_error: bool,
     implicit_any_attribute_error: bool,
+    unknown_attribute_type_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
@@ -120,6 +121,7 @@ pub struct TestEnv {
     incompatible_comparison_error: bool,
     untyped_class_decorator_error: bool,
     untyped_function_decorator_error: bool,
+    unused_call_result_error: bool,
     string_as_iterable_warning: bool,
     strict_callable_subtyping: bool,
     strict_partial_subtyping: bool,
@@ -128,7 +130,7 @@ pub struct TestEnv {
     no_any_return_explicit_error: bool,
     no_any_return_implicit_error: bool,
     implicit_any_lambda_error: bool,
-    implicit_any_variable_error: bool,
+    unknown_variable_type_error: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
@@ -154,6 +156,7 @@ impl TestEnv {
             unannotated_return_error: false,
             implicit_any_parameter_error: false,
             implicit_any_attribute_error: false,
+            unknown_attribute_type_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
             missing_override_decorator_error: false,
@@ -162,6 +165,7 @@ impl TestEnv {
             incompatible_comparison_error: false,
             untyped_class_decorator_error: false,
             untyped_function_decorator_error: false,
+            unused_call_result_error: false,
             string_as_iterable_warning: false,
             strict_callable_subtyping: false,
             strict_partial_subtyping: false,
@@ -170,7 +174,7 @@ impl TestEnv {
             no_any_return_explicit_error: false,
             no_any_return_implicit_error: false,
             implicit_any_lambda_error: false,
-            implicit_any_variable_error: false,
+            unknown_variable_type_error: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             run_require: Require::Everything,
@@ -283,6 +287,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unknown_attribute_type_error(mut self) -> Self {
+        self.unknown_attribute_type_error = true;
+        self
+    }
+
     pub fn enable_unannotated_return_error(mut self) -> Self {
         self.unannotated_return_error = true;
         self
@@ -333,6 +342,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unused_call_result_error(mut self) -> Self {
+        self.unused_call_result_error = true;
+        self
+    }
+
     pub fn enable_string_as_iterable_warning(mut self) -> Self {
         self.string_as_iterable_warning = true;
         self
@@ -373,8 +387,8 @@ impl TestEnv {
         self
     }
 
-    pub fn enable_implicit_any_variable_error(mut self) -> Self {
-        self.implicit_any_variable_error = true;
+    pub fn enable_unknown_variable_type_error(mut self) -> Self {
+        self.unknown_variable_type_error = true;
         self
     }
 
@@ -486,6 +500,9 @@ impl TestEnv {
         if self.implicit_any_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyAttribute, Severity::Error);
         }
+        if self.unknown_attribute_type_error {
+            errors.set_error_severity(ErrorKind::UnknownAttributeType, Severity::Error);
+        }
         if self.unannotated_return_error {
             errors.set_error_severity(ErrorKind::UnannotatedReturn, Severity::Error);
         }
@@ -525,14 +542,17 @@ impl TestEnv {
         if self.untyped_function_decorator_error {
             errors.set_error_severity(ErrorKind::UntypedFunctionDecorator, Severity::Error);
         }
+        if self.unused_call_result_error {
+            errors.set_error_severity(ErrorKind::UnusedCallResult, Severity::Error);
+        }
         if self.string_as_iterable_warning {
             errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);
         }
         if self.implicit_any_lambda_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyLambda, Severity::Error);
         }
-        if self.implicit_any_variable_error {
-            errors.set_error_severity(ErrorKind::ImplicitAnyVariable, Severity::Error);
+        if self.unknown_variable_type_error {
+            errors.set_error_severity(ErrorKind::UnknownVariableType, Severity::Error);
         }
         config.extra_file_extensions = self.extra_file_extensions.clone();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());

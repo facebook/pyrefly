@@ -68,22 +68,26 @@ def _patch_torch_if_available() -> None:
 _patch_torch_if_available()
 
 
-class SizeTuple:
-    """Integer tuple carrier for shape-like type parameters.
+class IntTuple:
+    """Tuple-valued shape annotation surface.
 
-    At runtime this is a no-op marker class. Pyrefly treats `SizeTuple` in type
-    positions as the shape carrier corresponding to `tuple[int, ...]`.
+    In type positions, Pyrefly treats `IntTuple` as the shape carrier for
+    `tuple[int, ...]`. At runtime, calling it coerces any iterable to a plain
+    tuple.
     """
+
+    def __new__(cls, iterable=()):
+        return tuple(iterable)
 
     def __class_getitem__(cls, params):
         return cls
 
 
 class Elements:
-    """Inverse of ``tuple[Unpack[S]]``: extracts the element sequence from a SizeTuple carrier.
+    """Inverse of ``tuple[Unpack[S]]``: extracts the element sequence from a IntTuple carrier.
 
     In the Python typing spec, ``tuple[Unpack[Ts]]`` wraps a ``TypeVarTuple`` into a
-    concrete tuple type. ``Elements[S]`` is the conceptual inverse: given a ``SizeTuple``
+    concrete tuple type. ``Elements[S]`` is the conceptual inverse: given a ``IntTuple``
     carrier ``S``, ``*Elements[S]`` splices its element sequence into a shape position,
     e.g. ``Array[[*Elements[S], OUT], DType]``.
 
@@ -106,7 +110,7 @@ class Elements:
         return f"Elements[{self.carrier!r}]"
 
 
-class Dim[T]:
+class Int[T]:
     """Symbolic integer type for dimension values.
 
     At runtime this is a no-op generic class. The type checker uses the
@@ -129,7 +133,7 @@ def enable_torchscript_runtime_compat() -> None:
     paths. It intentionally has no disable API for production callers.
     """
 
-    Dim.__class_getitem__ = classmethod(_return_int)
+    Int.__class_getitem__ = classmethod(_return_int)
 
 
 @dataclass(frozen=True)
@@ -253,7 +257,7 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
     return decorator
 
 
-class SymVar:
+class IntVar:
     """Symbolic variable with arithmetic support for tensor shape dimensions.
 
     Like typing.TypeVar but arithmetic operations (N + 1, N * 2, etc.)
@@ -261,8 +265,7 @@ class SymVar:
     __class__ = typing.TypeVar makes isinstance(x, typing.TypeVar)
     return True, so Generic[N] and TypedDict + Generic[N] both work.
 
-    In pyrefly, shape_extensions.SymVar is treated identically to
-    typing.TypeVar.
+    In pyrefly, shape_extensions.IntVar marks symbolic integer dimensions.
     """
 
     __class__ = typing.TypeVar

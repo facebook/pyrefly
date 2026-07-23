@@ -55,7 +55,7 @@ import torch.nn as nn
 import torch.quantization
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim, SymVar
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
@@ -64,7 +64,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class BottomMLP[DenseDim: SymVar, D: SymVar](nn.Module):
+class BottomMLP[DenseDim: IntVar, D: IntVar](nn.Module):
     """Bottom MLP: maps dense features to embedding space.
 
     Architecture: DenseDim → 512 → 256 → D
@@ -72,13 +72,13 @@ class BottomMLP[DenseDim: SymVar, D: SymVar](nn.Module):
     (B, DenseDim) → (B, D)
     """
 
-    def __init__(self, dense_dim: Dim[DenseDim], embed_dim: Dim[D]) -> None:
+    def __init__(self, dense_dim: Int[DenseDim], embed_dim: Int[D]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(dense_dim, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, embed_dim)
 
-    def forward[B: SymVar](self, x: Tensor[[B, DenseDim]]) -> Tensor[[B, D]]:
+    def forward[B: IntVar](self, x: Tensor[[B, DenseDim]]) -> Tensor[[B, D]]:
         h = nn.functional.relu(self.fc1(x))
         assert_type(h, Tensor[[B, 512]])
         h = nn.functional.relu(self.fc2(h))
@@ -91,7 +91,7 @@ class BottomMLP[DenseDim: SymVar, D: SymVar](nn.Module):
 # ============================================================================
 
 
-class TopMLP[TopIn: SymVar](nn.Module):
+class TopMLP[TopIn: IntVar](nn.Module):
     """Top MLP: maps interaction features to prediction.
 
     Architecture: TopIn → 512 → 256 → 1
@@ -99,13 +99,13 @@ class TopMLP[TopIn: SymVar](nn.Module):
     (B, TopIn) → (B, 1)
     """
 
-    def __init__(self, top_in: Dim[TopIn]) -> None:
+    def __init__(self, top_in: Int[TopIn]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(top_in, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, 1)
 
-    def forward[B: SymVar](self, x: Tensor[[B, TopIn]]) -> Tensor[[B, 1]]:
+    def forward[B: IntVar](self, x: Tensor[[B, TopIn]]) -> Tensor[[B, 1]]:
         h = nn.functional.relu(self.fc1(x))
         assert_type(h, Tensor[[B, 512]])
         h = nn.functional.relu(self.fc2(h))
@@ -118,7 +118,7 @@ class TopMLP[TopIn: SymVar](nn.Module):
 # ============================================================================
 
 
-class DLRM[DenseDim: SymVar, D: SymVar](nn.Module):
+class DLRM[DenseDim: IntVar, D: IntVar](nn.Module):
     """DLRM recommendation model.
 
     Concrete configuration for shape tracking:
@@ -133,8 +133,8 @@ class DLRM[DenseDim: SymVar, D: SymVar](nn.Module):
 
     def __init__(
         self,
-        dense_dim: Dim[DenseDim],
-        embed_dim: Dim[D],
+        dense_dim: Int[DenseDim],
+        embed_dim: Int[D],
         vocab1: int,
         vocab2: int,
         vocab3: int,
@@ -150,7 +150,7 @@ class DLRM[DenseDim: SymVar, D: SymVar](nn.Module):
         # Top MLP: D + 6 interaction features
         self.top_mlp = TopMLP(embed_dim + 6)
 
-    def interact_features[B: SymVar](
+    def interact_features[B: IntVar](
         self,
         dense: Tensor[[B, D]],
         sparse1: Tensor[[B, D]],
@@ -163,7 +163,7 @@ class DLRM[DenseDim: SymVar, D: SymVar](nn.Module):
         → extract upper triangle (6 elements) → concat with dense → (B, D+6)
         """
         b = dense.size(0)
-        assert_type(b, Dim[B])
+        assert_type(b, Int[B])
         # Stack: (B, 4, D)
         T = torch.stack((dense, sparse1, sparse2, sparse3), dim=1)
         assert_type(T, Tensor[[B, 4, D]])
@@ -181,7 +181,7 @@ class DLRM[DenseDim: SymVar, D: SymVar](nn.Module):
         assert_type(result, Tensor[[B, D + 6]])
         return result
 
-    def forward[B: SymVar](
+    def forward[B: IntVar](
         self,
         dense_x: Tensor[[B, DenseDim]],
         idx1: Tensor,
@@ -196,7 +196,7 @@ class DLRM[DenseDim: SymVar, D: SymVar](nn.Module):
         assert_type(x, Tensor[[B, D]])
         # Embedding lookups (EmbeddingBag returns unrefined Tensor)
         b = dense_x.size(0)
-        assert_type(b, Dim[B])
+        assert_type(b, Int[B])
         e1: Tensor[[B, D]] = self.emb1(idx1, off1)
         e2: Tensor[[B, D]] = self.emb2(idx2, off2)
         e3: Tensor[[B, D]] = self.emb3(idx3, off3)
@@ -212,7 +212,7 @@ class DLRM[DenseDim: SymVar, D: SymVar](nn.Module):
 # ============================================================================
 
 
-class QREmbeddingBag[D: SymVar](nn.Module):
+class QREmbeddingBag[D: IntVar](nn.Module):
     """Quotient-Remainder embedding compression.
 
     Original: dlrm_s_pytorch.py QREmbeddingBag.
@@ -232,7 +232,7 @@ class QREmbeddingBag[D: SymVar](nn.Module):
     def __init__(
         self,
         num_categories: int,
-        embedding_dim: Dim[D],
+        embedding_dim: Int[D],
         q_factor: int,
     ) -> None:
         super().__init__()
@@ -260,7 +260,7 @@ class QREmbeddingBag[D: SymVar](nn.Module):
 # ============================================================================
 
 
-class PREmbeddingBag[D: SymVar](nn.Module):
+class PREmbeddingBag[D: IntVar](nn.Module):
     """Pruned-Row embedding compression via hashing.
 
     Original: dlrm_s_pytorch.py PREmbeddingBag.
@@ -278,7 +278,7 @@ class PREmbeddingBag[D: SymVar](nn.Module):
     def __init__(
         self,
         num_rows: int,
-        embedding_dim: Dim[D],
+        embedding_dim: Int[D],
     ) -> None:
         super().__init__()
         self.num_rows = num_rows
@@ -350,7 +350,7 @@ def gather_emb_results(
 # ============================================================================
 
 
-class QuantizedEmbeddingBag[D: SymVar](nn.Module):
+class QuantizedEmbeddingBag[D: IntVar](nn.Module):
     """Quantized embedding lookup for inference.
 
     Original: dlrm_s_pytorch.py — quantization support.
@@ -365,7 +365,7 @@ class QuantizedEmbeddingBag[D: SymVar](nn.Module):
     def __init__(
         self,
         num_embeddings: int,
-        embedding_dim: Dim[D],
+        embedding_dim: Int[D],
     ) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim

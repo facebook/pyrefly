@@ -84,7 +84,7 @@ pub(crate) fn is_special_import_function(name: &str) -> bool {
 fn special_type_var_kind(special: SpecialExport) -> Option<QuantifiedKind> {
     match special {
         SpecialExport::TypeVar => Some(QuantifiedKind::TypeVar),
-        SpecialExport::SymVar => Some(QuantifiedKind::SymVar),
+        SpecialExport::IntVar => Some(QuantifiedKind::IntVar),
         _ => None,
     }
 }
@@ -332,11 +332,11 @@ impl<'a> BindingsBuilder<'a> {
         // The constraints (i.e., any positional arguments after the first)
         // and some keyword arguments are types.
         for arg in iargs {
-            if self.as_direct_shape_symvar(arg) {
+            if self.as_direct_shape_intvar(arg) {
                 self.error(
                     arg.range(),
                     ErrorKind::InvalidTypeVar,
-                    "`SymVar` cannot be used as a TypeVar constraint".to_owned(),
+                    "`IntVar` cannot be used as a TypeVar constraint".to_owned(),
                 );
                 self.ensure_expr(arg, static_type_usage);
                 continue;
@@ -347,12 +347,12 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(id) = &kw.arg
                 && (id.id == "bound" || id.id == "default")
             {
-                if self.as_direct_shape_symvar(&kw.value) {
+                if self.as_direct_shape_intvar(&kw.value) {
                     let role = if id.id == "bound" { "bound" } else { "default" };
                     self.error(
                         kw.value.range(),
                         ErrorKind::InvalidTypeVar,
-                        format!("`SymVar` cannot be used as a TypeVar {role}"),
+                        format!("`IntVar` cannot be used as a TypeVar {role}"),
                     );
                     self.ensure_expr(&mut kw.value, static_type_usage);
                     continue;
@@ -895,7 +895,7 @@ impl<'a> BindingsBuilder<'a> {
                     {
                         match special {
                             SpecialExport::TypeVar
-                            | SpecialExport::SymVar
+                            | SpecialExport::IntVar
                             | SpecialExport::ParamSpec
                             | SpecialExport::TypeVarTuple => {
                                 let ident = Ast::expr_name_identifier(name.clone());
@@ -1160,7 +1160,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::For(mut x) => {
                 if x.is_async
                     && !self.scopes.is_in_async_def()
-                    && !self.module_info.path().is_notebook()
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),
@@ -1344,7 +1344,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::With(x) => {
                 if x.is_async
                     && !self.scopes.is_in_async_def()
-                    && !self.module_info.path().is_notebook()
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),

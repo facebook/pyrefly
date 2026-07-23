@@ -13,7 +13,7 @@ from typing import Any, assert_type, TYPE_CHECKING
 import torch
 import torch.fft
 import torch.nn.functional as F
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -23,20 +23,20 @@ if TYPE_CHECKING:
 # Testing: fft2, ifft2, fftn, ifftn, rfft2, irfft2, rfftn, irfftn, hfft, ihfft
 
 
-def test_fft2[H: SymVar, W: SymVar](x: Tensor[[2, H, W]]):
+def test_fft2[H: IntVar, W: IntVar](x: Tensor[[2, H, W]]):
     """2D FFT preserves spatial dimensions"""
     y = torch.fft.fft2(x)
     # Should preserve shape
     assert_type(y, Tensor[[2, H, W]])
 
 
-def test_fftn[D1: SymVar, D2: SymVar, D3: SymVar](x: Tensor[[D1, D2, D3]]):
+def test_fftn[D1: IntVar, D2: IntVar, D3: IntVar](x: Tensor[[D1, D2, D3]]):
     """N-dimensional FFT preserves dimensions"""
     y = torch.fft.fftn(x)
     assert_type(y, Tensor[[D1, D2, D3]])
 
 
-def test_rfft2[H: SymVar, W: SymVar](x: Tensor[[2, H, W]]):
+def test_rfft2[H: IntVar, W: IntVar](x: Tensor[[2, H, W]]):
     """2D real FFT - last dimension changes"""
     y = torch.fft.rfft2(x)
     # Last dimension becomes W//2 + 1
@@ -44,7 +44,7 @@ def test_rfft2[H: SymVar, W: SymVar](x: Tensor[[2, H, W]]):
     assert_type(y, Tensor)
 
 
-def test_rfftn[D1: SymVar, D2: SymVar, D3: SymVar](x: Tensor[[D1, D2, D3]]):
+def test_rfftn[D1: IntVar, D2: IntVar, D3: IntVar](x: Tensor[[D1, D2, D3]]):
     """N-dimensional real FFT"""
     y = torch.fft.rfftn(x)
     # Last dimension changes, may return shapeless
@@ -65,7 +65,7 @@ test_rfftn(torch.randn(4, 8, 16))
 # Testing: cross_entropy, nll_loss, binary_cross_entropy, kl_div, smooth_l1_loss
 
 
-def test_cross_entropy[N: SymVar, C: SymVar](
+def test_cross_entropy[N: IntVar, C: IntVar](
     input: Tensor[[N, C]], target: Tensor[[N]]
 ):
     """Cross entropy loss - returns scalar by default"""
@@ -74,7 +74,7 @@ def test_cross_entropy[N: SymVar, C: SymVar](
     assert_type(loss, Tensor[[]])
 
 
-def test_cross_entropy_no_reduction[N: SymVar, C: SymVar](
+def test_cross_entropy_no_reduction[N: IntVar, C: IntVar](
     input: Tensor[[N, C]], target: Tensor[[N]]
 ):
     """Cross entropy with no reduction preserves self shape"""
@@ -85,25 +85,25 @@ def test_cross_entropy_no_reduction[N: SymVar, C: SymVar](
     assert_type(loss, Tensor[[N, C]])
 
 
-def test_nll_loss[N: SymVar, C: SymVar](input: Tensor[[N, C]], target: Tensor[[N]]):
+def test_nll_loss[N: IntVar, C: IntVar](input: Tensor[[N, C]], target: Tensor[[N]]):
     """Negative log likelihood loss"""
     loss = F.nll_loss(input, target)
     assert_type(loss, Tensor[[]])
 
 
-def test_binary_cross_entropy[N: SymVar](input: Tensor[[N]], target: Tensor[[N]]):
+def test_binary_cross_entropy[N: IntVar](input: Tensor[[N]], target: Tensor[[N]]):
     """Binary cross entropy loss"""
     loss = F.binary_cross_entropy(input, target)
     assert_type(loss, Tensor[[]])
 
 
-def test_kl_div[N: SymVar, C: SymVar](input: Tensor[[N, C]], target: Tensor[[N, C]]):
+def test_kl_div[N: IntVar, C: IntVar](input: Tensor[[N, C]], target: Tensor[[N, C]]):
     """KL divergence loss"""
     loss = F.kl_div(input, target)
     assert_type(loss, Tensor[[]])
 
 
-def test_smooth_l1_loss[N: SymVar](input: Tensor[[N]], target: Tensor[[N]]):
+def test_smooth_l1_loss[N: IntVar](input: Tensor[[N]], target: Tensor[[N]]):
     """Smooth L1 loss (Huber loss)"""
     loss = F.smooth_l1_loss(input, target)
     assert_type(loss, Tensor[[]])
@@ -126,37 +126,37 @@ test_smooth_l1_loss(_input_8, _input_8)
 # These take explicit sizes, but we can test with symbolic in the output
 
 
-def test_zeros_like_symbolic[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
+def test_zeros_like_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """zeros_like with symbolic dimensions"""
     y = torch.zeros_like(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_ones_like_symbolic[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
+def test_ones_like_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """ones_like with symbolic dimensions"""
     y = torch.ones_like(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_randn_like_symbolic[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
+def test_randn_like_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """randn_like with symbolic dimensions"""
     y = torch.randn_like(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_rand_like[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
+def test_rand_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """rand_like with symbolic dimensions"""
     y = torch.rand_like(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_full_like[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
+def test_full_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """full_like with symbolic dimensions"""
     y = torch.full_like(x, 3.14)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_empty_like_symbolic[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
+def test_empty_like_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """empty_like with symbolic dimensions"""
     y = torch.empty_like(x)
     assert_type(y, Tensor[[N, M]])
@@ -179,7 +179,7 @@ test_empty_like_symbolic(_t35)
 # Testing: index_copy, index_put, masked_scatter
 
 
-def test_index_copy[N: SymVar, M: SymVar](
+def test_index_copy[N: IntVar, M: IntVar](
     x: Tensor[[N, M]], indices: Tensor[[2]], source: Tensor[[2, M]]
 ):
     """index_copy preserves input shape"""
@@ -187,7 +187,7 @@ def test_index_copy[N: SymVar, M: SymVar](
     assert_type(y, Tensor[[N, M]])
 
 
-def test_masked_scatter[N: SymVar, M: SymVar](
+def test_masked_scatter[N: IntVar, M: IntVar](
     x: Tensor[[N, M]], mask: Tensor[[N, M]], source: Tensor[[10]]
 ):
     """masked_scatter preserves shape"""
@@ -225,7 +225,7 @@ def test_eye_symbolic():
     assert_type(y, Tensor[[5, 5]])
 
 
-def test_tensordot[N: SymVar, M: SymVar, K: SymVar](
+def test_tensordot[N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[N, M, K]], b: Tensor[[K, 6]]
 ):
     """tensordot - generalized tensor contraction"""
@@ -236,14 +236,14 @@ def test_tensordot[N: SymVar, M: SymVar, K: SymVar](
     assert_type(y, Tensor[[N, M, 6]])
 
 
-def test_broadcast_to_symbolic[N: SymVar](x: Tensor[[N, 1]]):
+def test_broadcast_to_symbolic[N: IntVar](x: Tensor[[N, 1]]):
     """broadcast_to with symbolic dimensions"""
     y = torch.broadcast_to(x, (3, 5))
     # Broadcasts to literal target shape
     assert_type(y, Tensor[[3, 5]])
 
 
-def test_unbind[N: SymVar, M: SymVar](x: Tensor[[3, N, M]]):
+def test_unbind[N: IntVar, M: IntVar](x: Tensor[[3, N, M]]):
     """unbind splits tensor along dimension"""
     tensors = torch.unbind(x, dim=0)
     # Returns tuple[Tensor[[N, M]], ...] (unbounded tuple)
@@ -266,33 +266,33 @@ test_unbind(_t345_b)
 # Testing: multinomial, normal, poisson, bernoulli (more thorough)
 
 
-def test_multinomial[N: SymVar](weights: Tensor[[N, 10]]):
+def test_multinomial[N: IntVar](weights: Tensor[[N, 10]]):
     """multinomial sampling"""
     samples = torch.multinomial(weights, num_samples=5, replacement=True)
     # Returns [N, 5]
     assert_type(samples, Tensor[[N, 5]])
 
 
-def test_normal_tensor[N: SymVar, M: SymVar](mean: Tensor[[N, M]], std: Tensor[[N, M]]):
+def test_normal_tensor[N: IntVar, M: IntVar](mean: Tensor[[N, M]], std: Tensor[[N, M]]):
     """normal tensor operation"""
     # torch.normal(mean_tensor, std_tensor) preserves shape
     y = torch.normal(mean, std)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_bernoulli[N: SymVar, M: SymVar](p: Tensor[[N, M]]):
+def test_bernoulli[N: IntVar, M: IntVar](p: Tensor[[N, M]]):
     """Bernoulli sampling preserves shape"""
     y = torch.bernoulli(p)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_poisson[N: SymVar, M: SymVar](lam: Tensor[[N, M]]):
+def test_poisson[N: IntVar, M: IntVar](lam: Tensor[[N, M]]):
     """Poisson sampling preserves shape"""
     y = torch.poisson(lam)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_rand_n[N: SymVar](x: Tensor[[N, 3]]):
+def test_rand_n[N: IntVar](x: Tensor[[N, 3]]):
     """randn with symbolic in output (via like)"""
     # Can't create with symbolic size directly, but can use like
     y = torch.randn_like(x)
@@ -315,7 +315,7 @@ test_rand_n(_t53)
 # ==== Additional Coverage ====
 
 
-def test_einsum_matmul[N: SymVar, M: SymVar, K: SymVar](
+def test_einsum_matmul[N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[N, M]], b: Tensor[[M, K]]
 ):
     """einsum matrix multiplication with symbolic shapes"""
@@ -323,7 +323,7 @@ def test_einsum_matmul[N: SymVar, M: SymVar, K: SymVar](
     assert_type(y, Tensor[[N, K]])
 
 
-def test_einsum_batch_matmul[B: SymVar, N: SymVar, M: SymVar, K: SymVar](
+def test_einsum_batch_matmul[B: IntVar, N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[B, N, M]], b: Tensor[[B, M, K]]
 ):
     """einsum batch matrix multiplication with symbolic shapes"""
@@ -331,43 +331,43 @@ def test_einsum_batch_matmul[B: SymVar, N: SymVar, M: SymVar, K: SymVar](
     assert_type(y, Tensor[[B, N, K]])
 
 
-def test_einsum_transpose[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
+def test_einsum_transpose[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """einsum transpose operation"""
     y = torch.einsum("ij->ji", x)
     assert_type(y, Tensor[[M, N]])
 
 
-def test_einsum_trace[N: SymVar](x: Tensor[[N, N]]):
+def test_einsum_trace[N: IntVar](x: Tensor[[N, N]]):
     """einsum trace: extracts diagonal"""
     y = torch.einsum("ii->i", x)
     assert_type(y, Tensor[[N]])
 
 
-def test_einsum_trace_scalar[N: SymVar](x: Tensor[[N, N]]):
+def test_einsum_trace_scalar[N: IntVar](x: Tensor[[N, N]]):
     """einsum trace to scalar: sums the diagonal"""
     y = torch.einsum("ii->", x)
     assert_type(y, Tensor[[]])
 
 
-def test_einsum_elementwise[N: SymVar, M: SymVar](a: Tensor[[N, M]], b: Tensor[[N, M]]):
+def test_einsum_elementwise[N: IntVar, M: IntVar](a: Tensor[[N, M]], b: Tensor[[N, M]]):
     """einsum element-wise multiplication"""
     y = torch.einsum("ij,ij->ij", a, b)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_einsum_sum_reduction[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
+def test_einsum_sum_reduction[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """einsum sum all elements to scalar"""
     y = torch.einsum("ij->", x)
     assert_type(y, Tensor[[]])
 
 
-def test_einsum_outer_product[N: SymVar, M: SymVar](a: Tensor[[N]], b: Tensor[[M]]):
+def test_einsum_outer_product[N: IntVar, M: IntVar](a: Tensor[[N]], b: Tensor[[M]]):
     """einsum outer product"""
     y = torch.einsum("i,j->ij", a, b)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_masked_select_documented_limitation[N: SymVar, M: SymVar](
+def test_masked_select_documented_limitation[N: IntVar, M: IntVar](
     x: Tensor[[N, M]], mask: Tensor[[N, M]]
 ):
     """masked_select returns Tensor[[Any]] (data-dependent 1D size)"""

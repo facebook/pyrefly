@@ -6,17 +6,17 @@
  */
 
 use pyrefly_build::handle::Handle;
+pub use pyrefly_glean_schema::report::glean::facts;
+pub use pyrefly_glean_schema::report::glean::schema;
 
 use crate::report::glean::facts::Glean;
 use crate::state::state::Transaction;
 
 pub mod convert;
-pub mod facts;
-pub mod schema;
 
 pub fn glean(transaction: &Transaction, handle: &Handle) -> String {
     fn f(transaction: &Transaction, handle: &Handle) -> Option<Glean> {
-        Some(Glean::new(transaction, handle))
+        Some(convert::glean(transaction, handle))
     }
 
     let data = f(transaction, handle).expect("Glean data be ready").entries;

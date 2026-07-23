@@ -399,7 +399,7 @@ impl Ast {
 
     /// The tightest AST node that strictly contains `target` — i.e. the parent
     /// of the node whose range is `target`, or `None` at module top level.
-    pub fn parent_node(module: &ModModule, target: TextRange) -> Option<AnyNodeRef> {
+    pub fn parent_node(module: &ModModule, target: TextRange) -> Option<AnyNodeRef<'_>> {
         Ast::locate_node(module, target.start())
             .into_iter()
             .find(|node| node.range() != target && node.range().contains_range(target))

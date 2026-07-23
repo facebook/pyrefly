@@ -206,6 +206,7 @@ fn test_class(module_name: ModuleName, name: &str) -> PyreflyClassType {
         NestingContext::toplevel(),
         module,
         None,
+        false,
     );
     PyreflyClassType::new(class, TArgs::default())
 }
@@ -412,8 +413,13 @@ impl TypeConverter<'_> {
                 self.convert_class_type(&t.base_class, TypeFlags::INSTANCE)
             }
 
+            PyreflyType::IntTuple(_) => builtin("tuple"),
+
             // --- NNModule → ClassType from class ---
             PyreflyType::NNModule(m) => self.convert_class_type(&m.class, TypeFlags::INSTANCE),
+
+            // --- DataFrame → convert the underlying instance type ---
+            PyreflyType::DataFrame(schema) => self.convert(&schema.underlying_type()),
 
             // --- TypeAlias → unwrap to the aliased type, or typing class for refs ---
             PyreflyType::TypeAlias(ta) | PyreflyType::UntypedAlias(ta) => {
@@ -461,11 +467,11 @@ impl TypeConverter<'_> {
             // --- KwCall → convert the return type ---
             PyreflyType::KwCall(kw) => self.convert(&kw.return_ty),
 
-            // --- Size / Dim → the stdlib `int` class (they represent integer dimensions) ---
+            // --- Int → the stdlib `int` class (symbolic integers represent dimensions) ---
             // Emitted as the real class, not `builtin("int")`: the protocol
             // restricts `BuiltInType.name` to a fixed sentinel set that excludes
             // `int`, so a bare builtin surfaces as Unknown on the consumer.
-            PyreflyType::Size(_) | PyreflyType::Dim(_) => {
+            PyreflyType::Int(_) => {
                 self.convert_class_type(self.stdlib.int_type, TypeFlags::INSTANCE)
             }
 
@@ -1239,15 +1245,12 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_size_and_dim_are_int_class() {
-        use pyrefly_types::dimension::SizeExpr;
+    fn test_convert_int_is_int_class() {
+        use pyrefly_types::dimension::Int;
 
-        // `Size`/`Dim` are integer tensor dimensions, emitted as the real `int`
+        // A `Int` is an integer tensor dimension, emitted as the real `int`
         // class rather than an off-spec `int` `BuiltInType`.
-        for ty in [
-            PyreflyType::Size(SizeExpr::literal(6)),
-            PyreflyType::Dim(Box::new(PyreflyType::Size(SizeExpr::literal(3)))),
-        ] {
+        for ty in [PyreflyType::Int(Int::literal(6))] {
             match convert_type(&ty) {
                 TspType::Class(c) => {
                     assert!(c.flags.contains(TypeFlags::INSTANCE));

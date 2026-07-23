@@ -2477,7 +2477,6 @@ C(42)
 
 // https://github.com/facebook/pyrefly/issues/2923
 testcase!(
-    bug = "Should reject @dataclass applied to NamedTuple subclass",
     test_dataclass_on_named_tuple,
     r#"
 from dataclasses import dataclass
@@ -2487,13 +2486,12 @@ class Coord(NamedTuple):
     x: int
     y: int
 
-dataclass(Coord)
+dataclass(Coord)  # E: Cannot apply `@dataclass` to NamedTuple `Coord`
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2921
 testcase!(
-    bug = "Should reject @dataclass applied to Protocol subclass",
     test_dataclass_on_protocol,
     r#"
 from dataclasses import dataclass
@@ -2502,7 +2500,21 @@ from typing import Protocol
 class Printable(Protocol):
     def display(self) -> str: ...
 
-dataclass(Printable)
+dataclass(Printable)  # E: `@dataclass` cannot be applied to Protocol `Printable`
+"#,
+);
+
+testcase!(
+    test_dataclass_on_enum,
+    r#"
+from dataclasses import dataclass
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+dataclass(Color)  # E: Cannot apply `@dataclass` to Enum `Color`
 "#,
 );
 

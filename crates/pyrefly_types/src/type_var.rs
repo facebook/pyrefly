@@ -21,6 +21,7 @@ use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Identifier;
 
+use crate::dimension::gradual_size;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::heap::TypeHeap;
@@ -69,9 +70,8 @@ impl Restriction {
             Self::Bound(t) => t.clone(),
             Self::Constraints(ts) => unions(ts.clone(), heap),
             Self::Unrestricted => match kind {
-                QuantifiedKind::TypeVar | QuantifiedKind::SymVar => {
-                    stdlib.object().clone().to_type()
-                }
+                QuantifiedKind::TypeVar => stdlib.object().clone().to_type(),
+                QuantifiedKind::IntVar => gradual_size(),
                 QuantifiedKind::ParamSpec => Type::Ellipsis,
                 QuantifiedKind::TypeVarTuple => Type::any_tuple(),
             },

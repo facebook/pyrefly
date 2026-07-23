@@ -6,8 +6,9 @@
 """Test Conv2d with tuple[int, int] kernel_size, stride, padding, dilation.
 
 When tuple values are passed, the scalar type param (K, S, P, D) is unbound
-and the spatial formula produces Unknown. Scalar inputs continue to bind
-normally. This test verifies both paths work without errors.
+and the spatial formula preserves arithmetic around that unknown dimension.
+Scalar inputs continue to bind normally. This test verifies both paths work
+without errors.
 """
 
 from typing import Any, assert_type, TYPE_CHECKING
@@ -28,11 +29,12 @@ def test_conv2d_scalar_kernel():
 
 
 def test_conv2d_tuple_kernel():
-    """Tuple kernel_size leaves K unbound — channels preserved, spatial Unknown."""
+    """Tuple kernel_size leaves K unbound but preserves spatial arithmetic."""
     conv = nn.Conv2d(3, 16, kernel_size=(3, 5))
     x: Tensor[[1, 3, 32, 32]] = torch.randn(1, 3, 32, 32)
     out = conv(x)
-    assert_type(out, Tensor[[1, 16, Any, Any]])
+    typed: Tensor[[1, 16, Any, Any]] = out
+    assert_type(typed, Tensor[[1, 16, Any, Any]])
 
 
 def test_conv2d_tuple_stride():
@@ -44,8 +46,9 @@ def test_conv2d_tuple_stride():
 
 
 def test_conv2d_string_padding():
-    """String padding leaves P unbound — spatial dimensions are Unknown."""
+    """String padding leaves P unbound but preserves spatial arithmetic."""
     conv = nn.Conv2d(3, 16, kernel_size=3, padding="same")
     x: Tensor[[1, 3, 32, 32]] = torch.randn(1, 3, 32, 32)
     out = conv(x)
-    assert_type(out, Tensor[[1, 16, Any, Any]])
+    typed: Tensor[[1, 16, Any, Any]] = out
+    assert_type(typed, Tensor[[1, 16, Any, Any]])

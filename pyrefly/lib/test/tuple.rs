@@ -161,6 +161,15 @@ def test(y: int):
 );
 
 testcase!(
+    test_unpack_starred_not_iterable_in_tuple,
+    r#"
+def test():
+    x: int = 42
+    y = (*x,)  # E: Expected an iterable, got `int`
+"#,
+);
+
+testcase!(
     test_unpack_index_out_of_bounds,
     r#"
 def test(x: tuple[int]) -> None:

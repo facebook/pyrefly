@@ -1345,7 +1345,6 @@ def test(w: A | B, x: A | B, y: A | B, z: A | B):
 
 // https://github.com/facebook/pyrefly/issues/3731
 testcase!(
-    bug = "nested class pattern in a generic wrapper is not treated as exhaustive",
     test_nested_class_pattern_exhaustive,
     r#"
 from typing import assert_never
@@ -1357,7 +1356,7 @@ class Err[E]:
     value: E
 class NotFound:
     pass
-def f(r: Ok[int] | Err[NotFound]) -> int:  # E: one or more paths are missing an explicit
+def f(r: Ok[int] | Err[NotFound]) -> int:
     match r:
         case Ok(value):
             return value
@@ -1370,7 +1369,69 @@ def g(r: Ok[int] | Err[NotFound]) -> int:
         case Err(NotFound()):
             raise Exception()
         case _:
-            assert_never(r)  # E: Argument `Err[NotFound]` is not assignable to parameter `arg` with type `Never`
+            assert_never(r)
+"#,
+);
+
+testcase!(
+    test_match_multi_slot_class_pattern_exhaustive,
+    r#"
+from typing import assert_never
+class Leaf:
+    pass
+class Node:
+    __match_args__ = ("left", "right")
+    left: Leaf
+    right: Leaf
+def f(n: Node) -> int:
+    match n:
+        case Node(Leaf(), Leaf()):
+            return 1
+def g(n: Node) -> int:
+    match n:
+        case Node(Leaf(), Leaf()):
+            return 1
+        case _:
+            assert_never(n)
+"#,
+);
+
+testcase!(
+    test_match_multi_slot_class_pattern_partial_not_exhaustive,
+    r#"
+class A:
+    pass
+class B:
+    pass
+class Rec:
+    __match_args__ = ("first", "second")
+    first: A
+    second: A | B
+def f(r: Rec) -> int:  # E: one or more paths are missing an explicit
+    # Only `first` is exhausted by `A()`; `second` still admits `B`, so the class
+    # is not covered and the match is not exhaustive.
+    match r:
+        case Rec(A(), A()):
+            return 1
+"#,
+);
+
+testcase!(
+    test_match_multi_slot_class_pattern_capture_and_refutable_exhaustive,
+    r#"
+from typing import assert_never
+class Leaf:
+    pass
+class Node:
+    __match_args__ = ("left", "right")
+    left: Leaf
+    right: Leaf
+def f(n: Node) -> int:
+    match n:
+        case Node(x, Leaf()):
+            return 1
+        case _:
+            assert_never(n)
 "#,
 );
 
@@ -1466,4 +1527,18 @@ def test(x: int | None, y: int | None) -> None:
     assert_type(u, int)  # E: `u` may be uninitialized
     assert_type(v, int)  # E: `v` may be uninitialized
 "#,
+);
+
+testcase!(
+    test_match_class_positional_pattern_narrows_attribute,
+    r#"
+from typing import assert_type
+class C:
+    __match_args__ = ("x",)
+    x: int | str
+def f(c: C) -> None:
+    match c:
+        case C(int()):
+            assert_type(c.x, int)
+    "#,
 );

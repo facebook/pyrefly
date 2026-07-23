@@ -29,46 +29,46 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim, SymVar
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
 @dataclass
 class FinalMLPConfig[
-    M1Out: SymVar = 256,
-    M2Out: SymVar = 256,
-    NH: SymVar = 1,
-    K: SymVar = 16,
+    M1Out: IntVar = 256,
+    M2Out: IntVar = 256,
+    NH: IntVar = 1,
+    K: IntVar = 16,
 ]:
     mlp1_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
-    mlp1_output_dim: Dim[M1Out] = 256  # type: ignore[bad-assignment]
+    mlp1_output_dim: Int[M1Out] = 256  # type: ignore[bad-assignment]
     mlp1_activation: str = "ReLU"
     mlp1_dropout: float = 0.0
     mlp1_batch_norm: bool = False
     mlp2_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
-    mlp2_output_dim: Dim[M2Out] = 256  # type: ignore[bad-assignment]
+    mlp2_output_dim: Int[M2Out] = 256  # type: ignore[bad-assignment]
     mlp2_activation: str = "ReLU"
     mlp2_dropout: float = 0.0
     mlp2_batch_norm: bool = False
-    num_heads: Dim[NH] = 1  # type: ignore[bad-assignment]
+    num_heads: Int[NH] = 1  # type: ignore[bad-assignment]
     num_layers: int = 1
-    num_output_features: Dim[K] = 16  # type: ignore[bad-assignment]
+    num_output_features: Int[K] = 16  # type: ignore[bad-assignment]
 
 
-class MLP[InD: SymVar, OutD: SymVar](nn.Module):
+class MLP[InD: IntVar, OutD: IntVar](nn.Module):
     """Multi-layer perceptron with shape-preserving layers built from Sequential(*list).
 
     Internal shapes are bare because Sequential(*list_var) erases module types.
     Bridge dims InD and OutD provide typed input/output interface.
     """
 
-    output_dim: Dim[OutD]
+    output_dim: Int[OutD]
 
     def __init__(
         self,
-        input_dim: Dim[InD],
+        input_dim: Int[InD],
         hidden_units: list[int],
-        output_dim: Dim[OutD],
+        output_dim: Int[OutD],
         activation: str = "ReLU",
         dropout: float = 0.0,
         batch_norm: bool = False,
@@ -88,7 +88,7 @@ class MLP[InD: SymVar, OutD: SymVar](nn.Module):
         self.layers = nn.ModuleList(layer_blocks)
         self.output_dim = output_dim
 
-    def forward[B: SymVar](self, x: Tensor[[B, InD]]) -> Tensor[[B, OutD]]:
+    def forward[B: IntVar](self, x: Tensor[[B, InD]]) -> Tensor[[B, OutD]]:
         for layer in self.layers:
             x = layer(x)
         # typed interface: Sequential(*list) + ModuleList[nn.Module] loop erases shapes
@@ -97,9 +97,12 @@ class MLP[InD: SymVar, OutD: SymVar](nn.Module):
         return result
 
 
-class InteractionAggregation[XD: SymVar, YD: SymVar, OutD: SymVar, NH: SymVar](
-    nn.Module
-):
+class InteractionAggregation[
+    XD: IntVar,
+    YD: IntVar,
+    OutD: IntVar,
+    NH: IntVar,
+](nn.Module):
     """Bilinear interaction aggregation for fusing two stream outputs.
 
     Computes: w_x(x) + w_y(y) + sum_h(head_x_h @ W_xy_h @ head_y_h)
@@ -107,10 +110,10 @@ class InteractionAggregation[XD: SymVar, YD: SymVar, OutD: SymVar, NH: SymVar](
 
     def __init__(
         self,
-        x_dim: Dim[XD],
-        y_dim: Dim[YD],
-        output_dim: Dim[OutD],
-        num_heads: Dim[NH],
+        x_dim: Int[XD],
+        y_dim: Int[YD],
+        output_dim: Int[OutD],
+        num_heads: Int[NH],
     ) -> None:
         super().__init__()
         self.num_heads = num_heads
@@ -129,7 +132,7 @@ class InteractionAggregation[XD: SymVar, YD: SymVar, OutD: SymVar, NH: SymVar](
         )
         self.bilinear_out = nn.Linear(num_heads, output_dim)
 
-    def forward[B: SymVar](
+    def forward[B: IntVar](
         self, x: Tensor[[B, XD]], y: Tensor[[B, YD]]
     ) -> Tensor[[B, OutD]]:
         out = self.w_x(x) + self.w_y(y)
@@ -163,12 +166,12 @@ class InteractionAggregation[XD: SymVar, YD: SymVar, OutD: SymVar, NH: SymVar](
 
 
 class FinalMLPLayer[
-    F: SymVar,
-    D: SymVar,
-    K: SymVar,
-    M1Out: SymVar,
-    M2Out: SymVar,
-    NH: SymVar,
+    F: IntVar,
+    D: IntVar,
+    K: IntVar,
+    M1Out: IntVar,
+    M2Out: IntVar,
+    NH: IntVar,
 ](nn.Module):
     """Single FinalMLP interaction layer: [B, F, D] -> [B, K, D].
 
@@ -179,10 +182,10 @@ class FinalMLPLayer[
 
     def __init__(
         self,
-        num_features: Dim[F],
-        emb_dim: Dim[D],
-        num_output_features: Dim[K],
-        output_emb_dim: Dim[D],
+        num_features: Int[F],
+        emb_dim: Int[D],
+        num_output_features: Int[K],
+        output_emb_dim: Int[D],
         config: FinalMLPConfig[M1Out, M2Out, NH, K],
     ) -> None:
         super().__init__()
@@ -218,7 +221,7 @@ class FinalMLPLayer[
         self.projector = nn.LazyLinear(num_output_features * output_emb_dim)
         self.layer_norm = nn.LayerNorm(output_emb_dim)
 
-    def forward[B: SymVar](self, input_embs: Tensor[[B, F, D]]) -> Tensor[[B, K, D]]:
+    def forward[B: IntVar](self, input_embs: Tensor[[B, F, D]]) -> Tensor[[B, K, D]]:
         flat = input_embs.flatten(start_dim=1)
         assert_type(flat, Tensor[[B, D * F]])
         mlp1_out = self.mlp1(flat)
@@ -237,12 +240,12 @@ class FinalMLPLayer[
 
 
 class FinalMLPBackbone[
-    F: SymVar,
-    D: SymVar,
-    M1Out: SymVar,
-    M2Out: SymVar,
-    NH: SymVar,
-    K: SymVar,
+    F: IntVar,
+    D: IntVar,
+    M1Out: IntVar,
+    M2Out: IntVar,
+    NH: IntVar,
+    K: IntVar,
 ](nn.Module):
     """Multi-layer FinalMLP backbone: stacks FinalMLPLayers for iterative interaction.
 
@@ -256,8 +259,8 @@ class FinalMLPBackbone[
 
     def __init__(
         self,
-        num_features: Dim[F],
-        emb_dim: Dim[D],
+        num_features: Int[F],
+        emb_dim: Int[D],
         config: FinalMLPConfig[M1Out, M2Out, NH, K] | None = None,
     ) -> None:
         super().__init__()
@@ -278,7 +281,7 @@ class FinalMLPBackbone[
     def output_dim(self) -> int:
         return self._output_dim
 
-    def forward[B: SymVar](self, input_embs: Tensor[[B, F, D]]) -> Tensor[[B, K * D]]:
+    def forward[B: IntVar](self, input_embs: Tensor[[B, F, D]]) -> Tensor[[B, K * D]]:
         x = self.first_layer(input_embs)
         assert_type(x, Tensor[[B, K, D]])
         for layer in self.rest_layers:

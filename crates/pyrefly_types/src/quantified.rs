@@ -23,6 +23,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
 use crate::class::ClassType;
+use crate::dimension::gradual_size;
 use crate::heap::TypeHeap;
 use crate::stdlib::Stdlib;
 use crate::type_var::PreInferenceVariance;
@@ -206,7 +207,7 @@ impl PartialOrd for Quantified {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum QuantifiedKind {
     TypeVar,
-    SymVar,
+    IntVar,
     ParamSpec,
     TypeVarTuple,
 }
@@ -214,7 +215,8 @@ pub enum QuantifiedKind {
 impl QuantifiedKind {
     fn empty_value(self) -> Type {
         match self {
-            QuantifiedKind::TypeVar | QuantifiedKind::SymVar => Type::any_implicit(),
+            QuantifiedKind::TypeVar => Type::any_implicit(),
+            QuantifiedKind::IntVar => gradual_size(),
             QuantifiedKind::ParamSpec => Type::Ellipsis,
             QuantifiedKind::TypeVarTuple => Type::any_tuple(),
         }
@@ -222,7 +224,7 @@ impl QuantifiedKind {
 
     fn class_type(self, stdlib: &Stdlib) -> &ClassType {
         match self {
-            QuantifiedKind::TypeVar | QuantifiedKind::SymVar => stdlib.type_var(),
+            QuantifiedKind::TypeVar | QuantifiedKind::IntVar => stdlib.type_var(),
             QuantifiedKind::ParamSpec => stdlib.param_spec(),
             QuantifiedKind::TypeVarTuple => stdlib.type_var_tuple(),
         }
@@ -396,7 +398,7 @@ impl Quantified {
     }
 
     pub fn is_type_var(&self) -> bool {
-        matches!(self.kind, QuantifiedKind::TypeVar | QuantifiedKind::SymVar)
+        matches!(self.kind, QuantifiedKind::TypeVar | QuantifiedKind::IntVar)
     }
 
     pub fn is_param_spec(&self) -> bool {

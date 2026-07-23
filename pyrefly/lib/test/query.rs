@@ -14,6 +14,10 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lined_buffer::PythonASTRange;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+use pyrefly_util::visit::Visit;
+use ruff_python_ast::Expr;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtFunctionDef;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
@@ -22,6 +26,7 @@ use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::query::Query;
 use crate::query::SerializedTypeTableEntry;
+use crate::query::TypeQueryExprVisitor;
 use crate::query::TypeShape;
 use crate::test::util::init_test;
 
@@ -188,6 +193,59 @@ fn test_simple_int_annotation() {
 ]"#;
 
     assert_eq!(expected, actual);
+}
+
+#[test]
+fn test_return_annotations_have_exact_range_type_traces() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"def f() -> list[int]: ...
+def g() -> int | str: ...
+def h() -> list[int | str]: ...
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let types = query.get_types_in_file(module_name, path).unwrap();
+    let type_at_range = |line, start_col, end_col| {
+        types
+            .iter()
+            .find_map(|(range, ty)| {
+                (range.start_line.get() == line
+                    && range.start_col == start_col
+                    && range.end_line.get() == line
+                    && range.end_col == end_col)
+                    .then_some(ty.as_str())
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected a type trace at {line}:{start_col}-{line}:{end_col}; got {types:?}"
+                )
+            })
+    };
+
+    assert_eq!(
+        "builtins.type[builtins.list[builtins.int]]",
+        type_at_range(1, 11, 20)
+    );
+    assert_eq!(
+        "builtins.type[builtins.int | builtins.str]",
+        type_at_range(2, 11, 20)
+    );
+    assert_eq!(
+        "builtins.type[builtins.list[builtins.int | builtins.str]]",
+        type_at_range(3, 11, 26),
+    );
+    assert_eq!(
+        "builtins.type[builtins.int | builtins.str]",
+        type_at_range(3, 16, 25),
+    );
 }
 
 #[test]
@@ -1181,5 +1239,170 @@ def foo(c: C, k: K) -> None:
     assert!(
         k_v_callees.is_empty(),
         "Expected no callees on the RHS `k.v`, got: {k_v_callees:?}"
+    );
+}
+
+#[test]
+fn test_filtered_type_shapes_skip_bodies_but_keep_signatures() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"
+def included(value: int) -> str:
+    local = value + 1
+    return str(local)
+
+def skipped(value: int) -> str:
+    local = value + 1
+    return str(local)
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let shapes = query
+        .get_type_shapes_in_file_filtered(module_name, path, Some(&walk_skip_skipped_function_body))
+        .unwrap();
+    let lines: Vec<_> = shapes
+        .iter()
+        .map(|(range, _)| range.start_line.get())
+        .collect();
+
+    assert!(lines.contains(&2), "included signature should be kept");
+    assert!(lines.contains(&3), "included body should be kept");
+    assert!(lines.contains(&6), "skipped signature should be kept");
+    assert!(
+        !lines.contains(&7) && !lines.contains(&8),
+        "skipped body should be filtered out, got lines {lines:?}",
+    );
+}
+
+fn walk_skip_skipped_function_body<'a>(
+    body: &'a [Stmt],
+    record_expr: &mut TypeQueryExprVisitor<'a>,
+) {
+    for stmt in body {
+        match stmt {
+            Stmt::FunctionDef(function_def) if function_def.name.as_str() == "skipped" => {
+                visit_function_signature(function_def, record_expr);
+            }
+            _ => visit_stmt(stmt, record_expr),
+        }
+    }
+}
+
+fn visit_expr<'a>(
+    expr: &'a Expr,
+    parent: Option<&'a Expr>,
+    record_expr: &mut TypeQueryExprVisitor<'a>,
+) {
+    record_expr(expr, parent);
+    expr.recurse(&mut |child| visit_expr(child, Some(expr), record_expr));
+}
+
+fn visit_exprs<'a, T: Visit<Expr>>(value: &'a T, record_expr: &mut TypeQueryExprVisitor<'a>) {
+    value.visit(&mut |expr| visit_expr(expr, None, record_expr));
+}
+
+fn visit_function_signature<'a>(
+    function_def: &'a StmtFunctionDef,
+    record_expr: &mut TypeQueryExprVisitor<'a>,
+) {
+    visit_exprs(&function_def.decorator_list, record_expr);
+    if let Some(type_params) = &function_def.type_params {
+        visit_exprs(type_params, record_expr);
+    }
+    visit_exprs(&function_def.parameters, record_expr);
+    if let Some(returns) = &function_def.returns {
+        visit_expr(returns, None, record_expr);
+    }
+}
+
+fn visit_stmt<'a>(stmt: &'a Stmt, record_expr: &mut TypeQueryExprVisitor<'a>) {
+    stmt.visit(&mut |expr| visit_expr(expr, None, record_expr));
+}
+
+fn walk_without_function_bodies<'a>(body: &'a [Stmt], record_expr: &mut TypeQueryExprVisitor<'a>) {
+    for stmt in body {
+        match stmt {
+            Stmt::ClassDef(class_def) => walk_without_function_bodies(&class_def.body, record_expr),
+            Stmt::FunctionDef(function_def) => visit_function_signature(function_def, record_expr),
+            _ => visit_stmt(stmt, record_expr),
+        }
+    }
+}
+
+#[test]
+fn test_filtered_type_shapes_keep_class_declarations() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"
+class Skipped:
+    field: int
+
+    def method(self, value: str) -> str:
+        local = value
+        return local
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let shapes = query
+        .get_type_shapes_in_file_filtered(module_name, path, Some(&walk_without_function_bodies))
+        .unwrap();
+    let lines: Vec<_> = shapes
+        .iter()
+        .map(|(range, _)| range.start_line.get())
+        .collect();
+
+    assert!(lines.contains(&3), "class field should be kept");
+    assert!(lines.contains(&5), "method signature should be kept");
+    assert!(
+        !lines.contains(&6) && !lines.contains(&7),
+        "method body should be filtered out, got lines {lines:?}",
+    );
+}
+
+#[test]
+fn test_filtered_type_shapes_nested_declarations_follow_parent_body() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"
+def skipped_parent(value: int) -> int:
+    def nested(inner: str) -> str:
+        return inner
+    return value
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let shapes = query
+        .get_type_shapes_in_file_filtered(module_name, path, Some(&walk_without_function_bodies))
+        .unwrap();
+    let lines: Vec<_> = shapes
+        .iter()
+        .map(|(range, _)| range.start_line.get())
+        .collect();
+
+    assert!(lines.contains(&2), "parent signature should be kept");
+    assert!(
+        !lines.contains(&3) && !lines.contains(&4) && !lines.contains(&5),
+        "nested declaration and parent body should follow skipped parent body, got lines {lines:?}",
     );
 }

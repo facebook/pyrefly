@@ -10,6 +10,8 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Function;
+use pyrefly_types::dimension::Int;
+use pyrefly_types::dimension::gradual_size;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;
@@ -25,11 +27,13 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::QuantifiedHandle;
+use crate::solver::solver::type_as_intvar_solution;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::literal::Lit;
 use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedIdentity;
@@ -463,12 +467,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                         ));
                     }
-                    QuantifiedKind::TypeVar | QuantifiedKind::SymVar => {
+                    QuantifiedKind::TypeVar => {
                         checked_targs.push(self.create_next_typevar_arg(
                             param,
                             targs_cursor.consume_for_typevar_arg(),
                             range,
                             validate_restriction,
+                            errors,
+                        ));
+                    }
+                    QuantifiedKind::IntVar => {
+                        checked_targs.push(self.create_next_intvar_arg(
+                            param,
+                            targs_cursor.consume_for_typevar_arg(),
+                            range,
                             errors,
                         ));
                     }
@@ -646,6 +658,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 } else {
                     let restriction = param.restriction();
+                    // Match the cheap `arg` literal shape before materializing the
+                    // parameter's upper bound, so only an integer literal argument
+                    // pays for computing the bound.
+                    let arg =
+                        if let Type::Literal(lit) = arg
+                            && let Lit::Int(i) = &lit.value
+                            && matches!(param.upper_bound(self.stdlib, self.heap), Type::Int(_))
+                        {
+                            Type::Int(i.as_i64().map(Int::Literal).unwrap_or_else(|| {
+                                Int::Symbolic(Box::new(Type::Literal(lit.clone())))
+                            }))
+                        } else {
+                            arg.clone()
+                        };
                     if validate_restriction && restriction.is_restricted() {
                         let tcc = &|| {
                             TypeCheckContext::of_kind(TypeCheckKind::TypeVarSpecialization(
@@ -670,9 +696,50 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             tcc,
                         );
                     }
-                    arg.clone()
+                    arg
                 }
             }
+        }
+    }
+
+    fn create_next_intvar_arg(
+        &self,
+        param: &Quantified,
+        arg: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match arg {
+            Type::Unpack(_) => {
+                // Shape argument parsing normally rejects this first; keep the
+                // targ-level recovery path for callers that bypass that parser.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadUnpacking,
+                    format!(
+                        "Unpacked argument cannot be used for type parameter {}",
+                        param.name()
+                    ),
+                );
+                gradual_size()
+            }
+            _ => type_as_intvar_solution(arg).unwrap_or_else(|| {
+                // Shape argument parsing normally rejects concrete source errors
+                // first; this is the class-targ recovery path for invalid values
+                // that reach specialization directly.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadSpecialization,
+                    format!(
+                        "Expected a valid Int expression for type parameter `{}`, got `{}`",
+                        param.name(),
+                        self.for_display(arg.clone())
+                    ),
+                );
+                gradual_size()
+            }),
         }
     }
 

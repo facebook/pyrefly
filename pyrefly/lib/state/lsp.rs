@@ -440,6 +440,9 @@ pub(crate) enum IdentifierContext {
         /// ex: For `from ... import x`, the name is `x`. For `from ... import x as y`, the name is `y`.
         name_after_import: Identifier,
     },
+    /// An identifier introduced as a local import alias.
+    /// ex: `y` in `import x as y` or `from x import z as y`.
+    AliasDefinition,
     /// An identifier appeared as the name of a function.
     /// ex: `x` in `def x(...): ...`
     FunctionDef { docstring_range: Option<TextRange> },
@@ -479,6 +482,7 @@ impl IdentifierContext {
                 }
                 | IdentifierContext::ImportedModule { .. }
                 | IdentifierContext::ImportedName { .. }
+                | IdentifierContext::AliasDefinition
                 | IdentifierContext::FunctionDef { .. }
                 | IdentifierContext::MethodDef { .. }
                 | IdentifierContext::ClassDef { .. }
@@ -569,6 +573,13 @@ impl IdentifierWithContext {
                 dots,
                 name_after_import,
             },
+        }
+    }
+
+    fn from_alias_definition(id: &Identifier) -> Self {
+        Self {
+            identifier: id.clone(),
+            context: IdentifierContext::AliasDefinition,
         }
     }
 
@@ -898,6 +909,19 @@ impl<'a> Transaction<'a> {
                 Some(AnyNodeRef::Alias(alias)),
                 Some(AnyNodeRef::StmtImport(_)),
                 _,
+            ) if alias
+                .asname
+                .as_ref()
+                .is_some_and(|asname| asname.range() == id.range()) =>
+            {
+                // `import ... as id`
+                Some(IdentifierWithContext::from_alias_definition(id))
+            }
+            (
+                Some(AnyNodeRef::Identifier(id)),
+                Some(AnyNodeRef::Alias(alias)),
+                Some(AnyNodeRef::StmtImport(_)),
+                _,
             ) => {
                 // `import id` or `import ... as id`
                 Some(IdentifierWithContext::from_stmt_import(id, alias))
@@ -913,6 +937,19 @@ impl<'a> Transaction<'a> {
                     id,
                     import_from,
                 ))
+            }
+            (
+                Some(AnyNodeRef::Identifier(id)),
+                Some(AnyNodeRef::Alias(alias)),
+                Some(AnyNodeRef::StmtImportFrom(import_from)),
+                _,
+            ) if alias
+                .asname
+                .as_ref()
+                .is_some_and(|asname| asname.range() == id.range()) =>
+            {
+                // `from ... import id as id`
+                Some(IdentifierWithContext::from_alias_definition(id))
             }
             (
                 Some(AnyNodeRef::Identifier(id)),
@@ -1128,6 +1165,9 @@ impl<'a> Transaction<'a> {
             IdentifierContext::ImportedName {
                 name_after_import, ..
             } => ResolutionKind::Key(Key::Definition(ShortIdentifier::new(name_after_import))),
+            IdentifierContext::AliasDefinition => {
+                ResolutionKind::Key(Key::Definition(ShortIdentifier::new(identifier)))
+            }
             IdentifierContext::FunctionDef { .. }
             | IdentifierContext::MethodDef { .. }
             | IdentifierContext::ClassDef { .. }
@@ -1480,7 +1520,7 @@ impl<'a> Transaction<'a> {
         module_name: ModuleName,
         name: Name,
         preference: FindPreference,
-    ) -> Option<(Handle, Export)> {
+    ) -> Option<(Handle, Name, Export)> {
         let mut m = module_name;
         let mut gas = RESOLVE_EXPORT_INITIAL_GAS;
         let mut name = name;
@@ -1507,6 +1547,7 @@ impl<'a> Transaction<'a> {
                             let docstring_range = self.get_module_docstring_range(&sub_handle);
                             return Some((
                                 sub_handle,
+                                name,
                                 Export {
                                     location: TextRange::default(),
                                     symbol_kind: Some(SymbolKind::Module),
@@ -1527,7 +1568,7 @@ impl<'a> Transaction<'a> {
                 };
             match location {
                 ExportLocation::ThisModule(export) => {
-                    return Some((hop_handle, export));
+                    return Some((hop_handle, name, export));
                 }
                 ExportLocation::OtherModule(module, aliased_name) => {
                     if let Some(aliased_name) = aliased_name {
@@ -1540,6 +1581,7 @@ impl<'a> Transaction<'a> {
                         let docstring_range = self.get_module_docstring_range(&sub_handle);
                         return Some((
                             sub_handle,
+                            name,
                             Export {
                                 location: TextRange::default(),
                                 symbol_kind: Some(SymbolKind::Module),
@@ -1611,7 +1653,7 @@ impl<'a> Transaction<'a> {
                 name,
                 original_name_range,
             ) => {
-                let Some((def_handle, export)) =
+                let Some((def_handle, _, export)) =
                     self.resolve_named_import(handle, module_name, name.clone(), preference)
                 else {
                     let non_module_result = self.resolve_intermediate_non_python_module_definition(
@@ -1720,7 +1762,7 @@ impl<'a> Transaction<'a> {
                 Some((text_range_with_module_info, docstring_range))
             }
             AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
-                let (handle, export) =
+                let (handle, _, export) =
                     self.resolve_named_import(handle, module_name, attr_name.clone(), preference)?;
                 let module_info = self.get_module_info(&handle)?;
                 Some((
@@ -2318,7 +2360,7 @@ impl<'a> Transaction<'a> {
         let exports = self.get_exports_data(handle);
         let (_entry_range, name) = exports.dunder_all_name_at(position)?;
 
-        if let Some((definition_handle, export)) =
+        if let Some((definition_handle, _, export)) =
             self.resolve_named_import(handle, module_info.name(), name.clone(), preference)
         {
             let definition_module = self.get_module_info(&definition_handle)?;
@@ -2563,6 +2605,16 @@ impl<'a> Transaction<'a> {
                     }),
                 }
             }
+            Some(IdentifierWithContext {
+                identifier,
+                context: IdentifierContext::AliasDefinition,
+            }) => match self.find_definition_for_name_def(handle, &identifier, preference)? {
+                Some(item) => Ok(vec1![item]),
+                None => Err(EmptyResponseReason::DefinitionNotFound {
+                    name: identifier.id.to_string(),
+                    context: DefinitionContext::NameDef,
+                }),
+            },
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::MethodDef { docstring_range },
@@ -2951,9 +3003,11 @@ impl<'a> Transaction<'a> {
                 }
             }
             match error.error_kind() {
-                ErrorKind::UnknownName if error_range.contains_range(range) => {
+                ErrorKind::UnknownName | ErrorKind::UnimportedDirective
+                    if error_range.contains_range(range) =>
+                {
                     let unknown_name = module_info.code_at(error_range);
-                    for (handle_to_import_from, export) in self
+                    for (handle_to_import_from, import_name, export) in self
                         .search_exports_exact(unknown_name, custom_thread_pool)
                         .unwrap_or_default()
                     {
@@ -2965,6 +3019,7 @@ impl<'a> Transaction<'a> {
                             &mut import_actions,
                             unknown_name,
                             handle_to_import_from,
+                            import_name,
                             export,
                         );
                     }
@@ -3130,7 +3185,7 @@ impl<'a> Transaction<'a> {
             .search_exports_exact("override", custom_thread_pool)
             .unwrap_or_default()
             .into_iter()
-            .map(|(handle_to_import_from, _)| handle_to_import_from)
+            .map(|(handle_to_import_from, _, _)| handle_to_import_from)
             .min_by_key(|candidate| usize::from(candidate.module().as_str() != "typing"))?;
         let edit = insert_import_edit(
             ast,
@@ -3212,6 +3267,7 @@ impl<'a> Transaction<'a> {
         import_actions: &mut Vec<QuickfixAction>,
         unknown_name: &str,
         handle_to_import_from: Handle,
+        import_name: Name,
         export: Export,
     ) {
         let import_edit = insert_import_edit(
@@ -3219,7 +3275,7 @@ impl<'a> Transaction<'a> {
             self.config_finder(),
             handle.dupe(),
             handle_to_import_from.dupe(),
-            unknown_name,
+            import_name.as_str(),
             import_format,
         );
         let range = import_edit.range;
@@ -3591,7 +3647,14 @@ impl<'a> Transaction<'a> {
         let identifier_context = self.identifier_at(handle, position);
 
         let definitions = self
-            .find_definition(handle, position, FindPreference::default())
+            .find_definition(
+                handle,
+                position,
+                FindPreference {
+                    resolve_call_dunders: false,
+                    ..Default::default()
+                },
+            )
             .map(Vec1::into_vec)
             .unwrap_or_default();
 
@@ -3665,7 +3728,7 @@ impl<'a> Transaction<'a> {
             .iter()
             .chain(&index.renamed_imports)
         {
-            if let Some((imported_handle, export)) = self.resolve_named_import(
+            if let Some((imported_handle, _, export)) = self.resolve_named_import(
                 handle,
                 *imported_module_name,
                 imported_name.clone(),
@@ -4126,9 +4189,11 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         export_name: &Name,
         location: &ExportLocation,
-    ) -> Option<(Handle, Export)> {
+    ) -> Option<(Handle, Name, Export)> {
         match location {
-            ExportLocation::ThisModule(export) => Some((handle.dupe(), export.clone())),
+            ExportLocation::ThisModule(export) => {
+                Some((handle.dupe(), export_name.clone(), export.clone()))
+            }
             ExportLocation::OtherModule(module, original_name) => {
                 let target_name = original_name.clone().unwrap_or_else(|| export_name.clone());
                 self.resolve_named_import(handle, *module, target_name, FindPreference::default())
@@ -4194,17 +4259,25 @@ impl<'a> Transaction<'a> {
         &self,
         name: &str,
         custom_thread_pool: Option<&ThreadPool>,
-    ) -> Result<Vec<(Handle, Export)>, Cancelled> {
+    ) -> Result<Vec<(Handle, Name, Export)>, Cancelled> {
         self.search_exports(
             |handle, exports_data, exports| {
                 let name = Name::new(name);
                 match exports.get(&name) {
                     Some(location) => {
-                        if let Some((canonical_handle, export)) =
+                        if let Some((canonical_handle, canonical_name, export)) =
                             self.export_from_location(handle, &name, location)
                         {
-                            let mut results = vec![(canonical_handle.dupe(), export.clone())];
-                            if canonical_handle != *handle
+                            // A renamed export is importable by that name from the module
+                            // exposing the alias, not from the module defining the original.
+                            let import_from = if canonical_name == name {
+                                canonical_handle.dupe()
+                            } else {
+                                handle.dupe()
+                            };
+                            let mut results =
+                                vec![(import_from.dupe(), name.clone(), export.clone())];
+                            if import_from != *handle
                                 && (Self::should_include_reexport(handle, &canonical_handle, &name)
                                     || (exports_data.is_explicit_reexport(&name)
                                         && Self::allows_explicit_reexport(handle)))
@@ -4215,7 +4288,7 @@ impl<'a> Transaction<'a> {
                                 // the canonical module's file, not this module's file.
                                 let mut reexport = export;
                                 reexport.location = TextRange::default();
-                                results.push((handle.dupe(), reexport));
+                                results.push((handle.dupe(), name.clone(), reexport));
                             }
                             results
                         } else {
@@ -4233,24 +4306,29 @@ impl<'a> Transaction<'a> {
         &self,
         pattern: &str,
         custom_thread_pool: Option<&ThreadPool>,
-    ) -> Result<Vec<(Handle, String, Export)>, Cancelled> {
+    ) -> Result<Vec<(Handle, Handle, Name, Export)>, Cancelled> {
         let mut res = self.search_exports(
             |handle, exports_data, exports| {
                 let matcher = SkimMatcherV2::default().smart_case();
                 let mut results = Vec::new();
                 for (name, location) in exports.iter() {
-                    let name_str = name.as_str();
-                    if let Some(score) = matcher.fuzzy_match(name_str, pattern)
-                        && let Some((canonical_handle, export)) =
+                    if let Some(score) = matcher.fuzzy_match(name.as_str(), pattern)
+                        && let Some((canonical_handle, canonical_name, export)) =
                             self.export_from_location(handle, name, location)
                     {
+                        let import_from = if canonical_name == *name {
+                            canonical_handle.dupe()
+                        } else {
+                            handle.dupe()
+                        };
                         results.push((
                             score,
                             canonical_handle.dupe(),
-                            name_str.to_owned(),
+                            import_from.dupe(),
+                            name.clone(),
                             export.clone(),
                         ));
-                        if canonical_handle != *handle
+                        if import_from != *handle
                             && (Self::should_include_reexport(handle, &canonical_handle, name)
                                 || (exports_data.is_explicit_reexport(name)
                                     && Self::allows_explicit_reexport(handle)))
@@ -4261,7 +4339,13 @@ impl<'a> Transaction<'a> {
                             // the canonical module's file, not this module's file.
                             let mut reexport = export;
                             reexport.location = TextRange::default();
-                            results.push((score, handle.dupe(), name_str.to_owned(), reexport));
+                            results.push((
+                                score,
+                                handle.dupe(),
+                                handle.dupe(),
+                                name.clone(),
+                                reexport,
+                            ));
                         }
                     }
                 }
@@ -4269,8 +4353,10 @@ impl<'a> Transaction<'a> {
             },
             custom_thread_pool,
         )?;
-        res.sort_by_key(|(score, _, _, _)| Reverse(*score));
-        Ok(res.into_map(|(_, handle, name, export)| (handle, name, export)))
+        res.sort_by_key(|(score, _, _, _, _)| Reverse(*score));
+        Ok(res.into_map(|(_, definition, import_from, name, export)| {
+            (definition, import_from, name, export)
+        }))
     }
 }
 

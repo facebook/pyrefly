@@ -118,9 +118,9 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 6);
-assert_words!(BindingExpect, 16);
+assert_words!(BindingExpect, 15);
 assert_words!(BindingTypeAlias, 7);
-assert_words!(BindingAnnotation, 15);
+assert_words!(BindingAnnotation, 14);
 assert_words!(BindingClass, 11);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
@@ -135,7 +135,7 @@ assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 13);
+assert_words!(BindingDecorator, 12);
 assert_bytes!(BindingDecoratedFunction, 20);
 assert_words!(BindingUndecoratedFunction, 20);
 
@@ -862,11 +862,14 @@ impl Ranged for NarrowUseLocation {
     }
 }
 
-/// Distinguishes between match statements and if/elif chains for exhaustiveness checking.
+/// Distinguishes between different kinds of exhaustiveness checking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExhaustivenessKind {
     Match,
     IfElif,
+    /// Coverage of a class pattern's sub-patterns over their matched slot types
+    /// (used to decide whether a refutable class pattern still narrows its class away).
+    ClassPatternCoverage,
 }
 
 /// Keys that refer to a `Type`.
@@ -1900,6 +1903,7 @@ pub struct ClassBinding {
     pub def: ClassDefData,
     pub def_index: ClassDefIndex,
     pub parent: NestingContext,
+    pub is_protocol: bool,
     /// Were we able to determine, using only syntactic analysis at bindings time,
     /// that there can be no legacy tparams? If no, we need a `BindingTParams`, if yes
     /// we can directly compute the `TParams` from the class def.
@@ -2249,7 +2253,7 @@ pub enum Binding {
         TextRange,
         Option<Box<MultiTargetReceiver>>,
     ),
-    /// TypeVar or SymVar
+    /// TypeVar or IntVar
     TypeVar(
         Box<(
             Option<Idx<KeyAnnotation>>,

@@ -22,6 +22,7 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::dimension::Int;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
@@ -1126,12 +1127,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                     .with_annotation(annot_range, "declared type".to_owned())
                 };
-                // Integer literal defaults are valid for `Dim[...]` parameters: at
+                // Integer literal defaults are valid for symbolic integer parameters: at
                 // call time the dimension variable is bound from that default value.
                 let skip_check = matches!(
                     (&param_ty, default),
                     (
-                        Type::Dim(inner),
+                        Type::Int(Int::Symbolic(inner)),
                         Some(Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral {
                             value: ruff_python_ast::Number::Int(i),
                             ..

@@ -56,11 +56,9 @@ use crate::alt::answers::OverloadedCallee;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers::TraceSideEffects;
-use crate::alt::class::class_field::ClassField;
 use crate::alt::traits::Solve;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
-use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
@@ -98,7 +96,7 @@ use crate::types::types::Var;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum JaxtypingQuantifiedKey {
-    Dim(Name),
+    Dim(Name, QuantifiedKind),
     ShapeCarrier(Name, QuantifiedKind),
 }
 
@@ -1810,7 +1808,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Get or create a Quantified type for a jaxtyping dimension name.
-    /// Cached per module: the same name always returns the same Quantified.
+    /// Cached per module on the `(name, kind)` pair: the same name reused with a
+    /// different `QuantifiedKind` intentionally yields a distinct Quantified.
     pub fn get_or_create_jaxtyping_dim(&self, name: Name, kind: QuantifiedKind) -> Quantified {
         let mut dims = self.jaxtyping_dims.borrow_mut();
         // Jaxtyping dims have no real source location. Use the current map size as a
@@ -1818,7 +1817,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // (default) anchor. Shared with `get_or_create_jaxtyping_shape_carrier`, which
         // uses the same map, so ordinals stay unique across both.
         let ordinal = dims.len() as u32;
-        dims.entry(JaxtypingQuantifiedKey::Dim(name.clone()))
+        dims.entry(JaxtypingQuantifiedKey::Dim(name.clone(), kind))
             .or_insert_with(|| {
                 let identity = QuantifiedIdentity::new(
                     self.module().name(),
@@ -1826,7 +1825,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     QuantifiedOrigin::SyntheticCallableResidual,
                 );
                 match kind {
-                    QuantifiedKind::TypeVar | QuantifiedKind::SymVar => Quantified::new(
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
                         identity,
                         name,
                         kind,
@@ -1845,10 +1844,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .clone()
     }
 
-    /// Get or create a tuple-carrier TypeVar or SymVar for a jaxtyping variadic shape name.
+    /// Get or create a tuple-carrier TypeVar or IntVar for a jaxtyping variadic shape name.
     ///
     /// A variadic jaxtyping shape (`*name`) whose enclosing shaped-array class uses a
-    /// `TypeVar`/`SymVar` (SizeTuple) shape parameter needs a carrier bounded by
+    /// `TypeVar`/`IntVar` (IntTuple) shape parameter needs a carrier bounded by
     /// `tuple[int, ...]`, rather than the `TypeVarTuple` produced for `*Shape` classes.
     pub fn get_or_create_jaxtyping_shape_carrier(
         &self,
@@ -1866,7 +1865,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     QuantifiedOrigin::SyntheticCallableResidual,
                 );
                 match kind {
-                    QuantifiedKind::TypeVar | QuantifiedKind::SymVar => Quantified::new(
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
                         identity,
                         name,
                         kind,
@@ -1877,7 +1876,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         PreInferenceVariance::Invariant,
                     ),
                     QuantifiedKind::TypeVarTuple | QuantifiedKind::ParamSpec => {
-                        unreachable!("jaxtyping shape carriers must be TypeVar or SymVar")
+                        unreachable!("jaxtyping shape carriers must be TypeVar or IntVar")
                     }
                 }
             })
@@ -2825,29 +2824,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             Vec::new()
         };
-
-        if exceeded_max_iterations {
-            // An *inferred* instance attribute whose type never converges is
-            // degenerately recursive (each iteration nests another container layer,
-            // e.g. `list[list[...]]`). Commit `Any` for those fields instead of the
-            // unrolled blowup, so it does not produce spurious downstream errors.
-            // Restricted to `DefinedInMethod` fields: annotated members and class-body
-            // type aliases (e.g. `type X = int | list[C.X]`) are intentional recursion
-            // whose errors must be preserved, not collapsed to `Any`.
-            let any_field: Arc<dyn Any + Send + Sync> =
-                Arc::new(Arc::new(ClassField::recursive(self.heap)));
-            for (calc_id, state) in scc.node_state.iter_mut() {
-                if let AnyIdx::KeyClassField(idx) = &calc_id.1
-                    && matches!(
-                        calc_id.0.get(*idx).definition,
-                        ClassFieldDefinition::DefinedInMethod { .. }
-                    )
-                    && let SccNodeState::Done { answer, .. } = state
-                {
-                    *answer = any_field.dupe();
-                }
-            }
-        }
 
         let did_commit = self.commit_final_answers(scc);
         if did_commit {

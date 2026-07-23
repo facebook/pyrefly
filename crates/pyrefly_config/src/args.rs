@@ -92,7 +92,7 @@ pub struct EnvironmentArgs {
 
     /// The platform any `sys.platform` checks should evaluate against.
     #[arg(long)]
-    pub(crate) python_platform: Option<PythonPlatform>,
+    pub(crate) python_platform: Option<Vec<PythonPlatform>>,
 
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
@@ -160,7 +160,8 @@ impl EnvironmentArgs {
             config.synthesized_preset_reason = Some(SynthesizedPresetReason::UserOverride);
         }
         if let Some(x) = &self.python_platform {
-            config.python_environment.python_platform = Some(x.clone());
+            config.python_environment.python_platform =
+                Some(PythonPlatform::new_platforms(x.iter().cloned()));
         }
         if let Some(x) = &self.python_version {
             config.python_environment.python_version = Some(*x);
@@ -556,5 +557,49 @@ impl ConfigOverrideArgs {
         if self.infer_return_types.is_none() {
             self.infer_return_types = Some(value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_python_platform_flags_merge() {
+        let args = ConfigOverrideArgs::parse_from([
+            "pyrefly",
+            "--python-platform",
+            "linux",
+            "--python-platform",
+            "win32",
+        ]);
+        args.validate().unwrap();
+        let (config, errors) = args.override_config(ConfigFile::default());
+        assert!(errors.is_empty());
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::new_many(vec![
+                "linux".to_owned(),
+                "win32".to_owned()
+            ]))
+        );
+    }
+
+    #[test]
+    fn repeated_python_platform_flags_all_wins() {
+        let args = ConfigOverrideArgs::parse_from([
+            "pyrefly",
+            "--python-platform",
+            "all",
+            "--python-platform",
+            "linux",
+        ]);
+        args.validate().unwrap();
+        let (config, errors) = args.override_config(ConfigFile::default());
+        assert!(errors.is_empty());
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::All)
+        );
     }
 }

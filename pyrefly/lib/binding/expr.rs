@@ -1117,7 +1117,9 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut x.value, usage);
                 let in_async_def = self.scopes.is_in_async_def();
                 let in_generator_element = self.in_generator_await_context();
-                if !in_async_def && !in_generator_element && !self.module_info.path().is_notebook()
+                if !in_async_def
+                    && !in_generator_element
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),

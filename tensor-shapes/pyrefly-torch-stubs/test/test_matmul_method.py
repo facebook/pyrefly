@@ -8,13 +8,13 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_matmul_method[N: SymVar, M: SymVar, K: SymVar](
+def test_matmul_method[N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[N, M]], b: Tensor[[M, K]]
 ):
     """Test .matmul() method"""

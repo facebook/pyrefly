@@ -469,3 +469,92 @@ testcase!(
     TestEnv::new_with_version(PythonVersion::new(3, 7, 0)),
     "",
 );
+
+// https://github.com/facebook/pyrefly/issues/3756: a module-level `TYPE_CHECKING` constant is
+// treated as `True` by type checkers and `False` at runtime, so it must have type `bool`.
+testcase!(
+    test_type_checking_constant_bad_annotation,
+    r#"
+TYPE_CHECKING: str = ""  # E: TYPE_CHECKING
+"#,
+);
+
+testcase!(
+    test_type_checking_constant_bad_value,
+    r#"
+TYPE_CHECKING = 1  # E: `TYPE_CHECKING` must have type `bool`
+"#,
+);
+
+// The canonical `from typing import TYPE_CHECKING` is an import, not an assignment, so it is fine.
+testcase!(
+    test_type_checking_constant_import_ok,
+    r#"
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    x: int = 1
+"#,
+);
+
+testcase!(
+    test_type_checking_constant_define_ok,
+    r#"
+TYPE_CHECKING = False
+TYPE_CHECKING_WITH_PYREFLY: bool = False
+"#,
+);
+
+// A local variable that merely shares the name is not the module-level constant, so don't flag it.
+testcase!(
+    test_type_checking_constant_local_ok,
+    r#"
+def f() -> None:
+    TYPE_CHECKING: str = ""
+"#,
+);
+
+// We check the type is `bool`; we do not additionally require the value to be `False`, so a
+// `True` value (a runtime bug) is currently accepted.
+testcase!(
+    bug = "TYPE_CHECKING = True is a runtime bug but is not flagged (we only check the type)",
+    test_type_checking_constant_true_not_flagged,
+    r#"
+TYPE_CHECKING = True
+"#,
+);
+
+// A class attribute that merely shares the name is not the module-level sentinel.
+testcase!(
+    test_type_checking_constant_class_attr_ok,
+    r#"
+class C:
+    TYPE_CHECKING: str = ""
+"#,
+);
+
+// `TYPE_CHECKING_WITH_PYREFLY` is also recognized, so a bad definition is flagged too.
+testcase!(
+    test_type_checking_with_pyrefly_bad,
+    r#"
+TYPE_CHECKING_WITH_PYREFLY = 1  # E: must have type `bool`
+"#,
+);
+
+// Annotation-only declarations route through a different binding, so we don't check them yet.
+testcase!(
+    bug = "annotation-only `TYPE_CHECKING: str` (no value) is not yet flagged",
+    test_type_checking_constant_annotation_only_not_flagged,
+    r#"
+TYPE_CHECKING: str
+"#,
+);
+
+// Stub (`.pyi`) files have no runtime and conventionally initialize typing constants to placeholder
+// values (e.g. `TYPE_CHECKING = 1` in mypy's test fixtures), so the check is skipped there.
+testcase!(
+    test_type_checking_constant_stub_ok,
+    TestEnv::one_with_path("foo", "foo.pyi", "TYPE_CHECKING = 1"),
+    r#"
+import foo
+"#,
+);

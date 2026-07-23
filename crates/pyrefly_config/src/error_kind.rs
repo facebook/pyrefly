@@ -149,6 +149,8 @@ pub enum ErrorKind {
     /// An error caused by unpacking.
     /// e.g. attempting to unpack an iterable into the wrong number of variables.
     BadUnpacking,
+    /// A Polars DataFrame column literal has an element that does not fit the column's first-element dtype.
+    ColumnTypeMismatch,
     /// A symbol has no type coverage. Emitted only by `pyrefly coverage check`.
     CoverageMissing,
     /// A symbol has partial type coverage. Emitted only by `pyrefly coverage check`.
@@ -168,8 +170,7 @@ pub enum ErrorKind {
     /// code (suppressing `implicit-any` suppresses every sub-kind).
     ImplicitAny,
     /// An implicit `Any` introduced when a class attribute without an explicit
-    /// annotation is defined by assignment to `self.x = None`, `self.x = ()`,
-    /// or a value with an unknown type.
+    /// annotation is defined by assignment to `self.x = None` or `self.x = ()`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyAttribute,
     /// An implicit `Any` introduced when an empty container (`[]`, `{}`) cannot
@@ -190,10 +191,6 @@ pub enum ErrorKind {
     /// to `Any`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyTypeArgument,
-    /// An implicit `Any` introduced when a variable is assigned a value of
-    /// unknown type without an explicit annotation.
-    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
-    ImplicitAnyVariable,
     /// Usage of a module that was not actually imported, but does exist.
     ImplicitImport,
     /// An attribute was implicitly defined by assignment to `self` in a method that we
@@ -250,6 +247,10 @@ pub enum ErrorKind {
     InvalidSyntax,
     /// An error related to type alias usage or definition.
     InvalidTypeAlias,
+    /// A user-defined `TYPE_CHECKING` constant that is not typed as `bool`. Type checkers treat
+    /// `TYPE_CHECKING` as `True` while the runtime sees `False`, so it must be a `bool`
+    /// (conventionally `TYPE_CHECKING = False`).
+    InvalidTypeCheckingConstant,
     /// An error caused by incorrect usage or definition of a TypeVar.
     InvalidTypeVar,
     /// An error caused by incorrect usage or definition of a TypeVarTuple.
@@ -366,8 +367,14 @@ pub enum ErrorKind {
     UnexpectedPositionalArgument,
     /// Attempting to use a type checker directive without importing it from `typing`.
     UnimportedDirective,
+    /// An unannotated attribute assigned a value with unknown type.
+    UnknownAttributeType,
+    /// Accessing a DataFrame column that does not exist in the inferred schema.
+    UnknownColumn,
     /// Attempting to use a name that is not defined.
     UnknownName,
+    /// A variable assigned a value with unknown type without an explicit annotation.
+    UnknownVariableType,
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
     /// or between literals whose comparison result is statically known.
     UnnecessaryComparison,
@@ -397,6 +404,8 @@ pub enum ErrorKind {
     UntypedFunctionDecorator,
     /// Import is missing an expected stubs package
     UntypedImport,
+    /// Result of a call expression is not used.
+    UnusedCallResult,
     /// Result of async function call is never used or awaited
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
@@ -462,9 +471,9 @@ impl ErrorKind {
             }
             ErrorKind::ImplicitAnyAttribute
             | ErrorKind::ImplicitAnyEmptyContainer
+            | ErrorKind::ImplicitAnyLambda
             | ErrorKind::ImplicitAnyParameter
-            | ErrorKind::ImplicitAnyTypeArgument
-            | ErrorKind::ImplicitAnyVariable => Some(ErrorKind::ImplicitAny),
+            | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
             ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
                 Some(ErrorKind::NoAnyReturn)
             }
@@ -532,7 +541,8 @@ impl ErrorKind {
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
             ErrorKind::ImplicitAnyLambda => Severity::Ignore,
-            ErrorKind::ImplicitAnyVariable => Severity::Ignore,
+            ErrorKind::UnknownAttributeType => Severity::Ignore,
+            ErrorKind::UnknownVariableType => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
@@ -541,6 +551,7 @@ impl ErrorKind {
             ErrorKind::UntypedClassDecorator => Severity::Ignore,
             ErrorKind::UntypedFunctionDecorator => Severity::Ignore,
             ErrorKind::UntypedImport => Severity::Warn,
+            ErrorKind::UnusedCallResult => Severity::Ignore,
             ErrorKind::UnusedIgnore => Severity::Ignore,
             ErrorKind::UnusedTypeIgnore => Severity::Ignore,
             ErrorKind::VarianceMismatch => Severity::Warn,
@@ -607,6 +618,36 @@ mod tests {
     fn test_error_kind_name() {
         assert_eq!(ErrorKind::Unsupported.to_name(), "unsupported");
         assert_eq!(ErrorKind::ParseError.to_name(), "parse-error");
+    }
+
+    #[test]
+    fn test_unknown_column_kind_exists() {
+        assert_eq!(ErrorKind::UnknownColumn.to_name(), "unknown-column");
+        assert_eq!(
+            "unknown-column".parse::<ErrorKind>(),
+            Ok(ErrorKind::UnknownColumn)
+        );
+    }
+
+    #[test]
+    fn test_column_type_mismatch_kind_exists() {
+        assert_eq!(
+            ErrorKind::ColumnTypeMismatch.to_name(),
+            "column-type-mismatch"
+        );
+        assert_eq!(
+            "column-type-mismatch".parse::<ErrorKind>(),
+            Ok(ErrorKind::ColumnTypeMismatch)
+        );
+        assert_eq!(
+            ErrorKind::ColumnTypeMismatch.default_severity(),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_unknown_column_default_severity() {
+        assert_eq!(ErrorKind::UnknownColumn.default_severity(), Severity::Error);
     }
 
     #[test]

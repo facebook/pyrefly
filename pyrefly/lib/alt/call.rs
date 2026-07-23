@@ -8,8 +8,10 @@
 use std::iter;
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_types::data_frame::DataFrameKind;
+use pyrefly_types::data_frame::DataFrameSchema;
+use pyrefly_types::data_frame::SchemaCompleteness;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::quantified::Quantified;
@@ -43,6 +45,8 @@ use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::class::dataclass::ReplaceKind;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::nn_module_specials::is_nn_sequential;
+use crate::alt::polars_specials::is_pandas_dataframe;
+use crate::alt::polars_specials::is_polars_dataframe;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
 use crate::binding::binding::Key;
@@ -67,6 +71,7 @@ use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethod;
+use crate::types::types::Forallable;
 use crate::types::types::OverloadType;
 use crate::types::types::Type;
 
@@ -134,18 +139,26 @@ pub enum CallTargetLookup {
     Ok(Box<CallTarget>),
     /// When a type is not callable, still collect what can be called in callable "subcases". This is
     /// for example used for a union type that is not callable, but some of its "subcases" are callable.
-    Error(Vec<CallTarget>),
+    Error(Type, Vec<CallTarget>),
     /// `__call__` resolves back to the same class, creating infinite recursion
     /// through descriptor resolution. This is distinct from `Error` because
     /// the type *has* a `__call__`, it just can't be resolved to a concrete target.
-    CircularCall,
+    CircularCall(Type),
 }
 
 impl CallTargetLookup {
     pub fn is_error(&self) -> bool {
         match self {
             CallTargetLookup::Ok(..) => false,
-            CallTargetLookup::Error(..) | CallTargetLookup::CircularCall => true,
+            CallTargetLookup::Error(..) | CallTargetLookup::CircularCall(..) => true,
+        }
+    }
+
+    fn with_error_type(self, ty: impl FnOnce(Type) -> Type) -> Self {
+        match self {
+            Self::Error(rejected, targets) => Self::Error(ty(rejected), targets),
+            Self::CircularCall(rejected) => Self::CircularCall(ty(rejected)),
+            ok => ok,
         }
     }
 }
@@ -265,7 +278,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if bound_method.obj.contains_overload_callable_residual() {
                     let mut is_subset = |got: &Type, want: &Type| self.is_subset_eq(got, want);
                     if let Some(bound) = self.bind_boundmethod(&bound_method, &mut is_subset) {
-                        return self.as_call_target_impl(bound, quantified);
+                        return self
+                            .as_call_target_impl(bound, quantified)
+                            .with_error_type(|_| Type::BoundMethod(Box::new(bound_method)));
                     }
                 }
                 let BoundMethod { obj, func } = bound_method;
@@ -286,7 +301,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             obj, overloads, meta,
                         )))
                     }
-                    _ => CallTargetLookup::Error(vec![]),
+                    _ => unreachable!("bound method functions are always callable"),
                 }
             }
             Type::ClassDef(cls) => match self.instantiate(&cls) {
@@ -317,6 +332,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let Type::Union(u) = *f else {
                     unreachable!("guarded by matches! above")
                 };
+                let original = Type::Type(Box::new(Type::Union(u.clone())));
                 let union_of_types = self.heap.mk_union(
                     u.members
                         .into_iter()
@@ -324,6 +340,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .collect(),
                 );
                 self.as_call_target_impl(union_of_types, quantified)
+                    .with_error_type(|_| original)
             }
             Type::Type(f) if matches!(&*f, Type::SelfType(_)) => {
                 let Type::SelfType(cls) = *f else {
@@ -390,34 +407,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 CallTargetLookup::Ok(Box::new(CallTarget::Any(style)))
             }
             Type::Forall(forall) => {
-                let mut target = self.as_call_target_impl(forall.body.as_type(), quantified);
-                if let CallTargetLookup::Ok(f) = &mut target {
-                    match &mut **f {
-                        CallTarget::Callable(TargetWithTParams(x, _))
-                        | CallTarget::Function(TargetWithTParams(x, _)) => {
-                            *x = Some(forall.tparams);
+                let tparams = forall.tparams;
+                match self.as_call_target_impl(forall.body.as_type(), quantified) {
+                    CallTargetLookup::Ok(mut target) => {
+                        match &mut *target {
+                            CallTarget::Callable(TargetWithTParams(x, _))
+                            | CallTarget::Function(TargetWithTParams(x, _)) => {
+                                *x = Some(tparams);
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        CallTargetLookup::Ok(target)
                     }
+                    error => error.with_error_type(|ty| {
+                        let body = match ty {
+                            Type::Callable(callable) => Forallable::Callable(*callable),
+                            Type::Function(function) => Forallable::Function(*function),
+                            Type::TypeAlias(type_alias) => Forallable::TypeAlias(*type_alias),
+                            _ => unreachable!("a Forall body must remain forallable"),
+                        };
+                        body.forall(tparams)
+                    }),
                 }
-                target
             }
-            Type::Var(v) if let Some(_guard) = self.recurse(v) => {
-                self.as_call_target_impl(self.solver().force_var(v), quantified)
-            }
+            Type::Var(v) if let Some(_guard) = self.recurse(v) => self
+                .as_call_target_impl(self.solver().force_var(v), quantified)
+                .with_error_type(|_| Type::Var(v)),
             Type::Union(f) => {
+                let original = Type::Union(f.clone());
                 let xs_length = f.members.len();
                 let targets = f
                     .members
                     .into_iter()
                     .filter_map(|x| match self.as_call_target_impl(x, quantified.clone()) {
                         CallTargetLookup::Ok(target) => Some(*target),
-                        CallTargetLookup::Error(..) | CallTargetLookup::CircularCall => None,
+                        CallTargetLookup::Error(..) | CallTargetLookup::CircularCall(..) => None,
                     })
                     .collect::<Vec<_>>();
                 let targets_length = targets.len();
                 if xs_length > targets_length {
-                    CallTargetLookup::Error(targets)
+                    CallTargetLookup::Error(original, targets)
                 } else if targets_length == 1 {
                     CallTargetLookup::Ok(Box::new(targets.into_iter().next().unwrap()))
                 } else {
@@ -426,8 +455,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Intersect(intersect) => {
                 // TODO(rechen): implement calling `A & B`
-                let (_, fallback) = *intersect;
+                let (types, fallback) = *intersect;
                 self.as_call_target_impl(fallback, quantified)
+                    .with_error_type(|fallback| Type::Intersect(Box::new((types, fallback))))
             }
             Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
             Type::TypeAlias(ta) => {
@@ -435,9 +465,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match body {
                     // This comes from an expression like `int | str`, which is not callable.
                     Type::Type(f) if matches!(&*f, Type::Union(_)) => {
-                        CallTargetLookup::Error(vec![])
+                        CallTargetLookup::Error(Type::TypeAlias(ta), vec![])
                     }
-                    _ => self.as_call_target_impl(body, quantified),
+                    _ => self
+                        .as_call_target_impl(body, quantified)
+                        .with_error_type(|_| Type::TypeAlias(ta)),
                 }
             }
             Type::ClassType(cls) => {
@@ -451,9 +483,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
                             || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
                         if is_self_recursive {
-                            CallTargetLookup::CircularCall
+                            CallTargetLookup::CircularCall(Type::ClassType(cls))
                         } else {
                             self.as_call_target_impl(ty, quantified)
+                                .with_error_type(|_| Type::ClassType(cls))
                         }
                     }
                     // If the class has an unknown base (e.g. inherits from an
@@ -465,7 +498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         CallTargetLookup::Ok(Box::new(CallTarget::Any(AnyStyle::Implicit)))
                     }
-                    None => CallTargetLookup::Error(vec![]),
+                    None => CallTargetLookup::Error(Type::ClassType(cls), vec![]),
                 }
             }
             // NNModule instances delegate call dispatch to their underlying class.
@@ -485,15 +518,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.as_call_target_impl(patched, quantified)
                     }
                     Some(ty) => self.as_call_target_impl(ty, quantified),
-                    None => CallTargetLookup::Error(vec![]),
+                    None => return CallTargetLookup::Error(Type::NNModule(module), vec![]),
                 }
+                .with_error_type(|_| Type::NNModule(module))
             }
+            // A DataFrame delegates call dispatch to its underlying instance type.
+            Type::DataFrame(schema) => self
+                .as_call_target_impl(schema.underlying_type(), quantified)
+                .with_error_type(|_| Type::DataFrame(schema)),
             Type::SelfType(cls) => {
                 // Ignoring `quantified` is okay here because Self is not a valid typevar bound.
-                self.self_as_dunder_call(&cls)
-                    .map_or(CallTargetLookup::Error(vec![]), |ty| {
-                        self.as_call_target_impl(ty, None)
-                    })
+                match self.self_as_dunder_call(&cls) {
+                    Some(ty) => self
+                        .as_call_target_impl(ty, None)
+                        .with_error_type(|_| Type::SelfType(cls)),
+                    None => CallTargetLookup::Error(Type::SelfType(cls), vec![]),
+                }
             }
             Type::Type(f) if matches!(&*f, Type::TypedDict(TypedDict::TypedDict(_))) => {
                 let Type::TypedDict(TypedDict::TypedDict(typed_dict)) = *f else {
@@ -517,11 +557,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let Type::Intersect(intersect) = *f else {
                     unreachable!("guarded by matches! above")
                 };
-                let (_, fallback) = *intersect;
+                let (types, fallback) = *intersect;
                 self.as_call_target_impl(self.heap.mk_type_of(fallback), quantified)
+                    .with_error_type(|fallback| {
+                        let Type::Type(fallback) = fallback else {
+                            unreachable!("the rejected fallback remains wrapped in Type")
+                        };
+                        self.heap
+                            .mk_type_of(Type::Intersect(Box::new((types, *fallback))))
+                    })
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
-                Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
+                Restriction::Unrestricted => CallTargetLookup::Error(Type::Quantified(q), vec![]),
                 Restriction::Bound(bound) => match bound {
                     Type::Union(f) => {
                         let members = &f.members;
@@ -536,12 +583,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ) {
                                 targets.push(*target);
                             } else {
-                                return CallTargetLookup::Error(vec![]);
+                                return CallTargetLookup::Error(Type::Quantified(q), vec![]);
                             }
                         }
                         CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                     }
-                    _ => self.as_call_target_impl(bound.clone(), Some(*q)),
+                    _ => self
+                        .as_call_target_impl(bound.clone(), Some((*q).clone()))
+                        .with_error_type(|_| Type::Quantified(q)),
                 },
                 Restriction::Constraints(constraints) => {
                     let mut targets = Vec::new();
@@ -554,17 +603,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ) {
                             targets.push(*target);
                         } else {
-                            return CallTargetLookup::Error(vec![]);
+                            return CallTargetLookup::Error(Type::Quantified(q), vec![]);
                         }
                     }
                     CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
             },
-            Type::KwCall(call) => self.as_call_target_impl(call.return_ty, quantified),
-            Type::Literal(ref f) if let Lit::Enum(enum_) = &f.value => {
-                self.as_call_target_impl(self.heap.mk_class_type(enum_.class.clone()), quantified)
+            Type::KwCall(call) => {
+                let KwCall {
+                    func_metadata,
+                    keywords,
+                    return_ty,
+                } = *call;
+                self.as_call_target_impl(return_ty, quantified)
+                    .with_error_type(|return_ty| {
+                        Type::KwCall(Box::new(KwCall {
+                            func_metadata,
+                            keywords,
+                            return_ty,
+                        }))
+                    })
             }
-            _ => CallTargetLookup::Error(vec![]),
+            Type::Literal(lit) => {
+                if let Lit::Enum(enum_) = &lit.value {
+                    self.as_call_target_impl(
+                        self.heap.mk_class_type(enum_.class.clone()),
+                        quantified,
+                    )
+                    .with_error_type(|_| Type::Literal(lit))
+                } else {
+                    CallTargetLookup::Error(Type::Literal(lit), vec![])
+                }
+            }
+            ty => CallTargetLookup::Error(ty, vec![]),
         }
     }
 
@@ -576,7 +647,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> CallTarget {
-        match self.as_call_target(ty.clone()) {
+        match self.as_call_target(ty) {
             CallTargetLookup::Ok(target) => {
                 let metadata = target.function_metadata();
                 if let Some(m) = metadata
@@ -604,7 +675,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 *target
             }
-            CallTargetLookup::Error(..) => {
+            CallTargetLookup::Error(ty, ..) => {
                 // Re-query `__call__` only on the error path so ordinary calls don't pay for
                 // preserving the original access error through call target resolution.
                 if let Some(error) = self.proxy_method_call_error(&ty) {
@@ -630,7 +701,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     context,
                 )
             }
-            CallTargetLookup::CircularCall => self.error_call_target(
+            CallTargetLookup::CircularCall(ty) => self.error_call_target(
                 errors,
                 range,
                 format!(
@@ -1579,6 +1650,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         if let Some(func_metadata) = kw_metadata {
+            // The call form `dataclass(C)` transforms `C` in place, so reject the same
+            // class kinds as the `@dataclass` decorator (see `report_forbidden_dataclass_target`).
+            // The decorator path never reaches here: a bare decorator is not a call.
+            if matches!(func_metadata.kind, FunctionKind::Dataclass) {
+                let transformed = match &res {
+                    Type::ClassDef(c) => Some(c),
+                    Type::Type(t) => match t.as_ref() {
+                        Type::ClassType(ct) => Some(ct.class_object()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(cls) = transformed {
+                    let metadata = self.get_metadata_for_class(cls);
+                    self.report_forbidden_dataclass_target(
+                        cls.name(),
+                        metadata.is_protocol(),
+                        metadata.is_enum(),
+                        metadata.is_typed_dict(),
+                        metadata.named_tuple_metadata().is_some(),
+                        arguments_range,
+                        errors,
+                    );
+                }
+            }
             let mut kws = TypeMap::new();
             for kw in keywords {
                 if let Some(name) = kw.arg {
@@ -1766,7 +1862,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // and the class object as `objtype`.
         let (objtype, obj) = match base {
             DescriptorBase::Instance(classtype) => (
-                self.heap.mk_class_def(classtype.class_object().dupe()),
+                self.heap
+                    .mk_type_of(self.heap.mk_class_type(classtype.clone())),
                 self.heap.mk_class_type(classtype),
             ),
             DescriptorBase::SelfInstance(classtype) => (
@@ -1933,8 +2030,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If `__new__` is overridden and `__init__` is inherited from object, use `__new__`
             new_attr_ty
         } else {
+            // Neither overridden: normally object's no-arg constructor, but if the class inherits
+            // from an unknown base its real constructor may come from there, so accept any args
+            // (matching direct construction, which treats an unknown-base class as gradual).
+            if !overrides_new
+                && !overrides_init
+                && self
+                    .get_metadata_for_class(cls.class_object())
+                    .has_base_any()
+            {
+                return heap.mk_callable_from(Callable::ellipsis(class_type.clone()));
+            }
             // If both are overridden, take the union
-            // Only if neither are overridden, use the `__new__` and `__init__` from object
             self.unions(vec![new_attr_ty, init_attr_ty])
         }
     }
@@ -1961,7 +2068,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
+        // A pandas frame is mutable so columns can be added after construction, which leaves
+        // its schema Partial. A Polars frame is immutable so its schema is Complete.
+        let dataframe_schema = if let Type::ClassDef(cls) = &callee_ty
+            && x.arguments.args.len() == 1
+            && x.arguments.keywords.is_empty()
+            && let Expr::Dict(dict) = &x.arguments.args[0]
+        {
+            if is_polars_dataframe(cls) {
+                self.infer_dataframe_schema(dict, DataFrameKind::Polars, errors)
+                    .map(|c| (c, DataFrameKind::Polars, SchemaCompleteness::Complete))
+            } else if is_pandas_dataframe(cls) {
+                self.infer_dataframe_schema(dict, DataFrameKind::Pandas, errors)
+                    .map(|c| (c, DataFrameKind::Pandas, SchemaCompleteness::Partial))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let result = if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
             // Because we have to construct a binding for super in order to fill in implicit arguments,
             // we can't handle things like local aliases to super. If we hit a case where the binding
             // wasn't constructed, fall back to `Any`.
@@ -2167,6 +2294,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.type_of(arg_ty)
                 }
                 _ if let Some(ret) = self.call_builtin_enumerate(ty, x, errors) => ret,
+                // `functools.partial(func, ...)` synthesizes the residual callable instead of the
+                // opaque stub, so calls on the result are checked (see `alt::functools`).
+                _ if matches!(ty, Type::ClassDef(cls) if cls.has_toplevel_qname("functools", "partial")) =>
+                {
+                    self.call_functools_partial(
+                        ty,
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range(),
+                        hint,
+                        errors,
+                    )
+                }
                 // Decorators can be applied in two ways:
                 //   - (common, idiomatic) via `@decorator`:
                 //     @staticmethod
@@ -2196,7 +2337,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 other => other,
             }
+        };
+
+        if let Some((columns, kind, completeness)) = dataframe_schema
+            && let Type::ClassType(underlying) = result.clone()
+        {
+            return DataFrameSchema {
+                underlying,
+                columns,
+                completeness,
+                kind,
+            }
+            .to_type();
         }
+        result
     }
 
     pub fn freeform_call_infer(

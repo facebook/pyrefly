@@ -17,13 +17,15 @@ Each test documents:
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_combine_like_terms[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> Tensor[[M * N]]:
+def test_combine_like_terms[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[M * N]]:
     """Test that products are structurally commutative: N*M compatible with M*N"""
     # Flatten produces N*M (left-associative)
     result = x.flatten(0, 1)
@@ -34,7 +36,7 @@ def test_combine_like_terms[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> Tensor[[
     return expected
 
 
-def test_division_flattening[N: SymVar, M: SymVar, K: SymVar](
+def test_division_flattening[N: IntVar, M: IntVar, K: IntVar](
     x: Tensor[[N, M, K]],
 ) -> Tensor[[(N * M) // 2, K]]:
     """Test that symbolic slicing preserves dimension expressions"""
@@ -48,7 +50,7 @@ def test_division_flattening[N: SymVar, M: SymVar, K: SymVar](
     return result
 
 
-def test_product_ordering[N: SymVar, M: SymVar, K: SymVar](
+def test_product_ordering[N: IntVar, M: IntVar, K: IntVar](
     x: Tensor[[N, M, K]],
 ) -> Tensor[[M * N * K]]:
     """Test that products are structurally commutative: N*M*K compatible with other orderings"""
@@ -62,7 +64,7 @@ def test_product_ordering[N: SymVar, M: SymVar, K: SymVar](
     return expected2
 
 
-def test_flatten_compatibility[B: SymVar, C: SymVar, H: SymVar, W: SymVar](
+def test_flatten_compatibility[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
     images: Tensor[[B, C, H, W]],
 ) -> Tensor[[W * H * C * B]]:
     """Test that flatten produces correct product"""
@@ -74,7 +76,7 @@ def test_flatten_compatibility[B: SymVar, C: SymVar, H: SymVar, W: SymVar](
     return expected
 
 
-def test_literal_evaluation[N: SymVar](x: Tensor[[N, 10]]) -> Tensor[[N * 10]]:
+def test_literal_evaluation[N: IntVar](x: Tensor[[N, 10]]) -> Tensor[[N * 10]]:
     """Test that literal expressions evaluate correctly"""
     # Flatten creates N*10
     result = x.flatten(0, 1)
@@ -82,7 +84,7 @@ def test_literal_evaluation[N: SymVar](x: Tensor[[N, 10]]) -> Tensor[[N * 10]]:
     return result
 
 
-def test_distributive_symbolic[GR: SymVar, Iterations: SymVar](
+def test_distributive_symbolic[GR: IntVar, Iterations: IntVar](
     a: Tensor[[GR * Iterations]],
     b: Tensor[[GR]],
 ) -> None:
@@ -102,7 +104,13 @@ def test_distributive_symbolic[GR: SymVar, Iterations: SymVar](
     _ = expected
 
 
-def test_multi_dim_flatten[A: SymVar, B: SymVar, C: SymVar, D: SymVar, E: SymVar](
+def test_multi_dim_flatten[
+    A: IntVar,
+    B: IntVar,
+    C: IntVar,
+    D: IntVar,
+    E: IntVar,
+](
     x: Tensor[[A, B, C, D, E]],
 ) -> tuple[
     Tensor[[C * B * A, D, E]], Tensor[[E * D * C * B * A]], Tensor[[A, D * C * B, E]]
@@ -135,22 +143,22 @@ def test_pow_literal(x: Tensor[[2**3]]) -> Tensor[[8]]:
     return x
 
 
-def test_pow_identity[N: SymVar](x: Tensor[[N**1]]) -> Tensor[[N]]:
+def test_pow_identity[N: IntVar](x: Tensor[[N**1]]) -> Tensor[[N]]:
     """N**1 = N."""
     return x
 
 
-def test_pow_zero[N: SymVar](x: Tensor[[N**0]]) -> Tensor[[1]]:
+def test_pow_zero[N: IntVar](x: Tensor[[N**0]]) -> Tensor[[1]]:
     """N**0 = 1."""
     return x
 
 
-def test_pow_symbolic_base[I: SymVar](x: Tensor[[2**I]]) -> Tensor[[2**I]]:
+def test_pow_symbolic_base[I: IntVar](x: Tensor[[2**I]]) -> Tensor[[2**I]]:
     """Symbolic exponent preserved."""
     return x
 
 
-def test_pow_product_grouping[I: SymVar](
+def test_pow_product_grouping[I: IntVar](
     x: Tensor[[2**I]],
 ) -> Tensor[[2**I]]:
     """2 * 2**I = 2**(I+1) and 2**(I+1) canonically equals... 2**(I+1).
@@ -159,21 +167,21 @@ def test_pow_product_grouping[I: SymVar](
     return x
 
 
-def test_pow_same_base_mul[I: SymVar, B: SymVar, C: SymVar](
+def test_pow_same_base_mul[I: IntVar, B: IntVar, C: IntVar](
     x: Tensor[[B, C * 2**I]],
 ) -> Tensor[[B, C * 2**I]]:
     """Product with Pow factor stays canonical."""
     return x
 
 
-def test_pow_literal_absorb[I: SymVar](
+def test_pow_literal_absorb[I: IntVar](
     x: Tensor[[8 * 2**I]],
 ) -> Tensor[[2 ** (I + 3)]]:
     """8 * 2**I = 2**3 * 2**I = 2**(I+3)."""
     return x
 
 
-def test_pow_mul_same_base[I: SymVar](
+def test_pow_mul_same_base[I: IntVar](
     x: Tensor[[2**I * 2]],
 ) -> Tensor[[2 ** (I + 1)]]:
     """2**I * 2 = 2**(I+1)."""

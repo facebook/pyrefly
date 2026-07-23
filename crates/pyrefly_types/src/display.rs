@@ -29,11 +29,13 @@ use crate::callable::FunctionKind;
 use crate::callable::ParamOverlay;
 use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
+use crate::data_frame::SchemaCompleteness;
 use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
 use crate::quantified::QuantifiedIdentity;
-use crate::shaped_array::ShapedArrayShapeArgStyle;
+use crate::shaped_array::IntTuple;
+use crate::shaped_array::IntTupleView;
 use crate::shaped_array::ShapedArraySyntax;
 use crate::shaped_array::ShapedArrayType;
 use crate::shaped_array::is_tuple_carrier_shape_middle;
@@ -175,6 +177,9 @@ impl<'a> TypeDisplayContext<'a> {
         t.universe(&mut |t| {
             if let Type::ShapedArray(shaped_array) = t {
                 self.add_qname(shaped_array.base_class.qname());
+            }
+            if let Type::DataFrame(schema) = t {
+                self.add_qname(schema.underlying.qname());
             }
             // A singledispatch dispatcher is displayed as its backing `_SingleDispatchCallable`
             // class, so that class needs a registered qname to display unqualified.
@@ -369,13 +374,14 @@ impl<'a> TypeDisplayContext<'a> {
     ) -> fmt::Result {
         match shaped_array.syntax {
             ShapedArraySyntax::Native => {
-                let shape_idx = match shaped_array.shape_arg_style {
-                    ShapedArrayShapeArgStyle::TupleCarrier { index } => index,
-                    ShapedArrayShapeArgStyle::Unknown => {
+                let shape_idx = match shaped_array.tuple_carrier_shape_arg_index() {
+                    Some(index) => index,
+                    None => {
                         output.write_qname(shaped_array.base_class.qname())?;
-                        if !shaped_array.is_shapeless() {
+                        let shape = shaped_array.shape();
+                        if !shape.is_shapeless() {
                             output.write_str("[")?;
-                            output.write_str(&shaped_array.shape.to_string())?;
+                            output.write_str(&shape.to_string())?;
                             output.write_str("]")?;
                         }
                         return Ok(());
@@ -387,7 +393,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("Shaped[")?;
                 output.write_qname(shaped_array.base_class.qname())?;
                 output.write_str(", \"")?;
-                output.write_str(&shaped_array.shape.fmt_jaxtyping())?;
+                output.write_str(&shaped_array.shape().fmt_jaxtyping())?;
                 output.write_str("\"]")
             }
         }
@@ -405,7 +411,8 @@ impl<'a> TypeDisplayContext<'a> {
             .expect("shape argument index should point to a class type argument");
 
         output.write_qname(shaped_array.base_class.qname())?;
-        let display_count = targs.display_count().max(if shaped_array.is_shapeless() {
+        let shape = shaped_array.shape();
+        let display_count = targs.display_count().max(if shape.is_shapeless() {
             0
         } else {
             shape_idx + 1
@@ -420,7 +427,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str(", ")?;
             }
             if i == shape_idx {
-                self.fmt_shape_as_tuple_carrier(shaped_array, output)?;
+                self.fmt_shape_as_tuple_carrier(&shape, output)?;
             } else {
                 self.fmt_targ(param, arg, output)?;
             }
@@ -430,37 +437,60 @@ impl<'a> TypeDisplayContext<'a> {
 
     fn fmt_shape_as_tuple_carrier(
         &self,
-        shaped_array: &ShapedArrayType,
+        shape: &IntTuple,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
-        if shaped_array.is_shapeless() {
+        if shape.is_shapeless() {
             return self.fmt_helper_generic(&Type::any_tuple(), false, output);
         }
-        match shaped_array.shape.as_tuple() {
-            Tuple::Concrete(dims) => {
-                output.write_str("[")?;
-                self.fmt_type_sequence(dims.iter(), ", ", false, output)?;
-                output.write_str("]")
+        match shape.view() {
+            IntTupleView::Concrete(dims) => {
+                write!(output, "[{}]", commas_iter(|| dims.iter()))
             }
-            Tuple::Unbounded(_) => {
-                unreachable!("shaped-array unbounded shapes must be tuple[Any, ...]")
+            IntTupleView::Gradual => {
+                unreachable!("shaped-array unbounded shapes must be gradual IntTuple")
             }
-            Tuple::Unpacked(unpacked) => {
-                let (prefix, middle, suffix) = &**unpacked;
+            IntTupleView::Unpacked {
+                prefix,
+                middle,
+                suffix,
+            } => {
                 if prefix.is_empty() && suffix.is_empty() && is_tuple_carrier_shape_middle(middle) {
                     return self.fmt_helper_generic(middle, false, output);
                 }
                 output.write_str("[")?;
-                let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
-                self.fmt_type_sequence(
-                    prefix
-                        .iter()
-                        .chain(std::iter::once(&unpacked_middle))
-                        .chain(suffix.iter()),
-                    ", ",
-                    false,
-                    output,
-                )?;
+                let mut first = true;
+                for dim in prefix {
+                    if !first {
+                        output.write_str(", ")?;
+                    }
+                    first = false;
+                    write!(output, "{dim}")?;
+                }
+                if !first {
+                    output.write_str(", ")?;
+                }
+                first = false;
+                if matches!(middle, Type::IntTuple(shape) if shape.is_shapeless()) {
+                    output.write_str("*tuple[int, ...]")?;
+                } else if is_tuple_carrier_shape_middle(middle) {
+                    output.write_str("*Elements[")?;
+                    self.fmt_helper_generic(middle, false, output)?;
+                    output.write_str("]")?;
+                } else {
+                    self.fmt_helper_generic(
+                        &Type::Unpack(Box::new(middle.clone())),
+                        false,
+                        output,
+                    )?;
+                }
+                for dim in suffix {
+                    if !first {
+                        output.write_str(", ")?;
+                    }
+                    first = false;
+                    write!(output, "{dim}")?;
+                }
                 output.write_str("]")
             }
         }
@@ -638,17 +668,6 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_type(&class_type.targs().as_slice()[0])?;
                 output.write_str(", ...]")
             }
-            // Display Dim[Unknown] as just "Dim" for cleaner output
-            Type::ClassType(class_type)
-                if class_type.has_qname("shape_extensions", "Dim")
-                    && class_type.targs().as_slice().len() == 1
-                    && matches!(
-                        class_type.targs().as_slice()[0],
-                        Type::Any(AnyStyle::Implicit | AnyStyle::Error)
-                    ) =>
-            {
-                output.write_qname(class_type.qname())
-            }
             Type::ClassType(class_type) => {
                 output.write_qname(class_type.qname())?;
                 output.write_targs(class_type.targs())
@@ -686,23 +705,41 @@ impl<'a> TypeDisplayContext<'a> {
                 }
             },
             Type::ShapedArray(shaped_array) => self.fmt_shaped_array(shaped_array, output),
+            Type::IntTuple(int_tuple) => {
+                if int_tuple.is_shapeless() {
+                    output.write_str("IntTuple")
+                } else {
+                    output.write_str("IntTuple[")?;
+                    output.write_str(&int_tuple.to_string())?;
+                    output.write_str("]")
+                }
+            }
             Type::NNModule(module) => {
                 // Display as the class name (e.g., MaxPool2d)
                 self.fmt_helper_generic(&Type::ClassType(module.class.clone()), false, output)
             }
-            Type::Size(dim) => {
-                // Display dimension value directly without Literal wrapper
-                output.write_str(&format!("{}", dim))
-            }
-            Type::Dim(inner) => {
-                // Display Dim[Unknown] as just "Dim" for cleaner output
-                // (Unknown represents implicit Any from gradual typing)
-                // But keep Dim[Any] when explicitly annotated
-                match &**inner {
-                    Type::Any(AnyStyle::Implicit | AnyStyle::Error) => output.write_str("Dim"),
-                    _ => output.write_str(&format!("Dim[{}]", self.display_internal(inner))),
+            Type::DataFrame(schema) => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
+                output.write_str("[")?;
+                for (i, (name, ty)) in schema.columns.iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
+                    }
+                    output.write_str(name.as_str())?;
+                    output.write_str(": ")?;
+                    self.fmt_helper_generic(ty, false, output)?;
                 }
+                // A Partial schema carries unknown extra columns, shown as a trailing "...".
+                if schema.completeness == SchemaCompleteness::Partial {
+                    if !schema.columns.is_empty() {
+                        output.write_str(", ")?;
+                    }
+                    output.write_str("...")?;
+                }
+                output.write_str("]")?;
+                Ok(())
             }
+            Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
             Type::TypeVar(t) => {
                 let type_var_qname = self.stdlib.map(|s| s.type_var().qname());
                 output.write_builtin("TypeVar", type_var_qname)?;
@@ -1555,7 +1592,7 @@ pub mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
-    use crate::dimension::SizeExpr;
+    use crate::dimension::Int;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
@@ -1564,7 +1601,7 @@ pub mod tests {
     use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
     use crate::quantified::QuantifiedOrigin;
-    use crate::shaped_array::ShapedArrayShape;
+    use crate::shaped_array::IntTuple;
     use crate::shaped_array::ShapedArrayType;
     use crate::tuple::Tuple;
     use crate::type_alias::TypeAlias;
@@ -1593,6 +1630,7 @@ pub mod tests {
             NestingContext::toplevel(),
             mi,
             None,
+            false,
         )
     }
 
@@ -1665,15 +1703,87 @@ pub mod tests {
     #[test]
     fn test_display_shaped_array_type_uses_base_class_name() {
         let array = ClassType::new(fake_class("Array", "arrays", 0), TArgs::default());
-        let shaped = ShapedArrayType::new(
-            array.clone(),
-            ShapedArrayShape::new(vec![SizeExpr::Literal(2)]),
-        )
-        .to_type();
+        let shaped =
+            ShapedArrayType::new(array.clone(), IntTuple::new(vec![Int::Literal(2)])).to_type();
         let shapeless = ShapedArrayType::shapeless(array).to_type();
 
         assert_eq!(shaped.to_string(), "Array[2]");
         assert_eq!(shapeless.to_string(), "Array");
+    }
+
+    #[test]
+    fn test_display_int_type_marks_standalone_sizes() {
+        let heap = TypeHeap::new();
+        let n = fake_tparam(0, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let m = fake_tparam(1, "M", QuantifiedKind::IntVar).to_type(&heap);
+
+        assert_eq!(Type::Int(Int::Literal(3)).to_string(), "Int[3]");
+        assert_eq!(
+            Type::Int(Int::Symbolic(Box::new(n.clone()))).to_string(),
+            "Int[N]"
+        );
+        assert_eq!(
+            Type::Int(Int::Mul(
+                Box::new(Int::Symbolic(Box::new(n))),
+                Box::new(Int::Symbolic(Box::new(m))),
+            ))
+            .to_string(),
+            "Int[(N * M)]"
+        );
+        assert_eq!(Type::Int(Int::Int).to_string(), "Int[int]");
+    }
+
+    #[test]
+    fn test_display_shaped_array_keeps_size_wrapper_out_of_shapes() {
+        let heap = TypeHeap::new();
+        let n = fake_tparam(0, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let m = fake_tparam(1, "M", QuantifiedKind::IntVar).to_type(&heap);
+        let shape = IntTuple::new(vec![
+            Int::Literal(3),
+            Int::Symbolic(Box::new(n.clone())),
+            Int::Mul(
+                Box::new(Int::Symbolic(Box::new(n))),
+                Box::new(Int::Symbolic(Box::new(m))),
+            ),
+        ]);
+        let array = ClassType::new(fake_class("Array", "arrays", 0), TArgs::default());
+
+        assert_eq!(
+            ShapedArrayType::new(array, shape).to_type().to_string(),
+            "Array[3, N, (N * M)]"
+        );
+    }
+
+    #[test]
+    fn test_display_tuple_carrier_shape_keeps_size_wrapper_out_of_shapes() {
+        let heap = TypeHeap::new();
+        let shape_param = fake_tparams(vec![fake_tparam(0, "Shape", QuantifiedKind::TypeVar)]);
+        let n = fake_tparam(1, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let shape = IntTuple::new(vec![Int::Literal(3), Int::Symbolic(Box::new(n))]);
+        let array = ClassType::new(
+            fake_class("Array", "arrays", 0),
+            TArgs::new(shape_param, vec![shape.to_shape_arg_type()]),
+        );
+
+        assert_eq!(
+            ShapedArrayType::new(array, shape)
+                .with_tuple_carrier_shape_arg(0)
+                .to_type()
+                .to_string(),
+            "Array[[3, N]]"
+        );
+    }
+
+    #[test]
+    fn test_display_int_tuple_type() {
+        let concrete = Type::IntTuple(Box::new(IntTuple::new(vec![
+            Int::Literal(2),
+            Int::Literal(3),
+        ])));
+        assert_eq!(concrete.to_string(), "IntTuple[2, 3]");
+
+        let gradual = Type::IntTuple(Box::new(IntTuple::shapeless()));
+        assert_eq!(gradual.to_string(), "IntTuple");
     }
 
     fn fake_generic_bound_method(

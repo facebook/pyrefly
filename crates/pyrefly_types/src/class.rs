@@ -264,6 +264,7 @@ impl ClassFields {
 struct ClassInner {
     def_index: ClassDefIndex,
     qname: QName,
+    is_protocol: bool,
     /// The precomputed tparams will be `Some(..)` if we were able to verify that there
     /// are no legacy type variables (at which point there's no chance of producing a cycle
     /// when computing the class tparams). Whenever it is `None`, there will be a corresponding
@@ -276,6 +277,7 @@ impl Debug for ClassInner {
         f.debug_struct("ClassInner")
             .field("index", &self.def_index)
             .field("qname", &self.qname)
+            .field("is_protocol", &self.is_protocol)
             .field("tparams", &self.precomputed_tparams)
             // We don't print `fields` because it's way too long.
             .finish_non_exhaustive()
@@ -340,10 +342,12 @@ impl Class {
         parent: NestingContext,
         module: Module,
         precomputed_tparams: Option<Arc<TParams>>,
+        is_protocol: bool,
     ) -> Self {
         Self(Arc::new(ClassInner {
             def_index,
             qname: QName::new(name, parent, module),
+            is_protocol,
             precomputed_tparams,
         }))
     }
@@ -362,6 +366,10 @@ impl Class {
 
     pub fn kind(&self) -> ClassKind {
         ClassKind::from_qname(self.qname())
+    }
+
+    pub fn is_protocol(&self) -> bool {
+        self.0.is_protocol
     }
 
     pub fn precomputed_tparams(&self) -> &Option<Arc<TParams>> {

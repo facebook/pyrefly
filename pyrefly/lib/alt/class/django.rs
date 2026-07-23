@@ -262,9 +262,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if value.to_str() == "self" {
                     Some(self.instantiate(class))
                 } else {
-                    // Handle forward reference - look up the model by name in the current module
-                    // This requires that the model class is imported or defined in the current module
-                    let class_name = Name::new(value.to_str());
+                    // Django string references may include an app label, but the imported model is
+                    // still looked up by its class name in the current module.
+                    let target = value.to_str();
+                    let class_name = Name::new(
+                        target
+                            .rsplit_once('.')
+                            .map_or(target, |(_, model_name)| model_name),
+                    );
                     let module_name = class.module_name();
 
                     if self.exports.export_exists(module_name, &class_name) {

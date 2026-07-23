@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn test_migrate_from_pyright_implicit_any_variable() {
+    fn test_migrate_from_pyright_unknown_variable_type() {
         let mut pyright_cfg = default_pyright_config();
         pyright_cfg.errors.report_unknown_variable_type = Some(Severity::Error);
 
@@ -294,7 +294,7 @@ mod tests {
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
         assert_eq!(
-            errors.severity(ErrorKind::ImplicitAnyVariable),
+            errors.severity(ErrorKind::UnknownVariableType),
             Severity::Error
         );
     }
@@ -311,9 +311,9 @@ mod tests {
 
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
-        // `reportUnknownMemberType` maps to `implicit-any-attribute`.
+        // `reportUnknownMemberType` maps to `unknown-attribute-type`.
         assert_eq!(
-            errors.severity(ErrorKind::ImplicitAnyAttribute),
+            errors.severity(ErrorKind::UnknownAttributeType),
             Severity::Error
         );
     }

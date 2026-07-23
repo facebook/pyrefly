@@ -747,27 +747,40 @@ pub fn get_hover(
         .or_else(|| transaction.get_type_at_for_display(handle, position))
         .or_else(|| transaction.operator_type_at(handle, position))?;
 
-    // Helper function to check if we're hovering over a callee and get its range
-    let find_callee_range_at_position = || -> Option<TextRange> {
+    // Find the innermost call whose callee (func) encloses the cursor, returning the
+    // callee's range and whether the cursor is on the callee's own name — the attribute
+    // in `a.b()`, or the whole callee otherwise. A receiver like `a` in `a.b()` is inside
+    // the callee range but not on the name, so hovering it must not coerce its type.
+    let callee_at_position = || -> Option<(TextRange, bool)> {
         use ruff_python_ast::Expr;
         let mod_module = transaction.get_ast(handle)?;
         let mut result = None;
         mod_module.visit(&mut |expr: &Expr| {
-            if let Expr::Call(call) = expr {
-                // Check if position is within the callee (func) range
-                if call.func.range().contains(position) {
-                    result = Some(call.func.range());
+            if let Expr::Call(call) = expr
+                && call.func.range().contains(position)
+            {
+                let on_callee_name = match &*call.func {
+                    Expr::Attribute(attr) => attr.attr.range(),
+                    _ => call.func.range(),
                 }
+                .contains(position);
+                result = Some((call.func.range(), on_callee_name));
             }
         });
         result
     };
 
-    // Check both: hovering in arguments area OR hovering over the callee itself
-    let callee_range_opt = transaction
-        .get_callables_from_call(handle, position)
-        .map(|info| info.callee_range)
-        .or_else(find_callee_range_at_position);
+    // Prefer the enclosing call found from the argument list; only walk the AST for a
+    // callee hover when the cursor is not inside an argument. Hovering inside arguments
+    // is never "on the callee", so coercion stays disabled there.
+    let (callee_range_opt, hovering_over_callee) =
+        match transaction.get_callables_from_call(handle, position) {
+            Some(info) => (Some(info.callee_range), false),
+            None => match callee_at_position() {
+                Some((range, on_name)) => (Some(range), on_name),
+                None => (None, false),
+            },
+        };
 
     if let Some(callee_range) = callee_range_opt {
         let is_constructor = transaction
@@ -776,6 +789,8 @@ pub fn get_hover(
             .is_some_and(is_constructor_call);
         if is_constructor && let Some(new_type) = override_constructor_return_type(type_.clone()) {
             type_ = new_type;
+        } else if hovering_over_callee {
+            type_ = transaction.coerce_type_to_callable(handle, type_);
         }
     }
 

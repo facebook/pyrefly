@@ -1905,9 +1905,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
 
         // Determine the final type, promoting literals when appropriate.
-        // Skip literal promotion for NNModule types: their fields are captured
-        // constructor args that must preserve literal types for shape inference.
-        let (ty, unpromoted_ty) = if matches!(value_ty, Type::NNModule(_)) {
+        // Skip literal promotion for NNModule and DataFrame types: their captured
+        // fields/columns must preserve literal types for shape/column inference.
+        let (ty, unpromoted_ty) = if matches!(value_ty, Type::NNModule(_) | Type::DataFrame(_)) {
             (value_ty, None)
         } else {
             let mut has_implicit_literal = value_ty.is_implicit_literal();
@@ -2339,13 +2339,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         self.expand_mut(&mut ty);
         // An unannotated attribute whose value has a bare implicit `Any` type (e.g. from an
-        // untyped call) is reported the same way as the `None`/empty-tuple sentinel cases
-        // above: `implicit-any-attribute`.
+        // untyped call) is reported separately from the `None`/empty-tuple sentinel cases above.
         if annotation.is_none() && matches!(&ty, Type::Any(AnyStyle::Implicit)) {
             self.error(
                 errors,
                 x.range(),
-                ErrorKind::ImplicitAnyAttribute,
+                ErrorKind::UnknownAttributeType,
                 "This expression is implicitly inferred to be `Any`. Please provide an explicit type annotation.".to_owned(),
             );
         }

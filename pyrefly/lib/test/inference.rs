@@ -270,8 +270,8 @@ for i, j in entries:
 );
 
 testcase!(
-    test_implicit_any_variable,
-    TestEnv::new().enable_implicit_any_variable_error(),
+    test_unknown_variable_type,
+    TestEnv::new().enable_unknown_variable_type_error(),
     r#"
 def untyped(x):
     return x
@@ -281,8 +281,8 @@ y = untyped(1)  # E: The type of `y` is unknown
 );
 
 testcase!(
-    test_implicit_any_variable_annotated_no_error,
-    TestEnv::new().enable_implicit_any_variable_error(),
+    test_unknown_variable_type_annotated_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
     r#"
 def untyped(x):
     return x
@@ -292,8 +292,8 @@ y: int = untyped(1)
 );
 
 testcase!(
-    test_implicit_any_variable_known_no_error,
-    TestEnv::new().enable_implicit_any_variable_error(),
+    test_unknown_variable_type_known_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
     r#"
 y = 1
 s = "hello"
@@ -301,19 +301,20 @@ s = "hello"
 );
 
 testcase!(
-    test_implicit_any_variable_suppressed_by_implicit_any,
-    TestEnv::new().enable_implicit_any_variable_error(),
+    test_unknown_variable_type_not_suppressed_by_implicit_any,
+    TestEnv::new().enable_unknown_variable_type_error(),
     r#"
 def untyped(x):
     return x
 
-y = untyped(1)  # pyrefly: ignore[implicit-any]
+# pyrefly: ignore[implicit-any]
+y = untyped(1)  # E: The type of `y` is unknown
 "#,
 );
 
 testcase!(
-    test_implicit_any_variable_explicit_any_no_error,
-    TestEnv::new().enable_implicit_any_variable_error(),
+    test_unknown_variable_type_explicit_any_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
     r#"
 from typing import Any, cast
 # An explicit `Any` is intentional, so only implicit `Any` should trigger the rule.
@@ -322,14 +323,14 @@ v = cast(Any, 1)
 );
 
 testcase!(
-    test_implicit_any_variable_class_body_no_error,
-    TestEnv::new().enable_implicit_any_variable_error(),
+    test_unknown_variable_type_class_body_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
     r#"
 def untyped(x):
     return x
 
 # A class-body assignment defines a class attribute, which is reported by
-# implicit-any-attribute, not implicit-any-variable.
+# implicit-any-attribute, not unknown-variable-type.
 class C:
     x = untyped(1)
 "#,

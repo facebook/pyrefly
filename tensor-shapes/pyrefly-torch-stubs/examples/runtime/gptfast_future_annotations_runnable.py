@@ -18,7 +18,7 @@ from typing import Any, Optional, TYPE_CHECKING, TypedDict
 
 import torch
 import torch.nn as nn
-from shape_extensions import Elements, SizeTuple
+from shape_extensions import Elements, IntTuple
 from torch.nn import functional as F
 from torch.nn.attention.flex_attention import (
     _mask_mod_signature,
@@ -28,7 +28,7 @@ from torch.nn.attention.flex_attention import (
 
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim, SymVar
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
@@ -42,24 +42,24 @@ class RopeScalingDict(TypedDict, total=False):
 
 
 class ModelArgsDict[
-    VocabSize: SymVar,
-    BlockSize: SymVar,
-    D: SymVar,
-    NHead: SymVar,
-    NLayer: SymVar,
-    IntermediateSize: SymVar,
-    NLocalHeads: SymVar,
+    VocabSize: IntVar,
+    BlockSize: IntVar,
+    D: IntVar,
+    NHead: IntVar,
+    NLayer: IntVar,
+    IntermediateSize: IntVar,
+    NLocalHeads: IntVar,
 ](TypedDict, total=False):
     """Type for transformer configuration dictionaries."""
 
-    block_size: Dim[BlockSize]
-    vocab_size: Dim[VocabSize]
-    n_layer: Dim[NLayer]
-    n_head: Dim[NHead]
-    dim: Dim[D]
-    intermediate_size: Dim[IntermediateSize]
-    n_local_heads: Dim[NLocalHeads]
-    head_dim: Dim[D // NHead]
+    block_size: Int[BlockSize]
+    vocab_size: Int[VocabSize]
+    n_layer: Int[NLayer]
+    n_head: Int[NHead]
+    dim: Int[D]
+    intermediate_size: Int[IntermediateSize]
+    n_local_heads: Int[NLocalHeads]
+    head_dim: Int[D // NHead]
     rope_base: int
     norm_eps: float
     rope_scaling: RopeScalingDict
@@ -80,22 +80,22 @@ def get_mask_mod(mask_mod: _mask_mod_signature, offset: int | Tensor):
 
 @dataclass
 class ModelArgs[
-    VocabSize: SymVar,
-    BlockSize: SymVar,
-    D: SymVar,
-    NHead: SymVar,
-    NLayer: SymVar,
-    IntermediateSize: SymVar,
-    NLocalHeads: SymVar,
+    VocabSize: IntVar,
+    BlockSize: IntVar,
+    D: IntVar,
+    NHead: IntVar,
+    NLayer: IntVar,
+    IntermediateSize: IntVar,
+    NLocalHeads: IntVar,
 ]:
-    block_size: Dim[BlockSize] = 2048  # type: ignore[assignment]
-    vocab_size: Dim[VocabSize] = 32000  # type: ignore[assignment]
-    n_layer: Dim[NLayer] = 32  # type: ignore[assignment]
-    n_head: Dim[NHead] = 32  # type: ignore[assignment]
-    dim: Dim[D] = 4096  # type: ignore[assignment]
-    intermediate_size: Dim[IntermediateSize] | None = None
-    n_local_heads: Dim[NLocalHeads] = -1  # type: ignore[assignment]
-    head_dim: Dim[D // NHead] = 64  # type: ignore[assignment]
+    block_size: Int[BlockSize] = 2048  # type: ignore[assignment]
+    vocab_size: Int[VocabSize] = 32000  # type: ignore[assignment]
+    n_layer: Int[NLayer] = 32  # type: ignore[assignment]
+    n_head: Int[NHead] = 32  # type: ignore[assignment]
+    dim: Int[D] = 4096  # type: ignore[assignment]
+    intermediate_size: Int[IntermediateSize] | None = None
+    n_local_heads: Int[NLocalHeads] = -1  # type: ignore[assignment]
+    head_dim: Int[D // NHead] = 64  # type: ignore[assignment]
     rope_base: int = 10000
     norm_eps: float = 1e-5
     rope_scaling: RopeScalingDict | None = None
@@ -231,7 +231,7 @@ transformer_configs: dict[str, ModelArgsDict[Any, Any, Any, Any, Any, Any, Any]]
 }
 
 
-def apply_rope_scaling[D: SymVar](
+def apply_rope_scaling[D: IntVar](
     freqs: Tensor[[D]], rope_scaling: RopeScalingDict
 ) -> Tensor[[D]]:
     factor = rope_scaling["factor"]
@@ -257,9 +257,9 @@ def apply_rope_scaling[D: SymVar](
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-def precompute_freqs_cis[SeqLen: SymVar, HeadDim: SymVar](
-    seq_len: Dim[SeqLen],
-    n_elem: Dim[HeadDim],
+def precompute_freqs_cis[SeqLen: IntVar, HeadDim: IntVar](
+    seq_len: Int[SeqLen],
+    n_elem: Int[HeadDim],
     base: int = 10000,
     dtype: torch.dtype = torch.bfloat16,
     rope_scaling: RopeScalingDict | None = None,
@@ -277,7 +277,7 @@ def precompute_freqs_cis[SeqLen: SymVar, HeadDim: SymVar](
     return cache.to(dtype=dtype)
 
 
-def apply_rotary_emb[B: SymVar, T: SymVar, NHeads: SymVar, HeadDim: SymVar](
+def apply_rotary_emb[B: IntVar, T: IntVar, NHeads: IntVar, HeadDim: IntVar](
     x: Tensor[[B, T, NHeads, HeadDim]], freqs_cis: Tensor[[T, HeadDim // 2, 2]]
 ) -> Tensor[[B, T, NHeads, HeadDim]]:
     xshaped = x.float().reshape(*x.size()[:-1], -1, 2)
@@ -297,18 +297,21 @@ def apply_rotary_emb[B: SymVar, T: SymVar, NHeads: SymVar, HeadDim: SymVar](
     return x_out2.type_as(x)  # type: ignore[bad-return]  # Issue 7: algebraic equivalence
 
 
-class KVCache[MaxBatchSize: SymVar, MaxSeqLen: SymVar, NHeads: SymVar, HeadDim: SymVar](
-    nn.Module
-):
+class KVCache[
+    MaxBatchSize: IntVar,
+    MaxSeqLen: IntVar,
+    NHeads: IntVar,
+    HeadDim: IntVar,
+](nn.Module):
     k_cache: Tensor[[MaxBatchSize, NHeads, MaxSeqLen, HeadDim]]
     v_cache: Tensor[[MaxBatchSize, NHeads, MaxSeqLen, HeadDim]]
 
     def __init__(
         self,
-        max_batch_size: Dim[MaxBatchSize],
-        max_seq_length: Dim[MaxSeqLen],
-        n_heads: Dim[NHeads],
-        head_dim: Dim[HeadDim],
+        max_batch_size: Int[MaxBatchSize],
+        max_seq_length: Int[MaxSeqLen],
+        n_heads: Int[NHeads],
+        head_dim: Int[HeadDim],
         dtype=torch.bfloat16,
     ):
         super().__init__()
@@ -316,7 +319,7 @@ class KVCache[MaxBatchSize: SymVar, MaxSeqLen: SymVar, NHeads: SymVar, HeadDim: 
         self.k_cache = nn.Buffer(torch.zeros(cache_shape, dtype=dtype))
         self.v_cache = nn.Buffer(torch.zeros(cache_shape, dtype=dtype))
 
-    def update[B: SymVar, S: SymVar](
+    def update[B: IntVar, S: IntVar](
         self,
         input_pos: Tensor[[S]] | None,
         k_val: Tensor[[B, NHeads, S, HeadDim]],
@@ -337,7 +340,7 @@ class KVCache[MaxBatchSize: SymVar, MaxSeqLen: SymVar, NHeads: SymVar, HeadDim: 
         return k_out, v_out
 
 
-class FeedForward[D: SymVar, IntermediateSize: SymVar](nn.Module):
+class FeedForward[D: IntVar, IntermediateSize: IntVar](nn.Module):
     def __init__(
         self, config: ModelArgs[Any, Any, D, Any, Any, IntermediateSize, Any]
     ) -> None:
@@ -347,12 +350,12 @@ class FeedForward[D: SymVar, IntermediateSize: SymVar](nn.Module):
         self.w3 = nn.Linear(config.dim, config.intermediate_size, bias=False)
         self.w2 = nn.Linear(config.intermediate_size, config.dim, bias=False)
 
-    def forward[B: SymVar, T: SymVar](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
+    def forward[B: IntVar, T: IntVar](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
 
-class RMSNorm[D: SymVar](nn.Module):
-    def __init__(self, dim: Dim[D], eps: float = 1e-5):
+class RMSNorm[D: IntVar](nn.Module):
+    def __init__(self, dim: Int[D], eps: float = 1e-5):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
@@ -360,14 +363,14 @@ class RMSNorm[D: SymVar](nn.Module):
     def _norm(self, x):
         return x * torch.rsqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
 
-    def forward[Bs: SizeTuple](
+    def forward[Bs: IntTuple](
         self, x: Tensor[[*Elements[Bs], D]]
     ) -> Tensor[[*Elements[Bs], D]]:
         output = self._norm(x.float()).type_as(x)
         return output * self.weight
 
 
-class Attention[D: SymVar, NHead: SymVar, NLocalHeads: SymVar](nn.Module):
+class Attention[D: IntVar, NHead: IntVar, NLocalHeads: IntVar](nn.Module):
     def __init__(self, config: ModelArgs[Any, Any, D, NHead, Any, Any, NLocalHeads]):
         super().__init__()
         assert config.dim % config.n_head == 0
@@ -391,7 +394,7 @@ class Attention[D: SymVar, NHead: SymVar, NLocalHeads: SymVar](nn.Module):
             wv = state_dict.pop(prefix + "wv.weight")
             state_dict[prefix + "wqkv.weight"] = torch.cat([wq, wk, wv])
 
-    def forward[B: SymVar, T: SymVar](
+    def forward[B: IntVar, T: IntVar](
         self,
         x: Tensor[[B, T, D]],
         freqs_cis: Tensor[[T, (D // NHead) // 2, 2]],
@@ -429,13 +432,13 @@ class Attention[D: SymVar, NHead: SymVar, NLocalHeads: SymVar](nn.Module):
 
 
 class Transformer[
-    VocabSize: SymVar,
-    BlockSize: SymVar,
-    D: SymVar,
-    NHead: SymVar,
-    NLayer: SymVar,
-    IntermediateSize: SymVar,
-    NLocalHeads: SymVar,
+    VocabSize: IntVar,
+    BlockSize: IntVar,
+    D: IntVar,
+    NHead: IntVar,
+    NLayer: IntVar,
+    IntermediateSize: IntVar,
+    NLocalHeads: IntVar,
 ](nn.Module):
     def __init__(
         self,
@@ -492,7 +495,7 @@ class Transformer[
             self.config.rope_scaling,
         )
 
-    def forward[B: SymVar, T: SymVar](
+    def forward[B: IntVar, T: IntVar](
         self, mask: BlockMask, idx: Tensor[[B, T]], input_pos: Tensor[[T]] | None = None
     ) -> Tensor[[B, T, VocabSize]]:
         assert self.freqs_cis is not None, "Caches must be initialized first"
@@ -514,10 +517,10 @@ class Transformer[
 
 
 class TransformerBlock[
-    D: SymVar,
-    NHead: SymVar,
-    IntermediateSize: SymVar,
-    NLocalHeads: SymVar,
+    D: IntVar,
+    NHead: IntVar,
+    IntermediateSize: IntVar,
+    NLocalHeads: IntVar,
 ](nn.Module):
     attention: Attention[D, NHead, NLocalHeads]
     feed_forward: FeedForward[D, IntermediateSize]
@@ -533,7 +536,7 @@ class TransformerBlock[
         self.ffn_norm = RMSNorm(config.dim, config.norm_eps)
         self.attention_norm = RMSNorm(config.dim, config.norm_eps)
 
-    def forward[B: SymVar, T: SymVar](
+    def forward[B: IntVar, T: IntVar](
         self,
         x: Tensor[[B, T, D]],
         input_pos: Tensor[[T]],

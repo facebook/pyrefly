@@ -218,8 +218,8 @@ C(5)  # E: not assignable to parameter `s` with type `list[int]`
 "#,
 );
 
-// A bare (unsubscripted) generic converter still works via the class-object path: `list` promotes
-// to `list[Unknown]`, so the `__init__` parameter is `Iterable[Unknown]`.
+// A bare (unsubscripted) generic converter takes its element type from the field annotation:
+// `list` for a `list[int]` field gives an `Iterable[int]` param.
 attrs_testcase!(
     test_attrs_field_bare_generic_converter,
     r#"
@@ -229,7 +229,140 @@ from attrs import define, field
 class C:
     xs: list[int] = field(converter=list)
 
-C(5)  # E: not assignable to parameter `xs` with type `Iterable[Unknown]`
+C(5)  # E: not assignable to parameter `xs` with type `Iterable[int]`
+"#,
+);
+
+// `tuple`'s constructor is `(Iterable[_T]) -> tuple[_T, ...]`. Solving that output against the
+// `Sequence[int]` annotation gives `_T = int`, so the `__init__` param is the converter's input,
+// `Iterable[int]`, while the attribute keeps the declared `Sequence[int]`.
+attrs_testcase!(
+    test_attrs_field_bare_tuple_converter_passthrough,
+    r#"
+from typing import Sequence, assert_type, reveal_type
+from attrs import define, field
+
+@define
+class C:
+    a: Sequence[int] = field(converter=tuple)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, a: Iterable[int]) -> None
+assert_type(C([1, 2, 3]).a, Sequence[int])
+C(["1", 2, 3])  # E: not assignable to parameter `a` with type `Iterable[int]`
+"#,
+);
+
+// When the converter's output cannot satisfy the annotation (`tuple[_T, ...]` is never an `int`),
+// there is no element type to solve, so the `__init__` param falls back to `Iterable[Unknown]`.
+attrs_testcase!(
+    test_attrs_field_bare_converter_incompatible_annotation,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class C:
+    a: int = field(converter=tuple)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, a: Iterable[Unknown]) -> None
+"#,
+);
+
+// The solved converter input type carries over to a field inherited from a base class.
+attrs_testcase!(
+    test_attrs_field_bare_converter_inherited,
+    r#"
+from typing import Sequence
+from attrs import define, field
+
+@define
+class Base:
+    a: Sequence[int] = field(converter=tuple)
+
+@define
+class Sub(Base):
+    pass
+
+Sub(["1", 2, 3])  # E: not assignable to parameter `a` with type `Iterable[int]`
+"#,
+);
+
+// A generic function converter (`def identity[T](x: T) -> T`) is type-preserving, so solving its
+// return against the `int` annotation gives an `__init__` param of `int` rather than a leaked `T`.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter,
+    r#"
+from typing import assert_type, reveal_type
+from attrs import define, field
+
+def identity[T](x: T) -> T:
+    return x
+
+@define
+class C:
+    x: int = field(converter=identity)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int) -> None
+assert_type(C(42).x, int)
+C("nope")  # E: not assignable to parameter `x`
+"#,
+);
+
+// A stdlib generic function converter is solved the same way, so its input is the field type
+// instead of a leaked type variable.
+attrs_testcase!(
+    test_attrs_field_deepcopy_converter,
+    r#"
+import copy
+from attrs import define, field
+
+@define
+class C:
+    x: int = field(converter=copy.deepcopy)
+
+C(42)     # OK
+C("no")   # E: not assignable to parameter `x`
+"#,
+);
+
+// A type argument is substituted into nested positions of the converter input, so a
+// `(list[T]) -> list[T]` converter against a `list[int]` field gives a `list[int]` param.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter_nested_typevar,
+    r#"
+from attrs import define, field
+
+def clone_all[T](xs: list[T]) -> list[T]:
+    return list(xs)
+
+@define
+class C:
+    xs: list[int] = field(converter=clone_all)
+
+C([1, 2])   # OK
+C(["a"])    # E: not assignable to parameter `xs`
+"#,
+);
+
+// The solved generic-function converter input carries over to a field inherited from a base class.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter_inherited,
+    r#"
+from attrs import define, field
+
+def identity[T](x: T) -> T:
+    return x
+
+@define
+class Base:
+    x: int = field(converter=identity)
+
+@define
+class Sub(Base):
+    pass
+
+Sub(5)       # OK
+Sub("nope")  # E: not assignable to parameter `x`
 "#,
 );
 
@@ -267,6 +400,26 @@ class C:
 assert_type(C(3.4).x, str)
 C("09")  # OK
 C({})    # E: not assignable to parameter `x`
+"#,
+);
+
+// In a `pipe`, the first converter's output feeds the next converter, not the field, so a bare
+// generic first converter is NOT solved against the field annotation: `tuple` here stays
+// `Iterable[Unknown]` rather than being (wrongly) solved to `Iterable[bool]` from `Sequence[bool]`.
+attrs_testcase!(
+    test_attrs_field_pipe_bare_generic_first_not_solved_from_annotation,
+    r#"
+from typing import Sequence, reveal_type
+from attrs import define, field
+import attr
+
+def widen(xs: tuple[int, ...]) -> Sequence[bool]: ...
+
+@define
+class C:
+    a: Sequence[bool] = field(converter=attr.converters.pipe(tuple, widen))
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, a: Iterable[Unknown]) -> None
 "#,
 );
 

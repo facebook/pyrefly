@@ -461,6 +461,16 @@ def two_elems() -> tuple:
 a, b, c = two_elems()
 ```
 
+## column-type-mismatch
+
+A Polars DataFrame column literal has an element whose type does not fit the column's dtype. Polars infers the dtype from the first element and requires every later element to fit it, so a mismatch raises `TypeError` at runtime.
+
+```python
+import polars as pl
+
+pl.DataFrame({"a": [1, 2.0]})  # column `a` is `int`, so the `float` does not fit
+```
+
 ## deprecated
 
 Default severity: `warn`
@@ -543,7 +553,6 @@ Most concrete diagnostics are emitted under one of the more specific sub-kinds:
 - [`implicit-any-lambda`](#implicit-any-lambda)
 - [`implicit-any-parameter`](#implicit-any-parameter)
 - [`implicit-any-type-argument`](#implicit-any-type-argument)
-- [`implicit-any-variable`](#implicit-any-variable)
 
 ## implicit-any-attribute
 
@@ -630,22 +639,6 @@ def f(xs: list) -> tuple:  # implicit-any-type-argument on both `list` and `tupl
 # Fix:
 def f(xs: list[int]) -> tuple[int, ...]:
     return tuple(xs)
-```
-
-## implicit-any-variable
-
-Default severity: `ignore`
-
-A variable assigned a value of unknown type without an explicit annotation is inferred as an implicit `Any`, which hides type errors wherever it is used. Adding an annotation gives the variable a concrete type.
-
-This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
-
-```python
-def untyped(x):  # unannotated: returns an implicit `Any`
-    return x
-
-y = untyped(1)  # the type of `y` is unknown [implicit-any-variable]
-y2: int = untyped(1)  # OK: `y2` is explicitly annotated
 ```
 
 ## implicit-import
@@ -985,6 +978,16 @@ specifically handles illegal type alias values:
 from typing import TypeAlias
 x = 2
 Bad: TypeAlias = x
+```
+
+## invalid-type-checking-constant
+
+A module-level `TYPE_CHECKING` constant that is not typed as `bool`. Type checkers treat
+`TYPE_CHECKING` as `True`, while at runtime it is `False`, so a user-defined one must be a `bool`
+(conventionally `TYPE_CHECKING = False`).
+
+```python
+TYPE_CHECKING: str = ""  # error: not a bool
 ```
 
 ## invalid-type-var
@@ -1729,6 +1732,28 @@ reveal_type(1)  # error
 assert_type(1, int)  # error
 ```
 
+## unknown-attribute-type
+
+Default severity: `ignore`
+
+An unannotated attribute is assigned a value whose type is unknown, so the attribute is inferred as `Any`. Add an explicit attribute annotation or fix the right-hand side so Pyrefly can infer a concrete type.
+
+This is not a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` does not suppress this error.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.x = untyped(1)  # downstream users don't know what type `self.x` is
+        self.y: int = untyped(1)  # downstream users treat `self.y` as `int`
+```
+
+## unknown-column
+
+Accessing a DataFrame column that does not exist in the inferred schema.
+
 ## unknown-name
 
 A name is referenced but does not exist.
@@ -1741,6 +1766,20 @@ Even when no configuration file is present, this diagnostic is shown as a warnin
 def where() -> None:
   # There is no spoon: unknown-name
   global spoon
+```
+
+## unknown-variable-type
+
+Default severity: `ignore`
+
+A variable assigned a value of unknown type without an explicit annotation is inferred as `Any`, which hides type errors wherever it is used. Adding an annotation gives the variable a concrete type.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+y = untyped(1)  # downstream users don't know what type `y` is
+y2: int = untyped(1)  # downstream users treat `y2` as `int`
 ```
 
 ## unnecessary-comparison
@@ -1929,6 +1968,24 @@ Default severity: `warn`
 Type information for some third-party libraries is shipped in a stubs package separate from the
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
+
+## unused-call-result
+
+Default severity: `ignore`
+
+This rule is disabled by default and must be explicitly enabled. Once enabled, it reports when the
+result of a call expression is discarded and the result type is informative (not `None`, `Any`, or
+`Never`). This is often a sign of a mistake, such as forgetting to use the return value.
+
+```python
+def combine(a: list[int], b: list[int]) -> list[int]:
+    return a + b
+
+items = [1, 2, 3]
+combine(items, [4, 5])  # warning: result is discarded
+print(items)  # ok: print returns None
+x = combine(items, [4, 5])  # ok: result is used
+```
 
 ## unused-coroutine
 

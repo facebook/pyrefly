@@ -8,14 +8,16 @@
 from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
-def accepts_symbolic_returns_symbolic[N: SymVar](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
+def accepts_symbolic_returns_symbolic[N: IntVar](
+    x: Tensor[[N, 3]],
+) -> Tensor[[N, 3]]:
     """Identity function with symbolic dimension - preserves shape"""
     return x
 
@@ -38,17 +40,17 @@ def test_symbolic_identity_wrong() -> Tensor[[4, 3]]:
     return result
 
 
-def numel_returns_bad_explicit_symint[N: SymVar, M: SymVar](
+def numel_returns_bad_explicit_int[N: IntVar, M: IntVar](
     x: Tensor[[N, M]],
-) -> Dim[N + M]:
+) -> Int[N + M]:
     s = x.numel()
-    assert_type(s, Dim[N * M])
-    # E: Returned type `Dim[(N * M)]` is not assignable
-    #    to declared return type `Dim[(N + M)]`
+    assert_type(s, Int[N * M])
+    # E: Returned type `Int[(N * M)]` is not assignable
+    #    to declared return type `Int[(N + M)]`
     return s
 
 
-def view_returns_bad_explicit_tensor[N: SymVar, M: SymVar](
+def view_returns_bad_explicit_tensor[N: IntVar, M: IntVar](
     x: Tensor[[N, M]],
 ) -> Tensor[[N + M]]:
     v = x.view(-1)
@@ -58,17 +60,17 @@ def view_returns_bad_explicit_tensor[N: SymVar, M: SymVar](
     return v
 
 
-def numel_returns_bad_implicit_symint[N: SymVar, M: SymVar, K: SymVar](
+def numel_returns_bad_implicit_int[N: IntVar, M: IntVar, K: IntVar](
     x: Tensor[[N, M]],
-) -> Dim[K]:
+) -> Int[K]:
     s = x.numel()
-    assert_type(s, Dim[N * M])
-    # E: Returned type `Dim[(N * M)]` is not assignable
-    #    to declared return type `Dim[K]`
+    assert_type(s, Int[N * M])
+    # E: Returned type `Int[(N * M)]` is not assignable
+    #    to declared return type `Int[K]`
     return s
 
 
-def view_returns_bad_implicit_tensor[N: SymVar, M: SymVar, K: SymVar](
+def view_returns_bad_implicit_tensor[N: IntVar, M: IntVar, K: IntVar](
     x: Tensor[[N, M]],
 ) -> Tensor[[K]]:
     v = x.view(-1)
@@ -78,9 +80,9 @@ def view_returns_bad_implicit_tensor[N: SymVar, M: SymVar, K: SymVar](
     return v
 
 
-def test_numel_returns_bad_implicit_symint() -> Dim[11]:
-    n = numel_returns_bad_implicit_symint(torch.randn(3, 4))
-    assert_type(n, Dim)
+def test_numel_returns_bad_implicit_int() -> Int[11]:
+    n = numel_returns_bad_implicit_int(torch.randn(3, 4))
+    assert_type(n, Int)
     # Should infer: Literal[12] (3*4=12)
     return n
 

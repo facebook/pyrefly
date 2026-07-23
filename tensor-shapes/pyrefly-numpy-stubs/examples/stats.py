@@ -6,34 +6,34 @@
 from __future__ import annotations
 
 import numpy as np
-from shape_extensions import assert_shape, Dim, SymVar
+from shape_extensions import assert_shape, IntVar
 
-N = SymVar("N")
-P = SymVar("P")
-K = SymVar("K")
-C = SymVar("C")
+N = IntVar("N")
+P = IntVar("P")
+K = IntVar("K")
+C = IntVar("C")
 
 
 def ordinary_least_squares(
-    x: np.ndarray[tuple[Dim[N], Dim[P]]],
-    y: np.ndarray[tuple[Dim[N], Dim[1]]],
-) -> np.ndarray[tuple[Dim[P], Dim[1]]]:
+    x: np.ndarray[[N, P]],
+    y: np.ndarray[[N, 1]],
+) -> np.ndarray[[P, 1]]:
     return np.linalg.solve(x.T @ x, x.T @ y)
 
 
 def ridge_regression(
-    x: np.ndarray[tuple[Dim[N], Dim[P]]],
-    y: np.ndarray[tuple[Dim[N], Dim[1]]],
-    penalty_matrix: np.ndarray[tuple[Dim[P], Dim[P]]],
-) -> np.ndarray[tuple[Dim[P], Dim[1]]]:
+    x: np.ndarray[[N, P]],
+    y: np.ndarray[[N, 1]],
+    penalty_matrix: np.ndarray[[P, P]],
+) -> np.ndarray[[P, 1]]:
     return np.linalg.solve(x.T @ x + penalty_matrix, x.T @ y)
 
 
 def logistic_irls_step(
-    x: np.ndarray[tuple[Dim[N], Dim[P]]],
-    y: np.ndarray[tuple[Dim[N], Dim[1]]],
-    beta: np.ndarray[tuple[Dim[P], Dim[1]]],
-) -> np.ndarray[tuple[Dim[P], Dim[1]]]:
+    x: np.ndarray[[N, P]],
+    y: np.ndarray[[N, 1]],
+    beta: np.ndarray[[P, 1]],
+) -> np.ndarray[[P, 1]]:
     eta = x @ beta
     probability = 1.0 / (1.0 + np.exp(-eta))
     weight = probability * (1.0 - probability)
@@ -42,8 +42,8 @@ def logistic_irls_step(
 
 
 def pca_full_basis_projection(
-    x: np.ndarray[tuple[Dim[N], Dim[P]]],
-) -> np.ndarray[tuple[Dim[N], Dim[P]]]:
+    x: np.ndarray[[N, P]],
+) -> np.ndarray[[N, P]]:
     x_centered = x - x.mean(axis=0)
     scatter = x_centered.T @ x_centered
     _u, _s, vt = np.linalg.svd(scatter, full_matrices=False)
@@ -51,9 +51,9 @@ def pca_full_basis_projection(
 
 
 def nearest_centroid_labels(
-    x: np.ndarray[tuple[Dim[N], Dim[P]]],
-    centroids: np.ndarray[tuple[Dim[K], Dim[P]]],
-) -> np.ndarray[tuple[Dim[N]]]:
+    x: np.ndarray[[N, P]],
+    centroids: np.ndarray[[K, P]],
+) -> np.ndarray[[N]]:
     point_vectors = np.expand_dims(x, axis=-2)
     centroid_vectors = np.expand_dims(centroids, axis=-3)
     deltas = point_vectors - centroid_vectors
@@ -62,9 +62,9 @@ def nearest_centroid_labels(
 
 
 def cross_entropy_loss(
-    logits: np.ndarray[tuple[Dim[N], Dim[C]]],
-    targets: np.ndarray[tuple[Dim[N]], np.dtype[np.intp]],
-) -> np.ndarray[tuple[()]]:
+    logits: np.ndarray[[N, C]],
+    targets: np.ndarray[[N], np.dtype[np.intp]],
+) -> np.ndarray[[]]:
     shifted = logits - logits.max(axis=1, keepdims=True)
     log_probs = shifted - np.log(np.exp(shifted).sum(axis=1, keepdims=True))
     return -log_probs[np.arange(len(targets)), targets].mean()

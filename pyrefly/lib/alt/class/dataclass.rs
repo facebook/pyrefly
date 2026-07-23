@@ -59,6 +59,7 @@ use crate::types::keywords::ConverterMap;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
+use crate::types::types::Forallable;
 use crate::types::types::Type;
 
 /// Which constructor-copy builtin `call_dataclasses_replace` is serving. Chosen by the caller so the
@@ -828,7 +829,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .or_else(|| {
                 map.0
                     .get(&DataclassFieldKeywords::CONVERTER)
-                    .map(|converter| self.get_converter_param(converter))
+                    .map(|converter| self.get_converter_param(converter, annotated_field_ty))
             });
         // Note that we intentionally don't try to fill in `default`, since we can't distinguish
         // between a real default and something like `dataclasses.MISSING`.
@@ -982,7 +983,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
-    pub(crate) fn get_converter_param(&self, converter: &Type) -> Type {
+    pub(crate) fn get_converter_param(
+        &self,
+        converter: &Type,
+        annotated_field_ty: Option<&Type>,
+    ) -> Type {
+        let solved = match (converter, annotated_field_ty) {
+            (Type::ClassDef(cls), Some(hint)) => self.solve_generic_class_converter(cls, hint),
+            (Type::Forall(_), Some(hint)) => self.solve_generic_function_converter(converter, hint),
+            _ => None,
+        };
+        let converter = solved.as_ref().unwrap_or(converter);
         let constructor_callable = self.constructor_to_callable_distributed(converter);
         let converter = constructor_callable.as_ref().unwrap_or(converter);
         self.distribute_over_union(converter, |ty| {
@@ -1000,6 +1011,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.unions(inputs)
             }
         })
+    }
+
+    /// A generic class converter is type-preserving, so solve its type parameters against the
+    /// declared field `hint` (e.g. `tuple` against `Sequence[int]` becomes `tuple[int, ...]`).
+    /// `None` for a non-generic class or an output incompatible with `hint`.
+    fn solve_generic_class_converter(&self, cls: &Class, hint: &Type) -> Option<Type> {
+        let mut class_type = self.as_class_type_unchecked(cls);
+        if class_type.targs().is_empty() {
+            return None;
+        }
+        let vs = self
+            .solver()
+            .freshen_class_targs(class_type.targs_mut(), self.uniques);
+        let matched = self.is_subset_eq(&self.heap.mk_class_type(class_type.clone()), hint);
+        self.solver()
+            .generalize_class_targs(class_type.targs_mut(), &SmallSet::new());
+        self.solver()
+            .finish_class_targs(class_type.targs_mut(), self.uniques);
+        // Finalizing the fresh vars is required; its specialization errors are dropped because this
+        // is best-effort param inference with no call site to report them against.
+        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        matched.then(|| self.heap.mk_type(self.heap.mk_class_type(class_type)))
+    }
+
+    /// A generic function converter is solved by constraining its return type against the declared
+    /// field `hint`, so the `__init__` param is the solved input, not a leaked type variable.
+    fn solve_generic_function_converter(&self, converter: &Type, hint: &Type) -> Option<Type> {
+        let Type::Forall(forall) = converter else {
+            return None;
+        };
+        if !matches!(forall.body, Forallable::Function(_)) {
+            return None;
+        }
+        let (vs, instantiated) = self.solver().fresh_quantified(
+            &forall.tparams,
+            forall.body.clone().as_type(),
+            self.uniques,
+        );
+        if let Some(ret) = instantiated.callable_return_type(self.heap) {
+            self.is_subset_eq(&ret, hint);
+        }
+        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        Some(self.solver().expand(instantiated))
     }
 
     fn get_default(&self, map: &TypeMap) -> Option<Type> {

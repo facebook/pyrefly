@@ -541,6 +541,7 @@ impl<'a> BindingsBuilder<'a> {
                 def_index: class_indices.def_index,
                 def: ClassDefData::new(x),
                 parent: parent.dupe(),
+                is_protocol: has_protocol_base,
                 tparams_require_binding,
                 docstring_range,
             }),

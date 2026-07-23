@@ -35,11 +35,11 @@ from typing import Any, assert_type, cast, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-from shape_extensions import Elements, SizeTuple, SymVar
+from shape_extensions import Elements, IntTuple, IntVar
 from torch.nn import functional as F
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
@@ -49,18 +49,18 @@ def find_multiple(n: int, k: int) -> int:
     return n + k - (n % k)
 
 
-class RMSNorm[D: SymVar](nn.Module):
-    def __init__(self, dim: Dim[D], eps: float = 1e-5):
+class RMSNorm[D: IntVar](nn.Module):
+    def __init__(self, dim: Int[D], eps: float = 1e-5):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def _norm[Bs: SizeTuple](
+    def _norm[Bs: IntTuple](
         self, x: Tensor[[*Elements[Bs], D]]
     ) -> Tensor[[*Elements[Bs], D]]:
         return x * torch.rsqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
 
-    def forward[Bs: SizeTuple](
+    def forward[Bs: IntTuple](
         self, x: Tensor[[*Elements[Bs], D]]
     ) -> Tensor[[*Elements[Bs], D]]:
         output = self._norm(x.float()).type_as(x)
@@ -70,13 +70,13 @@ class RMSNorm[D: SymVar](nn.Module):
         return result
 
 
-class KVCache[B: SymVar, NHead: SymVar, MaxSeq: SymVar, HD: SymVar](nn.Module):
+class KVCache[B: IntVar, NHead: IntVar, MaxSeq: IntVar, HD: IntVar](nn.Module):
     def __init__(
         self,
-        max_batch_size: Dim[B],
-        max_seq_length: Dim[MaxSeq],
-        n_heads: Dim[NHead],
-        head_dim: Dim[HD],
+        max_batch_size: Int[B],
+        max_seq_length: Int[MaxSeq],
+        n_heads: Int[NHead],
+        head_dim: Int[HD],
         dtype: Any = torch.bfloat16,
     ):
         super().__init__()
@@ -87,11 +87,11 @@ class KVCache[B: SymVar, NHead: SymVar, MaxSeq: SymVar, HD: SymVar](nn.Module):
             torch.zeros(max_batch_size, n_heads, max_seq_length, head_dim, dtype=dtype)
         )
 
-    def update[S: SymVar](
+    def update[S: IntVar](
         self,
         input_pos: Tensor[[S]],
-        k_val: Tensor[[B, NHead, S, HD]],
-        v_val: Tensor[[B, NHead, S, HD]],
+        k_val: Tensor,
+        v_val: Tensor,
     ) -> tuple[Tensor[[B, NHead, MaxSeq, HD]], Tensor[[B, NHead, MaxSeq, HD]]]:
         k_out = self.k_cache
         assert_type(k_out, Tensor[[B, NHead, MaxSeq, HD]])
@@ -102,19 +102,19 @@ class KVCache[B: SymVar, NHead: SymVar, MaxSeq: SymVar, HD: SymVar](nn.Module):
         return k_out, v_out
 
 
-class ConditionalFeedForward[NExp: SymVar, Inter: SymVar, D: SymVar](nn.Module):
+class ConditionalFeedForward[NExp: IntVar, Inter: IntVar, D: IntVar](nn.Module):
     def __init__(
         self,
-        num_experts: Dim[NExp],
-        intermediate_size: Dim[Inter],
-        dim: Dim[D],
+        num_experts: Int[NExp],
+        intermediate_size: Int[Inter],
+        dim: Int[D],
     ):
         super().__init__()
         self.w1 = nn.Parameter(torch.empty(num_experts, intermediate_size, dim))
         self.w2 = nn.Parameter(torch.empty(num_experts, dim, intermediate_size))
         self.w3 = nn.Parameter(torch.empty(num_experts, intermediate_size, dim))
 
-    def forward[T: SymVar, A: SymVar](
+    def forward[T: IntVar, A: IntVar](
         self, x: Tensor[[T, D]], expert_indices: Tensor[[T, A]]
     ) -> Tensor[[T, A, D]]:
         w1_weights = self.w1[expert_indices]
@@ -132,13 +132,13 @@ class ConditionalFeedForward[NExp: SymVar, Inter: SymVar, D: SymVar](nn.Module):
         return expert_outs
 
 
-class MOEFeedForward[D: SymVar, NExp: SymVar, A: SymVar, Inter: SymVar](nn.Module):
+class MOEFeedForward[D: IntVar, NExp: IntVar, A: IntVar, Inter: IntVar](nn.Module):
     def __init__(
         self,
-        dim: Dim[D],
-        num_experts: Dim[NExp],
-        num_activated_experts: Dim[A],
-        intermediate_size: Dim[Inter],
+        dim: Int[D],
+        num_experts: Int[NExp],
+        num_activated_experts: Int[A],
+        intermediate_size: Int[Inter],
     ) -> None:
         super().__init__()
         self.gate = nn.Linear(dim, num_experts, bias=False)
@@ -146,7 +146,7 @@ class MOEFeedForward[D: SymVar, NExp: SymVar, A: SymVar, Inter: SymVar](nn.Modul
         self.dim = dim
         self.num_activated_experts = num_activated_experts
 
-    def forward[T: SymVar](self, x: Tensor[[T, D]]) -> Tensor[[T, D]]:
+    def forward[T: IntVar](self, x: Tensor[[T, D]]) -> Tensor[[T, D]]:
         scores = self.gate(x)
         assert_type(scores, Tensor[[T, NExp]])
         expert_weights = F.softmax(scores, dim=-1)
@@ -231,7 +231,7 @@ def precompute_freqs_cis(seq_len: int, n_elem: int, base: float = 10000) -> Tens
     return cache.to(dtype=torch.bfloat16)
 
 
-def apply_rotary_emb[S: SizeTuple](x: Tensor[S], freqs_cis: Tensor) -> Tensor[S]:
+def apply_rotary_emb[S: IntTuple](x: Tensor[S], freqs_cis: Tensor) -> Tensor[S]:
     xshaped = x.float().reshape(*x.shape[:-1], -1, 2)  # type: ignore[bad-argument-type]
     freqs_cis = freqs_cis.view(1, xshaped.size(1), 1, xshaped.size(3), 2)
     x_out2 = torch.stack(
@@ -245,13 +245,13 @@ def apply_rotary_emb[S: SizeTuple](x: Tensor[S], freqs_cis: Tensor) -> Tensor[S]
     return x_out2.type_as(x)  # type: ignore[bad-return]  # shape preserved — rotary doesn't change dims
 
 
-class Attention[D: SymVar, NHead: SymVar, NLocalHead: SymVar, HD: SymVar](nn.Module):
+class Attention[D: IntVar, NHead: IntVar, NLocalHead: IntVar, HD: IntVar](nn.Module):
     def __init__(
         self,
-        dim: Dim[D],
-        n_head: Dim[NHead],
-        n_local_heads: Dim[NLocalHead],
-        head_dim: Dim[HD],
+        dim: Int[D],
+        n_head: Int[NHead],
+        n_local_heads: Int[NLocalHead],
+        head_dim: Int[HD],
     ):
         super().__init__()
         total_head_dim = (n_head + 2 * n_local_heads) * head_dim
@@ -272,7 +272,7 @@ class Attention[D: SymVar, NHead: SymVar, NLocalHead: SymVar, HD: SymVar](nn.Mod
             wv = state_dict.pop(prefix + "wv.weight")
             state_dict[prefix + "wqkv.weight"] = torch.cat([wq, wk, wv])
 
-    def forward[B: SymVar, SeqLen: SymVar](
+    def forward[B: IntVar, SeqLen: IntVar](
         self,
         x: Tensor[[B, SeqLen, D]],
         freqs_cis: Tensor,
@@ -336,23 +336,23 @@ class Attention[D: SymVar, NHead: SymVar, NLocalHead: SymVar, HD: SymVar](nn.Mod
 
 
 class TransformerBlock[
-    D: SymVar,
-    NHead: SymVar,
-    NLocalHead: SymVar,
-    HD: SymVar,
-    NExp: SymVar,
-    A: SymVar,
-    Inter: SymVar,
+    D: IntVar,
+    NHead: IntVar,
+    NLocalHead: IntVar,
+    HD: IntVar,
+    NExp: IntVar,
+    A: IntVar,
+    Inter: IntVar,
 ](nn.Module):
     def __init__(
         self,
-        dim: Dim[D],
-        n_head: Dim[NHead],
-        n_local_heads: Dim[NLocalHead],
-        head_dim: Dim[HD],
-        num_experts: Dim[NExp],
-        num_activated_experts: Dim[A],
-        intermediate_size: Dim[Inter],
+        dim: Int[D],
+        n_head: Int[NHead],
+        n_local_heads: Int[NLocalHead],
+        head_dim: Int[HD],
+        num_experts: Int[NExp],
+        num_activated_experts: Int[A],
+        intermediate_size: Int[Inter],
         norm_eps: float,
     ) -> None:
         super().__init__()
@@ -363,7 +363,7 @@ class TransformerBlock[
         self.ffn_norm = RMSNorm(dim, eps=norm_eps)
         self.attention_norm = RMSNorm(dim, eps=norm_eps)
 
-    def forward[B: SymVar, SeqLen: SymVar](
+    def forward[B: IntVar, SeqLen: IntVar](
         self,
         x: Tensor[[B, SeqLen, D]],
         input_pos: Tensor | None,
@@ -439,7 +439,9 @@ class Transformer(nn.Module):
             torch.ones(self.max_seq_length, self.max_seq_length, dtype=torch.bool)
         )
 
-    def forward(self, idx: Tensor, input_pos: Tensor | None = None) -> Tensor:
+    def forward[B: IntVar, SeqLen: IntVar](
+        self, idx: Tensor[[B, SeqLen]], input_pos: Tensor[[SeqLen]] | None = None
+    ) -> Tensor:
         if self.freqs_cis is None:
             raise AssertionError("Caches must be initialized first")
         mask = self.causal_mask[None, None, input_pos]
@@ -448,7 +450,7 @@ class Transformer(nn.Module):
         assert_type(freqs_cis, Tensor)  # bare — indexing on bare freqs_cis
         # ModelArgs uses plain int — sub-module dims are Unknown
         x = self.tok_embeddings(idx)
-        assert_type(x, Tensor)  # type: ignore  # Unknown — config dims are int not Dim
+        assert_type(x, Tensor)  # type: ignore  # Unknown — config dims are int not Int
 
         for layer in self.layers:
             x = layer(x, input_pos, freqs_cis, mask)
