@@ -455,8 +455,10 @@ impl Errors {
                 || containing_range.is_some_and(|(fs_start, fs_end)| {
                     let ignore = error.module().ignore();
                     error.error_kind().suppression_names().any(|kind| {
-                        (fs_start != start_line && ignore.is_ignored(fs_start, kind, &enabled_ignores))
-                            || (fs_end != start_line && ignore.is_ignored(fs_end, kind, &enabled_ignores))
+                        (fs_start != start_line
+                            && ignore.is_ignored(fs_start, kind, &enabled_ignores))
+                            || (fs_end != start_line
+                                && ignore.is_ignored(fs_end, kind, &enabled_ignores))
                     })
                 });
 
