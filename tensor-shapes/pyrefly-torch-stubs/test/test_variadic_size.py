@@ -13,11 +13,11 @@ from torch import Tensor
 
 
 def test_size_on_variadic_from_linear():
-    """Linear returns Tensor[*Bs, OUT] which is variadic when Bs is unknown"""
+    """Linear returns Tensor[[*Elements[Bs], OUT]] which is variadic when Bs is unknown"""
     linear = nn.Linear(10, 20)
     x: Tensor = torch.randn(5, 10)  # unannotated shape
 
-    # Linear forward returns variadic shape Tensor[*Bs, OUT]
+    # Linear forward returns variadic shape Tensor[[*Elements[Bs], OUT]]
     output = linear(x)
 
     # .size() should return tuple[int, ...]
@@ -34,7 +34,7 @@ def test_size_on_variadic_from_linear():
 
 def test_size_on_concrete_shape():
     """Verify that concrete shapes still work correctly"""
-    x: Tensor[5, 10] = torch.randn(5, 10)
+    x: Tensor[[5, 10]] = torch.randn(5, 10)
 
     # .size() returns tuple with specific dimensions
     # For concrete shapes, we return the actual tuple of dimensions

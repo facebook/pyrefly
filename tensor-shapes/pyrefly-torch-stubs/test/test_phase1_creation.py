@@ -14,56 +14,56 @@ from torch import Tensor
 
 # Test: torch.zeros_like
 def test_zeros_like():
-    x: Tensor[3, 4] = torch.randn(3, 4)
+    x: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.zeros_like(x)
-    assert_type(result, Tensor[3, 4])
+    assert_type(result, Tensor[[3, 4]])
 
 
 def test_zeros_like_3d():
-    x: Tensor[2, 3, 4] = torch.randn(2, 3, 4)
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
     result = torch.zeros_like(x)
-    assert_type(result, Tensor[2, 3, 4])
+    assert_type(result, Tensor[[2, 3, 4]])
 
 
 # Test: torch.ones_like
 def test_ones_like():
-    x: Tensor[3, 4] = torch.randn(3, 4)
+    x: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.ones_like(x)
-    assert_type(result, Tensor[3, 4])
+    assert_type(result, Tensor[[3, 4]])
 
 
 def test_ones_like_1d():
-    x: Tensor[5] = torch.randn(5)
+    x: Tensor[[5]] = torch.randn(5)
     result = torch.ones_like(x)
-    assert_type(result, Tensor[5])
+    assert_type(result, Tensor[[5]])
 
 
 # Test: torch.full_like
 def test_full_like():
-    x: Tensor[3, 4] = torch.randn(3, 4)
+    x: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.full_like(x, 2.5)
-    assert_type(result, Tensor[3, 4])
+    assert_type(result, Tensor[[3, 4]])
 
 
 # Test: torch.empty_like
 def test_empty_like():
-    x: Tensor[3, 4] = torch.randn(3, 4)
+    x: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.empty_like(x)
-    assert_type(result, Tensor[3, 4])
+    assert_type(result, Tensor[[3, 4]])
 
 
 # Test: torch.rand_like
 def test_rand_like():
-    x: Tensor[2, 3] = torch.randn(2, 3)
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
     result = torch.rand_like(x)
-    assert_type(result, Tensor[2, 3])
+    assert_type(result, Tensor[[2, 3]])
 
 
 # Test: torch.randn_like
 def test_randn_like():
-    x: Tensor[2, 3, 4] = torch.randn(2, 3, 4)
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
     result = torch.randn_like(x)
-    assert_type(result, Tensor[2, 3, 4])
+    assert_type(result, Tensor[[2, 3, 4]])
 
 
 # ==== Diagonal Operations ====
@@ -71,23 +71,23 @@ def test_randn_like():
 
 # Test: torch.diag_embed
 def test_diag_embed_1d():
-    x: Tensor[3] = torch.randn(3)
+    x: Tensor[[3]] = torch.randn(3)
     # Embeds into 3x3 diagonal matrix
     result = torch.diag_embed(x)
-    assert_type(result, Tensor[3, 3])
+    assert_type(result, Tensor[[3, 3]])
 
 
 def test_diag_embed_2d():
-    x: Tensor[2, 3] = torch.randn(2, 3)
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
     # Embeds last dim (3) into 3x3, output: [2, 3, 3]
     result = torch.diag_embed(x)
-    assert_type(result, Tensor[2, 3, 3])
+    assert_type(result, Tensor[[2, 3, 3]])
 
 
 def test_diag_embed_method():
-    x: Tensor[4] = torch.randn(4)
+    x: Tensor[[4]] = torch.randn(4)
     result = x.diag_embed()
-    assert_type(result, Tensor[4, 4])
+    assert_type(result, Tensor[[4, 4]])
 
 
 # ==== Triangular Operations (preserve shape) ====
@@ -95,55 +95,55 @@ def test_diag_embed_method():
 
 # Test: torch.tril
 def test_tril():
-    x: Tensor[3, 3] = torch.randn(3, 3)
+    x: Tensor[[3, 3]] = torch.randn(3, 3)
     # Lower triangular preserves shape
     result = torch.tril(x)
-    assert_type(result, Tensor[3, 3])
+    assert_type(result, Tensor[[3, 3]])
 
 
 def test_tril_rectangular():
-    x: Tensor[4, 5] = torch.randn(4, 5)
+    x: Tensor[[4, 5]] = torch.randn(4, 5)
     result = torch.tril(x)
-    assert_type(result, Tensor[4, 5])
+    assert_type(result, Tensor[[4, 5]])
 
 
 def test_tril_with_diagonal():
-    x: Tensor[3, 3] = torch.randn(3, 3)
+    x: Tensor[[3, 3]] = torch.randn(3, 3)
     # With diagonal offset
     result = torch.tril(x, diagonal=1)
-    assert_type(result, Tensor[3, 3])
+    assert_type(result, Tensor[[3, 3]])
 
 
 def test_tril_method():
-    x: Tensor[4, 4] = torch.randn(4, 4)
+    x: Tensor[[4, 4]] = torch.randn(4, 4)
     result = x.tril()
-    assert_type(result, Tensor[4, 4])
+    assert_type(result, Tensor[[4, 4]])
 
 
 # Test: torch.triu
 def test_triu():
-    x: Tensor[3, 3] = torch.randn(3, 3)
+    x: Tensor[[3, 3]] = torch.randn(3, 3)
     # Upper triangular preserves shape
     result = torch.triu(x)
-    assert_type(result, Tensor[3, 3])
+    assert_type(result, Tensor[[3, 3]])
 
 
 def test_triu_rectangular():
-    x: Tensor[5, 4] = torch.randn(5, 4)
+    x: Tensor[[5, 4]] = torch.randn(5, 4)
     result = torch.triu(x)
-    assert_type(result, Tensor[5, 4])
+    assert_type(result, Tensor[[5, 4]])
 
 
 def test_triu_with_diagonal():
-    x: Tensor[3, 3] = torch.randn(3, 3)
+    x: Tensor[[3, 3]] = torch.randn(3, 3)
     result = torch.triu(x, diagonal=-1)
-    assert_type(result, Tensor[3, 3])
+    assert_type(result, Tensor[[3, 3]])
 
 
 def test_triu_method():
-    x: Tensor[4, 4] = torch.randn(4, 4)
+    x: Tensor[[4, 4]] = torch.randn(4, 4)
     result = x.triu()
-    assert_type(result, Tensor[4, 4])
+    assert_type(result, Tensor[[4, 4]])
 
 
 # ==== Triangular Indices ====

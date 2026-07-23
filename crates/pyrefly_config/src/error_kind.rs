@@ -134,6 +134,9 @@ pub enum ErrorKind {
     /// Attempting to return a value that does not match the function's return type.
     /// Can also arise when returning values from generators.
     BadReturn,
+    /// A `functools.singledispatch` implementation is registered with a dispatch type that is
+    /// not a subtype of the fallback function's first parameter, so it can never be dispatched to.
+    BadSingledispatchRegister,
     /// Attempting to specialize a generic class with incorrect type arguments.
     /// e.g. `type[int, str]` is an error because `type` accepts only 1 type arg.
     BadSpecialization,
@@ -146,6 +149,8 @@ pub enum ErrorKind {
     /// An error caused by unpacking.
     /// e.g. attempting to unpack an iterable into the wrong number of variables.
     BadUnpacking,
+    /// A Polars DataFrame column literal has an element that does not fit the column's first-element dtype.
+    ColumnTypeMismatch,
     /// A symbol has no type coverage. Emitted only by `pyrefly coverage check`.
     CoverageMissing,
     /// A symbol has partial type coverage. Emitted only by `pyrefly coverage check`.
@@ -164,15 +169,18 @@ pub enum ErrorKind {
     /// `implicit-any` itself is reserved for the umbrella suppression/config
     /// code (suppressing `implicit-any` suppresses every sub-kind).
     ImplicitAny,
-    /// An implicit `Any` introduced when a class attribute is defined by
-    /// assignment to `self.x = None` or `self.x = ()` without an explicit
-    /// annotation.
+    /// An implicit `Any` introduced when a class attribute without an explicit
+    /// annotation is defined by assignment to `self.x = None` or `self.x = ()`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyAttribute,
     /// An implicit `Any` introduced when an empty container (`[]`, `{}`) cannot
     /// be inferred from context and is pinned to a container of `Any`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyEmptyContainer,
+    /// An implicit `Any` introduced when a lambda parameter or return type cannot
+    /// be inferred from context.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyLambda,
     /// An implicit `Any` introduced because a function parameter has no
     /// annotation. The `self` and `cls` parameters of methods are excluded.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
@@ -239,6 +247,10 @@ pub enum ErrorKind {
     InvalidSyntax,
     /// An error related to type alias usage or definition.
     InvalidTypeAlias,
+    /// A user-defined `TYPE_CHECKING` constant that is not typed as `bool`. Type checkers treat
+    /// `TYPE_CHECKING` as `True` while the runtime sees `False`, so it must be a `bool`
+    /// (conventionally `TYPE_CHECKING = False`).
+    InvalidTypeCheckingConstant,
     /// An error caused by incorrect usage or definition of a TypeVar.
     InvalidTypeVar,
     /// An error caused by incorrect usage or definition of a TypeVarTuple.
@@ -248,6 +260,10 @@ pub enum ErrorKind {
     /// Attempting to use `yield` in a way that is not allowed.
     /// e.g. `yield from` with something that's not an iterable.
     InvalidYield,
+    /// A file-level `# pyrefly: ignore-errors` (or `ignore-errors[code]`) directive
+    /// appears after the first line of code, where it is silently inert. File-level
+    /// suppressions are only honored in the preamble, at the top of the file.
+    MisplacedIgnore,
     /// An error caused by calling a function without all the required arguments.
     /// Should be used when we can name the specific arguments that are missing.
     MissingArgument,
@@ -267,6 +283,14 @@ pub enum ErrorKind {
     NameMismatch,
     /// The attribute exists but does not support this access pattern.
     NoAccess,
+    /// Umbrella error kind for cases where `Any` is returned from a function with a concrete return type.
+    NoAnyReturn,
+    /// An explicit `Any` returned from a function with a concrete return type.
+    /// This is a sub-kind of [NoAnyReturn]: suppressing `no-any-return` also suppresses this error.
+    NoAnyReturnExplicit,
+    /// An implicit `Any` returned from a function with a concrete return type.
+    /// This is a sub-kind of [NoAnyReturn]: suppressing `no-any-return` also suppresses this error.
+    NoAnyReturnImplicit,
     /// Attempting to call an overloaded function, but none of the signatures match.
     NoMatchingOverload,
     /// The SCC fixpoint iteration did not converge within the maximum number of
@@ -343,8 +367,14 @@ pub enum ErrorKind {
     UnexpectedPositionalArgument,
     /// Attempting to use a type checker directive without importing it from `typing`.
     UnimportedDirective,
+    /// An unannotated attribute assigned a value with unknown type.
+    UnknownAttributeType,
+    /// Accessing a DataFrame column that does not exist in the inferred schema.
+    UnknownColumn,
     /// Attempting to use a name that is not defined.
     UnknownName,
+    /// A variable assigned a value with unknown type without an explicit annotation.
+    UnknownVariableType,
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
     /// or between literals whose comparison result is statically known.
     UnnecessaryComparison,
@@ -368,8 +398,14 @@ pub enum ErrorKind {
     UnsupportedDelete,
     /// Attempting to apply an operation to arguments that do not support it.
     UnsupportedOperation,
+    /// A class decorator whose own type is `Any`, obscuring the decorated class type.
+    UntypedClassDecorator,
+    /// A function decorator whose own type is `Any`, obscuring the decorated function type.
+    UntypedFunctionDecorator,
     /// Import is missing an expected stubs package
     UntypedImport,
+    /// Result of a call expression is not used.
+    UnusedCallResult,
     /// Result of async function call is never used or awaited
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
@@ -435,8 +471,12 @@ impl ErrorKind {
             }
             ErrorKind::ImplicitAnyAttribute
             | ErrorKind::ImplicitAnyEmptyContainer
+            | ErrorKind::ImplicitAnyLambda
             | ErrorKind::ImplicitAnyParameter
             | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
+            ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
+                Some(ErrorKind::NoAnyReturn)
+            }
             _ => None,
         }
     }
@@ -478,9 +518,13 @@ impl ErrorKind {
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::IncompatibleComparison => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
+            ErrorKind::MisplacedIgnore => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
             ErrorKind::NameMismatch => Severity::Warn,
+            ErrorKind::NoAnyReturn => Severity::Ignore,
+            ErrorKind::NoAnyReturnExplicit => Severity::Ignore,
+            ErrorKind::NoAnyReturnImplicit => Severity::Ignore,
             ErrorKind::NonExhaustiveMatch => Severity::Warn,
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
@@ -496,12 +540,18 @@ impl ErrorKind {
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
+            ErrorKind::ImplicitAnyLambda => Severity::Ignore,
+            ErrorKind::UnknownAttributeType => Severity::Ignore,
+            ErrorKind::UnknownVariableType => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnreachableMatchCase => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            ErrorKind::UntypedClassDecorator => Severity::Ignore,
+            ErrorKind::UntypedFunctionDecorator => Severity::Ignore,
             ErrorKind::UntypedImport => Severity::Warn,
+            ErrorKind::UnusedCallResult => Severity::Ignore,
             ErrorKind::UnusedIgnore => Severity::Ignore,
             ErrorKind::UnusedTypeIgnore => Severity::Ignore,
             ErrorKind::VarianceMismatch => Severity::Warn,
@@ -568,6 +618,36 @@ mod tests {
     fn test_error_kind_name() {
         assert_eq!(ErrorKind::Unsupported.to_name(), "unsupported");
         assert_eq!(ErrorKind::ParseError.to_name(), "parse-error");
+    }
+
+    #[test]
+    fn test_unknown_column_kind_exists() {
+        assert_eq!(ErrorKind::UnknownColumn.to_name(), "unknown-column");
+        assert_eq!(
+            "unknown-column".parse::<ErrorKind>(),
+            Ok(ErrorKind::UnknownColumn)
+        );
+    }
+
+    #[test]
+    fn test_column_type_mismatch_kind_exists() {
+        assert_eq!(
+            ErrorKind::ColumnTypeMismatch.to_name(),
+            "column-type-mismatch"
+        );
+        assert_eq!(
+            "column-type-mismatch".parse::<ErrorKind>(),
+            Ok(ErrorKind::ColumnTypeMismatch)
+        );
+        assert_eq!(
+            ErrorKind::ColumnTypeMismatch.default_severity(),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_unknown_column_default_severity() {
+        assert_eq!(ErrorKind::UnknownColumn.default_severity(), Severity::Error);
     }
 
     #[test]

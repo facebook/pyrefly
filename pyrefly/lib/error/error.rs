@@ -183,7 +183,7 @@ impl<W: Write> ErrorRenderer<W> {
 
 impl Error {
     /// Return the path with a cell fragment if the error is in a notebook cell.
-    fn path_string_with_fragment(&self, project_root: &Path) -> String {
+    pub fn path_string_with_fragment(&self, project_root: &Path) -> String {
         let path = self.path().as_path();
         let path = path.strip_prefix(project_root).unwrap_or(path);
         if let Some(cell) = self.display_range.start.cell() {

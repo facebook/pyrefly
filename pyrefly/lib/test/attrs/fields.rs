@@ -218,8 +218,8 @@ C(5)  # E: not assignable to parameter `s` with type `list[int]`
 "#,
 );
 
-// A bare (unsubscripted) generic converter still works via the class-object path: `list` promotes
-// to `list[Unknown]`, so the `__init__` parameter is `Iterable[Unknown]`.
+// A bare (unsubscripted) generic converter takes its element type from the field annotation:
+// `list` for a `list[int]` field gives an `Iterable[int]` param.
 attrs_testcase!(
     test_attrs_field_bare_generic_converter,
     r#"
@@ -229,7 +229,140 @@ from attrs import define, field
 class C:
     xs: list[int] = field(converter=list)
 
-C(5)  # E: not assignable to parameter `xs` with type `Iterable[Unknown]`
+C(5)  # E: not assignable to parameter `xs` with type `Iterable[int]`
+"#,
+);
+
+// `tuple`'s constructor is `(Iterable[_T]) -> tuple[_T, ...]`. Solving that output against the
+// `Sequence[int]` annotation gives `_T = int`, so the `__init__` param is the converter's input,
+// `Iterable[int]`, while the attribute keeps the declared `Sequence[int]`.
+attrs_testcase!(
+    test_attrs_field_bare_tuple_converter_passthrough,
+    r#"
+from typing import Sequence, assert_type, reveal_type
+from attrs import define, field
+
+@define
+class C:
+    a: Sequence[int] = field(converter=tuple)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, a: Iterable[int]) -> None
+assert_type(C([1, 2, 3]).a, Sequence[int])
+C(["1", 2, 3])  # E: not assignable to parameter `a` with type `Iterable[int]`
+"#,
+);
+
+// When the converter's output cannot satisfy the annotation (`tuple[_T, ...]` is never an `int`),
+// there is no element type to solve, so the `__init__` param falls back to `Iterable[Unknown]`.
+attrs_testcase!(
+    test_attrs_field_bare_converter_incompatible_annotation,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class C:
+    a: int = field(converter=tuple)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, a: Iterable[Unknown]) -> None
+"#,
+);
+
+// The solved converter input type carries over to a field inherited from a base class.
+attrs_testcase!(
+    test_attrs_field_bare_converter_inherited,
+    r#"
+from typing import Sequence
+from attrs import define, field
+
+@define
+class Base:
+    a: Sequence[int] = field(converter=tuple)
+
+@define
+class Sub(Base):
+    pass
+
+Sub(["1", 2, 3])  # E: not assignable to parameter `a` with type `Iterable[int]`
+"#,
+);
+
+// A generic function converter (`def identity[T](x: T) -> T`) is type-preserving, so solving its
+// return against the `int` annotation gives an `__init__` param of `int` rather than a leaked `T`.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter,
+    r#"
+from typing import assert_type, reveal_type
+from attrs import define, field
+
+def identity[T](x: T) -> T:
+    return x
+
+@define
+class C:
+    x: int = field(converter=identity)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int) -> None
+assert_type(C(42).x, int)
+C("nope")  # E: not assignable to parameter `x`
+"#,
+);
+
+// A stdlib generic function converter is solved the same way, so its input is the field type
+// instead of a leaked type variable.
+attrs_testcase!(
+    test_attrs_field_deepcopy_converter,
+    r#"
+import copy
+from attrs import define, field
+
+@define
+class C:
+    x: int = field(converter=copy.deepcopy)
+
+C(42)     # OK
+C("no")   # E: not assignable to parameter `x`
+"#,
+);
+
+// A type argument is substituted into nested positions of the converter input, so a
+// `(list[T]) -> list[T]` converter against a `list[int]` field gives a `list[int]` param.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter_nested_typevar,
+    r#"
+from attrs import define, field
+
+def clone_all[T](xs: list[T]) -> list[T]:
+    return list(xs)
+
+@define
+class C:
+    xs: list[int] = field(converter=clone_all)
+
+C([1, 2])   # OK
+C(["a"])    # E: not assignable to parameter `xs`
+"#,
+);
+
+// The solved generic-function converter input carries over to a field inherited from a base class.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter_inherited,
+    r#"
+from attrs import define, field
+
+def identity[T](x: T) -> T:
+    return x
+
+@define
+class Base:
+    x: int = field(converter=identity)
+
+@define
+class Sub(Base):
+    pass
+
+Sub(5)       # OK
+Sub("nope")  # E: not assignable to parameter `x`
 "#,
 );
 
@@ -247,6 +380,84 @@ class C:
 
 C(None)     # OK: optional converter accepts None
 C([1, 2])   # E: not assignable to parameter `x`
+"#,
+);
+
+// `attr.converters.pipe(c1, ...)` runs `c1` first, so the `__init__` param takes `c1`'s input type
+// (here `int`'s) while the attribute keeps the declared output type. An argument `c1` can't accept
+// is rejected, even though a later converter (`str`) could.
+attrs_testcase!(
+    test_attrs_field_converters_pipe,
+    r#"
+from typing import assert_type
+from attrs import define, field
+import attr
+
+@define
+class C:
+    x: str = field(converter=attr.converters.pipe(int, str))
+
+assert_type(C(3.4).x, str)
+C("09")  # OK
+C({})    # E: not assignable to parameter `x`
+"#,
+);
+
+// In a `pipe`, the first converter's output feeds the next converter, not the field, so a bare
+// generic first converter is NOT solved against the field annotation: `tuple` here stays
+// `Iterable[Unknown]` rather than being (wrongly) solved to `Iterable[bool]` from `Sequence[bool]`.
+attrs_testcase!(
+    test_attrs_field_pipe_bare_generic_first_not_solved_from_annotation,
+    r#"
+from typing import Sequence, reveal_type
+from attrs import define, field
+import attr
+
+def widen(xs: tuple[int, ...]) -> Sequence[bool]: ...
+
+@define
+class C:
+    a: Sequence[bool] = field(converter=attr.converters.pipe(tuple, widen))
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, a: Iterable[Unknown]) -> None
+"#,
+);
+
+// `attr.converters.default_if_none(d)` replaces `None` with `d` and passes other values through, so
+// the `__init__` param is the field's declared type unioned with `None`, not a useless `Any`.
+attrs_testcase!(
+    test_attrs_field_converters_default_if_none,
+    r#"
+from typing import assert_type, reveal_type
+from attrs import define, field
+import attr
+
+@define
+class C:
+    x: int = field(converter=attr.converters.default_if_none(42))
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int | None) -> None
+assert_type(C(1).x, int)
+C(None)  # OK: None becomes the default
+C({})    # E: not assignable to parameter `x`
+"#,
+);
+
+// The `factory=` form behaves the same: non-`None` values pass through, so the input stays
+// `field type | None`.
+attrs_testcase!(
+    test_attrs_field_converters_default_if_none_factory,
+    r#"
+from attrs import define, field
+import attr
+
+@define
+class C:
+    xs: list[int] = field(converter=attr.converters.default_if_none(factory=list))
+
+C(None)    # OK
+C([1, 2])  # OK
+C("nope")  # E: not assignable to parameter `xs`
 "#,
 );
 
@@ -348,6 +559,186 @@ class C:
 assert_type(C("5").x, int)
 C(b"10")
 C([1, 2])  # E: not assignable to parameter `x`
+"#,
+);
+
+// A `@<field>.converter` decorator (attrs 26.2.0+) supplies the converter. attrs invokes it as
+// `converter(self, field, value)`, so the `value` parameter's type becomes the `__init__` param type
+// while the attribute keeps its declared output type.
+attrs_testcase!(
+    test_attrs_field_converter_decorator,
+    r#"
+from typing import assert_type, reveal_type
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value: str) -> int:
+        return int(value)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: str) -> None
+assert_type(C("5").x, int)
+C(5)  # E: not assignable to parameter `x`
+"#,
+);
+
+// A union `value` type flows to the `__init__` parameter, accepting either member and rejecting
+// anything else. (The runtime `int(...)` may still raise, but that is not a type error.)
+attrs_testcase!(
+    test_attrs_field_converter_decorator_union_input,
+    r#"
+from attrs import define, field
+
+@define
+class DecoratorConverter:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value: str | float) -> int:
+        return int(value)
+
+DecoratorConverter("foo")  # OK
+DecoratorConverter(1.5)    # OK
+DecoratorConverter([])     # E: not assignable to parameter `x`
+"#,
+);
+
+// An unannotated `value` parameter makes the `__init__` parameter `Any`, so any argument is accepted.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_unannotated_value,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value) -> int:
+        return int(value)
+
+C("anything")  # OK
+C(123)         # OK
+"#,
+);
+
+// attrs always calls the decorated converter as `converter(self, field, value)`. A method missing the
+// `field` parameter can never be called, so its signature is rejected (this is the naive 2-arg form).
+attrs_testcase!(
+    test_attrs_field_converter_decorator_too_few_params,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, value: str) -> int:  # E: The `@x.converter` method must accept `(self, field, value)`, but it accepts too few positional parameters
+        return int(value)
+"#,
+);
+
+// A converter with a required parameter beyond `(self, field, value)` can never be called by attrs.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_too_many_params,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value: str, extra: int) -> int:  # E: The `@x.converter` method must accept `(self, field, value)`, but it has required parameters that attrs does not pass
+        return int(value)
+"#,
+);
+
+// attrs passes converter arguments positionally, so a required keyword-only parameter can never be
+// filled.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_required_kwonly,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _to_int(self, attribute, value: str, *, mode: int) -> int:  # E: The `@x.converter` method must accept `(self, field, value)`, but it has a required keyword-only parameter that attrs cannot pass
+        return int(value)
+"#,
+);
+
+// An explicit `converter=` composes before a `@<field>.converter` decorator (attrs `pipe`), so the
+// keyword converter's input type is what `__init__` accepts.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_kwarg_takes_precedence,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+def to_int(x: bytes) -> int:
+    return 0
+
+@define
+class C:
+    x: int = field(converter=to_int)
+
+    @x.converter
+    def _extra(self, attribute, value: str) -> int:
+        return 0
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: bytes) -> None
+"#,
+);
+
+// Multiple `@<field>.converter` methods compose via `pipe` in definition order, so the first one's
+// input type is what `__init__` accepts.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_first_wins,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class C:
+    x: int = field()
+
+    @x.converter
+    def _first(self, attribute, value: str) -> int:
+        return 0
+
+    @x.converter
+    def _second(self, attribute, value: bytes) -> int:
+        return 0
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: str) -> None
+"#,
+);
+
+// A `default=` feeds the converter, so it is checked against the converter's input type (`str`), not
+// the field's declared output type, and the field stays optional.
+attrs_testcase!(
+    test_attrs_field_converter_decorator_with_default,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    x: int = field(default="5")
+
+    @x.converter
+    def _to_int(self, attribute, value: str) -> int:
+        return int(value)
+
+C()     # OK
+C("9")  # OK
 "#,
 );
 

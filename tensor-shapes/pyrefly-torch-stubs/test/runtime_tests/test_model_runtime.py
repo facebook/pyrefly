@@ -10,7 +10,7 @@
 Verifies that the runnable models (with assert_type stripped) can be
 instantiated and run forward passes at Python runtime. Tests both the
 future_annotations variants (which use PEP 563 to defer annotation
-evaluation) and the int_type_var variants (which use shape_extensions.TypeVar for
+evaluation) and the sym_int_var variants (which use shape_extensions.IntVar for
 runtime-safe arithmetic without future annotations).
 """
 
@@ -196,11 +196,11 @@ class TestGPTFastFutureAnnotationsRuntime(unittest.TestCase):
         assert_shape(v_out, (2, 4, 64, 8))
 
 
-class TestNanoGPTIntTypeVarRuntime(unittest.TestCase):
-    """Test that nanogpt_int_type_var_runnable.py can be imported, instantiated, and run."""
+class TestNanoGPTIntVarRuntime(unittest.TestCase):
+    """Test that nanogpt_sym_int_var_runnable.py can be imported, instantiated, and run."""
 
     def _make_config(self):
-        from nanogpt_int_type_var_runnable import GPTConfig
+        from nanogpt_sym_int_var_runnable import GPTConfig
 
         return GPTConfig(
             block_size=64,
@@ -214,7 +214,7 @@ class TestNanoGPTIntTypeVarRuntime(unittest.TestCase):
 
     def test_import(self):
         """Module can be imported without errors."""
-        import nanogpt_int_type_var_runnable  # noqa: F401
+        import nanogpt_sym_int_var_runnable  # noqa: F401
 
     def test_instantiate_config(self):
         """GPTConfig dataclass can be created."""
@@ -224,7 +224,7 @@ class TestNanoGPTIntTypeVarRuntime(unittest.TestCase):
 
     def test_instantiate_model(self):
         """GPT model can be instantiated."""
-        from nanogpt_int_type_var_runnable import GPT
+        from nanogpt_sym_int_var_runnable import GPT
 
         config = self._make_config()
         model = GPT(config)
@@ -232,7 +232,7 @@ class TestNanoGPTIntTypeVarRuntime(unittest.TestCase):
 
     def test_forward_inference(self):
         """Forward pass without targets (inference mode)."""
-        from nanogpt_int_type_var_runnable import GPT
+        from nanogpt_sym_int_var_runnable import GPT
 
         config = self._make_config()
         model = GPT(config)
@@ -248,7 +248,7 @@ class TestNanoGPTIntTypeVarRuntime(unittest.TestCase):
 
     def test_forward_training(self):
         """Forward pass with targets (training mode)."""
-        from nanogpt_int_type_var_runnable import GPT
+        from nanogpt_sym_int_var_runnable import GPT
 
         config = self._make_config()
         model = GPT(config)
@@ -264,7 +264,7 @@ class TestNanoGPTIntTypeVarRuntime(unittest.TestCase):
 
     def test_generate(self):
         """Generate method produces tokens."""
-        from nanogpt_int_type_var_runnable import GPT
+        from nanogpt_sym_int_var_runnable import GPT
 
         config = self._make_config()
         model = GPT(config)
@@ -278,11 +278,11 @@ class TestNanoGPTIntTypeVarRuntime(unittest.TestCase):
         assert_shape(generated, (batch_size, 4 + 3))
 
 
-class TestGPTFastIntTypeVarRuntime(unittest.TestCase):
-    """Test that gptfast_int_type_var_runnable.py can be imported and sub-modules can run."""
+class TestGPTFastIntVarRuntime(unittest.TestCase):
+    """Test that gptfast_sym_int_var_runnable.py can be imported and sub-modules can run."""
 
     def _make_config(self):
-        from gptfast_int_type_var_runnable import ModelArgs
+        from gptfast_sym_int_var_runnable import ModelArgs
 
         return ModelArgs(
             block_size=64,
@@ -296,7 +296,7 @@ class TestGPTFastIntTypeVarRuntime(unittest.TestCase):
 
     def test_import(self):
         """Module can be imported without errors."""
-        import gptfast_int_type_var_runnable  # noqa: F401
+        import gptfast_sym_int_var_runnable  # noqa: F401
 
     def test_instantiate_config(self):
         """ModelArgs dataclass can be created."""
@@ -307,7 +307,7 @@ class TestGPTFastIntTypeVarRuntime(unittest.TestCase):
 
     def test_instantiate_transformer(self):
         """Transformer model can be instantiated."""
-        from gptfast_int_type_var_runnable import Transformer
+        from gptfast_sym_int_var_runnable import Transformer
 
         config = self._make_config()
         model = Transformer(config)
@@ -315,7 +315,7 @@ class TestGPTFastIntTypeVarRuntime(unittest.TestCase):
 
     def test_rms_norm_forward(self):
         """RMSNorm forward pass works."""
-        from gptfast_int_type_var_runnable import RMSNorm
+        from gptfast_sym_int_var_runnable import RMSNorm
 
         norm = RMSNorm(32)
         x = torch.randn(2, 16, 32)
@@ -324,7 +324,7 @@ class TestGPTFastIntTypeVarRuntime(unittest.TestCase):
 
     def test_feed_forward(self):
         """FeedForward forward pass works."""
-        from gptfast_int_type_var_runnable import FeedForward
+        from gptfast_sym_int_var_runnable import FeedForward
 
         config = self._make_config()
         ff = FeedForward(config)
@@ -334,14 +334,14 @@ class TestGPTFastIntTypeVarRuntime(unittest.TestCase):
 
     def test_precompute_freqs_cis(self):
         """precompute_freqs_cis produces correct shape."""
-        from gptfast_int_type_var_runnable import precompute_freqs_cis
+        from gptfast_sym_int_var_runnable import precompute_freqs_cis
 
         cache = precompute_freqs_cis(seq_len=64, n_elem=8)
         assert_shape(cache, (64, 4, 2))
 
     def test_apply_rotary_emb(self):
         """apply_rotary_emb works on a tensor."""
-        from gptfast_int_type_var_runnable import apply_rotary_emb, precompute_freqs_cis
+        from gptfast_sym_int_var_runnable import apply_rotary_emb, precompute_freqs_cis
 
         batch, seq_len, n_heads, head_dim = 2, 16, 4, 8
         x = torch.randn(batch, seq_len, n_heads, head_dim)
@@ -351,7 +351,7 @@ class TestGPTFastIntTypeVarRuntime(unittest.TestCase):
 
     def test_kv_cache(self):
         """KVCache can be created and updated."""
-        from gptfast_int_type_var_runnable import KVCache
+        from gptfast_sym_int_var_runnable import KVCache
 
         cache = KVCache(
             max_batch_size=2,
