@@ -86,6 +86,14 @@ Do not write a laundry list of implementation changes. Focus on:
 
 A reader should be able to understand the intent and rationale from the commit message, without following all the code changes in details.
 
+For any diff in this project (internal/Sapling), always:
+
+- Prefix the title with `[pyrefly]`.
+- Add the `#pyrefly` project as a reviewer (note the `#` — it is a Phabricator
+  project tag, not a user). E.g. `jf template --add-reviewers "#pyrefly"` before
+  `jf submit`, or `meta phabricator.diff update -n D<number> --add-reviewers
+  "#pyrefly"` if the diff already exists.
+
 ## Development environments
 
 There are three possible development environments:
@@ -126,11 +134,6 @@ The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
   (from within the project folder)
 - **With cargo (external):** `cargo test <name of test>`
 
-Note: The heavyweight `lsp_interaction` tests live in a separate
-`rust_unittest` target for faster iteration. Run them with
-`buck test pyrefly:pyrefly_lsp_interaction_tests -- <name of test>`.
-Running `buck test pyrefly:pyrefly` triggers both test targets.
-
 ### Running the full test suite
 
 - `./test.py` runs linters and tests. It is heavyweight, so only run it when
@@ -139,7 +142,7 @@ Running `buck test pyrefly:pyrefly` triggers both test targets.
   You can override this with `--mode buck` or `--mode cargo`.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
-  `./test.py --no-test --no-conformance --no-jsonschema`
+  `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
 
 ### After modifying BUCK files (internal only)
 
@@ -149,7 +152,7 @@ Running `buck test pyrefly:pyrefly` triggers both test targets.
 
 **Always run formatting and linting before committing, updating a commit, or
 handing code off to a human for review:**
-`./test.py --no-test --no-conformance --no-jsonschema`
+`./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
 
 This applies whether you are committing autonomously or preparing code for a
 human to commit. Do not skip this step during human-in-the-loop iteration.

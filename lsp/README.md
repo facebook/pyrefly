@@ -52,3 +52,7 @@ settings:
 - `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover
   tooltips include "Go to definition" and "Go to type definition" navigation
   links. Set to `false` for cleaner tooltips with only type information.
+- `python.analysis.autoImportCompletions` [boolean: true]: Controls whether
+  completions include symbols that are not yet imported. When enabled, accepting
+  such a completion also inserts the required import statement. Set to `false` to
+  only complete symbols that are already in scope.

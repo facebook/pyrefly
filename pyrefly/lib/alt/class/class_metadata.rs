@@ -38,6 +38,7 @@ use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::class::attrs::is_attrs_setters_frozen;
 use crate::alt::class::django::is_django_choices_subclass;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::abstract_class::AbstractClassMembers;
@@ -128,10 +129,10 @@ impl BaseClassParseResult {
 
 /// The dataclass configuration derived from a `@dataclass_transform` decorator or an inherited
 /// transform base.
-struct TransformDataclass {
+pub(crate) struct TransformDataclass {
     keywords: DataclassKeywords,
     /// Callees recognized as field specifiers (PEP 681), e.g. `attrs.field`.
-    field_specifiers: Vec<CalleeKind>,
+    pub(crate) field_specifiers: Vec<CalleeKind>,
     /// attrs' `hash=`/`unsafe_hash=` argument; `None` for non-attrs classes or when unset.
     attrs_hash: Option<bool>,
 }
@@ -224,10 +225,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     targ.transform_mut(&mut |ty| match ty {
                         Type::Quantified(q) => *ty = q.as_gradual_type(),
                         Type::TypeVar(t) => {
-                            *ty = Quantified::as_gradual_type_helper(
-                                QuantifiedKind::TypeVar,
-                                t.default(),
-                            )
+                            *ty = Quantified::as_gradual_type_helper(t.kind(), t.default())
                         }
                         Type::TypeVarTuple(t) => {
                             *ty = Quantified::as_gradual_type_helper(
@@ -434,6 +432,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             });
         let dataclass_transform_metadata = self.dataclass_transform_metadata(
+            &keywords,
             &decorators,
             metaclass,
             dataclass_defaults_from_base_class.clone(),
@@ -444,6 +443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &decorators,
             dataclass_defaults_from_base_class,
             pydantic_config.as_ref(),
+            errors,
         );
         let is_attrs_class =
             self.is_attrs_class(&dataclass_from_dataclass_transform, &bases_with_metadata);
@@ -550,14 +550,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let BindingShapedArrayMetadata { shape_name, range } = metadata?;
         let tparams = self.get_class_tparams(cls);
         match tparams.iter().find(|param| param.name() == shape_name) {
-            Some(param) if param.kind == QuantifiedKind::TypeVarTuple => Some(param.clone()),
+            Some(param) if param.is_type_var() => Some(param.clone()),
             Some(param) => {
                 self.error(
                     errors,
                     *range,
                     ErrorKind::InvalidAnnotation,
                     format!(
-                        "Shape parameter `{}` must be a `TypeVarTuple`, got `{}`",
+                        "Shape parameter `{}` must be a `TypeVar` or `IntVar`, got `{}`",
                         shape_name, param.kind
                     ),
                 );
@@ -917,14 +917,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.get_class_fields(base)
                         .is_some_and(|f| f.contains(&Name::new_static("_value_")))
                 }),
-                is_flag: bases_with_metadata.iter().any(|(base, _)| {
-                    self.is_subset_eq(
-                        &self
-                            .heap
-                            .mk_class_type(self.promote_nontypeddict_silently_to_classtype(base)),
-                        &self.heap.mk_class_type(self.stdlib.enum_flag().clone()),
-                    )
-                }),
                 is_django,
             })
         } else {
@@ -934,6 +926,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn dataclass_transform_metadata(
         &self,
+        keywords: &[(Name, Annotation)],
         decorators: &[(Arc<Decorator>, TextRange)],
         metaclass: Option<&ClassType>,
         dataclass_defaults_from_base_class: Option<DataclassTransformMetadata>,
@@ -941,14 +934,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // This is set when a class is decorated with `@typing.dataclass_transform(...)`. Note that
         // this does not turn the class into a dataclass! Instead, it becomes a special base class
         // (or metaclass) that turns child classes into dataclasses.
+        // `dataclass_defaults_from_base_class` already falls back to the metaclass's transform
+        // metadata, so prefer it here: a base's accumulated keyword defaults (folded below) must
+        // propagate down the whole subtree rather than being reset to the metaclass's raw defaults.
         let mut dataclass_transform_metadata = dataclass_defaults_from_base_class;
-        if let Some(c) = metaclass
-            && let Some(m) = self
-                .get_metadata_for_class(c.class_object())
-                .dataclass_transform_metadata()
-        {
-            dataclass_transform_metadata = Some(m.clone());
-        }
         for (decorator, _) in decorators {
             // `@dataclass_transform(...)`
             if let Type::KwCall(call) = &decorator.ty
@@ -958,40 +947,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(DataclassTransformMetadata::from_type_map(&call.keywords));
             }
         }
-        dataclass_transform_metadata
-    }
-
-    /// The default `auto_attribs` for an attrs decorator that doesn't set it, based on the decorator's name:
-    /// - `attr.s`/`attrs`/`attributes` -> `False`
-    /// - `@attr.dataclass` -> `True`.
-    /// - `define`/`frozen`/`mutable` -> `None`
-    ///   The behavior for None is: try `True` and falls back
-    ///   to `False` when a field is assigned `attr.ib()`/`field()` with no annotation.
-    fn attrs_default_auto_attribs(
-        &self,
-        cls: &Class,
-        decorator_range: TextRange,
-        order_default: bool,
-    ) -> bool {
-        let Some(idx) = self
-            .bindings()
-            .key_to_idx_hashed_opt(Hashed::new(&KeyDecorator(decorator_range)))
-        else {
-            // Can't recover the decorator name; fall back to the transform default.
-            return !order_default;
-        };
-        let binding = self.bindings().get::<KeyDecorator>(idx);
-        match binding.trailing_name.as_ref().map(Name::as_str) {
-            Some("s" | "attrs" | "attributes") => false,
-            Some("dataclass") => true,
-            Some("define" | "mutable" | "frozen") => !self.get_class_fields(cls).is_some_and(|f| {
-                f.class_body_fields()
-                    .any(|name| f.is_attrs_field_specifier(name) && !f.is_field_annotated(name))
-            }),
-            // Unknown decorator: attrs sets `order_default` only on its classic
-            // decorators, so it stands in for "classic" here.
-            _ => !order_default,
+        // A metaclass-based dataclass_transform (e.g. SQLAlchemy's `DCTransformDeclarative`)
+        // re-applies its dataclass keywords to every subclass
+        let metaclass_is_transform = metaclass.is_some_and(|c| {
+            self.get_metadata_for_class(c.class_object())
+                .dataclass_transform_metadata()
+                .is_some()
+        });
+        if metaclass_is_transform && let Some(metadata) = &mut dataclass_transform_metadata {
+            for (name, annot) in keywords {
+                let Some(value) = annot.get_type().as_bool() else {
+                    continue;
+                };
+                match name.as_str() {
+                    "kw_only" => metadata.kw_only_default = value,
+                    "eq" => metadata.eq_default = value,
+                    "order" => metadata.order_default = value,
+                    _ => {}
+                }
+            }
         }
+        dataclass_transform_metadata
     }
 
     fn dataclass_from_dataclass_transform(
@@ -1001,6 +977,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators: &[(Arc<Decorator>, TextRange)],
         dataclass_defaults_from_base_class: Option<DataclassTransformMetadata>,
         pydantic_config: Option<&PydanticConfig>,
+        errors: &ErrorCollector,
     ) -> Option<TransformDataclass> {
         // This is set when we should apply dataclass-like transformations to the class. The class
         // should be transformed if:
@@ -1016,12 +993,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(defaults) = dataclass_defaults_from_base_class {
             // This class inherits from a dataclass_transform-ed base class, so its keywords are
             // interpreted as dataclass keywords.
-            let map = keywords
-                .iter()
-                .map(|(name, annot)| (name.clone(), annot.get_type().clone()))
-                .collect::<OrderedMap<_, _>>();
-            let mut kws =
-                DataclassKeywords::from_type_map(&TypeMap(map), &defaults, strict_default);
+            let map = TypeMap(
+                keywords
+                    .iter()
+                    .map(|(name, annot)| (name.clone(), annot.get_type().clone()))
+                    .collect::<OrderedMap<_, _>>(),
+            );
+            let mut kws = DataclassKeywords::from_type_map(&map, &defaults, strict_default);
 
             // Inject pydantic model configuration from ConfigDict.
             // This path is for pydantic models (BaseModel, etc.), not pydantic dataclasses.
@@ -1037,6 +1015,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
 
+            kws.attrs_setattr_frozen = map
+                .0
+                .get(&DataclassFieldKeywords::ON_SETATTR)
+                .is_some_and(is_attrs_setters_frozen);
             dataclass_from_dataclass_transform = Some(TransformDataclass {
                 keywords: kws,
                 field_specifiers: defaults.field_specifiers,
@@ -1074,8 +1056,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         defaults.order_default,
                     ));
                 }
+                kws.attrs_setattr_frozen = call
+                    .keywords
+                    .0
+                    .get(&DataclassFieldKeywords::ON_SETATTR)
+                    .is_some_and(is_attrs_setters_frozen);
                 let attrs_hash =
                     if Self::field_specifiers_reference_attrs(&defaults.field_specifiers) {
+                        self.validate_attrs_eq_order_cmp(&call.keywords, *decorator_range, errors);
                         DataclassKeywords::attrs_hash_from_map(&call.keywords)
                     } else {
                         None
@@ -1088,30 +1076,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         dataclass_from_dataclass_transform
-    }
-
-    fn field_specifiers_reference_attrs(field_specifiers: &[CalleeKind]) -> bool {
-        field_specifiers.iter().any(|callee| {
-            matches!(callee,
-                CalleeKind::Function(FunctionKind::Def(id))
-                    if id.module.name() == ModuleName::attr()
-                        || id.module.name() == ModuleName::attrs()
-            )
-        })
-    }
-
-    fn is_attrs_class(
-        &self,
-        dataclass_from_dataclass_transform: &Option<TransformDataclass>,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
-    ) -> bool {
-        let has_attrs_field_specifiers = dataclass_from_dataclass_transform
-            .as_ref()
-            .is_some_and(|t| Self::field_specifiers_reference_attrs(&t.field_specifiers));
-        let has_attrs_base = bases_with_metadata
-            .iter()
-            .any(|(_, metadata)| metadata.is_attrs_class());
-        has_attrs_field_specifiers || has_attrs_base
     }
 
     /// Single annotation walk returning local
@@ -1198,6 +1162,60 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         pseudo_field_names.extend(local_pseudo_overrides);
         pseudo_field_names.extend(local_pydantic_privates);
         pseudo_field_names
+    }
+
+    /// Report the "`@dataclass` cannot be applied to X" diagnostics for the class
+    /// kinds dataclass rejects. Shared by the decorator path (`dataclass_metadata`)
+    /// and the call form `dataclass(C)` so both reject the same kinds with the same
+    /// messages. `Protocol` is a soft reject (diagnostic only; it still becomes a
+    /// dataclass at runtime); `Enum`/`TypedDict`/`NamedTuple` are hard rejects.
+    /// Returns `true` on a hard reject so the decorator path can abort metadata.
+    pub fn report_forbidden_dataclass_target(
+        &self,
+        name: &Name,
+        is_protocol: bool,
+        is_enum: bool,
+        is_typed_dict: bool,
+        is_named_tuple: bool,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
+        if is_protocol {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("`@dataclass` cannot be applied to Protocol `{}`", name),
+            );
+        }
+        if is_enum {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("Cannot apply `@dataclass` to Enum `{}`", name),
+            );
+            return true;
+        }
+        if is_typed_dict {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("Cannot apply `@dataclass` to TypedDict `{}`", name),
+            );
+            return true;
+        }
+        if is_named_tuple {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("Cannot apply `@dataclass` to NamedTuple `{}`", name),
+            );
+            return true;
+        }
+        false
     }
 
     fn dataclass_metadata(
@@ -1307,47 +1325,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         // @dataclass cannot be applied to Protocol, Enum, TypedDict, or NamedTuple classes.
-        // Emit the error and return no metadata so the class is not treated as a dataclass.
-        if has_dataclass_decorator {
-            if is_protocol {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!(
-                        "`@dataclass` cannot be applied to Protocol `{}`",
-                        cls.name()
-                    ),
-                );
-                return (None, false);
-            }
-            if is_enum {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!("Cannot apply `@dataclass` to Enum `{}`", cls.name()),
-                );
-                return (None, false);
-            }
-            if is_typed_dict {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!("Cannot apply `@dataclass` to TypedDict `{}`", cls.name()),
-                );
-                return (None, false);
-            }
-            if is_named_tuple {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!("Cannot apply `@dataclass` to NamedTuple `{}`", cls.name()),
-                );
-                return (None, false);
-            }
+        // Protocols still become dataclasses at runtime, so preserve their metadata; the
+        // hard-reject kinds have no useful dataclass runtime behavior to model, so abort.
+        if has_dataclass_decorator
+            && self.report_forbidden_dataclass_target(
+                cls.name(),
+                is_protocol,
+                is_enum,
+                is_typed_dict,
+                is_named_tuple,
+                cls.range(),
+                errors,
+            )
+        {
+            return (None, false);
         }
         if let Some(TransformDataclass {
             keywords: kws,
@@ -1440,7 +1431,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 _ => None,
                             }
                             && let Some(quantified) = quantified
-                            && quantified.kind() == QuantifiedKind::TypeVar
+                            && quantified.is_type_var()
                             && matches!(quantified.restriction(), Restriction::Unrestricted)
                             && let Some(tparam) = forall.tparams.as_vec().first()
                             && *quantified == *tparam

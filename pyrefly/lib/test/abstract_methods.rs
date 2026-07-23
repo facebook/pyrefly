@@ -43,6 +43,30 @@ circle = Circle()
 );
 
 testcase!(
+    test_direct_abc_without_abstract_methods_instantiation_error,
+    r#"
+from abc import ABC, ABCMeta
+
+class DirectABC(ABC):
+    pass
+
+class IndirectABC(DirectABC):
+    pass
+
+class DirectABCMeta(metaclass=ABCMeta):
+    pass
+
+class IndirectABCMeta(DirectABCMeta):
+    pass
+
+direct_abc = DirectABC()  # E: Cannot instantiate `DirectABC`
+indirect_abc = IndirectABC()
+direct_abc_meta = DirectABCMeta()  # E: Cannot instantiate `DirectABCMeta`
+indirect_abc_meta = IndirectABCMeta()
+"#,
+);
+
+testcase!(
     test_polymorphic_calls_ok,
     r#"
 from abc import ABC, abstractmethod
@@ -482,7 +506,7 @@ from typing import ClassVar, final
 @final
 class A(ABC):
     x: ClassVar[int]
-a = A()
+a = A()  # E: Cannot instantiate `A`
 "#,
 );
 

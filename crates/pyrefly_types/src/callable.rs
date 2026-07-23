@@ -121,7 +121,7 @@ impl Callable {
             return false;
         }
         match &self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 let items = params.items();
                 items.iter().any(|p| matches!(p, Param::Varargs(..)))
                     && items.iter().any(|p| matches!(p, Param::Kwargs(..)))
@@ -143,7 +143,9 @@ impl Callable {
             return true;
         }
         match &self.params {
-            Params::List(params) => params.items().iter().any(|p| p.as_type().any(check)),
+            Params::List(params) | Params::Partial(params) => {
+                params.items().iter().any(|p| p.as_type().any(check))
+            }
             Params::ParamSpec(prefix, p) => {
                 prefix.iter().any(|pp| {
                     let ty = match pp {
@@ -163,7 +165,7 @@ impl Callable {
             return false;
         }
         match &self.params {
-            Params::List(params) => params
+            Params::List(params) | Params::Partial(params) => params
                 .items()
                 .iter()
                 .all(|p| matches!(p.as_type(), Type::Any(AnyStyle::Implicit))),
@@ -421,6 +423,10 @@ impl PrefixParam {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Params {
     List(ParamList),
+    /// The residual parameter list of a `functools.partial(...)`: behaves like `List` for
+    /// call-checking, but is additionally recognized as assignable to `functools.partial[ret]`
+    /// (see the subtyping rule in `subset.rs`). Carries the parameters left after binding a prefix.
+    Partial(ParamList),
     Ellipsis,
     /// All possible materializations of `...`. A subset check with Callable[Materialization, R]
     /// succeeds only if it would succeed with Materialization replaced with any parameter list.
@@ -436,7 +442,7 @@ pub enum Params {
 impl Params {
     fn arg_counts(&self) -> ArgCounts {
         match self {
-            Self::List(params) => {
+            Self::List(params) | Self::Partial(params) => {
                 let mut counts = ArgCounts {
                     positional: ArgCount::none_allowed(),
                     keyword: ArgCount::none_allowed(),
@@ -687,6 +693,8 @@ pub struct FuncFlags {
     pub has_final_decoration: bool,
     /// A function decorated with `@abc.abstractmethod`
     pub is_abstract_method: bool,
+    /// A function decorated with `@typing.no_type_check` or `@typing_extensions.no_type_check`
+    pub has_no_type_check: bool,
     /// Function body is treated as a stub (e.g. body is `...` or absent in a stub file)
     pub lacks_implementation: bool,
     /// Is the function definition in a `.pyi` file
@@ -717,6 +725,8 @@ pub struct FuncFlags {
     /// A function decorated with `@uses_shape_dsl`, whose return type should be
     /// refined by evaluating the referenced shape-DSL function at call sites.
     pub shape_transform: Option<Arc<ShapeTransform>>,
+    /// A function decorated with `@defines_assert_shape`.
+    pub is_assert_shape: bool,
 }
 
 impl FuncFlags {
@@ -860,7 +870,16 @@ pub enum FunctionKind {
     Dataclass,
     DataclassField,
     DataclassReplace,
+    CopyReplace,
     DataclassAsdict,
+    /// `attr.fields(C)` / `attrs.fields(C)`.
+    AttrsFields,
+    /// `attr.fields_dict(C)` / `attrs.fields_dict(C)`.
+    AttrsFieldsDict,
+    /// `attr.evolve` / `attrs.evolve`: validated like `dataclasses.replace`.
+    AttrsEvolve,
+    /// `attr.assoc` / `attrs.assoc`: validated against attribute names, including `init=False`.
+    AttrsAssoc,
     /// `typing.dataclass_transform`. Note that this is `dataclass_transform` itself, *not* the
     /// decorator created by a `dataclass_transform(...)` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
@@ -870,13 +889,19 @@ pub enum FunctionKind {
     Override,
     Cast,
     AssertType,
+    AssertShape,
     RevealType,
     Final,
     RuntimeCheckable,
     Def(Arc<FuncId>),
     AbstractMethod,
+    /// A function decorated with `typing.no_type_check` or `typing_extensions.no_type_check`.
+    NoTypeCheck,
     /// Instance of a protocol with a `__call__` method. The function has the `__call__` signature.
     CallbackProtocol(Box<ClassType>),
+    /// The `register` method of a `functools.singledispatch` dispatcher, tagged with the fallback's
+    /// first-parameter type so the registered dispatch type can be validated against it.
+    SingleDispatchRegister(Box<Type>),
     TotalOrdering,
     DisjointBase,
     /// `numba.jit()`
@@ -893,6 +918,8 @@ pub enum FunctionKind {
     ),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,
+    /// The `shape_extensions.defines_assert_shape` decorator function itself.
+    DefinesAssertShape,
 }
 
 impl Callable {
@@ -902,7 +929,7 @@ impl Callable {
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match &self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 output.write_str("(")?;
                 params.fmt_with_type(output, write_type, &ParamOverlay::All)?;
                 output.write_str(") -> ")?;
@@ -960,7 +987,7 @@ impl Callable {
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match &self.params {
-            Params::List(params) if params.len() > 1 => {
+            Params::List(params) | Params::Partial(params) if params.len() > 1 => {
                 // For multiple parameters, put each on a new line with indentation
                 output.write_str("(\n    ")?;
                 params.fmt_with_type_with_newlines(output, write_type)?;
@@ -968,6 +995,7 @@ impl Callable {
                 write_type(&self.ret, output)
             }
             Params::List(..)
+            | Params::Partial(..)
             | Params::ParamSpec(..)
             | Params::Ellipsis
             | Params::Materialization => self.fmt_with_type(output, write_type),
@@ -977,6 +1005,14 @@ impl Callable {
     pub fn list(params: ParamList, ret: Type) -> Self {
         Self {
             params: Params::List(params),
+            ret,
+        }
+    }
+
+    /// Build a `Callable` carrying a [`Params::Partial`] residual signature, returning `ret`.
+    pub fn partial(params: ParamList, ret: Type) -> Self {
+        Self {
+            params: Params::Partial(params),
             ret,
         }
     }
@@ -1025,6 +1061,20 @@ impl Callable {
                 }
             }
             Self {
+                params: Params::Partial(params),
+                ret,
+            } => {
+                let (first, rest) = params.0.split_first()?;
+                if let Param::Varargs(_, first) = first {
+                    Some((first, self.clone()))
+                } else {
+                    Some((
+                        first.as_type(),
+                        Self::partial(ParamList(rest.to_vec()), ret.clone()),
+                    ))
+                }
+            }
+            Self {
                 params: Params::ParamSpec(ts, p),
                 ret,
             } => {
@@ -1045,6 +1095,29 @@ impl Callable {
     pub fn get_first_param(&self) -> Option<Type> {
         self.split_first_param(&mut Owner::new())
             .map(|(first, _)| first.clone())
+    }
+
+    /// Whether this signature can be called with a single positional argument, i.e. none of the
+    /// parameters after the first is required (positional or keyword-only). `*args`/`**kwargs`
+    /// don't prevent it.
+    pub fn accepts_single_positional_arg(&self) -> bool {
+        match &self.params {
+            Params::List(params) | Params::Partial(params) => match params.0.split_first() {
+                Some((_, rest)) => !rest.iter().any(|p| {
+                    matches!(
+                        p,
+                        Param::PosOnly(_, _, Required::Required)
+                            | Param::Pos(_, _, Required::Required)
+                            | Param::KwOnly(_, _, Required::Required)
+                    )
+                }),
+                None => false,
+            },
+            Params::Ellipsis | Params::Materialization => true,
+            // A bare `P` or `Concatenate[A, P]` can resolve to anything, so stay permissive; only
+            // `Concatenate[A, B, ...]` (2+ prepended args) cannot be called with one positional.
+            Params::ParamSpec(prefix, _) => prefix.len() <= 1,
+        }
     }
 
     pub fn is_typeguard(&self) -> bool {
@@ -1223,11 +1296,17 @@ impl FunctionKind {
             ("dataclasses", None, "dataclass") => Self::Dataclass,
             ("dataclasses", None, "field") => Self::DataclassField,
             ("dataclasses", None, "replace") => Self::DataclassReplace,
+            ("copy", None, "replace") => Self::CopyReplace,
             ("dataclasses", None, "asdict") => Self::DataclassAsdict,
+            ("attr" | "attrs", None, "fields") => Self::AttrsFields,
+            ("attr" | "attrs", None, "fields_dict") => Self::AttrsFieldsDict,
+            ("attr" | "attrs", None, "evolve") => Self::AttrsEvolve,
+            ("attr" | "attrs", None, "assoc") => Self::AttrsAssoc,
             ("typing" | "typing_extensions", None, "overload") => Self::Overload,
             ("typing" | "typing_extensions", None, "override") => Self::Override,
             ("typing" | "typing_extensions", None, "cast") => Self::Cast,
             ("typing" | "typing_extensions", None, "assert_type") => Self::AssertType,
+            ("shape_extensions", None, "assert_shape") => Self::AssertShape,
             ("typing" | "typing_extensions", None, "reveal_type") => Self::RevealType,
             ("typing" | "typing_extensions", None, "final") => Self::Final,
             ("typing" | "typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
@@ -1235,11 +1314,13 @@ impl FunctionKind {
                 Self::DataclassTransform
             }
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
+            ("typing" | "typing_extensions", None, "no_type_check") => Self::NoTypeCheck,
             ("functools", None, "total_ordering") => Self::TotalOrdering,
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
             ("numba.core.decorators", None, "jit") => Self::NumbaJit,
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
             ("shape_extensions", None, "uses_shape_dsl") => Self::UsesShapeDsl,
+            ("shape_extensions", None, "defines_assert_shape") => Self::DefinesAssertShape,
             _ => Self::Def(Arc::new(FuncId {
                 module,
                 cls,
@@ -1258,17 +1339,25 @@ impl FunctionKind {
             Self::Dataclass => ModuleName::dataclasses(),
             Self::DataclassField => ModuleName::dataclasses(),
             Self::DataclassReplace => ModuleName::dataclasses(),
+            Self::CopyReplace => ModuleName::from_str("copy"),
             Self::DataclassAsdict => ModuleName::dataclasses(),
+            Self::AttrsFields => ModuleName::attr(),
+            Self::AttrsFieldsDict => ModuleName::attr(),
+            Self::AttrsEvolve => ModuleName::attr(),
+            Self::AttrsAssoc => ModuleName::attr(),
             Self::DataclassTransform => ModuleName::typing(),
             Self::Final => ModuleName::typing(),
             Self::Overload => ModuleName::typing(),
             Self::Override => ModuleName::typing(),
             Self::Cast => ModuleName::typing(),
             Self::AssertType => ModuleName::typing(),
+            Self::AssertShape => ModuleName::from_str("shape_extensions"),
             Self::RevealType => ModuleName::typing(),
             Self::RuntimeCheckable => ModuleName::typing(),
             Self::CallbackProtocol(cls) => cls.qname().module_name(),
+            Self::SingleDispatchRegister(_) => ModuleName::functools(),
             Self::AbstractMethod => ModuleName::abc(),
+            Self::NoTypeCheck => ModuleName::typing(),
             Self::TotalOrdering => ModuleName::functools(),
             Self::DisjointBase => ModuleName::typing(),
             Self::NumbaJit => ModuleName::from_str("numba"),
@@ -1276,6 +1365,7 @@ impl FunctionKind {
             Self::Def(func_id) => func_id.module.name().dupe(),
             Self::ShapeDsl(id, _, _) => id.module.name().dupe(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
+            Self::DefinesAssertShape => ModuleName::from_str("shape_extensions"),
         }
     }
 
@@ -1287,17 +1377,25 @@ impl FunctionKind {
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
             Self::DataclassField => Cow::Owned(Name::new_static("field")),
             Self::DataclassReplace => Cow::Owned(Name::new_static("replace")),
+            Self::CopyReplace => Cow::Owned(Name::new_static("replace")),
             Self::DataclassAsdict => Cow::Owned(Name::new_static("asdict")),
+            Self::AttrsFields => Cow::Owned(Name::new_static("fields")),
+            Self::AttrsFieldsDict => Cow::Owned(Name::new_static("fields_dict")),
+            Self::AttrsEvolve => Cow::Owned(Name::new_static("evolve")),
+            Self::AttrsAssoc => Cow::Owned(Name::new_static("assoc")),
             Self::DataclassTransform => Cow::Owned(Name::new_static("dataclass_transform")),
             Self::Final => Cow::Owned(Name::new_static("final")),
             Self::Overload => Cow::Owned(Name::new_static("overload")),
             Self::Override => Cow::Owned(Name::new_static("override")),
             Self::Cast => Cow::Owned(Name::new_static("cast")),
             Self::AssertType => Cow::Owned(Name::new_static("assert_type")),
+            Self::AssertShape => Cow::Owned(Name::new_static("assert_shape")),
             Self::RevealType => Cow::Owned(Name::new_static("reveal_type")),
             Self::RuntimeCheckable => Cow::Owned(Name::new_static("runtime_checkable")),
             Self::CallbackProtocol(_) => Cow::Owned(dunder::CALL),
+            Self::SingleDispatchRegister(_) => Cow::Owned(Name::new_static("register")),
             Self::AbstractMethod => Cow::Owned(Name::new_static("abstractmethod")),
+            Self::NoTypeCheck => Cow::Owned(Name::new_static("no_type_check")),
             Self::TotalOrdering => Cow::Owned(Name::new_static("total_ordering")),
             Self::DisjointBase => Cow::Owned(Name::new_static("disjoint_base")),
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
@@ -1305,6 +1403,7 @@ impl FunctionKind {
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
             Self::ShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
+            Self::DefinesAssertShape => Cow::Owned(Name::new_static("defines_assert_shape")),
         }
     }
 
@@ -1316,24 +1415,33 @@ impl FunctionKind {
             Self::Dataclass => None,
             Self::DataclassField => None,
             Self::DataclassReplace => None,
+            Self::CopyReplace => None,
             Self::DataclassAsdict => None,
+            Self::AttrsFields => None,
+            Self::AttrsFieldsDict => None,
+            Self::AttrsEvolve => None,
+            Self::AttrsAssoc => None,
             Self::DataclassTransform => None,
             Self::Final => None,
             Self::Overload => None,
             Self::Override => None,
             Self::Cast => None,
             Self::AssertType => None,
+            Self::AssertShape => None,
             Self::RevealType => None,
             Self::RuntimeCheckable => None,
             Self::NumbaJit => None,
             Self::NumbaNjit => None,
             Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
+            Self::SingleDispatchRegister(_) => None,
             Self::AbstractMethod => None,
+            Self::NoTypeCheck => None,
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
             Self::ShapeDsl(id, _, _) => id.cls.clone(),
             Self::UsesShapeDsl => None,
+            Self::DefinesAssertShape => None,
         }
     }
 
@@ -1356,7 +1464,7 @@ impl FunctionKind {
     /// Does this decorator require special-casing to be signature-preserving?
     pub fn is_signature_preserving_decorator(&self) -> bool {
         match self {
-            Self::NumbaJit | Self::NumbaNjit => true,
+            Self::NumbaJit | Self::NumbaNjit | Self::SingleDispatchRegister(_) => true,
             _ => false,
         }
     }

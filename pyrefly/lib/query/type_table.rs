@@ -14,6 +14,7 @@ use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::PrefixParam;
 use pyrefly_types::callable_residual::CallableResidualKind;
+use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::tuple::Tuple;
@@ -30,6 +31,7 @@ use xxhash_rust::xxh64::Xxh64;
 
 use super::TypeShapeContext;
 use super::TypeShapeTrait;
+use super::literal_value_shape_name;
 use super::qname_to_string;
 use super::typed_dict_traits;
 
@@ -38,7 +40,10 @@ pub struct LocatedTypeTableRef {
     pub location: PythonASTRange,
     #[serde(rename = "type")]
     pub type_index: usize,
-    pub display: String,
+    // Omitted from the wire when the caller opted out of per-location display
+    // (the structured client resolves types from the table alone).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -55,6 +60,8 @@ pub enum IndexedTypeShapeKind {
     Callable {
         params: Vec<usize>,
         return_type: usize,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        is_staticmethod: bool,
     },
     TypeVariable {
         name: String,
@@ -62,9 +69,21 @@ pub enum IndexedTypeShapeKind {
     },
 }
 
+/// A `type_table` entry as sent on the wire: the shape plus its structural
+/// hash. The hash lets clients keep a cross-file (global) hash -> parsed shape
+/// cache: it is stable across files/requests for structurally-identical shapes
+/// because it incorporates every field the shape is deduped on (name, args,
+/// unspecified arg count, and traits).
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+pub struct SerializedTypeTableEntry {
+    #[serde(flatten)]
+    pub kind: IndexedTypeShapeKind,
+    pub hash: u64,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TypeTableResponseData {
-    pub type_table: Vec<IndexedTypeShapeKind>,
+    pub type_table: Vec<SerializedTypeTableEntry>,
     pub types: Vec<LocatedTypeTableRef>,
 }
 
@@ -105,8 +124,14 @@ impl TypeTableBuilder {
         self.entries[index].hash
     }
 
-    pub(super) fn into_type_table(self) -> Vec<IndexedTypeShapeKind> {
-        self.entries.into_iter().map(|entry| entry.kind).collect()
+    pub(super) fn into_type_table(self) -> Vec<SerializedTypeTableEntry> {
+        self.entries
+            .into_iter()
+            .map(|entry| SerializedTypeTableEntry {
+                kind: entry.kind,
+                hash: entry.hash,
+            })
+            .collect()
     }
 }
 
@@ -126,7 +151,27 @@ fn hash_hashes(h: &mut Xxh64, hashes: &[u64]) {
     }
 }
 
-fn hash_named(name: &str, arg_hashes: &[u64], unspecified_type_arg_count: Option<usize>) -> u64 {
+fn hash_traits(h: &mut Xxh64, traits: &[TypeShapeTrait]) {
+    // Folded into the hash so structurally-distinct shapes that share
+    // name/args (e.g. a plain named class vs. a typed-dict or tuple value of
+    // the same name) get distinct hashes — the same fields `insert`'s equality
+    // check disambiguates on. Keeps the wire hash a complete structural key.
+    h.write_usize(traits.len());
+    for t in traits {
+        h.write_u8(match t {
+            TypeShapeTrait::TypedDict => 0,
+            TypeShapeTrait::PartialTypedDict => 1,
+            TypeShapeTrait::Tuple => 2,
+        });
+    }
+}
+
+fn hash_named(
+    name: &str,
+    arg_hashes: &[u64],
+    unspecified_type_arg_count: Option<usize>,
+    traits: &[TypeShapeTrait],
+) -> u64 {
     let mut h = Xxh64::new(0);
     h.write_u8(HASH_KIND_NAMED);
     hash_bytes(&mut h, name.as_bytes());
@@ -138,14 +183,16 @@ fn hash_named(name: &str, arg_hashes: &[u64], unspecified_type_arg_count: Option
         }
         None => h.write_u8(0),
     }
+    hash_traits(&mut h, traits);
     h.finish()
 }
 
-fn hash_callable(param_hashes: &[u64], return_hash: u64) -> u64 {
+fn hash_callable(param_hashes: &[u64], return_hash: u64, is_staticmethod: bool) -> u64 {
     let mut h = Xxh64::new(0);
     h.write_u8(HASH_KIND_CALLABLE);
     hash_hashes(&mut h, param_hashes);
     h.write_u64(return_hash);
+    h.write_u8(is_staticmethod as u8);
     h.finish()
 }
 
@@ -169,7 +216,7 @@ fn insert_indexed_named(
         .iter()
         .map(|arg| table.hash_at(*arg))
         .collect::<Vec<_>>();
-    let hash = hash_named(&name, &arg_hashes, unspecified_type_arg_count);
+    let hash = hash_named(&name, &arg_hashes, unspecified_type_arg_count, &traits);
     table.insert(
         IndexedTypeShapeKind::Named {
             name,
@@ -199,16 +246,18 @@ fn insert_indexed_callable(
     table: &mut TypeTableBuilder,
     params: Vec<usize>,
     return_type: usize,
+    is_staticmethod: bool,
 ) -> usize {
     let param_hashes = params
         .iter()
         .map(|param| table.hash_at(*param))
         .collect::<Vec<_>>();
-    let hash = hash_callable(&param_hashes, table.hash_at(return_type));
+    let hash = hash_callable(&param_hashes, table.hash_at(return_type), is_staticmethod);
     table.insert(
         IndexedTypeShapeKind::Callable {
             params,
             return_type,
+            is_staticmethod,
         },
         hash,
     )
@@ -260,8 +309,13 @@ pub(super) fn type_to_indexed_shape(
             let inner = type_to_indexed_shape(context, inner, table);
             insert_indexed_named(table, "typing.Type", vec![inner], None, Vec::new())
         }
-        Type::Callable(callable) => callable_to_indexed_shape(context, callable, table),
-        Type::Function(function) => callable_to_indexed_shape(context, &function.signature, table),
+        Type::Callable(callable) => callable_to_indexed_shape(context, callable, false, table),
+        Type::Function(function) => callable_to_indexed_shape(
+            context,
+            &function.signature,
+            function.metadata.flags.is_staticmethod,
+            table,
+        ),
         Type::BoundMethod(bound_method) => {
             let function_type = bound_method.func.clone().as_type();
             let args = vec![
@@ -302,7 +356,7 @@ pub(super) fn type_to_indexed_shape(
             )
         }
         Type::Literal(literal) => {
-            let value = indexed_named_leaf(table, literal.value.to_string());
+            let value = indexed_named_leaf(table, literal_value_shape_name(&literal.value));
             insert_indexed_named(table, "typing.Literal", vec![value], None, Vec::new())
         }
         Type::Sentinel(sentinel) => {
@@ -429,6 +483,7 @@ pub(super) fn type_to_indexed_shape(
         Type::Materialization => indexed_named_leaf(table, "Materialization"),
         Type::Var(_) => indexed_named_leaf(table, "typing.Any"),
         Type::ShapedArray(_) => indexed_named_leaf(table, "Tensor"),
+        Type::IntTuple(_) => indexed_named_leaf(table, "IntTuple"),
         Type::NNModule(module) => {
             let args = module
                 .class
@@ -445,11 +500,8 @@ pub(super) fn type_to_indexed_shape(
                 Vec::new(),
             )
         }
-        Type::Size(_) => indexed_named_leaf(table, "Size"),
-        Type::Dim(inner) => {
-            let inner = type_to_indexed_shape(context, inner, table);
-            insert_indexed_named(table, "Dim", vec![inner], None, Vec::new())
-        }
+        Type::DataFrame(schema) => type_to_indexed_shape(context, &schema.underlying_type(), table),
+        Type::Int(_) => indexed_named_leaf(table, "Int"),
         Type::TypeForm(inner) => {
             let inner = type_to_indexed_shape(context, inner, table);
             insert_indexed_named(table, "typing.TypeForm", vec![inner], None, Vec::new())
@@ -479,31 +531,36 @@ fn typed_dict_to_indexed_shape(
                 typed_dict_traits(is_partial),
             )
         }
-        TypedDict::Anonymous(_) if is_partial => insert_indexed_named(
-            table,
-            "NonTotalTypedDictionary",
-            Vec::new(),
-            None,
-            typed_dict_traits(is_partial),
-        ),
-        TypedDict::Anonymous(_) => insert_indexed_named(
-            table,
-            "TypedDictionary",
-            Vec::new(),
-            None,
-            typed_dict_traits(is_partial),
-        ),
+        // An anonymous TypedDict has no class identity; structurally it is a
+        // `dict[str, <union of field value types>]` (all keys are string
+        // literals). Emit it as that dict -- matching the display string and a
+        // real dict -- so the structured shape keeps the field value types
+        // instead of collapsing to an opaque `TypedDictionary` marker.
+        TypedDict::Anonymous(inner) => {
+            let heap = TypeHeap::new();
+            let value_type = inner.compute_value_type(&heap);
+            let str_index = indexed_named_leaf(table, "builtins.str");
+            let value_index = type_to_indexed_shape(context, &value_type, table);
+            insert_indexed_named(
+                table,
+                "builtins.dict",
+                vec![str_index, value_index],
+                None,
+                Vec::new(),
+            )
+        }
     }
 }
 
 fn callable_to_indexed_shape(
     context: &TypeShapeContext,
     callable: &Callable,
+    is_staticmethod: bool,
     table: &mut TypeTableBuilder,
 ) -> usize {
     let params = callable_param_indices(context, &callable.params, table);
     let return_type = type_to_indexed_shape(context, &callable.ret, table);
-    insert_indexed_callable(table, params, return_type)
+    insert_indexed_callable(table, params, return_type, is_staticmethod)
 }
 
 fn callable_param_indices(
@@ -512,7 +569,9 @@ fn callable_param_indices(
     table: &mut TypeTableBuilder,
 ) -> Vec<usize> {
     match params {
-        Params::List(params) => param_list_to_indexed_shapes(context, params, table),
+        Params::List(params) | Params::Partial(params) => {
+            param_list_to_indexed_shapes(context, params, table)
+        }
         Params::ParamSpec(prefix, param_spec) => {
             let mut params = prefix
                 .iter()
@@ -705,13 +764,14 @@ fn union_to_indexed_shape(
 
 pub(super) fn located_type_table_refs(
     types: Vec<(PythonASTRange, (usize, String))>,
+    include_display: bool,
 ) -> Vec<LocatedTypeTableRef> {
     types
         .into_iter()
         .map(|(location, (type_index, display))| LocatedTypeTableRef {
             location,
             type_index,
-            display,
+            display: include_display.then_some(display),
         })
         .collect()
 }

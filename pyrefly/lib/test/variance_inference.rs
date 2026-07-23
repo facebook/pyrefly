@@ -5,7 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
+
+fn proxy_method_env() -> TestEnv {
+    TestEnv::one_with_path(
+        "shape_extensions",
+        "shape_extensions/__init__.pyi",
+        r#"
+class ProxyMethod[T]: ...
+"#,
+    )
+}
 
 testcase!(
     test_specified_variance_gets_respected,
@@ -96,6 +107,28 @@ square: Callable[[int], int] = lambda x: x ** 2
 
 a: Callable[[int], int] = ShouldBeInvariant[int]().f(square)
 b: Callable[[float], int]= ShouldBeInvariant[float]().f(square)  # E: # E:
+"#,
+);
+
+testcase!(
+    test_proxy_method_target_participates_in_variance_inference,
+    proxy_method_env(),
+    r#"
+from shape_extensions import ProxyMethod
+
+class ProxySink[T]:
+    __call__: ProxyMethod["put"]
+    def put(self, x: T) -> None: ...
+
+class ProxyBox[T]:
+    __call__: ProxyMethod["replace"]
+    def replace(self, x: T) -> T: ...
+
+sink_ok: ProxySink[int] = ProxySink[object]()
+sink_bad: ProxySink[object] = ProxySink[int]()  # E:
+
+box_bad_1: ProxyBox[float] = ProxyBox[int]()  # E:
+box_bad_2: ProxyBox[int] = ProxyBox[float]()  # E:
 "#,
 );
 

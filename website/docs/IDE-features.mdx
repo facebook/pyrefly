@@ -437,6 +437,10 @@ Type errors and warnings from Pyrefly’s checker appear in the diagnostics pane
   preload="metadata"
 />
 
+Pyrefly also greys out unused imports and unused local variables directly in the editor. These are IDE-only hints and do not appear in the CLI.
+
+Because Pyrefly does not model import side effects, an import used only for its side effects  (for example a plugin that registers accessors or methods on an existing class, such as `pyjanitor` extending `pandas.DataFrame`) may be greyed even though it is required at runtime.
+
 ---
 
 ### [Semantic tokens](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_semanticTokens)
@@ -468,6 +472,7 @@ We reuse Pyright's `python.analysis.inlayHints.*` settings for backwards compati
 | `python.analysis.inlayHints.functionReturnTypes` | `boolean` | `true` | Show return type hints on functions without a return type annotation. |
 | `python.analysis.inlayHints.variableTypes` | `boolean` | `true` | Show type hints on variable assignments without a type annotation. |
 | `python.analysis.inlayHints.pytestParameters` | `boolean` | `false` | Show type hints for pytest fixture parameters. |
+| `python.analysis.inlayHintDebounceMs` | `number` | `150` | Debounce window, in milliseconds, for inlay hints. While a file is being edited, updates are held until editing pauses for this long, so hint widths don't jitter on every keystroke. Set to `0` to update immediately. |
 
 Inlay hints can be double clicked to insert them as an annotation.
 <video

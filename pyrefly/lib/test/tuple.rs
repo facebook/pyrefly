@@ -161,6 +161,15 @@ def test(y: int):
 );
 
 testcase!(
+    test_unpack_starred_not_iterable_in_tuple,
+    r#"
+def test():
+    x: int = 42
+    y = (*x,)  # E: Expected an iterable, got `int`
+"#,
+);
+
+testcase!(
     test_unpack_index_out_of_bounds,
     r#"
 def test(x: tuple[int]) -> None:
@@ -479,6 +488,18 @@ testcase!(
 from typing import assert_type, Iterable
 def test(x: Iterable[int]) -> None:
     assert_type(tuple(x), tuple[int, ...])
+"#,
+);
+
+testcase!(
+    bug = "TODO: handle generator from fixed-length heterogeneous iterable",
+    test_tuple_constructor_preserves_fixed_length,
+    r#"
+from typing import assert_type
+def test(xs: tuple[int, int]) -> None:
+    ys: tuple[int, int] = tuple(xs)
+    assert_type(tuple(xs), tuple[int, int])
+    zs: tuple[int, int] = tuple(x for x in xs)  # E: `tuple[int, ...]` is not assignable to `tuple[int, int]`
 "#,
 );
 
