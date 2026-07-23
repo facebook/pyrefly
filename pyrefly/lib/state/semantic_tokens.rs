@@ -26,6 +26,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
@@ -346,6 +347,14 @@ impl SemanticTokenBuilder {
         }
     }
 
+    fn process_pattern(&mut self, pattern: &Pattern) {
+        Ast::pattern_lvalue(pattern, &mut |name| {
+            if !Ast::is_synthesized_empty_identifier(name) {
+                self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, Vec::new());
+            }
+        });
+    }
+
     fn process_attribute_expr(
         &mut self,
         attr: &ExprAttribute,
@@ -531,6 +540,12 @@ impl SemanticTokenBuilder {
                     if let Some(name) = &with_item.optional_vars {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
+                }
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
+            }
+            Stmt::Match(stmt_match) => {
+                for case in &stmt_match.cases {
+                    self.process_pattern(&case.pattern);
                 }
                 x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }

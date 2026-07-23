@@ -2234,7 +2234,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // ForwardToFirstUse is handled here too: the partial answer shortcut
         // lives in get_idx (before push), so by the time we reach solve_binding
         // the shortcut didn't match and we fall through to normal resolution.
-        if let Binding::Forward(fwd) | Binding::ForwardToFirstUse(fwd) = binding {
+        if let Binding::Forward(fwd)
+        | Binding::PatternCapture(fwd)
+        | Binding::ForwardToFirstUse(fwd) = binding
+        {
             return self.get_idx(*fwd);
         }
         if let Binding::PromoteForward(fwd) = binding {
@@ -5139,7 +5142,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn binding_to_type_info(&self, binding: &Binding, errors: &ErrorCollector) -> TypeInfo {
         match binding {
-            Binding::Forward(k) => self.get_idx(*k).arc_clone(),
+            Binding::Forward(k) | Binding::PatternCapture(k) => self.get_idx(*k).arc_clone(),
             Binding::PromoteForward(k) => self.resolve_promote_forward(*k),
             Binding::ForwardToFirstUse(k) => {
                 if let Some(def_idx) = self.def_idx_for_forward_to_first_use(*k)
@@ -5598,6 +5601,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn binding_to_type(&self, binding: &Binding, errors: &ErrorCollector) -> Type {
         match binding {
             Binding::Forward(..)
+            | Binding::PatternCapture(..)
             | Binding::PromoteForward(..)
             | Binding::ForwardToFirstUse(..)
             | Binding::Phi(..)

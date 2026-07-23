@@ -2324,6 +2324,9 @@ pub enum Binding {
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
+    /// A definition boundary for a capture pattern. It forwards type information during solving,
+    /// but origin and definition lookups must not follow it through to the matched subject.
+    PatternCapture(Idx<Key>),
     /// Like Forward, but widens implicit literals.
     PromoteForward(Idx<Key>),
     /// A forward reference produced during first-use resolution of a partial type.
@@ -2531,6 +2534,7 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
+            Self::PatternCapture(k) => write!(f, "PatternCapture({})", ctx.display(*k)),
             Self::PromoteForward(k) => write!(f, "PromoteForward({})", ctx.display(*k)),
             Self::ForwardToFirstUse(k) => {
                 write!(f, "ForwardToFirstUse({})", ctx.display(*k))
@@ -2768,6 +2772,7 @@ impl Binding {
             Binding::LambdaParameter(..) | Binding::FunctionParameter(_) => {
                 Some(SymbolKind::Parameter)
             }
+            Binding::PatternCapture(_) => Some(SymbolKind::Variable),
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
