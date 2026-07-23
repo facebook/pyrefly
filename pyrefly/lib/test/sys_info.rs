@@ -193,6 +193,65 @@ assert_type(Y(), int)
 );
 
 testcase!(
+    test_platform_ternary_linux,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+import subprocess
+import sys
+
+value: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+inverted: int = 0 if sys.platform != "win32" else subprocess.CREATE_NO_WINDOW
+
+def condition() -> bool:
+    return False
+
+subprocess.CREATE_NO_WINDOW if condition() else 0  # E: No attribute `CREATE_NO_WINDOW` in module `subprocess`
+"#,
+);
+
+testcase!(
+    test_platform_ternary_windows,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+import subprocess
+import sys
+
+value: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else "not windows"
+inverted: int = "not windows" if sys.platform != "win32" else subprocess.CREATE_NO_WINDOW
+"#,
+);
+
+testcase!(
+    test_platform_ternary_yield_in_skipped_orelse,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+from typing import Generator, assert_type
+import sys
+
+def gen() -> Generator[int, None, None]:
+    x = 1 if sys.platform == "win32" else (yield 2)
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+"#,
+);
+
+testcase!(
+    test_platform_ternary_yield_in_skipped_body,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+from typing import Generator, assert_type
+import sys
+
+def gen() -> Generator[int, None, None]:
+    x = (yield 2) if sys.platform == "win32" else 1
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+"#,
+);
+
+testcase!(
     test_platform_membership,
     r#"
 from typing import assert_type
