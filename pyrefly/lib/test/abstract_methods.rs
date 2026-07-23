@@ -595,3 +595,102 @@ class A(metaclass=Meta2):
 A()  # E: Cannot instantiate `A`
     "#,
 );
+
+// #2797: a `@final` subclass of `Sequence` (a plain class over `Protocol` bases)
+// must report its unimplemented abstract methods.
+testcase!(
+    test_final_class_over_sequence,
+    r#"
+from typing import final
+from collections.abc import Sequence
+
+@final
+class A(Sequence[int]):  # E: Final class `A` cannot have unimplemented abstract members
+    ...
+"#,
+);
+
+// Same gap hid instantiation errors and reaches `Mapping` and user protocols via a
+// plain intermediate subclass.
+testcase!(
+    test_abstract_through_protocol_bases,
+    r#"
+from typing import final, Protocol
+from abc import abstractmethod
+from collections.abc import Sequence, Mapping
+
+class Plain(Sequence[int]): ...
+Plain()  # E: Cannot instantiate `Plain`
+
+@final
+class M(Mapping[str, int]):  # E: Final class `M` cannot have unimplemented abstract members
+    ...
+
+class P(Protocol):
+    @abstractmethod
+    def foo(self) -> int: ...
+class Mid(P): ...
+@final
+class D(Mid):  # E: Final class `D` cannot have unimplemented abstract members: `foo`
+    ...
+"#,
+);
+
+// The opt-in implicit-abstract diagnostic fires on `Sequence` subclasses too.
+testcase!(
+    test_implicit_abstract_through_sequence,
+    TestEnv::new().enable_implicit_abstract_class_error(),
+    r#"
+from collections.abc import Sequence
+class Plain(Sequence[int]):  # E: Class `Plain` has unimplemented abstract members
+    ...
+Plain()  # E: Cannot instantiate `Plain`
+"#,
+);
+
+// Implementing the abstract members keeps the subclass clean — no over-reporting.
+testcase!(
+    test_concrete_subclass_of_sequence_is_clean,
+    r#"
+from collections.abc import Sequence
+from typing import overload
+
+class Good(Sequence[int]):
+    @overload
+    def __getitem__(self, index: int) -> int: ...
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[int]: ...
+    def __getitem__(self, index: int | slice) -> int | Sequence[int]: ...
+    def __len__(self) -> int: ...
+Good()
+"#,
+);
+
+// Direct protocol bases were already handled; keep them working.
+testcase!(
+    test_final_class_direct_protocol_bases_still_errors,
+    r#"
+from typing import final
+from collections.abc import Collection, Reversible
+@final
+class B(Collection[int], Reversible[int]):  # E: Final class `B` cannot have unimplemented abstract members
+    ...
+"#,
+);
+
+// A TypedDict is a concrete `dict`, never abstract, despite its `Mapping`-based
+// fallback base.
+testcase!(
+    test_typed_dict_is_not_abstract,
+    TestEnv::new().enable_implicit_abstract_class_error(),
+    r#"
+from typing import TypedDict, final
+
+class CSSDict(TypedDict):
+    selector: str
+
+@final
+class FinalTD(TypedDict, total=False):
+    year: int
+"#,
+);
