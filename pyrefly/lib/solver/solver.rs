@@ -1367,13 +1367,20 @@ impl Solver {
     /// Finish the type returned from a function call. This entails expanding solved variables,
     /// erasing unsolved variables without defaults from unions, and canonicalizing dimension
     /// expressions so that all-literal `Int` trees fold to single literals.
-    pub fn for_return_boundary(&self, mut t: Type) -> Type {
+    pub fn for_return_boundary(&self, t: Type) -> Type {
+        self.for_return_boundary_with_type_level_dsl_errors(t).0
+    }
+
+    pub fn for_return_boundary_with_type_level_dsl_errors(
+        &self,
+        mut t: Type,
+    ) -> (Type, Vec<ShapeError>) {
         self.resolve_vars(&mut t, VarExpansionPolicy::Expand, &VarRecurser::new());
         t = t.finalize_callable_residuals_at_boundary(&self.heap, true);
-        t.finalize_type_level_dsl_at_boundary();
+        let type_level_dsl_errors = t.finalize_type_level_dsl_at_boundary();
         self.erase_unsolved_variables(&mut t);
         self.simplify_mut(&mut t);
-        t
+        (t, type_level_dsl_errors)
     }
 
     /// Expand a type. All variables that have been bound will be replaced with non-Var types,

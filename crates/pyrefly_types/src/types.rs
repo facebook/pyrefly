@@ -1490,23 +1490,70 @@ impl Type {
         self
     }
 
-    pub fn finalize_type_level_dsl_at_boundary(&mut self) {
-        fn force(ty: &mut Type) {
+    pub fn finalize_type_level_dsl_at_boundary(&mut self) -> Vec<dimension::ShapeError> {
+        let mut errors = Vec::new();
+
+        // Nested applications are dependencies of the public application being forced here:
+        // propagate the first invalid dependency upward so fallback is applied only at that
+        // public result-schema boundary.
+        fn force_nested(ty: &mut Type) -> Result<(), dimension::ShapeError> {
             let Type::TypeLevelDslCall(call) = ty else {
                 match ty {
                     Type::Callable(_)
                     | Type::Function(_)
                     | Type::BoundMethod(_)
                     | Type::Overload(_)
-                    | Type::Forall(_) => return,
-                    _ => ty.recurse_mut(&mut force),
+                    | Type::Forall(_) => return Ok(()),
+                    _ => {
+                        let mut error = None;
+                        ty.recurse_mut(&mut |ty| {
+                            if error.is_none() {
+                                error = force_nested(ty).err();
+                            }
+                        });
+                        return match error {
+                            Some(error) => Err(error),
+                            None => Ok(()),
+                        };
+                    }
+                }
+            };
+            for arg in &mut call.args {
+                if let Err(error) = force_nested(arg) {
+                    *ty = call.fallback();
+                    return Err(error);
+                }
+            }
+            match call.evaluate() {
+                Ok(result) => {
+                    *ty = result;
+                    Ok(())
+                }
+                Err(error) => {
+                    *ty = call.fallback();
+                    Err(error)
+                }
+            }
+        }
+
+        fn collect_errors(ty: &mut Type, errors: &mut Vec<dimension::ShapeError>) {
+            if matches!(ty, Type::TypeLevelDslCall(_)) {
+                if let Err(error) = force_nested(ty) {
+                    errors.push(error);
                 }
                 return;
-            };
-            *ty = call.evaluate();
-            force(ty);
+            }
+            match ty {
+                Type::Callable(_)
+                | Type::Function(_)
+                | Type::BoundMethod(_)
+                | Type::Overload(_)
+                | Type::Forall(_) => {}
+                _ => ty.recurse_mut(&mut |ty| collect_errors(ty, errors)),
+            }
         }
-        force(self);
+        collect_errors(self, &mut errors);
+        errors
     }
 
     pub fn subst_self_special_form_mut(&mut self, self_type: &Type) {

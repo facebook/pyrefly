@@ -1166,7 +1166,7 @@ impl TypeEq for Int {}
 // ============================================================================
 
 /// Errors that can occur during shape/dimension checking
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShapeError {
     /// Tensor ranks don't match
     RankMismatch { got: usize, want: usize },

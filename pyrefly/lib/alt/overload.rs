@@ -38,6 +38,7 @@ use crate::alt::callable::ArgMap;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
+use crate::alt::callable::ReturnTypeResolutionError;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
@@ -59,6 +60,7 @@ struct CalledOverload<'f> {
     arg_errors: ErrorCollector,
     call_errors: ErrorCollector,
     specialization_errors: Vec<TypeVarSpecializationError>,
+    return_type_errors: Vec<ReturnTypeResolutionError>,
     /// Maps each argument's source range to the parameter it was matched against.
     argmap: ArgMap,
 }
@@ -254,6 +256,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &[CallKeyword],
         arguments_range: TextRange,
         errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         // If we're constructing a class, its type arguments. A successful call will fill these in.
@@ -295,6 +298,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     arg_errors: self.error_collector(),
                     call_errors: self.error_collector(),
                     specialization_errors: Vec::new(),
+                    return_type_errors: Vec::new(),
                     argmap: ArgMap::new(),
                 },
                 false,
@@ -350,6 +354,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let argmap = first_overload.argmap.clone();
                         let arg_errors = self.error_collector();
                         let specialization_errors = first_overload.specialization_errors.clone();
+                        let return_type_errors = matched_overloads
+                            .iter()
+                            .flat_map(|overload| overload.return_type_errors.iter().cloned())
+                            .unique()
+                            .collect();
                         closest_overload = CalledOverload {
                             func,
                             ctor_targs,
@@ -361,6 +370,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             arg_errors,
                             call_errors: self.error_collector(),
                             specialization_errors,
+                            return_type_errors,
                         };
                         matched = true;
                         break;
@@ -433,6 +443,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None,
                 );
             }
+            self.add_return_type_resolution_errors(
+                closest_overload.return_type_errors,
+                arguments_range,
+                return_errors,
+                None,
+            );
             (
                 closest_overload.res,
                 closest_overload.func.1.signature.clone(),
@@ -884,10 +900,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ctor_targs,
                 );
                 (
-                    // Intentionally check only `call_errors` and not `specialization_errors`. The
-                    // contextual pass re-runs with the hint and may legitimately introduce
-                    // specialization errors that the matched-overload step already accounted for,
-                    // so we only fall back to the no-hint version on hard call errors. See
+                    // The contextual pass may legitimately introduce late resolution errors, so
+                    // we only fall back to the no-hint version on hard call errors. See
                     // `test::generic_restriction::test_nested_call_of_overloaded_function_preserves_bound`.
                     if !contextual_overload.has_hard_call_errors() {
                         contextual_overload
@@ -1028,7 +1042,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let arg_errors = self.error_collector();
         let call_errors = self.error_collector();
-        let (res, specialization_errors, argmap) = self.callable_infer(
+        let (res, specialization_errors, return_type_errors, argmap) = self.callable_infer(
             callable.1.signature.clone(),
             Some(&metadata.kind),
             shape_transform,
@@ -1053,6 +1067,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             arg_errors,
             call_errors,
             specialization_errors,
+            return_type_errors,
             argmap,
         }
     }

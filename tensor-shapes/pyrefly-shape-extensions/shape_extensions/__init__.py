@@ -257,6 +257,12 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
     return decorator
 
 
+def broadcast(*_args):
+    """Runtime placeholder for Pyrefly's native type-level broadcast intrinsic."""
+
+    return IntTuple()
+
+
 class IntVar:
     """Symbolic variable with arithmetic support for tensor shape dimensions.
 

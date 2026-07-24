@@ -916,6 +916,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &args.keywords.map(CallKeyword::new),
                 args.range,
                 errors,
+                errors,
                 None,
                 None,
                 None,

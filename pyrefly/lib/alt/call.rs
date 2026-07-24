@@ -8,6 +8,7 @@
 use std::iter;
 use std::sync::Arc;
 
+use itertools::Itertools;
 use pyrefly_python::dunder;
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
@@ -40,6 +41,7 @@ use crate::alt::attr::NoAccessReason;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
+use crate::alt::callable::ReturnTypeResolutionError;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::class::dataclass::ReplaceKind;
@@ -857,6 +859,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub(crate) fn add_return_type_resolution_errors(
+        &self,
+        errors_to_add: impl IntoIterator<Item = ReturnTypeResolutionError>,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) {
+        for error in errors_to_add.into_iter().unique() {
+            match error {
+                ReturnTypeResolutionError::TypeLevelDsl(error) => self.error_with_context(
+                    errors,
+                    range,
+                    ErrorKind::UnsupportedOperation,
+                    format!("Cannot evaluate type-level shape DSL call: {error}"),
+                    context,
+                ),
+            };
+        }
+    }
+
     /// Handles union hint decomposition for class and TypedDict construction.
     /// When the hint is a union, tries each member independently and keeps only
     /// successful constructions, preferring those assignable to their hint member.
@@ -1389,6 +1411,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arguments_range: TextRange,
         callee_range: Option<TextRange>,
         errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
@@ -1543,6 +1566,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 arguments_range,
                 errors,
                 errors,
+                return_errors,
                 context,
                 hint,
                 ctor_targs,
@@ -1558,6 +1582,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 arguments_range,
                 errors,
                 errors,
+                return_errors,
                 context,
                 hint,
                 ctor_targs,
@@ -1579,6 +1604,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 arguments_range,
                 errors,
                 errors,
+                return_errors,
                 context,
                 hint,
                 ctor_targs,
@@ -1593,6 +1619,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     keywords,
                     arguments_range,
                     errors,
+                    return_errors,
                     context,
                     hint,
                     ctor_targs,
@@ -1609,6 +1636,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     keywords,
                     arguments_range,
                     errors,
+                    return_errors,
                     context,
                     hint,
                     ctor_targs,
@@ -1628,6 +1656,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         arguments_range,
                         callee_range,
                         errors,
+                        return_errors,
                         context,
                         hint,
                         ctor_targs,
@@ -1704,6 +1733,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arguments_range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
@@ -1780,10 +1810,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             *targs = chosen_targs;
         }
-        let (ty, specialization_errors, _expected_types) = chosen_res;
+        let (ty, specialization_errors, return_type_errors, _expected_types) = chosen_res;
         if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
             self.add_specialization_errors(errors, arguments_range, call_errors, context);
         }
+        self.add_return_type_resolution_errors(
+            return_type_errors,
+            arguments_range,
+            return_errors,
+            context,
+        );
         ty
     }
 
@@ -1804,6 +1840,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             keywords,
             arguments_range,
             None,
+            errors,
             errors,
             context,
             hint,
@@ -2386,6 +2423,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             kws,
             arg_range,
             Some(callee_range),
+            errors,
             errors,
             None,
             hint,

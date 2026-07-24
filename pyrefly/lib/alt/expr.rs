@@ -128,6 +128,20 @@ pub enum TypeOrExpr<'a> {
     Expr(&'a Expr),
 }
 
+pub(crate) enum PreparedExprCall {
+    Resolved(Type),
+    Callee(Type),
+}
+
+impl PreparedExprCall {
+    pub(crate) fn callee(&self) -> Option<&Type> {
+        match self {
+            Self::Callee(callee) => Some(callee),
+            Self::Resolved(_) => None,
+        }
+    }
+}
+
 /// Where a dimension expression appears, which controls whether a plain
 /// `TypeVar` is accepted. Shape arithmetic (e.g. `N + 1`) needs the
 /// symbolic-integer semantics of an `IntVar`, so an operand of an arithmetic
@@ -832,91 +846,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::YieldFrom(x) => self.get(&KeyYieldFrom(x.range)).return_ty.clone(),
             Expr::Compare(x) => self.compare_infer(x, errors),
             Expr::Call(x) => {
-                if let Some(ty) = self.synthesized_functional_class_type(x) {
-                    return ty;
-                }
-                // Infer a method call's receiver once. A Polars column-algebra transform is a
-                // pure function of the receiver schema and is dispatched here; any other
-                // receiver is reused for ordinary callee inference rather than inferred again.
-                let callee_ty = if let Expr::Attribute(func) = &*x.func {
-                    let base = self.expr_infer_impl(&func.value, None, errors);
-                    if let Some(ty) = self.polars_select(base.ty(), func, &x.arguments, errors) {
-                        return ty;
-                    }
-                    if let Some(ty) = self.polars_drop(base.ty(), func, &x.arguments, errors) {
-                        return ty;
-                    }
-                    if let Some(ty) = self.polars_rename(base.ty(), func, &x.arguments, errors) {
-                        return ty;
-                    }
-                    if let Some(ty) =
-                        self.polars_with_columns(base.ty(), func, &x.arguments, errors)
-                    {
-                        return ty;
-                    }
-                    if let Some(ty) =
-                        self.polars_row_transform(base.ty(), func, &x.arguments, errors)
-                    {
-                        return ty;
-                    }
-                    let attr = self.attr_access_infer(func, &base, errors);
-                    // Reusing `base` bypasses `expr_infer_impl`, so record the callee's type trace
-                    // and deprecation check here as that path would for any other expression.
-                    self.check_for_deprecated_call(attr.ty(), func.range(), errors);
-                    self.record_type_trace(func.range(), attr.ty());
-                    attr.into_ty()
-                } else {
-                    self.expr_infer(&x.func, errors)
-                };
-                self.check_pytorch_tensor_item_call(x, &callee_ty, errors);
-                self.check_pytorch_tensor_cuda_call(x, &callee_ty, errors);
-                self.check_pytorch_print_tensor(x, &callee_ty, errors);
-                self.check_pytorch_redundant_to_call(x, &callee_ty, errors);
-                if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
-                    self.dict_infer(&d, hint, x.range, errors)
-                } else if let Some(ty) = self
-                    .anonymous_typed_dict_get_or_setdefault_with_literal(
-                        &x.func,
-                        &x.arguments,
-                        "get",
-                        errors,
-                    )
-                    .or_else(|| {
-                        self.anonymous_typed_dict_get_or_setdefault_with_literal(
-                            &x.func,
-                            &x.arguments,
-                            "setdefault",
-                            errors,
-                        )
-                    })
-                {
-                    ty
-                } else if let Some(ty) =
-                    self.anonymous_typed_dict_pop_with_literal(&x.func, &x.arguments, errors)
-                {
-                    ty
-                } else if let Some((obj_ty, key_expr, key)) =
-                    self.is_dict_get_with_literal(&x.func, &x.arguments, errors)
-                {
-                    let facet = FacetKind::Key(key.to_string());
-                    if obj_ty.has_value_less_presence(&facet) {
-                        self.subscript_infer_for_type_with_key_present(
-                            obj_ty.ty(),
-                            key_expr,
-                            x.range,
-                            errors,
-                            true,
-                        )
-                    } else {
-                        obj_ty
-                            .at_facet(&facet, || {
-                                self.expr_call_infer(x, callee_ty.clone(), hint, errors)
-                            })
-                            .into_ty()
-                    }
-                } else {
-                    self.expr_call_infer(x, callee_ty, hint, errors)
-                }
+                let prepared = self.prepare_expr_call(x, errors);
+                self.finish_prepared_expr_call(x, prepared, hint, errors)
             }
             Expr::FString(x) => {
                 let mut all_literal_strings = true;
@@ -995,6 +926,121 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
+    }
+
+    pub(crate) fn prepare_expr_call(
+        &self,
+        x: &ExprCall,
+        errors: &ErrorCollector,
+    ) -> PreparedExprCall {
+        if let Some(ty) = self.synthesized_functional_class_type(x) {
+            return PreparedExprCall::Resolved(ty);
+        }
+        // Infer a method call's receiver once. A Polars column-algebra transform is a
+        // pure function of the receiver schema and is dispatched here; any other
+        // receiver is reused for ordinary callee inference rather than inferred again.
+        let callee_ty = if let Expr::Attribute(func) = &*x.func {
+            let base = self.expr_infer_impl(&func.value, None, errors);
+            if let Some(ty) = self.polars_select(base.ty(), func, &x.arguments, errors) {
+                return PreparedExprCall::Resolved(ty);
+            }
+            if let Some(ty) = self.polars_drop(base.ty(), func, &x.arguments, errors) {
+                return PreparedExprCall::Resolved(ty);
+            }
+            if let Some(ty) = self.polars_rename(base.ty(), func, &x.arguments, errors) {
+                return PreparedExprCall::Resolved(ty);
+            }
+            if let Some(ty) = self.polars_with_columns(base.ty(), func, &x.arguments, errors) {
+                return PreparedExprCall::Resolved(ty);
+            }
+            if let Some(ty) = self.polars_row_transform(base.ty(), func, &x.arguments, errors) {
+                return PreparedExprCall::Resolved(ty);
+            }
+            let attr = self.attr_access_infer(func, &base, errors);
+            // Reusing `base` bypasses `expr_infer_impl`, so record the callee's type trace
+            // and deprecation check here as that path would for any other expression.
+            self.check_for_deprecated_call(attr.ty(), func.range(), errors);
+            self.record_type_trace(func.range(), attr.ty());
+            attr.into_ty()
+        } else {
+            self.expr_infer(&x.func, errors)
+        };
+        PreparedExprCall::Callee(callee_ty)
+    }
+
+    pub(crate) fn finish_prepared_expr_call(
+        &self,
+        x: &ExprCall,
+        prepared: PreparedExprCall,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let callee_ty = match prepared {
+            PreparedExprCall::Resolved(ty) => return ty,
+            PreparedExprCall::Callee(callee_ty) => callee_ty,
+        };
+
+        self.check_pytorch_tensor_item_call(x, &callee_ty, errors);
+        self.check_pytorch_tensor_cuda_call(x, &callee_ty, errors);
+        self.check_pytorch_print_tensor(x, &callee_ty, errors);
+        self.check_pytorch_redundant_to_call(x, &callee_ty, errors);
+        if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
+            self.dict_infer(&d, hint, x.range, errors)
+        } else if let Some(ty) = self
+            .anonymous_typed_dict_get_or_setdefault_with_literal(
+                &x.func,
+                &x.arguments,
+                "get",
+                errors,
+            )
+            .or_else(|| {
+                self.anonymous_typed_dict_get_or_setdefault_with_literal(
+                    &x.func,
+                    &x.arguments,
+                    "setdefault",
+                    errors,
+                )
+            })
+        {
+            ty
+        } else if let Some(ty) =
+            self.anonymous_typed_dict_pop_with_literal(&x.func, &x.arguments, errors)
+        {
+            ty
+        } else if let Some((obj_ty, key_expr, key)) =
+            self.is_dict_get_with_literal(&x.func, &x.arguments, errors)
+        {
+            let facet = FacetKind::Key(key.to_string());
+            if obj_ty.has_value_less_presence(&facet) {
+                self.subscript_infer_for_type_with_key_present(
+                    obj_ty.ty(),
+                    key_expr,
+                    x.range,
+                    errors,
+                    true,
+                )
+            } else {
+                obj_ty
+                    .at_facet(&facet, || {
+                        self.expr_call_infer(x, callee_ty.clone(), hint, errors)
+                    })
+                    .into_ty()
+            }
+        } else {
+            self.expr_call_infer(x, callee_ty, hint, errors)
+        }
+    }
+
+    pub(crate) fn finish_prepared_expr_call_with_trace(
+        &self,
+        x: &ExprCall,
+        prepared: PreparedExprCall,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let ty = self.finish_prepared_expr_call(x, prepared, None, errors);
+        self.check_for_deprecated_call(&ty, x.range(), errors);
+        self.record_type_trace(x.range(), &ty);
+        ty
     }
 
     /// Convenience function to call `expr_infer_with_hint` and promote literals in the result
@@ -2695,7 +2741,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        self.subscript_infer_for_type_with_key_present(base, slice, range, errors, false)
+        self.subscript_infer_for_type_with_options(base, slice, range, errors, false, false)
+    }
+
+    pub fn subscript_infer_for_type_in_return_annotation(
+        &self,
+        base: &Type,
+        slice: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        self.subscript_infer_for_type_with_options(base, slice, range, errors, false, true)
     }
 
     fn valid_slice_index_type(&self, ty: &Type, index_dunder: &Name) -> bool {
@@ -2754,6 +2810,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
         key_present: bool, // true if the key is definitely known to be present
+    ) -> Type {
+        self.subscript_infer_for_type_with_options(base, slice, range, errors, key_present, false)
+    }
+
+    fn subscript_infer_for_type_with_options(
+        &self,
+        base: &Type,
+        slice: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+        key_present: bool,
+        allow_type_level_dsl: bool,
     ) -> Type {
         let xs = Ast::unpack_slice(slice);
         let slice_ty = LazyCell::new(|| self.expr_infer(slice, errors));
@@ -2844,7 +2912,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 // Shaped-array type parsing for registered array classes.
                 Type::ClassDef(ref cls) if self.is_shaped_array_class(cls) => {
-                    Type::type_of(self.parse_registered_shaped_array_type(cls, xs, range, errors))
+                    Type::type_of(self.parse_registered_shaped_array_type(
+                        cls,
+                        xs,
+                        range,
+                        errors,
+                        allow_type_level_dsl,
+                    ))
                 }
                 Type::ClassDef(ref cls) if self.is_int_tuple_class(cls) => {
                     self.parse_int_tuple_type(xs, errors)
@@ -3434,7 +3508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Check if a class should use shaped-array type parsing.
-    fn is_shaped_array_class(&self, cls: &Class) -> bool {
+    pub(crate) fn is_shaped_array_class(&self, cls: &Class) -> bool {
         self.shaped_array_shape_for_class(cls).is_some()
     }
 
@@ -4206,6 +4280,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &[Expr],
         range: TextRange,
         errors: &ErrorCollector,
+        allow_type_level_dsl: bool,
     ) -> Type {
         let shape_param = self
             .shaped_array_shape_for_class(cls)
@@ -4253,7 +4328,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 _ => {
-                    if i == shape_idx
+                    if allow_type_level_dsl
+                        && i == shape_idx
+                        && let Some(ty) = self.parse_type_level_dsl_call(arg, errors)
+                    {
+                        shape_arg_carrier = Some(ty);
+                        shape_validation_arg(&IntTuple::shapeless().to_shape_arg_type())
+                    } else if i == shape_idx
                         && let Type::ClassDef(cls) = self.expr_infer(arg, &self.error_swallower())
                         && self.is_int_tuple_class(&cls)
                     {
@@ -4315,6 +4396,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(shape_arg) = base_class.targs_mut().as_mut().get_mut(shape_idx)
         {
             *shape_arg = carrier;
+        }
+        if matches!(
+            base_class.targs().as_slice().get(shape_idx),
+            Some(Type::TypeLevelDslCall(_))
+        ) {
+            return Type::ClassType(base_class);
         }
         self.shaped_array_classtype_to_shaped_array_type(&base_class)
             .to_type()

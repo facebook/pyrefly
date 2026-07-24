@@ -785,6 +785,79 @@ def f(x: Array[[2, 3], int]) -> None:
 );
 
 testcase!(
+    test_type_level_dsl_broadcast_return_boundary,
+    shaped_array_env_with_shaped_torch(),
+    r#"
+import shape_extensions
+import shape_extensions as shapes
+from shape_extensions import IntTuple, broadcast
+from torch import Tensor
+from typing import overload, reveal_type
+
+def add_qualified[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[shape_extensions.broadcast(S0, S1)]: ...
+def add_imported[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[broadcast(S0, S1)]: ...
+def add_alias[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[shapes.broadcast(S0, S1)]: ...
+def add_same[S: IntTuple](x: Tensor[S], y: Tensor[S]) -> Tensor[broadcast(S, S)]: ...
+def add_nested[S0: IntTuple, S1: IntTuple, S2: IntTuple](
+    x: Tensor[S0],
+    y: Tensor[S1],
+    z: Tensor[S2],
+) -> Tensor[broadcast(broadcast(S0, S1), S2)]: ...
+def add_repeated[S0: IntTuple, S1: IntTuple](
+    x: Tensor[S0],
+    y: Tensor[S1],
+) -> Tensor[broadcast(broadcast(S0, S1), broadcast(S0, S1))]: ...
+
+@overload
+def add_overloaded(x: Tensor[[2, 3]], y: Tensor[[1, 3]]) -> Tensor[broadcast(IntTuple[2, 3], IntTuple[1, 3])]: ...
+@overload
+def add_overloaded(x: Tensor[[2, 3]], y: Tensor[[4, 3]]) -> Tensor[broadcast(IntTuple[2, 3], IntTuple[4, 3])]: ...
+def add_overloaded(x: Tensor, y: Tensor) -> Tensor: ...
+
+def add_expanded(
+    args: tuple[Tensor[[2, 3]], Tensor[[1, 3]]]
+    | tuple[Tensor[[2, 3]], Tensor[[4, 3]]],
+) -> None:
+    add_overloaded(*args)  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
+
+def bad_domain[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(int, S0)]: ...  # E: Expected an `IntTuple` argument to `broadcast`
+def bad_arity[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(S0)]: ...  # E: Expected 2 arguments for `broadcast`, got 1
+def bad_keyword[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(S0, right=S0)]: ...  # E: `broadcast` does not accept keyword arguments
+
+def test_same[S: IntTuple](x: Tensor[S]) -> None:
+    reveal_type(add_same(x, x))  # E: revealed type: Tensor[S]
+
+def test(x: Tensor[[2, 3]], y: Tensor[[1, 3]], z: Tensor[[2, 1]], bad: Tensor[[4, 3]], unknown: Tensor[IntTuple]) -> None:
+    reveal_type(add_qualified(x, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(add_imported(x, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(add_alias(x, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(add_nested(x, z, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(add_imported(x, unknown))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    add_imported(x, bad)  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
+    add_nested(x, bad, y)  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
+    add_repeated(x, bad)  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
+"#,
+);
+
+testcase!(
+    test_type_level_dsl_broadcast_rejected_outside_return_annotation,
+    shaped_array_env_with_shaped_torch(),
+    r#"
+from shape_extensions import IntTuple, broadcast
+from torch import Tensor
+
+BadAlias = Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E:
+
+bad_global: Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E:
+
+class C:
+    bad_attr: Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E:
+
+def bad_parameter[S0: IntTuple](x: Tensor[broadcast(S0, S0)]) -> None: ...  # E:
+"#,
+);
+
+testcase!(
     test_shaped_array_inttuple_non_shape_arg_does_not_reproject,
     shaped_array_env(),
     r#"

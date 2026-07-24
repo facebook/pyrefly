@@ -17,6 +17,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::facet::FacetKind;
@@ -26,8 +27,10 @@ use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::type_info::JoinStyle;
+use pyrefly_types::type_level_dsl::TypeLevelDslCall;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::types::CalleeKind;
 use pyrefly_util::display::pluralize;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -6776,6 +6779,106 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty
     }
 
+    pub(crate) fn parse_type_level_dsl_call(
+        &self,
+        x: &Expr,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Expr::Call(call) = x else {
+            return None;
+        };
+        let probe_errors = self.error_swallower();
+        let prepared = self.prepare_expr_call(call, &probe_errors);
+        let callee = prepared.callee()?;
+        self.parse_type_level_dsl_call_with_callee(call, callee, errors)
+    }
+
+    fn parse_type_level_dsl_call_with_callee(
+        &self,
+        call: &ExprCall,
+        callee: &Type,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        if !Self::is_native_broadcast_callee(callee) {
+            return None;
+        }
+        if !call.arguments.keywords.is_empty() {
+            return Some(self.error(
+                errors,
+                call.range,
+                ErrorKind::InvalidAnnotation,
+                "`broadcast` does not accept keyword arguments".to_owned(),
+            ));
+        }
+        if call.arguments.args.len() != 2 {
+            return Some(self.error(
+                errors,
+                call.range,
+                ErrorKind::InvalidAnnotation,
+                format!(
+                    "Expected 2 arguments for `broadcast`, got {}",
+                    call.arguments.args.len()
+                ),
+            ));
+        }
+        let args = call
+            .arguments
+            .args
+            .iter()
+            .map(|arg| {
+                let ty = self
+                    .parse_type_level_dsl_call(arg, errors)
+                    .unwrap_or_else(|| {
+                        self.expr_untype(arg, TypeFormContext::TypeArgument, errors)
+                    });
+                if !self.is_int_tuple_dsl_argument(&ty) {
+                    self.error(
+                        errors,
+                        arg.range(),
+                        ErrorKind::InvalidAnnotation,
+                        format!(
+                            "Expected an `IntTuple` argument to `broadcast`, got `{}`",
+                            self.for_display(ty.clone())
+                        ),
+                    );
+                }
+                ty
+            })
+            .collect();
+        Some(Type::TypeLevelDslCall(Box::new(
+            TypeLevelDslCall::broadcast(args),
+        )))
+    }
+
+    fn is_native_broadcast_callee(callee: &Type) -> bool {
+        matches!(
+            callee.callee_kind(),
+            Some(CalleeKind::Function(FunctionKind::Def(id)))
+                if id.module.name().as_str() == "shape_extensions"
+                    && id.cls.is_none()
+                    && id.name.as_str() == "broadcast"
+        )
+    }
+
+    fn is_int_tuple_dsl_argument(&self, ty: &Type) -> bool {
+        let restriction = match ty {
+            Type::Any(_) | Type::IntTuple(_) | Type::TypeLevelDslCall(_) => return true,
+            Type::Quantified(q) if q.kind == QuantifiedKind::TypeVar => &q.restriction,
+            Type::TypeVar(type_var) => type_var.restriction(),
+            _ => return false,
+        };
+        match restriction {
+            Restriction::Bound(bound) => matches!(bound, Type::IntTuple(_)),
+            Restriction::Constraints(constraints) => {
+                !constraints.is_empty()
+                    && constraints
+                        .iter()
+                        .all(|constraint| matches!(constraint, Type::IntTuple(_)))
+            }
+            Restriction::Unrestricted => false,
+        }
+    }
+
     fn check_explicit_any(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
         if ty.any(|ty| matches!(ty, Type::Any(AnyStyle::Explicit))) {
             errors
@@ -6873,11 +6976,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let result = match x {
+            Expr::Call(call) if type_form_context == TypeFormContext::ReturnAnnotation => {
+                let prepared = self.prepare_expr_call(call, errors);
+                if let Some(ty) = prepared.callee().and_then(|callee| {
+                    self.parse_type_level_dsl_call_with_callee(call, callee, errors)
+                }) {
+                    ty
+                } else {
+                    let inferred_ty =
+                        self.finish_prepared_expr_call_with_trace(call, prepared, errors);
+                    self.untype_runtime_type(inferred_ty, x.range(), type_form_context, errors)
+                }
+            }
             Expr::Subscript(x)
                 if let Some(ty) =
                     self.parse_jaxtyping_type_form(&x.value, &x.slice, x.range(), errors) =>
             {
                 ty
+            }
+            Expr::Subscript(x) if type_form_context == TypeFormContext::ReturnAnnotation => {
+                let base = self.expr_infer(&x.value, errors);
+                // Preserve return-annotation context through ordinary wrappers so nested shaped
+                // array arguments may contain type-level DSL calls.
+                let inferred_ty = self.subscript_infer_for_type_in_return_annotation(
+                    &base,
+                    &x.slice,
+                    x.range(),
+                    errors,
+                );
+                self.untype_runtime_type_with_trace(
+                    inferred_ty,
+                    x.range(),
+                    type_form_context,
+                    errors,
+                )
             }
             // A `IntVar`'s default (e.g. `N = 3`) is a dimension expression, not
             // an ordinary type, so route it through the dimension parser.
@@ -6901,52 +7033,80 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))
             }
-            _ => {
-                let inferred_ty = self.expr_infer(x, errors);
-                // Check if this is a scoped type alias in base class context
-                // We do this check here instead of `validate_type_form` because it
-                // substitutes type aliases with the aliased type
-                if type_form_context == TypeFormContext::BaseClassList
-                    && let Type::TypeAlias(ta) = &inferred_ty
-                    && let ta = self.get_type_alias(ta)
-                    && ta.style == TypeAliasStyle::Scoped
-                {
-                    return self.error(
-                                errors,
-                                x.range(),
-                                ErrorKind::InvalidInheritance,
-                                format!(
-                                    "Cannot use scoped type alias `{}` as a base class. Use a legacy type alias instead: `{}: TypeAlias = {}`",
-                                    ta.name,
-                                    ta.name,
-                                    self.for_display(ta.as_type())
-                                ),
-                            );
-                }
-                self.untype_opt_with_context(
-                    inferred_ty.clone(),
-                    x.range(),
-                    errors,
-                    type_form_context.untype_context(),
-                )
-                .unwrap_or_else(|| {
-                    self.error(
-                        errors,
-                        x.range(),
-                        ErrorKind::NotAType,
-                        format!(
-                            "Expected a type form, got instance of `{}`",
-                            self.for_display(inferred_ty),
-                        ),
-                    )
-                })
-            }
+            _ => self.untype_runtime_expr(x, type_form_context, errors),
         };
         let result = self.validate_type_form(result, x.range(), type_form_context, errors);
         if type_form_context.can_report_explicit_any() {
             self.check_explicit_any(&result, x.range(), errors);
         }
         result
+    }
+
+    fn untype_runtime_expr(
+        &self,
+        x: &Expr,
+        type_form_context: TypeFormContext,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let inferred_ty = self.expr_infer(x, errors);
+        self.untype_runtime_type(inferred_ty, x.range(), type_form_context, errors)
+    }
+
+    fn untype_runtime_type_with_trace(
+        &self,
+        inferred_ty: Type,
+        range: TextRange,
+        type_form_context: TypeFormContext,
+        errors: &ErrorCollector,
+    ) -> Type {
+        self.record_type_trace(range, &inferred_ty);
+        self.untype_runtime_type(inferred_ty, range, type_form_context, errors)
+    }
+
+    fn untype_runtime_type(
+        &self,
+        inferred_ty: Type,
+        range: TextRange,
+        type_form_context: TypeFormContext,
+        errors: &ErrorCollector,
+    ) -> Type {
+        // Check if this is a scoped type alias in base class context
+        // We do this check here instead of `validate_type_form` because it
+        // substitutes type aliases with the aliased type
+        if type_form_context == TypeFormContext::BaseClassList
+            && let Type::TypeAlias(ta) = &inferred_ty
+            && let ta = self.get_type_alias(ta)
+            && ta.style == TypeAliasStyle::Scoped
+        {
+            return self.error(
+                errors,
+                range,
+                ErrorKind::InvalidInheritance,
+                format!(
+                    "Cannot use scoped type alias `{}` as a base class. Use a legacy type alias instead: `{}: TypeAlias = {}`",
+                    ta.name,
+                    ta.name,
+                    self.for_display(ta.as_type())
+                ),
+            );
+        }
+        self.untype_opt_with_context(
+            inferred_ty.clone(),
+            range,
+            errors,
+            type_form_context.untype_context(),
+        )
+        .unwrap_or_else(|| {
+            self.error(
+                errors,
+                range,
+                ErrorKind::NotAType,
+                format!(
+                    "Expected a type form, got instance of `{}`",
+                    self.for_display(inferred_ty),
+                ),
+            )
+        })
     }
 
     /// Try to evaluate a string literal as a forward-reference type form
