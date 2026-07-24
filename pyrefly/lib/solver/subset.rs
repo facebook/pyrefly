@@ -1753,6 +1753,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (_, Type::ClassType(want)) if want.is_builtin("object") => {
                 Ok(()) // everything is an instance of `object`
             }
+            (Type::KwCall(got), _) => self.is_subset_eq(&got.return_ty, want),
+            (_, Type::KwCall(want)) => self.is_subset_eq(got, &want.return_ty),
             (got_ty, want_ty)
                 if let Some(got_alias) = as_type_alias(got_ty)
                     && let Some(want_alias) = as_type_alias(want_ty) =>
