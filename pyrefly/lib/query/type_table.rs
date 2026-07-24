@@ -502,6 +502,7 @@ pub(super) fn type_to_indexed_shape(
         }
         Type::DataFrame(schema) => type_to_indexed_shape(context, &schema.underlying_type(), table),
         Type::Int(_) => indexed_named_leaf(table, "Int"),
+        Type::TypeLevelDslCall(_) => indexed_named_leaf(table, "type_level_dsl_call"),
         Type::TypeForm(inner) => {
             let inner = type_to_indexed_shape(context, inner, table);
             insert_indexed_named(table, "typing.TypeForm", vec![inner], None, Vec::new())

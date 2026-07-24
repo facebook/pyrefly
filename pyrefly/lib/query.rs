@@ -454,6 +454,7 @@ fn type_kind_name(ty: &Type) -> &'static str {
         Type::SuperInstance(_) => "super_instance",
         Type::SelfType(_) => "self_type",
         Type::CallableResidual(_) => "callable_residual",
+        Type::TypeLevelDslCall(_) => "type_level_dsl_call",
         Type::KwCall(_) => "kw_call",
         Type::Any(_) => "any",
         Type::Never(_) => "never",
@@ -679,6 +680,7 @@ fn type_shape_kind(context: &TypeShapeContext, ty: &Type) -> TypeShapeKind {
         }
         Type::DataFrame(schema) => type_shape_kind(context, &schema.underlying_type()),
         Type::Int(_) => named_type_shape_kind("Int", Vec::new()),
+        Type::TypeLevelDslCall(_) => named_type_shape_kind("type_level_dsl_call", Vec::new()),
         Type::TypeForm(inner) => {
             named_type_shape_kind("typing.TypeForm", vec![type_to_shape(context, inner)])
         }

@@ -438,6 +438,7 @@ pub(crate) fn type_to_structured(
         | Type::IntTuple(_)
         | Type::NNModule(_)
         | Type::DataFrame(_)
-        | Type::Int(_) => insert_simple_other_form("typing.Any", table),
+        | Type::Int(_)
+        | Type::TypeLevelDslCall(_) => insert_simple_other_form("typing.Any", table),
     }
 }

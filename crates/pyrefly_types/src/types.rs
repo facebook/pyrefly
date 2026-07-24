@@ -68,6 +68,7 @@ use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
+use crate::type_level_dsl::TypeLevelDslCall;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
@@ -769,6 +770,9 @@ pub enum Type {
     /// of the argument, so that we can resonstruct the same generic/overload structure if it
     /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
     CallableResidual(Box<CallableResidual>),
+    /// A type-level shape DSL application that is valid inside callable return annotations.
+    /// Call return-boundary processing forces this to a result-schema projection.
+    TypeLevelDslCall(Box<TypeLevelDslCall>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
     Function(Box<Function>),
@@ -915,6 +919,7 @@ impl Visit for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit(f),
             Type::CallableResidual(x) => x.visit(f),
+            Type::TypeLevelDslCall(x) => x.visit(f),
             Type::Function(x) => x.visit(f),
             Type::BoundMethod(x) => x.visit(f),
             Type::Overload(x) => x.visit(f),
@@ -973,6 +978,7 @@ impl VisitMut for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit_mut(f),
             Type::CallableResidual(x) => x.visit_mut(f),
+            Type::TypeLevelDslCall(x) => x.visit_mut(f),
             Type::Function(x) => x.visit_mut(f),
             Type::BoundMethod(x) => x.visit_mut(f),
             Type::Overload(x) => x.visit_mut(f),
@@ -1482,6 +1488,25 @@ impl Type {
     pub fn subst(mut self, mp: &SmallMap<&Quantified, &Type>) -> Self {
         self.subst_mut(mp);
         self
+    }
+
+    pub fn finalize_type_level_dsl_at_boundary(&mut self) {
+        fn force(ty: &mut Type) {
+            let Type::TypeLevelDslCall(call) = ty else {
+                match ty {
+                    Type::Callable(_)
+                    | Type::Function(_)
+                    | Type::BoundMethod(_)
+                    | Type::Overload(_)
+                    | Type::Forall(_) => return,
+                    _ => ty.recurse_mut(&mut force),
+                }
+                return;
+            };
+            *ty = call.evaluate();
+            force(ty);
+        }
+        force(self);
     }
 
     pub fn subst_self_special_form_mut(&mut self, self_type: &Type) {

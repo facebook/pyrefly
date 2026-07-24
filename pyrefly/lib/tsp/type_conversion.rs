@@ -481,6 +481,9 @@ impl TypeConverter<'_> {
             // --- Materialization is a solver artifact ---
             PyreflyType::Materialization => builtin("unknown"),
 
+            // --- Type-level DSL calls are forced at function-call return boundaries ---
+            PyreflyType::TypeLevelDslCall(_) => builtin("unknown"),
+
             // --- Sentinel → a `ClassType` carrying a `SentinelLiteral` ---
             // The protocol has a dedicated sentinel literal (class name plus its
             // defining location), so emit that rather than an off-spec

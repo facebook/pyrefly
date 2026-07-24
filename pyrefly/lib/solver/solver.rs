@@ -1370,6 +1370,7 @@ impl Solver {
     pub fn for_return_boundary(&self, mut t: Type) -> Type {
         self.resolve_vars(&mut t, VarExpansionPolicy::Expand, &VarRecurser::new());
         t = t.finalize_callable_residuals_at_boundary(&self.heap, true);
+        t.finalize_type_level_dsl_at_boundary();
         self.erase_unsolved_variables(&mut t);
         self.simplify_mut(&mut t);
         t

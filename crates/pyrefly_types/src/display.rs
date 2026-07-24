@@ -816,6 +816,17 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::TypeLevelDslCall(call) => {
+                output.write_str(call.function.name)?;
+                output.write_str("(")?;
+                for (i, arg) in call.args.iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
+                    }
+                    self.fmt_helper_generic(arg, false, output)?;
+                }
+                output.write_str(")")
+            }
             Type::Function(func) => {
                 let Function {
                     signature,
