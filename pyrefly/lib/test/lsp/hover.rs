@@ -612,6 +612,38 @@ def f() -> None:
 }
 
 #[test]
+fn hover_on_match_wildcard_shows_remaining_type() {
+    let code = r#"
+from enum import StrEnum
+
+class E(StrEnum):
+    x = "1"
+    y = "2"
+
+def f(x: E) -> None:
+    match x:
+        case E.x:
+            pass
+        case _:
+#            ^
+            pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("Literal[E.y]"),
+        "Expected hover to show remaining match type, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_string_with_hash_character() {
     let code = r#"
 x = "hello # world"  # pyrefly: ignore
