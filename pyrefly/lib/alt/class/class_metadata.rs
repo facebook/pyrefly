@@ -1541,6 +1541,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(ty) => parse_base_class_type(ty),
                 }
             }
+            BaseClass::Call(x) => {
+                // Ignore all type errors here since they'll be reported in `class_bases_of` anyway.
+                let errors = ErrorCollector::new(self.module().dupe(), ErrorStyle::Never);
+                let ty = self.expr_infer(x, &errors);
+                match self.untype_opt(ty.clone(), x.range(), &errors) {
+                    None => BaseClassParseResult::InvalidType(ty, x.range()),
+                    Some(ty) => parse_base_class_type(ty),
+                }
+            }
             BaseClass::NamedTuple(..) => parse_base_class_type(
                 self.heap
                     .mk_class_type(self.stdlib.named_tuple_fallback().clone()),
