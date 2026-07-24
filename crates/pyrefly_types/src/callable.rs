@@ -1156,7 +1156,7 @@ impl Callable {
 }
 
 impl Param {
-    fn fmt_default(&self, default: &Option<DefaultValue>) -> String {
+    pub(crate) fn fmt_default(&self, default: &Option<DefaultValue>) -> String {
         match default {
             Some(DefaultValue {
                 display: Some(text),
