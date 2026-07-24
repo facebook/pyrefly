@@ -86,6 +86,8 @@ pub enum CallStyle<'a> {
 pub enum ConstructorKind {
     // `MyClass`
     BareClassName,
+    // `MyClass[int]`
+    SpecializedClass,
     // `type[MyClass]`
     TypeOfClass,
     // `type[Self]`
@@ -1549,7 +1551,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 let metadata = self.get_metadata_for_class(cls.class_object());
-                if metadata.is_protocol() && constructor_kind == ConstructorKind::BareClassName {
+                let is_direct_class = matches!(
+                    &constructor_kind,
+                    ConstructorKind::BareClassName | ConstructorKind::SpecializedClass
+                );
+                if metadata.is_protocol() && is_direct_class {
                     self.error_with_context(
                         errors,
                         arguments_range,
@@ -1564,9 +1570,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let abstract_members = self.get_abstract_members_for_class(cls.class_object());
                     let unimplemented_abstract_methods =
                         abstract_members.unimplemented_abstract_methods();
-                    if constructor_kind == ConstructorKind::BareClassName
-                        && !unimplemented_abstract_methods.is_empty()
-                    {
+                    if is_direct_class && !unimplemented_abstract_methods.is_empty() {
                         self.error_with_context(
                             errors,
                             arguments_range,
@@ -1582,9 +1586,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ),
                             context,
                         );
-                    } else if constructor_kind == ConstructorKind::BareClassName
-                        && metadata.is_explicitly_abstract()
-                    {
+                    } else if is_direct_class && metadata.is_explicitly_abstract() {
                         self.error_with_context(
                             errors,
                             arguments_range,
@@ -2206,6 +2208,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         x: &ExprCall,
         mut callee_ty: Type,
+        direct_class_specialization: bool,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
@@ -2488,6 +2491,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     hint,
                     errors,
                 ),
+                _ if direct_class_specialization => {
+                    let mut call_target = self.as_call_target_or_error(
+                        ty.clone(),
+                        CallStyle::FreeForm,
+                        x.func.range(),
+                        errors,
+                        None,
+                    );
+                    if let CallTarget::Class(_, constructor_kind, _) = &mut call_target
+                        && *constructor_kind == ConstructorKind::TypeOfClass
+                    {
+                        *constructor_kind = ConstructorKind::SpecializedClass;
+                    }
+                    self.call_infer_with_callee_range(
+                        call_target,
+                        &args,
+                        &kws,
+                        x.arguments.range(),
+                        Some(x.func.range()),
+                        errors,
+                        errors,
+                        None,
+                        hint,
+                        None,
+                    )
+                }
                 _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
             }});
             // TypeIs and TypeGuard functions return bool at runtime
