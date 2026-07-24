@@ -112,7 +112,7 @@ def test[T: (B, C)](x: T) -> None:
     c: C = x  # E: `T` is not assignable to `C`
     d: B | C = x  # OK
 
-test(A())  # E: `A` is not assignable to upper bound `B | C` of type variable `T`
+test(A())  # E: `A` is not assignable to any of constraints `B`, `C` of type variable `T`
 test(B())
 test(C())
 test(D())
@@ -592,7 +592,7 @@ class X: ...
 def f[T: (int, str)](x: T) -> T: ...
 
 # X is not assignable to int or str, so this should error.
-f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `T`
+f(X())  # E: `X` is not assignable to any of constraints `int`, `str` of type variable `T`
     "#,
 );
 
@@ -629,6 +629,39 @@ def add1[T: int](x: T, y: T) -> T:
     return x + y # E: Returned type `int` is not assignable to declared return type `T`
 def add2[T: int | float](x: T, y: T) -> T:
     return x + y # E: Returned type `float | int` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    test_multiple_binops_with_constrained_typevar,
+    r#"
+from typing import TypeVar
+
+T = TypeVar("T", str, int)
+
+def foo(a: T) -> T:
+    doubled = 2 * a
+    return a + doubled
+    "#,
+);
+
+testcase!(
+    test_constraints_with_custom_add,
+    r#"
+from typing import assert_type, TypeVar
+class A1:
+    pass
+class A2:
+    def __radd__(self, other: "MyNum") -> str: ...
+class MyNum:
+    def __add__(self, other: A1) -> int: ...
+T = TypeVar("T", bound=MyNum)
+U = TypeVar("U", A1, A2)
+
+def f(x: T, y: U):
+    # T + A1 -> MyNum.__add__(A1) -> int
+    # T + A2 -> A2.__radd__(MyNum) -> str
+    assert_type(x + y, int | str)
     "#,
 );
 
@@ -1134,8 +1167,7 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug =
-        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
+    bug = "conformance: Should error on unbound TypeVars in class bases, TypeAlias, expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1334,5 +1366,180 @@ T = TypeVar("T", bound=C)
 def f(x: T | None) -> T | int: ...
 def g(x: T | None) -> T | int:
     return f(x)
+    "#,
+);
+
+testcase!(
+    test_unrestricted_typevar_param_with_default,
+    r#"
+from typing import assert_type
+
+def f1[T](x: T = 0) -> T: ...
+assert_type(f1(), int)
+assert_type(f1(""), str)
+
+def f2[T](x: T, y: T = 0) -> T: ...
+assert_type(f2(1), int)
+assert_type(f2(""), int | str)
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_param_with_default,
+    r#"
+from typing import assert_type, reveal_type
+
+def f1[T: (int, str)](x: T = 0) -> T: ...
+assert_type(f1(), int)
+assert_type(f1(""), str)
+
+def f2[T: (int, str)](x: T, y: T = 0) -> T: ...
+assert_type(f2(1), int)
+f2("")  # E: `Literal[0]` is not assignable to parameter `y` with type `str`
+
+def f_bad[T: (int, str)](x: T = b"") -> T: ...  # E: `Literal[b'']` is not assignable to parameter `x` with type `int | str`
+# T is left unsolved
+reveal_type(f_bad())  # E: revealed type: @_
+assert_type(f_bad(0), int)
+    "#,
+);
+
+testcase!(
+    test_bounded_typevar_param_with_default,
+    r#"
+from typing import assert_type, reveal_type
+
+def f1[T: int](x: T = 0) -> T: ...
+assert_type(f1(), int)
+
+def f2[T: int](x: T, y: T = 0) -> T: ...
+assert_type(f2(1), int)
+
+def f_bad[T: int](x: T = "") -> T: ...  # E: `Literal['']` is not assignable to parameter `x` with type `int`
+# T is left unsolved
+reveal_type(f_bad())  # E: revealed type: @_
+assert_type(f_bad(0), int)
+    "#,
+);
+
+testcase!(
+    test_param_with_nested_typevar_and_default,
+    r#"
+from typing import Sequence, assert_type
+def f[T](x: Sequence[T] = (0,)) -> T: ...
+assert_type(f(), int)
+assert_type(f([""]), str)
+    "#,
+);
+
+// Note: in Python, mutable function parameter defaults are wildly unsafe and heavily discouraged.
+// We still want to make sure Pyrefly behaves sensibly, even on this bad code pattern.
+testcase!(
+    test_typevar_param_with_mutable_default,
+    r#"
+from typing import assert_type, reveal_type
+
+def f1[T](x: list[T] = []) -> T: ...
+# T is left unsolved
+reveal_type(f1())  # E: revealed type: @_
+assert_type(f1([0]), int)
+
+def f2[T](x: T, y: list[T] = []) -> T: ...
+assert_type(f2(0), int)
+
+def f3[T](x: list[T] = [""]) -> T: ...
+assert_type(f3(), str)
+assert_type(f3([0]), int)
+
+def f_bad[T: int](x: list[T] = [""]) -> T: ...  # E: `list[str]` is not assignable to parameter `x` with type `list[int]`
+# T is left unsolved
+reveal_type(f_bad())  # E: revealed type: @_
+    "#,
+);
+
+testcase!(
+    test_typevar_posonly_and_kwonly_param_default,
+    r#"
+from typing import assert_type
+
+def f1[T: (int, str)](x: T = 0, /) -> T: ...
+assert_type(f1(), int)
+
+def f2[T: (int, str)](*, x: T = 0) -> T: ...
+assert_type(f2(), int)
+    "#,
+);
+
+testcase!(
+    test_typevar_param_default_custom_generic,
+    r#"
+from typing import reveal_type
+class A[T]: ...
+def f[T](x: A[T] = A()) -> T: ...
+# T is left unsolved
+reveal_type(f())  # E: revealed type: @_
+    "#,
+);
+
+testcase!(
+    test_union_of_constraints_does_not_match_constrained_typevar,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    return x
+def g(x: int | str):
+    f(x)  # E: `int | str` is not assignable to any of constraints `int`, `str` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_constrained_identity_function_preserves_typevar,
+    r#"
+from typing import reveal_type
+def f[T: (bool, int)](x: T) -> T:
+    return x
+def g[T: bool](x: T) -> T:
+    return f(x)
+def h[S: str](x: S) -> S:
+    return f(x)  # E: `S` is not assignable to any of constraints `bool`, `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_cannot_return_union_of_constraints_for_constrained_typevar,
+    r#"
+def f() -> int | str: ...
+def g[T: (int, str)](x: T) -> T:
+    return f()  # E: `int | str` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    bug = "Return type T is narrowed to int, so returning 0 should be allowed",
+    test_return_concrete_type_after_typevar_narrow,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    if isinstance(x, int):
+        return 0  # E: `Literal[0]` is not assignable to declared return type `T`
+    else:
+        return x
+    "#,
+);
+
+testcase!(
+    test_binop_on_two_typevars_after_narrow_one,
+    r#"
+from typing import reveal_type
+def f[T: (str, bytes)](x: T, y: T):
+    if isinstance(x, str):
+        return reveal_type(x + y)  # E: revealed type: str & T
+    "#,
+);
+
+testcase!(
+    test_binop_on_typevar_with_union_bound,
+    r#"
+def f[T: bytes | str](x: T):
+    if isinstance(x, str):
+        y: str = 2 * x
     "#,
 );

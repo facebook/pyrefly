@@ -17,7 +17,6 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use super::extract_shared::code_at_range;
 use super::extract_shared::is_member_stmt;
 use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
@@ -39,7 +38,9 @@ pub(crate) fn extract_superclass_code_actions(
 ) -> Option<Vec<LocalRefactorCodeAction>> {
     let module_info = transaction.get_module_info(handle)?;
     let source = module_info.contents();
-    let ast = transaction.get_ast(handle)?;
+    let parsed = transaction.get_parsed_module(handle)?;
+    let ast = parsed.module();
+    let tokens = parsed.tokens()?;
     let selection_point = selection_anchor(source, selection);
     let class_def = find_class_at_selection(ast.as_ref(), selection_point)?;
     let members = selected_members(class_def, selection);
@@ -49,7 +50,13 @@ pub(crate) fn extract_superclass_code_actions(
 
     let (class_indent, insert_position) = class_insertion_point(class_def, source)?;
     let superclass_name = generate_superclass_name(source, class_def.name.id.as_str());
-    let superclass_text = build_superclass_text(source, &class_indent, &superclass_name, &members)?;
+    let superclass_text = build_superclass_text(
+        source,
+        tokens.as_ref(),
+        &class_indent,
+        &superclass_name,
+        &members,
+    )?;
     let insert_text = prepare_insertion_text(source, insert_position, &superclass_text);
     let insert_edit = (
         module_info.dupe(),
@@ -120,6 +127,7 @@ fn generate_superclass_name(source: &str, class_name: &str) -> String {
 
 fn build_superclass_text(
     source: &str,
+    tokens: &ruff_python_ast::token::Tokens,
     class_indent: &str,
     superclass_name: &str,
     members: &[&Stmt],
@@ -132,9 +140,9 @@ fn build_superclass_text(
     }
     for member in members {
         let removal_range = statement_removal_range(source, member)?;
-        let raw = code_at_range(source, removal_range)?;
         let (from_indent, _) = line_indent_and_start(source, member.range().start())?;
-        let mut reindented = reindent_block(raw, &from_indent, &member_indent);
+        let mut reindented =
+            reindent_block(source, removal_range, tokens, &from_indent, &member_indent)?;
         if !reindented.ends_with('\n') {
             reindented.push('\n');
         }

@@ -126,6 +126,38 @@ def h(cls) -> None: ...  # E: `h` is missing an annotation for parameter `cls`
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3542
+testcase!(
+    test_underscore_params_suppress_implicit_any,
+    TestEnv::new().enable_implicit_any_parameter_error(),
+    r#"
+# Single `_` and `_`-prefixed params (single underscore, not ending with `_`)
+# should not trigger implicit-any-parameter error
+def foo(_) -> int:  # ok - intentionally unused
+    return 1
+
+def bar(_x) -> int:  # ok
+    return 1
+
+# Params starting with `__` or ending with `_` should still error
+def baz(__x) -> int:  # E: `baz` is missing an annotation for parameter `__x`
+    return 1
+
+def qux(x_) -> int:  # E: `qux` is missing an annotation for parameter `x_`
+    return 1
+
+def quux(__x__) -> int:  # E: `quux` is missing an annotation for parameter `__x__`
+    return 1
+
+def corge(_x_) -> int:  # E: `corge` is missing an annotation for parameter `_x_`
+    return 1
+
+# Regular params without annotation should still error
+def grault(x) -> int:  # E: `grault` is missing an annotation for parameter `x`
+    return 1
+"#,
+);
+
 testcase!(
     test_implicit_any_with_complete_annotations,
     TestEnv::new().enable_implicit_any_error(),
@@ -234,5 +266,72 @@ for i, row in enumerate(rows):
 entries: list[Any] = []
 for i, j in entries:
     x[i][j] = "x"
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+y = untyped(1)  # E: The type of `y` is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_annotated_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+y: int = untyped(1)
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_known_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+y = 1
+s = "hello"
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_not_suppressed_by_implicit_any,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+# pyrefly: ignore[implicit-any]
+y = untyped(1)  # E: The type of `y` is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_explicit_any_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+from typing import Any, cast
+# An explicit `Any` is intentional, so only implicit `Any` should trigger the rule.
+v = cast(Any, 1)
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_class_body_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+# A class-body assignment defines a class attribute, which is reported by
+# implicit-any-attribute, not unknown-variable-type.
+class C:
+    x = untyped(1)
 "#,
 );

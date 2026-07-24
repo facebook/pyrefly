@@ -86,8 +86,7 @@ def f(x: X) -> Y:
 );
 
 testcase!(
-    bug =
-        "Iterative fixpoint reports non-convergent-recursion for recursive class attribute aliases",
+    bug = "fixpoint reports non-convergent-recursion for recursive class attribute aliases",
     test_class_attr,
     r#"
 class C:
@@ -233,7 +232,7 @@ testcase!(
     test_error_implicit_any,
     TestEnv::new().enable_implicit_any_error(),
     r#"
-type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X`
+type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X[T]`
 def f(x: X[str]) -> X[int]:
     return [x]
     "#,
@@ -274,11 +273,24 @@ not x
 testcase!(
     test_cyclic_no_base_case,
     r#"
-# These have no base case — every value would be infinitely nested.
+# These have no base case — they are either uninhabited or inhabited only by nestings of empty containers.
 type A = list[A]  # E: cyclic self-reference in `A`
-type B = dict[str, B]  # E: cyclic self-reference in `B`
+type B = dict[B, B]  # E: cyclic self-reference in `B`
 type C = tuple[int, C]  # E: cyclic self-reference in `C`
 type D = tuple[D, ...]  # E: cyclic self-reference in `D`
+type E = list[list[E]]  # E: cyclic self-reference in `E`
+type F = tuple[list[F]]  # E: cyclic self-reference in `F`
+type G = list[G] | tuple[G, ...]  # E: cyclic self-reference in `G`
+    "#,
+);
+
+testcase!(
+    test_container_with_non_self_ref_not_cyclic,
+    r#"
+type A = int | list[A]
+type B = list[int | B]
+type C = tuple[int, list[C]]
+type D = list[tuple[int, D]]
     "#,
 );
 
@@ -367,5 +379,20 @@ Outer: TypeAlias = dict[str, Inner[int]]
 
 def f(x: Outer) -> None:
     reveal_type(x)  # E: dict[str, int | list[int]]
+    "#,
+);
+
+testcase!(
+    test_nested_literal_against_recursive_alias_branch,
+    r#"
+from collections.abc import Mapping
+from typing import TypeAlias
+
+class A: ...
+class B(A): ...
+
+IncEx: TypeAlias = Mapping[int, int] | Mapping[str, "IncEx | list[A]"]
+
+ok: IncEx = {"a": {"__all__": [B()]}}
     "#,
 );

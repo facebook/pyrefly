@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::path::PathBuf;
+
 use configparser::ini::Ini;
 
 use crate::config::ConfigFile;
@@ -28,7 +30,14 @@ impl ConfigOptionMigrater for SearchPath {
             None => return Err(anyhow::anyhow!("No mypy_path found in mypy config")),
         };
 
-        let paths = util::string_to_paths(&mypy_path);
+        // mypy_path is a `,`/`:`-separated list; strip `$MYPY_CONFIG_FILE_DIR`
+        // from the front of each entry (see `util::expand_config_file_dir`).
+        let paths: Vec<PathBuf> = mypy_path
+            .split([',', ':'])
+            .map(|x| util::expand_config_file_dir(x.trim()))
+            .filter(|x| !x.is_empty())
+            .map(PathBuf::from)
+            .collect();
         if paths.is_empty() {
             return Err(anyhow::anyhow!("Empty search paths found in mypy config"));
         }
@@ -150,6 +159,29 @@ mod tests {
                 .iter()
                 .map(|&p| PathBuf::from(p))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_expands_config_file_dir() {
+        // `$MYPY_CONFIG_FILE_DIR` denotes the config file's directory — the root
+        // migrated relative paths resolve against — so it is stripped from the
+        // front of each `,`/`:`-separated entry, leaving portable relative paths.
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set(
+            MYPY_SECTION,
+            MYPY_PATH_KEY,
+            Some("$MYPY_CONFIG_FILE_DIR/src:$MYPY_CONFIG_FILE_DIR/test".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let search_path = SearchPath;
+        let _ = search_path.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        assert_eq!(
+            pyrefly_cfg.search_path_from_file,
+            vec![PathBuf::from("src"), PathBuf::from("test")]
         );
     }
 

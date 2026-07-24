@@ -8,21 +8,22 @@
 //! Jaxtyping annotation support.
 //!
 //! This module handles parsing and processing of jaxtyping-style tensor
-//! annotations like `Float[Tensor, "batch channels"]`. The jaxtyping library
-//! uses dtype wrapper classes (Float, Int, Shaped, etc.) subscripted with a
-//! tensor class and a shape string.
+//! annotations like `Float[Tensor, "batch channels"]`. Static jaxtyping stubs
+//! expose dtype wrappers (Float, Int, Shaped, etc.) as `Annotated` aliases.
+//! Pyrefly uses those wrappers only as markers for jaxtyping shape syntax; it
+//! does not model dtype refinements.
 //!
 //! ## Shape string syntax
 //!
 //! The shape string is whitespace-separated and supports:
 //! - Named dims (`"batch"`) → Quantified TypeVars
-//! - Integer literals (`"3"`) → `Type::Size(SizeExpr::Literal(3))`
+//! - Integer literals (`"3"`) → `Type::Int(Int::Literal(3))`
 //! - Anonymous dim (`"_"`) → `Type::Any(AnyStyle::Implicit)`
 //! - Variadic (`"*batch"`) → Quantified TypeVarTuples
 //! - Ellipsis (`"..."`) → anonymous variadic (any number of any-sized dims)
 //! - Broadcast (`"#batch"`) → treated as `"batch"` (conservative, safe)
 //! - Combined (`"*#batch"`) → variadic TypeVarTuple, broadcast prefix stripped
-//! - Arithmetic (`"dim+1"`, `"n-1"`) → `Type::Size(SizeExpr::Add/Sub(...))`
+//! - Arithmetic (`"dim+1"`, `"n-1"`) → `Type::Int(Int::Add/Sub(...))`
 //! - Parenthesized (`"(1+T)"`) → parens stripped, parsed as arithmetic
 //! - Scalar (`""`) → rank-0 tensor
 //!
@@ -43,11 +44,15 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
-use pyrefly_types::dimension::SizeExpr;
+use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::Ast;
+use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::class::ClassType;
+use pyrefly_types::dimension::Int;
 use pyrefly_types::quantified::QuantifiedKind;
-use pyrefly_types::tensor::TensorShape;
-use pyrefly_types::tensor::TensorSyntax;
-use pyrefly_types::tensor::TensorType;
+use pyrefly_types::shaped_array::IntTuple;
+use pyrefly_types::shaped_array::ShapedArraySyntax;
+use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::types::TParams;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -55,52 +60,261 @@ use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
+use crate::binding::binding::Binding;
+use crate::binding::binding::BindingLegacyTypeParam;
+use crate::binding::binding::ImportBinding;
+use crate::binding::binding::Key;
+use crate::binding::binding::KeyLegacyTypeParam;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::types::class::Class;
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
+const JAXTYPING_WRAPPERS: &[&str] = &[
+    "Float",
+    "Float16",
+    "Float32",
+    "Float64",
+    "BFloat16",
+    "Int",
+    "Int8",
+    "Int16",
+    "Int32",
+    "Int64",
+    "Integer",
+    "Key",
+    "UInt",
+    "UInt8",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "Bool",
+    "Num",
+    "Real",
+    "Shaped",
+    "Complex",
+    "Complex64",
+    "Complex128",
+    "Inexact",
+];
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    /// Check if a class is a jaxtyping dtype wrapper (Float, Int, Shaped, etc.)
-    pub fn is_jaxtyping_wrapper(&self, cls: &Class) -> bool {
-        const WRAPPERS: &[&str] = &[
-            "Float",
-            "Float16",
-            "Float32",
-            "Float64",
-            "BFloat16",
-            "Int",
-            "Int8",
-            "Int16",
-            "Int32",
-            "Int64",
-            "UInt",
-            "UInt8",
-            "UInt16",
-            "UInt32",
-            "UInt64",
-            "Bool",
-            "Num",
-            "Shaped",
-            "Complex",
-            "Complex64",
-            "Complex128",
-            "Inexact",
-        ];
-        WRAPPERS
-            .iter()
-            .any(|name| cls.has_toplevel_qname("jaxtyping", name))
+    /// Check if an expression resolves to one of jaxtyping's public dtype wrappers.
+    pub fn is_jaxtyping_wrapper_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Name(name) => self.name_is_jaxtyping_wrapper(name),
+            Expr::Attribute(attr) => {
+                if !JAXTYPING_WRAPPERS
+                    .iter()
+                    .any(|wrapper| attr.attr.id.as_str() == *wrapper)
+                {
+                    return false;
+                }
+                self.is_jaxtyping_module_expr(&attr.value)
+            }
+            _ => false,
+        }
     }
 
-    /// Parse a jaxtyping annotation like `Float[Tensor, "batch channels"]` into a TensorType.
-    pub fn parse_jaxtyping_annotation(
+    fn binding_for_name(&self, name: &ruff_python_ast::ExprName) -> Option<&Binding> {
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        Some(self.bindings().get(idx))
+    }
+
+    fn binding_following_forwards(&self, mut idx: Idx<Key>) -> &Binding {
+        for _ in 0..16 {
+            match self.bindings().get(idx) {
+                Binding::Forward(inner)
+                | Binding::PromoteForward(inner)
+                | Binding::ForwardToFirstUse(inner) => idx = *inner,
+                binding => return binding,
+            }
+        }
+        unreachable!("exceeded forward-binding depth limit while resolving jaxtyping wrapper")
+    }
+
+    fn binding_for_name_following_forwards(
+        &self,
+        name: &ruff_python_ast::ExprName,
+    ) -> Option<&Binding> {
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        Some(self.binding_following_forwards(idx))
+    }
+
+    fn import_is_jaxtyping_wrapper(import: &ImportBinding) -> bool {
+        import.module.as_str() == "jaxtyping"
+            && JAXTYPING_WRAPPERS
+                .iter()
+                .any(|wrapper| import.name.as_str() == *wrapper)
+    }
+
+    fn name_is_jaxtyping_wrapper(&self, name: &ruff_python_ast::ExprName) -> bool {
+        self.binding_for_name(name)
+            .is_some_and(|binding| self.binding_is_jaxtyping_wrapper_origin(binding))
+            || self
+                .binding_for_name_following_forwards(name)
+                .is_some_and(|binding| self.binding_is_jaxtyping_wrapper_origin(binding))
+    }
+
+    fn is_jaxtyping_module_expr(&self, expr: &Expr) -> bool {
+        if let Expr::Name(name) = expr
+            && (self
+                .binding_for_name(name)
+                .is_some_and(|binding| self.binding_is_jaxtyping_module(binding))
+                || self
+                    .binding_for_name_following_forwards(name)
+                    .is_some_and(|binding| self.binding_is_jaxtyping_module(binding)))
+        {
+            return true;
+        }
+        let silent_errors = self.error_swallower();
+        matches!(
+            self.expr_infer(expr, &silent_errors),
+            Type::Module(module)
+                if module.parts().len() == 1
+                    && module.parts()[0].as_str() == "jaxtyping"
+        )
+    }
+
+    fn binding_is_jaxtyping_module(&self, binding: &Binding) -> bool {
+        match binding {
+            Binding::Module(module) => module.0.as_str() == "jaxtyping",
+            Binding::Import(import) => {
+                import.module.as_str() == "jaxtyping" && import.name.as_str() == "jaxtyping"
+            }
+            Binding::PossibleLegacyTParam(key, _) => self.legacy_tparam_is_jaxtyping_module(*key),
+            _ => false,
+        }
+    }
+
+    fn binding_is_jaxtyping_wrapper_origin(&self, binding: &Binding) -> bool {
+        match binding {
+            Binding::Import(import) => Self::import_is_jaxtyping_wrapper(import),
+            Binding::Forward(idx)
+            | Binding::PromoteForward(idx)
+            | Binding::ForwardToFirstUse(idx) => {
+                self.binding_is_jaxtyping_wrapper_origin(self.binding_following_forwards(*idx))
+            }
+            Binding::PossibleLegacyTParam(key, _) => {
+                self.legacy_tparam_is_jaxtyping_wrapper_origin(*key)
+            }
+            _ => false,
+        }
+    }
+
+    fn legacy_tparam_is_jaxtyping_wrapper_origin(&self, key: Idx<KeyLegacyTypeParam>) -> bool {
+        match self.bindings().get(key) {
+            BindingLegacyTypeParam::ParamKeyed(idx) => {
+                self.binding_is_jaxtyping_wrapper_origin(self.binding_following_forwards(*idx))
+            }
+            BindingLegacyTypeParam::ModuleKeyed(idx, attrs)
+                if attrs.len() == 1
+                    && JAXTYPING_WRAPPERS
+                        .iter()
+                        .any(|wrapper| attrs.last().as_str() == *wrapper) =>
+            {
+                self.binding_is_jaxtyping_module(self.binding_following_forwards(*idx))
+            }
+            BindingLegacyTypeParam::ModuleKeyed(_, _) => false,
+        }
+    }
+
+    fn legacy_tparam_is_jaxtyping_module(&self, key: Idx<KeyLegacyTypeParam>) -> bool {
+        match self.bindings().get(key) {
+            BindingLegacyTypeParam::ParamKeyed(idx) => {
+                self.binding_is_jaxtyping_module(self.binding_following_forwards(*idx))
+            }
+            BindingLegacyTypeParam::ModuleKeyed(_, _) => false,
+        }
+    }
+
+    /// Parse an origin-aware jaxtyping type form such as `Float[Tensor, "batch"]`.
+    ///
+    /// This hook is intentionally for annotation/type-form parsing only. In value
+    /// expressions, jaxtyping aliases should keep their ordinary `Annotated[...]`
+    /// runtime behavior. Returning `Some` is the commit point: normal
+    /// `Annotated` parsing will not run, and this hook may emit diagnostics for
+    /// malformed jaxtyping shape syntax.
+    pub fn parse_jaxtyping_type_form(
+        &self,
+        value: &Expr,
+        slice: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let xs = Ast::unpack_slice(slice);
+        if xs.is_empty() || !self.solver().tensor_shapes || !self.is_jaxtyping_wrapper_expr(value) {
+            return None;
+        }
+        let base_class = self.jaxtyping_shaped_array_base(&xs[0])?;
+        Some(self.parse_jaxtyping_annotation(xs, base_class, range, errors))
+    }
+
+    fn jaxtyping_shaped_array_base(&self, base_expr: &Expr) -> Option<ClassType> {
+        let silent_errors = self.error_swallower();
+        match self.expr_untype(base_expr, TypeFormContext::TypeArgument, &silent_errors) {
+            Type::ShapedArray(shaped_array_type) if shaped_array_type.is_shapeless() => {
+                Some(shaped_array_type.base_class.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Build a jaxtyping-syntax `ShapedArrayType` and synchronize the tuple carrier.
+    ///
+    /// For shaped arrays whose shape parameter is a `TypeVar` or `IntVar`, the
+    /// carrier type argument on `base_class` is updated to reflect `shape` so that
+    /// shape-aware operations (e.g. `.shape` access, generic return reprojection)
+    /// remain coherent with the jaxtyping annotation.
+    fn jaxtyping_shaped_array_type(&self, mut base_class: ClassType, shape: IntTuple) -> Type {
+        let shape_arg_index = match self.shaped_array_shape_for_class_type(&base_class) {
+            Some(shape_param) => {
+                let shape_idx = self
+                    .get_class_tparams(base_class.class_object())
+                    .iter()
+                    .position(|param| param == &shape_param)
+                    // The metadata is produced by `@shaped_array` validation which
+                    // verifies the shape param is an actual type parameter of the class.
+                    .expect("shaped-array metadata should refer to a class type parameter");
+                match shape_param.kind() {
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => {
+                        let shape_arg = base_class.targs_mut().as_mut().get_mut(shape_idx).expect(
+                            // Pyrefly always constructs ClassType with one targ per tparam.
+                            "class type should have an argument for each type parameter",
+                        );
+                        *shape_arg = shape.to_shape_arg_type();
+                        Some(shape_idx)
+                    }
+                    QuantifiedKind::TypeVarTuple => unreachable!(
+                        "shaped-array metadata validation rejects TypeVarTuple shape parameters"
+                    ),
+                    QuantifiedKind::ParamSpec => unreachable!(
+                        "shaped-array metadata validation rejects ParamSpec shape parameters"
+                    ),
+                }
+            }
+            None => None,
+        };
+        let shaped_array =
+            ShapedArrayType::new(base_class, shape).with_syntax(ShapedArraySyntax::Jaxtyping);
+        match shape_arg_index {
+            Some(index) => shaped_array.with_tuple_carrier_shape_arg(index).to_type(),
+            None => shaped_array.to_type(),
+        }
+    }
+
+    /// Parse a jaxtyping annotation like `Float[Tensor, "batch channels"]`.
+    fn parse_jaxtyping_annotation(
         &self,
         xs: &[Expr],
+        base_class: ClassType,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
@@ -116,28 +330,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
-
-        // Resolve xs[0] as the base array type (e.g., torch.Tensor).
-        // With tensor_shapes enabled and shared fixtures, bare `Tensor` in a type
-        // argument position resolves to Type::Tensor(shapeless). We extract the
-        // base_class from it and apply the jaxtyping shape string instead.
-        let base_type = self.expr_untype(&xs[0], TypeFormContext::TypeArgument, errors);
-        let base_class = match &base_type {
-            Type::Tensor(tensor_type) if tensor_type.is_shapeless() => {
-                tensor_type.base_class.clone()
-            }
-            _ => {
-                return self.error(
-                    errors,
-                    xs[0].range(),
-                    ErrorKind::InvalidAnnotation,
-                    format!(
-                        "First argument to jaxtyping annotation must be a tensor class, got `{}`",
-                        self.for_display(base_type)
-                    ),
-                );
-            }
-        };
 
         // Extract shape string from xs[1]
         let shape_str = match &xs[1] {
@@ -157,10 +349,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tokens: Vec<&str> = shape_str.split_whitespace().collect();
         if tokens.is_empty() {
             // Empty shape string means scalar tensor (rank 0), like Tensor[()]
-            let tensor_shape = TensorShape::from_types(vec![]);
-            return TensorType::new(base_class, tensor_shape)
-                .with_syntax(TensorSyntax::Jaxtyping)
-                .to_type();
+            let shaped_array_shape = IntTuple::from_types(vec![]);
+            return self.jaxtyping_shaped_array_type(base_class, shaped_array_shape);
         }
 
         // Find variadic token: "*name", "*#name", or "...".
@@ -188,29 +378,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             let middle = if tokens[var_idx] == "..." {
                 // Ellipsis: anonymous variadic matching any number of any-sized dims.
-                // Represented as tuple[Any, ...], same as shapeless tensor middle.
-                Type::any_tuple()
+                IntTuple::shapeless().to_shape_arg_type()
             } else {
-                // "*name" or "*#name": named TypeVarTuple.
+                // "*name" or "*#name": named variadic shape.
                 // Strip leading '*', then strip optional broadcast '#' prefix.
                 let var_name = &tokens[var_idx][1..];
                 let var_name = var_name.strip_prefix('#').unwrap_or(var_name);
-                let q = self
-                    .get_or_create_jaxtyping_dim(Name::new(var_name), QuantifiedKind::TypeVarTuple);
+                let q = match self.shaped_array_shape_for_class_type(&base_class) {
+                    Some(shape_param) => match shape_param.kind() {
+                        QuantifiedKind::TypeVar | QuantifiedKind::IntVar => self
+                            .get_or_create_jaxtyping_shape_carrier(
+                                Name::new(var_name),
+                                shape_param.kind(),
+                            ),
+                        QuantifiedKind::TypeVarTuple => unreachable!(
+                            "shaped-array metadata validation rejects TypeVarTuple shape parameters"
+                        ),
+                        QuantifiedKind::ParamSpec => unreachable!(
+                            "shaped-array metadata validation rejects ParamSpec shape parameters"
+                        ),
+                    },
+                    None => self.get_or_create_jaxtyping_dim(
+                        Name::new(var_name),
+                        QuantifiedKind::TypeVarTuple,
+                    ),
+                };
                 Type::Quantified(Box::new(q))
             };
 
-            let tensor_shape = TensorShape::unpacked(prefix, middle, suffix);
-            TensorType::new(base_class, tensor_shape)
-                .with_syntax(TensorSyntax::Jaxtyping)
-                .to_type()
+            let shaped_array_shape = IntTuple::unpacked_from_types(prefix, middle, suffix);
+            self.jaxtyping_shaped_array_type(base_class, shaped_array_shape)
         } else {
             // Concrete shape: all tokens are non-variadic dims
             let dims = self.parse_jaxtyping_dim_tokens(&tokens);
-            let tensor_shape = TensorShape::from_types(dims);
-            TensorType::new(base_class, tensor_shape)
-                .with_syntax(TensorSyntax::Jaxtyping)
-                .to_type()
+            let shaped_array_shape = IntTuple::from_types(dims);
+            self.jaxtyping_shaped_array_type(base_class, shaped_array_shape)
         }
     }
 
@@ -220,7 +422,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// jaxtyping's parser behavior:
     /// 1. Strip broadcast `#` prefix (treated as regular dim — conservative, safe)
     /// 2. `_` → `Type::Any(AnyStyle::Implicit)` (anonymous, any size)
-    /// 3. Integer → `Type::Size(SizeExpr::Literal(n))`
+    /// 3. Integer → `Type::Int(Int::Literal(n))`
     /// 4. Parenthesized → strip outer parens, parse inner as arithmetic
     /// 5. Contains `+`/`-` (not at position 0) → arithmetic expression
     /// 6. Named identifier → Quantified TypeVar (cached per module)
@@ -238,7 +440,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
                 // Integer literal: "3", "-1", etc.
                 if let Ok(n) = token.parse::<i64>() {
-                    return self.heap.mk_size(SizeExpr::literal(n));
+                    return self.heap.mk_int(Int::literal(n));
                 }
 
                 // Parenthesized expression: "(dim+1)" → strip parens, parse as arithmetic
@@ -254,7 +456,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
 
                 // Named dimension: "batch", "channels", etc.
-                let q = self.get_or_create_jaxtyping_dim(Name::new(token), QuantifiedKind::TypeVar);
+                let q = self.get_or_create_jaxtyping_dim(Name::new(token), QuantifiedKind::IntVar);
                 Type::Quantified(Box::new(q))
             })
             .collect()
@@ -264,7 +466,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///
     /// Looks for the last `+` or `-` not at position 0 (to avoid treating
     /// negative integer literals like "-3" as subtraction). Splits into
-    /// left/right atoms and creates `SizeExpr::Add` or `SizeExpr::Sub`.
+    /// left/right atoms and creates `Int::Add` or `Int::Sub`.
     ///
     /// Returns `None` if the token contains no arithmetic operator.
     fn parse_jaxtyping_arithmetic(&self, token: &str) -> Option<Type> {
@@ -285,9 +487,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Parse each operand as an integer literal or named dim
         let parse_atom = |s: &str| -> Type {
             if let Ok(n) = s.parse::<i64>() {
-                self.heap.mk_size(SizeExpr::literal(n))
+                self.heap.mk_int(Int::literal(n))
             } else {
-                let q = self.get_or_create_jaxtyping_dim(Name::new(s), QuantifiedKind::TypeVar);
+                let q = self.get_or_create_jaxtyping_dim(Name::new(s), QuantifiedKind::IntVar);
                 Type::Quantified(Box::new(q))
             }
         };
@@ -295,16 +497,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let left = parse_atom(left_str);
         let right = parse_atom(right_str);
 
-        let size_expr = match op {
-            '+' => SizeExpr::add(left, right),
-            '-' => SizeExpr::sub(left, right),
+        let symint = match op {
+            '+' => Int::add(left, right),
+            '-' => Int::sub(left, right),
             _ => unreachable!("only '+' and '-' are matched above"),
         };
 
-        Some(self.heap.mk_size(size_expr))
+        Some(self.heap.mk_int(symint))
     }
 
-    /// Collect implicit jaxtyping TypeVars from a callable's signature and    /// extend `tparams` with them. Also detects and reports mixing of native
+    /// Collect implicit jaxtyping TypeVars from a callable's signature and
+    /// extend `tparams` with them. Also detects and reports mixing of native
     /// and jaxtyping tensor annotation syntax in the same function.
     ///
     /// Returns the (potentially extended) `TParams` to use for the function's
@@ -333,12 +536,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 jaxtyping_extras.push(q.as_ref().clone());
             }
-            if let Type::Tensor(tensor_type) = ty
-                && !tensor_type.is_shapeless()
+            if let Type::ShapedArray(shaped_array_type) = ty
+                && !shaped_array_type.is_shapeless()
             {
-                match tensor_type.syntax {
-                    TensorSyntax::Native => has_native = true,
-                    TensorSyntax::Jaxtyping => has_jaxtyping = true,
+                match shaped_array_type.syntax {
+                    ShapedArraySyntax::Native => has_native = true,
+                    ShapedArraySyntax::Jaxtyping => has_jaxtyping = true,
                 }
             }
         });

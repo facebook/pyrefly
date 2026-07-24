@@ -116,7 +116,7 @@ impl VisitMut for Expr {
                     f(&mut x.iter);
                     x.ifs.recurse_mut(f);
                 }
-                f(&mut x.key);
+                x.key.recurse_mut(f);
                 f(&mut x.value);
             }
             Expr::Generator(x) => {
@@ -289,7 +289,7 @@ impl Visit for Expr {
                 }
             }
             Expr::DictComp(x) => {
-                f(&x.key);
+                x.key.recurse(f);
                 f(&x.value);
                 for x in &x.generators {
                     f(&x.iter);

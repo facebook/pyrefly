@@ -4,6 +4,8 @@
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  */
+use std::collections::HashMap;
+use std::fs;
 
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
@@ -16,6 +18,7 @@ use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::TestEnv;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
@@ -35,7 +38,7 @@ fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, S
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let mut report = "Code Actions Results:\n".to_owned();
     let transaction = state.transaction();
-    for (title, info, range, patch) in transaction
+    for (title, edits) in transaction
         .local_quickfix_code_actions_sorted(
             handle,
             TextRange::new(position, position),
@@ -44,7 +47,10 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         )
         .unwrap_or_default()
     {
-        let (before, after) = apply_patch(&info, range, patch);
+        // All quick-fix edits target the triggering file; apply them together.
+        let info = edits[0].0.clone();
+        let before = info.contents().as_str().to_owned();
+        let after = apply_refactor_edits_for_module(&info, &edits);
         report.push_str("# Title: ");
         report.push_str(&title);
         report.push('\n');
@@ -485,14 +491,35 @@ fn compute_module_member_move_actions(
     ModuleInfo,
     Vec<Vec<(Module, TextRange, String)>>,
     Vec<String>,
-    std::collections::HashMap<String, ModuleInfo>,
+    HashMap<String, ModuleInfo>,
 ) {
     let (handles, state) =
         mk_multi_file_state_assert_no_errors(code_by_module, Require::Everything);
+    compute_module_member_move_actions_from_state(
+        &handles,
+        &state,
+        code_by_module,
+        module_name,
+        selection,
+    )
+}
+
+fn compute_module_member_move_actions_from_state(
+    handles: &HashMap<&'static str, Handle>,
+    state: &State,
+    code_by_module: &[(&'static str, &str)],
+    module_name: &'static str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+    HashMap<String, ModuleInfo>,
+) {
     let handle = handles.get(module_name).unwrap();
     let transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
-    let mut module_infos = std::collections::HashMap::new();
+    let mut module_infos = HashMap::new();
     for (name, _) in code_by_module {
         if let Some(handle) = handles.get(*name)
             && let Some(info) = transaction.get_module_info(handle)
@@ -683,8 +710,14 @@ my_export
 
 #[test]
 fn prefer_public_stdlib_module_for_reexports() {
-    let report =
-        get_batched_lsp_operations_report_allow_error(&[("main", "BytesIO\n# ^")], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", "BytesIO\n# ^"),
+            ("_io", "class BytesIO: pass\n"),
+            ("io", "from _io import BytesIO as BytesIO\n"),
+        ],
+        get_test_report,
+    );
     assert_eq!(
         r#"
 # main.py
@@ -747,6 +780,12 @@ BytesIO
 # pyrefly: ignore [unknown-name]
 BytesIO
 # ^
+
+
+
+# _io.py
+
+# io.py
 "#
         .trim(),
         report.trim(),
@@ -839,16 +878,45 @@ np
             None,
         )
         .unwrap_or_default();
-    let (_, _, _, insert_text) = actions
+    let (_, edits) = actions
         .iter()
-        .find(|(title, _, _, _)| title == "Use common alias: `import numpy as np`")
+        .find(|(title, _)| title == "Use common alias: `import numpy as np`")
         .expect("expected common alias import code action");
-    assert_eq!(insert_text.trim(), "import numpy as np");
+    assert_eq!(edits[0].2.trim(), "import numpy as np");
     assert!(
-        !actions
+        !actions.iter().any(|(_, edits)| edits
             .iter()
-            .any(|(_, _, _, insert_text)| insert_text.trim() == "import numpy"),
+            .any(|(_, _, insert_text)| insert_text.trim() == "import numpy")),
         "expected alias import to suppress non-aliased import code action"
+    );
+}
+
+#[test]
+fn insert_import_uses_file_line_ending() {
+    // The file uses Windows (CRLF) line endings; an inserted import must match the
+    // file's line ending instead of emitting a bare `\n` and mixing endings.
+    let code = "my_export\r\n";
+    let files = [("a", "my_export = 3\n"), ("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    // Cursor on `my_export` (offset 0), the unknown name.
+    let position = TextSize::new(0);
+    let actions = state
+        .transaction()
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default();
+    let (_, edits) = actions
+        .iter()
+        .find(|(title, _)| title == "Insert import: `from a import my_export`")
+        .expect("expected an import quick fix for `my_export`");
+    assert_eq!(
+        edits[0].2, "from a import my_export\r\n",
+        "import inserted into a CRLF file should use CRLF line endings"
     );
 }
 
@@ -1300,6 +1368,34 @@ fn redundant_cast_fix_all() {
     );
 }
 
+#[test]
+fn unnecessary_str_call_quickfix() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "def f(x: str) -> None:\n    y = str(x)\n#       ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 |     y = str(x)
+            ^
+Code Actions Results:
+# Title: Remove unnecessary `str()` call
+
+## Before:
+def f(x: str) -> None:
+    y = str(x)
+#       ^
+## After:
+def f(x: str) -> None:
+    y = x
+#       ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
 fn redundant_cast_action_after(code: &str, cursor_offset: usize) -> Option<String> {
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
     let handle = handles.get("main")?;
@@ -1314,9 +1410,10 @@ fn redundant_cast_action_after(code: &str, cursor_offset: usize) -> Option<Strin
             None,
         )
         .unwrap_or_default();
-    let (_, module, range, patch) = actions
+    let (_, edits) = actions
         .into_iter()
-        .find(|(title, _, _, _)| title == "Remove redundant cast")?;
+        .find(|(title, _)| title == "Remove redundant cast")?;
+    let (module, range, patch) = edits.into_iter().next()?;
     if module.path() != module_info.path() {
         return None;
     }
@@ -1375,22 +1472,12 @@ fn test_import_from_stdlib() {
         &[("a", "TypeVar('T')\n# ^")],
         get_test_report,
     );
-    // TODO: Ideally `typing` would be preferred over `ast`.
     assert_eq!(
         r#"
 # a.py
 1 | TypeVar('T')
       ^
 Code Actions Results:
-# Title: Insert import: `from ast import TypeVar`
-
-## Before:
-TypeVar('T')
-# ^
-## After:
-from ast import TypeVar
-TypeVar('T')
-# ^
 # Title: Insert import: `from typing import TypeVar`
 
 ## Before:
@@ -1443,6 +1530,41 @@ TypeVar('T')
         .trim(),
         report.trim()
     );
+}
+
+#[test]
+fn test_import_for_unimported_directives() {
+    for (directive, call) in [
+        ("reveal_type", "reveal_type(1)\n"),
+        ("assert_type", "assert_type(1, int)\n"),
+    ] {
+        let files = [("main", call)];
+        let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+        let handle = handles.get("main").unwrap();
+        let transaction = state.transaction();
+        let module_info = transaction.get_module_info(handle).unwrap();
+        let actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::new(TextSize::new(0), TextSize::new(0)),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        let expected_title = format!("Insert import: `from typing import {directive}`");
+        let (_, edits) = actions
+            .iter()
+            .find(|(title, _)| title == &expected_title)
+            .unwrap_or_else(|| panic!("expected import quick fix for `{directive}`"));
+        assert_eq!(edits.len(), 1);
+
+        let expected_import = format!("from typing import {directive}\n");
+        assert_eq!(expected_import, edits[0].2);
+        assert_eq!(
+            format!("{expected_import}{call}"),
+            apply_refactor_edits_for_module(&module_info, edits)
+        );
+    }
 }
 
 #[test]
@@ -3269,6 +3391,87 @@ def foo():
 }
 
 #[test]
+fn move_module_member_to_sibling_keeps_consumer_import_pointing_to_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let code_a = r#"
+# MOVE-START
+def foo():
+    return 1
+# MOVE-END
+"#;
+    let code_b = "";
+    let code_c = r#"
+from a import foo
+def use_foo():
+    from a import foo
+    return foo()
+
+x = foo()
+"#;
+    fs::write(temp.path().join("a.py"), code_a).unwrap();
+    fs::write(temp.path().join("b.py"), code_b).unwrap();
+    fs::write(temp.path().join("c.py"), code_c).unwrap();
+
+    let mut env = TestEnv::new();
+    env.add_real_path("a", temp.path().join("a.py"));
+    env.add_real_path("b", temp.path().join("b.py"));
+    env.add_real_path("c", temp.path().join("c.py"));
+    let (state, handle_for_module) = env
+        .with_default_require_level(Require::Everything)
+        .to_state();
+    let handles = HashMap::from([
+        ("a", handle_for_module("a")),
+        ("b", handle_for_module("b")),
+        ("c", handle_for_module("c")),
+    ]);
+
+    let selection = find_marked_range_with(code_a, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles, module_infos) =
+        compute_module_member_move_actions_from_state(
+            &handles,
+            &state,
+            &[("a", code_a), ("b", code_b), ("c", code_c)],
+            "a",
+            selection,
+        );
+    let move_to_b = titles
+        .iter()
+        .position(|title| title == "Move `foo` to `b`")
+        .expect("expected move to b action");
+    let updated_a = apply_refactor_edits_for_module(&module_info, &actions[move_to_b]);
+    let updated_b = apply_refactor_edits_for_module(
+        module_infos.get("b").expect("missing module b"),
+        &actions[move_to_b],
+    );
+    let updated_c = apply_refactor_edits_for_module(
+        module_infos.get("c").expect("missing module c"),
+        &actions[move_to_b],
+    );
+    let expected_a = r#"
+# MOVE-START
+from b import foo
+# MOVE-END
+"#;
+    let expected_b = r#"
+def foo():
+    return 1
+"#;
+    let expected_c = r#"
+from b import foo
+
+def use_foo():
+    from b import foo
+
+    return foo()
+
+x = foo()
+"#;
+    assert_eq!(expected_a.trim(), updated_a.trim());
+    assert_eq!(expected_b.trim(), updated_b.trim());
+    assert_eq!(expected_c.trim(), updated_c.trim());
+}
+
+#[test]
 fn make_local_function_top_level() {
     let code = r#"
 def outer():
@@ -3509,12 +3712,13 @@ A = 1
 
 #[test]
 fn convert_star_import_multiline() {
-    // Multi-line star imports with parentheses should be handled correctly.
+    // A star import whose statement spans multiple lines should have its full
+    // range replaced. `*` can't be parenthesized, so a backslash continuation is
+    // the only valid multi-line star import.
     let code_main = r#"
 # MULTILINE-START
-from foo import (
-    *,
-)
+from foo import \
+    *
 # MULTILINE-END
 x = A
 "#;
@@ -3663,7 +3867,36 @@ def greet(name, param):
     )
 
 def caller():
-    greet("Ada", "Hello " + ("Ada"))
+    greet("Ada", "Hello " + "Ada")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_parenthesizes_int_before_attribute() {
+    let code = r#"
+def f(x):
+    return (
+        # EXTRACT-START
+        x.bit_length()
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42)
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def f(x, param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42, (42).bit_length())
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3694,7 +3927,7 @@ def add_one(x, param):
     return param
 
 def caller():
-    add_one(3, (3) + 1)
+    add_one(3, 3 + 1)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3733,7 +3966,7 @@ class Greeter:
 
 def caller():
     greeter = Greeter()
-    greeter.greet("Ada", greeter.prefix + ("Ada"))
+    greeter.greet("Ada", greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3762,7 +3995,7 @@ def mix(x, *, param, y):
     )
 
 def caller():
-    mix(1, param=(1) + (2), y=2)
+    mix(1, param=1 + 2, y=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3824,7 +4057,7 @@ class Utils:
         )
 
 def caller():
-    Utils.join("Hi ", "Ada", ("Hi ") + ("Ada"))
+    Utils.join("Hi ", "Ada", "Hi " + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3853,7 +4086,7 @@ def add(a, b, param):
     )
 
 def caller():
-    add(1, param=(1) + (2), b=2)
+    add(1, param=1 + 2, b=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3890,7 +4123,7 @@ class Greeter:
         )
 
 def caller():
-    Greeter.greet("Ada", Greeter.prefix + ("Ada"))
+    Greeter.greet("Ada", Greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4236,6 +4469,118 @@ def compute():
 }
 
 #[test]
+fn inline_variable_parens_for_bin_op_in_attribute() {
+    let code = r#"
+value = 1 + 3
+result = value.real
+#        ^
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+result = (1 + 3).real
+#        ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_no_parens_for_number_literal() {
+    let code = r#"
+value = 42
+result = value + 1
+#        ^
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+result = 42 + 1
+#        ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_parens_for_number_literal_in_attribute() {
+    let code = r#"
+def compute():
+    value = 42
+    result = value.bit_length()
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = (42).bit_length()
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_no_parens_for_float_literal_in_attribute() {
+    let code = r#"
+def compute():
+    value = 4.2
+    result = value.hex()
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = 4.2.hex()
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_parens_for_bool_op() {
+    let code = r#"
+def compute(a, b, c):
+    value = a and b
+    result = value or c
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute(a, b, c):
+    result = (a and b) or c
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_parens_for_tuple() {
+    let code = r#"
+def compute():
+    value = 1, 2
+    result = len(value)
+#                ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = len((1, 2))
+#                ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
 fn inline_method_basic_refactor() {
     let code = r#"
 def add(a, b):
@@ -4408,7 +4753,7 @@ def compute():
     let expected = r#"
 def add(a):
 #          ^
-    return a + (2)
+    return a + 2
 
 def compute():
     return add(1)
@@ -4632,6 +4977,27 @@ def f():
     let expected = r#"
 def f():
     print(2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_preserves_multiline_string_indentation() {
+    let code = r#"
+def f():
+    if True:
+        x = """
+        hello
+        """
+"#;
+    let selection = find_nth_range(code, "True", 1);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    x = """
+        hello
+        """
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4983,4 +5349,178 @@ def test_one(answer: int, user: str):
     print(answer, user)
 "#;
     assert_eq!(expected.trim(), updated_all.trim());
+}
+
+/// Returns the edits of the "Add `@override` decorator" quick fix for the method
+/// at the last `def foo` in `code`, or `None` if the fix is not offered.
+fn add_override_quickfix_edits(
+    code: &str,
+) -> Option<(ModuleInfo, Vec<(Module, TextRange, String)>)> {
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_module) = env.enable_missing_override_decorator_error().to_state();
+    let handle = handle_for_module("main");
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(&handle).unwrap();
+
+    // Put the cursor on the overriding method (last `def foo`).
+    let derived_foo = code.rfind("def foo").unwrap() + "def ".len();
+    let position = TextSize::try_from(derived_foo).unwrap();
+
+    let (_, edits) = transaction
+        .local_quickfix_code_actions_sorted(
+            &handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(title, _)| title == "Add `@override` decorator")?;
+    Some((module_info, edits))
+}
+
+#[test]
+fn quickfix_add_override_decorator_adds_import() {
+    // `override` is not in scope, so the fix inserts both the decorator and the
+    // import in a single action.
+    let code = "\
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    def foo(self) -> None:
+        pass
+";
+    let (module_info, edits) =
+        add_override_quickfix_edits(code).expect("expected override quick fix");
+    assert_eq!(edits.len(), 2, "expected decorator + import edits");
+    let after = apply_refactor_edits_for_module(&module_info, &edits);
+    let expected = "\
+from typing import override
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    @override
+    def foo(self) -> None:
+        pass
+";
+    assert_eq!(expected, after);
+}
+
+#[test]
+fn quickfix_add_override_decorator_uses_file_line_ending() {
+    // The file uses Windows (CRLF) line endings. Both inserted edits (the
+    // decorator and the import) must use CRLF instead of emitting a bare `\n`
+    // and mixing line endings.
+    let code = "class Base:\r\n    def foo(self) -> None:\r\n        pass\r\n\r\nclass Derived(Base):\r\n    def foo(self) -> None:\r\n        pass\r\n";
+    let (module_info, edits) =
+        add_override_quickfix_edits(code).expect("expected override quick fix");
+    assert_eq!(edits.len(), 2, "expected decorator + import edits");
+    for (_, _, insert_text) in &edits {
+        assert!(
+            !insert_text.replace("\r\n", "").contains('\n'),
+            "inserted text must not contain a bare `\\n` on a CRLF file: {insert_text:?}"
+        );
+    }
+    let after = apply_refactor_edits_for_module(&module_info, &edits);
+    let expected = "from typing import override\r\nclass Base:\r\n    def foo(self) -> None:\r\n        pass\r\n\r\nclass Derived(Base):\r\n    @override\r\n    def foo(self) -> None:\r\n        pass\r\n";
+    assert_eq!(expected, after);
+}
+
+#[test]
+fn quickfix_add_override_decorator_skips_import_when_in_scope() {
+    // `override` is already imported, so only the decorator edit is produced.
+    let code = "\
+from typing import override
+
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    def foo(self) -> None:
+        pass
+";
+    let (module_info, edits) =
+        add_override_quickfix_edits(code).expect("expected override quick fix");
+    assert_eq!(
+        edits.len(),
+        1,
+        "decorator only when `override` already imported"
+    );
+    let after = apply_refactor_edits_for_module(&module_info, &edits);
+    let expected = "\
+from typing import override
+
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    @override
+    def foo(self) -> None:
+        pass
+";
+    assert_eq!(expected, after);
+}
+
+#[test]
+fn quickfix_add_override_decorator_not_offered_when_present() {
+    // The method already has `@override`, so no quick fix is offered.
+    let code = "\
+from typing import override
+
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    @override
+    def foo(self) -> None:
+        pass
+";
+    assert!(
+        add_override_quickfix_edits(code).is_none(),
+        "no override quick fix when the decorator is already present"
+    );
+}
+
+#[test]
+fn quickfix_add_override_decorator_inserted_above_existing_decorators() {
+    // `@override` is inserted above an existing decorator, becoming the outermost one.
+    let code = "\
+from typing import override
+
+class Base:
+    @property
+    def foo(self) -> int:
+        return 1
+
+class Derived(Base):
+    @property
+    def foo(self) -> int:
+        return 2
+";
+    let (module_info, edits) =
+        add_override_quickfix_edits(code).expect("expected override quick fix");
+    let after = apply_refactor_edits_for_module(&module_info, &edits);
+    let expected = "\
+from typing import override
+
+class Base:
+    @property
+    def foo(self) -> int:
+        return 1
+
+class Derived(Base):
+    @override
+    @property
+    def foo(self) -> int:
+        return 2
+";
+    assert_eq!(expected, after);
 }

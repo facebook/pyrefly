@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::cell::Ref;
 use std::cell::RefCell;
@@ -22,14 +23,19 @@ use std::sync::atomic::Ordering;
 
 use itertools::Either;
 use itertools::Itertools;
+use pyrefly_python::qname::QName;
+use pyrefly_types::callable_residual::OverloadBranchProjection;
+use pyrefly_types::callable_residual::OverloadResidualIdentity;
+use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::dimension::canonicalize;
+use pyrefly_types::dimension::gradual_size;
+use pyrefly_types::dimension::is_gradual_size;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
-use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TArgs;
@@ -58,10 +64,7 @@ use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncFlags;
-use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -73,14 +76,6 @@ use crate::types::simplify::simplify_tuples;
 use crate::types::simplify::unions;
 use crate::types::simplify::unions_with_literals;
 use crate::types::typed_dict::TypedDict;
-use crate::types::types::CallableResidual;
-use crate::types::types::CallableResidualKind;
-use crate::types::types::Forall;
-use crate::types::types::Forallable;
-use crate::types::types::Overload;
-use crate::types::types::OverloadBranchProjection;
-use crate::types::types::OverloadResidualIdentity;
-use crate::types::types::OverloadType;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -97,6 +92,45 @@ const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to
 /// and each recursive call to is_subset_eq can use several KB of stack space
 /// due to large enums (Type) and lock guards.
 const INITIAL_GAS: Gas = Gas::new(200);
+
+/// Normalize a candidate answer for an `IntVar`.
+///
+/// Existing `IntVar` leaves stay as bare quantified/type-var values so
+/// substitution preserves source-level spellings like `Int[N]`; compound
+/// dimension expressions are canonicalized to `Type::Int`.
+pub(crate) fn type_as_intvar_solution(ty: &Type) -> Option<Type> {
+    match ty {
+        _ if ty.is_any() => Some(gradual_size()),
+        Type::ClassType(cls) if cls.is_builtin("int") => Some(gradual_size()),
+        Type::Quantified(q) if q.kind() == QuantifiedKind::IntVar => Some(ty.clone()),
+        Type::TypeVar(tv) if tv.kind() == QuantifiedKind::IntVar => Some(ty.clone()),
+        // An unsolved `Var` becomes a raw symbolic leaf. This is what the
+        // fallback arm below would also produce (`Int::from_type` wraps a `Var`
+        // as `Int::Symbolic`, and `canonicalize` of a bare `Var` leaf is a
+        // no-op), so this arm only skips that redundant canonical rebuild.
+        Type::Var(_) => Some(Type::Int(Int::Symbolic(Box::new(ty.clone())))),
+        _ => Int::from_type(ty).map(|dim| canonicalize(Type::Int(dim))),
+    }
+}
+
+/// Pin a solver answer for a variable of the given `kind`.
+///
+/// `IntVar` answers are normalized into dimension space, falling back to a
+/// gradual size when the candidate is not a valid dimension. Answers for every
+/// other kind are used as-is. This is distinct from the `.expect(...)` sites
+/// that pin a *bound* already validated by `validate_bound_consistency`, where a
+/// failed normalization is an invariant violation rather than a fallback.
+///
+/// Takes `Cow` so an owned answer is moved through the pass-through branch while
+/// a borrowed one is only cloned when it must be returned as-is.
+fn normalize_answer_for_kind(kind: QuantifiedKind, ty: Cow<Type>) -> Type {
+    if kind == QuantifiedKind::IntVar {
+        type_as_intvar_solution(&ty).unwrap_or_else(gradual_size)
+    } else {
+        ty.into_owned()
+    }
+}
+
 /// Accumulated bounds for a solver variable.
 #[derive(Clone, Debug, Default)]
 struct Bounds {
@@ -124,42 +158,592 @@ impl Bounds {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ResidualIdentity {
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::nesting_context::NestingContext;
+    use pyrefly_types::class::ClassDefIndex;
+    use pyrefly_types::class::ClassType;
+    use pyrefly_types::dimension::Int;
+    use pyrefly_types::dimension::gradual_size;
+    use pyrefly_types::lit_int::LitInt;
+    use pyrefly_types::quantified::AnchorIndex;
+    use pyrefly_types::quantified::QuantifiedIdentity;
+    use pyrefly_types::quantified::QuantifiedOrigin;
+    use pyrefly_types::shaped_array::IntTuple;
+    use pyrefly_types::shaped_array::ShapedArrayType;
+    use pyrefly_types::type_var::PreInferenceVariance;
+    use pyrefly_types::types::AnyStyle;
+    use pyrefly_types::types::TArgs;
+    use pyrefly_types::types::TParams;
+    use pyrefly_types::types::Union;
+    use ruff_python_ast::Identifier;
+    use ruff_text_size::TextSize;
+
+    use super::*;
+
+    fn solver_with_answer(answer: Type) -> (Solver, Var) {
+        let solver = Solver::new(false, true, false, false, false);
+        let uniques = UniqueFactory::new();
+        let var = Var::new(&uniques);
+        solver
+            .variables
+            .lock()
+            .insert_fresh(var, Variable::Answer(answer));
+        (solver, var)
+    }
+
+    fn quantified(kind: QuantifiedKind, index: u32) -> Quantified {
+        quantified_with_restriction(kind, index, Restriction::Unrestricted)
+    }
+
+    fn quantified_with_restriction(
+        kind: QuantifiedKind,
+        index: u32,
+        restriction: Restriction,
+    ) -> Quantified {
+        Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("test"),
+                AnchorIndex::new(TextRange::default(), index),
+                QuantifiedOrigin::SyntheticCallableResidual,
+            ),
+            Name::new(match kind {
+                QuantifiedKind::IntVar => "S",
+                QuantifiedKind::TypeVar => "T",
+                QuantifiedKind::ParamSpec | QuantifiedKind::TypeVarTuple => {
+                    unreachable!("test only creates scalar quantifieds")
+                }
+            }),
+            kind,
+            None,
+            restriction,
+            PreInferenceVariance::Invariant,
+        )
+    }
+
+    fn fake_array(targs: TArgs) -> ClassType {
+        let module = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test")),
+            Arc::new("fake module contents".to_owned()),
+        );
+        ClassType::new(
+            Class::new(
+                ClassDefIndex(0),
+                Identifier::new(Name::new("Array"), TextRange::empty(TextSize::new(0))),
+                NestingContext::toplevel(),
+                module,
+                None,
+                false,
+            ),
+            targs,
+        )
+    }
+
+    #[test]
+    fn expand_with_bounds_canonicalizes_solved_int_literals() {
+        let (solver, var) = solver_with_answer(LitInt::new(2).to_implicit_type());
+        let mut ty = Type::Int(Int::add(Type::Var(var), Type::Int(Int::Literal(1))));
+
+        solver.expand_with_bounds(&mut ty);
+
+        assert_eq!(ty, Type::Int(Int::Literal(3)));
+    }
+
+    #[test]
+    fn expand_with_bounds_canonicalizes_solved_gradual_int() {
+        let (solver, var) = solver_with_answer(Type::Any(AnyStyle::Explicit));
+        let mut ty = Type::Int(Int::mul(Type::Int(Int::Literal(2)), Type::Var(var)));
+
+        solver.expand_with_bounds(&mut ty);
+
+        assert_eq!(ty, gradual_size());
+    }
+
+    #[test]
+    fn expand_with_bounds_preserves_quantified_int_leaves() {
+        let cases = [QuantifiedKind::IntVar, QuantifiedKind::TypeVar];
+        for (index, kind) in cases.into_iter().enumerate() {
+            let quantified = quantified(kind, index as u32);
+            let quantified_ty = Type::Quantified(Box::new(quantified));
+            let (solver, var) = solver_with_answer(quantified_ty.clone());
+            let mut ty = Type::Int(Int::add(Type::Var(var), Type::Int(Int::Literal(1))));
+
+            solver.expand_with_bounds(&mut ty);
+
+            assert_eq!(
+                ty,
+                Type::Int(Int::add(Type::Int(Int::Literal(1)), quantified_ty)),
+            );
+        }
+    }
+
+    #[test]
+    fn expand_with_bounds_canonicalizes_int_inside_tuple_splice() {
+        let quantified_ty = Type::Quantified(Box::new(quantified(QuantifiedKind::IntVar, 0)));
+        let raw_compound = Type::Int(Int::add(quantified_ty.clone(), quantified_ty));
+        let expected_compound = canonicalize(raw_compound.clone());
+        assert_ne!(raw_compound, expected_compound);
+
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![raw_compound])));
+        let mut ty = Type::Tuple(Tuple::unpacked(
+            vec![Type::Int(Int::Literal(1))],
+            Type::Var(var),
+            vec![Type::Int(Int::Literal(3))],
+        ));
+
+        solver.expand_with_bounds(&mut ty);
+
+        assert_eq!(
+            ty,
+            Type::Tuple(Tuple::unpacked(
+                vec![Type::Int(Int::Literal(1))],
+                Type::Tuple(Tuple::Concrete(vec![expected_compound])),
+                vec![Type::Int(Int::Literal(3))],
+            ))
+        );
+    }
+
+    #[test]
+    fn expand_with_bounds_does_not_simplify_non_int_types() {
+        let union = Type::Union(Box::new(Union {
+            members: vec![Type::None, Type::None],
+            display_name: None,
+        }));
+        let (solver, var) = solver_with_answer(union.clone());
+        let mut ty = Type::Var(var);
+
+        solver.expand_with_bounds(&mut ty);
+
+        assert_eq!(ty, union);
+    }
+
+    #[test]
+    fn simplify_mut_flattens_reachable_concrete_tuple_unpack() {
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![Type::Int(
+            Int::Literal(2),
+        )])));
+        let mut ty = Type::Tuple(Tuple::unpacked(
+            vec![Type::Int(Int::Literal(1))],
+            Type::Var(var),
+            vec![Type::Int(Int::Literal(3))],
+        ));
+
+        solver.expand_mut(&mut ty);
+
+        assert_eq!(
+            ty,
+            Type::Tuple(Tuple::Concrete(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_standalone_int_tuple() {
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ])));
+        let mut ty =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)])
+                .to_shape_arg_type();
+
+        solver.expand_mut(&mut ty);
+
+        assert_eq!(
+            ty,
+            IntTuple::from_types(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+                Type::Int(Int::Literal(4)),
+            ])
+            .to_shape_arg_type()
+        );
+    }
+
+    #[test]
+    fn simplify_mut_flattens_tuple_unpack_in_standalone_int_tuple() {
+        let nested = Type::Unpack(Box::new(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ]))));
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![nested])));
+        let mut ty =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)])
+                .to_shape_arg_type();
+
+        solver.expand_mut(&mut ty);
+
+        assert_eq!(
+            ty,
+            IntTuple::from_types(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+                Type::Int(Int::Literal(4)),
+            ])
+            .to_shape_arg_type()
+        );
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_inline_shaped_array() {
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![Type::Int(
+            Int::Literal(2),
+        )])));
+        let shape =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(3)]);
+        let mut ty = ShapedArrayType::new(fake_array(TArgs::default()), shape).to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        assert_eq!(
+            array.shape(),
+            IntTuple::from_types(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+            ])
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), None);
+    }
+
+    #[test]
+    fn simplify_mut_flattens_tuple_unpack_in_inline_shaped_array() {
+        let nested = Type::Unpack(Box::new(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ]))));
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![nested])));
+        let shape =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)]);
+        let mut ty = ShapedArrayType::new(fake_array(TArgs::default()), shape).to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        assert_eq!(
+            array.shape(),
+            IntTuple::from_types(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+                Type::Int(Int::Literal(4)),
+            ])
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), None);
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_concrete_tuple_carrier_as_first_class_shape_arg() {
+        let nested = Type::Unpack(Box::new(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ]))));
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![nested])));
+        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
+        let base_class = fake_array(TArgs::new(
+            Arc::new(TParams::new(vec![shape_param])),
+            vec![Type::Var(var)],
+        ));
+        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
+            .with_tuple_carrier_shape_arg(0)
+            .to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        let expected =
+            IntTuple::from_types(vec![Type::Int(Int::Literal(2)), Type::Int(Int::Literal(3))]);
+        assert_eq!(array.shape(), expected);
+        assert_eq!(
+            array.base_class.targs().as_slice()[0],
+            expected.to_shape_arg_type()
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), Some(0));
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_gradual_tuple_carrier_as_first_class_shape_arg() {
+        let (solver, var) =
+            solver_with_answer(Type::Tuple(Tuple::Unbounded(Box::new(gradual_size()))));
+        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
+        let base_class = fake_array(TArgs::new(
+            Arc::new(TParams::new(vec![shape_param])),
+            vec![Type::Var(var)],
+        ));
+        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
+            .with_tuple_carrier_shape_arg(0)
+            .to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        let expected = IntTuple::shapeless();
+        assert_eq!(array.shape(), expected);
+        assert_eq!(
+            array.base_class.targs().as_slice()[0],
+            expected.to_shape_arg_type()
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), Some(0));
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_existing_first_class_tuple_carrier() {
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ])));
+        let shape =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)]);
+        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
+        let base_class = fake_array(TArgs::new(
+            Arc::new(TParams::new(vec![shape_param])),
+            vec![shape.to_shape_arg_type()],
+        ));
+        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
+            .with_tuple_carrier_shape_arg(0)
+            .to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        let expected = IntTuple::from_types(vec![
+            Type::Int(Int::Literal(1)),
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+            Type::Int(Int::Literal(4)),
+        ]);
+        assert_eq!(array.shape(), expected);
+        assert_eq!(
+            array.base_class.targs().as_slice()[0],
+            expected.to_shape_arg_type()
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), Some(0));
+    }
+
+    #[test]
+    fn simplify_mut_preserves_whole_shape_typevar_carrier_as_first_class_shape_arg() {
+        let carrier = Type::Quantified(Box::new(quantified(QuantifiedKind::TypeVar, 1)));
+        let (solver, var) = solver_with_answer(carrier.clone());
+        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
+        let base_class = fake_array(TArgs::new(
+            Arc::new(TParams::new(vec![shape_param])),
+            vec![Type::Var(var)],
+        ));
+        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
+            .with_tuple_carrier_shape_arg(0)
+            .to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        let expected = IntTuple::unpacked(Vec::new(), carrier, Vec::new());
+        assert_eq!(array.shape(), expected);
+        assert_eq!(
+            array.base_class.targs().as_slice()[0],
+            expected.to_shape_arg_type()
+        );
+        assert_eq!(array.to_string(), "Array[T]");
+    }
+
+    #[test]
+    fn intvar_typevar_unification_preserves_intvar_kind() {
+        let cases = [
+            (
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Unrestricted,
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Unrestricted,
+            ),
+            (
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Bound(Type::any_implicit()),
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                true,
+                QuantifiedKind::IntVar,
+                Restriction::Unrestricted,
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+                true,
+                QuantifiedKind::IntVar,
+                Restriction::Unrestricted,
+            ),
+            (
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Bound(Type::any_implicit()),
+                true,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                true,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+        ];
+        for (index, (v1_quantified, k1, r1, v2_quantified, k2, r2)) in cases.into_iter().enumerate()
+        {
+            let solver = Solver::new(false, true, false, false, false);
+            let uniques = UniqueFactory::new();
+            let v1 = Var::new(&uniques);
+            let v2 = Var::new(&uniques);
+            let q1 = quantified_with_restriction(k1, (index * 2) as u32, r1);
+            let q2 = quantified_with_restriction(k2, (index * 2 + 1) as u32, r2);
+            let mut variables = solver.variables.lock();
+            variables.insert_fresh(
+                v1,
+                if v1_quantified {
+                    Variable::Quantified {
+                        quantified: q1,
+                        bounds: Bounds::new(),
+                    }
+                } else {
+                    Variable::PartialQuantified(q1)
+                },
+            );
+            variables.insert_fresh(
+                v2,
+                if v2_quantified {
+                    Variable::Quantified {
+                        quantified: q2,
+                        bounds: Bounds::new(),
+                    }
+                } else {
+                    Variable::PartialQuantified(q2)
+                },
+            );
+            let variable1 = variables.get(v1);
+            let variable2 = variables.get(v2);
+            let (x, y) = intvar_typevar_unify_order(v1, &variable1, v2, &variable2)
+                .expect("case should require IntVar-preserving unification");
+            drop(variable1);
+            drop(variable2);
+            variables.unify(x, y);
+
+            for var in [v1, v2] {
+                let current = variables.get(var);
+                assert!(match &*current {
+                    Variable::Quantified { quantified, .. } => {
+                        quantified.kind() == QuantifiedKind::IntVar
+                    }
+                    Variable::PartialQuantified(q) => q.kind() == QuantifiedKind::IntVar,
+                    _ => false,
+                });
+            }
+        }
+    }
+}
+
+/// Per-call capture of generic witness information, stored on `CallContext`.
+/// Each entry records a single Forall instantiation's witness vars and the
+/// target vars that are allowed to observe the residualized answer.
+#[derive(Clone, Debug)]
+struct GenericWitnessCapture {
     witness_hash: u64,
-    /// Vars that are allowed to observe the residualized answer for this candidate.
-    /// This is captured during subset checks and threaded into `Variable::ResidualAnswer`.
     target_vars: SmallSet<Var>,
+    /// Union of origin_vars and deferred_vars from the witness — the quantified
+    /// vars constrained by this Forall instantiation.
+    witness_vars: SmallSet<Var>,
 }
 
 /// Full per-branch capture used transiently during overload probing.
-/// Decomposed into per-var results by `record_overload_residuals_for_witness`.
 #[derive(Clone, Debug)]
-pub(crate) struct OverloadBranchCapture {
+pub struct OverloadBranchCapture {
     branch_index: usize,
     values: SmallMap<Var, Variable>,
+    /// Vars that had a generic residual at snapshot time. Used by
+    /// `materialize_overload_residual_branch_value` to decide whether
+    /// to produce a `callable_residual_generic`.
+    generic_residual_vars: SmallSet<Var>,
 }
 
-type OverloadWitnessPayloadByHash = SmallMap<u64, Vec<OverloadBranchCapture>>;
+type OverloadWitnessCapturesByHash = SmallMap<u64, Vec<OverloadBranchCapture>>;
 
-/// Shared context for an overload capture event. Arc'd to avoid duplication across vars.
-#[derive(Clone, Debug)]
-struct OverloadResidualWitness {
-    identity: ResidualIdentity,
+/// Witness captures collected during subset checking and consumed at solve
+/// boundaries. Used both as live storage on `CallContext` and as owned data
+/// after draining.
+#[derive(Debug, Default)]
+struct WitnessCaptures {
+    overload: OverloadWitnessCapturesByHash,
+    generic: Vec<GenericWitnessCapture>,
 }
 
-/// Per-var, per-branch capture at solver level.
-#[derive(Clone, Debug)]
-struct OverloadVarBranchCapture {
-    branch_index: usize,
-    value: Variable,
-}
+impl WitnessCaptures {
+    #[cfg(debug_assertions)]
+    fn is_empty(&self) -> bool {
+        self.overload.is_empty() && self.generic.is_empty()
+    }
 
-/// Per-var overload residual, stored on `Variable::Quantified`.
-#[derive(Clone, Debug)]
-struct OverloadResidualForVar {
-    witness: Arc<OverloadResidualWitness>,
-    branches: Vec<OverloadVarBranchCapture>,
+    fn captured_vars(&self) -> SmallSet<Var> {
+        let mut vars: SmallSet<Var> = self
+            .overload
+            .values()
+            .flat_map(|captures| captures.iter())
+            .flat_map(|capture| capture.values.keys().copied())
+            .collect();
+        vars.extend(
+            self.generic
+                .iter()
+                .flat_map(|c| c.witness_vars.iter().copied()),
+        );
+        vars
+    }
 }
 
 /// Witness-keyed pruning decisions threaded through finishing.
@@ -172,15 +756,6 @@ struct OverloadWitnessPruningDecision {
 
 type OverloadPruningByWitness = HashMap<OverloadResidualIdentity, OverloadWitnessPruningDecision>;
 
-enum OverloadResidualIdentityAnalysis {
-    None,
-    Single {
-        identity: OverloadResidualIdentity,
-        branch_indices: Vec<usize>,
-    },
-    Multiple,
-}
-
 #[derive(Clone, Debug)]
 struct OverloadSolvedConstraint {
     quantified_name: Name,
@@ -192,31 +767,8 @@ struct OverloadAllPrunedCause {
     solved_constraints: Vec<OverloadSolvedConstraint>,
 }
 
-struct OverloadBranchSubstitutionResult {
-    substituted: bool,
-    marker_remaining: bool,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum CallableResidualFinalizePhase {
-    Overload,
-    Generic,
-}
-
-/// Snapshot of a solved quantified var after the bounds-first pass in
-/// `finish_quantified`.
-///
-/// Used by witness-level overload pruning: eliminate branches whose
-/// branch-implied bounds are incompatible with the solved type.
 #[derive(Clone, Debug)]
-struct SolvedVarWithResiduals {
-    quantified_name: Name,
-    solved_ty: Type,
-    overload_residuals: Vec<OverloadResidualForVar>,
-}
-
-#[derive(Clone, Debug)]
-struct SolvedVarByPayload {
+struct SolvedVarInfo {
     quantified_name: Option<Name>,
     solved_ty: Type,
 }
@@ -244,11 +796,6 @@ enum Variable {
     Quantified {
         quantified: Quantified,
         bounds: Bounds,
-        /// Residual candidates captured during subset checks.
-        /// Kept separate from concrete bounds to avoid accidental coupling.
-        residuals: Vec<ResidualIdentity>,
-        /// Overload residual candidates captured during overload dispatch.
-        overload_residuals: Vec<OverloadResidualForVar>,
     },
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
     Recursive,
@@ -281,8 +828,6 @@ impl Display for Variable {
             | Variable::Quantified {
                 quantified: q,
                 bounds: _,
-                residuals: _,
-                overload_residuals: _,
             } => {
                 let label = if matches!(self, Variable::PartialQuantified(_)) {
                     "PartialQuantified"
@@ -495,6 +1040,7 @@ pub struct Solver {
     pub heap: TypeHeap,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
 }
 
@@ -510,6 +1056,19 @@ impl Display for Solver {
 /// A number chosen such that all practical types are less than this depth,
 /// but we don't want to stack overflow.
 const TYPE_LIMIT: usize = 20;
+
+/// Policy for how `resolve_vars` handles unsolved variables.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum VarExpansionPolicy {
+    /// Replace solved vars with their answers. Leave unsolved vars as `Var`.
+    Expand,
+    /// Like `Expand`, but also solve unsolved `Quantified`/`Unwrap` vars from
+    /// their accumulated bounds if possible.
+    ExpandWithBounds,
+    /// Like `ExpandWithBounds`, but force all remaining unsolved vars to
+    /// `Any`/gradual fallback and write the answer back to the solver.
+    Force,
+}
 
 /// A new bound to add to a variable.
 enum NewBound {
@@ -539,6 +1098,7 @@ impl Solver {
         infer_with_first_use: bool,
         tensor_shapes: bool,
         strict_callable_subtyping: bool,
+        strict_partial_subtyping: bool,
         spec_compliant_overloads: bool,
     ) -> Self {
         Self {
@@ -550,6 +1110,7 @@ impl Solver {
             heap: TypeHeap::new(),
             tensor_shapes,
             strict_callable_subtyping,
+            strict_partial_subtyping,
             spec_compliant_overloads,
         }
     }
@@ -592,7 +1153,6 @@ impl Solver {
     }
 
     /// Force all non-recursive Vars in `vars`.
-    /// TODO: deduplicate Variable-to-gradual-type logic with `force_var`.
     pub fn pin_placeholder_type(&self, var: Var, pin_partial_types: bool) -> Option<PinError> {
         let variables = self.variables.lock();
         let mut variable = variables.get_mut(var);
@@ -605,7 +1165,6 @@ impl Solver {
             Variable::Quantified {
                 quantified: q,
                 bounds: _,
-                ..
             } => {
                 // A Variable::Quantified should always be finished (see `finish_quantified`) by
                 // the code that creates it, because we need to know when we're done collecting
@@ -648,6 +1207,15 @@ impl Solver {
             &*variable,
             Variable::PartialQuantified(_) | Variable::PartialContained(_) | Variable::Unwrap(_)
         )
+    }
+
+    /// Returns true if the given type is a Var that points to a partial variable.
+    pub fn is_partial(&self, ty: &Type) -> bool {
+        if let Type::Var(v) = ty {
+            self.var_is_partial(*v)
+        } else {
+            false
+        }
     }
 
     /// Witnesses track both origin and deferred vars for residual plumbing,
@@ -777,30 +1345,42 @@ impl Solver {
         &self,
         branch_index: usize,
         vars: &[Var],
+        generic_captured_vars: &SmallSet<Var>,
     ) -> OverloadBranchCapture {
         let variables = self.variables.lock();
         let values: SmallMap<Var, Variable> = vars
             .iter()
             .map(|var| (*var, variables.get(*var).clone()))
             .collect();
+        let generic_residual_vars: SmallSet<Var> = vars
+            .iter()
+            .copied()
+            .filter(|var| generic_captured_vars.contains(var))
+            .collect();
         OverloadBranchCapture {
             branch_index,
             values,
+            generic_residual_vars,
         }
     }
 
     /// Finish the type returned from a function call. This entails expanding solved variables,
     /// erasing unsolved variables without defaults from unions, and canonicalizing dimension
-    /// expressions so that all-literal SizeExpr trees fold to single literals.
-    pub fn finish_function_return(&self, mut t: Type) -> Type {
-        self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new(), false, None);
-        t = self.finalize_callable_residuals_at_boundary_impl(t, true);
+    /// expressions so that all-literal `Int` trees fold to single literals.
+    pub fn for_return_boundary(&self, t: Type) -> Type {
+        self.for_return_boundary_with_type_level_dsl_errors(t).0
+    }
+
+    pub fn for_return_boundary_with_type_level_dsl_errors(
+        &self,
+        mut t: Type,
+    ) -> (Type, Vec<ShapeError>) {
+        self.resolve_vars(&mut t, VarExpansionPolicy::Expand, &VarRecurser::new());
+        t = t.finalize_callable_residuals_at_boundary(&self.heap, true);
+        let type_level_dsl_errors = t.finalize_type_level_dsl_at_boundary();
         self.erase_unsolved_variables(&mut t);
         self.simplify_mut(&mut t);
-        // After variable expansion, dimension expressions may have all-literal operands
-        // (e.g., (64 + 2 - 3 - 1) // 2 + 1) that should fold to a single literal (32).
-        // Without this, Sequential chaining compounds symbolic expressions across layers.
-        self.simplify_forced_type(t)
+        (t, type_level_dsl_errors)
     }
 
     /// Expand a type. All variables that have been bound will be replaced with non-Var types,
@@ -808,567 +1388,16 @@ impl Solver {
     /// Variables that have not yet been bound will remain as Var.
     ///
     /// In addition, if the type exceeds a large depth, it will be replaced with `Any`.
-    pub fn expand_vars(&self, mut t: Type) -> Type {
-        self.expand_vars_mut(&mut t);
+    pub fn expand(&self, mut t: Type) -> Type {
+        self.expand_mut(&mut t);
         t
     }
 
     /// Like `expand`, but when you have a `&mut`.
-    pub fn expand_vars_mut(&self, t: &mut Type) {
-        self.expand_with_limit(t, TYPE_LIMIT, &VarRecurser::new(), false, None);
+    pub fn expand_mut(&self, t: &mut Type) {
+        self.resolve_vars(t, VarExpansionPolicy::Expand, &VarRecurser::new());
         // After we substitute bound variables, we may be able to simplify some types
         self.simplify_mut(t);
-    }
-
-    // Canonical fallback policy for residual elimination outside callable-preserving paths.
-    fn residual_fallback_type(&self, residual: &CallableResidual) -> Type {
-        match &residual.kind {
-            CallableResidualKind::Generic { quantified } => quantified.as_gradual_type(),
-            CallableResidualKind::Overload { branches, .. } => unions(
-                branches
-                    .iter()
-                    .map(|branch| branch.ty.clone())
-                    .collect::<Vec<_>>(),
-                &self.heap,
-            ),
-        }
-    }
-
-    fn flatten_residual_for_non_target_read(&self, ty: &Type) -> Type {
-        let mut flattened = ty.clone();
-        flattened.transform_mut(&mut |inner| {
-            if let Type::CallableResidual(residual) = inner {
-                *inner = self.residual_fallback_type(residual);
-            }
-        });
-        flattened
-    }
-
-    /// Finishing invariant: overload residual branch types must not contain
-    /// overload residual markers. This keeps boundary finalization to one
-    /// overload pass followed by one generic pass.
-    fn flatten_overload_residual_markers(&self, ty: &mut Type) {
-        ty.transform_mut(&mut |inner| {
-            if let Type::CallableResidual(residual) = inner
-                && matches!(&residual.kind, CallableResidualKind::Overload { .. })
-            {
-                *inner = self.residual_fallback_type(residual);
-            }
-        });
-    }
-
-    fn quantified_tparams_for_forall(&self, ty: &Type) -> Arc<TParams> {
-        let mut tparams = Vec::new();
-        ty.for_each_quantified(&mut |q| tparams.push(q.clone()));
-        tparams.sort();
-        tparams.dedup();
-        Arc::new(TParams::new(tparams))
-    }
-
-    fn promote_callable_to_forall(&self, callable: Callable) -> Type {
-        let callable_ty = self
-            .heap
-            .mk_callable(callable.params.clone(), callable.ret.clone());
-        Forallable::Callable(callable).forall(self.quantified_tparams_for_forall(&callable_ty))
-    }
-
-    fn promote_function_to_forall(&self, func: Function) -> Type {
-        let callable_ty = self
-            .heap
-            .mk_callable(func.signature.params.clone(), func.signature.ret.clone());
-        Forallable::Function(func).forall(self.quantified_tparams_for_forall(&callable_ty))
-    }
-
-    /// Analyze overload residual markers in one pass.
-    /// Returns:
-    /// - `None`: no overload residual markers in this type
-    /// - `Single`: exactly one witness identity with the branch-index intersection
-    /// - `Multiple`: more than one witness identity appears in the same type
-    fn analyze_overload_residual_identity(&self, ty: &Type) -> OverloadResidualIdentityAnalysis {
-        let mut first: Option<OverloadResidualIdentity> = None;
-        let mut intersection: Option<SmallSet<usize>> = None;
-        let mut conflict = false;
-        ty.universe(&mut |inner| {
-            if conflict {
-                return;
-            }
-            if let Type::CallableResidual(residual) = inner
-                && let CallableResidualKind::Overload { identity, branches } = &residual.kind
-            {
-                let branch_indices: SmallSet<usize> =
-                    branches.iter().map(|branch| branch.branch_index).collect();
-                match &first {
-                    None => {
-                        first = Some(identity.clone());
-                        intersection = Some(branch_indices);
-                    }
-                    Some(existing) if existing == identity => {
-                        let current = intersection.take().expect(
-                            "matching overload residual identity must have intersection state",
-                        );
-                        intersection = Some(
-                            current
-                                .into_iter()
-                                .filter(|idx| branch_indices.contains(idx))
-                                .collect(),
-                        );
-                    }
-                    Some(_) => conflict = true,
-                }
-            }
-        });
-        if conflict {
-            OverloadResidualIdentityAnalysis::Multiple
-        } else if let Some(identity) = first {
-            let mut branch_indices = intersection
-                .expect("matching overload residual identity must produce an intersection set")
-                .into_iter()
-                .collect::<Vec<_>>();
-            branch_indices.sort_unstable();
-            OverloadResidualIdentityAnalysis::Single {
-                identity,
-                branch_indices,
-            }
-        } else {
-            OverloadResidualIdentityAnalysis::None
-        }
-    }
-
-    fn strip_overload_residual_identity(&self, ty: &mut Type, identity: &OverloadResidualIdentity) {
-        ty.transform_mut(&mut |inner| {
-            if let Type::CallableResidual(residual) = inner
-                && let CallableResidualKind::Overload {
-                    identity: marker_identity,
-                    ..
-                } = &residual.kind
-                && marker_identity == identity
-            {
-                *inner = self.residual_fallback_type(residual);
-            }
-        });
-    }
-
-    fn substitute_overload_residual_identity_branch(
-        &self,
-        ty: &mut Type,
-        identity: &OverloadResidualIdentity,
-        branch_index: usize,
-    ) -> OverloadBranchSubstitutionResult {
-        let mut substituted = false;
-        let mut marker_remaining = false;
-        ty.transform_mut(&mut |inner| {
-            if let Type::CallableResidual(residual) = inner
-                && let CallableResidualKind::Overload {
-                    identity: marker_identity,
-                    branches,
-                } = &residual.kind
-                && marker_identity == identity
-            {
-                let branch = branches
-                    .iter()
-                    .find(|branch| branch.branch_index == branch_index)
-                    .expect("selected overload branch index must exist on every matching marker");
-                let branch_ty = &branch.ty;
-                let branch_contains_identity = branch_ty.any(|candidate| {
-                    if let Type::CallableResidual(candidate_residual) = candidate
-                        && let CallableResidualKind::Overload {
-                            identity: candidate_identity,
-                            ..
-                        } = &candidate_residual.kind
-                    {
-                        candidate_identity == identity
-                    } else {
-                        false
-                    }
-                });
-                marker_remaining |= branch_contains_identity;
-                *inner = branch_ty.clone();
-                substituted = true;
-            }
-        });
-        OverloadBranchSubstitutionResult {
-            substituted,
-            marker_remaining,
-        }
-    }
-
-    fn overload_metadata_for_reconstruction(&self, ty: &Type) -> FuncMetadata {
-        ty.visit_toplevel_func_metadata(&|metadata| Some(metadata.clone()))
-            .unwrap_or(FuncMetadata {
-                kind: FunctionKind::Overload,
-                flags: FuncFlags::default(),
-            })
-    }
-
-    fn overload_signature_from_branch_type(
-        &self,
-        branch_ty: Type,
-        metadata: &FuncMetadata,
-    ) -> Option<OverloadType> {
-        match branch_ty {
-            Type::Function(function) => Some(OverloadType::Function(*function)),
-            Type::Forall(forall) => match forall.body {
-                Forallable::Function(function) => Some(OverloadType::Forall(Forall {
-                    tparams: forall.tparams,
-                    body: function,
-                })),
-                Forallable::Callable(callable) => Some(OverloadType::Forall(Forall {
-                    tparams: forall.tparams,
-                    body: Function {
-                        signature: callable,
-                        metadata: metadata.clone(),
-                    },
-                })),
-                Forallable::TypeAlias(_) => None,
-            },
-            Type::Callable(callable) => Some(OverloadType::Function(Function {
-                signature: *callable,
-                metadata: metadata.clone(),
-            })),
-            _ => None,
-        }
-    }
-
-    fn try_combine_reconstructed_overload(
-        &self,
-        original_ty: &Type,
-        reconstructed: &[Type],
-    ) -> Option<Type> {
-        let metadata = self.overload_metadata_for_reconstruction(original_ty);
-        let signatures = reconstructed
-            .iter()
-            .cloned()
-            .map(|branch_ty| self.overload_signature_from_branch_type(branch_ty, &metadata))
-            .collect::<Option<Vec<_>>>()?;
-        let signatures = Vec1::try_from_vec(signatures).ok()?;
-        Some(Type::Overload(Overload {
-            signatures,
-            metadata: Box::new(metadata),
-        }))
-    }
-
-    /// Finalize callable residuals at a boundary with one outer traversal.
-    ///
-    /// Non-callable structure is traversed once. Callable/function subtrees run
-    /// two phases (overload then generic) internally.
-    fn finalize_callable_residuals_mut(
-        &self,
-        ty: &mut Type,
-        callable_slot: bool,
-        preserve_class_targs: bool,
-    ) -> (bool, bool) {
-        match ty {
-            Type::CallableResidual(residual) => match &residual.kind {
-                CallableResidualKind::Generic { quantified } => {
-                    if !callable_slot {
-                        *ty = self.residual_fallback_type(residual);
-                        return (true, false);
-                    }
-                    *ty = self.heap.mk_quantified(quantified.clone());
-                    (true, true)
-                }
-                CallableResidualKind::Overload { .. } => {
-                    *ty = self.residual_fallback_type(residual);
-                    let (_nested_changed, nested_consumed) = self.finalize_callable_residuals_mut(
-                        ty,
-                        callable_slot,
-                        preserve_class_targs,
-                    );
-                    (true, nested_consumed)
-                }
-            },
-            Type::Callable(callable) => {
-                // NOTE: This loop is intentionally duplicated in the Type::Function
-                // arm below. The phase ordering and accumulation logic are identical,
-                // but extracting a shared higher-order helper adds closure/generic
-                // indirection without a clear zero-cost win here.
-                let mut changed = false;
-                let mut consumed_residual = false;
-                for phase in [
-                    CallableResidualFinalizePhase::Overload,
-                    CallableResidualFinalizePhase::Generic,
-                ] {
-                    let (phase_changed, phase_consumed) =
-                        self.finalize_callable_type_mut(callable, preserve_class_targs, phase);
-                    changed |= phase_changed;
-                    consumed_residual |= phase_consumed;
-                }
-                if consumed_residual && !callable_slot {
-                    let promoted = self.promote_callable_to_forall((**callable).clone());
-                    *ty = promoted;
-                    (true, true)
-                } else {
-                    (changed, consumed_residual)
-                }
-            }
-            Type::Function(function) => {
-                // Intentionally kept in lockstep with the Type::Callable arm above.
-                let mut changed = false;
-                let mut consumed_residual = false;
-                for phase in [
-                    CallableResidualFinalizePhase::Overload,
-                    CallableResidualFinalizePhase::Generic,
-                ] {
-                    let (phase_changed, phase_consumed) =
-                        self.finalize_function_type_mut(function, preserve_class_targs, phase);
-                    changed |= phase_changed;
-                    consumed_residual |= phase_consumed;
-                }
-                if !changed {
-                    return (false, false);
-                }
-                if consumed_residual && !callable_slot {
-                    let promoted = self.promote_function_to_forall((**function).clone());
-                    *ty = promoted;
-                    (true, true)
-                } else {
-                    (true, consumed_residual)
-                }
-            }
-            Type::ClassType(_) if preserve_class_targs && !callable_slot => (false, false),
-            _ => {
-                let mut changed = false;
-                let mut consumed_residual = false;
-                ty.recurse_mut(&mut |inner| {
-                    let (inner_changed, inner_consumed) = self.finalize_callable_residuals_mut(
-                        inner,
-                        callable_slot,
-                        preserve_class_targs,
-                    );
-                    changed |= inner_changed;
-                    consumed_residual |= inner_consumed;
-                });
-                (changed, consumed_residual)
-            }
-        }
-    }
-
-    fn finalize_callable_residuals_in_phase_mut(
-        &self,
-        ty: &mut Type,
-        callable_slot: bool,
-        preserve_class_targs: bool,
-        phase: CallableResidualFinalizePhase,
-    ) -> (bool, bool) {
-        match ty {
-            Type::CallableResidual(residual) => match &residual.kind {
-                CallableResidualKind::Generic { quantified } => {
-                    if phase != CallableResidualFinalizePhase::Generic {
-                        return (false, false);
-                    }
-                    if !callable_slot {
-                        *ty = self.residual_fallback_type(residual);
-                        return (true, false);
-                    }
-                    *ty = self.heap.mk_quantified(quantified.clone());
-                    (true, true)
-                }
-                CallableResidualKind::Overload { .. } => {
-                    if phase != CallableResidualFinalizePhase::Overload {
-                        return (false, false);
-                    }
-                    *ty = self.residual_fallback_type(residual);
-                    (true, false)
-                }
-            },
-            Type::Callable(callable) => {
-                self.finalize_callable_type_mut(callable, preserve_class_targs, phase)
-            }
-            Type::Function(function) => {
-                self.finalize_function_type_mut(function, preserve_class_targs, phase)
-            }
-            Type::ClassType(_) if preserve_class_targs && !callable_slot => (false, false),
-            _ => {
-                let mut changed = false;
-                let mut consumed_residual = false;
-                ty.recurse_mut(&mut |inner| {
-                    let (inner_changed, inner_consumed) = self
-                        .finalize_callable_residuals_in_phase_mut(
-                            inner,
-                            callable_slot,
-                            preserve_class_targs,
-                            phase,
-                        );
-                    changed |= inner_changed;
-                    consumed_residual |= inner_consumed;
-                });
-                (changed, consumed_residual)
-            }
-        }
-    }
-
-    fn finalize_callable_type_mut(
-        &self,
-        callable: &mut Callable,
-        preserve_class_targs: bool,
-        phase: CallableResidualFinalizePhase,
-    ) -> (bool, bool) {
-        let mut changed = false;
-        let mut consumed_residual = false;
-        match &mut callable.params {
-            Params::List(params) => {
-                for param in params.items_mut() {
-                    let (param_changed, param_consumed) = self
-                        .finalize_callable_residuals_in_phase_mut(
-                            param.as_type_mut(),
-                            true,
-                            preserve_class_targs,
-                            phase,
-                        );
-                    changed |= param_changed;
-                    consumed_residual |= param_consumed;
-                }
-            }
-            Params::ParamSpec(prefix, p) => {
-                for prefix_param in prefix.iter_mut() {
-                    let prefix_ty = match prefix_param {
-                        PrefixParam::PosOnly(_, ty, _) | PrefixParam::Pos(_, ty, _) => ty,
-                    };
-                    let (prefix_changed, prefix_consumed) = self
-                        .finalize_callable_residuals_in_phase_mut(
-                            prefix_ty,
-                            true,
-                            preserve_class_targs,
-                            phase,
-                        );
-                    changed |= prefix_changed;
-                    consumed_residual |= prefix_consumed;
-                }
-                let (paramspec_changed, paramspec_consumed) = self
-                    .finalize_callable_residuals_in_phase_mut(p, true, preserve_class_targs, phase);
-                changed |= paramspec_changed;
-                consumed_residual |= paramspec_consumed;
-            }
-            Params::Ellipsis | Params::Materialization => {}
-        }
-        let (ret_changed, ret_consumed) = self.finalize_callable_residuals_in_phase_mut(
-            &mut callable.ret,
-            true,
-            preserve_class_targs,
-            phase,
-        );
-        changed |= ret_changed;
-        consumed_residual |= ret_consumed;
-        (changed, consumed_residual)
-    }
-
-    fn finalize_function_type_mut(
-        &self,
-        function: &mut Function,
-        preserve_class_targs: bool,
-        phase: CallableResidualFinalizePhase,
-    ) -> (bool, bool) {
-        if !function.signature.contains_callable_residual() {
-            return (false, false);
-        }
-        let mut signature = function.signature.clone();
-        let (changed, consumed_residual) =
-            self.finalize_callable_type_mut(&mut signature, preserve_class_targs, phase);
-        if !changed {
-            return (false, false);
-        }
-        function.signature = signature;
-        (true, consumed_residual)
-    }
-
-    /// Finalize callable residuals at a substitution boundary (a return type or class field).
-    ///
-    /// We run overload handling first and generic handling second.
-    fn finalize_callable_residuals_at_boundary_impl(
-        &self,
-        ty: Type,
-        preserve_class_targs: bool,
-    ) -> Type {
-        let mut active_overload_identities = Vec::new();
-        self.finalize_callable_residuals_at_boundary_impl_with_active(
-            ty,
-            preserve_class_targs,
-            &mut active_overload_identities,
-        )
-    }
-
-    fn finalize_callable_residuals_at_boundary_impl_with_active(
-        &self,
-        mut ty: Type,
-        preserve_class_targs: bool,
-        active_overload_identities: &mut Vec<OverloadResidualIdentity>,
-    ) -> Type {
-        // Overload reconstruction is only for callable roots. For non-callable
-        // roots, keep the outer structure and rely on inline residual fallback.
-        let callable_root = ty.is_toplevel_callable();
-
-        // Reconstruction is only safe when all overload residual markers in
-        // the type share a single witness identity. Multiple witnesses would
-        // produce a cross-product explosion; strip all markers and fall
-        // through to generic residual finalization instead.
-        if callable_root
-            && let OverloadResidualIdentityAnalysis::Single {
-                identity,
-                branch_indices,
-            } = self.analyze_overload_residual_identity(&ty)
-        {
-            if active_overload_identities.contains(&identity) {
-                unreachable!(
-                    "detected recursive overload residual identity cycle during finalization",
-                );
-            }
-            if branch_indices.is_empty() {
-                // TODO(T235420905): This path is intended to be unreachable for coherent
-                // witnesses, but we have seen CI panic signatures around this stack. Audit
-                // the top-of-stack identity/branch-coherence invariant and decide whether
-                // to harden this boundary or tighten upstream residual capture.
-                self.strip_overload_residual_identity(&mut ty, &identity);
-            } else {
-                active_overload_identities.push(identity.clone());
-                let mut reconstructed = Vec::with_capacity(branch_indices.len());
-                for branch_index in branch_indices {
-                    let mut branch_ty = ty.clone();
-                    let substitution_result = self.substitute_overload_residual_identity_branch(
-                        &mut branch_ty,
-                        &identity,
-                        branch_index,
-                    );
-                    if !substitution_result.substituted {
-                        unreachable!(
-                            "selected overload residual identity must be present during reconstruction",
-                        );
-                    }
-                    if substitution_result.marker_remaining {
-                        unreachable!(
-                            "overload residual substitution did not eliminate active identity"
-                        );
-                    }
-                    reconstructed.push(
-                        self.finalize_callable_residuals_at_boundary_impl_with_active(
-                            branch_ty,
-                            preserve_class_targs,
-                            active_overload_identities,
-                        ),
-                    );
-                }
-                let popped = active_overload_identities
-                    .pop()
-                    .expect("active_overload_identities push/pop must stay balanced");
-                debug_assert_eq!(popped, identity);
-                if let Some(overload_ty) =
-                    self.try_combine_reconstructed_overload(&ty, &reconstructed)
-                {
-                    ty = overload_ty;
-                } else {
-                    // This fallback only applies to callable roots. Non-callable
-                    // roots bypass reconstruction and rely on inline fallback.
-                    ty = unions(reconstructed, &self.heap);
-                    self.simplify_mut(&mut ty);
-                }
-            }
-        }
-
-        self.finalize_callable_residuals_mut(&mut ty, false, preserve_class_targs);
-        ty
-    }
-
-    pub(crate) fn finalize_callable_residuals_at_boundary(&self, ty: Type) -> Type {
-        self.finalize_callable_residuals_at_boundary_impl(ty, false)
     }
 
     fn residual_read_for_query_var(
@@ -1380,23 +1409,28 @@ impl Solver {
         if query_var.is_some_and(|q| target_vars.contains(&q)) {
             ty.clone()
         } else {
-            self.flatten_residual_for_non_target_read(ty)
+            ty.clone().flatten_residuals(&self.heap)
         }
     }
 
-    /// Expand, but if the resulting type will be greater than limit levels deep, return an `Any`.
-    /// Avoids producing things that stack overflow later in the process.
-    fn expand_with_limit(
+    /// Unified var resolution traversal. Recursively walks the type tree, resolving
+    /// `Var`s according to the given policy:
+    /// - `Expand`: replace solved vars, leave unsolved as-is
+    /// - `ExpandWithBounds`: also solve unsolved vars from their bounds if possible
+    /// - `Force`: like ExpandWithBounds, but force unsolved vars to Any/gradual fallback
+    fn resolve_vars(&self, t: &mut Type, policy: VarExpansionPolicy, recurser: &VarRecurser) {
+        self.resolve_vars_with_limit(t, TYPE_LIMIT, policy, recurser, None);
+    }
+
+    fn resolve_vars_with_limit(
         &self,
         t: &mut Type,
         limit: usize,
+        policy: VarExpansionPolicy,
         recurser: &VarRecurser,
-        expand_unfinished_variables: bool,
         query_var: Option<Var>,
     ) {
         if limit == 0 {
-            // TODO: Should probably add an error here, and use any_error,
-            // but don't have any good location information to hand.
             *t = self.heap.mk_any_implicit();
         } else if let Type::Var(x) = t {
             let query_var = query_var.or(Some(*x));
@@ -1408,45 +1442,48 @@ impl Solver {
                         *t = ty.clone();
                         drop(variable);
                         drop(lock);
-                        self.expand_with_limit(
-                            t,
-                            limit - 1,
-                            recurser,
-                            expand_unfinished_variables,
-                            query_var,
-                        );
+                        self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
                     }
                     Variable::ResidualAnswer { target_vars, ty } => {
                         *t = self.residual_read_for_query_var(query_var, target_vars, ty);
                         drop(variable);
                         drop(lock);
-                        self.expand_with_limit(
-                            t,
-                            limit - 1,
-                            recurser,
-                            expand_unfinished_variables,
-                            query_var,
-                        );
+                        self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
                     }
                     Variable::Quantified {
                         quantified: _,
                         bounds,
-                        ..
                     }
                     | Variable::Unwrap(bounds)
-                        if expand_unfinished_variables
+                        if policy == VarExpansionPolicy::ExpandWithBounds
                             && let Some(bound) = self.solve_bounds(bounds.clone()) =>
                     {
                         *t = bound;
                         drop(variable);
                         drop(lock);
-                        self.expand_with_limit(
-                            t,
-                            limit - 1,
-                            recurser,
-                            expand_unfinished_variables,
-                            query_var,
-                        );
+                        self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
+                    }
+                    _ if policy == VarExpansionPolicy::Force => {
+                        drop(variable);
+                        let mut e = lock.get_mut(*x);
+                        let ty = match &mut *e {
+                            Variable::Quantified {
+                                quantified: q,
+                                bounds,
+                            } => self
+                                .solve_bounds(mem::take(bounds))
+                                .unwrap_or_else(|| q.as_gradual_type()),
+                            Variable::PartialQuantified(q) => q.as_gradual_type(),
+                            Variable::Unwrap(bounds) => self
+                                .solve_bounds(mem::take(bounds))
+                                .unwrap_or_else(|| self.heap.mk_any_implicit()),
+                            _ => self.heap.mk_any_implicit(),
+                        };
+                        *e = Variable::Answer(ty.clone());
+                        *t = ty;
+                        drop(e);
+                        drop(lock);
+                        self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
                     }
                     _ => {}
                 }
@@ -1455,13 +1492,7 @@ impl Solver {
             }
         } else {
             t.recurse_mut(&mut |t| {
-                self.expand_with_limit(
-                    t,
-                    limit - 1,
-                    recurser,
-                    expand_unfinished_variables,
-                    query_var,
-                )
+                self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var)
             });
         }
     }
@@ -1481,10 +1512,27 @@ impl Solver {
         }
     }
 
-    /// Public wrapper to expand a dimension type by resolving bound Vars.
-    /// Used by subset checking to expand Vars before comparing dimension expressions.
-    pub fn expand_dimension(&self, dim_ty: &mut Type) {
-        self.expand_with_limit(dim_ty, TYPE_LIMIT, &VarRecurser::new(), true, None);
+    /// Public wrapper to expand a dimension type by resolving bound Vars and
+    /// canonicalizing the resulting symbolic dimension expression.
+    /// Used by subset checking before comparing dimension expressions.
+    pub fn expand_with_bounds(&self, dim_ty: &mut Type) {
+        self.resolve_vars(
+            dim_ty,
+            VarExpansionPolicy::ExpandWithBounds,
+            &VarRecurser::new(),
+        );
+        Self::canonicalize_only_ints_mut(dim_ty);
+    }
+
+    fn canonicalize_only_ints_mut(t: &mut Type) {
+        t.transform_mut(&mut |x| {
+            if let Type::Int(_) = x {
+                let simplified = canonicalize(x.clone());
+                if &simplified != x {
+                    *x = simplified;
+                }
+            }
+        });
     }
 
     /// Given a `Var`, ensures that the solver has an answer for it (or inserts Any if not already),
@@ -1493,7 +1541,7 @@ impl Solver {
     pub fn force_var(&self, v: Var) -> Type {
         let lock = self.variables.lock();
         let mut e = lock.get_mut(v);
-        let result = match &mut *e {
+        match &mut *e {
             Variable::Answer(t) => t.clone(),
             Variable::ResidualAnswer { target_vars, ty } => {
                 self.residual_read_for_query_var(Some(v), target_vars, ty)
@@ -1503,7 +1551,6 @@ impl Solver {
                     Variable::Quantified {
                         quantified: q,
                         bounds,
-                        ..
                     } => self
                         .solve_bounds(mem::take(bounds))
                         .unwrap_or_else(|| q.as_gradual_type()),
@@ -1516,50 +1563,12 @@ impl Solver {
                 *e = Variable::Answer(ty.clone());
                 ty
             }
-        };
-        // Simplify dimension expressions after forcing
-        // This ensures Tensor[(10 * 20)] becomes Tensor[200]
-        self.simplify_forced_type(result)
-    }
-
-    /// Simplify dimension expressions in a forced type
-    fn simplify_forced_type(&self, mut ty: Type) -> Type {
-        // Use transform_mut to visit every Type node and simplify dimensions
-        ty.transform_mut(&mut |t| {
-            let simplified = canonicalize(t.clone());
-            if &simplified != t {
-                *t = simplified;
-            }
-        });
-        ty
-    }
-
-    fn deep_force_mut_with_limit(&self, t: &mut Type, limit: usize, recurser: &VarRecurser) {
-        if limit == 0 {
-            // TODO: Should probably add an error here, and use any_error,
-            // but don't have any good location information to hand.
-            *t = self.heap.mk_any_implicit();
-        } else if let Type::Var(v) = t {
-            if let Some(_guard) = self.recurse(*v, recurser) {
-                *t = self.force_var(*v);
-                self.deep_force_mut_with_limit(t, limit - 1, recurser);
-            } else {
-                *t = self.heap.mk_any_implicit();
-            }
-        } else {
-            t.recurse_mut(&mut |t| self.deep_force_mut_with_limit(t, limit - 1, recurser));
-            // After forcing all Vars recursively, simplify dimension expressions
-            // This handles cases like Tensor[(10 * 20)] after Vars are forced to 10 and 20
-            let simplified = canonicalize(t.clone());
-            if &simplified != t {
-                *t = simplified;
-            }
         }
     }
 
-    /// A version of `deep_force` that works in-place on a `Type`.
-    pub fn deep_force_mut(&self, t: &mut Type) {
-        self.deep_force_mut_with_limit(t, TYPE_LIMIT, &VarRecurser::new());
+    /// A version of `force` that works in-place on a `Type`.
+    pub fn force_mut(&self, t: &mut Type) {
+        self.resolve_vars(t, VarExpansionPolicy::Force, &VarRecurser::new());
         // After forcing, we might be able to simplify some unions
         self.simplify_mut(t);
     }
@@ -1583,32 +1592,27 @@ impl Solver {
                     .heap
                     .mk_tuple(simplify_tuples(mem::take(tuple), &self.heap));
             }
-            // Flatten Tensor[prefix, *tuple[...], suffix] after TypeVarTuple resolution
-            if let Type::Tensor(tensor) = x
-                && let TensorShape::Unpacked(unpacked) = &mut tensor.shape
-                && let Type::Tuple(tuple_variant) = &unpacked.1
-            {
-                let (prefix, _, suffix) = &**unpacked;
-                match tuple_variant {
-                    Tuple::Concrete(elements) => {
-                        let mut new_dims = prefix.clone();
-                        new_dims.extend(elements.clone());
-                        new_dims.extend(suffix.clone());
-                        tensor.shape = TensorShape::Concrete(new_dims);
+            if let Type::IntTuple(shape) = x {
+                **shape = shape.normalize();
+            }
+            if let Type::ShapedArray(tensor) = x {
+                match tensor.tuple_carrier_shape_arg_index() {
+                    Some(index)
+                        if !matches!(
+                            tensor.base_class.targs().as_slice().get(index),
+                            Some(Type::IntTuple(_))
+                        ) =>
+                    {
+                        let shape = tensor.shape();
+                        tensor.set_shape(shape);
                     }
-                    Tuple::Unpacked(inner) => {
-                        let (tuple_prefix, tuple_middle, tuple_suffix) = &**inner;
-                        let mut new_prefix = prefix.clone();
-                        new_prefix.extend(tuple_prefix.clone());
-                        let mut new_suffix = tuple_suffix.clone();
-                        new_suffix.extend(suffix.clone());
-                        tensor.shape = TensorShape::Unpacked(Box::new((
-                            new_prefix,
-                            tuple_middle.clone(),
-                            new_suffix,
-                        )));
+                    None => {
+                        let shape = tensor.shape().normalize();
+                        tensor.set_shape(shape);
                     }
-                    _ => {}
+                    // `transform_mut` is post-order, so this first-class carrier was normalized
+                    // by the `IntTuple` arm before its containing shaped array.
+                    Some(_) => {}
                 }
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
@@ -1688,6 +1692,14 @@ impl Solver {
                 }
                 *param_list = ParamList::new(new_params);
             }
+            // Simplify dimension expressions
+            // This ensures Tensor[(10 * 20)] becomes Tensor[200]
+            if let Type::Int(_) = x {
+                let simplified = canonicalize(x.clone());
+                if &simplified != x {
+                    *x = simplified;
+                }
+            }
         });
     }
 
@@ -1744,8 +1756,8 @@ impl Solver {
     /// Guarantees there will be no `Var` in the result.
     ///
     /// In addition, if the type exceeds a large depth, it will be replaced with `Any`.
-    pub fn deep_force(&self, mut t: Type) -> Type {
-        self.deep_force_mut(&mut t);
+    pub fn force(&self, mut t: Type) -> Type {
+        self.force_mut(&mut t);
         t
     }
 
@@ -1758,8 +1770,8 @@ impl Solver {
     /// This is the canonical boundary normalization entry point used by report/query
     /// surfaces and other serialization/display-adjacent consumers.
     pub fn for_export_boundary(&self, mut t: Type) -> Type {
-        self.expand_vars_mut(&mut t);
-        t = self.finalize_callable_residuals_at_boundary(t);
+        self.resolve_vars(&mut t, VarExpansionPolicy::Expand, &VarRecurser::new());
+        t = t.finalize_callable_residuals_at_boundary(&self.heap, false);
         self.simplify_mut(&mut t);
         t
     }
@@ -1799,8 +1811,6 @@ impl Solver {
                 Variable::Quantified {
                     quantified: (*q).clone(),
                     bounds: Bounds::new(),
-                    residuals: Vec::new(),
-                    overload_residuals: Vec::new(),
                 },
             );
         }
@@ -1869,7 +1879,12 @@ impl Solver {
         // Either we have solutions, or we fall back to Any. We don't want Variable::Partial.
         // If this errors, then the definition is invalid, and we should have raised an error at
         // the definition site.
-        let _specialization_errors = self.finish_quantified(vs, false);
+        let _specialization_errors = self.finish_quantified_with_pruning(
+            vs,
+            false,
+            &mut |_got, _want| Ok(()),
+            &mut WitnessCaptures::default(),
+        );
 
         callable
     }
@@ -1888,28 +1903,25 @@ impl Solver {
             .any(|(v, state)| state.error.is_none() && lock.contains_key(v))
     }
 
-    /// Returns true if the given type is a Var that points to a partial
-    /// (PartialQuantified or PartialContained) variable.
-    pub fn is_partial(&self, ty: &Type) -> bool {
-        if let Type::Var(v) = ty {
-            matches!(
-                *self.variables.lock().get(*v),
-                Variable::PartialQuantified(_) | Variable::PartialContained(_)
-            )
-        } else {
-            false
-        }
-    }
-
-    /// Add a bound to the variable if it is a Quantified or Unwrap
+    /// Add a bound to the variable if it is a Quantified or Unwrap.
+    ///
+    /// Given two recorded bounds `A` and `B` on the same variable where `B <: A`:
+    ///
+    /// - For *lower* bounds we keep `A`. From `A <: T` we get `B <: T` (transitivity
+    ///   through `B <: A`), so `A` carries strictly more information.
+    /// - For *upper* bounds we keep `B`. From `T <: B` we get `T <: A` (transitivity
+    ///   through `B <: A`), so `B` carries strictly more information. Without this,
+    ///   a tight bound like `T <: int` would be discarded in favor of a looser
+    ///   `T <: int | () -> int` that was recorded first.
     fn get_new_bound(
         &self,
         existing_bound: Option<Type>,
         bound: Type,
+        is_upper: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> NewBound {
         // Check if the new bound can absorb or be absorbed into the existing bound.
-        // Examples: `float` absorbs `int`, `list[Any]` absorbs `list[int]`.
+        // Examples (lower bound): `float` absorbs `int`, `list[Any]` absorbs `list[int]`.
         // TODO(https://github.com/facebook/pyrefly/issues/105): there are a few fishy things:
         // * We're only checking against the first bound.
         // * We're keeping `Any` separate so it can be filtered out in `solve_one_bounds`.
@@ -1920,9 +1932,13 @@ impl Solver {
                 let _ = is_subset(&bound, &first); // Ignore the result, just pin vars
                 None
             } else if is_subset(&bound.materialize(), &first).is_ok() {
-                Some(first)
+                // `bound <: first`: lower bounds keep `first` (the supertype), upper
+                // bounds keep `bound` (the subtype).
+                Some(if is_upper { bound.clone() } else { first })
             } else if is_subset(&first.materialize(), &bound).is_ok() {
-                Some(bound.clone())
+                // `first <: bound`: lower bounds adopt `bound` (the supertype), upper
+                // bounds keep `first` (the subtype).
+                Some(if is_upper { first } else { bound.clone() })
             } else {
                 None
             }
@@ -1955,6 +1971,9 @@ impl Solver {
         existing_bounds: &Vec<Type>,
         kind: QuantifiedKind,
     ) -> Result<(), SubsetError> {
+        if kind == QuantifiedKind::IntVar && type_as_intvar_solution(bound).is_none() {
+            return Err(SubsetError::Other);
+        }
         if kind == QuantifiedKind::TypeVarTuple
             && let Type::Tuple(Tuple::Concrete(elts)) = bound
         {
@@ -1983,11 +2002,10 @@ impl Solver {
     ) -> Result<(), SubsetError> {
         let lock = self.variables.lock();
         let e = lock.get(v);
-        let (first_bound, upper_bound, res) = match &*e {
+        let (first_bound, upper_bound, res, quantified_kind) = match &*e {
             Variable::Quantified {
                 quantified: _,
                 bounds,
-                ..
             }
             | Variable::Unwrap(bounds) => (
                 bounds.lower.first().cloned(),
@@ -1997,6 +2015,11 @@ impl Solver {
                 } else {
                     Ok(())
                 },
+                if let Variable::Quantified { quantified, .. } = &*e {
+                    Some(quantified.kind())
+                } else {
+                    None
+                },
             ),
             _ => return Ok(()),
         };
@@ -2005,21 +2028,35 @@ impl Solver {
         let res = res.and_then(|_| {
             upper_bound.map_or(Ok(()), |upper_bound| is_subset(&bound, &upper_bound))
         });
-        let new_bound = if res.is_ok() {
-            self.get_new_bound(first_bound, bound, is_subset)
-        } else {
-            // TODO(https://github.com/facebook/pyrefly/issues/105): don't throw away the bound.
-            NewBound::AddBound(Type::any_error())
+        let new_bound = match (res.is_ok(), quantified_kind) {
+            (true, Some(QuantifiedKind::IntVar)) => Some(
+                self.get_new_bound(
+                    first_bound,
+                    // `validate_bound_consistency` accepted this bound, so the
+                    // same IntVar normalization must succeed before storing it.
+                    type_as_intvar_solution(&bound)
+                        .expect("successful IntVar lower-bound check must normalize"),
+                    false,
+                    is_subset,
+                ),
+            ),
+            (true, _) => Some(self.get_new_bound(first_bound, bound, false, is_subset)),
+            (false, Some(QuantifiedKind::IntVar)) => None,
+            (false, _) => {
+                // TODO(https://github.com/facebook/pyrefly/issues/105): don't throw away the bound.
+                Some(NewBound::AddBound(Type::any_error()))
+            }
         };
         let lock = self.variables.lock();
-        match &mut *lock.get_mut(v) {
-            Variable::Quantified {
-                quantified: _,
-                bounds,
-                ..
+        if let Some(new_bound) = new_bound {
+            match &mut *lock.get_mut(v) {
+                Variable::Quantified {
+                    quantified: _,
+                    bounds,
+                }
+                | Variable::Unwrap(bounds) => self.add_bound(&mut bounds.lower, new_bound),
+                _ => {}
             }
-            | Variable::Unwrap(bounds) => self.add_bound(&mut bounds.lower, new_bound),
-            _ => {}
         }
         res
     }
@@ -2032,11 +2069,10 @@ impl Solver {
     ) -> Result<(), SubsetError> {
         let lock = self.variables.lock();
         let e = lock.get(v);
-        let (first_bound, lower_bound, res) = match &*e {
+        let (first_bound, lower_bound, res, quantified_kind) = match &*e {
             Variable::Quantified {
                 quantified: _,
                 bounds,
-                ..
             }
             | Variable::Unwrap(bounds) => (
                 bounds.upper.first().cloned(),
@@ -2046,6 +2082,11 @@ impl Solver {
                 } else {
                     Ok(())
                 },
+                if let Variable::Quantified { quantified, .. } = &*e {
+                    Some(quantified.kind())
+                } else {
+                    None
+                },
             ),
             _ => return Ok(()),
         };
@@ -2054,21 +2095,35 @@ impl Solver {
         let res = res.and_then(|_| {
             lower_bound.map_or(Ok(()), |lower_bound| is_subset(&lower_bound, &bound))
         });
-        let new_bound = if res.is_ok() {
-            self.get_new_bound(first_bound, bound, is_subset)
-        } else {
-            // TODO(https://github.com/facebook/pyrefly/issues/105): don't throw away the bound.
-            NewBound::AddBound(Type::any_error())
+        let new_bound = match (res.is_ok(), quantified_kind) {
+            (true, Some(QuantifiedKind::IntVar)) => Some(
+                self.get_new_bound(
+                    first_bound,
+                    // `validate_bound_consistency` accepted this bound, so the
+                    // same IntVar normalization must succeed before storing it.
+                    type_as_intvar_solution(&bound)
+                        .expect("successful IntVar upper-bound check must normalize"),
+                    true,
+                    is_subset,
+                ),
+            ),
+            (true, _) => Some(self.get_new_bound(first_bound, bound, true, is_subset)),
+            (false, Some(QuantifiedKind::IntVar)) => None,
+            (false, _) => {
+                // TODO(https://github.com/facebook/pyrefly/issues/105): don't throw away the bound.
+                Some(NewBound::AddBound(Type::any_error()))
+            }
         };
         let lock = self.variables.lock();
-        match &mut *lock.get_mut(v) {
-            Variable::Quantified {
-                quantified: _,
-                bounds,
-                ..
+        if let Some(new_bound) = new_bound {
+            match &mut *lock.get_mut(v) {
+                Variable::Quantified {
+                    quantified: _,
+                    bounds,
+                }
+                | Variable::Unwrap(bounds) => self.add_bound(&mut bounds.upper, new_bound),
+                _ => {}
             }
-            | Variable::Unwrap(bounds) => self.add_bound(&mut bounds.upper, new_bound),
-            _ => {}
         }
         res
     }
@@ -2117,93 +2172,39 @@ impl Solver {
         }
     }
 
-    pub(crate) fn record_generic_residuals_for_witness(&self, witness: &ResidualWitnessContext) {
-        let lock = self.variables.lock();
-        for &var in witness
-            .origin_vars
-            .iter()
-            .chain(witness.deferred_vars.iter())
-        {
-            let mut variable = lock.get_mut(var);
-            if let Variable::Quantified { residuals, .. } = &mut *variable
-                && !residuals.contains(&witness.identity)
-            {
-                residuals.push(witness.identity.clone());
-            }
-        }
-    }
-
-    /// Record per-var overload residuals from full branch captures.
-    /// Decomposes each branch's full capture into per-var entries.
-    pub(crate) fn record_overload_residuals_for_witness(
+    fn materialize_overload_residual_branch_value(
         &self,
-        witness: &ResidualWitnessContext,
-        branch_captures: Vec<OverloadBranchCapture>,
-    ) {
-        let shared_witness = Arc::new(OverloadResidualWitness {
-            identity: witness.identity.clone(),
-        });
-        let lock = self.variables.lock();
-        for &var in witness
-            .origin_vars
-            .iter()
-            .chain(witness.deferred_vars.iter())
-        {
-            let mut variable = lock.get_mut(var);
-            if let Variable::Quantified {
-                overload_residuals, ..
-            } = &mut *variable
-            {
-                let branches: Vec<OverloadVarBranchCapture> = branch_captures
-                    .iter()
-                    .filter_map(|capture| {
-                        capture
-                            .values
-                            .get(&var)
-                            .map(|value| OverloadVarBranchCapture {
-                                branch_index: capture.branch_index,
-                                value: value.clone(),
-                            })
-                    })
-                    .collect();
-                if !branches.is_empty() {
-                    overload_residuals.push(OverloadResidualForVar {
-                        witness: shared_witness.clone(),
-                        branches,
-                    });
+        value: &Variable,
+        has_generic_residual: bool,
+    ) -> Type {
+        match value {
+            Variable::Answer(ty) | Variable::ResidualAnswer { ty, .. } => ty.clone(),
+            Variable::Quantified { quantified, bounds } => {
+                if let Some(bound) = self.solve_bounds(bounds.clone()) {
+                    return bound;
                 }
+                if has_generic_residual {
+                    return Type::callable_residual_generic(quantified.clone());
+                }
+                quantified.as_gradual_type()
+            }
+            Variable::PartialQuantified(q) => q.as_gradual_type(),
+            Variable::PartialContained(_) | Variable::Recursive => self.heap.mk_any_implicit(),
+            Variable::Unwrap(_) => {
+                unreachable!("overload residual capture should not include Unwrap vars")
             }
         }
     }
 
-    fn merge_residual_candidates(
-        left: &mut Vec<ResidualIdentity>,
-        right: &mut Vec<ResidualIdentity>,
-    ) {
-        for residual in mem::take(right) {
-            if !left.contains(&residual) {
-                left.push(residual);
-            }
-        }
-        *right = left.clone();
-    }
-
-    fn materialize_generic_residual_type(&self, q: &Quantified) -> Type {
-        Type::CallableResidual(Box::new(CallableResidual {
-            kind: CallableResidualKind::Generic {
-                quantified: q.clone(),
-            },
-        }))
-    }
-
-    fn materialize_overload_residual_type(
+    /// Materialize an overload residual type for a single var from branch captures.
+    fn materialize_overload_residual(
         &self,
-        residual: &OverloadResidualForVar,
+        witness_hash: u64,
+        var: Var,
+        branch_captures: &[OverloadBranchCapture],
         overload_pruning_by_witness: &OverloadPruningByWitness,
     ) -> Type {
-        let identity = OverloadResidualIdentity {
-            witness_hash: residual.witness.identity.witness_hash,
-        };
+        let identity = OverloadResidualIdentity { witness_hash };
         let pruning_decision = overload_pruning_by_witness.get(&identity);
         if pruning_decision.is_some_and(|decision| decision.all_pruned) {
             // All candidate branches were pruned for this witness.
@@ -2213,26 +2214,25 @@ impl Solver {
         let surviving_branch_indices = pruning_decision
             .map(|decision| decision.surviving_branch_indices.clone())
             .unwrap_or_else(|| {
-                residual
-                    .branches
+                branch_captures
                     .iter()
-                    .map(|branch| branch.branch_index)
+                    .filter(|capture| capture.values.contains_key(&var))
+                    .map(|capture| capture.branch_index)
                     .collect()
             });
-        let surviving_branches = residual
-            .branches
+        let surviving_branches = branch_captures
             .iter()
-            .filter(|branch| surviving_branch_indices.contains(&branch.branch_index))
-            .map(|branch| {
-                let mut ty = self.materialize_overload_residual_branch_value(
-                    &branch.value,
-                    overload_pruning_by_witness,
-                );
-                self.flatten_overload_residual_markers(&mut ty);
-                OverloadBranchProjection {
-                    branch_index: branch.branch_index,
+            .filter(|capture| surviving_branch_indices.contains(&capture.branch_index))
+            .filter_map(|capture| {
+                let value = capture.values.get(&var)?;
+                let has_generic_residual = capture.generic_residual_vars.contains(&var);
+                let mut ty =
+                    self.materialize_overload_residual_branch_value(value, has_generic_residual);
+                ty.flatten_overload_residual_markers(&self.heap);
+                Some(OverloadBranchProjection {
+                    branch_index: capture.branch_index,
                     ty,
-                }
+                })
             })
             .collect::<Vec<_>>();
         match surviving_branches.len() {
@@ -2260,50 +2260,8 @@ impl Solver {
                 {
                     first_ty
                 } else {
-                    Type::CallableResidual(Box::new(CallableResidual {
-                        kind: CallableResidualKind::Overload {
-                            identity,
-                            branches: surviving_branches,
-                        },
-                    }))
+                    Type::callable_residual_overload(identity, surviving_branches)
                 }
-            }
-        }
-    }
-
-    fn materialize_overload_residual_branch_value(
-        &self,
-        value: &Variable,
-        overload_pruning_by_witness: &OverloadPruningByWitness,
-    ) -> Type {
-        match value {
-            Variable::Answer(ty) | Variable::ResidualAnswer { ty, .. } => ty.clone(),
-            Variable::Quantified {
-                quantified,
-                bounds,
-                residuals,
-                overload_residuals,
-            } => {
-                if let Some(bound) = self.solve_bounds(bounds.clone()) {
-                    return bound;
-                }
-                if overload_residuals.len() == 1 {
-                    return self.materialize_overload_residual_type(
-                        overload_residuals.first().expect(
-                            "overload_residuals.len() == 1 must provide one overload residual",
-                        ),
-                        overload_pruning_by_witness,
-                    );
-                }
-                if residuals.len() == 1 {
-                    return self.materialize_generic_residual_type(quantified);
-                }
-                quantified.as_gradual_type()
-            }
-            Variable::PartialQuantified(q) => q.as_gradual_type(),
-            Variable::PartialContained(_) | Variable::Recursive => self.heap.mk_any_implicit(),
-            Variable::Unwrap(_) => {
-                unreachable!("overload residual capture should not include Unwrap vars")
             }
         }
     }
@@ -2322,31 +2280,65 @@ impl Solver {
                 return is_subset(branch_ty, solved_ty).is_ok()
                     && is_subset(solved_ty, branch_ty).is_ok();
             }
-            Variable::PartialQuantified(_)
-            | Variable::PartialContained(_)
-            | Variable::Recursive => {
+            Variable::PartialQuantified(q) => {
+                let answer = normalize_answer_for_kind(q.kind(), Cow::Borrowed(solved_ty));
+                *branch_value = Variable::Answer(answer);
+                return true;
+            }
+            Variable::PartialContained(_) | Variable::Recursive => {
                 // During the overload branch probe, the captured Quantified var
                 // was unified with a partial/recursive var. Pin it to the solved
-                // type so downstream materialization sees a concrete answer.
+                // type so downstream materialization sees a concrete answer. These
+                // vars do not retain a QuantifiedKind, so any IntVar answer was
+                // already normalized before capture.
                 *branch_value = Variable::Answer(solved_ty.clone());
                 return true;
             }
         };
-        bounds
-            .lower
-            .iter()
-            .all(|lower| is_subset(lower, solved_ty).is_ok())
-            && bounds
-                .upper
-                .iter()
-                .all(|upper| is_subset(solved_ty, upper).is_ok())
+        // The captured bounds may reference self-referential vars; sanitize them before testing
+        // compatibility so a degenerate cycle does not spuriously prune a valid branch.
+        bounds.lower.iter().all(|lower| {
+            let sanitized = self.sanitize_self_referential_vars(lower, solved_ty);
+            is_subset(sanitized.as_ref().unwrap_or(lower), solved_ty).is_ok()
+        }) && bounds.upper.iter().all(|upper| {
+            let sanitized = self.sanitize_self_referential_vars(upper, solved_ty);
+            is_subset(solved_ty, sanitized.as_ref().unwrap_or(upper)).is_ok()
+        })
     }
 
-    fn quantified_name_for_payload_var(
+    /// Replace any placeholder var whose answer mentions the var itself with the solved type.
+    fn sanitize_self_referential_vars(&self, ty: &Type, solved_ty: &Type) -> Option<Type> {
+        let vars = ty.collect_maybe_placeholder_vars();
+        if vars.is_empty() {
+            return None;
+        }
+        let self_referential: Vec<Var> = {
+            let variables = self.variables.lock();
+            vars.into_iter()
+                .filter(|v| {
+                    matches!(&*variables.get(*v), Variable::Answer(answer)
+                        if answer.collect_maybe_placeholder_vars().contains(v))
+                })
+                .collect()
+        };
+        if self_referential.is_empty() {
+            return None;
+        }
+        let mut ty = ty.clone();
+        ty.transform_mut(&mut |inner| {
+            if let Type::Var(v) = inner
+                && self_referential.contains(v)
+            {
+                *inner = solved_ty.clone();
+            }
+        });
+        Some(ty)
+    }
+
+    fn quantified_name_for_var(
         &self,
         branch_value: &Variable,
         existing_name: Option<Name>,
-        _var: Var,
     ) -> Name {
         existing_name
             .or_else(|| match branch_value {
@@ -2359,119 +2351,11 @@ impl Solver {
 
     fn compute_overload_pruning_by_witness(
         &self,
-        solved_vars_with_residuals: &mut [SolvedVarWithResiduals],
+        solved_vars: &SmallMap<Var, SolvedVarInfo>,
+        overload_witness_captures: &mut OverloadWitnessCapturesByHash,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> OverloadPruningByWitness {
-        let mut all_branch_indices_by_witness: HashMap<OverloadResidualIdentity, SmallSet<usize>> =
-            HashMap::new();
-        let mut surviving_branch_indices_by_witness: HashMap<
-            OverloadResidualIdentity,
-            SmallSet<usize>,
-        > = HashMap::new();
-        let mut solved_constraints_by_witness: HashMap<
-            OverloadResidualIdentity,
-            Vec<OverloadSolvedConstraint>,
-        > = HashMap::new();
-
-        for solved_var in solved_vars_with_residuals {
-            let mut surviving_per_witness_for_solved_var: HashMap<
-                OverloadResidualIdentity,
-                SmallSet<usize>,
-            > = HashMap::new();
-            for residual in &mut solved_var.overload_residuals {
-                let identity = OverloadResidualIdentity {
-                    witness_hash: residual.witness.identity.witness_hash,
-                };
-                let all_branch_indices = all_branch_indices_by_witness
-                    .entry(identity.clone())
-                    .or_default();
-                let solved_constraints_for_witness = solved_constraints_by_witness
-                    .entry(identity.clone())
-                    .or_default();
-                if !solved_constraints_for_witness
-                    .iter()
-                    .any(|constraint| constraint.quantified_name == solved_var.quantified_name)
-                {
-                    solved_constraints_for_witness.push(OverloadSolvedConstraint {
-                        quantified_name: solved_var.quantified_name.clone(),
-                        solved_ty: solved_var.solved_ty.clone(),
-                    });
-                }
-                let surviving_for_solved_var = surviving_per_witness_for_solved_var
-                    .entry(identity.clone())
-                    .or_default();
-                for branch in &mut residual.branches {
-                    all_branch_indices.insert(branch.branch_index);
-                    if self.branch_bounds_compatibility_check(
-                        &mut branch.value,
-                        &solved_var.solved_ty,
-                        is_subset,
-                    ) {
-                        surviving_for_solved_var.insert(branch.branch_index);
-                    }
-                }
-            }
-            for (identity, surviving_for_solved_var) in surviving_per_witness_for_solved_var {
-                if let Some(existing_surviving) =
-                    surviving_branch_indices_by_witness.get_mut(&identity)
-                {
-                    existing_surviving.retain(|idx| surviving_for_solved_var.contains(idx));
-                } else {
-                    surviving_branch_indices_by_witness.insert(identity, surviving_for_solved_var);
-                }
-            }
-        }
-
-        all_branch_indices_by_witness
-            .into_keys()
-            .map(|identity| {
-                let surviving_branch_indices = surviving_branch_indices_by_witness
-                    .get(&identity)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        unreachable!(
-                            "all observed overload residual witnesses must have surviving candidates"
-                        )
-                    });
-                let all_pruned = surviving_branch_indices.is_empty();
-                let all_pruned_cause = if all_pruned {
-                    let mut solved_constraints = solved_constraints_by_witness
-                        .get(&identity)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            unreachable!(
-                                "all-pruned witness decisions must include solved constraints"
-                            )
-                        });
-                    solved_constraints
-                        .sort_by(|left, right| left.quantified_name.cmp(&right.quantified_name));
-                    Some(
-                        OverloadAllPrunedCause {
-                            solved_constraints,
-                        },
-                    )
-                } else {
-                    None
-                };
-                (
-                    identity,
-                    OverloadWitnessPruningDecision {
-                        surviving_branch_indices: surviving_branch_indices.clone(),
-                        all_pruned,
-                        all_pruned_cause,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    fn compute_overload_pruning_by_witness_from_payloads(
-        &self,
-        solved_vars_by_payload: &SmallMap<Var, SolvedVarByPayload>,
-        overload_witness_payloads: &mut OverloadWitnessPayloadByHash,
-        is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-    ) -> OverloadPruningByWitness {
-        overload_witness_payloads
+        overload_witness_captures
             .iter_mut()
             .filter_map(|(witness_hash, branch_captures)| {
                 let identity = OverloadResidualIdentity {
@@ -2479,7 +2363,7 @@ impl Solver {
                 };
                 let mut surviving_by_witness: Option<SmallSet<usize>> = None;
                 let mut solved_constraints = Vec::new();
-                for (var, solved_var) in solved_vars_by_payload {
+                for (var, solved_var) in solved_vars {
                     let mut surviving_for_solved_var = SmallSet::new();
                     let mut saw_var_in_witness = false;
                     for capture in branch_captures.iter_mut() {
@@ -2502,10 +2386,9 @@ impl Solver {
                         .iter()
                         .find_map(|capture| {
                             capture.values.get(var).map(|branch_value| {
-                                self.quantified_name_for_payload_var(
+                                self.quantified_name_for_var(
                                     branch_value,
                                     solved_var.quantified_name.clone(),
-                                    *var,
                                 )
                             })
                         })
@@ -2538,10 +2421,8 @@ impl Solver {
             .collect()
     }
 
-    // Quantified finishing entrypoints. Keep these together so callsites can
-    // choose the right mode (no-pruning vs pruning) without hunting around.
-    ///
-    /// Finish a specific quantified set without pruning overload branches.
+    /// Finish a specific quantified set, resolving type variables to their
+    /// solved types or gradual fallbacks.
     ///
     /// Called after a quantified function has been called. Given
     /// `def f[T](x: int): list[T]`, this runs after generic solving completes.
@@ -2550,69 +2431,50 @@ impl Solver {
     /// empty-container partial type and may be pinned by first use.
     /// If `infer_with_first_use` is false, unresolved `T` is replaced with
     /// gradual (`Any`-like) fallback.
-    pub fn finish_quantified(
-        &self,
-        vs: QuantifiedHandle,
-        infer_with_first_use: bool,
-    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        self.finish_quantified_with_subset(vs, infer_with_first_use, &mut |_got, _want| Ok(()))
-    }
-
-    /// Finish a specific quantified set with overload pruning checks driven by
-    /// the given `TypeOrder`.
     ///
-    /// Useful in call/callable paths where we already have a type-order
-    /// context and want pruning decisions to use that same subset relation.
-    pub fn finish_quantified_with_type_order<Ans: LookupAnswer>(
+    /// If `call_context` is provided, tracked fresh vars and overload witness
+    /// captures are drained from it and included in the finishing set.
+    pub fn finish_quantified<Ans: LookupAnswer>(
         &self,
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
         type_order: TypeOrder<Ans>,
+        call_context: Option<&CallContext>,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        let mut subset = self.subset(type_order);
-        self.finish_quantified_with_subset(vs, infer_with_first_use, &mut |got, want| {
-            subset.is_subset_eq_probe_for_pruning(got, want)
-        })
-    }
-
-    /// Finish quantified vars at a call boundary by consuming tracked fresh
-    /// quantified vars from `CallContext`, then finishing the reachable
-    /// quantified closure from explicit roots plus tracked roots.
-    pub fn finish_quantified_with_type_order_and_call_context<Ans: LookupAnswer>(
-        &self,
-        vs: QuantifiedHandle,
-        infer_with_first_use: bool,
-        type_order: TypeOrder<Ans>,
-        call_context: &CallContext,
-    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        let tracked_fresh_vars = call_context.take_deferred_quantified_vars();
-        let mut overload_witness_payloads = call_context.take_overload_witness_payloads();
-        call_context.mark_boundary_consumed_and_drained();
-        let payload_vars: SmallSet<Var> = overload_witness_payloads
-            .values()
-            .flat_map(|branch_captures| branch_captures.iter())
-            .flat_map(|capture| capture.values.keys().copied())
-            .collect();
-        let mut roots: SmallSet<Var> = vs.0.into_iter().collect();
-        roots.extend(tracked_fresh_vars.0);
-        // Solve boundaries explicitly own fresh quantified tracking. We finish
-        // the exact boundary set (explicit roots + fresh vars + payload vars),
-        // rather than using reachability expansion that can miss or overreach.
-        let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
-        // Payload-driven overload pruning must include solved vars even if they
-        // already collapsed to `Answer` before boundary finishing.
-        all_boundary_vars.extend(payload_vars);
-        all_boundary_vars.sort_unstable();
-        all_boundary_vars.dedup();
-        if all_boundary_vars.is_empty() {
+        let (vs, mut captures) = if let Some(cc) = call_context {
+            let tracked_fresh_vars = cc.take_deferred_quantified_vars();
+            let captures = cc.take_witness_captures();
+            cc.mark_boundary_consumed_and_drained();
+            let overload_capture_vars: SmallSet<Var> = captures
+                .overload
+                .values()
+                .flat_map(|branch_captures| branch_captures.iter())
+                .flat_map(|capture| capture.values.keys().copied())
+                .collect();
+            let mut roots: SmallSet<Var> = vs.0.into_iter().collect();
+            roots.extend(tracked_fresh_vars.0);
+            // Solve boundaries explicitly own fresh quantified tracking. We finish
+            // the exact boundary set (explicit roots + fresh vars + overload capture vars),
+            // rather than using reachability expansion that can miss or overreach.
+            let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
+            // Overload pruning must include solved vars even if they
+            // already collapsed to `Answer` before boundary finishing.
+            all_boundary_vars.extend(overload_capture_vars);
+            all_boundary_vars.sort_unstable();
+            all_boundary_vars.dedup();
+            (QuantifiedHandle(all_boundary_vars), captures)
+        } else {
+            (vs, WitnessCaptures::default())
+        };
+        if vs.0.is_empty() {
             return Ok(());
         }
         let mut subset = self.subset(type_order);
-        self.finish_quantified_with_subset_and_payloads(
-            QuantifiedHandle(all_boundary_vars),
+        self.finish_quantified_with_pruning(
+            vs,
             infer_with_first_use,
             &mut |got, want| subset.is_subset_eq_probe_for_pruning(got, want),
-            Some(&mut overload_witness_payloads),
+            &mut captures,
         )
     }
 
@@ -2621,37 +2483,54 @@ impl Solver {
     ///
     /// Useful at boundaries where the caller has a type but not an explicit
     /// quantified handle.
-    pub fn finish_all_quantified(&self, ty: &Type) -> Result<(), Vec1<TypeVarSpecializationError>> {
+    pub fn finish_all_quantified<Ans: LookupAnswer>(
+        &self,
+        ty: &Type,
+        type_order: TypeOrder<Ans>,
+    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let vs = QuantifiedHandle(ty.collect_maybe_placeholder_vars());
-        self.finish_quantified(vs, self.infer_with_first_use)
+        self.finish_quantified(vs, self.infer_with_first_use, type_order, None)
     }
 
-    /// Core quantified-finishing implementation used by all wrappers.
+    /// Find the unique generic witness capture whose `witness_vars` share a
+    /// union-find root with `v`. Returns `None` if zero or multiple captures match
+    /// (ambiguous matches cannot produce a residual).
+    fn find_unique_generic_witness(
+        &self,
+        v: Var,
+        captures: &[GenericWitnessCapture],
+        root_map: &SmallMap<Var, Var>,
+    ) -> Option<SmallSet<Var>> {
+        let v_root = root_map.get(&v).copied().unwrap_or(v);
+        let mut found = None;
+        for c in captures {
+            if c.witness_vars
+                .iter()
+                .any(|wv| root_map.get(wv).copied().unwrap_or(*wv) == v_root)
+            {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(c.target_vars.clone());
+            }
+        }
+        found
+    }
+
+    /// Core quantified-finishing implementation.
     ///
     /// The injected `is_subset` callback controls whether/how overload branch
     /// pruning compatibility is checked.
-    pub(crate) fn finish_quantified_with_subset(
+    fn finish_quantified_with_pruning(
         &self,
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        self.finish_quantified_with_subset_and_payloads(vs, infer_with_first_use, is_subset, None)
-    }
-
-    fn finish_quantified_with_subset_and_payloads(
-        &self,
-        vs: QuantifiedHandle,
-        infer_with_first_use: bool,
-        is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-        overload_witness_payloads: Option<&mut OverloadWitnessPayloadByHash>,
+        captures: &mut WitnessCaptures,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let mut err = Vec::new();
-        let use_payload_pruning = overload_witness_payloads
-            .as_ref()
-            .is_some_and(|payloads| !payloads.is_empty());
+        let has_overload_captures = !captures.overload.is_empty();
         let mut solved_quantified_names_by_var: SmallMap<Var, Name> = SmallMap::new();
-        let mut solved_vars_with_residuals = Vec::new();
         let lock = self.variables.lock();
         for &v in &vs.0 {
             let mut variable = lock.get_mut(v);
@@ -2666,29 +2545,16 @@ impl Solver {
                 Variable::Quantified {
                     quantified: q,
                     bounds,
-                    overload_residuals,
-                    ..
                 } => {
                     if let Some(e) = self.instantiation_errors.read().get(&v) {
                         err.push(e.clone());
                     }
                     let original_bounds = mem::take(bounds);
                     if let Some(bound) = self.solve_bounds(original_bounds.clone()) {
-                        let quantified_name = q.name().clone();
-                        let solved_ty = bound.clone();
-                        let captured_overload_residuals =
-                            (!use_payload_pruning).then(|| overload_residuals.clone());
-                        if use_payload_pruning {
-                            solved_quantified_names_by_var.insert(v, quantified_name.clone());
+                        if has_overload_captures {
+                            solved_quantified_names_by_var.insert(v, q.name().clone());
                         }
                         *variable = Variable::Answer(bound);
-                        if let Some(overload_residuals) = captured_overload_residuals {
-                            solved_vars_with_residuals.push(SolvedVarWithResiduals {
-                                quantified_name,
-                                solved_ty,
-                                overload_residuals,
-                            });
-                        }
                     } else {
                         *bounds = original_bounds;
                     }
@@ -2698,17 +2564,14 @@ impl Solver {
         }
         drop(lock);
 
-        let overload_pruning_by_witness = if use_payload_pruning {
-            let overload_witness_payloads = overload_witness_payloads.unwrap_or_else(|| {
-                unreachable!("payload pruning requires call-context witness payloads")
-            });
+        let overload_pruning_by_witness = if has_overload_captures {
             let lock = self.variables.lock();
-            let solved_vars_by_payload: SmallMap<Var, SolvedVarByPayload> =
+            let solved_vars: SmallMap<Var, SolvedVarInfo> =
                 vs.0.iter()
                     .filter_map(|&v| match &*lock.get(v) {
                         Variable::Answer(solved_ty) => Some((
                             v,
-                            SolvedVarByPayload {
+                            SolvedVarInfo {
                                 quantified_name: solved_quantified_names_by_var.get(&v).cloned(),
                                 solved_ty: solved_ty.clone(),
                             },
@@ -2717,13 +2580,13 @@ impl Solver {
                     })
                     .collect();
             drop(lock);
-            self.compute_overload_pruning_by_witness_from_payloads(
-                &solved_vars_by_payload,
-                overload_witness_payloads,
+            self.compute_overload_pruning_by_witness(
+                &solved_vars,
+                &mut captures.overload,
                 is_subset,
             )
         } else {
-            self.compute_overload_pruning_by_witness(&mut solved_vars_with_residuals, is_subset)
+            HashMap::new()
         };
         for decision in overload_pruning_by_witness.values() {
             if !decision.all_pruned {
@@ -2732,35 +2595,55 @@ impl Solver {
             let all_pruned_cause = decision.all_pruned_cause.as_ref().unwrap_or_else(|| {
                 unreachable!("all-pruned witness diagnostics require solved-type cause")
             });
-            let primary_constraint =
-                all_pruned_cause
-                    .solved_constraints
-                    .first()
-                    .unwrap_or_else(|| {
-                        unreachable!(
-                            "all-pruned witness diagnostics require at least one solved var"
-                        )
-                    });
-            err.push(TypeVarSpecializationError {
-                name: primary_constraint.quantified_name.clone(),
-                got: Type::never(),
-                want: primary_constraint.solved_ty.clone(),
-                error_kind: ErrorKind::IncompatibleOverloadResidual,
-                message_override: Some(format!(
-                    "Overload type was not compatible with solved type variables: {}",
-                    all_pruned_cause
-                        .solved_constraints
-                        .iter()
-                        .map(|constraint| format!(
-                            "{} = {}",
-                            constraint.quantified_name,
-                            constraint.solved_ty.clone().deterministic_printing()
-                        ))
-                        .join(", "),
-                )),
-                error: SubsetError::Other,
+            err.push(TypeVarSpecializationError::IncompatibleOverloadResidual {
+                solved_constraints: all_pruned_cause.solved_constraints.map(|constraint| {
+                    (
+                        constraint.quantified_name.clone(),
+                        constraint.solved_ty.clone(),
+                    )
+                }),
             });
         }
+
+        // Reverse map from var to its unique witness hash. If a var appears in
+        // multiple witnesses, it maps to None so we skip it — ambiguous witnesses
+        // should not produce an overload residual.
+        let var_to_witness: SmallMap<Var, Option<u64>> = {
+            let mut map: SmallMap<Var, Option<u64>> = SmallMap::new();
+            for (&wh, captures) in captures.overload.iter() {
+                for capture in captures {
+                    for &v in capture.values.keys() {
+                        match map.entry(v) {
+                            Entry::Occupied(mut e) => {
+                                if *e.get() != Some(wh) {
+                                    *e.get_mut() = None;
+                                }
+                            }
+                            Entry::Vacant(e) => {
+                                e.insert(Some(wh));
+                            }
+                        }
+                    }
+                }
+            }
+            map
+        };
+
+        // Precompute union-find roots for all vars that appear in generic
+        // residual captures, so we can match vars by equivalence class without
+        // holding a mutable borrow during the main loop.
+        let root_map: SmallMap<Var, Var> = if !captures.generic.is_empty() {
+            let lock = self.variables.lock();
+            let all_vars = vs.0.iter().copied().chain(
+                captures
+                    .generic
+                    .iter()
+                    .flat_map(|c| c.witness_vars.iter().copied()),
+            );
+            all_vars.map(|v| (v, lock.get_root(v))).collect()
+        } else {
+            SmallMap::new()
+        };
 
         let mut reported_all_pruned_witnesses = SmallSet::new();
         let lock = self.variables.lock();
@@ -2769,31 +2652,23 @@ impl Solver {
             if let Variable::Quantified {
                 quantified: q,
                 bounds,
-                residuals,
-                overload_residuals,
             } = &mut *e
             {
                 let solved_bound = self.solve_bounds(mem::take(bounds));
-                let overload_residual_candidate =
-                    if solved_bound.is_none() && overload_residuals.len() == 1 {
-                        overload_residuals.first().cloned()
-                    } else {
-                        None
-                    };
-                let overload_all_pruned =
-                    overload_residual_candidate
-                        .as_ref()
-                        .is_some_and(|candidate| {
-                            let identity = OverloadResidualIdentity {
-                                witness_hash: candidate.witness.identity.witness_hash,
-                            };
-                            overload_pruning_by_witness
-                                .get(&identity)
-                                .is_some_and(|decision| decision.all_pruned)
-                        });
-                if overload_all_pruned && let Some(candidate) = overload_residual_candidate.as_ref()
-                {
-                    let witness_hash = candidate.witness.identity.witness_hash;
+
+                let witness_hash = if solved_bound.is_none() {
+                    var_to_witness.get(&v).copied().flatten()
+                } else {
+                    None
+                };
+                let overload_all_pruned = witness_hash.is_some_and(|wh| {
+                    overload_pruning_by_witness
+                        .get(&OverloadResidualIdentity { witness_hash: wh })
+                        .is_some_and(|decision| decision.all_pruned)
+                });
+
+                if overload_all_pruned {
+                    let witness_hash = witness_hash.expect("all-pruned requires a witness hash");
                     if reported_all_pruned_witnesses.insert(witness_hash) {
                         let all_pruned_cause = overload_pruning_by_witness
                             .get(&OverloadResidualIdentity { witness_hash })
@@ -2803,48 +2678,45 @@ impl Solver {
                                     "all-pruned witness diagnostics require solved-type cause"
                                 )
                             });
-                        err.push(TypeVarSpecializationError {
-                            name: q.name().clone(),
-                            got: Type::never(),
-                            want: q.as_gradual_type(),
-                            error_kind: ErrorKind::IncompatibleOverloadResidual,
-                            message_override: Some(format!(
-                                "Overload type was not compatible with solved type variables: {}",
-                                all_pruned_cause
-                                    .solved_constraints
-                                    .iter()
-                                    .map(|constraint| format!(
-                                        "{} = {}",
-                                        constraint.quantified_name,
-                                        constraint.solved_ty.clone().deterministic_printing()
-                                    ))
-                                    .join(", "),
-                            )),
-                            error: SubsetError::Other,
+                        err.push(TypeVarSpecializationError::IncompatibleOverloadResidual {
+                            solved_constraints: all_pruned_cause.solved_constraints.map(
+                                |constraint| {
+                                    (
+                                        constraint.quantified_name.clone(),
+                                        constraint.solved_ty.clone(),
+                                    )
+                                },
+                            ),
                         });
                     }
                 }
-                let residual_candidate = if solved_bound.is_none() && residuals.len() == 1 {
-                    residuals.first().cloned()
-                } else {
-                    None
-                };
+
                 *e = if let Some(bound) = solved_bound {
                     Variable::Answer(bound)
                 } else if overload_all_pruned {
                     Variable::Answer(Type::never())
-                } else if let Some(overload_residual) = overload_residual_candidate {
-                    Variable::ResidualAnswer {
-                        target_vars: overload_residual.witness.identity.target_vars.clone(),
-                        ty: self.materialize_overload_residual_type(
-                            &overload_residual,
-                            &overload_pruning_by_witness,
-                        ),
-                    }
-                } else if let Some(ResidualIdentity { target_vars, .. }) = residual_candidate {
+                } else if let Some(witness_hash) = witness_hash {
+                    let overload_captures =
+                        captures.overload.get(&witness_hash).unwrap_or_else(|| {
+                            unreachable!("overload materialization requires witness captures")
+                        });
+                    let target_vars: SmallSet<Var> = overload_captures
+                        .iter()
+                        .flat_map(|c| c.values.keys().copied())
+                        .collect();
+                    let ty = self.materialize_overload_residual(
+                        witness_hash,
+                        v,
+                        overload_captures,
+                        &overload_pruning_by_witness,
+                    );
+                    Variable::ResidualAnswer { target_vars, ty }
+                } else if let Some(target_vars) =
+                    self.find_unique_generic_witness(v, &captures.generic, &root_map)
+                {
                     Variable::ResidualAnswer {
                         target_vars,
-                        ty: self.materialize_generic_residual_type(q),
+                        ty: Type::callable_residual_generic(q.clone()),
                     }
                 } else if infer_with_first_use {
                     Variable::finished(q)
@@ -2883,8 +2755,6 @@ impl Solver {
                     Variable::Quantified {
                         quantified: param.clone(),
                         bounds: Bounds::new(),
-                        residuals: Vec::new(),
-                        overload_residuals: Vec::new(),
                     },
                 );
             }
@@ -2895,12 +2765,13 @@ impl Solver {
     /// Solve each fresh var created in freshen_class_targs. If we still have a Var, we do not
     /// yet have an instantiation, but one might come later. E.g., __new__ did not provide an
     /// instantiation, but __init__ will.
-    pub fn generalize_class_targs(&self, targs: &mut TArgs) {
+    pub fn generalize_class_targs(
+        &self,
+        targs: &mut TArgs,
+        vars_with_residual_captures: &SmallSet<Var>,
+    ) {
         // Expanding targs might require the variables lock, so do that first.
-        targs
-            .as_mut()
-            .iter_mut()
-            .for_each(|t| self.expand_vars_mut(t));
+        targs.as_mut().iter_mut().for_each(|t| self.expand_mut(t));
         let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t {
@@ -2908,13 +2779,11 @@ impl Solver {
                 if let Variable::Quantified {
                     quantified: q,
                     bounds,
-                    residuals,
-                    overload_residuals,
-                    ..
                 } = &mut *e
                     && *q == *param
                 {
-                    if bounds.is_empty() && residuals.is_empty() && overload_residuals.is_empty() {
+                    let has_residual_captures = vars_with_residual_captures.contains(v);
+                    if bounds.is_empty() && !has_residual_captures {
                         *t = param.clone().to_type(&self.heap);
                     } else if !bounds.is_empty() {
                         // If the variable has bounds, finalize its type now.
@@ -3001,7 +2870,11 @@ impl Solver {
 
     pub fn for_display(&self, t: Type) -> Type {
         let mut t = t;
-        self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new(), true, None);
+        self.resolve_vars(
+            &mut t,
+            VarExpansionPolicy::ExpandWithBounds,
+            &VarRecurser::new(),
+        );
         self.simplify_mut(&mut t);
         t.deterministic_printing()
     }
@@ -3170,34 +3043,22 @@ impl Solver {
 
     /// Is `got <: want`? If you aren't sure, return `false`.
     /// May cause partial variables to be resolved to an answer.
+    ///
+    /// If `call_context` is provided, the subset check runs with that context
+    /// active (e.g. to enable residual capture during call analysis).
     pub fn is_subset_eq<Ans: LookupAnswer>(
         &self,
         got: &Type,
         want: &Type,
         type_order: TypeOrder<Ans>,
-    ) -> Result<(), SubsetError> {
-        self.is_subset_eq_impl(got, want, type_order)
-    }
-
-    fn is_subset_eq_impl<Ans: LookupAnswer>(
-        &self,
-        got: &Type,
-        want: &Type,
-        type_order: TypeOrder<Ans>,
+        call_context: Option<&CallContext>,
     ) -> Result<(), SubsetError> {
         let mut subset = self.subset(type_order);
-        subset.is_subset_eq(got, want)
-    }
-
-    pub(crate) fn is_subset_eq_with_call_context<Ans: LookupAnswer>(
-        &self,
-        got: &Type,
-        want: &Type,
-        type_order: TypeOrder<Ans>,
-        call_context: &CallContext,
-    ) -> Result<(), SubsetError> {
-        let mut subset = self.subset(type_order);
-        subset.is_subset_eq_with_context(got, want, call_context)
+        if let Some(cc) = call_context {
+            subset.with_active_call_context(cc.clone(), |me| me.is_subset_eq(got, want))
+        } else {
+            subset.is_subset_eq(got, want)
+        }
     }
 
     pub fn is_consistent<Ans: LookupAnswer>(
@@ -3235,30 +3096,60 @@ impl Solver {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeVarSpecializationError {
-    pub name: Name,
-    pub got: Type,
-    pub want: Type,
-    pub error_kind: ErrorKind,
-    pub message_override: Option<String>,
-    #[allow(dead_code)]
-    pub error: SubsetError,
+pub enum TypeVarSpecializationError {
+    BadBoundSpecialization {
+        name: Name,
+        got: Type,
+        want: Type,
+    },
+    BadConstraintSpecialization {
+        name: Name,
+        got: Type,
+        want: Vec<Type>,
+    },
+    IncompatibleOverloadResidual {
+        solved_constraints: Vec<(Name, Type)>,
+    },
 }
 
 impl TypeVarSpecializationError {
     pub fn error_kind(&self) -> ErrorKind {
-        self.error_kind
+        match self {
+            Self::BadBoundSpecialization { .. } | Self::BadConstraintSpecialization { .. } => {
+                ErrorKind::BadSpecialization
+            }
+            Self::IncompatibleOverloadResidual { .. } => ErrorKind::IncompatibleOverloadResidual,
+        }
     }
 
     pub fn to_error_msg<Ans: LookupAnswer>(self, ans: &AnswersSolver<Ans>) -> String {
-        if let Some(message_override) = self.message_override {
-            return message_override;
+        match self {
+            Self::BadBoundSpecialization { name, got, want } => {
+                TypeCheckKind::TypeVarSpecialization(name).format_error(
+                    &ans.for_display(got),
+                    &ans.for_display(want),
+                    ans.module().name(),
+                )
+            }
+            Self::BadConstraintSpecialization { name, got, want } => {
+                format!(
+                    "`{}` is not assignable to any of constraints {} of type variable `{name}`",
+                    ans.for_display(got),
+                    want.into_iter()
+                        .map(|want| format!("`{}`", ans.for_display(want)))
+                        .join(", ")
+                )
+            }
+            Self::IncompatibleOverloadResidual { solved_constraints } => {
+                format!(
+                    "Overload type was not compatible with solved type variables: {}",
+                    solved_constraints
+                        .into_iter()
+                        .map(|(name, ty)| format!("{} = {}", name, ans.for_display(ty)))
+                        .join(", ")
+                )
+            }
         }
-        TypeCheckKind::TypeVarSpecialization(self.name).format_error(
-            &ans.for_display(self.got),
-            &ans.for_display(self.want),
-            ans.module().name(),
-        )
     }
 }
 
@@ -3398,7 +3289,11 @@ pub enum SubsetError {
     /// Errors involving arbitrary unknown fields in open TypedDicts
     OpenTypedDict(Box<OpenTypedDictSubsetError>),
     /// Tensor shape check failed
-    TensorShape(ShapeError),
+    Shape(ShapeError),
+    /// We do not currently permit ShapedArray subtyping because there is no known use case and
+    /// it would complicate the shape comparison. This is not a fundamental limitation,
+    /// just a way to keep the complexity of an experimental feature lower.
+    ShapedArraySubtyping(QName, QName),
     /// An invariant was violated - used for cases that should be unreachable when - if there is ever a bug - we
     /// would prefer to not panic and get a text location for reproducing rather than just a crash report.
     /// Note: always use `ErrorCollector::internal_error` to log internal errors.
@@ -3407,6 +3302,9 @@ pub enum SubsetError {
     TypeOfProtocolNeedsConcreteClass(Name),
     /// A `type` cannot accept special forms like `Callable`
     TypeCannotAcceptSpecialForms(SpecialForm),
+    /// A function without **kwargs is not assignable to a function with Unpack-ed TypedDict **kwargs
+    /// unless the TypedDict is closed.
+    OpenTypedDictKwargs(Name),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -3430,7 +3328,10 @@ impl SubsetError {
             }
             SubsetError::TypedDict(err) => Some(err.to_error_msg()),
             SubsetError::OpenTypedDict(err) => Some(err.to_error_msg()),
-            SubsetError::TensorShape(err) => Some(err.to_string()),
+            SubsetError::Shape(err) => Some(err.to_string()),
+            SubsetError::ShapedArraySubtyping(got, want) => Some(format!(
+                "Pyrefly does not support subtyping relationships between shaped arrays `{got}` and `{want}` at this time. If you need this, consider filing an issue."
+            )),
             SubsetError::InternalError(msg) => Some(format!("Pyrefly internal error: {msg}")),
             SubsetError::TypeOfProtocolNeedsConcreteClass(want) => Some(format!(
                 "Only concrete classes may be assigned to `type[{want}]` because `{want}` is a protocol"
@@ -3438,6 +3339,9 @@ impl SubsetError {
             SubsetError::TypeCannotAcceptSpecialForms(form) => Some(format!(
                 "`type` cannot accept special form `{}` as an argument",
                 form
+            )),
+            SubsetError::OpenTypedDictKwargs(td) => Some(format!(
+                "Callable without `**kwargs` cannot be assigned to callable with `**kwargs: Unpack[{td}]`, because `{td}` is not closed and may have additional unknown keys"
             )),
             SubsetError::Other => None,
         }
@@ -3490,8 +3394,9 @@ pub(crate) enum SubsetCacheContext {
 }
 
 // The context in which we are collecting residuals.
-// - The `identity` is the particular Forall type that appeared as an argument
-//   in a higher-order call
+// - The `witness_hash` identifies the particular Forall type that appeared as
+//   an argument in a higher-order call
+// - The `target_vars` are vars allowed to observe the residualized answer
 // - The `origin_vars` are `Vars` that correspond to scoped type parameters
 //   inside of that argument (the "origin" of the generic behavior)
 // - The `deferred_vars` are `Vars` that correspond to call-scope vars from
@@ -3502,15 +3407,55 @@ pub(crate) enum SubsetCacheContext {
 // TODO(stroxler): Rethink the names of fields here. It would be difficult to restack.
 #[derive(Clone, Debug)]
 pub struct ResidualWitnessContext {
-    identity: ResidualIdentity,
+    witness_hash: u64,
+    /// Vars that are allowed to observe the residualized answer for this candidate.
+    target_vars: SmallSet<Var>,
     argument_side: ArgumentSide,
     origin_vars: SmallSet<Var>,
     deferred_vars: SmallSet<Var>,
 }
 
 impl ResidualWitnessContext {
+    fn type_witness_hash(ty: &Type) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        ty.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Build a witness for a Forall instantiation during subset checking.
+    pub fn for_forall(
+        got: &Type,
+        vars: &QuantifiedHandle,
+        want: &Type,
+        argument_side: ArgumentSide,
+    ) -> Self {
+        let mut target_vars: SmallSet<Var> =
+            want.collect_maybe_placeholder_vars().into_iter().collect();
+        target_vars.extend(vars.0.iter().copied());
+        Self {
+            witness_hash: Self::type_witness_hash(got),
+            target_vars,
+            argument_side,
+            origin_vars: vars.0.iter().copied().collect(),
+            deferred_vars: SmallSet::new(),
+        }
+    }
+
+    /// Build a witness for an overload residual during subset checking.
+    pub fn for_overload(got: &Type, eligible_vars: &[Var], argument_side: ArgumentSide) -> Self {
+        let target_vars: SmallSet<Var> = eligible_vars.iter().copied().collect();
+        let origin_vars = target_vars.clone();
+        Self {
+            witness_hash: Self::type_witness_hash(got),
+            target_vars,
+            argument_side,
+            origin_vars,
+            deferred_vars: SmallSet::new(),
+        }
+    }
+
     pub(crate) fn witness_hash(&self) -> u64 {
-        self.identity.witness_hash
+        self.witness_hash
     }
 
     fn capture_candidate_vars(&self) -> SmallSet<Var> {
@@ -3526,14 +3471,14 @@ impl ResidualWitnessContext {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CallContext {
     witness: Option<ResidualWitnessContext>,
     argument_side: ArgumentSide,
     deferred_quantified_vars: Arc<Mutex<SmallSet<Var>>>,
-    /// Invariant: payload entries are scoped to this call-context lineage and
-    /// must not leak across `with_outside_call_context` boundaries.
-    overload_witness_payloads: Arc<Mutex<OverloadWitnessPayloadByHash>>,
+    /// Witness captures scoped to this call-context lineage. Must not leak
+    /// across `with_outside_context` boundaries.
+    witness_captures: Arc<Mutex<WitnessCaptures>>,
     /// Whether this context must be consumed at a solve boundary.
     require_boundary_consumption: Arc<AtomicBool>,
     /// Whether deferred state from this context lineage was consumed/drained.
@@ -3546,7 +3491,7 @@ impl Default for CallContext {
             witness: None,
             argument_side: ArgumentSide::default(),
             deferred_quantified_vars: Arc::new(Mutex::new(SmallSet::new())),
-            overload_witness_payloads: Arc::new(Mutex::new(SmallMap::new())),
+            witness_captures: Default::default(),
             require_boundary_consumption: Arc::new(AtomicBool::new(false)),
             boundary_consumed_and_drained: Arc::new(AtomicBool::new(false)),
         }
@@ -3558,20 +3503,37 @@ impl CallContext {
         Self::default()
     }
 
-    pub fn set_argument_side(&mut self, argument_side: ArgumentSide) {
-        self.argument_side = argument_side;
-    }
-
     pub(crate) fn register_fresh_quantified_vars(&self, vars: &[Var]) {
         let mut deferred_quantified_vars = self.deferred_quantified_vars.lock();
         deferred_quantified_vars.extend(vars.iter().copied());
     }
 
-    pub fn require_boundary_consumption(&self) {
+    pub fn with_argument_side(mut self, argument_side: ArgumentSide) -> Self {
+        self.argument_side = argument_side;
+        self
+    }
+
+    pub fn require_boundary_consumption(self) -> Self {
         self.require_boundary_consumption
             .store(true, Ordering::Relaxed);
         self.boundary_consumed_and_drained
             .store(false, Ordering::Relaxed);
+        self
+    }
+
+    pub fn with_outside_context(mut self) -> Self {
+        // Keep fresh-var tracking attached to the same boundary while
+        // temporarily disabling residual hooks. Fresh quantified vars created in
+        // this scope must still be finished when the outer boundary drains.
+        self.witness = Default::default();
+        self.argument_side = Default::default();
+        self.witness_captures = Default::default();
+        self
+    }
+
+    pub fn with_residual_witness(mut self, witness: ResidualWitnessContext) -> Self {
+        self.witness = Some(witness);
+        self
     }
 
     pub fn residual_witness(&self) -> Option<&ResidualWitnessContext> {
@@ -3580,6 +3542,10 @@ impl CallContext {
 
     pub fn residual_witness_mut(&mut self) -> Option<&mut ResidualWitnessContext> {
         self.witness.as_mut()
+    }
+
+    pub fn take_residual_witness(&mut self) -> Option<ResidualWitnessContext> {
+        self.witness.take()
     }
 
     pub(crate) fn argument_side(&self) -> ArgumentSide {
@@ -3602,7 +3568,7 @@ impl CallContext {
             // witness/polarity-sensitive side effects isolated. Most checks run
             // under Default context and keep prior cache behavior.
             SubsetCacheContext::Witness {
-                witness_hash: witness.identity.witness_hash,
+                witness_hash: witness.witness_hash,
                 argument_side: self.argument_side,
             }
         } else {
@@ -3619,9 +3585,57 @@ impl CallContext {
         )
     }
 
-    fn take_overload_witness_payloads(&self) -> OverloadWitnessPayloadByHash {
-        let mut overload_witness_payloads = self.overload_witness_payloads.lock();
-        mem::take(&mut *overload_witness_payloads)
+    fn take_witness_captures(&self) -> WitnessCaptures {
+        let mut captures = self.witness_captures.lock();
+        mem::take(&mut *captures)
+    }
+
+    /// Persist overload probe captures. Finishing consumes these captures as the
+    /// authoritative pruning source.
+    pub fn persist_overload_witness_captures(
+        &self,
+        witness_hash: u64,
+        branch_captures: Vec<OverloadBranchCapture>,
+    ) {
+        let mut captures = self.witness_captures.lock();
+        captures.overload.insert(witness_hash, branch_captures);
+    }
+
+    /// Record generic residual information from a completed witness check.
+    pub fn record_generic_residuals(&self, witness: &ResidualWitnessContext) {
+        let mut captures = self.witness_captures.lock();
+        let capture = GenericWitnessCapture {
+            witness_hash: witness.witness_hash,
+            target_vars: witness.target_vars.clone(),
+            witness_vars: witness.capture_candidate_vars(),
+        };
+        // Dedup: if an existing entry has the same (witness_hash, target_vars),
+        // merge witness_vars into it instead of pushing a new entry.
+        for existing in captures.generic.iter_mut() {
+            if existing.witness_hash == capture.witness_hash
+                && existing.target_vars == capture.target_vars
+            {
+                existing.witness_vars.extend(capture.witness_vars);
+                return;
+            }
+        }
+        captures.generic.push(capture);
+    }
+
+    /// Returns the union of all captured vars across both overload and generic
+    /// witness captures, without draining.
+    pub fn captured_vars(&self) -> SmallSet<Var> {
+        self.witness_captures.lock().captured_vars()
+    }
+
+    /// Returns the union of generic witness vars only, without draining.
+    pub fn generic_captured_vars(&self) -> SmallSet<Var> {
+        let captures = self.witness_captures.lock();
+        captures
+            .generic
+            .iter()
+            .flat_map(|c| c.witness_vars.iter().copied())
+            .collect()
     }
 
     fn mark_boundary_consumed_and_drained(&self) {
@@ -3651,8 +3665,8 @@ impl Drop for CallContext {
                 "CallContext dropped with deferred quantified vars still pending",
             );
             assert!(
-                self.overload_witness_payloads.lock().is_empty(),
-                "CallContext dropped with overload witness payloads still pending",
+                self.witness_captures.lock().is_empty(),
+                "CallContext dropped with witness captures still pending",
             );
         }
     }
@@ -3702,44 +3716,48 @@ pub struct Subset<'a, Ans: LookupAnswer> {
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
-    fn type_witness_hash(ty: &Type) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        ty.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    pub fn snapshot_witness_deferred_vars(&self) -> SmallMap<u64, SmallSet<Var>> {
+    fn snapshot_witness_deferred_vars(&self) -> SmallMap<u64, SmallSet<Var>> {
         self.witness_deferred_vars.clone()
     }
 
-    pub(crate) fn restore_witness_deferred_vars(
-        &mut self,
-        deferred_vars: SmallMap<u64, SmallSet<Var>>,
-    ) {
+    fn restore_witness_deferred_vars(&mut self, deferred_vars: SmallMap<u64, SmallSet<Var>>) {
         self.witness_deferred_vars = deferred_vars;
     }
 
-    pub(crate) fn make_forall_witness(
+    /// Run a speculative subset check used only for overload-branch pruning in
+    /// quantified finishing.
+    ///
+    /// Why this exists:
+    /// Pruning asks "would this branch be compatible with the solved type?" so we
+    /// can trim impossible overload residual branches before final materialization.
+    ///
+    /// Why we snapshot:
+    /// `is_subset_eq` is not pure - it can pin vars, refine bounds, and update
+    /// subset/protocol/witness side-state. None of those probe side effects are
+    /// semantically part of the real solve path, so we snapshot and restore the
+    /// relevant local state after each probe.
+    fn is_subset_eq_probe_for_pruning(
         &mut self,
         got: &Type,
-        vars: &QuantifiedHandle,
         want: &Type,
-    ) -> ResidualWitnessContext {
-        let argument_side = self.active_call_context.argument_side();
-        // Residual reads may happen through either side: call-visible vars from
-        // `want`, or fresh vars created by this Forall instantiation.
-        let mut target_vars: SmallSet<Var> =
-            want.collect_maybe_placeholder_vars().into_iter().collect();
-        target_vars.extend(vars.0.iter().copied());
-        ResidualWitnessContext {
-            identity: ResidualIdentity {
-                witness_hash: Self::type_witness_hash(got),
-                target_vars,
-            },
-            argument_side,
-            origin_vars: vars.0.iter().copied().collect(),
-            deferred_vars: SmallSet::new(),
-        }
+    ) -> Result<(), SubsetError> {
+        let mut vars: SmallSet<Var> = got.collect_maybe_placeholder_vars().into_iter().collect();
+        vars.extend(want.collect_maybe_placeholder_vars());
+        let vars = vars.into_iter().collect::<Vec<_>>();
+        let vars_snapshot = self.solver.snapshot_vars(&vars);
+        let cache_snapshot = self.subset_cache.clone();
+        self.subset_cache.clear();
+        let protocol_assumptions = self.class_protocol_assumptions.clone();
+        let deferred_vars = self.snapshot_witness_deferred_vars();
+        let coinductive_assumptions_used = self.coinductive_assumptions_used;
+        let result =
+            self.with_active_call_context(CallContext::outside(), |me| me.is_subset_eq(got, want));
+        self.solver.restore_vars(vars_snapshot);
+        self.subset_cache = cache_snapshot;
+        self.class_protocol_assumptions = protocol_assumptions;
+        self.restore_witness_deferred_vars(deferred_vars);
+        self.coinductive_assumptions_used = coinductive_assumptions_used;
+        result
     }
 
     pub fn is_consistent(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
@@ -3756,7 +3774,20 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         if self.gas.stop() {
             return Err(SubsetError::Other);
         }
-        if matches!(got, Type::Materialization) {
+        // Normalize before var solving so decorator metadata does not get pinned as part of a type.
+        if let Type::KwCall(call) = got {
+            let res = self.is_subset_eq(&call.return_ty, want);
+            self.gas.restore();
+            return res;
+        } else if let Type::KwCall(call) = want {
+            let res = self.is_subset_eq(got, &call.return_ty);
+            self.gas.restore();
+            return res;
+        } else if matches!(got, Type::Materialization) {
+            if is_gradual_size(want) {
+                self.gas.restore();
+                return Ok(());
+            }
             let res = self.is_subset_eq(
                 &self
                     .solver
@@ -3764,9 +3795,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .mk_class_type(self.type_order.stdlib().object().clone()),
                 want,
             );
+            self.gas.restore();
             return res;
         } else if matches!(want, Type::Materialization) {
+            if is_gradual_size(got) {
+                self.gas.restore();
+                return Ok(());
+            }
             let res = self.is_subset_eq(got, &self.solver.heap.mk_never());
+            self.gas.restore();
             return res;
         }
         let res = self.is_subset_eq_var(got, want);
@@ -3774,99 +3811,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         res
     }
 
-    pub fn is_subset_eq_with_context(
+    pub fn with_active_call_context<T>(
         &mut self,
-        got: &Type,
-        want: &Type,
-        call_context: &CallContext,
-    ) -> Result<(), SubsetError> {
-        self.with_active_call_context(call_context, |me| me.is_subset_eq(got, want))
-    }
-
-    fn with_active_call_context<T>(
-        &mut self,
-        call_context: &CallContext,
+        call_context: CallContext,
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        let old_witness = mem::replace(
-            &mut self.active_call_context.witness,
-            call_context.witness.clone(),
-        );
-        let old_argument_side = mem::replace(
-            &mut self.active_call_context.argument_side,
-            call_context.argument_side,
-        );
-        let old_deferred_quantified_vars = mem::replace(
-            &mut self.active_call_context.deferred_quantified_vars,
-            call_context.deferred_quantified_vars.clone(),
-        );
-        let old_overload_witness_payloads = mem::replace(
-            &mut self.active_call_context.overload_witness_payloads,
-            call_context.overload_witness_payloads.clone(),
-        );
-        let old_require_boundary_consumption = mem::replace(
-            &mut self.active_call_context.require_boundary_consumption,
-            call_context.require_boundary_consumption.clone(),
-        );
-        let old_boundary_consumed_and_drained = mem::replace(
-            &mut self.active_call_context.boundary_consumed_and_drained,
-            call_context.boundary_consumed_and_drained.clone(),
-        );
+        let old = mem::replace(&mut self.active_call_context, call_context);
         let res = f(self);
-        self.active_call_context.witness = old_witness;
-        self.active_call_context.argument_side = old_argument_side;
-        self.active_call_context.deferred_quantified_vars = old_deferred_quantified_vars;
-        self.active_call_context.overload_witness_payloads = old_overload_witness_payloads;
-        self.active_call_context.require_boundary_consumption = old_require_boundary_consumption;
-        self.active_call_context.boundary_consumed_and_drained = old_boundary_consumed_and_drained;
-        res
-    }
-
-    pub(crate) fn with_active_argument_side<T>(
-        &mut self,
-        argument_side: ArgumentSide,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let old_argument_side =
-            mem::replace(&mut self.active_call_context.argument_side, argument_side);
-        let res = f(self);
-        self.active_call_context.argument_side = old_argument_side;
-        res
-    }
-
-    pub(crate) fn with_active_witness_and_side<T>(
-        &mut self,
-        witness: ResidualWitnessContext,
-        argument_side: ArgumentSide,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> (T, Option<ResidualWitnessContext>) {
-        let old_witness = self.active_call_context.witness.replace(witness);
-        let old_argument_side =
-            mem::replace(&mut self.active_call_context.argument_side, argument_side);
-        let res = f(self);
-        let active_witness = self.active_call_context.witness.take();
-        self.active_call_context.witness = old_witness;
-        self.active_call_context.argument_side = old_argument_side;
-        (res, active_witness)
-    }
-
-    pub(crate) fn with_outside_call_context<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let old_witness = self.active_call_context.witness.take();
-        let old_argument_side = mem::replace(
-            &mut self.active_call_context.argument_side,
-            ArgumentSide::NotAnalyzingACall,
-        );
-        // Keep fresh-var tracking attached to the same boundary while
-        // temporarily disabling residual hooks. Fresh quantified vars created in
-        // this scope must still be finished when the outer boundary drains.
-        let old_overload_witness_payloads = mem::replace(
-            &mut self.active_call_context.overload_witness_payloads,
-            Arc::new(Mutex::new(SmallMap::new())),
-        );
-        let res = f(self);
-        self.active_call_context.witness = old_witness;
-        self.active_call_context.argument_side = old_argument_side;
-        self.active_call_context.overload_witness_payloads = old_overload_witness_payloads;
+        self.active_call_context = old;
         res
     }
 
@@ -3875,41 +3827,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         witness_hash: u64,
     ) -> Option<SmallSet<Var>> {
         self.witness_deferred_vars.shift_remove(&witness_hash)
-    }
-
-    /// Persist overload probe captures in call-context payload storage.
-    /// Finishing consumes these payloads as the authoritative pruning source
-    /// when present, with variable-backed residuals as fallback.
-    pub(crate) fn persist_overload_witness_payload(
-        &self,
-        witness_hash: u64,
-        branch_captures: Vec<OverloadBranchCapture>,
-    ) {
-        let mut payloads = self.active_call_context.overload_witness_payloads.lock();
-        payloads.insert(witness_hash, branch_captures);
-    }
-
-    pub(crate) fn active_argument_side(&self) -> ArgumentSide {
-        self.active_call_context.argument_side()
-    }
-
-    pub(crate) fn make_overload_witness(
-        &mut self,
-        got: &Type,
-        eligible_vars: &[Var],
-        argument_side: ArgumentSide,
-    ) -> ResidualWitnessContext {
-        let target_vars: SmallSet<Var> = eligible_vars.iter().copied().collect();
-        let origin_vars = target_vars.clone();
-        ResidualWitnessContext {
-            identity: ResidualIdentity {
-                witness_hash: Self::type_witness_hash(got),
-                target_vars,
-            },
-            argument_side,
-            origin_vars,
-            deferred_vars: SmallSet::new(),
-        }
     }
 
     pub(crate) fn active_overload_residual_witness(&self) -> Option<ResidualWitnessContext> {
@@ -3933,12 +3850,29 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         if !witness.origin_vars.contains(&origin_var) {
             return;
         }
-        let witness_hash = witness.identity.witness_hash;
-        let target_vars = witness.identity.target_vars.clone();
+        let witness_hash = witness.witness_hash;
+        let target_vars = witness.target_vars.clone();
         let deferred_vars = self.witness_deferred_vars.entry(witness_hash).or_default();
         for var in other.collect_maybe_placeholder_vars() {
             if target_vars.contains(&var) {
                 deferred_vars.insert(var);
+            }
+        }
+    }
+
+    fn quantified_satisfies_constraints(&mut self, q: &Quantified, constraints: &[Type]) -> bool {
+        match q.restriction() {
+            Restriction::Bound(b) => constraints.iter().any(|c| self.is_subset_eq(b, c).is_ok()),
+            Restriction::Constraints(cs) => cs.iter().all(|c1| {
+                constraints
+                    .iter()
+                    .any(|c2| self.is_subset_eq(c1, c2).is_ok())
+            }),
+            Restriction::Unrestricted => {
+                // Check if the implicit bound `object` is assignable to any of the constraints
+                constraints.iter().any(|c| {
+                    c.is_any() || matches!(c, Type::ClassType(cls) if cls.is_builtin("object"))
+                })
             }
         }
     }
@@ -3996,47 +3930,43 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 t1_p
             }
         };
-        let bound = q.bound_type(self.type_order.stdlib(), &self.solver.heap);
+        let bound = q.upper_bound(self.type_order.stdlib(), &self.solver.heap);
         // For constrained TypeVars, promote to the matching constraint type.
-        if let Restriction::Constraints(ref constraints) = q.restriction {
+        if let Restriction::Constraints(constraints) = &q.restriction {
+            if let Type::Quantified(q_t1) = t1 {
+                let err = (!self.quantified_satisfies_constraints(q_t1, constraints)).then(|| {
+                    TypeVarSpecializationError::BadConstraintSpecialization {
+                        name: q.name.clone(),
+                        got: t1.clone(),
+                        want: constraints.clone(),
+                    }
+                });
+                (t1.clone(), err)
             // Try promoted type first, then fall back to original (for literal bounds).
-            if let Some(constraint) = self.find_matching_constraint(&t1_p, constraints) {
+            } else if let Some(constraint) = self.find_matching_constraint(&t1_p, constraints) {
                 (constraint.clone(), None)
             } else if let Some(constraint) = self.find_matching_constraint(t1, constraints) {
                 (constraint.clone(), None)
-            } else if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
-                // No individual constraint matched, but the type may still
-                // be assignable to the constraint union (e.g. an abstract
-                // `AnyStr` satisfies `str | bytes`). Fall back to bound
-                // checking, mirroring the non-constraint code path.
-                if self.is_subset_eq(t1, &bound).is_err() {
-                    let specialization_error = TypeVarSpecializationError {
+            } else {
+                // `Any` falls through to here because it does not match a specific constraint.
+                let specialization_error = (!t1_p.is_any()).then(|| {
+                    TypeVarSpecializationError::BadConstraintSpecialization {
                         name: q.name().clone(),
                         got: t1_p.clone(),
-                        want: bound,
-                        error_kind: ErrorKind::BadSpecialization,
-                        message_override: None,
-                        error: err_p,
-                    };
-                    (t1_p.clone(), Some(specialization_error))
-                } else {
-                    (t1.clone(), None)
-                }
-            } else {
-                (t1_p.clone(), None)
+                        want: constraints.clone(),
+                    }
+                });
+                (t1_p.clone(), specialization_error)
             }
-        } else if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+        } else if self.is_subset_eq(&t1_p, &bound).is_err() {
             // If the promoted type fails, try again with the original type, in case the bound itself is literal.
             // This could be more optimized, but errors are rare, so this code path should not be hot.
             if self.is_subset_eq(t1, &bound).is_err() {
                 // If the original type is also an error, use the promoted type.
-                let specialization_error = TypeVarSpecializationError {
+                let specialization_error = TypeVarSpecializationError::BadBoundSpecialization {
                     name: q.name().clone(),
                     got: t1_p.clone(),
                     want: bound,
-                    error_kind: ErrorKind::BadSpecialization,
-                    message_override: None,
-                    error: err_p,
                 };
                 (t1_p.clone(), Some(specialization_error))
             } else {
@@ -4058,13 +3988,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     /// - if `f[T](x: T) -> T: ...`, then `f(1)` gets solved to `int`
     /// - if `f(x: Literal[0]): ...`, then `x = []; f(x[0])` results in `x: list[Literal[0]]`
     fn is_subset_eq_var(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
-        if let Some(witness) = self.active_call_context.residual_witness() {
-            let _ = (
-                &witness.identity,
-                &witness.origin_vars,
-                &witness.deferred_vars,
-            );
-        }
         match (got, want) {
             _ if got == want => Ok(()),
             (Type::Var(v1), Type::Var(v2)) => {
@@ -4087,35 +4010,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Variable::Quantified {
                                 quantified: _,
                                 bounds: v1_bounds,
-                                residuals: v1_residuals,
-                                overload_residuals: v1_overload_residuals,
-                            },
-                            Variable::Quantified {
-                                quantified: _,
-                                bounds: v2_bounds,
-                                residuals: v2_residuals,
-                                overload_residuals: v2_overload_residuals,
-                            },
-                        ) => {
-                            v1_bounds.extend(mem::take(v2_bounds));
-                            *v2_bounds = v1_bounds.clone();
-                            Solver::merge_residual_candidates(v1_residuals, v2_residuals);
-                            // Overload residual merge semantics (identity-aware dedupe/pruning)
-                            // are not wired yet; for now keep all captured candidates.
-                            v1_overload_residuals.extend(mem::take(v2_overload_residuals));
-                            *v2_overload_residuals = v1_overload_residuals.clone();
-                        }
-                        (
-                            Variable::Quantified {
-                                quantified: _,
-                                bounds: v1_bounds,
-                                ..
                             }
                             | Variable::Unwrap(v1_bounds),
                             Variable::Quantified {
                                 quantified: _,
                                 bounds: v2_bounds,
-                                ..
                             }
                             | Variable::Unwrap(v2_bounds),
                         ) => {
@@ -4162,6 +4061,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     drop(variables);
                     self.is_subset_eq(&t1, want)
                 } else {
+                    if let Some((x, y)) =
+                        intvar_typevar_unify_order(*v1, &variable1, *v2, &variable2)
+                    {
+                        drop(variable1);
+                        drop(variable2);
+                        variables.unify(x, y);
+                        return Ok(());
+                    }
+
                     match (&*variable1, &*variable2) {
                         // When both variables are quantified, we need to preserve the stricter bound.
                         // The `unify` function preserves the Variable data from its second argument,
@@ -4170,25 +4078,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Variable::Quantified {
                                 quantified: q1,
                                 bounds: _,
-                                ..
                             },
                             Variable::Quantified {
                                 quantified: q2,
                                 bounds: _,
-                                ..
                             },
                         )
                         | (Variable::PartialQuantified(q1), Variable::PartialQuantified(q2)) => {
                             let r1_restricted = q1.restriction().is_restricted();
                             let r2_restricted = q2.restriction().is_restricted();
-                            let b1 = q1.bound_type(self.type_order.stdlib(), &self.solver.heap);
-                            let b2 = q2.bound_type(self.type_order.stdlib(), &self.solver.heap);
+                            let b1 = q1.upper_bound(self.type_order.stdlib(), &self.solver.heap);
+                            let b2 = q2.upper_bound(self.type_order.stdlib(), &self.solver.heap);
                             drop(variable1);
                             drop(variable2);
 
                             match (r1_restricted, r2_restricted) {
                                 (false, false) => {
-                                    // Neither has a restriction, order doesn't matter
                                     variables.unify(*v1, *v2);
                                 }
                                 (true, false) => {
@@ -4230,7 +4135,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Variable::Quantified {
                                 quantified: _,
                                 bounds: _,
-                                ..
                             },
                         ) => {
                             drop(variable1);
@@ -4275,7 +4179,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Quantified {
                         quantified: q,
                         bounds: _,
-                        ..
                     } if q.kind() == QuantifiedKind::ParamSpec => {
                         // TODO(https://github.com/facebook/pyrefly/issues/105): figure out what to
                         // do with ParamSpec.
@@ -4293,52 +4196,62 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
+                        let kind = q.kind();
                         let restriction = q.restriction().clone();
-                        let bound = q.bound_type(self.type_order.stdlib(), &self.solver.heap);
+                        let bound = q.upper_bound(self.type_order.stdlib(), &self.solver.heap);
                         drop(v1_ref);
 
                         // For constrained TypeVars, promote to the matching constraint type
                         // rather than pinning to the raw argument type.
-                        if let Restriction::Constraints(ref constraints) = restriction {
-                            variables.update(*v1, Variable::Answer(t2.clone()));
+                        if let Restriction::Constraints(constraints) = restriction {
+                            // Source-created IntVars are represented with an
+                            // unrestricted marker, not constraints; keep this
+                            // defensive path normalized in case an internal
+                            // quantified value is constructed with constraints.
+                            let answer = normalize_answer_for_kind(kind, Cow::Borrowed(t2));
+                            variables.update(*v1, Variable::Answer(answer));
                             drop(variables);
-                            if let Some(constraint) = self.find_matching_constraint(t2, constraints)
+                            if let Type::Quantified(q_t2) = t2 {
+                                if !self.quantified_satisfies_constraints(q_t2, &constraints) {
+                                    self.solver.instantiation_errors.write().insert(
+                                        *v1,
+                                        TypeVarSpecializationError::BadConstraintSpecialization {
+                                            name,
+                                            got: t2.clone(),
+                                            want: constraints,
+                                        },
+                                    );
+                                }
+                            } else if let Some(constraint) =
+                                self.find_matching_constraint(t2, &constraints)
                             {
-                                let constraint = constraint.clone();
+                                let constraint =
+                                    normalize_answer_for_kind(kind, Cow::Borrowed(constraint));
                                 self.solver
                                     .variables
                                     .lock()
                                     .update(*v1, Variable::Answer(constraint));
-                            } else if let Err(e) = self.is_subset_eq(t2, &bound) {
-                                // No individual constraint matched, but the type may still
-                                // be assignable to the constraint union (e.g. an abstract
-                                // `AnyStr` satisfies `str | bytes`). Only error if it fails
-                                // the union bound check too.
+                            } else if !t2.is_any() {
                                 self.solver.instantiation_errors.write().insert(
                                     *v1,
-                                    TypeVarSpecializationError {
+                                    TypeVarSpecializationError::BadConstraintSpecialization {
                                         name,
                                         got: t2.clone(),
-                                        want: bound,
-                                        error_kind: ErrorKind::BadSpecialization,
-                                        message_override: None,
-                                        error: e,
+                                        want: constraints,
                                     },
                                 );
                             }
                         } else {
-                            variables.update(*v1, Variable::Answer(t2.clone()));
+                            let answer = normalize_answer_for_kind(kind, Cow::Borrowed(t2));
+                            variables.update(*v1, Variable::Answer(answer));
                             drop(variables);
-                            if let Err(e) = self.is_subset_eq(t2, &bound) {
+                            if self.is_subset_eq(t2, &bound).is_err() {
                                 self.solver.instantiation_errors.write().insert(
                                     *v1,
-                                    TypeVarSpecializationError {
+                                    TypeVarSpecializationError::BadBoundSpecialization {
                                         name,
                                         got: t2.clone(),
                                         want: bound,
-                                        error_kind: ErrorKind::BadSpecialization,
-                                        message_override: None,
-                                        error: e,
                                     },
                                 );
                             }
@@ -4351,10 +4264,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             &*v1_current
                             && t.is_none()
                         {
-                            let widened = self
-                                .solver
-                                .heap
-                                .mk_union(vec![t.clone(), Type::any_implicit()]);
+                            let widened =
+                                unions(vec![t.clone(), Type::any_implicit()], &self.solver.heap);
                             drop(v1_current);
                             variables.update(*v1, Variable::Answer(widened));
                         }
@@ -4367,9 +4278,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         // container will later hold some other (unknown) type, analogous
                         // to how `self.x = None` is inferred as `None | Any` for attributes.
                         let answer = if t2.is_none() {
-                            self.solver
-                                .heap
-                                .mk_union(vec![t2.clone(), Type::any_implicit()])
+                            unions(vec![t2.clone(), Type::any_implicit()], &self.solver.heap)
                         } else {
                             t2.clone()
                         };
@@ -4408,7 +4317,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Quantified {
                         quantified: q,
                         bounds,
-                        ..
                     } => {
                         let q = q.clone();
                         let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
@@ -4430,6 +4338,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             //
                             // TODO(https://github.com/facebook/pyrefly/issues/105): figure out
                             // what to do with ParamSpec.
+                            let answer = normalize_answer_for_kind(q.kind(), Cow::Owned(answer));
                             self.solver
                                 .variables
                                 .lock()
@@ -4447,6 +4356,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         let (answer, specialization_error) =
                             self.is_subset_eq_quantified(t1, &q, None);
+                        let answer = normalize_answer_for_kind(q.kind(), Cow::Owned(answer));
                         if let Some(specialization_error) = specialization_error {
                             self.solver
                                 .instantiation_errors
@@ -4457,10 +4367,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         // the PartialContained behavior (see comment there).
                         let variables = self.solver.variables.lock();
                         if answer.is_none() {
-                            let widened = self
-                                .solver
-                                .heap
-                                .mk_union(vec![answer.clone(), Type::any_implicit()]);
+                            let widened = unions(
+                                vec![answer.clone(), Type::any_implicit()],
+                                &self.solver.heap,
+                            );
                             variables.update(*v2, Variable::Answer(widened));
                         } else {
                             variables.update(*v2, Variable::Answer(answer));
@@ -4475,7 +4385,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         // Widen None to None | Any (see comment at the other
                         // PartialContained pinning site above).
                         let answer = if t1_p.is_none() {
-                            self.solver.heap.mk_union(vec![t1_p, Type::any_implicit()])
+                            unions(vec![t1_p, Type::any_implicit()], &self.solver.heap)
                         } else {
                             t1_p
                         };
@@ -4499,5 +4409,35 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             _ => self.is_subset_eq_impl(got, want),
         }
+    }
+}
+
+fn quantified_kind_for_unification(variable: &Variable) -> Option<QuantifiedKind> {
+    match variable {
+        Variable::Quantified { quantified, .. } | Variable::PartialQuantified(quantified) => {
+            Some(quantified.kind())
+        }
+        _ => None,
+    }
+}
+
+fn intvar_typevar_unify_order(
+    v1: Var,
+    variable1: &Variable,
+    v2: Var,
+    variable2: &Variable,
+) -> Option<(Var, Var)> {
+    // `unify(x, y)` preserves `y`'s variable data. If a symbolic-int variable
+    // meets an ordinary type variable, preserve the IntVar kind even if the
+    // ordinary TypeVar has a bound or constraints: later IntVar answers must
+    // remain symbolic integers, and any ordinary TypeVar restriction has already
+    // been checked when bounds were admitted.
+    match (
+        quantified_kind_for_unification(variable1),
+        quantified_kind_for_unification(variable2),
+    ) {
+        (Some(QuantifiedKind::IntVar), Some(QuantifiedKind::TypeVar)) => Some((v2, v1)),
+        (Some(QuantifiedKind::TypeVar), Some(QuantifiedKind::IntVar)) => Some((v1, v2)),
+        _ => None,
     }
 }

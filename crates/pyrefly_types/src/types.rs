@@ -42,11 +42,14 @@ use crate::callable::Params;
 use crate::callable::PrefixParam;
 use crate::callable::PropertyMetadata;
 use crate::callable::PropertyRole;
+use crate::callable_residual::CallableResidual;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
+use crate::data_frame::DataFrameSchema;
 use crate::dimension;
-use crate::dimension::SizeExpr;
+use crate::dimension::Int;
+use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::heap::TypeHeap;
 use crate::keywords::DataclassTransformMetadata;
@@ -57,12 +60,15 @@ use crate::literal::Literal;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
+use crate::sentinel::Sentinel;
+use crate::shaped_array::IntTuple;
+use crate::shaped_array::ShapedArrayType;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
-use crate::tensor::TensorType;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
+use crate::type_level_dsl::TypeLevelDslCall;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
@@ -398,48 +404,6 @@ pub enum CalleeKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
-pub enum CallableResidualKind {
-    /// A generic residual. The `quantified` is the quantified type variable we
-    /// want to use when reconstructing a `Callable` that contains a generic
-    /// residual; we'll wrap it in a Forall that scopes all the residuals.
-    ///
-    /// If it appears anywhere else, the fallback is `quantified.as_gradual_type()`
-    Generic { quantified: Quantified },
-    /// Per-var overload residual with identity for cross-var correlation.
-    ///
-    /// Finishing normalizes branch types so an overload residual does not
-    /// contain nested overload residual markers in `branches[*].ty`.
-    Overload {
-        identity: OverloadResidualIdentity,
-        branches: Vec<OverloadBranchProjection>,
-    },
-}
-
-/// Correlation key for matching overload residuals across vars during finalization.
-/// The hash is derived from the got-side type at the comparison that produced the
-/// residual, making it a stable function of the value rather than of solve order.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct OverloadResidualIdentity {
-    pub witness_hash: u64,
-}
-
-/// Per-branch result for a single var in an overload residual.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct OverloadBranchProjection {
-    pub branch_index: usize,
-    pub ty: Type,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct CallableResidual {
-    pub kind: CallableResidualKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
 pub struct BoundMethod {
     /// Type of the self/cls argument,
     pub obj: Type,
@@ -647,7 +611,7 @@ pub enum SuperObj {
     Class(ClassType),
 }
 
-#[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq)]
 pub struct Union {
     pub members: Vec<Type>,
     pub display_name: Option<(ModuleName, Name)>,
@@ -662,6 +626,24 @@ impl PartialEq for Union {
 impl Hash for Union {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.members.hash(state)
+    }
+}
+
+impl PartialOrd for Union {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Union {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.members.cmp(&other.members)
+    }
+}
+
+impl TypeEq for Union {
+    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
+        self.members.type_eq(&other.members, ctx)
     }
 }
 
@@ -683,7 +665,7 @@ impl VisitMut<Type> for Union {
 
 /// An nn.Module instance with captured constructor arguments.
 ///
-/// Analogous to how `TensorType` wraps `ClassType` + shape info, `NNModuleType`
+/// Analogous to how `ShapedArrayType` wraps `ClassType` + shape info, `NNModuleType`
 /// wraps `ClassType` + a field map of captured init args. This allows DSL forward
 /// functions to access constructor parameters (e.g., `kernel_size`, `stride`)
 /// directly from the type, without requiring every shape-relevant parameter to
@@ -696,7 +678,7 @@ impl VisitMut<Type> for Union {
 pub struct NNModuleType {
     /// The underlying nn.Module subclass (e.g., MaxPool2d).
     pub class: ClassType,
-    /// Captured init args (e.g., kernel_size → Size(3), stride → None).
+    /// Captured init args (e.g., kernel_size → Int(3), stride → None).
     /// Ordered by constructor parameter order.
     pub fields: SmallMap<Name, Type>,
 }
@@ -736,7 +718,7 @@ impl Ord for NNModuleType {
     }
 }
 
-impl pyrefly_util::visit::Visit<Type> for NNModuleType {
+impl Visit<Type> for NNModuleType {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
         self.class.recurse(f);
         for (_, ty) in self.fields.iter() {
@@ -745,7 +727,7 @@ impl pyrefly_util::visit::Visit<Type> for NNModuleType {
     }
 }
 
-impl pyrefly_util::visit::VisitMut<Type> for NNModuleType {
+impl VisitMut<Type> for NNModuleType {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
         self.class.recurse_mut(f);
         for (_, ty) in self.fields.iter_mut() {
@@ -754,7 +736,7 @@ impl pyrefly_util::visit::VisitMut<Type> for NNModuleType {
     }
 }
 
-impl crate::equality::TypeEq for NNModuleType {
+impl TypeEq for NNModuleType {
     fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
         crate::equality::TypeEq::type_eq(&self.class, &other.class, ctx)
             && self.fields.len() == other.fields.len()
@@ -788,6 +770,9 @@ pub enum Type {
     /// of the argument, so that we can resonstruct the same generic/overload structure if it
     /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
     CallableResidual(Box<CallableResidual>),
+    /// A type-level shape DSL application that is valid inside callable return annotations.
+    /// Call return-boundary processing forces this to a result-schema projection.
+    TypeLevelDslCall(Box<TypeLevelDslCall>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
     Function(Box<Function>),
@@ -823,30 +808,27 @@ pub enum Type {
     /// For a TypedDict type `C`, `Partial[C]` represents an object with any subset of read-write
     /// keys from `C`, where each present key has the same value type as in `C`.
     PartialTypedDict(TypedDict),
-    /// Tensor type with shape information
+    /// Shaped-array type with shape information.
     /// Example: Tensor[2, 3] represents a 2x3 tensor
-    Tensor(Box<TensorType>),
+    ShapedArray(Box<ShapedArrayType>),
+    /// First-class tensor shape tuple.
+    IntTuple(Box<IntTuple>),
     /// nn.Module instance with captured constructor arguments.
     /// Wraps a ClassType + field map of init args, enabling DSL forward
     /// functions to access shape-relevant constructor parameters directly.
     NNModule(Box<NNModuleType>),
+    /// DataFrame instance with an inferred column schema.
+    /// Wraps an underlying DataFrame instance type and an ordered column schema;
+    /// all behavior delegates to the underlying type.
+    DataFrame(Box<DataFrameSchema>),
     /// Dimension value type - represents values that satisfy Dim bound
     /// Examples:
-    ///   - Type::Size(SizeExpr::Literal(6)) for concrete dimension 6
-    ///   - Type::Size(SizeExpr::Var(v)) for dimension variables
+    ///   - `Type::Int(Int::Literal(6))` for concrete dimension 6
+    ///   - `Type::Int(Int::Symbolic(v))` for dimension variables
     ///
     /// This is the type-level representation of dimension values, used when
     /// type variables with Dim bound unify with concrete dimension values.
-    Size(SizeExpr),
-    /// Symbolic integer type - wraps dimension expressions for use in type annotations
-    /// Examples:
-    ///   - Type::Dim(SizeExpr(Literal(3))) for Dim[3]
-    ///   - Type::Dim(Quantified) for Dim[N]
-    ///   - Type::Dim(SizeExpr(Add(...))) for Dim[N+1]
-    ///
-    /// This is the type annotation form of symbolic integers, distinct from
-    /// concrete integer literals which use Type::Literal(Lit::Int(...)).
-    Dim(Box<Type>),
+    Int(Int),
     Tuple(Tuple),
     Module(ModuleType),
     Forall(Box<Forall<Forallable>>),
@@ -898,6 +880,9 @@ pub enum Type {
     /// be immediately looked up for untyping (see `TypeAliasData::TypeAliasRef`), `UntypedAlias`
     /// stores a reference that is untyped once we actually look up the value.
     UntypedAlias(Box<TypeAliasData>),
+    // Sentinel types, documented here: https://docs.python.org/3.15/library/functions.html#sentinel
+    // First introduced in PEP 661: https://peps.python.org/pep-0661/
+    Sentinel(Sentinel),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -934,6 +919,7 @@ impl Visit for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit(f),
             Type::CallableResidual(x) => x.visit(f),
+            Type::TypeLevelDslCall(x) => x.visit(f),
             Type::Function(x) => x.visit(f),
             Type::BoundMethod(x) => x.visit(f),
             Type::Overload(x) => x.visit(f),
@@ -943,10 +929,11 @@ impl Visit for Type {
             Type::ClassType(x) => x.visit(f),
             Type::TypedDict(x) => x.visit(f),
             Type::PartialTypedDict(x) => x.visit(f),
-            Type::Tensor(x) => x.visit(f),
+            Type::ShapedArray(x) => x.visit(f),
+            Type::IntTuple(x) => x.visit(f),
             Type::NNModule(x) => x.visit(f),
-            Type::Size(x) => x.visit(f),
-            Type::Dim(x) => x.visit(f),
+            Type::DataFrame(x) => x.visit(f),
+            Type::Int(x) => x.visit(f),
             Type::Tuple(x) => x.visit(f),
             Type::Module(x) => x.visit(f),
             Type::Forall(x) => x.visit(f),
@@ -959,6 +946,7 @@ impl Visit for Type {
             Type::Annotated(x, _metadata) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
             Type::TypeVar(x) => x.visit(f),
+            Type::Sentinel(x) => x.visit(f),
             Type::ParamSpec(x) => x.visit(f),
             Type::TypeVarTuple(x) => x.visit(f),
             Type::SpecialForm(x) => x.visit(f),
@@ -990,6 +978,7 @@ impl VisitMut for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit_mut(f),
             Type::CallableResidual(x) => x.visit_mut(f),
+            Type::TypeLevelDslCall(x) => x.visit_mut(f),
             Type::Function(x) => x.visit_mut(f),
             Type::BoundMethod(x) => x.visit_mut(f),
             Type::Overload(x) => x.visit_mut(f),
@@ -999,10 +988,11 @@ impl VisitMut for Type {
             Type::ClassType(x) => x.visit_mut(f),
             Type::TypedDict(x) => x.visit_mut(f),
             Type::PartialTypedDict(x) => x.visit_mut(f),
-            Type::Tensor(x) => x.visit_mut(f),
+            Type::ShapedArray(x) => x.visit_mut(f),
+            Type::IntTuple(x) => x.visit_mut(f),
             Type::NNModule(x) => x.visit_mut(f),
-            Type::Size(x) => x.visit_mut(f),
-            Type::Dim(x) => x.visit_mut(f),
+            Type::DataFrame(x) => x.visit_mut(f),
+            Type::Int(x) => x.visit_mut(f),
             Type::Tuple(x) => x.visit_mut(f),
             Type::Module(x) => x.visit_mut(f),
             Type::Forall(x) => x.visit_mut(f),
@@ -1015,6 +1005,7 @@ impl VisitMut for Type {
             Type::Annotated(x, _metadata) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
             Type::TypeVar(x) => x.visit_mut(f),
+            Type::Sentinel(x) => x.visit_mut(f),
             Type::ParamSpec(x) => x.visit_mut(f),
             Type::TypeVarTuple(x) => x.visit_mut(f),
             Type::SpecialForm(x) => x.visit_mut(f),
@@ -1174,6 +1165,11 @@ impl Type {
 
     pub fn is_literal_string(&self) -> bool {
         self.lit_string_style().is_some()
+    }
+
+    /// A scalar type cannot decompose into a container element type.
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, Type::Literal(_) | Type::LiteralString(_) | Type::None)
     }
 
     /// If this type is a literal string (either `LiteralString` or a `Literal` string value),
@@ -1435,6 +1431,12 @@ impl Type {
         }
     }
 
+    pub fn is_assert_shape(&self) -> bool {
+        self.visit_toplevel_func_metadata(&|meta| {
+            meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
+        })
+    }
+
     pub fn is_none(&self) -> bool {
         matches!(self, Type::None)
     }
@@ -1486,6 +1488,72 @@ impl Type {
     pub fn subst(mut self, mp: &SmallMap<&Quantified, &Type>) -> Self {
         self.subst_mut(mp);
         self
+    }
+
+    pub fn finalize_type_level_dsl_at_boundary(&mut self) -> Vec<dimension::ShapeError> {
+        let mut errors = Vec::new();
+
+        // Nested applications are dependencies of the public application being forced here:
+        // propagate the first invalid dependency upward so fallback is applied only at that
+        // public result-schema boundary.
+        fn force_nested(ty: &mut Type) -> Result<(), dimension::ShapeError> {
+            let Type::TypeLevelDslCall(call) = ty else {
+                match ty {
+                    Type::Callable(_)
+                    | Type::Function(_)
+                    | Type::BoundMethod(_)
+                    | Type::Overload(_)
+                    | Type::Forall(_) => return Ok(()),
+                    _ => {
+                        let mut error = None;
+                        ty.recurse_mut(&mut |ty| {
+                            if error.is_none() {
+                                error = force_nested(ty).err();
+                            }
+                        });
+                        return match error {
+                            Some(error) => Err(error),
+                            None => Ok(()),
+                        };
+                    }
+                }
+            };
+            for arg in &mut call.args {
+                if let Err(error) = force_nested(arg) {
+                    *ty = call.fallback();
+                    return Err(error);
+                }
+            }
+            match call.evaluate() {
+                Ok(result) => {
+                    *ty = result;
+                    Ok(())
+                }
+                Err(error) => {
+                    *ty = call.fallback();
+                    Err(error)
+                }
+            }
+        }
+
+        fn collect_errors(ty: &mut Type, errors: &mut Vec<dimension::ShapeError>) {
+            if matches!(ty, Type::TypeLevelDslCall(_)) {
+                if let Err(error) = force_nested(ty) {
+                    errors.push(error);
+                }
+                return;
+            }
+            match ty {
+                Type::Callable(_)
+                | Type::Function(_)
+                | Type::BoundMethod(_)
+                | Type::Overload(_)
+                | Type::Forall(_) => {}
+                _ => ty.recurse_mut(&mut |ty| collect_errors(ty, errors)),
+            }
+        }
+        collect_errors(self, &mut errors);
+        errors
     }
 
     pub fn subst_self_special_form_mut(&mut self, self_type: &Type) {
@@ -1783,7 +1851,7 @@ impl Type {
         sigs
     }
 
-    fn widen_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {
+    fn promote_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {
         match &*ty {
             Type::Literal(lit) if lit.style == LitStyle::Implicit => {
                 *ty = lit.value.general_class_type(stdlib).clone().to_type()
@@ -1798,27 +1866,21 @@ impl Type {
         match &mut self {
             Type::Union(union) => {
                 for member in &mut union.members {
-                    Self::widen_one_implicit_literal(member, stdlib);
+                    Self::promote_one_implicit_literal(member, stdlib);
                 }
             }
-            _ => Self::widen_one_implicit_literal(&mut self, stdlib),
+            _ => Self::promote_one_implicit_literal(&mut self, stdlib),
         }
         self
     }
 
     pub fn promote_implicit_literals(mut self, stdlib: &Stdlib) -> Type {
         fn g(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
-            // Don't recurse into NNModule fields — they carry captured constructor
-            // args (e.g., padding=Literal[1]) that DSL forward functions need as
-            // concrete literals to compute output shapes.
-            if matches!(ty, Type::NNModule(_)) {
-                return;
-            }
             ty.recurse_mut(&mut |ty| g(ty, f));
             f(ty);
         }
         g(&mut self, &mut |ty| {
-            Self::widen_one_implicit_literal(ty, stdlib)
+            Self::promote_one_implicit_literal(ty, stdlib)
         });
         self
     }
@@ -1865,12 +1927,12 @@ impl Type {
         })
     }
 
-    pub fn explicit_literals(self) -> Self {
+    pub fn with_literal_style(self, style: LitStyle) -> Self {
         self.transform(&mut |ty| {
             if let Type::Literal(lit) = ty {
-                lit.style = LitStyle::Explicit;
-            } else if let Type::LiteralString(style) = ty {
-                *style = LitStyle::Explicit;
+                lit.style = style;
+            } else if let Type::LiteralString(lit_style) = ty {
+                *lit_style = style;
             }
         })
     }
@@ -1911,17 +1973,27 @@ impl Type {
         self
     }
 
-    pub fn as_quantified(&self) -> Option<Quantified> {
+    /// If this type represents a (possibly narrowed) quantified (i.e., `Q`  or `Q & T`), returns
+    /// the quantified `Q` plus the type `T` it is narrowed to.
+    pub fn as_quantified(&self) -> Option<(&Quantified, Option<&Type>)> {
         match self {
-            Type::Quantified(q) => Some((**q).clone()),
+            Type::Quantified(q) => Some((q, None)),
+            Type::Intersect(x) => match x.0.as_slice() {
+                [Type::Quantified(q), t] | [t, Type::Quantified(q)]
+                    if !matches!(t, Type::Quantified(_)) =>
+                {
+                    Some((q, Some(t)))
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
 
-    /// Extract the literal value from a `SizeExpr::Literal`, if this is one.
+    /// Extract the literal value from a `Int::Literal`, if this is one.
     pub fn as_shape_literal(&self) -> Option<i64> {
         match self {
-            Type::Size(SizeExpr::Literal(n)) => Some(*n),
+            Type::Int(Int::Literal(n)) => Some(*n),
             _ => None,
         }
     }
@@ -1965,6 +2037,7 @@ impl Type {
             Type::ParamSpec(t) => Some(t.qname()),
             Type::SelfType(cls) => Some(cls.qname()),
             Type::Literal(lit) if let Lit::Enum(e) = &lit.value => Some(e.class.qname()),
+            Type::Sentinel(s) => Some(s.qname()),
             _ => None,
         }
     }
@@ -1978,6 +2051,7 @@ impl Type {
             Type::Literal(lit) if let Lit::Str(x) = &lit.value => Some(!x.is_empty()),
             Type::Type(_) => Some(true),
             Type::None => Some(false),
+            Type::Sentinel(_) => Some(true),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
             Type::Union(u) => {
                 let mut answer = None;
@@ -2019,6 +2093,18 @@ impl Type {
         ty.transform_types_in_type_variable_positions(&mut |ty| {
             if ty.is_any() {
                 *ty = Type::Materialization;
+            } else {
+                // Gradual shape dimensions are the shape analog of `Any`, but they
+                // are stored as `Int` rather than `Type`, so the traversal above
+                // never reaches them directly. Materialize them at each carrier so
+                // `is_equivalent` does not treat a gradual size as equivalent to a
+                // concrete one.
+                match ty {
+                    Type::Int(dim) => dim.materialize(),
+                    Type::IntTuple(tuple) => tuple.materialize(),
+                    Type::ShapedArray(shaped) => shaped.materialize_inline_shape(),
+                    _ => {}
+                }
             }
             ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
                 if matches!(callable.params, Params::Ellipsis) {
@@ -2077,9 +2163,36 @@ impl<'a> TypeVariable<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
+    use pyrefly_python::module_name::ModuleName;
+    use ruff_python_ast::name::Name;
+
+    use crate::equality::TypeEq;
+    use crate::equality::TypeEqCtx;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
     use crate::types::Type;
+    use crate::types::Union;
+
+    /// `display_name` is presentation-only, so two unions with identical members
+    /// but different names must agree across `Eq`, `Ord`, and `TypeEq`.
+    #[test]
+    fn test_union_display_name_ignored_by_comparisons() {
+        let members = vec![Type::None, Type::LiteralString(LitStyle::Implicit)];
+        let named = Union {
+            members: members.clone(),
+            display_name: Some((ModuleName::builtins(), Name::new_static("TA"))),
+        };
+        let anonymous = Union {
+            members,
+            display_name: None,
+        };
+
+        assert_eq!(named, anonymous);
+        assert_eq!(named.cmp(&anonymous), Ordering::Equal);
+        assert!(named.type_eq(&anonymous, &mut TypeEqCtx::default()));
+    }
 
     #[test]
     fn test_as_bool() {

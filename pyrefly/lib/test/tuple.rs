@@ -161,10 +161,121 @@ def test(y: int):
 );
 
 testcase!(
+    test_unpack_starred_not_iterable_in_tuple,
+    r#"
+def test():
+    x: int = 42
+    y = (*x,)  # E: Expected an iterable, got `int`
+"#,
+);
+
+testcase!(
     test_unpack_index_out_of_bounds,
     r#"
 def test(x: tuple[int]) -> None:
   y, z = x  # E: Cannot unpack
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_star,
+    r#"
+from typing import assert_type
+def test(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    a, *rest, b = t
+    assert_type(a, int)
+    assert_type(rest, list[bool])
+    assert_type(b, str)
+    # A fixed suffix element that no after-star target consumes flows into the star,
+    # but the fixed prefix element does not smear in.
+    c, *carry = t
+    assert_type(c, int)
+    assert_type(carry, list[bool | str])
+    for x in t:
+        assert_type(x, int | bool | str)
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_empty_middle,
+    r#"
+from typing import assert_type
+# The unbounded middle can match zero elements, so a fixed target that indexes past
+# its own end may land on a fixed element from the opposite end.
+def prefix_only(x: tuple[str, *tuple[int, ...]]) -> None:
+    *head, last = x
+    assert_type(head, list[int | str])
+    assert_type(last, int | str)
+def suffix_only(x: tuple[*tuple[int, ...], str]) -> None:
+    first, *rest = x
+    assert_type(first, int | str)
+    assert_type(rest, list[int | str])
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_exact_length,
+    r#"
+from typing import assert_type
+# An unpack with no star pins the length exactly, so the variadic middle has a known
+# size and each target resolves to a single element -- no fixed-end smearing.
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    a, b = t  # length must be 2, so the middle is empty
+    assert_type(a, int)
+    assert_type(b, str)
+    c, d, e = t  # length must be 3, so the middle has exactly one element
+    assert_type(c, int)
+    assert_type(d, bool)
+    assert_type(e, str)
+    match t:
+        case [f, g]:
+            assert_type(f, int)
+            assert_type(g, str)
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_too_few_targets,
+    r#"
+# The fixed prefix and suffix guarantee at least 2 elements, so an exact unpack into
+# fewer targets can never succeed.
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    (a,) = t  # E: Cannot unpack tuple[int, *tuple[bool, ...], str] (of size 2+) into 1 value
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_both_ends_mandatory,
+    r#"
+from typing import assert_type
+# `b` and `c` are mandatory targets that reserve the fixed prefix `int` and suffix `str`,
+# so the empty-middle shift must not leak those into each other or into the star.
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    a, b, *rest, c = t
+    assert_type(a, int)
+    assert_type(b, bool)
+    assert_type(rest, list[bool])
+    assert_type(c, str)
+"#,
+);
+
+testcase!(
+    test_match_variadic_tuple_both_ends_mandatory,
+    r#"
+from typing import assert_type
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    match t:
+        case [a, b, *rest, c]:
+            assert_type(b, bool)
+            assert_type(c, str)
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_bad_star,
+    r#"
+def f(t: tuple[int, *int, str]) -> None: ...  # E: Expected a type form, got instance of `*int`
+def g(t: tuple[int, *list[int], str]) -> None: ...  # E: Expected a type form, got instance of `*list[int]`
 "#,
 );
 
@@ -371,12 +482,139 @@ def test[*Ts](x1: tuple[int, *tuple[str, ...]], x2: tuple[*Ts]) -> None:
 );
 
 testcase!(
+    test_unpack_typevar_bound_to_tuple,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[str, int]](x: Z):
+    u, v = x
+    reveal_type(u)  # E: revealed type: str
+    reveal_type(v)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_to_tuple_three_elements,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[str, int, bytes]](x: Z):
+    a, b, c = x
+    reveal_type(a)  # E: revealed type: str
+    reveal_type(b)  # E: revealed type: int
+    reveal_type(c)  # E: revealed type: bytes
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_to_unbounded_tuple,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[int, ...]](x: Z):
+    a, b = x
+    reveal_type(a)  # E: revealed type: int
+    reveal_type(b)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_to_tuple_starred,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[str, int, bytes]](x: Z):
+    a, *b = x
+    reveal_type(a)  # E: revealed type: str
+    reveal_type(b)  # E: revealed type: list[bytes | int]
+"#,
+);
+
+testcase!(
+    test_unpack_constrained_typevar_tuple,
+    r#"
+from typing import TypeVar, reveal_type
+Z = TypeVar("Z", tuple[str, int], tuple[bool, bytes])
+def f(x: Z):
+    a, b = x
+    reveal_type(a)  # E: revealed type: bool | str
+    reveal_type(b)  # E: revealed type: bytes | int
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_unbounded_not_iterable,
+    r#"
+def f[Z](x: Z):
+    a, b = x  # E: Type `object` is not iterable
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_not_iterable,
+    r#"
+def f[Z: int](x: Z):
+    a, b = x  # E: Type `int` is not iterable
+"#,
+);
+
+testcase!(
     test_tuple_slice_non_literal,
     r#"
 from typing import assert_type
 def test(x: tuple[int, str, bool], y: tuple[int, ...], start: int, stop: int, step: int):
     assert_type(x[start:stop:step], tuple[int | str | bool, ...])
     assert_type(y[start:stop:step], tuple[int, ...])
+"#,
+);
+
+testcase!(
+    test_slice_invalid_components,
+    r#"
+def test(xs: list[int], ys: tuple[int, ...]) -> None:
+    xs[1.5:]  # E: Slice indices must be integers or have an `__index__` method
+    ys[:1.5]  # E: Slice indices must be integers or have an `__index__` method
+    xs[::1.5]  # E: Slice indices must be integers or have an `__index__` method
+    ys[::1.5]  # E: Slice indices must be integers or have an `__index__` method
+"#,
+);
+
+testcase!(
+    test_slice_accepts_index_method,
+    r#"
+class Index:
+    def __index__(self) -> int:
+        return 0
+
+def test(xs: list[int], ys: tuple[int, ...], index: Index) -> None:
+    xs[index:]
+    ys[:index]
+    xs[::index]
+"#,
+);
+
+testcase!(
+    test_slice_zero_step,
+    r#"
+def test(xs: list[int], ys: tuple[int, ...]) -> None:
+    xs[::0]  # E: Slice step cannot be zero
+    ys[::0]  # E: Slice step cannot be zero
+"#,
+);
+
+testcase!(
+    test_slice_omitted_positions_preserved,
+    r#"
+from typing import assert_type
+
+def test(x: tuple[int, str, bool]) -> None:
+    assert_type(x[:2], tuple[int, str])
+    assert_type(x[1:], tuple[str, bool])
+"#,
+);
+
+testcase!(
+    test_slice_union_step_reported_once,
+    r#"
+def test(xs: list[int] | tuple[int, ...]) -> None:
+    xs[::0]  # E: Slice step cannot be zero
+    xs[::1.5]  # E: Slice indices must be integers or have an `__index__` method
 "#,
 );
 
@@ -406,6 +644,18 @@ testcase!(
 from typing import assert_type, Iterable
 def test(x: Iterable[int]) -> None:
     assert_type(tuple(x), tuple[int, ...])
+"#,
+);
+
+testcase!(
+    bug = "TODO: handle generator from fixed-length heterogeneous iterable",
+    test_tuple_constructor_preserves_fixed_length,
+    r#"
+from typing import assert_type
+def test(xs: tuple[int, int]) -> None:
+    ys: tuple[int, int] = tuple(xs)
+    assert_type(tuple(xs), tuple[int, int])
+    zs: tuple[int, int] = tuple(x for x in xs)  # E: `tuple[int, ...]` is not assignable to `tuple[int, int]`
 "#,
 );
 
@@ -701,4 +951,147 @@ def make_tuple[T](x: T) -> tuple[T, ...]:
     return (x,)
 f: Callable[[int], tuple[int, str]] = make_tuple  # E: `[T](x: T) -> tuple[T, ...]` is not assignable to `(int) -> tuple[int, str]`
     "#,
+);
+
+// Regression test: widening wide tuple unions keeps type complexity linear at control-flow joins.
+// Without it, conditionally appending to a tuple produces an exponential number of concrete tuple
+// variants and causes a OOM
+testcase!(
+    test_many_conditional_tuple_appends,
+    r#"
+class D0: pass
+class D1: pass
+class D2: pass
+class D3: pass
+class D4: pass
+class D5: pass
+class D6: pass
+class D7: pass
+class D8: pass
+class D9: pass
+class D10: pass
+class D11: pass
+class D12: pass
+class D13: pass
+class D14: pass
+class D15: pass
+class D16: pass
+class D17: pass
+class D18: pass
+class D19: pass
+class D20: pass
+class D21: pass
+class D22: pass
+class D23: pass
+class D24: pass
+class D25: pass
+class D26: pass
+class D27: pass
+class D28: pass
+class D29: pass
+class D30: pass
+class D31: pass
+class D32: pass
+class D33: pass
+class D34: pass
+class D35: pass
+class D36: pass
+class D37: pass
+class D38: pass
+class D39: pass
+class D40: pass
+class D41: pass
+class D42: pass
+class D43: pass
+class D44: pass
+class D45: pass
+class D46: pass
+class D47: pass
+class D48: pass
+class D49: pass
+class D50: pass
+class D51: pass
+class D52: pass
+class D53: pass
+class D54: pass
+class D55: pass
+class D56: pass
+class D57: pass
+class D58: pass
+class D59: pass
+class D60: pass
+class D61: pass
+class D62: pass
+class D63: pass
+class D64: pass
+
+def repro(conds: list[bool]):
+    z = ()
+    if conds[0]: z += (D0(),)
+    if conds[1]: z += (D1(),)
+    if conds[2]: z += (D2(),)
+    if conds[3]: z += (D3(),)
+    if conds[4]: z += (D4(),)
+    if conds[5]: z += (D5(),)
+    if conds[6]: z += (D6(),)
+    if conds[7]: z += (D7(),)
+    if conds[8]: z += (D8(),)
+    if conds[9]: z += (D9(),)
+    if conds[10]: z += (D10(),)
+    if conds[11]: z += (D11(),)
+    if conds[12]: z += (D12(),)
+    if conds[13]: z += (D13(),)
+    if conds[14]: z += (D14(),)
+    if conds[15]: z += (D15(),)
+    if conds[16]: z += (D16(),)
+    if conds[17]: z += (D17(),)
+    if conds[18]: z += (D18(),)
+    if conds[19]: z += (D19(),)
+    if conds[20]: z += (D20(),)
+    if conds[21]: z += (D21(),)
+    if conds[22]: z += (D22(),)
+    if conds[23]: z += (D23(),)
+    if conds[24]: z += (D24(),)
+    if conds[25]: z += (D25(),)
+    if conds[26]: z += (D26(),)
+    if conds[27]: z += (D27(),)
+    if conds[28]: z += (D28(),)
+    if conds[29]: z += (D29(),)
+    if conds[30]: z += (D30(),)
+    if conds[31]: z += (D31(),)
+    if conds[32]: z += (D32(),)
+    if conds[33]: z += (D33(),)
+    if conds[34]: z += (D34(),)
+    if conds[35]: z += (D35(),)
+    if conds[36]: z += (D36(),)
+    if conds[37]: z += (D37(),)
+    if conds[38]: z += (D38(),)
+    if conds[39]: z += (D39(),)
+    if conds[40]: z += (D40(),)
+    if conds[41]: z += (D41(),)
+    if conds[42]: z += (D42(),)
+    if conds[43]: z += (D43(),)
+    if conds[44]: z += (D44(),)
+    if conds[45]: z += (D45(),)
+    if conds[46]: z += (D46(),)
+    if conds[47]: z += (D47(),)
+    if conds[48]: z += (D48(),)
+    if conds[49]: z += (D49(),)
+    if conds[50]: z += (D50(),)
+    if conds[51]: z += (D51(),)
+    if conds[52]: z += (D52(),)
+    if conds[53]: z += (D53(),)
+    if conds[54]: z += (D54(),)
+    if conds[55]: z += (D55(),)
+    if conds[56]: z += (D56(),)
+    if conds[57]: z += (D57(),)
+    if conds[58]: z += (D58(),)
+    if conds[59]: z += (D59(),)
+    if conds[60]: z += (D60(),)
+    if conds[61]: z += (D61(),)
+    if conds[62]: z += (D62(),)
+    if conds[63]: z += (D63(),)
+    if conds[64]: z += (D64(),)
+    return z
+"#,
 );

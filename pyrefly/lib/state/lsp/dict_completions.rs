@@ -44,12 +44,21 @@ enum DictKeyLiteralContext {
         dict: ExprDict,
         literal: ExprStringLiteral,
     },
+    /// An empty subscript slot, before any key string has been typed.
+    /// Example: `cfg[|]`. Completions insert a quoted key since there is no
+    /// surrounding string.
+    BareSubscript { base_expr: Expr },
 }
 
 impl DictKeyLiteralContext {
-    fn literal_range(&self) -> TextRange {
+    /// The range of the key string literal, when the cursor is already inside one.
+    /// `None` for `BareSubscript`, where there is no string to bound the cursor to.
+    fn literal_range(&self) -> Option<TextRange> {
         match self {
-            Self::KeyAccess { literal, .. } | Self::DictLiteral { literal, .. } => literal.range(),
+            Self::KeyAccess { literal, .. } | Self::DictLiteral { literal, .. } => {
+                Some(literal.range())
+            }
+            Self::BareSubscript { .. } => None,
         }
     }
 
@@ -58,16 +67,26 @@ impl DictKeyLiteralContext {
         // For dict literals, we want the literal's contextual type (e.g. a TypedDict in
         // `cfg: Config = {"na|": 1}`), which is attached to the literal's range.
         match self {
-            Self::KeyAccess { base_expr, .. } => base_expr.range(),
+            Self::KeyAccess { base_expr, .. } | Self::BareSubscript { base_expr } => {
+                base_expr.range()
+            }
             Self::DictLiteral { dict, .. } => dict.range(),
         }
     }
 
     fn base_expr(&self) -> Option<&Expr> {
         match self {
-            Self::KeyAccess { base_expr, .. } => Some(base_expr),
+            Self::KeyAccess { base_expr, .. } | Self::BareSubscript { base_expr } => {
+                Some(base_expr)
+            }
             Self::DictLiteral { .. } => None,
         }
+    }
+
+    /// Whether inserted keys need surrounding quotes (true only when the cursor is
+    /// not already inside a string literal).
+    fn needs_quotes(&self) -> bool {
+        matches!(self, Self::BareSubscript { .. })
     }
 }
 
@@ -133,11 +152,18 @@ impl<'a> Transaction<'a> {
         for node in nodes {
             let candidate = match node {
                 AnyNodeRef::ExprSubscript(sub) => {
-                    if let Expr::StringLiteral(lit) = sub.slice.as_ref() {
-                        Some((sub.value.as_ref().clone(), lit.clone()))
-                    } else {
-                        None
-                    }
+                    // A complete `d["k"]` parses the slice as a string literal directly.
+                    // A half-typed `d["` recovers as a slice whose lower bound is the
+                    // (unclosed) string, so accept that form too.
+                    let literal = match sub.slice.as_ref() {
+                        Expr::StringLiteral(lit) => Some(lit),
+                        Expr::Slice(slice) => match slice.lower.as_deref() {
+                            Some(Expr::StringLiteral(lit)) => Some(lit),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    literal.map(|lit| (sub.value.as_ref().clone(), lit.clone()))
                 }
                 AnyNodeRef::ExprCall(call) => self.typed_dict_get_string_literal(handle, call),
                 _ => None,
@@ -179,14 +205,18 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<DictKeyLiteralContext> {
         // Prefer direct key access (`d["k"]` / `d.get("k")`) so we can reuse the base
-        // expression for facet-based completions. Fall back to dict literal keys.
+        // expression for facet-based completions, then dict literal keys, and finally
+        // an empty subscript slot (`d[|]`) with no key string typed yet.
         if let Some((base_expr, literal)) =
             self.dict_key_string_literal_at(handle, module, position)
         {
             Some(DictKeyLiteralContext::KeyAccess { base_expr, literal })
+        } else if let Some((dict, literal)) = Self::dict_literal_string_literal_at(module, position)
+        {
+            Some(DictKeyLiteralContext::DictLiteral { dict, literal })
         } else {
-            Self::dict_literal_string_literal_at(module, position)
-                .map(|(dict, literal)| DictKeyLiteralContext::DictLiteral { dict, literal })
+            Self::bare_subscript_base_at(module, position)
+                .map(|base_expr| DictKeyLiteralContext::BareSubscript { base_expr })
         }
     }
 
@@ -295,10 +325,11 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    /// Adds dict key completions for the given position. Returns `true` if this function
-    /// claimed the position (i.e., we are inside a dict/TypedDict key string literal), in
-    /// which case the caller should skip overload-based literal completions to avoid showing
-    /// redundant entries.
+    /// Adds dict key completions for the given position. Handles a key string being
+    /// typed (`d["k|"]`, `{"k|": …}`) as well as an empty subscript slot (`d[|]`),
+    /// where the inserted key is quoted. Returns `true` if this function claimed the
+    /// position, in which case the caller should skip overload-based literal completions
+    /// to avoid showing redundant entries.
     pub(crate) fn add_dict_key_completions(
         &self,
         handle: &Handle,
@@ -309,25 +340,57 @@ impl<'a> Transaction<'a> {
         let Some(context) = self.dict_key_literal_context(handle, module, position) else {
             return false;
         };
-        let literal_range = context.literal_range();
-        // Allow the cursor to sit a few characters before the literal (e.g. between nested
-        // subscripts) so completion requests fired just before the quotes still succeed.
-        let allowance = TextSize::from(4);
-        let lower_bound = literal_range
-            .start()
-            .checked_sub(allowance)
-            .unwrap_or_else(|| TextSize::new(0));
-        if position < lower_bound || position > literal_range.end() {
+        if let Some(literal_range) = context.literal_range() {
+            // Allow the cursor to sit a few characters before the literal (e.g. between
+            // nested subscripts) so completion requests fired just before the quotes
+            // still succeed.
+            let allowance = TextSize::from(4);
+            let lower_bound = literal_range
+                .start()
+                .checked_sub(allowance)
+                .unwrap_or_else(|| TextSize::new(0));
+            if position < lower_bound || position > literal_range.end() {
+                return false;
+            }
+        }
+        let suggestions =
+            self.dict_key_suggestions(handle, context.base_expr(), context.base_range());
+        if suggestions.is_empty() {
             return false;
         }
+        Self::push_dict_key_completions(suggestions, completions, context.needs_quotes());
+        true
+    }
+
+    /// If `position` is inside a subscript's slice (`d[|...]`, after the base), returns
+    /// the base expression `d`. Used to offer dict-key completions before a key is typed.
+    fn bare_subscript_base_at(module: &ModModule, position: TextSize) -> Option<Expr> {
+        for node in Ast::locate_node(module, position) {
+            if let AnyNodeRef::ExprSubscript(sub) = node
+                && position >= sub.value.range().end()
+            {
+                return Some(sub.value.as_ref().clone());
+            }
+        }
+        None
+    }
+
+    /// Collects the known string keys for a dict-like base: explicit keys recorded as
+    /// facets on the base's binding, plus TypedDict fields from the base's type.
+    fn dict_key_suggestions(
+        &self,
+        handle: &Handle,
+        base_expr: Option<&Expr>,
+        base_range: TextRange,
+    ) -> BTreeMap<String, Option<Type>> {
         let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
 
-        if let Some(base_expr) = context.base_expr()
+        if let Some(base_expr) = base_expr
             && let Some(bindings) = self.get_bindings(handle)
         {
             let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
                 Some((identifier, facets))
-            } else if let Expr::Name(name) = &base_expr {
+            } else if let Expr::Name(name) = base_expr {
                 Some((Ast::expr_name_identifier(name.clone()), Vec::new()))
             } else {
                 None
@@ -365,7 +428,7 @@ impl<'a> Transaction<'a> {
 
         // For key access we query the container expression; for literals we query the
         // literal itself to pick up contextual TypedDict typing from assignments.
-        if let Some(base_type) = self.get_type_trace(handle, context.base_range())
+        if let Some(base_type) = self.get_type_trace(handle, base_range)
             && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
         {
             for (key, ty) in typed_keys {
@@ -376,19 +439,24 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        if suggestions.is_empty() {
-            return false;
-        }
+        suggestions
+    }
 
+    fn push_dict_key_completions(
+        suggestions: BTreeMap<String, Option<Type>>,
+        completions: &mut Vec<RankedCompletion>,
+        quote: bool,
+    ) {
         for (label, ty_opt) in suggestions {
             let detail = ty_opt.as_ref().map(|ty| ty.to_string());
+            let insert_text = quote.then(|| format!("\"{label}\""));
             completions.push(RankedCompletion::new(CompletionItem {
                 label,
                 detail,
                 kind: Some(CompletionItemKind::FIELD),
+                insert_text,
                 ..Default::default()
             }));
         }
-        true
     }
 }

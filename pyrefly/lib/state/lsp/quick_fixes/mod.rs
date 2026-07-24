@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub(crate) mod add_override;
 pub(crate) mod convert_dict;
 pub(crate) mod convert_star_import;
 pub(crate) mod enum_member;
@@ -26,4 +27,5 @@ pub(crate) mod pytest_fixture;
 pub(crate) mod redundant_cast;
 pub(crate) mod safe_delete;
 pub(crate) mod types;
+pub(crate) mod unnecessary_type_conversion;
 pub(crate) mod unwrap_block;

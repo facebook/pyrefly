@@ -69,6 +69,22 @@ def foo(member: MyEnum) -> None:
 );
 
 testcase!(
+    test_enum_string_getitem_with_future_annotations,
+    r#"
+from __future__ import annotations
+from enum import Enum
+from typing import Literal, assert_type
+
+class DEFAULT_TYPES(Enum):
+    EXE = "EXE"
+    LIB = "LIB"
+
+assert_type(DEFAULT_TYPES["EXE"], Literal[DEFAULT_TYPES.EXE])
+assert_type(DEFAULT_TYPES["LIB"], Literal[DEFAULT_TYPES.LIB])
+"#,
+);
+
+testcase!(
     test_enum_class_value,
     r#"
 from enum import Enum
@@ -375,6 +391,16 @@ def foo(f: MyFlag) -> None:
         pass
     else:
         assert_type(f, MyFlag)
+"#,
+);
+
+testcase!(
+    test_recursive_enum_class,
+    r#"
+import enum
+
+class C(C, enum.Enum):  # E: Class `C` inheriting from `C` creates a cycle  # E: Cannot extend final class `C`
+    a = 1
 "#,
 );
 
@@ -961,13 +987,37 @@ assert_type(Foo.X.value, Literal["x"])
 # str, Enum mixin: specific literal correctly gives literal type
 assert_type(Bar.Y.value, Literal["y"])
 
-# Generic instance access should give the mixed-in type
+# Generic instance access gives the union of the members' literal values
 def test(foo: Foo, bar: Bar) -> None:
-    assert_type(foo.value, str)
-    assert_type(bar.value, str)
+    assert_type(foo.value, Literal["x"])
+    assert_type(bar.value, Literal["y"])
     take_literal(Foo.X.value)
     take_literal(Bar.Y.value)
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3365
+testcase!(
+    test_enum_value_union_of_member_literals,
+    r#"
+from enum import Enum
+from typing import Literal, TypedDict, assert_type
+
+class Biscuits(str, Enum):
+    DIGESTIVES = "digestives"
+    CUSTARD_CREMES = "custard_cremes"
+
+class Params(TypedDict):
+    biscuit_type: Literal["digestives", "custard_cremes"]
+
+def fun2(params: Params) -> None: ...
+
+def fun(biscuit_type: Biscuits) -> None:
+    # `.value` on the enum type is the union of the members' literal values, so it is
+    # assignable to the `Literal[...]` TypedDict key rather than being widened to `str`.
+    assert_type(biscuit_type.value, Literal["digestives", "custard_cremes"])
+    fun2(params={"biscuit_type": biscuit_type.value})
+"#,
 );
 
 // When a member's value type doesn't match the mixin (e.g. int value in a str-mixin enum),

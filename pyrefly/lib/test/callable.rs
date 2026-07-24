@@ -30,16 +30,26 @@ testcase!(
     r#"
 from typing import reveal_type
 f = lambda x, y=1: x + y
-reveal_type(f)  # E: revealed type: (x: Unknown, y: Unknown = ...) -> Unknown
+reveal_type(f)  # E: revealed type: (x: Unknown, y: int = 1) -> Unknown
 f(1)  # OK, y has default
 f(1, 2)  # OK
 f()  # E: Missing argument `x`
 
 g = lambda x, y="hello", z=None: (x, y, z)
-reveal_type(g)  # E: revealed type: (x: Unknown, y: Unknown = ..., z: Unknown = ...) -> tuple[Unknown, Unknown, Unknown]
+reveal_type(g)  # E: revealed type: (x: Unknown, y: str = 'hello', z: Unknown | None = None) -> tuple[Unknown, str, Unknown | None]
 g(1)  # OK
 g(1, "world")  # OK
-g(1, "world", True)  # OK
+g(1, "world", True)  # OK, z is `Any | None`
+"#,
+);
+
+testcase!(
+    test_lambda_default_promotes_literalstring,
+    r#"
+from typing import Callable
+KEYS="ABC"
+VALUES="DEF"
+x: Callable[[str], str] = lambda key, map=dict(zip(KEYS, VALUES)): map[key]
 "#,
 );
 
@@ -75,6 +85,16 @@ f: Callable[[T], T] = lambda x: x
 reveal_type(f)  # E: revealed type: [T: int](T) -> T
 reveal_type(f(1))  # E: revealed type: int
 f("hello")  # E: `str` is not assignable to upper bound `int` of type variable `T`
+"#,
+);
+
+testcase!(
+    test_callable_typevartuple_varargs_homogeneous_tuple,
+    r#"
+from typing import Callable
+
+def test[*Ts](f: Callable[[*tuple[object, ...]], object]) -> Callable[[*Ts], object]:
+    return f
 "#,
 );
 
@@ -1032,15 +1052,88 @@ class Foo:
 
 testcase!(
     test_ellipsis_body,
+    TestEnv::new().enable_empty_body_error(),
     r#"
-from typing import Any, assert_type
+from typing import TYPE_CHECKING, Protocol, assert_type, overload
+from abc import abstractmethod
+
 def f(): ...
-# This is technically wrong (`g()` returns `None`), but `...` is often used to stub out the bodies
-# of things like overload signatures and abstractmethods. For simplicity, we just always allow this
-# stubbing behavior.
-def g() -> str: ...
+def g() -> None: ...
+def h() -> int | None: ...
+def i() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
+
+async def j() -> None: ...
+async def k() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
+
+if TYPE_CHECKING:
+    def tc() -> str: ...
+
+DOCS_BUILDING = False
+if TYPE_CHECKING or DOCS_BUILDING:
+    def tc_or_docs() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
+
+if not TYPE_CHECKING:
+    pass
+else:
+    def tc_else() -> str: ...
+
+class P(Protocol):
+    def m(self) -> str: ...
+
+class A:
+    @abstractmethod
+    def m(self) -> str: ...
+
+@overload
+def ov(x: int) -> int: ...
+@overload
+def ov(x: str) -> str: ...
+def ov(x: int | str) -> int | str:
+    return x
+
 assert_type(f(), None)
-assert_type(g(), str)
+assert_type(g(), None)
+    "#,
+);
+
+testcase!(
+    test_ellipsis_body_in_pyi,
+    TestEnv::one_with_path("foo", "foo.pyi", "def f() -> int: ...").enable_empty_body_error(),
+    r#"
+from typing import assert_type
+from foo import f
+assert_type(f(), int)
+    "#,
+);
+
+testcase!(
+    test_ellipsis_body_type_checking_guards,
+    TestEnv::new().enable_empty_body_error(),
+    r#"
+import typing
+from typing import TYPE_CHECKING
+
+# `typing.TYPE_CHECKING` is a valid guard.
+if typing.TYPE_CHECKING:
+    def a() -> str: ...
+
+# `TYPE_CHECKING is False` / `TYPE_CHECKING == False` make the `else` type-checking-only.
+if TYPE_CHECKING is False:
+    pass
+else:
+    def b() -> str: ...
+
+if TYPE_CHECKING == False:  # noqa
+    pass
+else:
+    def c() -> str: ...
+
+# An unrelated attribute named `TYPE_CHECKING` is not a guard.
+class NotTyping:
+    TYPE_CHECKING = True
+nt = NotTyping()
+if nt.TYPE_CHECKING:
+    def d() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
     "#,
 );
 
@@ -1421,6 +1514,57 @@ assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Unknown], Clas
 );
 
 testcase!(
+    test_generic_classmethod_to_callable_preserves_class_tparams,
+    r#"
+from typing import Callable, Generic, ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+R = TypeVar("R")
+T = TypeVar("T")
+
+def accepts_callable(cb: Callable[P, R]) -> Callable[P, R]:
+    return cb
+
+class Box(Generic[T]):
+    pass
+
+class Factory(Generic[T]):
+    @classmethod
+    def make(cls, x: list[T], y: list[T]) -> Box[T]: ...
+
+r = accepts_callable(Factory.make)
+assert_type(r([""], [""]), Box[str])
+"#,
+);
+
+testcase!(
+    test_generic_classmethod_to_callable_within_classmethod_preserves_class_tparams,
+    r#"
+from typing import Callable, Generic, ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+R = TypeVar("R")
+T = TypeVar("T")
+U = TypeVar("U")
+
+def accepts_callable(cb: Callable[P, R]) -> Callable[P, R]:
+    return cb
+
+class Box(Generic[T]):
+    pass
+
+class Factory(Generic[T]):
+    @classmethod
+    def make(cls, x: list[U], y: list[U]) -> Box[U]: ...
+
+    @classmethod
+    def test(cls):
+        r = accepts_callable(cls.make)
+        assert_type(r([""], [""]), Box[str])
+"#,
+);
+
+testcase!(
     test_callable_instance_with_unknown_base,
     r#"
 class MyModel(BaseClass):  # E: Could not find name `BaseClass`
@@ -1457,5 +1601,122 @@ def schedule(delay: int, func: Callable[..., object]) -> None: ...
 def after_func() -> None: ...
 
 schedule(1000, after_func)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3912
+testcase!(
+    test_callable_ellipsis_return,
+    r#"
+from typing import Callable, reveal_type
+def f(x: Callable[..., ...]):  # E: `...` is not a valid return type
+    reveal_type(x)  # E: revealed type: (...) -> Unknown
+"#,
+);
+
+testcase!(
+    test_implicit_any_lambda,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+f = lambda x: x  # E: Type of lambda parameter `x` is unknown  # E: Return type of lambda is unknown
+"#,
+);
+
+testcase!(
+    test_implicit_any_lambda_param_only,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+f = lambda x: 1  # E: Type of lambda parameter `x` is unknown
+"#,
+);
+
+testcase!(
+    test_implicit_any_lambda_multiple_params,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+f = lambda x, y: x + y  # E: Type of lambda parameter `x` is unknown  # E: Type of lambda parameter `y` is unknown  # E: Return type of lambda is unknown
+"#,
+);
+
+testcase!(
+    test_implicit_any_lambda_return_only,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+def untyped(x):
+    return x
+
+f = lambda: untyped(1)  # E: Return type of lambda is unknown
+"#,
+);
+
+testcase!(
+    test_lambda_type_contextual_no_error,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable
+f: Callable[[int], int] = lambda x: x
+"#,
+);
+
+testcase!(
+    test_lambda_no_params_known_return_no_error,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+f = lambda: 1
+"#,
+);
+
+testcase!(
+    test_lambda_default_param_no_error,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+f = lambda x=1: x
+"#,
+);
+
+testcase!(
+    bug = "Pyrefly does not contextually type lambda parameters in generic callback arguments (e.g. `sorted(key=...)`), so they become implicit `Any` and are flagged, even though the type is derivable (Pyright infers `int` here)",
+    test_implicit_any_lambda_in_generic_call,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+xs = sorted([3, 1, 2], key=lambda x: x)  # E: Type of lambda parameter `x` is unknown  # E: Return type of lambda is unknown
+"#,
+);
+
+testcase!(
+    test_lambda_default_infers_type,
+    r#"
+from typing import reveal_type
+f = lambda x=1: x
+reveal_type(f)  # E: revealed type: (x: int = 1) -> int
+"#,
+);
+
+testcase!(
+    test_lambda_default_none_infers_optional,
+    r#"
+from typing import reveal_type
+f = lambda x=None: x
+reveal_type(f)  # E: revealed type: (x: Unknown | None = None) -> Unknown | None
+"#,
+);
+
+testcase!(
+    test_lambda_default_no_unknown,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+f = lambda x=1: x
+g = lambda x="a": x
+h = lambda x=None: x
+"#,
+);
+
+testcase!(
+    test_lambda_default_contextual_type_takes_precedence,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable, assert_type
+f: Callable[[str | None], str | None] = lambda x="hi": x
+assert_type(f, Callable[[str | None], str | None])
 "#,
 );

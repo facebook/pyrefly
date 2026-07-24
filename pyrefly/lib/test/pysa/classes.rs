@@ -34,6 +34,26 @@ use crate::test::pysa::utils::get_class_ref;
 use crate::test::pysa::utils::get_function_ref;
 use crate::test::pysa::utils::get_handle_for_module_name;
 
+fn typed_dict_keys_field(context: &ModuleContext) -> PysaClassField {
+    PysaClassField {
+        type_: PysaType::from_type(
+            &context.answers_context.answers.heap().mk_class_type(
+                context.answers_context.stdlib.frozenset(
+                    context
+                        .answers_context
+                        .answers
+                        .heap()
+                        .mk_class_type(context.answers_context.stdlib.str().clone()),
+                ),
+            ),
+            context,
+        ),
+        explicit_annotation: None,
+        location: None,
+        declaration_kind: None,
+    }
+}
+
 fn create_simple_class(
     name: &str,
     id: u32,
@@ -447,6 +467,8 @@ class Point(TypedDict):
                         declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
                     },
                 ),
+                ("__required_keys__".into(), typed_dict_keys_field(context)),
+                ("__optional_keys__".into(), typed_dict_keys_field(context)),
             ]),
             decorator_callees: HashMap::new(),
         }
@@ -512,6 +534,8 @@ class Point(TypedDict, total=False):
                         declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
                     },
                 ),
+                ("__required_keys__".into(), typed_dict_keys_field(context)),
+                ("__optional_keys__".into(), typed_dict_keys_field(context)),
             ]),
             decorator_callees: HashMap::new(),
         }
@@ -924,5 +948,45 @@ class Foo:
                 declaration_kind: Some(PysaClassFieldDeclaration::DefinedInMethod),
             },
         )]))
+    },
+);
+
+// When the user declares both __x and _Foo__x, pyrefly emits both as separate
+// fields. Pysa handles this by skipping the private-name entry when the mangled
+// form already exists. This test documents the current pyrefly behavior.
+exported_class_testcase!(
+    test_export_private_attribute_with_explicit_mangled_form,
+    r#"
+class Foo:
+    __x: int = 1
+    _Foo__x: str = "hello"
+"#,
+    &|context: &ModuleContext| {
+        create_simple_class(
+            "Foo",
+            0,
+            ScopeParent::TopLevel,
+            create_location(2, 7, 2, 10),
+        )
+        .with_fields(HashMap::from([
+            (
+                "__x".into(),
+                PysaClassField {
+                    type_: PysaType::from_class_type(context.answers_context.stdlib.int(), context),
+                    explicit_annotation: Some("int".to_owned()),
+                    location: Some(create_location(3, 5, 3, 8)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::AssignedInBody),
+                },
+            ),
+            (
+                "_Foo__x".into(),
+                PysaClassField {
+                    type_: PysaType::from_class_type(context.answers_context.stdlib.str(), context),
+                    explicit_annotation: Some("str".to_owned()),
+                    location: Some(create_location(4, 5, 4, 12)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::AssignedInBody),
+                },
+            ),
+        ]))
     },
 );

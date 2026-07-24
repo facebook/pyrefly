@@ -280,6 +280,26 @@ assert_type(f([1], [2]), list[int])
 );
 
 testcase!(
+    test_overloaded_shadow_builtin_range,
+    r#"
+from typing import overload
+
+class Block[T]:
+    pass
+
+@overload
+def range(stop: int) -> Block[int]: ...
+@overload
+def range(stop: int, stop2: int) -> Block[int]: ...
+def range(stop: int, stop2: int | None = None) -> Block[int]:
+    return Block()
+
+def f() -> Block[int]:
+    return range(1)  # E: Returned type `Block[int] | range`
+"#,
+);
+
+testcase!(
     test_unordered_defs,
     r#"
 def f() -> int:
@@ -952,6 +972,34 @@ def test(
 );
 
 testcase!(
+    test_ellipsis_invalid_type_form,
+    r#"
+from typing import Callable, ParamSpec, TypeVar, Generic
+
+# `...` leaking into non-ParamSpec positions is rejected.
+class C1[T: ...]: ...                # E: `Ellipsis` is not allowed in this context
+x1: list[...]                        # E: `...` cannot be used for type parameter
+x2: dict[int, ...]                   # E: `...` cannot be used for type parameter
+x3: type[...]                        # E: `Ellipsis` is not allowed in this context
+TBad = TypeVar("TBad", bound=...)    # E: `Ellipsis` is not allowed in this context
+
+# Still rejected via existing paths.
+def g() -> ...: ...                  # E: Expression cannot be used in annotations
+y_ret: Callable[..., ...]            # E: `...` is not a valid return type
+y_tup: tuple[...]                    # E: Invalid position for `...`
+
+# `...` remains valid where a ParamSpec or homogeneous tuple is expected.
+T = TypeVar("T")
+P = ParamSpec("P")
+ok1: Callable[..., int]
+ok2: tuple[int, ...]
+PD = ParamSpec("PD", default=...)
+class X(Generic[T, P]): ...
+def f(a: X[int, ...]) -> None: ...
+"#,
+);
+
+testcase!(
     test_invalid_type_arguments,
     r#"
 from typing import assert_type
@@ -1085,6 +1133,30 @@ def f(x: int | str) -> None:
 );
 
 testcase!(
+    test_kw_call_transparent_for_subtyping,
+    r#"
+from dataclasses import dataclass
+from typing import Any
+
+class Foo:
+    x: int = 0
+
+def takes_type_foo(cls: type[Foo]) -> None: ...
+
+def returns_type_foo() -> type[Foo]:
+    return dataclass(Foo)
+
+foo_cls: type[Foo] = dataclass(Foo)
+any_cls: type[Any] = dataclass(Foo)
+wrong_cls: type[int] = dataclass(Foo)  # E: `type[Foo]` is not assignable to `type[int]`
+takes_type_foo(dataclass(Foo))
+
+def make_dynamic_dataclass(base: type) -> type:
+    return dataclass(type(f"Dynamic{base.__name__}", (), {"__annotations__": {"x": int}}))
+"#,
+);
+
+testcase!(
     test_assert_nonetype,
     r#"
 from types import NoneType
@@ -1186,6 +1258,16 @@ assert_type(A, type[A])
 );
 
 testcase!(
+    test_assert_type_metaclass,
+    r#"
+from typing import assert_type
+class Meta(type): pass
+class A(metaclass=Meta): pass
+assert_type(A, Meta)  # E: assert_type(type[A], Meta) failed
+    "#,
+);
+
+testcase!(
     test_compare_int_str_error,
     r#"
 0 < "oops"  # E: Argument `Literal['oops']` is not assignable to parameter `value` with type `int`
@@ -1225,7 +1307,51 @@ a = True if # E: Parse
 testcase!(
     test_syntax_error_resulting_in_empty_defintion,
     r#"
-@:a=1 # E: Parse # E: Could not find name `a`
+@:a=1 # E: Parse
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_decorator_slice,
+    r#"
+@:[ # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_star,
+    r#"
+x = object()
+match x:
+    case [*]: # E: Parse
+        pass
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_bindings,
+    r#"
+x = object()
+match x:
+    case as: # E: Parse
+        pass
+match x:
+    case {**}: # E: Parse
+        pass
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_import_name,
+    r#"
+from os import , # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_import_python_empty_import_name,
+    r#"
+import_python("a.b.c.cinc", "")
     "#,
 );
 
@@ -1820,6 +1946,14 @@ testcase!(
 );
 
 testcase!(
+    test_crash_on_incomplete_named_walrus_attribute_annotation,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/3344
+(a:=).:b  # E: Cannot annotate non-self attribute `a:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Could not find name `b`
+"#,
+);
+
+testcase!(
     test_crash_on_incomplete_walrus,
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/2093
@@ -1839,7 +1973,7 @@ testcase!(
     test_crash_on_decorator_assign,
     r#"
 from typing import TypeVar
-@T=TypeVar()  # E: Expected newline, found `=`
+@T=TypeVar()  # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
 "#,
 );
 
@@ -1996,6 +2130,7 @@ testcase!(
     r#"
 def f(x: int = "test"): # E: Default `Literal['test']` is not assignable to parameter `x` with type `int`
     pass
+f()  # Make sure we don't get a cascading bad-argument-type error
 "#,
 );
 

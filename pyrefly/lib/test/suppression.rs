@@ -49,6 +49,48 @@ testcase!(
 );
 
 testcase!(
+    test_pyrefly_top_level_ignore_typed,
+    r#"
+# pyrefly: ignore-errors[bad-assignment]
+x: int = "x"
+3 + "3"  # E:
+"#,
+);
+
+// A typed file-level directive is only honored in the preamble; placed after code
+// it is inert (the error on the following line is still reported) and additionally
+// flagged with a `misplaced-ignore` warning on the directive line.
+testcase!(
+    test_pyrefly_top_level_ignore_typed_not_at_top,
+    r#"
+x: int = "x"  # E:
+# pyrefly: ignore-errors[bad-assignment]  # E: has no effect here
+y: int = "y"  # E:
+"#,
+);
+
+// A blanket file-level directive after code is inert and flagged as misplaced.
+testcase!(
+    test_pyrefly_misplaced_ignore_errors_blanket,
+    r#"
+x: int = "x"  # E:
+# pyrefly: ignore-errors  # E: has no effect here
+y: int = "y"  # E:
+"#,
+);
+
+// A correctly-placed top-of-file directive suppresses everything and produces
+// no `misplaced-ignore` warning.
+testcase!(
+    test_pyrefly_misplaced_ignore_errors_top_of_file_ok,
+    r#"
+# pyrefly: ignore-errors
+x: int = "x"
+y: int = "y"
+"#,
+);
+
+testcase!(
     test_pyrefly_top_level_ignore_wrong_same_line,
     r#"
 3 + "3" # pyrefly: ignore-errors # E:
@@ -60,7 +102,7 @@ testcase!(
     test_pyrefly_top_level_ignore_wrong_own_line,
     r#"
 3 + "3" # E:
-# pyrefly: ignore-errors
+# pyrefly: ignore-errors # E: has no effect here
 3 + "3" # E:
 "#,
 );

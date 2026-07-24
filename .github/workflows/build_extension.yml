@@ -159,7 +159,7 @@ jobs:
         run: echo "platform=${{ matrix.platform }}-${{ matrix.arch }}" >> ${{ matrix.github_env }}
       - run: npm ci
         working-directory: lsp/
-      - run: npx vsce package --target ${{ env.platform }} ${{needs.get_version.outputs.marketplace_version}}
+      - run: npx vsce package --target ${{ env.platform }} ${{ needs.get_version.outputs.prerelease_flag }} ${{needs.get_version.outputs.marketplace_version}}
         working-directory: lsp/
       - uses: actions/upload-artifact@v6
         with:

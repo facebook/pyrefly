@@ -29,6 +29,8 @@ pub enum ReadOnlyReason {
     ReadOnlyQualifier,
     /// Field is a frozen dataclass member
     FrozenDataclass,
+    /// Field is frozen by attrs `on_setattr=setters.frozen`
+    AttrsFrozen,
     /// Field is a NamedTuple member
     NamedTuple,
     /// Field is a ClassVar
@@ -54,6 +56,9 @@ impl ReadOnlyReason {
             }
             ReadOnlyReason::ReadOnlyQualifier => "This field is marked as ReadOnly".to_owned(),
             ReadOnlyReason::FrozenDataclass => "This field is a frozen dataclass member".to_owned(),
+            ReadOnlyReason::AttrsFrozen => {
+                "This field is frozen by attrs `on_setattr=setters.frozen`".to_owned()
+            }
             ReadOnlyReason::NamedTuple => "This field is a NamedTuple member".to_owned(),
             ReadOnlyReason::ClassVar => {
                 "A ClassVar may not be mutated from an instance of the class".to_owned()
