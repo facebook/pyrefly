@@ -128,6 +128,7 @@ pub struct TestEnv {
     strict_callable_subtyping: bool,
     strict_partial_subtyping: bool,
     spec_compliant_overloads: bool,
+    treat_all_caps_as_final: bool,
     no_any_return_error: bool,
     no_any_return_explicit_error: bool,
     no_any_return_implicit_error: bool,
@@ -176,6 +177,7 @@ impl TestEnv {
             strict_callable_subtyping: false,
             strict_partial_subtyping: false,
             spec_compliant_overloads: false,
+            treat_all_caps_as_final: true,
             no_any_return_error: false,
             no_any_return_explicit_error: false,
             no_any_return_implicit_error: false,
@@ -513,6 +515,7 @@ impl TestEnv {
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
         config.root.strict_partial_subtyping = Some(self.strict_partial_subtyping);
         config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
+        config.root.treat_all_caps_as_final = Some(self.treat_all_caps_as_final);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };

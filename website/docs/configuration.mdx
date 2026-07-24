@@ -809,6 +809,24 @@ When set to `true`, parameter list compatibility is checked strictly even when
 - Default: `false`
 - Flag equivalent: `--strict-callable-subtyping`
 
+### `treat-all-caps-as-final`
+
+Treat module-level `ALL_CAPS` names as final after their first assignment. When
+enabled, assigning to the same constant name again emits a `bad-assignment`
+error, similar to writing an explicit `Final` annotation.
+
+```python
+FOO = 1
+FOO = 2  # error
+```
+
+Names inside function bodies and non-constant names are unaffected.
+
+- Type: `bool`
+- Default: `true`
+- Flag equivalent: `--treat-all-caps-as-final`
+- Equivalent configs: `reportConstantRedefinition` in Pyright
+
 ### `untyped-def-behavior` (deprecated)
 
 :::warning

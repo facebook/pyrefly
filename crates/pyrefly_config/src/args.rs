@@ -353,6 +353,14 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     spec_compliant_overloads: Option<bool>,
+    /// Treat module-level ALL_CAPS names as final after their first assignment.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    treat_all_caps_as_final: Option<bool>,
 }
 
 impl ConfigOverrideArgs {
@@ -503,6 +511,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.spec_compliant_overloads {
             config.root.spec_compliant_overloads = Some(*x);
+        }
+        if let Some(x) = &self.treat_all_caps_as_final {
+            config.root.treat_all_caps_as_final = Some(*x);
         }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {
