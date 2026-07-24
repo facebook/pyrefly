@@ -130,6 +130,22 @@ take_callable(old_function)  # E: `old_function` is deprecated
 );
 
 testcase!(
+    test_type_call_dynamic_base,
+    TestEnv::new().enable_unsupported_dynamic_base_error(),
+    r#"
+class Base: ...
+
+def factory(base: type[Base]) -> type:
+    return type("Dynamic", (base,), {})  # E: Base class `type[Base]` in `type()` call is not a statically known class
+
+type("Static", (Base,), {})
+
+bases = (Base,)
+type("AlsoDynamic", bases, {})  # E: Base classes in `type()` calls must be a tuple literal of statically known classes
+"#,
+);
+
+testcase!(
     test_deprecated_method_call,
     r#"
 from warnings import deprecated

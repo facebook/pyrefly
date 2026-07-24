@@ -125,6 +125,7 @@ pub struct TestEnv {
     untyped_function_decorator_error: bool,
     unused_call_result_error: bool,
     string_as_iterable_warning: bool,
+    unsupported_dynamic_base_error: bool,
     strict_callable_subtyping: bool,
     strict_partial_subtyping: bool,
     spec_compliant_overloads: bool,
@@ -173,6 +174,7 @@ impl TestEnv {
             untyped_function_decorator_error: false,
             unused_call_result_error: false,
             string_as_iterable_warning: false,
+            unsupported_dynamic_base_error: false,
             strict_callable_subtyping: false,
             strict_partial_subtyping: false,
             spec_compliant_overloads: false,
@@ -367,6 +369,11 @@ impl TestEnv {
 
     pub fn enable_string_as_iterable_warning(mut self) -> Self {
         self.string_as_iterable_warning = true;
+        self
+    }
+
+    pub fn enable_unsupported_dynamic_base_error(mut self) -> Self {
+        self.unsupported_dynamic_base_error = true;
         self
     }
 
@@ -582,6 +589,9 @@ impl TestEnv {
         }
         if self.string_as_iterable_warning {
             errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);
+        }
+        if self.unsupported_dynamic_base_error {
+            errors.set_error_severity(ErrorKind::UnsupportedDynamicBase, Severity::Error);
         }
         if self.implicit_any_lambda_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyLambda, Severity::Error);
