@@ -968,11 +968,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_unpack(ty)
             }
             Expr::Slice(x) => {
-                let elt_exprs = [x.lower.as_ref(), x.upper.as_ref(), x.step.as_ref()];
-                let elts = elt_exprs
-                    .iter()
-                    .filter_map(|e| e.map(|e| self.expr_infer(e, errors)))
-                    .collect::<Vec<_>>();
+                let none = self.heap.mk_none();
+                let elts = vec![
+                    x.lower
+                        .as_ref()
+                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
+                    x.upper
+                        .as_ref()
+                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
+                    x.step
+                        .as_ref()
+                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
+                ];
                 self.specialize(&self.stdlib.slice_class_object(), elts, x.range(), errors)
             }
             Expr::IpyEscapeCommand(x) => {
@@ -2691,6 +2698,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.subscript_infer_for_type_with_key_present(base, slice, range, errors, false)
     }
 
+    fn valid_slice_index_type(&self, ty: &Type, index_dunder: &Name) -> bool {
+        match ty {
+            Type::Any(_) | Type::None => true,
+            Type::Union(u) => u
+                .members
+                .iter()
+                .all(|ty| self.valid_slice_index_type(ty, index_dunder)),
+            Type::Literal(lit) if lit.value.as_index_i64().is_some() => true,
+            _ => self.has_attr(ty, index_dunder),
+        }
+    }
+
+    fn validate_builtin_sequence_slice(
+        &self,
+        slice_expr: &ExprSlice,
+        slice_ty: &Type,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let [lower_ty, upper_ty, step_ty] =
+            Self::slice_type_args(slice_ty).expect("Expr::Slice should infer to builtins.slice");
+        let index_dunder = Name::new_static("__index__");
+        for (expr, ty, is_step) in [
+            (&slice_expr.lower, lower_ty, false),
+            (&slice_expr.upper, upper_ty, false),
+            (&slice_expr.step, step_ty, true),
+        ]
+        .into_iter()
+        .filter_map(|(expr, ty, is_step)| expr.as_deref().map(|expr| (expr, ty, is_step)))
+        {
+            if is_step && matches!(ty, Type::Literal(lit) if lit.value.as_index_i64() == Some(0)) {
+                return Some(self.error(
+                    errors,
+                    expr.range(),
+                    ErrorKind::BadIndex,
+                    "Slice step cannot be zero".to_owned(),
+                ));
+            }
+            if !self.valid_slice_index_type(ty, &index_dunder) {
+                return Some(self.error(
+                    errors,
+                    expr.range(),
+                    ErrorKind::BadIndex,
+                    "Slice indices must be integers or have an `__index__` method".to_owned(),
+                ));
+            }
+        }
+        None
+    }
+
     fn subscript_infer_for_type_with_key_present(
         &self,
         base: &Type,
@@ -2700,6 +2756,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         key_present: bool, // true if the key is definitely known to be present
     ) -> Type {
         let xs = Ast::unpack_slice(slice);
+        let slice_ty = LazyCell::new(|| self.expr_infer(slice, errors));
+        // The slice error depends only on `slice`, not on the union member, so compute it
+        // at most once. Otherwise a union of builtin sequences (e.g.
+        // `list[int] | tuple[int, ...]`) would emit the same error once per matching member.
+        let slice_error = LazyCell::new(|| match slice {
+            Expr::Slice(slice_expr) => {
+                self.validate_builtin_sequence_slice(slice_expr, &slice_ty, errors)
+            }
+            _ => None,
+        });
         self.distribute_over_union(base, |base| {
             let mut base = base.clone();
             if let Type::Var(v) = base {
@@ -2712,6 +2778,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // TODO: Handle subscription of intersections properly.
                 base = x.1;
             }
+            let is_builtin_sequence = match &base {
+                Type::Tuple(_) => true,
+                Type::ClassType(cls) | Type::SelfType(cls) => {
+                    cls.is_builtin("list")
+                        || (self.as_tuple(cls).is_some()
+                            && !self.class_overrides_tuple_getitem(cls))
+                }
+                _ => false,
+            };
+
+            if is_builtin_sequence
+                && let Some(error_ty) = &*slice_error
+            {
+                return error_ty.clone();
+            }
+            let builtin_sequence_slice_ty = match slice {
+                Expr::Slice(_) if is_builtin_sequence => Some(&*slice_ty),
+                _ => None,
+            };
+
             match base {
                 Type::Forall(forall) => {
                     if matches!(forall.body, Forallable::TypeAlias(_)) {
@@ -2867,6 +2953,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::Tuple(ref tuple) => self.infer_tuple_subscript(
                     tuple.clone(),
                     slice,
+                    builtin_sequence_slice_ty,
                     range,
                     errors,
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
@@ -2874,6 +2961,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::IntTuple(ref int_tuple) => self.infer_int_tuple_subscript(
                     int_tuple,
                     slice,
+                    builtin_sequence_slice_ty,
                     range,
                     errors,
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
@@ -2909,6 +2997,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.infer_tuple_subscript(
                         tuple,
                         slice,
+                        None,
                         range,
                         errors,
                         Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
@@ -2946,6 +3035,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.infer_tuple_subscript(
                         tuple,
                         slice,
+                        builtin_sequence_slice_ty,
                         range,
                         errors,
                         Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
@@ -2954,6 +3044,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Special handling for nn.ModuleDict with TypedDict type argument
                 Type::ClassType(ref cls) if is_nn_module_dict(cls) => {
                     self.try_nn_module_dict_index(cls, &base, slice, range, errors)
+                }
+                Type::ClassType(ref cls) | Type::SelfType(ref cls) if cls.is_builtin("list") => {
+                    let index_arg = match builtin_sequence_slice_ty {
+                        Some(ty) => CallArg::ty(ty, slice.range()),
+                        None => CallArg::expr(slice),
+                    };
+                    self.call_method_or_error(
+                        &base,
+                        &dunder::GETITEM,
+                        range,
+                        &[index_arg],
+                        &[],
+                        errors,
+                        Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                    )
                 }
                 Type::ClassType(_) | Type::SelfType(_) => self.call_method_or_error(
                     &base,
