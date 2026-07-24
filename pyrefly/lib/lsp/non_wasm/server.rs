@@ -5637,6 +5637,17 @@ impl Server {
             .get_ast(&handle)
             .ok_or(EmptyResponseReason::AstNotFound)?;
         let notebook_cell = self.maybe_get_code_cell_index(uri);
+        let document_range = if let Some(cell) = notebook_cell {
+            module
+                .notebook()
+                .expect("a notebook cell URI should map to a notebook module")
+                .cell_offsets()
+                .content_ranges()
+                .nth(cell)
+                .expect("a notebook cell URI should have a matching code cell")
+        } else {
+            TextRange::up_to(TextSize::of(module.lined_buffer().contents().as_str()))
+        };
 
         Ok(Some(
             params
@@ -5644,17 +5655,6 @@ impl Server {
                 .into_iter()
                 .map(|position| {
                     let position = self.from_lsp_position(uri, &module, position);
-                    let document_range = if let Some(cell) = notebook_cell {
-                        module
-                            .notebook()
-                            .expect("a notebook cell URI should map to a notebook module")
-                            .cell_offsets()
-                            .content_ranges()
-                            .nth(cell)
-                            .expect("a notebook cell URI should have a matching code cell")
-                    } else {
-                        TextRange::up_to(TextSize::of(module.lined_buffer().contents().as_str()))
-                    };
                     let mut selection = SelectionRange {
                         range: module.to_lsp_range(document_range),
                         parent: None,
