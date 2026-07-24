@@ -2339,7 +2339,7 @@ impl Scopes {
     /// Look up the FlowStyle for `name`, skipping class body scopes
     pub fn flow_style_for_name(&self, name: &Name) -> Option<FlowStyle> {
         let hashed = Hashed::new(name);
-        self.visit_scopes(|_, scope, _| {
+        self.visit_scopes(false, |_, scope, _| {
             let value = scope.flow.get_info_hashed(hashed)?.value()?;
             Some(value.style.clone())
         })
@@ -2392,6 +2392,7 @@ impl Scopes {
                 &Usage::NonPinningValue(None),
                 lookup,
                 current_module,
+                false,
             ) {
                 // An already-materialized builtin, or a fresh builtin fallback: check whether the
                 // resolving builtin module makes it a special export.
@@ -3005,8 +3006,10 @@ impl Scopes {
     }
 
     /// Helper for iterating over scopes in a way that respects class body visibility rules.
+    /// Forward references skip class bodies because their strings are evaluated outside them.
     fn visit_scopes<'a, T>(
         &'a self,
+        skip_class_scopes: bool,
         mut visitor: impl FnMut(usize, &'a Scope, FlowBarrier) -> Option<T>,
     ) -> Option<T> {
         let mut flow_barrier = FlowBarrier::AllowFlowChecked;
@@ -3025,7 +3028,9 @@ impl Scopes {
             //   have access to their enclosing class scopes.
             // Type alias scopes (PEP 695) also have access to enclosing class scopes.
             if is_class
-                && !((lookup_depth == 0) || (is_current_scope_annotation_like && lookup_depth == 1))
+                && (skip_class_scopes
+                    || !((lookup_depth == 0)
+                        || (is_current_scope_annotation_like && lookup_depth == 1)))
             {
                 // Note: class body scopes have `flow_barrier = AllowFlowChecked`, so skipping the flow_barrier update is okay.
                 continue;
@@ -3043,7 +3048,7 @@ impl Scopes {
     pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
         let mut candidates: Vec<(&Name, usize)> = Vec::new();
 
-        self.visit_scopes(|lookup_depth, scope, flow_barrier| {
+        self.visit_scopes(false, |lookup_depth, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
             if flow_barrier < FlowBarrier::BlockFlow {
@@ -3103,12 +3108,13 @@ impl Scopes {
         usage: &Usage,
         lookup: &dyn LookupExport,
         current_module: ModuleName,
+        skip_class_scopes: bool,
     ) -> NameReadInfo {
         let skip_class_overload_function_definitions = matches!(
             usage,
             Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
         );
-        self.visit_scopes(|_, scope, flow_barrier| {
+        self.visit_scopes(skip_class_scopes, |_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
             let flow_info = scope.flow.get_info_hashed(name);
