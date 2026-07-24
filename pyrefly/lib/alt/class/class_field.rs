@@ -1522,7 +1522,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     ClassFieldInitialization::Magic
                 } else if let Some(flags) =
-                    self.extract_pydantic_field_from_annotation(*annot, &metadata)
+                    self.extract_pydantic_field_from_annotation(*annot, name, &metadata)
                 {
                     ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
                 } else {
@@ -1623,6 +1623,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     let mut flags = self.compute_dataclass_field_initialization(
                         call,
+                        name,
                         direct_annotation.as_ref().and_then(|a| a.ty.as_ref()),
                         dm,
                     );
@@ -2938,6 +2939,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn compute_dataclass_field_initialization(
         &self,
         call: &ExprCall,
+        field_name: &Name,
         annotated_field_ty: Option<&Type>,
         dm: &DataclassMetadata,
     ) -> Option<DataclassFieldKeywords> {
@@ -2957,6 +2959,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             let flags = self.dataclass_field_keywords(
                 &func_ty,
+                field_name,
                 arguments,
                 annotated_field_ty,
                 dm,

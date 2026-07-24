@@ -768,6 +768,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn dataclass_field_keywords(
         &self,
         func: &Type,
+        field_name: &Name,
         args: &Arguments,
         annotated_field_ty: Option<&Type>,
         dataclass_metadata: &DataclassMetadata,
@@ -847,6 +848,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &mut kw_only,
                 &mut alias,
             );
+        }
+        if alias.is_none() {
+            alias = dataclass_metadata
+                .init_defaults
+                .alias_generator
+                .as_ref()
+                .map(|generator| Name::new(generator.generate(field_name.as_str())));
         }
         DataclassFieldKeywords {
             init: init.unwrap_or(true),
@@ -1132,6 +1140,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 (DataclassMember::NotAField, _) => {}
                 (DataclassMember::Field(field, mut keywords), _)
                 | (DataclassMember::InitVar(field, mut keywords), true) => {
+                    if keywords.init_by_alias.is_none()
+                        && let Some(generator) = dataclass.init_defaults.alias_generator.as_ref()
+                    {
+                        keywords.init_by_alias = Some(Name::new(generator.generate(name.as_str())));
+                        keywords.init_by_name =
+                            keywords.init_by_name || dataclass.init_defaults.init_by_name;
+                    }
                     if keywords.kw_only.is_none() {
                         // kw_only hasn't been explicitly set on the field.
                         // A field is kw_only if:
