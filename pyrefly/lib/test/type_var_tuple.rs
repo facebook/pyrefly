@@ -215,6 +215,21 @@ assert_type(test(fun, 1), tuple[int])
 );
 
 testcase!(
+    test_type_var_tuple_callable_optional_parameter,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]: ...
+def callback(x: int, y: str = "") -> None: ...
+
+assert_type(test(callback, 1), tuple[int])
+assert_type(test(callback, 1, ""), tuple[int, str])
+test(callback, 1, 1)  # E: Unpacked argument `tuple[Literal[1], Literal[1]]` is not assignable to parameter `*args` with type `tuple[*tuple[int] | tuple[int, str]]`
+test(callback, 1, "", "")  # E: Unpacked argument `tuple[Literal[1], Literal[''], Literal['']]` is not assignable to parameter `*args` with type `tuple[*tuple[int] | tuple[int, str]]`
+"#,
+);
+
+testcase!(
     test_type_var_tuple_resolves_to_empty,
     r#"
 from typing import Callable, assert_type

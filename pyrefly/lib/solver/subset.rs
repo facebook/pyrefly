@@ -349,36 +349,55 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Some(Param::Varargs(_, Type::Unpack(u))),
                 ) => {
                     let mut l_types = Vec::new();
+                    let mut l_optional_prefixes = Vec::new();
                     loop {
-                        if let Some(Param::PosOnly(_, l, _) | Param::Pos(_, l, _)) = l_arg {
+                        if let Some(Param::PosOnly(_, l, required) | Param::Pos(_, l, required)) =
+                            l_arg
+                        {
+                            // Each trailing optional positional parameter adds a valid shorter
+                            // sequence; a later required parameter makes earlier prefixes invalid.
+                            match required {
+                                Required::Required => l_optional_prefixes.clear(),
+                                Required::Optional(_) => l_optional_prefixes
+                                    .push(self.solver.heap.mk_concrete_tuple(l_types.clone())),
+                            }
                             l_types.push(l.clone());
                             l_arg = l_args.next();
                         } else if let Some(Param::Varargs(_, Type::Unpack(l))) = l_arg {
+                            l_optional_prefixes.push(self.solver.heap.mk_unpacked_tuple(
+                                l_types,
+                                (**l).clone(),
+                                Vec::new(),
+                            ));
+                            let accepted = unions(l_optional_prefixes, &self.solver.heap);
                             self.is_subset_eq(
-                                u,
-                                &self.solver.heap.mk_unpacked_tuple(
-                                    l_types,
-                                    (**l).clone(),
-                                    Vec::new(),
-                                ),
+                                canonical_vararg_unpack_inner(u, &accepted),
+                                &accepted,
                             )?;
                             l_arg = l_args.next();
                             u_arg = u_args.next();
                             break;
                         } else if let Some(Param::Varargs(_, l)) = l_arg {
+                            l_optional_prefixes.push(self.solver.heap.mk_unpacked_tuple(
+                                l_types,
+                                self.solver.heap.mk_unbounded_tuple(l.clone()),
+                                Vec::new(),
+                            ));
+                            let accepted = unions(l_optional_prefixes, &self.solver.heap);
                             self.is_subset_eq(
-                                u,
-                                &self.solver.heap.mk_unpacked_tuple(
-                                    l_types,
-                                    self.solver.heap.mk_unbounded_tuple(l.clone()),
-                                    Vec::new(),
-                                ),
+                                canonical_vararg_unpack_inner(u, &accepted),
+                                &accepted,
                             )?;
                             l_arg = l_args.next();
                             u_arg = u_args.next();
                             break;
                         } else {
-                            self.is_subset_eq(u, &self.solver.heap.mk_concrete_tuple(l_types))?;
+                            l_optional_prefixes.push(self.solver.heap.mk_concrete_tuple(l_types));
+                            let accepted = unions(l_optional_prefixes, &self.solver.heap);
+                            self.is_subset_eq(
+                                canonical_vararg_unpack_inner(u, &accepted),
+                                &accepted,
+                            )?;
                             u_arg = u_args.next();
                             break;
                         }
