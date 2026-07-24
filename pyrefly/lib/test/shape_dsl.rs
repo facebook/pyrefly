@@ -4033,8 +4033,7 @@ assert_type(two_errors_fn(1), int)
 );
 
 testcase!(
-    bug =
-        "dotted-name arguments to @uses_shape_dsl currently silent-noop; should emit a diagnostic",
+    bug = "dotted-name arguments to @uses_shape_dsl silent-noop; should emit a diagnostic",
     test_shape_dsl_dotted_name_silent_noop,
     shape_dsl_env(),
     r#"

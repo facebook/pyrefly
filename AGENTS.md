@@ -164,7 +164,9 @@ human to commit. Do not skip this step during human-in-the-loop iteration.
   whether the errors are in code you modified. If so, fix them before
   committing.
 
-## The `bug` marker in tests
+## Writing tests
+
+### The `bug` marker in tests
 
 The `testcase!` macro supports a `bug = "<description>"` marker to indicate that
 a test captures undesirable behavior. Important points:
@@ -184,3 +186,13 @@ a test captures undesirable behavior. Important points:
   detailed explanations as comments inside the test body rather than making the
   marker message very long. If there is an associated Github issue, linking to it
   in a comment is often sufficient without paraphrasing the issue in the test.
+
+### `testcase!` header hygiene
+
+The macro uses `line!()` to map errors in the embedded source back to the test file,
+assuming a fixed layout. Extra lines in the header shift every reported line number.
+
+- Put comments above `testcase!(`, never between it and the `r#"..."#` content.
+- Keep `bug = "..."` on one line, with no blank lines in the header.
+- `rustfmt` re-splits a `bug = ` line past 100 cols, so keep the message short
+  enough to fit; put longer detail in a comment above the macro.

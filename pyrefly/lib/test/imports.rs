@@ -1252,9 +1252,9 @@ def abs(x: object) -> str: ...
     )
 }
 
+// A name defined in both the stdlib `builtins` and the user's `__builtins__.pyi`
+// resolves to the user's `__builtins__` definition, which shadows the stdlib one.
 testcase!(
-    // A name defined in both the stdlib `builtins` and the user's `__builtins__.pyi`
-    // resolves to the user's `__builtins__` definition, which shadows the stdlib one.
     test_extra_builtins_shadows_builtin,
     env_extra_builtins_shadows_builtin(),
     r#"

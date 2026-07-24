@@ -1698,8 +1698,7 @@ def main() -> None:
 );
 
 testcase!(
-    bug =
-        "BoolOp laxness causes false negative for walrus in while short-circuit context, see #1251",
+    bug = "BoolOp laxness causes false negative for walrus in short-circuit context, see #1251",
     test_walrus_in_while_bool_op,
     r#"
 def cond() -> bool: ...
