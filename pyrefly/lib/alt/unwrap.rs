@@ -295,7 +295,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .heap
             .mk_class_type(self.stdlib.list(elem.to_type(self.heap)));
         if self.is_subset_eq(&list_type, hint) {
-            self.resolve_var_opt(hint, elem)
+            let elem = self.resolve_var_opt(hint, elem);
+            // A bounded call type variable may only decompose to the `Any` in its bound. In that
+            // case the unhinted list type provides the useful constraint for solving the call.
+            if elem.as_ref().is_some_and(Type::is_any)
+                && hint
+                    .collect_maybe_placeholder_vars()
+                    .into_iter()
+                    .any(|var| self.solver().var_is_quantified(var))
+            {
+                None
+            } else {
+                elem
+            }
         } else {
             None
         }

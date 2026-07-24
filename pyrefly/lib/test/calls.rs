@@ -276,6 +276,15 @@ reduce(max, [1,2])
 );
 
 testcase!(
+    test_iter_list_literal,
+    r#"
+from typing import Iterator, assert_type
+
+assert_type(iter([0]), Iterator[int])
+    "#,
+);
+
+testcase!(
     test_call_arg_lambda_contextual_typing,
     r#"
 from typing import Callable
