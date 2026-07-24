@@ -60,6 +60,28 @@ assert_type(y, Literal[7, 100])
 );
 
 testcase!(
+    test_repeated_predicate_tracks_branch_assignment,
+    r#"
+from typing import reveal_type
+
+def f(b: str):
+    x: int | None = None
+    if b == "bar":
+        x = 3
+    if b == "bar":
+        reveal_type(x)  # E: revealed type: int
+
+def invalidated_predicate(b: str):
+    x: int | None = None
+    if b == "bar":
+        x = 3
+    b = "baz"
+    if b == "bar":
+        reveal_type(x)  # E: revealed type: int | None
+"#,
+);
+
+testcase!(
     test_listcomp_simple,
     r#"
 from typing import assert_type
