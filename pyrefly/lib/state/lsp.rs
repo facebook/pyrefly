@@ -868,7 +868,7 @@ impl<'a> Transaction<'a> {
         );
         // Return the whole edit so callers can use `display_text` for human-facing
         // strings (which stays "from parent import submodule" even when the actual
-        // edit merges into an existing line and `new_text` is just ", submodule").
+        // edit merges into an existing line and `insert_text` is just ", submodule").
         Some((submodule_name.to_owned(), import_edit))
     }
 
