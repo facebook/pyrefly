@@ -6,10 +6,14 @@
  */
 
 use lsp_types::CodeLens;
+use lsp_types::CodeLensOptions;
 use lsp_types::Url;
 use lsp_types::request::CodeLensRequest;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::Value;
 use serde_json::json;
 
@@ -205,4 +209,98 @@ fn test_code_lens_disabled_by_default() {
         .unwrap();
 
     interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_initialize_advertises_code_lens_with_indexing() {
+    let interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+
+    interaction
+        .client
+        .send_initialize(
+            interaction
+                .client
+                .get_initialize_params(&InitializeSettings::default()),
+        )
+        .expect_response_with(|response| {
+            response.capabilities.code_lens_provider
+                == Some(CodeLensOptions {
+                    resolve_provider: Some(false),
+                })
+        })
+        .unwrap();
+    interaction.client.send_initialized();
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_code_lens_shows_reference_counts() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("code_lens_references");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("symbols.py");
+    interaction.client.did_open("usage.py");
+
+    interaction
+        .client
+        .code_lens("symbols.py")
+        .expect_response_with(|response| {
+            let Some(lenses) = response else {
+                return false;
+            };
+            has_reference_lens(&lenses, 0, "3 references", 3)
+                && has_reference_lens(&lenses, 1, "2 references", 2)
+                && has_reference_lens(&lenses, 4, "2 references", 2)
+                && lenses.len() == 3
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+fn has_reference_lens(
+    lenses: &[CodeLens],
+    line: u32,
+    expected_title: &str,
+    expected_locations: usize,
+) -> bool {
+    lenses.iter().any(|lens| {
+        let Some(command) = &lens.command else {
+            return false;
+        };
+        if lens.range.start.line != line
+            || command.title != expected_title
+            || command.command != "editor.action.showReferences"
+        {
+            return false;
+        }
+        let Some(arguments) = &command.arguments else {
+            return false;
+        };
+        arguments
+            .get(2)
+            .and_then(|value| value.as_array())
+            .is_some_and(|locations| locations.len() == expected_locations)
+    })
 }
