@@ -1344,7 +1344,7 @@ impl ModuleSymbols {
             &tco_classes,
         );
         merge_overloads(&mut functions);
-        let classes = parse_classes(&module, &bindings, &answers, &tco_classes);
+        let mut classes = parse_classes(&module, &bindings, &answers, &tco_classes);
         let mut variables = parse_variables(
             &module,
             &bindings,
@@ -1362,6 +1362,24 @@ impl ModuleSymbols {
             handle,
             &tco_classes,
         ));
+
+        // A private name hides its whole subtree, unless exported via `__all__` (issue #3578).
+        let prefix = module_prefix(&module);
+        let is_visible = |name: &str| {
+            let relative = name
+                .strip_prefix(&prefix)
+                .expect("symbol FQNs start with the module prefix");
+            let mut components = relative.split('.');
+            let top = components
+                .next()
+                .expect("split yields at least one component");
+            (is_public_name(top) || dunder_all.iter().any(|n| n == top))
+                && components.all(is_public_name)
+        };
+        functions.retain(|f| is_visible(&f.name));
+        classes.retain(|c| is_visible(&c.name));
+        variables.retain(|v| is_visible(&v.name));
+
         let suppressions = parse_suppressions(&module);
         let stub_merge = for_stub_merge.then(|| StubMergeData {
             class_members: collect_class_members(
