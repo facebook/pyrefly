@@ -44,11 +44,13 @@ use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::error::ErrorQuickFix;
 use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::Params;
 use crate::types::function::FuncMetadata;
 use crate::types::function::Function;
+use crate::types::function::FunctionKind;
 use crate::types::literal::Lit;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
@@ -456,6 +458,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors.error_builder(arguments_range, ErrorKind::Deprecated, header);
                 if let Some(detail) = detail {
                     error_builder = error_builder.with_detail(detail);
+                }
+                if let FunctionKind::Def(id) = &closest_overload.func.1.metadata.kind {
+                    let replacement = if id.has_toplevel_qname("contextlib", "contextmanager") {
+                        Some(("Iterator", "Generator"))
+                    } else if id.has_toplevel_qname("contextlib", "asynccontextmanager") {
+                        Some(("AsyncIterator", "AsyncGenerator"))
+                    } else {
+                        None
+                    };
+                    if let Some((from, to)) = replacement {
+                        error_builder = error_builder.with_quick_fix(
+                            ErrorQuickFix::ReplaceDeprecatedContextManagerReturn {
+                                from: from.to_owned(),
+                                to: to.to_owned(),
+                            },
+                        );
+                    }
                 }
                 error_builder.with_context(context).emit();
             }
