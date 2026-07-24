@@ -13,6 +13,10 @@ use crate::test::util::TestEnv;
 use crate::test::util::testcase_for_macro;
 use crate::testcase;
 
+fn implicit_bool_env() -> TestEnv {
+    TestEnv::new().enable_implicit_bool_error()
+}
+
 testcase!(
     test_if_simple,
     r#"
@@ -993,6 +997,49 @@ if foo:  # E: Function object `foo` used as condition
 while foo:  # E: Function object `foo` used as condition
     ...
 [x for x in range(42) if foo]  # E: Function object `foo` used as condition
+    "#,
+);
+
+testcase!(
+    test_implicit_bool,
+    implicit_bool_env(),
+    r#"
+from typing import Any
+
+def conditions(
+    optional_int: int | None,
+    items: list[int],
+    flag: bool,
+    dynamic: Any,
+) -> None:
+    if optional_int:  # E: Implicit conversion of `int | None` to `bool` is not allowed
+        ...
+    if not optional_int:  # E: Implicit conversion of `int | None` to `bool` is not allowed
+        ...
+    while items:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+        break
+    assert items  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+    [x for x in items if x]  # E: Implicit conversion of `int` to `bool` is not allowed
+    value = 1 if items else 0  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+    fallback = optional_int or 0  # E: Implicit conversion of `int | None` to `bool` is not allowed
+
+    if flag:
+        ...
+    if not flag:
+        ...
+    if bool(items):
+        ...
+    if dynamic:
+        ...
+    "#,
+);
+
+testcase!(
+    test_implicit_bool_disabled_by_default,
+    r#"
+def f(x: int | None) -> None:
+    if x:
+        ...
     "#,
 );
 
