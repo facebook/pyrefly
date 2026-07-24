@@ -2353,6 +2353,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             {
                 self.is_subset_eq(&self.type_order.constructor_to_callable(got_cls), want)
             }
+            (Type::ClassDef(got), Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_))
+                if let Some(constructor) =
+                    self.type_order.constructor_to_callable_for_class_def(got) =>
+            {
+                self.is_subset_eq(&constructor, want)
+            }
             (Type::ClassDef(got), Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_)) => {
                 self.is_subset_eq(&Type::type_of(self.type_order.promote_silently(got)), want)
             }
