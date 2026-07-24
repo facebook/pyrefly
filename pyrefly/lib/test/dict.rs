@@ -15,24 +15,44 @@ dict(x = 1, y = "test")
 );
 
 testcase!(
-    bug = "Dict literal type errors should point to the bad entry, not the whole literal",
     test_dict_literal_bad_value_range,
     r#"
-mp: dict[int, int] = {  # E: `dict[int, int | str]` is not assignable to `dict[int, int]`
+mp: dict[int, int] = {
     1: 2,
-    3: "test",
+    3: "test",  # E: `Literal['test']` is not assignable to dict value type `int`
 }
     "#,
 );
 
 testcase!(
-    bug = "Dict literal type errors should point to the bad entry, not the whole literal",
     test_dict_literal_bad_key_range,
     r#"
-mp: dict[int, int] = {  # E: `dict[int | str, int]` is not assignable to `dict[int, int]`
+mp: dict[int, int] = {
     1: 2,
-    "test": 3,
+    "test": 3,  # E: `Literal['test']` is not assignable to dict key type `int`
 }
+    "#,
+);
+
+testcase!(
+    test_dict_literal_nested_alias_mapping_or_iterable,
+    r#"
+from typing import Generic, Iterable, Mapping, TypeAlias, TypeVar
+
+class Var: ...
+
+JsonScalar: TypeAlias = "Json | Mapping[str, object] | Var"
+JsonList: TypeAlias = JsonScalar | Iterable[JsonScalar]
+
+PythonTypes = TypeVar("PythonTypes")
+AcceptedTypes = TypeVar("AcceptedTypes")
+
+class Base(Generic[PythonTypes, AcceptedTypes]):
+    def __init__(self, value: AcceptedTypes | None = None) -> None: ...
+
+class Json(Base[Mapping[str, object], JsonList]): ...
+
+Json({"featureQuery": {"id": 1}})
     "#,
 );
 
