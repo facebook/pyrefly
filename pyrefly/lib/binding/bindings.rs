@@ -1102,8 +1102,22 @@ impl<'a> BindingsBuilder<'a> {
     /// fallback. Thin wrapper over `Scopes::look_up_name_for_read` that supplies the builtin
     /// context (the `lookup` and current module) so call sites don't repeat it.
     pub(crate) fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
-        self.scopes
-            .look_up_name_for_read(name, usage, self.lookup, self.module_info.name())
+        self.look_up_name_for_read_impl(name, usage, false)
+    }
+
+    fn look_up_name_for_read_impl(
+        &self,
+        name: Hashed<&Name>,
+        usage: &Usage,
+        skip_class_scopes: bool,
+    ) -> NameReadInfo {
+        self.scopes.look_up_name_for_read(
+            name,
+            usage,
+            self.lookup,
+            self.module_info.name(),
+            skip_class_scopes,
+        )
     }
 
     fn inject_shadowed_implicit_builtins(&mut self) {
@@ -1526,11 +1540,20 @@ impl<'a> BindingsBuilder<'a> {
     /// First-use detection happens later in `process_deferred_bound_names`
     /// when all phi nodes are populated.
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
+        self.lookup_name_impl(name, usage, false)
+    }
+
+    pub(crate) fn lookup_name_impl(
+        &mut self,
+        name: Hashed<&Name>,
+        usage: &mut Usage,
+        skip_class_scopes: bool,
+    ) -> NameLookupResult {
         let may_prove_initialized = !matches!(
             usage,
             Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
         );
-        let name_read_info = self.look_up_name_for_read(name, usage);
+        let name_read_info = self.look_up_name_for_read_impl(name, usage, skip_class_scopes);
         match name_read_info {
             NameReadInfo::Flow { idx, initialized } => {
                 // Mark as used (this must happen during traversal for unused-variable detection)

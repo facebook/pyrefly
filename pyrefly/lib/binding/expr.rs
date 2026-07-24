@@ -285,7 +285,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: &mut Option<LegacyTParamCollector>,
     ) -> Idx<Key> {
-        self.ensure_name_in_type(name, usage, tparams_builder, false)
+        self.ensure_name_in_type(name, usage, tparams_builder, false, false)
     }
 
     fn ensure_name_in_type(
@@ -294,6 +294,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: &mut Option<LegacyTParamCollector>,
         is_runtime_evaluated_annotation: bool,
+        skip_class_scopes: bool,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             name,
@@ -302,6 +303,7 @@ impl<'a> BindingsBuilder<'a> {
                 .as_mut()
                 .map(|tparams_builder| (tparams_builder, LegacyTParamId::Name(name.clone()))),
             is_runtime_evaluated_annotation,
+            skip_class_scopes,
         )
     }
 
@@ -311,6 +313,7 @@ impl<'a> BindingsBuilder<'a> {
         attrs: Vec1<Identifier>,
         usage: &mut Usage,
         tparams_builder: &mut Option<LegacyTParamCollector>,
+        skip_class_scopes: bool,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             value,
@@ -319,6 +322,7 @@ impl<'a> BindingsBuilder<'a> {
                 (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
             false,
+            skip_class_scopes,
         )
     }
 
@@ -349,6 +353,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_lookup: Option<(&mut LegacyTParamCollector, LegacyTParamId)>,
         is_runtime_evaluated_annotation: bool,
+        skip_class_scopes: bool,
     ) -> Idx<Key> {
         let key = Key::BoundName(ShortIdentifier::new(name));
         if name.is_empty() {
@@ -370,7 +375,7 @@ impl<'a> BindingsBuilder<'a> {
             if used_in_static_type && let Some((tparams_collector, tparam_id)) = tparams_lookup {
                 self.intercept_lookup(tparams_collector, tparam_id)
             } else {
-                self.lookup_name(Hashed::new(&name.id), usage)
+                self.lookup_name_impl(Hashed::new(&name.id), usage, skip_class_scopes)
             };
         match lookup_result {
             NameLookupResult::Found {
@@ -1279,6 +1284,7 @@ impl<'a> BindingsBuilder<'a> {
                     usage,
                     tparams_builder,
                     check_runtime_name && !in_string_literal,
+                    in_string_literal,
                 );
             }
             Expr::Subscript(ExprSubscript { value, .. })
@@ -1462,6 +1468,7 @@ impl<'a> BindingsBuilder<'a> {
                     attrs,
                     &mut attr_value_usage,
                     tparams_builder,
+                    in_string_literal,
                 );
             }
             Expr::Attribute(ExprAttribute { value, attr, .. })
@@ -1486,9 +1493,21 @@ impl<'a> BindingsBuilder<'a> {
                     ref u => u.clone(),
                 };
                 if resolved.is_some() {
-                    self.ensure_name(&name, &mut attr_value_usage, tparams_builder);
+                    self.ensure_name_in_type(
+                        &name,
+                        &mut attr_value_usage,
+                        tparams_builder,
+                        false,
+                        in_string_literal,
+                    );
                 } else {
-                    self.ensure_name(&name, &mut attr_value_usage, &mut None);
+                    self.ensure_name_in_type(
+                        &name,
+                        &mut attr_value_usage,
+                        &mut None,
+                        false,
+                        in_string_literal,
+                    );
                 }
             }
             Expr::BinOp(ExprBinOp {

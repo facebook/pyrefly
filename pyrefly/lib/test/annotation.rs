@@ -14,11 +14,15 @@ testcase!(
     test_class_scope_quoted_annotation_bypasses_shadowing,
     r#"
 from typing import assert_type
+class C: ...
 class D:
+    C: "C"
     def int(self) -> None:
         ...
-    x: "int" = 0  # E: Expected a type form
-assert_type(D.x, int)  # E: assert_type(Unknown, int) failed
+    x: "int" = 0
+    y: int = 0  # E: Expected a type form
+assert_type(D.C, C)
+assert_type(D.x, int)
 "#,
 );
 
