@@ -1679,14 +1679,14 @@ impl ConfigFile {
         (config, errors)
     }
 
-    fn parse_config(config_str: &str) -> anyhow::Result<ConfigFile> {
+    pub fn parse_config(config_str: &str) -> anyhow::Result<ConfigFile> {
         toml::from_str::<ConfigFile>(config_str).map_err(|err| anyhow::Error::msg(err.to_string()))
     }
 
     /// Parse a pyproject.toml file. Returns a tuple of:
     /// - `Option<ConfigFile>`: the pyrefly config, if `[tool.pyrefly]` was present
     /// - `bool`: whether Python tool sections like `[tool.ruff]` were detected
-    fn parse_pyproject_toml(config_str: &str) -> anyhow::Result<(Option<ConfigFile>, bool)> {
+    pub fn parse_pyproject_toml(config_str: &str) -> anyhow::Result<(Option<ConfigFile>, bool)> {
         let pyproject = toml::from_str::<PyProject>(config_str)
             .map_err(|err| anyhow::Error::msg(err.to_string()))?;
         let has_python_tools = pyproject.has_python_tools();

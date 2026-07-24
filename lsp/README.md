@@ -56,3 +56,21 @@ settings:
   completions include symbols that are not yet imported. When enabled, accepting
   such a completion also inserts the required import statement. Set to `false` to
   only complete symbols that are already in scope.
+
+## Development
+
+### Build And Run (VS Code Desktop)
+
+1. Build the WASM bundle (used by VS Code Web / web extension host):
+   `cd pyrefly_wasm && ./build.sh`
+2. Build the extension:
+   `cd lsp && npm install && npm run compile`
+3. Open the extension folder in VS Code:
+   `cd lsp && code .`
+4. Run the web extension host:
+   Run the `Run Web Extension` launch configuration (it uses `--extensionDevelopmentKind=web`).
+
+Notes:
+
+- The extension build copies `pyrefly_wasm/target/pyrefly_wasm.js` into `lsp/wasm/pyrefly_wasm.js` and
+  `pyrefly_wasm/target/pyrefly_wasm_bg.wasm(.opt)` into `lsp/dist/pyrefly_wasm_bg.wasm`.

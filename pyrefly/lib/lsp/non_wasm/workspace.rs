@@ -246,6 +246,8 @@ struct PyreflyClientConfig {
     extra_paths: Option<Vec<PathBuf>>,
     runnable_code_lens: Option<bool>,
     diagnostic_mode: Option<DiagnosticMode>,
+    complete_function_parens: Option<bool>,
+    import_format: Option<ImportFormat>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
@@ -362,6 +364,34 @@ pub struct LspAnalysisConfig {
     // TODO: this is not a pylance setting. it should be in pyrefly settings
     #[serde(default)]
     pub inlay_hint_debounce_ms: Option<u64>,
+}
+
+impl LspAnalysisConfig {
+    fn has_any_setting(self) -> bool {
+        self.diagnostic_mode.is_some()
+            || self.import_format.is_some()
+            || self.complete_function_parens.is_some()
+            || self.auto_import_completions.is_some()
+            || self.inlay_hints.is_some()
+            || self.show_hover_go_to_links.is_some()
+    }
+
+    fn overlay(self, overrides: Self) -> Self {
+        Self {
+            diagnostic_mode: overrides.diagnostic_mode.or(self.diagnostic_mode),
+            import_format: overrides.import_format.or(self.import_format),
+            complete_function_parens: overrides
+                .complete_function_parens
+                .or(self.complete_function_parens),
+            auto_import_completions: overrides
+                .auto_import_completions
+                .or(self.auto_import_completions),
+            inlay_hints: overrides.inlay_hints.or(self.inlay_hints),
+            show_hover_go_to_links: overrides
+                .show_hover_go_to_links
+                .or(self.show_hover_go_to_links),
+        }
+    }
 }
 
 fn deserialize_analysis<'de, D>(deserializer: D) -> Result<Option<LspAnalysisConfig>, D::Error>
@@ -544,6 +574,8 @@ impl Workspaces {
             Ok(x) => x,
         };
 
+        let mut analysis = config.analysis;
+
         if let Some(python_path) = config.python_path {
             self.update_pythonpath(modified, scope_uri, &python_path);
         }
@@ -569,6 +601,26 @@ impl Workspaces {
             if let Some(diagnostic_mode) = pyrefly.diagnostic_mode {
                 self.update_diagnostic_mode(scope_uri, diagnostic_mode);
             }
+            let mut pyrefly_analysis = pyrefly
+                .analysis
+                .filter(|analysis| analysis.has_any_setting());
+            if pyrefly.complete_function_parens.is_some() || pyrefly.import_format.is_some() {
+                let mut analysis = pyrefly_analysis.unwrap_or_default();
+                if let Some(complete_function_parens) = pyrefly.complete_function_parens {
+                    analysis.complete_function_parens = Some(complete_function_parens);
+                }
+                if let Some(import_format) = pyrefly.import_format {
+                    analysis.import_format = Some(import_format);
+                }
+                pyrefly_analysis = Some(analysis);
+            }
+            if let Some(pyrefly_analysis) = pyrefly_analysis {
+                analysis = Some(
+                    analysis
+                        .map(|analysis| analysis.overlay(pyrefly_analysis))
+                        .unwrap_or(pyrefly_analysis),
+                );
+            }
             // Always write a definitive value for each of these three
             // settings — including `None` when absent — so that removing a
             // setting from VS Code clears the previously-stored workspace
@@ -590,16 +642,12 @@ impl Workspaces {
                     pyrefly.display_type_errors,
                 ),
             );
-            // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis)
-            if let Some(analysis) = pyrefly.analysis {
-                self.update_ide_settings(modified, scope_uri, analysis);
-            }
             if let Some(config_path) = pyrefly.config_path {
                 self.update_workspace_config(modified, scope_uri, config_path);
             }
         }
-        // Always handle analysis at top level (no longer conditional on analysis_handled)
-        if let Some(analysis) = config.analysis {
+
+        if let Some(analysis) = analysis {
             self.update_ide_settings(modified, scope_uri, analysis);
         }
     }
@@ -1124,6 +1172,36 @@ mod tests {
         ));
         assert_eq!(config.python_path, Some("/usr/bin/python3".to_owned()));
         assert!(config.pyrefly.is_some());
+    }
+
+    #[test]
+    fn test_pyrefly_direct_ide_settings_merge_with_legacy_analysis() {
+        let workspaces = Workspaces::new(Workspace::new(), &[]);
+        let mut modified = false;
+
+        workspaces.apply_client_configuration(
+            &mut modified,
+            &None,
+            json!({
+                "analysis": {
+                    "diagnosticMode": "workspace"
+                },
+                "pyrefly": {
+                    "completeFunctionParens": true,
+                    "importFormat": "relative"
+                }
+            }),
+        );
+
+        let analysis = workspaces
+            .default
+            .read()
+            .lsp_analysis_config
+            .expect("analysis config should be set");
+        assert!(modified);
+        assert_eq!(analysis.diagnostic_mode, Some(DiagnosticMode::Workspace));
+        assert_eq!(analysis.complete_function_parens, Some(true));
+        assert_eq!(analysis.import_format, Some(ImportFormat::Relative));
     }
 
     /// Legacy `displayTypeErrors` maps onto the two new axes:

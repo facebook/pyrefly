@@ -163,6 +163,12 @@ impl Range {
     }
 }
 
+#[derive(Serialize)]
+pub struct DefinitionLocation {
+    pub filename: String,
+    pub range: Range,
+}
+
 #[derive(Serialize, Clone)]
 pub struct Diagnostic {
     #[serde(rename(serialize = "startLineNumber"))]
@@ -293,31 +299,41 @@ impl Playground {
         force_update: bool,
     ) -> Option<String> {
         self.config_diagnostics.clear();
-        // Parse configuration if present in the in-memory files
-        let mut parsed_config: Option<ConfigFile> = None;
-        if let Some(cfg_str) = files.get("pyrefly.toml") {
-            match toml::from_str::<ConfigFile>(cfg_str) {
-                Ok(cfg) => parsed_config = Some(cfg),
-                Err(err) => {
-                    // Attach a diagnostic to pyrefly.toml on parse/validation failure
-                    self.config_diagnostics.push(Diagnostic {
-                        start_line: 1,
-                        start_col: 1,
-                        end_line: 1,
-                        end_col: 1,
-                        message_header: "TOML parse error".to_owned(),
-                        message_details: err.to_string(),
-                        kind: "parse-error".to_owned(),
-                        // MarkerSeverity.Error (8)
-                        severity: 8,
-                        filename: "pyrefly.toml".to_owned(),
-                    });
-                    if !force_update {
-                        return None;
-                    }
+        // Parse configuration if present in the in-memory files. Match the normal
+        // config precedence: pyrefly.toml beats pyproject.toml's [tool.pyrefly].
+        let config_result = files
+            .get("pyrefly.toml")
+            .map(|cfg| ("pyrefly.toml", ConfigFile::parse_config(cfg).map(Some)))
+            .or_else(|| {
+                files.get("pyproject.toml").map(|cfg| {
+                    (
+                        "pyproject.toml",
+                        ConfigFile::parse_pyproject_toml(cfg).map(|(config, _)| config),
+                    )
+                })
+            });
+        let parsed_config = match config_result {
+            Some((_, Ok(config))) => config,
+            Some((filename, Err(err))) => {
+                self.config_diagnostics.push(Diagnostic {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 1,
+                    end_col: 1,
+                    message_header: "TOML parse error".to_owned(),
+                    message_details: err.to_string(),
+                    kind: "parse-error".to_owned(),
+                    // MarkerSeverity.Error (8)
+                    severity: 8,
+                    filename: filename.to_owned(),
+                });
+                if !force_update {
+                    return None;
                 }
+                None
             }
-        }
+            None => None,
+        };
 
         self.handles.clear();
         // Base configuration: use parsed config if available, otherwise defaults
@@ -630,6 +646,27 @@ impl Playground {
             .collect()
     }
 
+    pub fn goto_definition_locations(&mut self, pos: Position) -> Vec<DefinitionLocation> {
+        let handle = match self.handles.get(&self.active_filename) {
+            Some(handle) => handle,
+            None => return Vec::new(),
+        };
+        let transaction = self.state.transaction();
+        let position = match self.to_text_size(&transaction, pos) {
+            Some(position) => position,
+            None => return Vec::new(),
+        };
+        transaction
+            .goto_definition(handle, position)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| DefinitionLocation {
+                filename: r.module.path().as_path().to_string_lossy().to_string(),
+                range: Range::new(r.module.display_range(r.range)),
+            })
+            .collect()
+    }
+
     pub fn autocomplete(&self, pos: Position) -> Vec<AutoCompletionItem> {
         let handle = match self.handles.get(&self.active_filename) {
             Some(h) => h,
@@ -822,6 +859,68 @@ mod tests {
     }
 
     #[test]
+    fn test_cross_file_goto_definition_locations() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import helper_function\nresult = helper_function()".to_owned(),
+        );
+        files.insert(
+            "utils.py".to_owned(),
+            "def helper_function() -> str:\n    return \"Hello from utils!\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        let locations = state.goto_definition_locations(Position::new(2, 10));
+
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].filename, "utils.py");
+        assert_eq!(locations[0].range.start_line, 1);
+        assert_eq!(locations[0].range.start_col, 5);
+    }
+
+    #[test]
+    fn test_update_sandbox_files_removes_missing_files() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import helper_function\nresult = helper_function()".to_owned(),
+        );
+        files.insert(
+            "utils.py".to_owned(),
+            "def helper_function() -> str:\n    return \"Hello from utils!\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+        assert!(
+            state
+                .get_errors()
+                .into_iter()
+                .all(|e| !e.message_header.contains("Cannot find module `utils`"))
+        );
+
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import helper_function\nresult = helper_function()".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        assert!(
+            state
+                .get_errors()
+                .into_iter()
+                .any(|e| e.message_header.contains("Cannot find module `utils`"))
+        );
+    }
+
+    #[test]
     fn test_multi_file_errors_with_filenames() {
         let mut state = Playground::new(None).unwrap();
         let mut files = SmallMap::new();
@@ -970,6 +1069,21 @@ mod tests {
             !state.handles.contains_key("pyrefly.toml"),
             "Config file should not be a module"
         );
+    }
+
+    #[test]
+    fn test_pyproject_config_sets_python_version() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("module.py".to_owned(), "x: int = 1".to_owned());
+        files.insert(
+            "pyproject.toml".to_owned(),
+            "[tool.pyrefly]\npython-version = \"3.11\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+
+        assert_eq!(state.sys_info.version(), PythonVersion::new(3, 11, 0));
     }
 
     #[test]
