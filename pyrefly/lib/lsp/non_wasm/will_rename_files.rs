@@ -26,6 +26,8 @@ use pyrefly_util::lock::RwLock;
 use rayon::prelude::*;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use tracing::info;
 
 use crate::lsp::non_wasm::module_helpers::PathRemapper;
@@ -40,6 +42,8 @@ struct RenameUsageVisitor<'a> {
     edits: Vec<TextEdit>,
     old_module_name: &'a ModuleName,
     new_module_name: &'a ModuleName,
+    current_module_name: ModuleName,
+    is_init: bool,
     lined_buffer: &'a LinedBuffer,
 }
 
@@ -47,13 +51,27 @@ impl<'a> RenameUsageVisitor<'a> {
     fn new(
         old_module_name: &'a ModuleName,
         new_module_name: &'a ModuleName,
+        current_module_name: ModuleName,
+        is_init: bool,
         lined_buffer: &'a LinedBuffer,
     ) -> Self {
         Self {
             edits: Vec::new(),
             old_module_name,
             new_module_name,
+            current_module_name,
+            is_init,
             lined_buffer,
+        }
+    }
+
+    fn replacement_for_module(&self, imported_module: ModuleName) -> Option<String> {
+        if imported_module == *self.old_module_name {
+            Some(self.new_module_name.as_str().to_owned())
+        } else {
+            let old_prefix = format!("{}.", self.old_module_name.as_str());
+            let suffix = imported_module.as_str().strip_prefix(&old_prefix)?;
+            Some(format!("{}.{}", self.new_module_name.as_str(), suffix))
         }
     }
 
@@ -62,22 +80,7 @@ impl<'a> RenameUsageVisitor<'a> {
             Stmt::Import(import) => {
                 for alias in &import.names {
                     let imported_module = ModuleName::from_name(&alias.name.id);
-                    if imported_module == *self.old_module_name
-                        || imported_module
-                            .as_str()
-                            .starts_with(&format!("{}.", self.old_module_name.as_str()))
-                    {
-                        // Replace the module name
-                        let new_import_name = if imported_module == *self.old_module_name {
-                            self.new_module_name.as_str().to_owned()
-                        } else {
-                            // Replace the prefix
-                            imported_module.as_str().replace(
-                                self.old_module_name.as_str(),
-                                self.new_module_name.as_str(),
-                            )
-                        };
-
+                    if let Some(new_import_name) = self.replacement_for_module(imported_module) {
                         self.edits.push(TextEdit {
                             range: self.lined_buffer.to_lsp_range(alias.name.range(), None),
                             new_text: new_import_name,
@@ -86,30 +89,61 @@ impl<'a> RenameUsageVisitor<'a> {
                 }
             }
             Stmt::ImportFrom(import_from) => {
-                if let Some(module) = &import_from.module {
-                    let imported_module = ModuleName::from_name(&module.id);
-                    if imported_module == *self.old_module_name
-                        || imported_module
-                            .as_str()
-                            .starts_with(&format!("{}.", self.old_module_name.as_str()))
-                    {
-                        // Replace the module name
-                        let new_import_name = if imported_module == *self.old_module_name {
-                            self.new_module_name.as_str().to_owned()
-                        } else {
-                            // Replace the prefix
-                            imported_module.as_str().replace(
-                                self.old_module_name.as_str(),
-                                self.new_module_name.as_str(),
+                // `from . import name` binds `name` directly, so updating it would also require
+                // a semantic rename of references to that binding.
+                let Some(module) = &import_from.module else {
+                    return;
+                };
+                let Some(imported_module) = self.current_module_name.new_maybe_relative(
+                    self.is_init,
+                    import_from.level,
+                    Some(&module.id),
+                ) else {
+                    return;
+                };
+                let Some(replacement) = self.replacement_for_module(imported_module) else {
+                    return;
+                };
+                let (range, new_text) = if import_from.level == 0 {
+                    (module.range(), replacement)
+                } else {
+                    let current_package = self
+                        .current_module_name
+                        .new_maybe_relative(self.is_init, import_from.level, None)
+                        .expect("resolved above with the same number of dots");
+                    let current_package_prefix = if current_package.as_str().is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}.", current_package.as_str())
+                    };
+                    match replacement.strip_prefix(&current_package_prefix) {
+                        Some(relative_replacement) => {
+                            (module.range(), relative_replacement.to_owned())
+                        }
+                        // Keeping the original dots would resolve against the wrong package.
+                        // Ruff stores their count but not their range, so we can just locate them
+                        // in the source before replacing the whole path.
+                        None => {
+                            let before_module =
+                                TextRange::new(import_from.range().start(), module.range().start());
+                            let dots_offset = self
+                                .lined_buffer
+                                .code_at(before_module)
+                                .find('.')
+                                .expect("relative import has a dot before the module name");
+                            let dots_start = before_module.start()
+                                + TextSize::try_from(dots_offset).expect("offset fits in u32");
+                            (
+                                TextRange::new(dots_start, module.range().end()),
+                                replacement,
                             )
-                        };
-
-                        self.edits.push(TextEdit {
-                            range: self.lined_buffer.to_lsp_range(module.range(), None),
-                            new_text: new_import_name,
-                        });
+                        }
                     }
-                }
+                };
+                self.edits.push(TextEdit {
+                    range: self.lined_buffer.to_lsp_range(range, None),
+                    new_text,
+                });
             }
             _ => {}
         }
@@ -258,6 +292,8 @@ pub fn will_rename_files(
                 let mut visitor = RenameUsageVisitor::new(
                     &old_module_name,
                     &new_module_name,
+                    rdep_handle.module(),
+                    rdep_handle.path().is_init(),
                     module_info.lined_buffer(),
                 );
 
