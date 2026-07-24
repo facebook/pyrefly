@@ -896,6 +896,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn unop_infer(&self, x: &ExprUnaryOp, errors: &ErrorCollector) -> Type {
         let t = self.expr_infer(&x.operand, errors);
+        if x.op == UnaryOp::Not {
+            self.check_implicit_bool(&t, x.operand.range(), errors);
+        }
         let unop = |t: &Type, f: &dyn Fn(&Lit) -> Option<Type>, method: &Name| {
             let operand_range = x.operand.range();
             let context = || {

@@ -193,6 +193,8 @@ pub enum ErrorKind {
     /// to `Any`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyTypeArgument,
+    /// A non-`bool` value is used in a boolean context, such as an `if` condition.
+    ImplicitBool,
     /// Usage of a module that was not actually imported, but does exist.
     ImplicitImport,
     /// Importing a name from a module that only made it available via a plain
@@ -527,6 +529,7 @@ impl ErrorKind {
             ErrorKind::ImplicitAnyEmptyContainer => Severity::Ignore,
             ErrorKind::ImplicitAnyParameter => Severity::Ignore,
             ErrorKind::ImplicitAnyTypeArgument => Severity::Ignore,
+            ErrorKind::ImplicitBool => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,
             ErrorKind::ImplicitReexport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,

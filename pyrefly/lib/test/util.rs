@@ -113,6 +113,7 @@ pub struct TestEnv {
     unannotated_return_error: bool,
     implicit_any_parameter_error: bool,
     implicit_any_attribute_error: bool,
+    implicit_bool_error: bool,
     unknown_attribute_type_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
@@ -162,6 +163,7 @@ impl TestEnv {
             unannotated_return_error: false,
             implicit_any_parameter_error: false,
             implicit_any_attribute_error: false,
+            implicit_bool_error: false,
             unknown_attribute_type_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
@@ -299,6 +301,11 @@ impl TestEnv {
 
     pub fn enable_implicit_any_attribute_error(mut self) -> Self {
         self.implicit_any_attribute_error = true;
+        self
+    }
+
+    pub fn enable_implicit_bool_error(mut self) -> Self {
+        self.implicit_bool_error = true;
         self
     }
 
@@ -535,6 +542,9 @@ impl TestEnv {
         }
         if self.implicit_any_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyAttribute, Severity::Error);
+        }
+        if self.implicit_bool_error {
+            errors.set_error_severity(ErrorKind::ImplicitBool, Severity::Error);
         }
         if self.unknown_attribute_type_error {
             errors.set_error_severity(ErrorKind::UnknownAttributeType, Severity::Error);
