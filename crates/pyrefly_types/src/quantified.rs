@@ -43,6 +43,8 @@ pub enum QuantifiedOrigin {
     SyntheticSelf,
     /// Synthetic binder created during callable/tuple instantiation (TypeVarTuple residual).
     SyntheticCallableResidual,
+    /// Hidden class type parameter inferred from an unannotated `__init__` parameter.
+    SyntheticPseudoGeneric,
 }
 
 /// A source range plus an index that disambiguates multiple quantifieds sharing the same range.
@@ -411,6 +413,10 @@ impl Quantified {
 
     pub fn identity(&self) -> &QuantifiedIdentity {
         &self.identity
+    }
+
+    pub fn is_pseudo_generic(&self) -> bool {
+        self.identity.origin == QuantifiedOrigin::SyntheticPseudoGeneric
     }
 
     pub fn as_gradual_type_helper(kind: QuantifiedKind, default: Option<&Type>) -> Type {

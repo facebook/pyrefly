@@ -403,6 +403,16 @@ impl Bindings {
         Some(&self.0.metadata.get_class_checked(idx)?.fields)
     }
 
+    pub fn get_pseudo_generic_params(&self, idx: ClassDefIndex) -> Option<&[Identifier]> {
+        Some(
+            &self
+                .0
+                .metadata
+                .get_class_checked(idx)?
+                .pseudo_generic_params,
+        )
+    }
+
     /// Per-module class index for a class definition statement (`ClassDefIndex`),
     /// used for `KeyClassField` / `ClassFields` lookups.
     pub fn class_def_index(&self, class_def: &StmtClassDef) -> Option<ClassDefIndex> {
