@@ -745,6 +745,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &x.elt,
                         HintRef::with_ty_opt(hint, elem_hint.as_ref()),
                         errors,
+                        None,
                     );
                     self.heap.mk_class_type(self.stdlib.list(elem_ty))
                 },
@@ -758,6 +759,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &x.elt,
                         HintRef::with_ty_opt(hint, elem_hint.as_ref()),
                         errors,
+                        None,
                     );
                     self.heap.mk_class_type(self.stdlib.set(elem_ty))
                 },
@@ -786,10 +788,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // `key` is only `None` for a syntactically invalid dict comprehension
                     // (parser error recovery); the parser already reports the syntax error.
                     let key_ty = match &x.key {
-                        Some(key) => self.expr_infer_with_hint_promote(key, key_hint, errors),
+                        Some(key) => self.expr_infer_with_hint_promote(key, key_hint, errors, None),
                         None => self.heap.mk_any_error(),
                     };
-                    let value_ty = self.expr_infer_with_hint_promote(&x.value, value_hint, errors);
+                    let value_ty =
+                        self.expr_infer_with_hint_promote(&x.value, value_hint, errors, None);
                     self.heap.mk_class_type(self.stdlib.dict(key_ty, value_ty))
                 },
             ),
@@ -1003,17 +1006,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         x: &Expr,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
+        tcc: Option<&dyn Fn() -> TypeCheckContext>,
     ) -> Type {
         let ty = self.expr_infer_with_hint(x, hint, errors);
-        if let Some(want) = hint {
+        if let Some(hint) = hint {
+            let use_hint = |want| {
+                if let Some(check_errors) = hint.errors()
+                    && let Some(tcc) = tcc
+                {
+                    // If this is a hard hint, always use it, reporting any check errors that
+                    // result from its use.
+                    self.check_type(&ty, want, x.range(), check_errors, tcc);
+                    true
+                } else {
+                    // Use a soft hint only if it is compatible.
+                    self.is_subset_eq(&ty, want)
+                }
+            };
             // Optimization: delay Type cloning until absolutely necessary.
-            if let &[want] = &want.types() {
-                if self.is_subset_eq(&ty, want) {
+            if let &[want] = &hint.types() {
+                if use_hint(want) {
                     return want.clone();
                 }
             } else {
-                let want = Type::union(want.types().to_vec());
-                if self.is_subset_eq(&ty, &want) {
+                let want = Type::union(hint.types().to_vec());
+                if use_hint(&want) {
                     return want;
                 }
             }
@@ -1572,6 +1589,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .map(|hint| HintRef::new(key_hint, hint.errors()))
                         }),
                         errors,
+                        None,
                     );
                     let value_t = self.expr_infer_with_hint_promote(
                         &x.value,
@@ -1580,6 +1598,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .map(|hint| HintRef::new(value_hint, hint.errors()))
                         }),
                         errors,
+                        None,
                     );
                     if !key_t.is_error() {
                         key_tys.push(key_t);
@@ -2643,6 +2662,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     value,
                     HintRef::with_ty_opt(elt_hint, star_hint.as_ref()),
                     errors,
+                    None,
                 );
                 if let Some(iterable_ty) = self.unwrap_iterable(&unpacked_ty) {
                     iterable_ty
@@ -2658,7 +2678,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             }
-            _ => self.expr_infer_with_hint_promote(x, elt_hint, errors),
+            _ => self.expr_infer_with_hint_promote(x, elt_hint, errors, None),
         })
     }
 
