@@ -26,9 +26,11 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprList;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSet;
 use ruff_python_ast::ExprSlice;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtIf;
@@ -443,6 +445,14 @@ impl SysInfo {
 
     pub fn type_checking(&self) -> bool {
         self.0.type_checking
+    }
+
+    pub fn with_platform(&self, platform: PythonPlatform) -> Self {
+        if self.type_checking() {
+            SysInfo::new(self.version(), platform)
+        } else {
+            SysInfo::new_without_type_checking(self.version(), platform)
+        }
     }
 }
 
@@ -1055,9 +1065,112 @@ impl SysInfo {
     }
 }
 
+pub fn module_platform_guard(body: &[Stmt]) -> Option<PythonPlatform> {
+    let body = match body.split_first() {
+        Some((Stmt::Expr(x), rest)) if x.value.is_string_literal_expr() => rest,
+        _ => body,
+    };
+    for stmt in body {
+        if let Some(platform) = platform_guard_from_stmt(stmt) {
+            return Some(platform);
+        }
+        if !matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)) {
+            return None;
+        }
+    }
+    None
+}
+
+fn platform_guard_from_stmt(stmt: &Stmt) -> Option<PythonPlatform> {
+    match stmt {
+        Stmt::Assert(x) => platform_guard_from_assert(&x.test),
+        Stmt::If(x) if x.elif_else_clauses.is_empty() && body_is_unconditional_raise(&x.body) => {
+            platform_guard_from_not_eq(&x.test)
+        }
+        _ => None,
+    }
+}
+
+fn body_is_unconditional_raise(body: &[Stmt]) -> bool {
+    matches!(body, [Stmt::Raise(_)])
+}
+
+fn platform_guard_from_assert(test: &Expr) -> Option<PythonPlatform> {
+    let (op, platform) = platform_compare(test)?;
+    match op {
+        CmpOp::Eq => Some(PythonPlatform::new(&platform)),
+        _ => None,
+    }
+}
+
+fn platform_guard_from_not_eq(test: &Expr) -> Option<PythonPlatform> {
+    let (op, platform) = platform_compare(test)?;
+    match op {
+        CmpOp::NotEq => Some(PythonPlatform::new(&platform)),
+        _ => None,
+    }
+}
+
+fn platform_compare(test: &Expr) -> Option<(CmpOp, String)> {
+    let Expr::Compare(compare) = test else {
+        return None;
+    };
+    if compare.ops.len() != 1 || compare.comparators.len() != 1 {
+        return None;
+    }
+    let op = compare.ops[0];
+    if !matches!(op, CmpOp::Eq | CmpOp::NotEq) {
+        return None;
+    }
+    let left = &compare.left;
+    let right = &compare.comparators[0];
+    let platform = extract_platform_literal(left, right)?;
+    Some((op, platform))
+}
+
+fn extract_platform_literal(left: &Expr, right: &Expr) -> Option<String> {
+    if is_sys_platform(left) {
+        string_literal(right)
+    } else if is_sys_platform(right) {
+        string_literal(left)
+    } else {
+        None
+    }
+}
+
+fn is_sys_platform(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Attribute(ExprAttribute { value, attr, .. })
+            if matches!(&**value, Expr::Name(ExprName { id, .. }) if id == "sys")
+                && attr.as_str() == "platform"
+    )
+}
+
+fn string_literal(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::StringLiteral(ExprStringLiteral { value, .. }) => Some(value.to_str().to_owned()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use ruff_python_ast::PySourceType;
+
     use super::*;
+    use crate::ast::Ast;
+
+    fn parsed_module_platform_guard(code: &str) -> Option<PythonPlatform> {
+        let (module, parse_errors, unsupported_syntax_errors) =
+            Ast::parse(code, PySourceType::Python);
+        assert!(parse_errors.is_empty(), "{parse_errors:?}");
+        assert!(
+            unsupported_syntax_errors.is_empty(),
+            "{unsupported_syntax_errors:?}"
+        );
+        module_platform_guard(&module.body)
+    }
 
     #[test]
     fn test_parse_py_version() {
@@ -1095,6 +1208,48 @@ mod tests {
         );
         assert!(PythonVersion::from_str("").is_err());
         assert!(PythonVersion::from_str("abc").is_err());
+    }
+
+    #[test]
+    fn test_module_platform_guard_allows_leading_docstring_and_imports() {
+        assert_eq!(
+            parsed_module_platform_guard(
+                r#"
+"Windows-only module."
+from __future__ import annotations
+import sys
+assert sys.platform == "win32"
+x = 1
+"#,
+            ),
+            Some(PythonPlatform::windows()),
+        );
+    }
+
+    #[test]
+    fn test_module_platform_guard_stops_after_executable_statement() {
+        assert_eq!(
+            parsed_module_platform_guard(
+                r#"
+import sys
+x = 1
+assert sys.platform == "win32"
+"#,
+            ),
+            None,
+        );
+        assert_eq!(
+            parsed_module_platform_guard(
+                r#"
+import sys
+if __name__ == "__main__":
+    pass
+if sys.platform != "win32":
+    raise RuntimeError()
+"#,
+            ),
+            None,
+        );
     }
 
     #[test]
