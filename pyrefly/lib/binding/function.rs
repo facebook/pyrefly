@@ -74,6 +74,7 @@ use crate::binding::expr::Usage;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
+use crate::binding::scope::Scopes;
 use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::YieldsAndReturns;
@@ -481,7 +482,7 @@ impl<'a> BindingsBuilder<'a> {
     /// it relies on that binding to ensure we don't have a dangling `Idx<Key>` (which could lead
     /// to a panic).
     fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> Idx<Key> {
-        let last_exprs = function_last_expressions(body, self.sys_info).map(|x| {
+        let last_exprs = function_last_expressions(body, self.sys_info, &self.scopes).map(|x| {
             x.into_map(|(last, x)| {
                 (
                     last.clone(),
@@ -1064,8 +1065,14 @@ impl<'a> BindingsBuilder<'a> {
 fn function_last_expressions<'a>(
     x: &'a [Stmt],
     sys_info: SysInfo,
+    scopes: &Scopes,
 ) -> Option<Vec<(LastStmt, &'a Expr)>> {
-    fn f<'a>(sys_info: SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
+    fn f<'a>(
+        sys_info: SysInfo,
+        scopes: &Scopes,
+        x: &'a [Stmt],
+        res: &mut Vec<(LastStmt, &'a Expr)>,
+    ) -> Option<()> {
         fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
             match statement {
                 Stmt::Break(_) => {
@@ -1086,7 +1093,7 @@ fn function_last_expressions<'a>(
                 for y in &x.items {
                     res.push((LastStmt::With(kind), &y.context_expr));
                 }
-                f(sys_info, &x.body, res)?;
+                f(sys_info, scopes, &x.body, res)?;
             }
             Stmt::While(x) => {
                 let test_value = sys_info.evaluate_bool(&x.test);
@@ -1101,7 +1108,7 @@ fn function_last_expressions<'a>(
                 } else if has_break || x.orelse.is_empty() {
                     return None;
                 } else {
-                    f(sys_info, &x.orelse, res)?;
+                    f(sys_info, scopes, &x.orelse, res)?;
                 }
             }
             Stmt::For(x) => {
@@ -1111,15 +1118,33 @@ fn function_last_expressions<'a>(
                 if has_break || x.orelse.is_empty() {
                     return None;
                 }
-                f(sys_info, &x.orelse, res)?;
+                f(sys_info, scopes, &x.orelse, res)?;
             }
             Stmt::If(x) => {
                 let mut last_test = None;
                 let mut any_branch_processed = false;
-                for (test, body) in sys_info.pruned_if_branches(x) {
+                // Prune branches consistently with how the binding traversal prunes
+                // them (see `BindingsBuilder::stmts` handling of `Stmt::If`), i.e. taking
+                // `Final` bool constants into account and not just `sys_info` tests.
+                // If this scan disagreed with the traversal and kept a branch the
+                // traversal drops, we would record a `LastStmt` pointing at a statement
+                // that never gets a binding, and panic at solve time with a dangling key.
+                for (test, body) in Ast::if_branches(x) {
+                    let chosen = match test {
+                        None => Some(true),
+                        Some(test) => scopes.evaluate_bool_for_control_flow(sys_info, test),
+                    };
+                    if chosen == Some(false) {
+                        // Statically-false branch: never executed, so skip it.
+                        continue;
+                    }
                     any_branch_processed = true;
-                    last_test = test;
-                    f(sys_info, body, res)?;
+                    last_test = if chosen == Some(true) { None } else { test };
+                    f(sys_info, scopes, body, res)?;
+                    if chosen == Some(true) {
+                        // Statically-true branch: later branches are unreachable.
+                        break;
+                    }
                 }
                 if !any_branch_processed {
                     // All branches were pruned, so the code falls through
@@ -1144,16 +1169,16 @@ fn function_last_expressions<'a>(
                         .iter()
                         .any(|stmt| matches!(stmt, Stmt::Return(_)))
                 {
-                    f(sys_info, &x.finalbody, res)?;
+                    f(sys_info, scopes, &x.finalbody, res)?;
                 } else {
                     if x.orelse.is_empty() {
-                        f(sys_info, &x.body, res)?;
+                        f(sys_info, scopes, &x.body, res)?;
                     } else {
-                        f(sys_info, &x.orelse, res)?;
+                        f(sys_info, scopes, &x.orelse, res)?;
                     }
                     for handler in &x.handlers {
                         match handler {
-                            ExceptHandler::ExceptHandler(x) => f(sys_info, &x.body, res)?,
+                            ExceptHandler::ExceptHandler(x) => f(sys_info, scopes, &x.body, res)?,
                         }
                     }
                     // If we don't have a matching handler, we raise an exception, which is fine.
@@ -1162,7 +1187,7 @@ fn function_last_expressions<'a>(
             Stmt::Match(x) => {
                 let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
-                    f(sys_info, &case.body, res)?;
+                    f(sys_info, scopes, &case.body, res)?;
                     if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
                         syntactically_exhaustive = true;
                         break;
@@ -1185,7 +1210,7 @@ fn function_last_expressions<'a>(
     }
 
     let mut res = Vec::new();
-    f(sys_info, x, &mut res)?;
+    f(sys_info, scopes, x, &mut res)?;
     Some(res)
 }
 
