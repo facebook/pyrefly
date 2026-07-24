@@ -2423,33 +2423,43 @@ impl<'a> Transaction<'a> {
 
         let mut results: Vec<FindDefinitionItem> = Vec::with_capacity(location_count);
         for (module_info, ranges) in modules_to_ranges.into_iter() {
-            let ast = {
-                let handle = Handle::new(
-                    module_info.name(),
-                    module_info.path().dupe(),
-                    handle.sys_info().dupe(),
-                );
-                self.get_ast(&handle).unwrap_or_else(|| {
-                    // We may not have the AST available for the handle if it's not opened -- in that case,
-                    // Re-parse the module to get the AST.
-                    Ast::parse(module_info.contents(), module_info.source_type())
-                        .0
-                        .into()
-                })
-            };
+            let ast = self.get_ast_or_parse_module(handle, &module_info);
 
             for range in ranges.into_iter() {
-                let refined_param_range =
-                    self.refine_param_location_for_callee(ast.as_ref(), range, identifier);
-                // TODO(grievejia): Should we filter out unrefinable ranges here?
+                let (metadata, definition_range) = if let Some(param_range) =
+                    self.refine_param_location_for_callee(ast.as_ref(), range, identifier)
+                {
+                    (
+                        DefinitionMetadata::Variable(Some(SymbolKind::Parameter)),
+                        param_range,
+                    )
+                } else {
+                    // TODO(grievejia): Should we filter out unrefinable ranges here?
+                    (
+                        DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
+                        range,
+                    )
+                };
                 results.push(FindDefinitionItem {
-                    metadata: DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
-                    definition_range: refined_param_range.unwrap_or(range),
+                    metadata,
+                    definition_range,
                     module: module_info.dupe(),
                 })
             }
         }
         results
+    }
+
+    /// Return the cached AST for a module, parsing its contents if unavailable.
+    /// Files that Pyrefly has not explicitly opened may have module information but no cached AST.
+    fn get_ast_or_parse_module(&self, handle: &Handle, module: &ModuleInfo) -> Arc<ModModule> {
+        let module_handle = Handle::new(
+            module.name(),
+            module.path().dupe(),
+            handle.sys_info().dupe(),
+        );
+        self.get_ast(&module_handle)
+            .unwrap_or_else(|| Ast::parse(module.contents(), module.source_type()).0.into())
     }
 
     fn get_callee_location(
@@ -3725,8 +3735,8 @@ impl<'a> Transaction<'a> {
     }
 
     /// Find references to an external definition within the given handle's module.
-    /// When the exact byte-range comparison fails (e.g. CRLF/LF differences),
-    /// falls back to comparing line numbers, which are encoding-invariant.
+    /// When the exact byte-range comparison fails (e.g. CRLF/LF differences), fall back to
+    /// comparing symbol names and line numbers, which are encoding-invariant.
     fn local_references_from_external_definition(
         &self,
         handle: &Handle,
@@ -3737,22 +3747,26 @@ impl<'a> Transaction<'a> {
         let index = index.lock();
         let mut references = Vec::new();
 
-        // Lazily computed line number for fallback comparison.
-        let definition_line = || module.to_lsp_position(definition_range.start()).line;
+        let definition_line = module.to_lsp_position(definition_range.start()).line;
+        let definition_name = module.code_at(definition_range);
+        let matches_definition = |candidate_range: TextRange, candidate_name: &str| {
+            candidate_range == definition_range
+                || (candidate_name == definition_name
+                    && module.to_lsp_position(candidate_range.start()).line == definition_line)
+        };
 
         for ((imported_module_name, imported_name), ranges) in index
             .externally_defined_variable_references
             .iter()
             .chain(&index.renamed_imports)
         {
-            if let Some((imported_handle, _, export)) = self.resolve_named_import(
+            if let Some((imported_handle, resolved_name, export)) = self.resolve_named_import(
                 handle,
                 *imported_module_name,
                 imported_name.clone(),
                 FindPreference::default(),
             ) && imported_handle.path().as_path() == module.path().as_path()
-                && (export.location == definition_range
-                    || module.to_lsp_position(export.location.start()).line == definition_line())
+                && matches_definition(export.location, resolved_name.as_str())
             {
                 references.extend(ranges.iter().copied());
             }
@@ -3762,9 +3776,7 @@ impl<'a> Transaction<'a> {
         {
             if attribute_module_path == module.path() {
                 for (def_range, ref_range) in def_and_ref_ranges {
-                    if *def_range == definition_range
-                        || module.to_lsp_position(def_range.start()).line == definition_line()
-                    {
+                    if matches_definition(*def_range, module.code_at(*def_range)) {
                         references.push(*ref_range);
                     }
                 }
@@ -3788,15 +3800,14 @@ impl<'a> Transaction<'a> {
                 definition_name,
             ),
             DefinitionMetadata::Module => Vec::new(),
-            DefinitionMetadata::Variable(symbol_kind) => self
+            DefinitionMetadata::Variable(_) => self
                 .local_variable_references_from_local_definition(
                     handle,
                     definition_range,
                     definition_name,
-                    symbol_kind,
                 )
                 .unwrap_or_default(),
-            DefinitionMetadata::VariableOrAttribute(symbol_kind) => [
+            DefinitionMetadata::VariableOrAttribute(_) => [
                 self.local_attribute_references_from_local_definition(
                     handle,
                     definition_range,
@@ -3806,7 +3817,6 @@ impl<'a> Transaction<'a> {
                     handle,
                     definition_range,
                     definition_name,
-                    symbol_kind,
                 )
                 .unwrap_or_default(),
             ]
@@ -3833,10 +3843,12 @@ impl<'a> Transaction<'a> {
         module: &Module,
         include_declaration: bool,
     ) -> Option<Vec<TextRange>> {
+        let definition_name = Name::new(module.code_at(definition_range));
+        let is_parameter_definition =
+            definition_metadata.symbol_kind() == Some(SymbolKind::Parameter);
         let mut references = if handle.path() != module.path() {
             self.local_references_from_external_definition(handle, definition_range, module)?
         } else {
-            let definition_name = Name::new(module.code_at(definition_range));
             self.local_references_from_local_definition(
                 handle,
                 definition_metadata,
@@ -3845,6 +3857,16 @@ impl<'a> Transaction<'a> {
                 include_declaration,
             )?
         };
+        // Only callable parameters can be referenced by keyword arguments. Attributes, modules,
+        // and other variable kinds are covered by the regular reference indexes above.
+        if is_parameter_definition {
+            references.extend(self.keyword_argument_references_from_parameter_definition(
+                handle,
+                module,
+                definition_range,
+                &definition_name,
+            ));
+        }
         references.sort_by_key(|range| range.start());
         references.dedup();
         Some(references)
@@ -3966,34 +3988,21 @@ impl<'a> Transaction<'a> {
         results
     }
 
-    /// Finds all local keyword argument references that correspond to a specific parameter definition.
-    ///
-    /// Given a parameter's definition range and name, this function identifies all keyword arguments
-    /// in function calls within the same module that refer to this parameter. This is useful for
-    /// LSP features like "Find All References" for function parameters.
-    ///
-    /// # Arguments
-    ///
-    /// * `handle` - Handle to the module containing the parameter definition
-    /// * `definition_range` - The text range where the parameter is defined
-    /// * `expected_name` - The name of the parameter to search for
-    ///
-    /// # Returns
-    ///
-    /// Returns `Some(Vec<TextRange>)` containing the text ranges of all keyword argument usages
-    /// that reference this parameter definition, or `None` if the AST cannot be retrieved.
-    fn local_keyword_argument_references_from_parameter_definition(
+    fn keyword_argument_references_from_parameter_definition(
         &self,
         handle: &Handle,
+        definition_module: &ModuleInfo,
         definition_range: TextRange,
         expected_name: &Name,
-    ) -> Option<Vec<TextRange>> {
-        let ast = self.get_ast(handle)?;
+    ) -> Vec<TextRange> {
         let keyword_args = self.collect_local_keyword_arguments_by_name(handle, expected_name);
+        if keyword_args.is_empty() {
+            return Vec::new();
+        }
+
+        let definition_ast = self.get_ast_or_parse_module(handle, definition_module);
+
         let mut references = Vec::new();
-
-        let definition_module = self.get_module_info(handle)?;
-
         for (kw_identifier, callee_kind) in keyword_args {
             let callee_locations =
                 self.get_callee_location(handle, &callee_kind, FindPreference::default());
@@ -4004,22 +4013,20 @@ impl<'a> Transaction<'a> {
             } in callee_locations
             {
                 if module.path() == definition_module.path() {
-                    // Refine to get the actual parameter location
+                    // Refine to get the actual parameter location.
                     if let Some(param_range) = self.refine_param_location_for_callee(
-                        ast.as_ref(),
+                        definition_ast.as_ref(),
                         callee_def_range,
                         &kw_identifier,
-                    ) {
-                        // If the parameter location matches our definition, this is a valid reference
-                        if param_range == definition_range {
-                            references.push(kw_identifier.range);
-                        }
+                    ) && param_range == definition_range
+                    {
+                        references.push(kw_identifier.range);
                     }
                 }
             }
         }
 
-        Some(references)
+        references
     }
 
     fn local_variable_references_from_local_definition(
@@ -4027,7 +4034,6 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         definition_range: TextRange,
         expected_name: &Name,
-        symbol_kind: Option<SymbolKind>,
     ) -> Option<Vec<TextRange>> {
         let mut references = Vec::new();
         if let Some(mod_module) = self.get_ast(handle) {
@@ -4063,20 +4069,6 @@ impl<'a> Transaction<'a> {
             mod_module.visit(&mut |x| f(x, &is_valid_use, &mut references));
         }
 
-        if let Some(kind) = symbol_kind
-            && (kind == SymbolKind::Parameter || kind == SymbolKind::Variable)
-        {
-            let kwarg_references = self
-                .local_keyword_argument_references_from_parameter_definition(
-                    handle,
-                    definition_range,
-                    expected_name,
-                );
-
-            if let Some(refs) = kwarg_references {
-                references.extend(refs);
-            }
-        }
         Some(references)
     }
 
