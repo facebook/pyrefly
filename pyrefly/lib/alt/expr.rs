@@ -139,7 +139,19 @@ pub enum TypeOrExpr<'a> {
 
 pub(crate) enum PreparedExprCall {
     Resolved(Type),
-    Callee(Type),
+    Callee {
+        ty: Type,
+        direct_class_specialization: bool,
+    },
+}
+
+impl PreparedExprCall {
+    pub(crate) fn callee(&self) -> Option<&Type> {
+        match self {
+            Self::Callee { ty, .. } => Some(ty),
+            Self::Resolved(_) => None,
+        }
+    }
 }
 
 /// Where a dimension expression appears, which controls whether a plain
@@ -1067,7 +1079,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return PreparedExprCall::Resolved(ty);
         }
         // Reuse the inferred receiver when schema specialization does not apply.
-        let callee_ty = if let Expr::Attribute(func) = &*x.func {
+        let (callee_ty, direct_class_specialization) = if let Expr::Attribute(func) = &*x.func {
             let base = self.expr_infer_impl(&func.value, None, errors, None);
             if let Some(ty) = self.polars_method_call(base.ty(), func, &x.arguments, errors) {
                 return PreparedExprCall::Resolved(ty);
@@ -1077,11 +1089,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // and deprecation check here as that path would for any other expression.
             self.check_for_deprecated_call(attr.ty(), func.range(), errors);
             self.record_type_trace(func.range(), attr.ty());
-            attr.into_ty()
+            (attr.into_ty(), false)
+        } else if let Expr::Subscript(func) = &*x.func {
+            let base = self.expr_infer_impl(&func.value, None, errors);
+            let callee = self.subscript_infer(&base, &func.slice, func.range(), errors);
+            let direct_class_specialization = matches!(
+                base.ty(),
+                Type::ClassDef(cls) if !self.get_class_tparams(cls).is_empty()
+            ) && matches!(
+                callee.ty(),
+                Type::Type(inner) if matches!(&**inner, Type::ClassType(_))
+            );
+            self.check_for_deprecated_call(callee.ty(), func.range(), errors);
+            self.record_type_trace(func.range(), callee.ty());
+            (callee.into_ty(), direct_class_specialization)
         } else {
-            self.expr_infer(&x.func, errors)
+            (self.expr_infer(&x.func, errors), false)
         };
-        PreparedExprCall::Callee(callee_ty)
+        PreparedExprCall::Callee {
+            ty: callee_ty,
+            direct_class_specialization,
+        }
     }
 
     pub(crate) fn finish_prepared_expr_call(
@@ -1091,9 +1119,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
-        let mut callee_ty = match prepared {
+        let (mut callee_ty, direct_class_specialization) = match prepared {
             PreparedExprCall::Resolved(ty) => return ty,
-            PreparedExprCall::Callee(callee_ty) => callee_ty,
+            PreparedExprCall::Callee {
+                ty,
+                direct_class_specialization,
+            } => (ty, direct_class_specialization),
         };
 
         // Instantiating a subscripted generic whose type argument is an out-of-scope legacy
@@ -1147,7 +1178,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             } else {
                 obj_ty
                     .at_facet(&facet, || {
-                        self.expr_call_infer(x, callee_ty.clone(), hint, errors)
+                        self.expr_call_infer(
+                            x,
+                            callee_ty.clone(),
+                            direct_class_specialization,
+                            hint,
+                            errors,
+                        )
                     })
                     .into_ty()
             }
@@ -1155,7 +1192,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let regex_pattern = Self::regex_pattern_argument(&x.arguments);
             let regex_flags_position =
                 regex_pattern.and_then(|_| self.regex_flags_position(&callee_ty));
-            let ret = self.expr_call_infer(x, callee_ty, hint, errors);
+            let ret = self.expr_call_infer(
+                x,
+                callee_ty,
+                direct_class_specialization,
+                hint,
+                errors,
+            );
             if let (Some(pattern), Some(flags_position)) = (regex_pattern, regex_flags_position) {
                 self.regex_validate_pattern_argument(pattern, &x.arguments, flags_position, errors);
             }
