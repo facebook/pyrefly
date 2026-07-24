@@ -1292,7 +1292,8 @@ impl<'a> BindingsBuilder<'a> {
                     // always evaluates statically to `false`, so its branch is skipped below,
                     // yet the following `else` branch must still be treated as type-checking-only.
                     following_runtime_only_branch |= later_branches_are_type_checking;
-                    let new_narrow_ops = if this_branch_chosen == Some(false) {
+                    let new_narrow_ops = NarrowOps::from_expr(self, test.as_ref());
+                    if this_branch_chosen == Some(false) {
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
                         // However, we still need to check for `yield`/`yield from` in the skipped
@@ -1301,11 +1302,19 @@ impl<'a> BindingsBuilder<'a> {
                         if Ast::body_contains_yield(&body) {
                             self.scopes.mark_has_yield_in_dead_code();
                         }
+                        if self.should_bind_unreachable_branches() {
+                            self.bind_narrow_ops(
+                                &new_narrow_ops,
+                                NarrowUseLocation::Span(range),
+                                &Usage::NonPinningValue(None),
+                            );
+                            self.with_error_suppression(|builder| {
+                                builder.stmts(body, parent);
+                            });
+                        }
                         self.abandon_branch();
                         continue;
-                    } else {
-                        NarrowOps::from_expr(self, test.as_ref())
-                    };
+                    }
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
                         self.insert_binding(
