@@ -1656,7 +1656,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ),
                             context,
                         );
-                    } else if is_direct_class && metadata.is_explicitly_abstract() {
+                    } else if constructor_kind == ConstructorKind::BareClassName
+                        && metadata.is_explicitly_abstract()
+                    {
                         self.error_with_context(
                             errors,
                             arguments_range,
