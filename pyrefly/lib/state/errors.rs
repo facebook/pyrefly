@@ -642,10 +642,51 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| (load.module_info.path(), config))
             .collect();
+        let unused_ignore_name = ErrorKind::UnusedIgnore.to_name();
+        let unused_ignore_suppression_lines_by_path: SmallMap<&ModulePath, SmallSet<LineNumber>> =
+            self.loads
+                .iter()
+                .filter_map(|(load, _, config)| {
+                    let path = load.module_info.path();
+                    if !config
+                        .enabled_ignores(path.as_path())
+                        .contains(&Tool::Pyrefly)
+                    {
+                        return None;
+                    }
+                    let lines: SmallSet<LineNumber> = load
+                        .module_info
+                        .ignore()
+                        .iter()
+                        .flat_map(|(_, suppressions)| suppressions.iter())
+                        .filter(|supp| {
+                            supp.tool() == Tool::Pyrefly
+                                && supp
+                                    .error_codes()
+                                    .iter()
+                                    .any(|code| code == unused_ignore_name)
+                        })
+                        .map(|supp| supp.comment_line())
+                        .collect();
+                    if lines.is_empty() {
+                        None
+                    } else {
+                        Some((path, lines))
+                    }
+                })
+                .collect();
 
         for error in unused_errors {
-            if let Some(config) = config_by_path.get(&error.path()) {
-                let error_config = config.get_error_config(error.path().as_path());
+            let path = error.path();
+            let line = error.display_range().start.line_within_file();
+            if unused_ignore_suppression_lines_by_path
+                .get(&path)
+                .is_some_and(|lines| lines.contains(&line))
+            {
+                continue;
+            }
+            if let Some(config) = config_by_path.get(&path) {
+                let error_config = config.get_error_config(path.as_path());
                 let severity = error_config.display_config.severity(error.error_kind());
                 match severity {
                     Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
@@ -691,6 +732,8 @@ mod tests {
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
+    use pyrefly_config::error_kind::ErrorKind;
+    use pyrefly_config::error_kind::Severity;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
@@ -734,10 +777,28 @@ mod tests {
     }
 
     fn get_errors(contents: &str) -> (Errors, TempDir) {
+        get_errors_with_config(contents, |_| {})
+    }
+
+    fn get_errors_with_unused_ignore_error(contents: &str) -> (Errors, TempDir) {
+        get_errors_with_config(contents, |config| {
+            config
+                .root
+                .errors
+                .get_or_insert_with(Default::default)
+                .set_error_severity(ErrorKind::UnusedIgnore, Severity::Error);
+        })
+    }
+
+    fn get_errors_with_config(
+        contents: &str,
+        configure_config: impl FnOnce(&mut ConfigFile),
+    ) -> (Errors, TempDir) {
         let tdir = tempfile::tempdir().unwrap();
 
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
+        configure_config(&mut config);
         let name = "test";
         fs_anyhow::write(&get_path(&tdir), contents).unwrap();
         config.configure();
@@ -787,6 +848,38 @@ def f() -> int:
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("bad-override"));
+    }
+
+    #[test]
+    fn test_unused_ignore_suppresses_itself_for_display() {
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore[unused-ignore]
+    return 1
+"#;
+        let (errors, _tdir) = get_errors_with_unused_ignore_error(contents);
+        let collected = errors.collect_errors();
+        assert_eq!(errors.collect_unused_ignore_errors(&collected).len(), 1);
+        let display = errors.collect_unused_ignore_errors_for_display(&collected);
+        assert!(display.ordinary.is_empty());
+        assert!(display.disabled.is_empty());
+    }
+
+    #[test]
+    fn test_unused_ignore_suppresses_mixed_unused_codes_for_display() {
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore[bad-return, unused-ignore]
+    return 1
+"#;
+        let (errors, _tdir) = get_errors_with_unused_ignore_error(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("bad-return"));
+        let display = errors.collect_unused_ignore_errors_for_display(&collected);
+        assert!(display.ordinary.is_empty());
+        assert!(display.disabled.is_empty());
     }
 
     #[test]
