@@ -567,6 +567,31 @@ Hover Result: `int`
     );
 }
 
+#[test]
+fn kwarg_dataclass_constructor() {
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Test:
+    foo: int
+
+Test(foo=1)
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | Test(foo=1)
+         ^
+Hover Result: `int`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 // When the callee's implementation uses *args/**kwargs, keyword argument hovers fall back
 // to the matched overload when there is one.
 #[test]
