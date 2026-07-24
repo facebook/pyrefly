@@ -1375,6 +1375,34 @@ Widget docstring"#
 }
 
 #[test]
+fn hover_on_property_returning_class_shows_class_docstring() {
+    let lib = r#"
+from typing import Type
+
+class current_timestamp:
+    """The CURRENT_TIMESTAMP() SQL function."""
+    def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+class Func:
+    @property
+    def current_timestamp(self) -> Type[current_timestamp]: ...
+"#;
+    let code = r#"
+from lib import Func
+
+f = Func()
+f.current_timestamp
+#  ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert!(
+        report.contains("The CURRENT_TIMESTAMP() SQL function."),
+        "Expected hover to show the class docstring, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_dict_constructor_is_multiline() {
     let code = r#"
 x: dict[str, int]
