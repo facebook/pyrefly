@@ -98,6 +98,14 @@ impl Interpreters {
         self.python_interpreter_path = Some(ConfigOrigin::lsp(interpreter));
     }
 
+    /// Freeze interpreter discovery and clear any previously selected interpreter source.
+    pub fn disable_query(&mut self) {
+        self.skip_interpreter_query = true;
+        self.python_interpreter_path = None;
+        self.fallback_python_interpreter_name = None;
+        self.conda_environment = None;
+    }
+
     /// Finds interpreters by searching in prioritized locations for the given project
     /// and interpreter settings.
     ///
