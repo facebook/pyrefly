@@ -17,6 +17,7 @@ use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::helpers::is_docstring_stmt;
+use ruff_python_ast::token::Tokens;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::walk_expr;
 use ruff_python_ast::visitor::walk_stmt;
@@ -428,33 +429,68 @@ pub(crate) fn is_static_or_class_method(function_def: &StmtFunctionDef) -> bool 
         || function_has_decorator(function_def, "classmethod")
 }
 
-/// Reindent every non-blank line in `text` from `from_indent` to `to_indent`.
-pub(crate) fn reindent_block(text: &str, from_indent: &str, to_indent: &str) -> String {
+/// Reindent every non-blank line in `range` from `from_indent` to `to_indent`.
+///
+/// Only indentation that lives outside token spans is rewritten. This preserves
+/// whitespace inside triple-quoted strings and other multi-line token content.
+pub(crate) fn reindent_block(
+    source: &str,
+    range: TextRange,
+    tokens: &Tokens,
+    from_indent: &str,
+    to_indent: &str,
+) -> Option<String> {
     let mut result = String::new();
-    for line in text.split_inclusive('\n') {
-        let (line_body, line_end) = match line.strip_suffix('\n') {
+    let mut line_start = range.start().to_usize();
+    let end = range.end().to_usize().min(source.len());
+    while line_start < end {
+        let next_line_start = source[line_start..end]
+            .find('\n')
+            .map(|offset| line_start + offset + 1)
+            .unwrap_or(end);
+        let line = &source[line_start..next_line_start];
+        let (line_body, line_break) = match line.strip_suffix('\n') {
             Some(body) => (body, "\n"),
             None => (line, ""),
         };
         if line_body.trim().is_empty() {
-            result.push_str(line_body);
-            result.push_str(line_end);
+            result.push_str(line);
+            line_start = next_line_start;
             continue;
         }
-        if !from_indent.is_empty() && line_body.starts_with(from_indent) {
+
+        let line_start_offset = TextSize::try_from(line_start).ok()?;
+        if line_starts_inside_token(tokens, line_start_offset) {
+            result.push_str(line);
+            line_start = next_line_start;
+            continue;
+        }
+
+        let leading_len = line_body
+            .chars()
+            .take_while(|ch| *ch == ' ' || *ch == '\t')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let prefix = &line_body[..leading_len];
+        let remainder = &line_body[leading_len..];
+        if !from_indent.is_empty() && prefix.starts_with(from_indent) {
             result.push_str(to_indent);
-            result.push_str(&line_body[from_indent.len()..]);
+            result.push_str(&prefix[from_indent.len()..]);
+            result.push_str(remainder);
         } else if from_indent.is_empty() {
             result.push_str(to_indent);
-            result.push_str(line_body);
+            result.push_str(prefix);
+            result.push_str(remainder);
         } else {
-            let trimmed = line_body.trim_start_matches([' ', '\t']);
+            let trimmed = prefix.trim_start_matches([' ', '\t']);
             result.push_str(to_indent);
             result.push_str(trimmed);
+            result.push_str(remainder);
         }
-        result.push_str(line_end);
+        result.push_str(line_break);
+        line_start = next_line_start;
     }
-    result
+    Some(result)
 }
 
 /// Prepares text for insertion at a given position, adding a newline prefix if needed.
@@ -531,17 +567,20 @@ pub(crate) fn needs_pass_after_removal(body: &[Stmt], removed_range: TextRange) 
 pub(crate) fn reindent_statement(
     source: &str,
     range: TextRange,
+    tokens: &Tokens,
     from_indent: &str,
     to_indent: &str,
-) -> String {
-    let start = range.start().to_usize().min(source.len());
-    let end = range.end().to_usize().min(source.len());
-    let raw = if start < end { &source[start..end] } else { "" };
-    let mut text = reindent_block(raw, from_indent, to_indent);
+) -> Option<String> {
+    let mut text = reindent_block(source, range, tokens, from_indent, to_indent)?;
     if !text.ends_with('\n') {
         text.push('\n');
     }
-    text
+    Some(text)
+}
+
+fn line_starts_inside_token(tokens: &Tokens, line_start: TextSize) -> bool {
+    let index = tokens.partition_point(|token| token.start() < line_start);
+    index > 0 && tokens[index - 1].end() > line_start
 }
 
 /// Resolves the definition at `position` to the single matching local definition

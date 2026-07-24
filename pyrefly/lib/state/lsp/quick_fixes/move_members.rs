@@ -37,6 +37,8 @@ pub(crate) fn pull_members_up_code_actions(
     handle: &Handle,
     selection: TextRange,
 ) -> Option<Vec<LocalRefactorCodeAction>> {
+    let parsed = transaction.get_parsed_module(handle)?;
+    let tokens = parsed.tokens()?;
     with_move_context(
         transaction,
         handle,
@@ -50,6 +52,7 @@ pub(crate) fn pull_members_up_code_actions(
                 }
                 if let Some(action) = build_move_action(
                     module_info,
+                    tokens.as_ref(),
                     member_stmt,
                     member_indent,
                     class_def,
@@ -75,6 +78,8 @@ pub(crate) fn push_members_down_code_actions(
     handle: &Handle,
     selection: TextRange,
 ) -> Option<Vec<LocalRefactorCodeAction>> {
+    let parsed = transaction.get_parsed_module(handle)?;
+    let tokens = parsed.tokens()?;
     with_move_context(
         transaction,
         handle,
@@ -90,6 +95,7 @@ pub(crate) fn push_members_down_code_actions(
                 eligible_subclasses.push(subclass);
                 if let Some(action) = build_move_action(
                     module_info,
+                    tokens.as_ref(),
                     member_stmt,
                     member_indent,
                     class_def,
@@ -102,6 +108,7 @@ pub(crate) fn push_members_down_code_actions(
             if eligible_subclasses.len() > 1
                 && let Some(action) = build_move_action_multi_target(
                     module_info,
+                    tokens.as_ref(),
                     member_stmt,
                     member_indent,
                     class_def,
@@ -251,13 +258,20 @@ fn collect_class_defs<'a>(body: &'a [Stmt], out: &mut Vec<&'a StmtClassDef>) {
 
 fn build_move_action(
     module_info: &pyrefly_python::module::Module,
+    tokens: &ruff_python_ast::token::Tokens,
     member_stmt: &Stmt,
     member_indent: &str,
     origin_class: &StmtClassDef,
     target_class: &StmtClassDef,
     title: String,
 ) -> Option<LocalRefactorCodeAction> {
-    let insert_edit = build_insertion_edit(module_info, member_stmt, member_indent, target_class)?;
+    let insert_edit = build_insertion_edit(
+        module_info,
+        tokens,
+        member_stmt,
+        member_indent,
+        target_class,
+    )?;
     let removal_edit = build_removal_edit(module_info, member_stmt, member_indent, origin_class)?;
 
     Some(LocalRefactorCodeAction {
@@ -269,6 +283,7 @@ fn build_move_action(
 
 fn build_move_action_multi_target(
     module_info: &pyrefly_python::module::Module,
+    tokens: &ruff_python_ast::token::Tokens,
     member_stmt: &Stmt,
     member_indent: &str,
     origin_class: &StmtClassDef,
@@ -277,8 +292,13 @@ fn build_move_action_multi_target(
 ) -> Option<LocalRefactorCodeAction> {
     let mut edits = Vec::new();
     for target_class in target_classes {
-        let insert_edit =
-            build_insertion_edit(module_info, member_stmt, member_indent, target_class)?;
+        let insert_edit = build_insertion_edit(
+            module_info,
+            tokens,
+            member_stmt,
+            member_indent,
+            target_class,
+        )?;
         edits.push(insert_edit);
     }
     let removal_edit = build_removal_edit(module_info, member_stmt, member_indent, origin_class)?;
@@ -293,6 +313,7 @@ fn build_move_action_multi_target(
 /// Build an insertion edit for placing the member into the target class.
 fn build_insertion_edit(
     module_info: &pyrefly_python::module::Module,
+    tokens: &ruff_python_ast::token::Tokens,
     member_stmt: &Stmt,
     member_indent: &str,
     target_class: &StmtClassDef,
@@ -300,8 +321,13 @@ fn build_insertion_edit(
     let source = module_info.contents();
     let (target_indent, insert_range, replaces_pass) =
         target_insertion_point(target_class, source)?;
-    let member_text =
-        reindent_statement(source, member_stmt.range(), member_indent, &target_indent);
+    let member_text = reindent_statement(
+        source,
+        member_stmt.range(),
+        tokens,
+        member_indent,
+        &target_indent,
+    )?;
     let insert_text = if replaces_pass {
         member_text
     } else {
