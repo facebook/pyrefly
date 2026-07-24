@@ -169,6 +169,10 @@ pub enum TypeCheckKind {
     CallUnpackKwArg(Name, Option<FunctionKind>),
     /// Check of a parameter's default value against its type annotation.
     FunctionParameterDefault(Name),
+    /// Check against the key type of a dict.
+    DictKey,
+    /// Check against the value type of a dict.
+    DictValue,
     /// Check against type of a TypedDict key. The name may be None if the type comes from
     /// `extra_items` or some other non-literal-key source. The bool indicates whether the
     /// TypedDict was inferred (anonymous) rather than explicitly declared.
@@ -239,7 +243,7 @@ impl TypeCheckKind {
             Self::CallKwArgs(..) => ErrorKind::BadArgumentType,
             Self::CallUnpackKwArg(..) => ErrorKind::BadArgumentType,
             Self::FunctionParameterDefault(..) => ErrorKind::BadFunctionDefinition,
-            Self::TypedDictKey(_, _) => ErrorKind::BadAssignment,
+            Self::DictKey | Self::DictValue | Self::TypedDictKey(_, _) => ErrorKind::BadAssignment,
             Self::TypedDictUnpacking => ErrorKind::BadUnpacking,
             Self::TypedDictOpenUnpacking => ErrorKind::OpenUnpacking,
             Self::Attribute(..) => ErrorKind::BadAssignment,

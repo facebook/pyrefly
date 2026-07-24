@@ -171,6 +171,16 @@ impl TypeCheckKind {
                 param,
                 ctx.display(want),
             ),
+            Self::DictKey => format!(
+                "`{}` is not assignable to dict key type `{}`",
+                ctx.display(got),
+                ctx.display(want),
+            ),
+            Self::DictValue => format!(
+                "`{}` is not assignable to dict value type `{}`",
+                ctx.display(got),
+                ctx.display(want),
+            ),
             Self::TypedDictKey(key, is_anonymous) => {
                 let key_str = if let Some(key) = key {
                     format!(" `{key}`")
