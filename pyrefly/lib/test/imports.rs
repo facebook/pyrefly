@@ -2035,6 +2035,18 @@ assert_type(c.value, int)
 "#,
 );
 
+// Test import_python with empty string second argument (treated as wildcard).
+testcase!(
+    test_import_python_empty_string_wildcard,
+    env_import_thrift(),
+    r#"
+from typing import assert_type
+import_python("service/types.thrift", "")
+c = MyConfig()
+assert_type(c.value, int)
+"#,
+);
+
 // Test import_thrift with dot separators.
 testcase!(
     test_import_thrift_dot_separator,

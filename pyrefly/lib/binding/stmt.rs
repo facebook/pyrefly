@@ -199,12 +199,12 @@ impl<'a> BindingsBuilder<'a> {
         let module_name_str = module_path.replace('/', ".");
         let m = ModuleName::from_string(module_name_str);
 
-        // Determine import style: "*" or absent → wildcard, otherwise aliased.
+        // Determine import style: "*", empty, or absent → wildcard, otherwise aliased.
         let alias = args.get(1).and_then(|arg| match arg {
             Expr::StringLiteral(lit) => Some(lit.value.to_str()),
             _ => None,
         });
-        let is_wildcard = alias.is_none() || alias == Some("*");
+        let is_wildcard = alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
 
         if is_wildcard {
             // Equivalent to `from <module> import *`.
