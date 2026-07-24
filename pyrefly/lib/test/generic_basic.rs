@@ -814,6 +814,15 @@ assert_type(A(0).f(""), A[int | str])
 );
 
 testcase!(
+    test_mapping_of_typevar,
+    r#"
+from typing import assert_type, Mapping
+def f[T](x: T, y: Mapping[str, T]) -> T: ...
+assert_type(f(0, {"x": "y"}), int | str)
+    "#,
+);
+
+testcase!(
     test_any_absorption,
     r#"
 from typing import Any, assert_type

@@ -431,7 +431,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         hint: Option<HintRef<'_, '_>>,
         decompose: impl Fn(&Type) -> Option<D>,
-        infer: impl Fn(Option<D>) -> Type,
+        // The inputs to `infer` are the result of decomposing the hint, plus the original hint.
+        // The latter is passed in because we swap in a fresh error collector.
+        infer: impl Fn(Option<D>, Option<HintRef>) -> Type,
     ) -> Type {
         if let Some(hint) = hint {
             let raw_hints = hint.types();
@@ -439,26 +441,67 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let hints = flattened_hints.as_ref().map_or(raw_hints, |x| x);
             let decomposable_width = hints.iter().filter(|h| !h.is_scalar()).count();
             if decomposable_width <= MAX_DECOMPOSE_HINT_WIDTH {
-                for (hint, vs) in self.solver().partial_sort_by_vars(hints) {
-                    if hint.is_scalar() {
+                let mut ret_with_errors = None;
+                for (branch_hint, vs) in self.solver().partial_sort_by_vars(hints) {
+                    if branch_hint.is_scalar() {
                         continue;
                     }
+                    // Per-hint errors are speculative until we make our final selection of which hint to use.
+                    let error_collectors = if vs.is_empty() {
+                        hint.errors().map(|e| (e, self.error_collector()))
+                    } else {
+                        // It's not safe to emit errors based on possibly partial var answers.
+                        None
+                    };
                     let mut ret = None;
                     match self.solver().with_snapshot(&vs, || {
-                        let d = decompose(hint);
+                        let d = decompose(branch_hint);
                         if d.is_none() {
                             return Err(SubsetError::Other);
                         }
-                        ret = Some(infer(d));
-                        self.is_subset_eq_with_reason(ret.as_ref().unwrap(), hint)
+                        ret = Some(infer(
+                            d,
+                            Some(HintRef(
+                                hint.types(),
+                                error_collectors
+                                    .as_ref()
+                                    .map(|(_, branch_errors)| branch_errors),
+                            )),
+                        ));
+                        match self.is_subset_eq_with_reason(ret.as_ref().unwrap(), branch_hint) {
+                            Ok(()) => {
+                                if let Some((errors, branch_errors)) = error_collectors
+                                    && !branch_errors.is_empty()
+                                {
+                                    if ret_with_errors.is_none() {
+                                        ret_with_errors = Some((
+                                            ret.clone().unwrap(),
+                                            errors,
+                                            branch_errors,
+                                            self.solver().snapshot_vars(&vs),
+                                        ));
+                                    }
+                                    Err(SubsetError::Other)
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            err @ Err(_) => err,
+                        }
                     }) {
                         SubsetWithSnapshotResult::Ok => return ret.unwrap(),
                         SubsetWithSnapshotResult::Err(_) => {}
                     }
                 }
+                // If we didn't find a completely successful result, take the first one that produced a hint-compatible result.
+                if let Some((ret, errors, branch_errors, snapshot)) = ret_with_errors {
+                    errors.extend(branch_errors);
+                    self.solver().restore_vars(snapshot);
+                    return ret;
+                }
             }
         }
-        infer(None)
+        infer(None, hint)
     }
 
     /// Flatten the hint candidates produced by `HintRef::split`, additionally looking through type
@@ -467,21 +510,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn flatten_alias_union_hints(&self, hints: &[Type]) -> Option<Vec<Type>> {
         if !hints
             .iter()
-            .any(|hint| matches!(hint, Type::UntypedAlias(_)))
+            .any(|hint| matches!(hint, Type::UntypedAlias(_) | Type::Union(_)))
         {
             return None;
         }
         let mut flattened_hints = Vec::new();
         for hint in hints {
-            if let Type::UntypedAlias(data) = hint {
-                let expanded_alias = self.untype_alias(data);
-                if let Type::Union(u) = expanded_alias {
-                    flattened_hints.extend(u.members);
-                } else {
-                    flattened_hints.push(expanded_alias);
+            match hint {
+                Type::UntypedAlias(data) => {
+                    let expanded_alias = self.untype_alias(data);
+                    if let Type::Union(u) = expanded_alias {
+                        flattened_hints.extend(u.members);
+                    } else {
+                        flattened_hints.push(expanded_alias);
+                    }
                 }
-            } else {
-                flattened_hints.push(hint.clone());
+                Type::Union(u) => {
+                    flattened_hints.extend(u.members.clone());
+                }
+                _ => flattened_hints.push(hint.clone()),
             }
         }
         Some(flattened_hints)
