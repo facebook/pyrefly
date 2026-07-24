@@ -285,6 +285,43 @@ fn assert_no_invert_boolean_action_allow_errors(code: &str, selection: TextRange
     );
 }
 
+fn compute_if_to_match_actions(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .if_to_match_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_first_if_to_match_action(code: &str, selection: TextRange) -> Option<String> {
+    let (module_info, actions, _) = compute_if_to_match_actions(code, selection);
+    let edits = actions.first()?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn assert_no_if_to_match_action(code: &str, selection: TextRange) {
+    let (_, actions, _) = compute_if_to_match_actions(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no if-to-match actions, found {}",
+        actions.len()
+    );
+}
+
 fn cursor_selection(code: &str) -> TextRange {
     let position = extract_cursors_for_test(code)
         .first()
@@ -2843,6 +2880,176 @@ def foo(other_var):
     return (not abc)
 "#;
     assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn if_to_match_literal_chain() {
+    let code = r#"
+x = "a"
+if x == "a":
+    y = 1
+elif x == "b":
+    y = 2
+else:
+    y = 3
+"#;
+    let selection = find_nth_range(code, "if x", 1);
+    let updated =
+        apply_first_if_to_match_action(code, selection).expect("expected if-to-match action");
+    let expected = r#"
+x = "a"
+match x:
+    case "a":
+        y = 1
+    case "b":
+        y = 2
+    case _:
+        y = 3
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn if_to_match_isinstance_chain() {
+    let code = r#"
+def f(x):
+    if isinstance(x, str):
+        return x
+    elif isinstance(x, int):
+        return str(x)
+"#;
+    let selection = find_nth_range(code, "if isinstance", 1);
+    let updated =
+        apply_first_if_to_match_action(code, selection).expect("expected if-to-match action");
+    let expected = r#"
+def f(x):
+    match x:
+        case str():
+            return x
+        case int():
+            return str(x)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn if_to_match_isinstance_tuple_chain() {
+    let code = r#"
+class A: pass
+class B: pass
+class C: pass
+
+def f(x):
+    if isinstance(x, (A, B)):
+        return 1
+    elif isinstance(x, C):
+        return 2
+"#;
+    let selection = find_nth_range(code, "if isinstance", 1);
+    let updated =
+        apply_first_if_to_match_action(code, selection).expect("expected if-to-match action");
+    let expected = r#"
+class A: pass
+class B: pass
+class C: pass
+
+def f(x):
+    match x:
+        case A() | B():
+            return 1
+        case C():
+            return 2
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn if_to_match_enum_member_chain() {
+    let code = r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    BLUE = 2
+
+def f(color: Color):
+    if color == Color.RED:
+        return 1
+    elif color == Color.BLUE:
+        return 2
+"#;
+    let selection = find_nth_range(code, "if color", 1);
+    let updated =
+        apply_first_if_to_match_action(code, selection).expect("expected if-to-match action");
+    let expected = r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    BLUE = 2
+
+def f(color: Color):
+    match color:
+        case Color.RED:
+            return 1
+        case Color.BLUE:
+            return 2
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn if_to_match_preserves_branch_comments() {
+    let code = r#"
+x = "a"
+if x == "a":
+    # keep this comment
+    y = 1
+elif x == "b":
+    y = 2
+"#;
+    let selection = find_nth_range(code, "if x", 1);
+    let updated =
+        apply_first_if_to_match_action(code, selection).expect("expected if-to-match action");
+    let expected = r#"
+x = "a"
+match x:
+    case "a":
+        # keep this comment
+        y = 1
+    case "b":
+        y = 2
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn if_to_match_rejects_mixed_subjects() {
+    let code = r#"
+x = "a"
+z = "b"
+if x == "a":
+    y = 1
+elif z == "b":
+    y = 2
+"#;
+    let selection = find_nth_range(code, "if x", 1);
+    assert_no_if_to_match_action(code, selection);
+}
+
+#[test]
+fn if_to_match_rejects_capture_pattern() {
+    let code = r#"
+x = "a"
+expected = "a"
+other = "b"
+if x == expected:
+    y = 1
+elif x == other:
+    y = 2
+"#;
+    let selection = find_nth_range(code, "if x", 1);
+    assert_no_if_to_match_action(code, selection);
 }
 
 #[test]
