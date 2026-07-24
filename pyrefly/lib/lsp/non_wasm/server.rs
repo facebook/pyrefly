@@ -254,6 +254,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -330,7 +331,8 @@ use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::completion::CompletionOptions as CompletionRequestOptions;
 use crate::lsp::wasm::completion::supports_snippet_completions;
-use crate::lsp::wasm::hover::get_hover;
+use crate::lsp::wasm::hover::HoverResult;
+use crate::lsp::wasm::hover::get_hover_with_verbosity;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
@@ -794,8 +796,11 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use lsp_types::CodeActionKind;
+    use lsp_types::InitializeParams;
+    use serde_json::json;
 
     use super::SOURCE_FIX_ALL_PYREFLY;
+    use super::client_uses_custom_hover_provider;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
 
@@ -857,6 +862,16 @@ mod tests {
         )));
         assert!(!matches_fix_all_kind(&CodeActionKind::QUICKFIX));
         assert!(!matches_fix_all_kind(&CodeActionKind::REFACTOR_EXTRACT));
+    }
+
+    #[test]
+    fn test_custom_hover_provider_requires_explicit_opt_in() {
+        let mut params = InitializeParams::default();
+        assert!(!client_uses_custom_hover_provider(&params));
+        params.initialization_options = Some(json!({
+            "pyrefly": {"customHoverProvider": true}
+        }));
+        assert!(client_uses_custom_hover_provider(&params));
     }
 }
 
@@ -1069,6 +1084,31 @@ pub struct ServerCapabilitiesWithTypeHierarchy {
     type_hierarchy_provider: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HoverParamsWithVerbosity {
+    #[serde(flatten)]
+    params: HoverParams,
+    #[serde(default)]
+    verbosity_level: usize,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HoverWithVerbosity {
+    #[serde(flatten)]
+    hover: Hover,
+    can_increase_verbosity: bool,
+}
+
+enum HoverRequestWithVerbosity {}
+
+impl lsp_types::request::Request for HoverRequestWithVerbosity {
+    type Params = HoverParamsWithVerbosity;
+    type Result = Option<HoverWithVerbosity>;
+    const METHOD: &'static str = HoverRequest::METHOD;
+}
+
 impl ServerCapabilitiesWithTypeHierarchy {
     pub fn set_experimental(&mut self, value: Value) {
         self.base.experimental = Some(value);
@@ -1258,6 +1298,16 @@ fn client_augments_syntax_tokens(initialization_params: &InitializeParams) -> bo
         .unwrap_or(false)
 }
 
+fn client_uses_custom_hover_provider(initialization_params: &InitializeParams) -> bool {
+    initialization_params
+        .initialization_options
+        .as_ref()
+        .and_then(|opts| opts.get("pyrefly"))
+        .and_then(|pyrefly| pyrefly.get("customHoverProvider"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub fn capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
@@ -1336,7 +1386,10 @@ pub fn capabilities(
             trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
             ..Default::default()
         }),
-        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        // The extension registers its richer provider only when VS Code grants the proposed API.
+        hover_provider: Some(HoverProviderCapability::Simple(
+            !client_uses_custom_hover_provider(initialization_params),
+        )),
         inlay_hint_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
@@ -2265,17 +2318,24 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<HoverRequest>(&x) {
+                } else if let Some(params) = as_request::<HoverRequestWithVerbosity>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<HoverRequest>(params, &x.id)
+                        .extract_request_params_or_send_err_response::<HoverRequestWithVerbosity>(
+                            params, &x.id,
+                        )
                     {
-                        let response = match self.hover(&transaction, params) {
-                            Ok(response) => response,
-                            Err(reason) => {
-                                telemetry_event.set_empty_response_reason(reason);
-                                None
+                        let response =
+                            match self.hover(&transaction, params.params, params.verbosity_level) {
+                                Ok(response) => response,
+                                Err(reason) => {
+                                    telemetry_event.set_empty_response_reason(reason);
+                                    None
+                                }
                             }
-                        };
+                            .map(|result| HoverWithVerbosity {
+                                hover: result.hover,
+                                can_increase_verbosity: result.can_increase_verbosity,
+                            });
                         self.send_response(new_response(x.id, Ok(response)));
                     }
                 } else if let Some(params) = as_request::<InlayHintRequest>(&x) {
@@ -5123,7 +5183,8 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         params: HoverParams,
-    ) -> Result<Option<Hover>, EmptyResponseReason> {
+        verbosity_level: usize,
+    ) -> Result<Option<HoverResult>, EmptyResponseReason> {
         let uri = &params.text_document_position_params.text_document.uri;
         let (handle, lsp_config) =
             self.make_handle_with_lsp_analysis_config_if_enabled(uri, Some(HoverRequest::METHOD))?;
@@ -5135,7 +5196,13 @@ impl Server {
         let show_go_to_links = lsp_config
             .and_then(|c| c.show_hover_go_to_links)
             .unwrap_or(true);
-        Ok(get_hover(transaction, &handle, position, show_go_to_links))
+        Ok(get_hover_with_verbosity(
+            transaction,
+            &handle,
+            position,
+            show_go_to_links,
+            verbosity_level,
+        ))
     }
 
     /// How long an inlay hint request should be deferred to debounce it, or
