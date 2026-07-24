@@ -510,21 +510,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn flatten_alias_union_hints(&self, hints: &[Type]) -> Option<Vec<Type>> {
         if !hints
             .iter()
-            .any(|hint| matches!(hint, Type::UntypedAlias(_)))
+            .any(|hint| matches!(hint, Type::UntypedAlias(_) | Type::Union(_)))
         {
             return None;
         }
         let mut flattened_hints = Vec::new();
         for hint in hints {
-            if let Type::UntypedAlias(data) = hint {
-                let expanded_alias = self.untype_alias(data);
-                if let Type::Union(u) = expanded_alias {
-                    flattened_hints.extend(u.members);
-                } else {
-                    flattened_hints.push(expanded_alias);
+            match hint {
+                Type::UntypedAlias(data) => {
+                    let expanded_alias = self.untype_alias(data);
+                    if let Type::Union(u) = expanded_alias {
+                        flattened_hints.extend(u.members);
+                    } else {
+                        flattened_hints.push(expanded_alias);
+                    }
                 }
-            } else {
-                flattened_hints.push(hint.clone());
+                Type::Union(u) => {
+                    flattened_hints.extend(u.members.clone());
+                }
+                _ => flattened_hints.push(hint.clone()),
             }
         }
         Some(flattened_hints)
