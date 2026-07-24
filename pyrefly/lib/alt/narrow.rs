@@ -1091,6 +1091,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => {}
             }
         }
+        let can_filter_parent = base.is_union()
+            || matches!(facet, FacetKind::Index(_))
+                && match base {
+                    Type::Tuple(Tuple::Concrete(_)) => true,
+                    Type::ClassType(class) => {
+                        matches!(self.as_tuple(class), Some(Tuple::Concrete(_)))
+                    }
+                    _ => false,
+                };
         match op {
             AtomicNarrowOp::Is(v) => {
                 let right = self.expr_infer(v, errors);
@@ -1157,9 +1166,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }))
             }
-            // Only filter members of a union to avoid inferring `Never` excessively
+            // Only filter union members or fixed tuple shapes to avoid inferring `Never` excessively.
             AtomicNarrowOp::IsInstance(_, _) | AtomicNarrowOp::IsNotInstance(_, _)
-                if base.is_union() =>
+                if can_filter_parent =>
             {
                 let suppress_errors = self.error_swallower();
                 Some(self.distribute_over_union(base, |t| {

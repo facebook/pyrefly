@@ -324,11 +324,18 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     combined_narrow_op.clone()
                 };
+                let exact_sequence_subpatterns_fully_modeled = num_patterns
+                    == num_non_star_patterns
+                    && x.patterns.iter().all(|p| {
+                        p.is_irrefutable()
+                            || p.is_wildcard()
+                            || Self::sequence_element_atomic_op(p).is_some()
+                    });
                 subject_idx = self.insert_binding(
                     Key::PatternNarrow(x.range()),
                     Binding::Narrow(
                         subject_idx,
-                        Box::new(subject_narrow_op),
+                        Box::new(subject_narrow_op.clone()),
                         NarrowUseLocation::Span(x.range()),
                     ),
                 );
@@ -347,8 +354,10 @@ impl<'a> BindingsBuilder<'a> {
                     ]);
                     narrow_ops.scope.0.insert(name, (scope_narrow_op, x.range));
                 } else if match_subject.is_synthetic() {
-                    let subject_op = if all_subpatterns_irrefutable {
-                        combined_narrow_op
+                    let subject_op = if all_subpatterns_irrefutable
+                        || exact_sequence_subpatterns_fully_modeled
+                    {
+                        subject_narrow_op
                     } else {
                         NarrowOp::And(vec![
                             combined_narrow_op,
@@ -504,20 +513,25 @@ impl<'a> BindingsBuilder<'a> {
                             match_key,
                             Binding::PatternMatchMapping(Box::new(match_key_expr), subject_idx),
                         );
-                        let subject_at_key = if let (Some(key), Some(subject)) =
-                            (key_name, match_subject.as_single())
-                        {
-                            MatchSubject::Single(
-                                subject.clone().with_facet(UnresolvedFacetKind::Key(key)),
-                            )
+                        if let (Some(key), Some(subject)) = (&key_name, match_subject.as_single()) {
+                            narrow_ops.and_all(
+                                self.bind_pattern(
+                                    MatchSubject::Single(
+                                        subject
+                                            .clone()
+                                            .with_facet(UnresolvedFacetKind::Key(key.clone())),
+                                    ),
+                                    pattern,
+                                    match_key_idx,
+                                ),
+                            );
                         } else {
-                            MatchSubject::None
-                        };
-                        narrow_ops.and_all(self.bind_pattern(
-                            subject_at_key,
-                            pattern,
-                            match_key_idx,
-                        ))
+                            narrow_ops.and_all(self.bind_pattern(
+                                MatchSubject::None,
+                                pattern,
+                                match_key_idx,
+                            ));
+                        }
                     });
                 if let Some(rest) = x.rest
                     && !Ast::is_synthesized_empty_identifier(&rest)
@@ -682,11 +696,12 @@ impl<'a> BindingsBuilder<'a> {
                          attr,
                          pattern,
                      }| {
+                        let attr_name = attr.id.clone();
                         let subject_for_attr = if let Some(subject) = match_subject.as_single() {
                             MatchSubject::Single(
                                 subject
                                     .clone()
-                                    .with_facet(UnresolvedFacetKind::Attribute(attr.id.clone())),
+                                    .with_facet(UnresolvedFacetKind::Attribute(attr_name.clone())),
                             )
                         } else {
                             MatchSubject::None
