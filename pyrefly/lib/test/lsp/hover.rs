@@ -302,6 +302,31 @@ takes(foo=1, bar="x", baz=None)
 }
 
 #[test]
+fn hover_wraps_nested_callable_params() {
+    let code = r#"
+from typing import Callable, Concatenate, ParamSpec, TypeVar
+
+T = TypeVar("T")
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def drop_str(func: Callable[Concatenate[T, str, P], R]) -> Callable[Concatenate[T, P], R]: ...
+
+drop_str
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("func: (\n    T,\n    str,\n    ParamSpec(P)\n) -> R"),
+        "Expected wrapped input callable in hover, got: {report}"
+    );
+    assert!(
+        report.contains(") -> (\n    T,\n    ParamSpec(P)\n) -> R"),
+        "Expected wrapped return callable in hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_callable_instance_uses_dunder_call_signature() {
     let code = r#"
 class Greeter:
