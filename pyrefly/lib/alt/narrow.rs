@@ -298,6 +298,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Whether two types have no possible runtime value in common.
+    pub fn is_provably_disjoint(&self, left: &Type, right: &Type) -> bool {
+        let is_dict = |ty: &Type| {
+            matches!(
+                ty,
+                Type::ClassType(cls) | Type::SelfType(cls)
+                    if self.has_superclass(cls.class_object(), self.stdlib.dict_object())
+            )
+        };
+        if (left.is_typed_dict() && is_dict(right)) || (right.is_typed_dict() && is_dict(left)) {
+            return false;
+        }
+        let normalize = |ty: &Type| {
+            ty.clone()
+                .transform(&mut |ty| match ty {
+                    Type::Quantified(q) if q.is_type_var() && q.restriction().is_restricted() => {
+                        *ty = q.upper_bound(self.stdlib, self.heap);
+                    }
+                    Type::TypeVar(tv) if tv.restriction().is_restricted() => {
+                        *ty = tv.upper_bound(self.stdlib, self.heap);
+                    }
+                    _ => {}
+                })
+                .transform(&mut |ty| match ty {
+                    Type::ClassType(cls) | Type::SelfType(cls) => {
+                        for arg in cls.targs_mut().as_mut() {
+                            *arg = self.heap.mk_class_type(self.stdlib.object().clone());
+                        }
+                    }
+                    _ => {}
+                })
+        };
+        let [left, right] = [left, right].map(normalize);
+        if left.is_never() || right.is_never() {
+            return false;
+        }
+        if [&left, &right].iter().any(|ty| {
+            ty.any(|ty| {
+                ty.is_any()
+                    || matches!(ty, Type::Quantified(_) | Type::TypeVar(_))
+                    || matches!(
+                        ty,
+                        Type::ClassType(cls) | Type::SelfType(cls)
+                            if cls.class_object().is_protocol()
+                    )
+            })
+        }) {
+            return false;
+        }
+        self.intersect_with_fallback(&left, &right, IntersectFallback::Right)
+            .is_never()
+    }
+
     fn subtract(&self, left: &Type, right: &Type) -> Type {
         self.distribute_over_union(left, |left| {
             if !left.is_any() && !right.is_any() && left.is_typed_dict() && !right.is_typed_dict() {

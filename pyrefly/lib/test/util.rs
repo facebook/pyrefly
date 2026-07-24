@@ -121,6 +121,7 @@ pub struct TestEnv {
     not_required_key_access_error: bool,
     pytorch_efficiency_lint_error: bool,
     incompatible_comparison_error: bool,
+    invalid_cast_warning: bool,
     untyped_class_decorator_error: bool,
     untyped_function_decorator_error: bool,
     unused_call_result_error: bool,
@@ -169,6 +170,7 @@ impl TestEnv {
             not_required_key_access_error: false,
             pytorch_efficiency_lint_error: false,
             incompatible_comparison_error: false,
+            invalid_cast_warning: false,
             untyped_class_decorator_error: false,
             untyped_function_decorator_error: false,
             unused_call_result_error: false,
@@ -347,6 +349,11 @@ impl TestEnv {
 
     pub fn enable_incompatible_comparison_error(mut self) -> Self {
         self.incompatible_comparison_error = true;
+        self
+    }
+
+    pub fn enable_invalid_cast_warning(mut self) -> Self {
+        self.invalid_cast_warning = true;
         self
     }
 
@@ -570,6 +577,9 @@ impl TestEnv {
         }
         if self.incompatible_comparison_error {
             errors.set_error_severity(ErrorKind::IncompatibleComparison, Severity::Error);
+        }
+        if self.invalid_cast_warning {
+            errors.set_error_severity(ErrorKind::InvalidCast, Severity::Warn);
         }
         if self.untyped_class_decorator_error {
             errors.set_error_severity(ErrorKind::UntypedClassDecorator, Severity::Error);

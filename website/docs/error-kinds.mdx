@@ -846,6 +846,32 @@ if isinstance(1, UserId):
   ...
 ```
 
+## invalid-cast
+
+Default severity: `ignore`
+
+This warning is raised when `typing.cast` or `typing_extensions.cast` converts
+between types that Pyrefly can prove are disjoint. It is not raised merely
+because the source type is not assignable to the target; for example, a union
+may contain a member that overlaps the target. Generic arguments are ignored
+when checking disjointness because they do not affect the underlying runtime
+class, so casting `list[int]` to `list[str]` does not produce this warning.
+Pyrefly also avoids this warning for an unconstrained type variable or a
+protocol, where runtime overlap may be possible. Bounds and constraints on a
+type variable are used when they prove the cast disjoint. Casts to or from
+`Never` are not reported, since they are useful for narrowing and unreachable
+code. A `TypedDict` and `dict` are treated as overlapping because they share the
+same runtime representation. Two open nominal classes are not considered
+disjoint unless their disjoint-base representatives conflict, because a
+multiple-inheritance subclass could satisfy both.
+
+```python
+from typing import cast
+
+x: int = 1
+cast(str, x)  # Cast from `int` to `str` is invalid because the types are disjoint [invalid-cast]
+```
+
 ## invalid-decorator
 
 Default severity: `warn`
