@@ -3754,8 +3754,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class8[Unknown]",
-      "description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class8[Unknown]",
+      "concise_description": "revealed type: [T](x: list[T], y: list[T]) -> Class8[T]",
+      "description": "revealed type: [T](x: list[T], y: list[T]) -> Class8[T]",
       "line": 184,
       "name": "reveal-type",
       "severity": "info",
@@ -3764,14 +3764,14 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Class8[Unknown], Class8[str]) failed",
-      "description": "assert_type(Class8[Unknown], Class8[str]) failed",
-      "line": 185,
-      "name": "assert-type",
+      "column": 9,
+      "concise_description": "Argument `list[str]` is not assignable to parameter `y` with type `list[int]`",
+      "description": "Argument `list[str]` is not assignable to parameter `y` with type `list[int]`",
+      "line": 186,
+      "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 41,
-      "stop_line": 185
+      "stop_column": 13,
+      "stop_line": 186
     },
     {
       "code": -2,
