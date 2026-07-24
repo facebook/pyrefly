@@ -8,6 +8,7 @@
 use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::HashSet;
+use std::iter;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -1824,6 +1825,39 @@ impl<'a> Transaction<'a> {
         let (def_range, docstring_range) =
             definition_from_executable_ast(ast.as_ref(), &context, attr_name)?;
         Some((executable_module, def_range, docstring_range))
+    }
+
+    /// Find the definition in the interface used to type-check an executable module.
+    fn find_corresponding_interface_definition(
+        &self,
+        sys_info: SysInfo,
+        definition: &TextRangeWithModule,
+    ) -> Option<TextRangeWithModule> {
+        if definition.module.path().style() != ModuleStyle::Executable {
+            return None;
+        }
+        let source_handle = Handle::new(
+            definition.module.name(),
+            definition.module.path().dupe(),
+            sys_info,
+        );
+        let interface_handle = self
+            .import_handle(&source_handle, definition.module.name(), None)
+            .finding()?;
+        if interface_handle.path().style() != ModuleStyle::Interface {
+            return None;
+        }
+        let context = AttributeContext::from_module(&definition.module, definition.range)?;
+        let name = Name::new(definition.module.code_at(definition.range));
+        let _ = self.get_exports(&interface_handle);
+        let interface_module = self.get_module_info(&interface_handle)?;
+        let ast = self.get_ast(&interface_handle).unwrap_or_else(|| {
+            Ast::parse(interface_module.contents(), interface_module.source_type())
+                .0
+                .into()
+        });
+        let (range, _) = definition_from_executable_ast(ast.as_ref(), &context, &name)?;
+        Some(TextRangeWithModule::new(interface_module, range))
     }
 
     pub fn key_to_export(
@@ -4374,6 +4408,11 @@ trait RdepTransaction {
     fn module_info(&self, handle: &Handle) -> Option<Module>;
     fn transitive_rdeps(&self, handle: Handle) -> HashSet<Handle>;
     fn run_for_handles(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled>;
+    fn find_corresponding_interface_definition(
+        &self,
+        sys_info: SysInfo,
+        definition: &TextRangeWithModule,
+    ) -> Option<TextRangeWithModule>;
     fn local_references_from_definition(
         &self,
         handle: &Handle,
@@ -4401,6 +4440,14 @@ impl<'a> RdepTransaction for Transaction<'a> {
     fn run_for_handles(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
         self.run(handles, require, None);
         Ok(())
+    }
+
+    fn find_corresponding_interface_definition(
+        &self,
+        sys_info: SysInfo,
+        definition: &TextRangeWithModule,
+    ) -> Option<TextRangeWithModule> {
+        self.find_corresponding_interface_definition(sys_info, definition)
     }
 
     fn local_references_from_definition(
@@ -4438,6 +4485,15 @@ impl<'a> RdepTransaction for CancellableTransaction<'a> {
 
     fn run_for_handles(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
         self.run(handles, require, None)
+    }
+
+    fn find_corresponding_interface_definition(
+        &self,
+        sys_info: SysInfo,
+        definition: &TextRangeWithModule,
+    ) -> Option<TextRangeWithModule> {
+        self.as_ref()
+            .find_corresponding_interface_definition(sys_info, definition)
     }
 
     fn local_references_from_definition(
@@ -4594,50 +4650,59 @@ fn find_global_references_from_definition_impl<T: RdepTransaction>(
     definition: TextRangeWithModule,
     include_declaration: bool,
 ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
-    let results = process_rdeps_with_definition_impl(
-        transaction,
-        sys_info,
-        &definition,
-        |transaction, handle, patched_definition| {
-            let mut module_refs: Vec<(Module, Vec<TextRange>)> = Vec::new();
+    let interface_definition =
+        transaction.find_corresponding_interface_definition(sys_info, &definition);
+    let definitions = interface_definition
+        .into_iter()
+        .map(|definition| (definition, false))
+        .chain(iter::once((definition, include_declaration)));
+    let mut results = Vec::new();
+    for (definition, include_declaration) in definitions {
+        results.extend(process_rdeps_with_definition_impl(
+            transaction,
+            sys_info,
+            &definition,
+            |transaction, handle, patched_definition| {
+                let mut module_refs: Vec<(Module, Vec<TextRange>)> = Vec::new();
 
-            let references = transaction
-                .local_references_from_definition(
-                    handle,
-                    definition_kind.clone(),
-                    patched_definition.range,
-                    &patched_definition.module,
-                    include_declaration,
-                )
-                .unwrap_or_default();
-            if !references.is_empty()
-                && let Some(module_info) = transaction.module_info(handle)
-            {
-                module_refs.push((module_info, references));
-            }
-
-            let child_implementations =
-                find_child_implementations_impl(transaction, handle, patched_definition);
-            if !child_implementations.is_empty()
-                && let Some(module_info) = transaction.module_info(handle)
-            {
-                if let Some((_, ranges)) = module_refs
-                    .iter_mut()
-                    .find(|(m, _)| m.path() == module_info.path())
+                let references = transaction
+                    .local_references_from_definition(
+                        handle,
+                        definition_kind.clone(),
+                        patched_definition.range,
+                        &patched_definition.module,
+                        include_declaration,
+                    )
+                    .unwrap_or_default();
+                if !references.is_empty()
+                    && let Some(module_info) = transaction.module_info(handle)
                 {
-                    ranges.extend(child_implementations);
-                } else {
-                    module_refs.push((module_info, child_implementations));
+                    module_refs.push((module_info, references));
                 }
-            }
 
-            if module_refs.is_empty() {
-                None
-            } else {
-                Some(module_refs)
-            }
-        },
-    )?;
+                let child_implementations =
+                    find_child_implementations_impl(transaction, handle, patched_definition);
+                if !child_implementations.is_empty()
+                    && let Some(module_info) = transaction.module_info(handle)
+                {
+                    if let Some((_, ranges)) = module_refs
+                        .iter_mut()
+                        .find(|(m, _)| m.path() == module_info.path())
+                    {
+                        ranges.extend(child_implementations);
+                    } else {
+                        module_refs.push((module_info, child_implementations));
+                    }
+                }
+
+                if module_refs.is_empty() {
+                    None
+                } else {
+                    Some(module_refs)
+                }
+            },
+        )?);
+    }
 
     let mut global_references: Vec<(Module, Vec<TextRange>)> = Vec::new();
     for module_refs in results {
