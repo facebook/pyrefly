@@ -496,6 +496,20 @@ y = 10 // 0  # error: division by zero
 z = 10 % 0   # error: division by zero
 ```
 
+## empty-body
+
+Default severity: `ignore`
+
+A function body consists only of `...` even though the function declares a
+return type that `None` is not assignable to.
+
+Empty ellipsis bodies are allowed in stub files, protocol methods, abstract
+methods, overload declarations, and `if TYPE_CHECKING` blocks.
+
+```python
+def f() -> int: ...  # error: empty body
+```
+
 ## explicit-any
 
 Default severity: `ignore`
@@ -662,6 +676,34 @@ urllib.request.urlopen(...)
 
 ```
 
+## implicit-reexport
+
+Default severity: `ignore`
+
+This error is emitted when you import a name from a module that only made it
+available through a plain `import` or `from ... import ...` statement. Per the
+[typing spec](https://typing.python.org/en/latest/spec/distributing.html#import-conventions),
+such a name is not part of the module's public interface, so relying on it is
+fragile: the intermediate module may stop importing it at any time.
+
+A module explicitly re-exports a name when it is redundantly aliased
+(`from x import y as y` or `import x as x`), listed in `__all__`, or brought in
+via a wildcard (`from x import *`).
+
+```python
+# foo.py
+a = 1
+
+# bar.py
+from foo import a  # `a` is not re-exported from `bar`
+
+# baz.py
+from bar import a  # error: `a` is not exported from module `bar`
+
+# Fix in bar.py:
+from foo import a as a  # or add `a` to `__all__`
+```
+
 ## implicitly-defined-attribute
 
 Default severity: `ignore`
@@ -765,6 +807,22 @@ def f(x: bool = False) -> int | None:
 ## internal-error
 
 Ideally you'll never see this one. If you do, please consider [filing a bug](https://github.com/facebook/pyrefly/issues).
+
+## invalid-abstract-method
+
+Default severity: `ignore`
+
+Pyrefly emits this error when a class that is not abstract (does not inherit from `abc.ABC`, use `abc.ABCMeta`, have any transitive abstract base, or define a `Protocol` or `NewType`) defines a method decorated with `@abstractmethod`. Such a class is directly instantiable at runtime, yet contains an unimplemented method — a likely programming mistake.
+
+```python
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod  # Error: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+    def fn(self) -> int: ...
+```
+
+To fix the issue, either inherit from `abc.ABC` to make the class abstract, define a `Protocol` if the class is an interface, or remove the `@abstractmethod` decorator and provide a concrete implementation.
 
 ## invalid-annotation
 
@@ -1175,6 +1233,29 @@ happen if you install the `types-requests` package but forget to install `reques
 ## missing-source-for-stubs
 
 Pyrefly has bundled stubs for a package, but no corresponding source package was found.
+
+## missing-super-call
+
+Default severity: `ignore`
+
+A constructor-like method overrides a parent class method but does not call `super()`.
+
+```python
+class Base:
+    def __init__(self) -> None:
+        self.value: int = 1
+
+class Child(Base):
+    def __init__(self) -> None:  # missing-super-call
+        pass
+```
+
+To enable this check, set the severity to `error` in your configuration:
+
+```toml
+[tool.pyrefly]
+errors = { missing-super-call = "error" }
+```
 
 ## name-mismatch
 
