@@ -220,6 +220,8 @@ use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::editable_install::clear_editable_source_paths_cache;
+use pyrefly_util::editable_install::is_editable_metadata_file;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::HiddenDirFilter;
@@ -3870,6 +3872,8 @@ impl Server {
                 .and_then(|x| x.to_str())
                 .is_some_and(|x| ConfigFile::CONFIG_FILE_NAMES.contains(&x))
         });
+        // Editable metadata changes can add/remove source roots, so we need to rewatch.
+        let editable_metadata_changed = events.iter().any(|path| is_editable_metadata_file(path));
 
         // Re-register watchers if files were created/removed (pip install, new files, etc.)
         // or if unknown events occurred. This ensures we discover new files while avoiding
@@ -3877,7 +3881,7 @@ impl Server {
         let files_added_or_removed =
             !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty();
 
-        config_changed || files_added_or_removed
+        config_changed || files_added_or_removed || editable_metadata_changed
     }
 
     fn did_change_watched_files(
@@ -3890,6 +3894,7 @@ impl Server {
         if events.is_empty() {
             return;
         }
+        let editable_metadata_changed = events.iter().any(|path| is_editable_metadata_file(path));
 
         // Log the files that changed
         let total = events.created.len()
@@ -3918,6 +3923,10 @@ impl Server {
         });
 
         let should_requery_build_system = should_requery_build_system(&events);
+
+        if editable_metadata_changed {
+            clear_editable_source_paths_cache();
+        }
 
         // Rewatch files if necessary (config changed, files added/removed, etc.)
         if Self::should_rewatch(&events) {
