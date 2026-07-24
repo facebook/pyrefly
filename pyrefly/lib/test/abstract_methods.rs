@@ -83,10 +83,18 @@ class DirectABCMeta(metaclass=ABCMeta):
 class IndirectABCMeta(DirectABCMeta):
     pass
 
+class DirectGenericABC[T](ABC):
+    pass
+
+class DirectGenericABCMeta[T](metaclass=ABCMeta):
+    pass
+
 direct_abc = DirectABC()  # E: Cannot instantiate `DirectABC`
 indirect_abc = IndirectABC()
 direct_abc_meta = DirectABCMeta()  # E: Cannot instantiate `DirectABCMeta`
 indirect_abc_meta = IndirectABCMeta()
+direct_generic_abc = DirectGenericABC[int]()
+direct_generic_abc_meta = DirectGenericABCMeta[int]()
 "#,
 );
 
