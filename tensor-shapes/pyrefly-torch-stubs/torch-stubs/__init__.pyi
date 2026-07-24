@@ -6,20 +6,20 @@
 """
 Comprehensive type stubs for PyTorch with shape inference.
 
-Shape inference is declared via @uses_shape_dsl(ir_fn) decorators. The IR
-functions are defined in torch/_shapes.pyi and evaluated by the DSL interpreter
-in crates/pyrefly_types/src/meta_shape_dsl.rs.
+Shape inference is expressed through type-level functions such as `broadcast(...)` in
+annotations or through `@uses_shape_dsl(ir_fn)` decorators. Decorator IR functions are defined
+in `torch/_shapes.pyi` and evaluated by the DSL interpreter in
+`crates/pyrefly_types/src/meta_shape_dsl.rs`.
 """
 
 import builtins
 from typing import Any, overload, Self, TYPE_CHECKING
 
 import shape_extensions
-from shape_extensions import Elements, IntTuple, IntVar, uses_shape_dsl
+from shape_extensions import broadcast, Elements, IntTuple, IntVar, uses_shape_dsl
 from torch._shapes import (
     aminmax_ir,
     arange_ir,
-    binary_broadcast_ir,
     broadcast_to_ir,
     cat_ir,
     chunk_ir,
@@ -162,24 +162,31 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     # ==== Arithmetic Operations ====
 
-    @uses_shape_dsl(binary_broadcast_ir)
+    # Tensor-tensor operators return Tensor rather than Self because broadcasting changes the
+    # shape specialization, which arbitrary subclasses are not guaranteed to preserve.
+
     @overload
-    def __add__(self, other: Tensor) -> Self: ...
+    def __add__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
     @overload
     def __add__(self, other: float | int) -> Self: ...
-    @uses_shape_dsl(binary_broadcast_ir)
     @overload
-    def __sub__(self, other: Tensor) -> Self: ...
+    def __sub__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
     @overload
     def __sub__(self, other: float | int) -> Self: ...
-    @uses_shape_dsl(binary_broadcast_ir)
     @overload
-    def __mul__(self, other: Tensor) -> Self: ...
+    def __mul__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
     @overload
     def __mul__(self, other: float | int) -> Self: ...
-    @uses_shape_dsl(binary_broadcast_ir)
     @overload
-    def __truediv__(self, other: Tensor) -> Self: ...
+    def __truediv__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
     @overload
     def __truediv__(self, other: float | int) -> Self: ...
 
@@ -201,26 +208,40 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     # ==== Comparison Operations ====
 
-    def __eq__(self, other: Tensor | float | int) -> Self: ...  # type: ignore[override]
-    def __ne__(self, other: Tensor | float | int) -> Self: ...  # type: ignore[override]
-    @uses_shape_dsl(binary_broadcast_ir)
     @overload
-    def __lt__(self, other: Tensor) -> Tensor: ...
+    def __eq__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...  # type: ignore[override]
+    @overload
+    def __eq__(self, other: float | int) -> Self: ...  # type: ignore[override]
+    @overload
+    def __ne__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...  # type: ignore[override]
+    @overload
+    def __ne__(self, other: float | int) -> Self: ...  # type: ignore[override]
+    @overload
+    def __lt__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
     @overload
     def __lt__(self, other: float | int) -> Self: ...
-    @uses_shape_dsl(binary_broadcast_ir)
     @overload
-    def __le__(self, other: Tensor) -> Tensor: ...
+    def __le__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
     @overload
     def __le__(self, other: float | int) -> Self: ...
-    @uses_shape_dsl(binary_broadcast_ir)
     @overload
-    def __gt__(self, other: Tensor) -> Tensor: ...
+    def __gt__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
     @overload
     def __gt__(self, other: float | int) -> Self: ...
-    @uses_shape_dsl(binary_broadcast_ir)
     @overload
-    def __ge__(self, other: Tensor) -> Tensor: ...
+    def __ge__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
     @overload
     def __ge__(self, other: float | int) -> Self: ...
 
