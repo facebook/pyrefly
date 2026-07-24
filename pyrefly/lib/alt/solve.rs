@@ -5213,44 +5213,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     #[inline(never)]
     fn binding_to_type_info_possible_legacy_tparam(
         &self,
-        key: Idx<KeyLegacyTypeParam>,
+        keys: &[Idx<KeyLegacyTypeParam>],
         range_if_scoped_params_exist: &Option<TextRange>,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        let ty = match &*self.get_idx(key) {
-            LegacyTypeParameterLookup::Parameter(p) => {
-                // This class or function has scoped (PEP 695) type parameters. Mixing legacy-style parameters is an error.
-                if let Some(r) = range_if_scoped_params_exist {
-                    self.error(
-                        errors,
-                        *r,
-                        ErrorKind::InvalidTypeVar,
-                        format!(
-                            "Type parameter {} is not included in the type parameter list",
-                            self.module().display(&self.bindings().idx_to_key(key).0)
-                        ),
-                    );
-                }
-                p.clone().to_value()
+        let first_key = *keys
+            .first()
+            .expect("PossibleLegacyTParam bindings must always have at least one key");
+        match self.bindings().get(first_key) {
+            BindingLegacyTypeParam::ParamKeyed(_) => {
+                let ty = match &*self.get_idx(first_key) {
+                    LegacyTypeParameterLookup::Parameter(p) => {
+                        if let Some(r) = range_if_scoped_params_exist {
+                            self.error(
+                                errors,
+                                *r,
+                                ErrorKind::InvalidTypeVar,
+                                format!(
+                                    "Type parameter {} is not included in the type parameter list",
+                                    self.module()
+                                        .display(&self.bindings().idx_to_key(first_key).0)
+                                ),
+                            );
+                        }
+                        p.clone().to_value()
+                    }
+                    LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
+                };
+                TypeInfo::of_ty(ty)
             }
-            LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
-        };
-        match self.bindings().get(key) {
-            BindingLegacyTypeParam::ModuleKeyed(idx, attrs) => {
-                // `idx` points to a module whose attr chain may end in a legacy type
-                // variable that needs to be replaced with a QuantifiedValue. Since the
-                // binding is for the module itself, we use the mechanism for attribute
-                // ("facet") type narrowing to change the type produced when the final
-                // attr is accessed.
-                let module = (*self.get_idx(*idx)).clone();
-                if matches!(ty, Type::QuantifiedValue(_)) {
-                    let facets = attrs.mapped_ref(|a| FacetKind::Attribute(a.clone()));
-                    module.with_narrow(&facets, ty)
-                } else {
-                    module
+            BindingLegacyTypeParam::ModuleKeyed(idx, _) => {
+                let mut module_info = (*self.get_idx(*idx)).clone();
+                for &key in keys {
+                    let ty = match &*self.get_idx(key) {
+                        LegacyTypeParameterLookup::Parameter(p) => {
+                            if let Some(r) = range_if_scoped_params_exist {
+                                self.error(
+                                    errors,
+                                    *r,
+                                    ErrorKind::InvalidTypeVar,
+                                    format!(
+                                        "Type parameter {} is not included in the type parameter list",
+                                        self.module().display(&self.bindings().idx_to_key(key).0)
+                                    ),
+                                );
+                            }
+                            p.clone().to_value()
+                        }
+                        LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
+                    };
+                    if let BindingLegacyTypeParam::ModuleKeyed(_, attrs) = self.bindings().get(key)
+                        && matches!(ty, Type::QuantifiedValue(_))
+                    {
+                        let facets = attrs.mapped_ref(|a| FacetKind::Attribute(a.clone()));
+                        module_info = module_info.with_narrow(&facets, ty);
+                    }
                 }
+                module_info
             }
-            BindingLegacyTypeParam::ParamKeyed(_) => TypeInfo::of_ty(ty),
         }
     }
 
@@ -5319,7 +5339,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::PossibleLegacyTParam(key, range_if_scoped_params_exist) => self
                 .binding_to_type_info_possible_legacy_tparam(
-                    *key,
+                    key,
                     range_if_scoped_params_exist,
                     errors,
                 ),
