@@ -954,7 +954,7 @@ assert_type(y, str)
 testcase!(
     test_unpack_string_too_many,
     r#"
-a, b = "abc"  # E: Cannot unpack Literal['abc'] (of size 3) into 2 values
+ a, b = "abc"  # E: Cannot unpack Literal['abc'] (of size 3) into 2 values
 "#,
 );
 
@@ -962,7 +962,7 @@ a, b = "abc"  # E: Cannot unpack Literal['abc'] (of size 3) into 2 values
 testcase!(
     test_unpack_string_too_few,
     r#"
-a, b = "x"  # E: Cannot unpack Literal['x'] (of size 1) into 2 values
+ a, b = "x"  # E: Cannot unpack Literal['x'] (of size 1) into 2 values
 "#,
 );
 
@@ -991,7 +991,7 @@ a, b = b"abc"  # E: Cannot unpack Literal[b'abc'] (of size 3) into 2 values
 testcase!(
     test_unpack_bytes_exact,
     r#"
-a, b, c = b"abc"
+ a, b, c = b"abc"
 "#,
 );
 
@@ -1069,6 +1069,29 @@ xs: list[Any] = []
 y: int
 for y in xs:
     assert_type(y, int)
+"#,
+);
+
+testcase!(
+    test_for_loop_unpack_string,
+    r#"
+for k, v in {"x": 1}:  # E: Cannot unpack
+    pass
+
+xs: list[str] = []
+for a, b in xs:  # E: Cannot unpack
+    pass
+"#,
+);
+
+testcase!(
+    test_for_loop_unpack_parenthesized_tuple_annotation,
+    r#"
+from __future__ import annotations
+
+x: list[(str, str)] = []
+for a, b in x:
+    pass
 "#,
 );
 
