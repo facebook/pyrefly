@@ -216,6 +216,88 @@ from typing import assert_type
 
 x = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": {"k": {"l": {"m": {"n": {"o": "deep"}}}}}}}}}}}}}}}
 assert_type(x, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]]]]]]]]]]])
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3653
+// Keep enough heterogeneous values and branching to exercise constructor overload inference.
+// Re-inferring each list of pairs for every overload makes this grow exponentially with depth.
+testcase!(
+    test_nested_dict_constructor_from_list_of_pairs,
+    r#"
+from collections import OrderedDict
+from typing import assert_type
+
+def dict_tree() -> dict:
+    return dict([
+        ("name", "root"),
+        ("count", 1),
+        ("items", [1, 2]),
+        ("metadata", {"enabled": True}),
+        ("left", dict([
+            ("name", "left"),
+            ("count", 2),
+            ("items", [3, 4]),
+            ("metadata", {"enabled": False}),
+            ("left", dict([
+                ("name", "leaf"),
+                ("count", 3),
+                ("items", [5, 6]),
+                ("metadata", {"enabled": True}),
+            ])),
+            ("right", dict([
+                ("name", "leaf"),
+                ("count", 4),
+                ("items", [7, 8]),
+                ("metadata", {"enabled": False}),
+            ])),
+        ])),
+        ("right", dict([
+            ("name", "right"),
+            ("count", 5),
+            ("items", [9, 10]),
+            ("metadata", {"enabled": True}),
+            ("left", dict([
+                ("name", "leaf"),
+                ("count", 6),
+                ("items", [11, 12]),
+                ("metadata", {"enabled": False}),
+            ])),
+            ("right", dict([
+                ("name", "leaf"),
+                ("count", 7),
+                ("items", [13, 14]),
+                ("metadata", {"enabled": True}),
+            ])),
+        ])),
+    ])
+
+def ordered_tree() -> OrderedDict:
+    return OrderedDict([
+        ("name", "root"),
+        ("count", 1),
+        ("left", OrderedDict([
+            ("name", "left"),
+            ("count", 2),
+            ("items", [1, 2]),
+        ])),
+        ("right", OrderedDict([
+            ("name", "right"),
+            ("count", 3),
+            ("items", [3, 4]),
+        ])),
+    ])
+
+ordered = OrderedDict([("name", "root"), ("count", 1)])
+assert_type(ordered, OrderedDict[str, int | str])
+
+with_keyword = dict([("first", 1)], second="two")
+assert_type(with_keyword, dict[str, int | str])
+
+class Base: ...
+class Child(Base): ...
+contextual: dict[str, list[Base]] = dict([("items", [Child()])])
+assert_type(contextual, dict[str, list[Base]])
 "#,
 );
 
