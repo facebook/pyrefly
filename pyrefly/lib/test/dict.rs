@@ -15,6 +15,28 @@ dict(x = 1, y = "test")
 );
 
 testcase!(
+    bug = "Dict literal type errors should point to the bad entry, not the whole literal",
+    test_dict_literal_bad_value_range,
+    r#"
+mp: dict[int, int] = {  # E: `dict[int, int | str]` is not assignable to `dict[int, int]`
+    1: 2,
+    3: "test",
+}
+    "#,
+);
+
+testcase!(
+    bug = "Dict literal type errors should point to the bad entry, not the whole literal",
+    test_dict_literal_bad_key_range,
+    r#"
+mp: dict[int, int] = {  # E: `dict[int | str, int]` is not assignable to `dict[int, int]`
+    1: 2,
+    "test": 3,
+}
+    "#,
+);
+
+testcase!(
     test_anonymous_typed_dict_union_promotion,
     r#"
 from typing import assert_type
