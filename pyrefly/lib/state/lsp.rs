@@ -3648,8 +3648,8 @@ impl<'a> Transaction<'a> {
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
-        // Actions that carry more than one edit (e.g. the missing-`@override` fix,
-        // which inserts both the decorator and an import).
+        // Actions such as missing-`@override` and context-manager annotations
+        // carry multiple edits that must apply together.
         let mut multi_actions: Vec<(String, Vec<(Module, TextRange, String)>)> = Vec::new();
         // Deduplicates the actions pushed onto `other_actions`. The same fix can
         // be generated more than once -- e.g. several errors on one line all
@@ -3723,6 +3723,18 @@ impl<'a> Transaction<'a> {
                 if other_action_keys.insert(key) {
                     other_actions.push(action);
                 }
+            }
+            if error_range.contains_range(range)
+                && let Some(action) =
+                    quick_fixes::deprecated_contextmanager::replace_return_code_action(
+                        self,
+                        handle,
+                        &module_info,
+                        &ast,
+                        &error,
+                    )
+            {
+                multi_actions.push(action);
             }
             if error_range.contains_range(range)
                 && let Some(action) = quick_fixes::pyrefly_ignore::add_pyrefly_ignore_code_action(
@@ -3892,9 +3904,7 @@ impl<'a> Transaction<'a> {
         // this will be the public/non-deprecated version)
         import_actions.dedup_by(|a, b| a.insert_text == b.insert_text);
 
-        // Every quick-fix producer except the missing-`@override` fix yields a single
-        // edit; wrap those in a one-element edit list so they share the multi-edit shape
-        // that `multi_actions` and the LSP layer expect.
+        // Wrap single-edit actions in the same shape as the multi-edit producers.
         fn wrap_single(
             (title, module, range, insert_text): (String, Module, TextRange, String),
         ) -> (String, Vec<(Module, TextRange, String)>) {
@@ -3924,9 +3934,8 @@ impl<'a> Transaction<'a> {
         (!actions.is_empty()).then_some(actions)
     }
 
-    /// Builds an edit inserting `from typing import override` (preferring `typing`
-    /// over `typing_extensions`) at the top of the file. Returns `None` when no
-    /// module in scope exports `override`.
+    /// Imports `override`, preferring `typing` over `typing_extensions`.
+    /// Returns `None` when the name cannot be found.
     fn override_import_edit(
         &self,
         handle: &Handle,

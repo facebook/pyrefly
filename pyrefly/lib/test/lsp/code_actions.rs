@@ -14,7 +14,6 @@ use pyrefly_python::module::Module;
 use pyrefly_python::sys_info::PythonVersion;
 use ruff_python_ast::PySourceType;
 use ruff_text_size::Ranged;
-use pyrefly_python::sys_info::PythonVersion;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 

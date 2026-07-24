@@ -60,6 +60,23 @@ pub enum ErrorQuickFix {
     AssertNotNone,
     RemoveUnusedSuppression(SuppressionEdit),
     ImportModule { module: ModuleName },
+    ReplaceDeprecatedContextManagerReturn(ContextManagerKind),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContextManagerKind {
+    Sync,
+    Async,
+}
+
+impl ContextManagerKind {
+    /// The iterator, generator, and explicit defaults for a return annotation.
+    pub fn return_annotation_replacement(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Sync => ("Iterator", "Generator", ", None, None"),
+            Self::Async => ("AsyncIterator", "AsyncGenerator", ", None"),
+        }
+    }
 }
 
 impl From<SuppressionEdit> for ErrorQuickFix {
