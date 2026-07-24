@@ -3251,16 +3251,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .with_quick_fix(ErrorQuickFix::ReplaceWithEnumMember { replacement });
         }
         if Self::type_contains_none(got) && !Self::type_contains_none(want) {
-            let hint = match tcc().kind {
+            let (hint, offer_narrowing_fix) = match tcc().kind {
                 TypeCheckKind::ExplicitFunctionReturn
                 | TypeCheckKind::AnnAssign
                 | TypeCheckKind::AnnotatedName(_)
                     if !got.is_none() =>
                 {
-                    Some(format!(
-                        "Consider narrowing the value with an `is not None` check or changing the declared type to `{} | None`",
-                        self.for_display(want.clone()),
-                    ))
+                    (
+                        Some(format!(
+                            "Consider narrowing the value with an `is not None` check or changing the declared type to `{} | None`",
+                            self.for_display(want.clone()),
+                        )),
+                        true,
+                    )
                 }
                 TypeCheckKind::ImplicitFunctionReturn(_) => {
                     // For implicit returns (missing return statement), the error message
@@ -3268,7 +3271,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // an explicit return" is already clear. Adding a None hint here is
                     // confusing because the user didn't explicitly return None.
                     // Skip the hint for implicit returns.
-                    None
+                    (None, false)
                 }
                 TypeCheckKind::Attribute(_)
                 | TypeCheckKind::CallArgument(..)
@@ -3279,21 +3282,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // Skip the hint. Narrowing the value doesn't make sense if there's no
                         // non-None part to narrow to, and changing the attribute or parameter type
                         // is often unactionable, since the definition may be in third-party code.
-                        None
+                        (None, false)
                     } else {
                         // We only suggest narrowing. Changing the attribute or parameter type is
                         // often unactionable, since the definition may be in third-party code.
-                        Some("Consider narrowing the value with an `is not None` check".to_owned())
+                        (
+                            Some(
+                                "Consider narrowing the value with an `is not None` check"
+                                    .to_owned(),
+                            ),
+                            true,
+                        )
                     }
                 }
-                _ => Some(format!(
-                    "Consider changing the declared type to `{} | None`",
-                    self.for_display(want.clone())
-                )),
+                _ => (
+                    Some(format!(
+                        "Consider changing the declared type to `{} | None`",
+                        self.for_display(want.clone())
+                    )),
+                    false,
+                ),
             };
             if let Some(hint) = hint {
                 builder = builder
                     .with_detail(format!("The declared type does not allow `None`. {hint}."));
+            }
+            if offer_narrowing_fix {
+                builder = builder.with_quick_fix(ErrorQuickFix::AssertNotNone);
             }
         }
         builder.emit();

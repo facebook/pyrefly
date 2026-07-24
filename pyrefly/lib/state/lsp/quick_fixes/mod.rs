@@ -6,6 +6,7 @@
  */
 
 pub(crate) mod add_override;
+pub(crate) mod assert_not_none;
 pub(crate) mod convert_dict;
 pub(crate) mod convert_star_import;
 pub(crate) mod enum_member;
