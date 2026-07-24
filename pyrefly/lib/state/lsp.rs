@@ -2963,11 +2963,15 @@ impl<'a> Transaction<'a> {
         .map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
 
-    pub(crate) fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
+    pub(crate) fn search_modules_fuzzy(&self, handle: &Handle, pattern: &str) -> Vec<ModuleName> {
         let matcher = SkimMatcherV2::default().smart_case();
         let mut results = Vec::new();
+        // `self.modules()` only contains modules that have already been loaded. Include modules
+        // discoverable from the active file's import paths so auto-import works on the first try.
+        let mut module_names: HashSet<_> = self.modules().into_iter().collect();
+        module_names.extend(self.import_prefixes(handle, ModuleName::from_str(pattern)));
 
-        for module_name in self.modules() {
+        for module_name in module_names {
             let module_name_str = module_name.as_str();
 
             // Skip builtins module
@@ -3058,7 +3062,7 @@ impl<'a> Transaction<'a> {
                         &mut import_actions,
                         unknown_name,
                     );
-                    for module_name in self.search_modules_fuzzy(unknown_name) {
+                    for module_name in self.search_modules_fuzzy(handle, unknown_name) {
                         if module_name == handle.module() {
                             continue;
                         }

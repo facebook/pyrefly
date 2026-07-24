@@ -706,7 +706,7 @@ impl Transaction<'_> {
                 });
             }
 
-            for module_name in self.search_modules_fuzzy(identifier_text) {
+            for module_name in self.search_modules_fuzzy(handle, identifier_text) {
                 if module_name == handle.module() {
                     continue;
                 }

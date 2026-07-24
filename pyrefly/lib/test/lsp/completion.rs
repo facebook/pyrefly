@@ -2399,6 +2399,41 @@ jso
 }
 
 #[test]
+fn autoimport_suggests_unloaded_stdlib_module() {
+    let code = r#"
+jso
+#  ^
+"#;
+    let mut env = TestEnv::new().with_default_require_level(Require::Exports);
+    env.add("main", code);
+    let (state, handle_for) = env.to_state();
+    let handle = handle_for("main");
+    let position = extract_cursors_for_test(code)[0];
+
+    let completions =
+        state
+            .transaction()
+            .completion(&handle, position, ImportFormat::Absolute, true, None);
+    let json = completions
+        .iter()
+        .find(|item| item.label == "json")
+        .expect("expected an auto-import completion for the unloaded json module");
+    assert!(
+        json.detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("import json")),
+        "expected json completion to add an import, got {:?}",
+        json.detail
+    );
+    assert!(
+        json.additional_text_edits
+            .as_ref()
+            .is_some_and(|edits| !edits.is_empty()),
+        "expected json completion to include an import edit"
+    );
+}
+
+#[test]
 fn autoimport_does_not_duplicate_existing_module_import_after_another_import() {
     let code = r#"
 import os
