@@ -1884,16 +1884,14 @@ fn test_get_expected_type_list_element_falls_back_to_container_type() {
 }
 
 #[test]
-fn test_get_expected_type_dict_value_falls_back_to_container_type() {
-    // `d: dict[str, int | str] = {"k": 4}` — ideally the expected type
-    // at `4` would be `int | str`, but we currently return `dict[...]`.
+fn test_get_expected_type_dict_value() {
+    // `d: dict[str, int | str] = {"k": 4}` — the expected type is `int | str`.
     let source = "d: dict[str, int | str] = {\"k\": 4}\n";
     let (mut tsp, file_uri, snapshot) = setup_project(source);
 
     // Position 32 is the `4` value in the dict literal.
     let expected = get_expected_type_ok(&mut tsp, &file_uri, 0, 32, snapshot);
-    // TODO: should be TypeKind::Union for the value type.
-    assert_kind(&expected, TypeKind::Class);
+    assert_kind(&expected, TypeKind::Union);
 
     tsp.shutdown();
 }
