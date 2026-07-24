@@ -52,6 +52,7 @@ use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::IdentifierWithContext;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::MIN_CHARACTERS_TYPED_AUTOIMPORT;
+use crate::state::lsp::PatternMatchParameterKind;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
@@ -1000,6 +1001,55 @@ impl Transaction<'_> {
         });
     }
 
+    /// Suggest `attr=` completions inside a class pattern like `case Point(x=...)`.
+    pub(crate) fn add_match_class_keyword_completions(
+        &self,
+        handle: &Handle,
+        covering_nodes: &[AnyNodeRef],
+        completions: &mut Vec<RankedCompletion>,
+    ) {
+        let Some(pattern_class) = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::PatternMatchClass(pattern_class) => Some(pattern_class),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(class_ty) = self.get_type_trace(handle, pattern_class.cls.range()) else {
+            return;
+        };
+        let Some(items) = self.ad_hoc_solve(handle, "completion_match_class_keywords", |solver| {
+            let instance_ty = match class_ty {
+                Type::ClassDef(cls) => solver.instantiate(&cls),
+                Type::ClassType(cls) => Type::ClassType(cls),
+                Type::Type(inner) => match *inner {
+                    Type::ClassType(cls) => Type::ClassType(cls),
+                    _ => return Vec::new(),
+                },
+                _ => return Vec::new(),
+            };
+            solver
+                .completions(instance_ty, None, true)
+                .into_iter()
+                .map(|attr| {
+                    RankedCompletion::new(CompletionItem {
+                        label: format!("{}=", attr.name.as_str()),
+                        detail: attr.ty.map(|ty| ty.to_string()),
+                        kind: Some(CompletionItemKind::VARIABLE),
+                        tags: if attr.is_deprecated {
+                            Some(vec![CompletionItemTag::DEPRECATED])
+                        } else {
+                            None
+                        },
+                        ..Default::default()
+                    })
+                })
+                .collect::<Vec<_>>()
+        }) else {
+            return;
+        };
+        completions.extend(items);
+    }
+
     /// Core completion implementation returning items and incomplete flag.
     pub(crate) fn completion_sorted_opt_with_incomplete<F>(
         &self,
@@ -1180,6 +1230,13 @@ impl Transaction<'_> {
                         }
                     }
                 }
+                if matches!(
+                    context,
+                    IdentifierContext::PatternMatch(PatternMatchParameterKind::KeywordArgName)
+                ) && let Some(covering_nodes) = covering_nodes.as_deref()
+                {
+                    self.add_match_class_keyword_completions(handle, covering_nodes, &mut result);
+                }
                 self.add_kwargs_completions(handle, position, &mut result);
                 // In `func(foo=1, ba|` the cursor can only be a keyword-argument
                 // name, so suppress unrelated completions.
@@ -1271,6 +1328,7 @@ impl Transaction<'_> {
                             &mut result,
                             in_string_literal,
                         );
+                        self.add_match_class_keyword_completions(handle, &nodes, &mut result);
                         // `dict_key_claimed` was computed up front; when a dict key was
                         // offered we skip the overload literal completions.
                         if !dict_key_claimed {
