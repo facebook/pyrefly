@@ -694,7 +694,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::List(x) => self.infer_with_decomposed_hint(
                 hint,
                 |hint| self.decompose_list(hint),
-                |elt_hint| {
+                |elt_hint, hint| {
                     if x.is_empty() {
                         let elem_ty = elt_hint.unwrap_or_else(|| {
                             self.solver()
@@ -717,7 +717,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Set(x) => self.infer_with_decomposed_hint(
                 hint,
                 |hint| self.decompose_set(hint),
-                |elem_hint| {
+                |elem_hint, hint| {
                     if x.is_empty() {
                         let elem_ty = elem_hint.unwrap_or_else(|| {
                             self.solver()
@@ -739,7 +739,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::ListComp(x) => self.infer_with_decomposed_hint(
                 hint,
                 |hint| self.decompose_list(hint),
-                |elem_hint| {
+                |elem_hint, hint| {
                     self.ifs_infer(&x.generators, errors);
                     let elem_ty = self.expr_infer_with_hint_promote(
                         &x.elt,
@@ -752,7 +752,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::SetComp(x) => self.infer_with_decomposed_hint(
                 hint,
                 |hint| self.decompose_set(hint),
-                |elem_hint| {
+                |elem_hint, hint| {
                     self.ifs_infer(&x.generators, errors);
                     let elem_ty = self.expr_infer_with_hint_promote(
                         &x.elt,
@@ -772,8 +772,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some((key_hint, value_hint))
                     }
                 },
-                |hints| {
-                    let (key_hint, value_hint) = hints.unwrap_or_default();
+                |decomposed_hints, hint| {
+                    let (key_hint, value_hint) = decomposed_hints.unwrap_or_default();
                     let key_hint = key_hint.as_ref().and_then(|key_hint| {
                         hint.as_ref()
                             .map(|hint| HintRef::new(key_hint, hint.errors()))
@@ -796,7 +796,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Generator(x) => self.infer_with_decomposed_hint(
                 hint,
                 |hint| self.decompose_generator(hint).map(|(y, _, _)| y),
-                |yield_hint| {
+                |yield_hint, hint| {
                     self.ifs_infer(&x.generators, errors);
                     let yield_ty = self
                         .expr_infer_impl(
@@ -1511,8 +1511,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some((key_hint, value_hint))
                 }
             },
-            |hints| {
-                let (key_hint, value_hint) = hints.unwrap_or_default();
+            |decomposed_hints, hint| {
+                let (key_hint, value_hint) = decomposed_hints.unwrap_or_default();
                 self.dict_items_infer_inner(range, &items, hint, key_hint, value_hint, errors)
             },
         )
