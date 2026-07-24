@@ -161,6 +161,8 @@ pub enum ErrorKind {
     DivisionByZero,
     /// Explicit usage of `typing.Any` in an annotation.
     ExplicitAny,
+    /// Formatting a value whose default string representation is unlikely to be helpful.
+    HelpfulString,
     /// Raised when a class implicitly becomes abstract by defining abstract members without
     /// inheriting from `abc.ABC` or using `abc.ABCMeta`.
     ImplicitAbstractClass,
@@ -518,6 +520,7 @@ impl ErrorKind {
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::ExplicitAny => Severity::Ignore,
+            ErrorKind::HelpfulString => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
