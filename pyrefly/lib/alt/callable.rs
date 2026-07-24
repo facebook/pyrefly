@@ -1637,11 +1637,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &call_context,
                 &mut bound_args,
             ),
-            Params::Ellipsis | Params::Materialization => {
+            Params::Ellipsis => {
                 // Deal with Callable[..., R]
                 for arg in self_arg.iter().chain(args.iter()) {
                     arg.pre_eval(self, arg_errors).post_infer(self, arg_errors)
                 }
+                ArgMap::new()
+            }
+            Params::Materialization => {
+                for arg in self_arg.iter().chain(args.iter()) {
+                    arg.pre_eval(self, arg_errors).post_infer(self, arg_errors)
+                }
+                self.error_with_context(
+                    call_errors,
+                    arguments_range,
+                    ErrorKind::InvalidArgument,
+                    "Cannot call callable with unknown parameter types".to_owned(),
+                    context,
+                );
                 ArgMap::new()
             }
             Params::ParamSpec(concatenate, p) => {
