@@ -31,50 +31,6 @@ pub struct DjangoFieldInfo {
 }
 
 impl<'a> BindingsBuilder<'a> {
-    /// Detect if a field has `primary_key=True` set. This will be used to support Django models with custom primary keys.
-    pub fn extract_django_primary_key(&self, e: &Expr) -> bool {
-        let Some(call) = e.as_call_expr() else {
-            return false;
-        };
-        for keyword in &call.arguments.keywords {
-            if let Some(arg_name) = &keyword.arg
-                && arg_name.as_str() == PRIMARY_KEY.as_str()
-                && let Expr::BooleanLiteral(bl) = &keyword.value
-            {
-                return bl.value;
-            }
-        }
-
-        false
-    }
-
-    pub fn extract_django_foreign_key_like(&self, e: &Expr) -> bool {
-        let Some(call) = e.as_call_expr() else {
-            return false;
-        };
-        let name_str = match &*call.func {
-            Expr::Name(name) => name.id.as_str(),
-            Expr::Attribute(attr) => attr.attr.as_str(),
-            _ => return false,
-        };
-        name_str == FOREIGN_KEY.as_str() || name_str == ONE_TO_ONE_FIELD.as_str()
-    }
-
-    pub fn extract_django_choices(&self, e: &Expr) -> bool {
-        let Some(call) = e.as_call_expr() else {
-            return false;
-        };
-        for keyword in &call.arguments.keywords {
-            if let Some(arg_name) = &keyword.arg
-                && arg_name.as_str() == CHOICES.as_str()
-            {
-                return true;
-            }
-        }
-
-        false
-    }
-
     /// Extract Django field information from class body field definitions.
     /// Scans all fields assigned in the class body for Django-specific patterns
     /// (primary_key, ForeignKey, choices).
@@ -88,15 +44,32 @@ impl<'a> BindingsBuilder<'a> {
         for (name, (definition, _range)) in field_definitions.iter() {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = definition
                 && let ExprOrBinding::Expr(e) = value.as_ref()
+                && let Some(call) = e.as_call_expr()
             {
-                if self.extract_django_primary_key(e) {
-                    primary_key_field = Some(name.clone());
-                }
-                if self.extract_django_foreign_key_like(e) {
+                if let Some(constructor_name) = match &*call.func {
+                    Expr::Name(name) => Some(name.id()),
+                    Expr::Attribute(attr) => Some(attr.attr.id()),
+                    _ => None,
+                } && (*constructor_name == FOREIGN_KEY || *constructor_name == ONE_TO_ONE_FIELD)
+                {
                     foreign_key_like_fields.push(name.clone());
                 }
-                if self.extract_django_choices(e) {
-                    fields_with_choices.push(name.clone());
+
+                for keyword in &call.arguments.keywords {
+                    let Some(arg_name) = &keyword.arg else {
+                        continue;
+                    };
+                    let arg_name = arg_name.id();
+                    if *arg_name == PRIMARY_KEY {
+                        // Detect if a field has `primary_key=True` set.
+                        if let Expr::BooleanLiteral(bl) = &keyword.value
+                            && bl.value
+                        {
+                            primary_key_field = Some(name.clone());
+                        }
+                    } else if *arg_name == CHOICES {
+                        fields_with_choices.push(name.clone());
+                    }
                 }
             }
         }
