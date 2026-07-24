@@ -448,6 +448,45 @@ impl NarrowingSubject {
 }
 
 impl NarrowOp {
+    /// Return the `None` expression when this is a direct `x is None` narrow.
+    pub fn is_none_expr(&self) -> Option<&Expr> {
+        match self {
+            Self::Atomic(None, AtomicNarrowOp::Is(expr))
+                if matches!(expr, Expr::NoneLiteral(_)) =>
+            {
+                Some(expr)
+            }
+            _ => None,
+        }
+    }
+
+    fn excludes_none_or_is_unrelated(&self) -> bool {
+        match self {
+            Self::Or(ops) => {
+                ops.len() == 2
+                    && ops.iter().any(|op| {
+                        matches!(
+                            op,
+                            Self::Atomic(None, AtomicNarrowOp::IsNot(Expr::NoneLiteral(_)))
+                        )
+                    })
+                    && ops
+                        .iter()
+                        .any(|op| matches!(op, Self::Atomic(None, AtomicNarrowOp::Placeholder)))
+            }
+            Self::And(ops) => {
+                let mut meaningful = ops
+                    .iter()
+                    .filter(|op| !matches!(op, Self::Atomic(None, AtomicNarrowOp::Placeholder)));
+                meaningful
+                    .next()
+                    .is_some_and(Self::excludes_none_or_is_unrelated)
+                    && meaningful.next().is_none()
+            }
+            _ => false,
+        }
+    }
+
     /// Produce a Python-like snippet for hover display.
     ///
     /// `base_name` is the variable being narrowed. `snippet` converts a
@@ -709,6 +748,25 @@ impl NarrowOps {
                 .map(|(name, (op, range))| (name.clone(), (op.negate(), *range)))
                 .collect(),
         )
+    }
+
+    /// Recognize the surviving condition after a terminating
+    /// `if x is None and y is None` branch.
+    pub fn excluded_none_pair(&self) -> Option<(Name, Name)> {
+        if self.0.len() != 2 {
+            return None;
+        }
+        let mut entries = self.0.iter();
+        let (first, (first_op, _)) = entries.next().unwrap();
+        let (second, (second_op, _)) = entries.next().unwrap();
+        if first != second
+            && first_op.excludes_none_or_is_unrelated()
+            && second_op.excludes_none_or_is_unrelated()
+        {
+            Some((first.clone(), second.clone()))
+        } else {
+            None
+        }
     }
 
     fn get_or_placeholder(&mut self, name: Name, range: TextRange) -> &mut NarrowOp {
