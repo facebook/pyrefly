@@ -14,7 +14,9 @@ use std::path::Path;
 use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
+use lsp_types::DiagnosticRelatedInformation;
 use lsp_types::DiagnosticTag;
+use lsp_types::Location;
 use lsp_types::Url;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
@@ -35,6 +37,7 @@ use yansi::Paint;
 
 use crate::config::error_kind::ErrorKind;
 use crate::config::error_kind::Severity;
+use crate::lsp::module_helpers::to_real_path;
 
 /// A secondary annotation that labels a span in the same file as the primary error.
 /// Used to show additional context, e.g. the types of both operands in a binary operation.
@@ -322,8 +325,24 @@ impl Error {
         let code_description = Url::parse(&self.error_kind().docs_url())
             .ok()
             .map(|href| CodeDescription { href });
-        // TODO: Map secondary_annotations to DiagnosticRelatedInformation for LSP clients.
-        // This requires constructing a Url from the module path, which may not always succeed.
+        // Secondary annotations live in the same file as the primary error, so we can reuse this
+        // module's path for their locations. `Url::from_file_path` requires an absolute path and
+        // may fail; in that case we omit the related information rather than dropping the diagnostic.
+        let related_information = to_real_path(self.module.path())
+            .and_then(|path| Url::from_file_path(path).ok())
+            .map(|uri| {
+                self.secondary_annotations
+                    .iter()
+                    .map(|ann| DiagnosticRelatedInformation {
+                        location: Location {
+                            uri: uri.clone(),
+                            range: self.module.to_lsp_range(ann.range),
+                        },
+                        message: ann.label.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|related| !related.is_empty());
         Diagnostic {
             range: self.module.to_lsp_range(self.range()),
             severity: Some(match self.severity() {
@@ -342,6 +361,7 @@ impl Error {
             } else {
                 None
             },
+            related_information,
             ..Default::default()
         }
     }
@@ -634,6 +654,71 @@ mod tests {
   |
 "#,
         );
+    }
+
+    #[test]
+    fn test_to_diagnostic_maps_secondary_annotations() {
+        // Use an absolute path so `Url::from_file_path` succeeds.
+        let source = "val * 2";
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("/test.py")),
+            Arc::new(source.to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(0), TextSize::new(7)),
+            "`*` is not supported between `int | str` and `int`".to_owned(),
+            Vec::new(),
+            ErrorKind::UnsupportedOperation,
+        )
+        .with_annotation(
+            TextRange::new(TextSize::new(0), TextSize::new(3)),
+            "has type `int | str`".to_owned(),
+        )
+        .with_annotation(
+            TextRange::new(TextSize::new(6), TextSize::new(7)),
+            "has type `int`".to_owned(),
+        );
+
+        let related = error
+            .to_diagnostic()
+            .related_information
+            .expect("secondary annotations should map to related information");
+        assert_eq!(related.len(), 2);
+        assert_eq!(related[0].message, "has type `int | str`");
+        assert_eq!(related[1].message, "has type `int`");
+        assert_eq!(
+            related[0].location.uri, related[1].location.uri,
+            "annotations in the same file share one uri"
+        );
+        assert!(
+            related[0].location.uri.as_str().ends_with("/test.py"),
+            "uri should point at the error's file, got {}",
+            related[0].location.uri
+        );
+        // The first annotation starts where the primary error does (byte 0).
+        assert_eq!(
+            related[0].location.range.start,
+            error.to_diagnostic().range.start
+        );
+    }
+
+    #[test]
+    fn test_to_diagnostic_without_annotations_has_no_related_information() {
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("/test.py")),
+            Arc::new("def f(x: int) -> str:\n    return x".to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(26), TextSize::new(34)),
+            "bad return".to_owned(),
+            Vec::new(),
+            ErrorKind::BadReturn,
+        );
+        assert!(error.to_diagnostic().related_information.is_none());
     }
 
     /// Integration test: verify that binary operator errors from the type checker

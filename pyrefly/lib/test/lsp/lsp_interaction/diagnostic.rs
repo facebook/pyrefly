@@ -676,6 +676,8 @@ fn test_error_documentation_links() {
 
     interaction.client.did_open("error_docs_test.py");
 
+    let error_docs_uri =
+        Url::from_file_path(test_files_root.path().join("error_docs_test.py")).unwrap();
     interaction
         .client
         .diagnostic("error_docs_test.py")
@@ -691,6 +693,16 @@ fn test_error_documentation_links() {
                         "end": {"character": 11, "line": 9},
                         "start": {"character": 9, "line": 9}
                     },
+                    "relatedInformation": [{
+                        "location": {
+                            "range": {
+                                "end": {"character": 6, "line": 9},
+                                "start": {"character": 3, "line": 9}
+                            },
+                            "uri": error_docs_uri.as_str()
+                        },
+                        "message": "declared type"
+                    }],
                     "severity": 1,
                     "source": "Pyrefly"
                 },
@@ -1108,6 +1120,7 @@ fn test_shows_stdlib_type_errors_with_force_on() {
 
     interaction.client.did_open(stdlib_filepath);
 
+    let stdlib_uri = Url::from_file_path(test_files_root.path().join(stdlib_filepath)).unwrap();
     interaction
         .client
         .diagnostic(stdlib_filepath)
@@ -1123,6 +1136,16 @@ fn test_shows_stdlib_type_errors_with_force_on() {
                         "end": {"character": 12, "line": 5},
                         "start": {"character": 9, "line": 5}
                     },
+                    "relatedInformation": [{
+                        "location": {
+                            "range": {
+                                "end": {"character": 6, "line": 5},
+                                "start": {"character": 3, "line": 5}
+                            },
+                            "uri": stdlib_uri.as_str()
+                        },
+                        "message": "declared type"
+                    }],
                     "severity": 1,
                     "source": "Pyrefly"
                 }
@@ -1160,14 +1183,9 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         .unwrap()
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
-    interaction
-        .client
-        .did_open("filtering_stdlib_errors/usr/local/lib/python3.12/stdlib_file.py");
-
-    interaction
-        .client
-        .diagnostic("filtering_stdlib_errors/usr/local/lib/python3.12/stdlib_file.py")
-        .expect_response(json!({
+    let expected_stdlib_diagnostic = |file_path: &str| {
+        let uri = Url::from_file_path(test_files_root.path().join(file_path)).unwrap();
+        json!({
             "items": [
                 {
                     "code": "bad-assignment",
@@ -1179,12 +1197,30 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
                         "end": {"character": 12, "line": 5},
                         "start": {"character": 9, "line": 5}
                     },
+                    "relatedInformation": [{
+                        "location": {
+                            "range": {
+                                "end": {"character": 6, "line": 5},
+                                "start": {"character": 3, "line": 5}
+                            },
+                            "uri": uri.as_str()
+                        },
+                        "message": "declared type"
+                    }],
                     "severity": 1,
                     "source": "Pyrefly"
                 }
             ],
             "kind": "full"
-        }))
+        })
+    };
+
+    let path = "filtering_stdlib_errors/usr/local/lib/python3.12/stdlib_file.py";
+    interaction.client.did_open(path);
+    interaction
+        .client
+        .diagnostic(path)
+        .expect_response(expected_stdlib_diagnostic(path))
         .unwrap();
 
     register_stdlib_paths(vec![
@@ -1193,58 +1229,20 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
             .join("filtering_stdlib_errors/usr/lib/python3.8"),
     ]);
 
+    let path = "filtering_stdlib_errors/usr/local/lib/python3.8/stdlib_file.py";
+    interaction.client.did_open(path);
     interaction
         .client
-        .did_open("filtering_stdlib_errors/usr/local/lib/python3.8/stdlib_file.py");
-
-    interaction
-        .client
-        .diagnostic("filtering_stdlib_errors/usr/local/lib/python3.8/stdlib_file.py")
-        .expect_response(json!({
-            "items": [
-                {
-                    "code": "bad-assignment",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
-                    },
-                    "message": "`Literal['1']` is not assignable to `int`",
-                    "range": {
-                        "end": {"character": 12, "line": 5},
-                        "start": {"character": 9, "line": 5}
-                    },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                }
-            ],
-            "kind": "full"
-        }))
+        .diagnostic(path)
+        .expect_response(expected_stdlib_diagnostic(path))
         .unwrap();
 
+    let path = "filtering_stdlib_errors/usr/lib/python3.12/stdlib_file.py";
+    interaction.client.did_open(path);
     interaction
         .client
-        .did_open("filtering_stdlib_errors/usr/lib/python3.12/stdlib_file.py");
-
-    interaction
-        .client
-        .diagnostic("filtering_stdlib_errors/usr/lib/python3.12/stdlib_file.py")
-        .expect_response(json!({
-            "items": [
-                {
-                    "code": "bad-assignment",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
-                    },
-                    "message": "`Literal['1']` is not assignable to `int`",
-                    "range": {
-                        "end": {"character": 12, "line": 5},
-                        "start": {"character": 9, "line": 5}
-                    },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                }
-            ],
-            "kind": "full"
-        }))
+        .diagnostic(path)
+        .expect_response(expected_stdlib_diagnostic(path))
         .unwrap();
 
     register_stdlib_paths(vec![
@@ -1253,31 +1251,12 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
             .join("filtering_stdlib_errors/usr/lib64/python3.12"),
     ]);
 
+    let path = "filtering_stdlib_errors/usr/lib64/python3.12/stdlib_file.py";
+    interaction.client.did_open(path);
     interaction
         .client
-        .did_open("filtering_stdlib_errors/usr/lib64/python3.12/stdlib_file.py");
-
-    interaction
-        .client
-        .diagnostic("filtering_stdlib_errors/usr/lib64/python3.12/stdlib_file.py")
-        .expect_response(json!({
-            "items": [
-                {
-                    "code": "bad-assignment",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
-                    },
-                    "message": "`Literal['1']` is not assignable to `int`",
-                    "range": {
-                        "end": {"character": 12, "line": 5},
-                        "start": {"character": 9, "line": 5}
-                    },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                }
-            ],
-            "kind": "full"
-        }))
+        .diagnostic(path)
+        .expect_response(expected_stdlib_diagnostic(path))
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -1350,6 +1329,7 @@ fn test_shows_stdlib_errors_when_explicitly_included_in_project_includes() {
 
     interaction.client.did_open(stdlib_filepath);
 
+    let stdlib_uri = Url::from_file_path(test_files_root.path().join(stdlib_filepath)).unwrap();
     interaction
         .client
         .diagnostic(stdlib_filepath)
@@ -1365,6 +1345,16 @@ fn test_shows_stdlib_errors_when_explicitly_included_in_project_includes() {
                         "end": {"character": 12, "line": 5},
                         "start": {"character": 9, "line": 5}
                     },
+                    "relatedInformation": [{
+                        "location": {
+                            "range": {
+                                "end": {"character": 6, "line": 5},
+                                "start": {"character": 3, "line": 5}
+                            },
+                            "uri": stdlib_uri.as_str()
+                        },
+                        "message": "declared type"
+                    }],
                     "severity": 1,
                     "source": "Pyrefly"
                 }
