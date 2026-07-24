@@ -765,6 +765,43 @@ assert_type(r, int)
     "#,
 );
 
+fn env_pytest_parametrize() -> TestEnv {
+    TestEnv::one_with_path(
+        "pytest",
+        "pytest.pyi",
+        r#"
+class MarkDecorator:
+    def __call__[T](self, func: T) -> T: ...
+
+class MarkGenerator:
+    def parametrize(self, argnames: object, argvalues: object) -> MarkDecorator: ...
+
+mark: MarkGenerator
+"#,
+    )
+}
+
+testcase!(
+    test_pytest_parametrize_infers_parameter_types,
+    env_pytest_parametrize(),
+    r#"
+import pytest
+from typing import assert_type
+
+@pytest.mark.parametrize(
+    ("exception", "expected_error"),
+    [
+        (Exception("OAuth error"), "OAuth process failed"),
+        (ValueError("Invalid token"), "OAuth process failed"),
+        (KeyError("Missing key"), "OAuth process failed"),
+    ],
+)
+def test_oauth_error(exception, expected_error) -> None:
+    assert_type(exception, Exception | KeyError | ValueError)
+    assert_type(expected_error, str)
+"#,
+);
+
 fn env_numba() -> TestEnv {
     let mut env = TestEnv::one_with_path(
         "numba",
