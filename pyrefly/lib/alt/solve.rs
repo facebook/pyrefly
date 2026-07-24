@@ -56,6 +56,7 @@ use vec1::Vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
+use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::class::attrs::is_attrs_nothing;
 use crate::alt::class::class_field::ClassField;
@@ -5928,7 +5929,69 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if erases_class {
                         self.heap.mk_type(self.heap.mk_any_explicit())
                     } else {
-                        self.heap.mk_class_def(cls.dupe())
+                        let mut ty = self.heap.mk_class_def(cls.dupe());
+                        if !self.module().path().is_interface() {
+                            for decorator_key in decorators.iter().rev() {
+                                let decorator = self.get_idx(*decorator_key);
+                                if matches!(
+                                    &decorator.ty,
+                                    Type::Any(AnyStyle::Implicit | AnyStyle::Explicit)
+                                ) || decorator.ty.dataclass_transform_metadata().is_some()
+                                    || matches!(
+                                        &decorator.ty,
+                                        Type::KwCall(call)
+                                            if call.has_function_kind(
+                                                FunctionKind::DataclassTransform,
+                                            ) || call
+                                                .func_metadata
+                                                .flags
+                                                .dataclass_transform_metadata
+                                                .is_some()
+                                    )
+                                {
+                                    continue;
+                                }
+                                // Generic identity and callable-returning decorators are common
+                                // and do not provide a concrete replacement value to model.
+                                if !decorator
+                                    .ty
+                                    .callable_signatures()
+                                    .iter()
+                                    .any(|callable| matches!(&callable.ret, Type::ClassType(_)))
+                                {
+                                    continue;
+                                }
+                                let range = self.bindings().idx_to_key(*decorator_key).range();
+                                let call_target = self.as_call_target_or_error(
+                                    decorator.ty.clone(),
+                                    CallStyle::FreeForm,
+                                    range,
+                                    errors,
+                                    None,
+                                );
+                                let arg = CallArg::ty(&ty, range);
+                                let decorated_ty = self.call_infer(
+                                    call_target,
+                                    &[arg],
+                                    &[],
+                                    range,
+                                    errors,
+                                    None,
+                                    None,
+                                    None,
+                                );
+                                if decorated_ty.is_toplevel_callable()
+                                    || self
+                                        .untype_opt(decorated_ty.clone(), range, errors)
+                                        .is_some()
+                                {
+                                    ty = self.heap.mk_class_def(cls.dupe());
+                                } else {
+                                    ty = decorated_ty;
+                                }
+                            }
+                        }
+                        ty
                     }
                 }
             },
@@ -6431,6 +6494,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(aliased_type)
             }
+            Type::KwCall(call) => self.untype_opt(call.return_ty, range, errors),
             // `as_type_alias` untypes a type alias in order to validate that it is a legal type.
             // If we hit a recursive reference to the alias while untyping it, delay the untyping
             // to avoid a cycle.
