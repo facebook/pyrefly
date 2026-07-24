@@ -53,6 +53,7 @@ mod provide_type;
 mod references;
 mod rename;
 mod safe_delete_file;
+mod selection_range;
 mod semantic_tokens;
 mod type_definition;
 mod type_hierarchy;
