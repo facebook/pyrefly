@@ -1306,7 +1306,7 @@ impl<'a> BindingsBuilder<'a> {
                             self.bind_narrow_ops(
                                 &new_narrow_ops,
                                 NarrowUseLocation::Span(range),
-                                &Usage::Narrowing(None),
+                                &Usage::NonPinningValue(None),
                             );
                             self.with_error_suppression(|builder| {
                                 builder.stmts(body, parent);
