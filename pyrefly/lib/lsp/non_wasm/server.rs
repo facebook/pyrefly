@@ -4474,6 +4474,7 @@ impl Server {
             Some(CodeActionRequest::METHOD),
         )?;
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
+        let inlay_hint_config = lsp_config.and_then(|c| c.inlay_hints).unwrap_or_default();
         let module_info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
@@ -4564,6 +4565,32 @@ impl Server {
                         ..Default::default()
                     }))
                 }));
+            }
+            if let Some(inlay_hints) = transaction.inlay_hints(&handle, inlay_hint_config) {
+                for hint in inlay_hints {
+                    let is_type_hint = hint
+                        .label_parts
+                        .first()
+                        .is_some_and(|(text, _)| text == ": " || text == " -> ");
+                    if !hint.insertable || !range.contains_inclusive(hint.position) || !is_type_hint
+                    {
+                        continue;
+                    }
+                    let position = module_info.to_lsp_position(hint.position);
+                    let edit = TextEdit {
+                        range: Range::new(position, position),
+                        new_text: hint.label_parts.into_iter().map(|(text, _)| text).collect(),
+                    };
+                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                        title: "Insert inferred type annotation".to_owned(),
+                        kind: Some(CodeActionKind::QUICKFIX),
+                        edit: Some(WorkspaceEdit {
+                            changes: Some(HashMap::from([(uri.clone(), vec![edit])])),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }));
+                }
             }
             record_code_action_telemetry("quickfix", start);
         }

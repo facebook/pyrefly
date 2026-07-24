@@ -27,6 +27,7 @@ mod folding_range;
 mod hover;
 mod implementation;
 mod inlay_hint;
+mod insert_type_annotation_code_action;
 mod io;
 mod move_symbol_new_file;
 mod no_config_warnings;
