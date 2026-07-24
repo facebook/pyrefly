@@ -1584,6 +1584,12 @@ impl<'a> BindingsBuilder<'a> {
     ) -> Vec<Idx<KeyDecorator>> {
         let mut decorator_keys = Vec::with_capacity(decorators.len());
         for mut x in decorators {
+            let decorator_func = x
+                .expression
+                .as_call_expr()
+                .map_or(&x.expression, |call| &call.func);
+            let is_class_metadata =
+                self.as_special_export(decorator_func) == Some(SpecialExport::ShapedArray);
             self.ensure_expr(&mut x.expression, usage);
             let trailing_name = Ast::decorator_trailing_name(&x.expression).map(Name::new);
             let k = self.insert_binding(
@@ -1591,6 +1597,7 @@ impl<'a> BindingsBuilder<'a> {
                 BindingDecorator {
                     expr: x.expression,
                     trailing_name,
+                    is_class_metadata,
                 },
             );
             decorator_keys.push(k);

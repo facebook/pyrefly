@@ -5897,14 +5897,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                     }
-                    // TODO: analyze the class decorators beyond the `Any` check above. We don't
-                    // support general type-level analysis of class decorators (the ones we do
-                    // support, like dataclass-related ones, are handled via custom bindings).
-                    //
-                    // Note that all decorators have their own binding so they are still type checked for errors
-                    // *inside* the decorator. The only application-level effect we honor is an
-                    // explicit `type[Any]` return, which intentionally erases the class interface.
-                    //
                     // We use `.any()` across the chain because if *any* decorator is annotated
                     // with `-> type[Any]`, all *later* decorators receive whatever class that
                     // dynamic decorator produces (an `Any`-ish class), so the final output must
@@ -5925,7 +5917,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if erases_class {
                         self.heap.mk_type(self.heap.mk_any_explicit())
                     } else {
-                        self.heap.mk_class_def(cls.dupe())
+                        let mut ty = self.heap.mk_class_def(cls.dupe());
+                        for decorator_key in decorators.iter().rev() {
+                            if self.bindings().get(*decorator_key).is_class_metadata {
+                                continue;
+                            }
+                            let decorator = self.get_idx(*decorator_key);
+                            let return_is_inferred =
+                                decorator.ty.visit_toplevel_func_metadata(&|meta| {
+                                    meta.flags.is_return_inferred
+                                });
+                            let returns_type_any = decorator
+                                .ty
+                                .callable_signatures()
+                                .iter()
+                                .any(|c| matches!(&c.ret, Type::Type(inner) if matches!(&**inner, Type::Any(AnyStyle::Explicit))));
+                            let returns_bare_any = decorator
+                                .ty
+                                .callable_signatures()
+                                .iter()
+                                .any(|c| matches!(&c.ret, Type::Any(_)));
+                            if matches!(
+                                &decorator.ty,
+                                Type::Any(AnyStyle::Implicit | AnyStyle::Explicit)
+                            ) || return_is_inferred && returns_type_any
+                                || returns_bare_any
+                            {
+                                continue;
+                            }
+                            let range = self.bindings().idx_to_key(*decorator_key).range();
+                            ty =
+                                self.apply_class_decorator(decorator.ty.clone(), ty, range, errors);
+                        }
+                        ty
                     }
                 }
             },
