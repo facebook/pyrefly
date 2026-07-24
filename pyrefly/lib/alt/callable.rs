@@ -80,10 +80,11 @@ impl CallWithTypes {
         errors: &ErrorCollector,
     ) -> TypeOrExpr<'a> {
         match x {
-            TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_))) => {
-                // Hack: don't flatten mutable builtin containers into types before calling a
-                // function, as we know these containers often need to be contextually typed using
-                // the function's parameter types.
+            TypeOrExpr::Expr(
+                e @ (Expr::Dict(_) | Expr::Lambda(_) | Expr::List(_) | Expr::Set(_)),
+            ) => {
+                // Keep expressions that need contextual types unevaluated until we inspect the
+                // function's parameter types.
                 TypeOrExpr::Expr(e)
             }
             TypeOrExpr::Expr(e) => {
@@ -754,6 +755,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut unpacked_vararg_matched_args = Vec::new();
         let mut variadic_name = None;
         let mut variadic_collected = Vec::new();
+        // Later arguments may provide the bounds needed to contextually type a lambda's parameters.
+        let mut deferred_lambdas = Vec::new();
 
         // Resolve a deferred ParamSpec Var into additional parameters.
         // Returns `Err(q)` when the Var resolved to a quantified ParamSpec `q`
@@ -847,18 +850,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let unhinted_arg_ty = bound_args
                             .as_ref()
                             .map(|_| arg_pre.inferred_type(self, arg_errors));
-                        let arg_ty = arg_pre.post_check(
-                            self,
-                            callable_name,
-                            ty,
-                            name,
-                            false,
-                            arg.range(),
-                            arg_errors,
-                            call_errors,
-                            context,
-                            call_context,
-                        );
+                        let arg_ty = if matches!(arg_pre, CallArgPreEval::Expr(Expr::Lambda(_), _))
+                            && bound_args.is_none()
+                        {
+                            deferred_lambdas.push((arg_pre.clone(), ty, name, arg.range()));
+                            arg_pre.mark_done();
+                            None
+                        } else {
+                            arg_pre.post_check(
+                                self,
+                                callable_name,
+                                ty,
+                                name,
+                                false,
+                                arg.range(),
+                                arg_errors,
+                                call_errors,
+                                context,
+                                call_context,
+                            )
+                        };
                         if let Some(name) = name
                             && let Some(ty) = unhinted_arg_ty.or(arg_ty)
                         {
@@ -1421,6 +1432,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                 })
                 .with_call_context(call_context),
+            );
+        }
+        for (mut arg, hint, name, range) in deferred_lambdas {
+            let mut hint = hint.clone();
+            // Read the bounds collected from the other arguments without finalizing type variables
+            // that the lambda's return type may still need to constrain.
+            self.solver().expand_with_bounds(&mut hint);
+            arg.post_check(
+                self,
+                callable_name,
+                &hint,
+                name,
+                false,
+                range,
+                arg_errors,
+                call_errors,
+                context,
+                call_context,
             );
         }
         let num_extra_positional_args = extra_positional_args.len();

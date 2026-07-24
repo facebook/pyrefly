@@ -288,6 +288,17 @@ takes(lambda x: x + "")  # E:  Argument `Literal['']` is not assignable to param
 );
 
 testcase!(
+    test_generic_callback_contextual_typing_from_later_argument,
+    r#"
+map(lambda x: x.does_not_exist(), [1])  # E: Object of class `int` has no attribute `does_not_exist`
+
+def takes_bool(value: bool) -> None: ...
+
+map(takes_bool, [1])  # E: is not assignable to parameter
+    "#,
+);
+
+testcase!(
     test_union_with_type,
     r#"
 from typing import assert_type
