@@ -75,6 +75,7 @@ mod shape_dsl;
 mod simple;
 mod sklearn;
 mod slots;
+mod sqlalchemy;
 mod state;
 mod subscript_narrow;
 mod suppression;
