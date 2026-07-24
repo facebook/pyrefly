@@ -12,8 +12,10 @@ use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::Suppression;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::ignore::misplaced_ignore_errors;
 use pyrefly_python::ignore::parse_ignore_all;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
@@ -233,7 +235,10 @@ pub struct ModuleRanges {
     /// Multi-line string and backslash-continuation ranges.
     pub multi_line: Vec<(LineNumber, LineNumber)>,
     /// Top-level ignore-all directives (e.g. `# pyrefly: ignore-errors`).
-    pub ignore_all: SmallMap<Tool, LineNumber>,
+    pub ignore_all: Vec<Suppression>,
+    /// Lines of pyrefly `ignore-errors` directives placed after the preamble,
+    /// where they are inert. Surfaced as `misplaced-ignore` warnings.
+    pub misplaced_ignore_all: Vec<LineNumber>,
 }
 
 impl ModuleRanges {
@@ -244,9 +249,11 @@ impl ModuleRanges {
         multi_line.extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
         multi_line.sort();
         let ignore_all = parse_ignore_all(module_info.contents(), &multi_line);
+        let misplaced_ignore_all = misplaced_ignore_errors(module_info.contents(), &multi_line);
         Self {
             multi_line,
             ignore_all,
+            misplaced_ignore_all,
         }
     }
 }
@@ -291,6 +298,7 @@ impl Errors {
                 &error_config,
                 &ranges.multi_line,
                 &ranges.ignore_all,
+                &ranges.misplaced_ignore_all,
                 &mut errors,
             );
         }
@@ -436,11 +444,25 @@ impl Errors {
                 .get(&module_path)
                 .cloned()
                 .unwrap_or_else(Tool::default_enabled);
-            if error.is_ignored(&enabled_ignores) {
-                let module_path = error.path();
-                let start_line = error.display_range().start.line_within_file();
-                let end_line = error.display_range().end.line_within_file();
+            let start_line = error.display_range().start.line_within_file();
+            let end_line = error.display_range().end.line_within_file();
 
+            let containing_range = fstring_ranges_by_module
+                .get(&module_path)
+                .and_then(|ranges| find_containing_range(ranges, start_line));
+
+            let is_ignored = error.is_ignored(&enabled_ignores)
+                || containing_range.is_some_and(|(fs_start, fs_end)| {
+                    let ignore = error.module().ignore();
+                    error.error_kind().suppression_names().any(|kind| {
+                        (fs_start != start_line
+                            && ignore.is_ignored(fs_start, kind, &enabled_ignores))
+                            || (fs_end != start_line
+                                && ignore.is_ignored(fs_end, kind, &enabled_ignores))
+                    })
+                });
+
+            if is_ignored {
                 let module_codes = suppressed_codes_by_module.entry(module_path).or_default();
 
                 // Track both this kind's name and any parent kind's name, so that
@@ -465,9 +487,7 @@ impl Errors {
                 // If the error is inside a multi-line f/t-string, also track
                 // the code at the f-string's start and end lines so that a
                 // suppression comment placed there is recognized as "used".
-                if let Some(ranges) = fstring_ranges_by_module.get(&module_path)
-                    && let Some((fs_start, fs_end)) = find_containing_range(ranges, start_line)
-                {
+                if let Some((fs_start, fs_end)) = containing_range {
                     for code in &error_codes {
                         module_codes
                             .entry(fs_start)
@@ -653,6 +673,7 @@ impl Errors {
                 &error_config,
                 &ranges.multi_line,
                 &ranges.ignore_all,
+                &ranges.misplaced_ignore_all,
                 &mut result,
             );
             let output_errors = Self::merge_display_errors(result.ordinary, result.directives);
@@ -866,6 +887,22 @@ def f() -> int:
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("type: ignore"));
+    }
+
+    #[test]
+    fn test_used_ignore_multiline_fstring() {
+        let contents = r#"
+def f(some_condition: bool):
+    if some_condition:
+        foo = 1
+    # pyrefly: ignore[unbound-name]
+    bar = f"""The result is:
+{foo}"""
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
     }
 
     #[test]

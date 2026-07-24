@@ -26,10 +26,11 @@ def helper() -> int: return 1
 a: Solutions
 b: Answers
 
-(36 builtin demands hidden)
+(35 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)
+a -> b::Exports(is_implicit_reexport)
 a -> b::Exports(get_deprecated)
 a -> b::KeyExport(Name("helper"))
 ```

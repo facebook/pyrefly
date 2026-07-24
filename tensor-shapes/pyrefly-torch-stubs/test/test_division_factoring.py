@@ -13,26 +13,32 @@ from __future__ import annotations
 
 from typing import assert_type
 
-from shape_extensions import Dim
+from shape_extensions import Int, IntVar
 from torch import Tensor
 
 
-def test_reshape_inferred_dim[A, B](x: Tensor[2 * A - 1, B]) -> None:
+def test_reshape_inferred_dim[A: IntVar, B: IntVar](
+    x: Tensor[[2 * A - 1, B]],
+) -> None:
     """reshape(-1) computes ((2*A-1)*B) // (2*A-1), should simplify to B."""
     n = x.shape[0]
     step1 = x.reshape(1, n, -1)
-    assert_type(step1, Tensor[1, 2 * A - 1, B])
+    assert_type(step1, Tensor[[1, 2 * A - 1, B]])
 
 
-def test_three_factor[A, B, C](x: Tensor[A, B, C]) -> None:
+def test_three_factor[A: IntVar, B: IntVar, C: IntVar](
+    x: Tensor[[A, B, C]],
+) -> None:
     """(A*B*C) // (A*B) should simplify to C."""
     ab = x.shape[0] * x.shape[1]
     y = x.reshape(ab, -1)
-    assert_type(y, Tensor[A * B, C])
+    assert_type(y, Tensor[[A * B, C]])
 
 
-def test_expression_divisor[N, C](x: Tensor[2 * N + 1, C]) -> None:
+def test_expression_divisor[N: IntVar, C: IntVar](
+    x: Tensor[[2 * N + 1, C]],
+) -> None:
     """((2*N+1)*C) // (2*N+1) should simplify to C."""
     n = x.shape[0]
     y = x.reshape(1, n, -1)
-    assert_type(y, Tensor[1, 2 * N + 1, C])
+    assert_type(y, Tensor[[1, 2 * N + 1, C]])

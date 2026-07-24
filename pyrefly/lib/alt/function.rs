@@ -22,6 +22,7 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::dimension::Int;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
@@ -53,6 +54,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::call::CallTarget;
 use crate::alt::callable::CallArg;
+use crate::alt::singledispatch::DispatcherDef;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::SpecialDecorator;
@@ -435,8 +437,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &FunctionDefData,
         def_index: FuncDefIndex,
         stub_or_impl: FunctionStubOrImpl,
+        has_ellipsis_body: bool,
         placeholder_body_kind: Option<PlaceholderBodyKind>,
         is_return_inferred: bool,
+        calls_super_method: bool,
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
@@ -465,6 +469,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_async: def.is_async,
             placeholder_body_kind,
             is_return_inferred,
+            calls_super_method,
             ..Default::default()
         };
         let mut found_class_property = false;
@@ -492,6 +497,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => {
                     if is_class_property_decorator_type(&decorator.ty) {
                         found_class_property = true;
+                    }
+                    if matches!(
+                        &decorator.ty,
+                        Type::Any(AnyStyle::Implicit | AnyStyle::Explicit)
+                    ) {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::UntypedFunctionDecorator,
+                            format!(
+                                "Untyped function decorator obscures the type of function `{}`",
+                                def.name
+                            ),
+                        );
                     }
                     true
                 }
@@ -662,6 +681,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params,
             paramspec,
             stub_or_impl,
+            has_ellipsis_body,
             defining_cls,
             resolved_param_types,
         })
@@ -684,6 +704,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 stmt.name.range(),
                 ErrorKind::UnannotatedReturn,
                 format!("`{}` is missing a return annotation", stmt.name),
+            );
+        }
+        if def.has_ellipsis_body
+            && has_return_annotation
+            && !def.metadata.flags.defined_in_stub_file
+            && !def.metadata.flags.is_overload
+            && !def.metadata.flags.is_abstract_method
+            && !def
+                .defining_cls
+                .as_ref()
+                .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol())
+            && !if stmt.is_async {
+                self.unwrap_coroutine(&ret)
+                    .is_some_and(|(_, _, return_ty)| {
+                        self.is_subset_eq(&self.heap.mk_none(), &return_ty)
+                    })
+            } else {
+                self.is_subset_eq(&self.heap.mk_none(), &ret)
+            }
+        {
+            self.error(
+                errors,
+                stmt.name.range(),
+                ErrorKind::EmptyBody,
+                "Function body cannot consist only of `...` when the return type is not `None`"
+                    .to_owned(),
             );
         }
         // The first parameter of a non-static method is the implicit self/cls
@@ -848,6 +894,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (x, range) in def.decorators.iter().rev() {
             ty = self.apply_function_decorator(x.clone(), ty, &def.metadata, *range, errors);
         }
+        self.validate_singledispatch_dispatcher_signature(
+            &ty,
+            DispatcherDef {
+                params: &def.params,
+                id_range: def.id_range(),
+                defining_cls: def.defining_cls.as_ref(),
+                is_staticmethod: def.metadata.flags.is_staticmethod,
+            },
+            errors,
+        );
         Arc::new(ty)
     }
 
@@ -1101,12 +1157,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                     .with_annotation(annot_range, "declared type".to_owned())
                 };
-                // Integer literal defaults are valid for `Dim[...]` parameters: at
+                // Integer literal defaults are valid for symbolic integer parameters: at
                 // call time the dimension variable is bound from that default value.
                 let skip_check = matches!(
                     (&param_ty, default),
                     (
-                        Type::Dim(inner),
+                        Type::Int(Int::Symbolic(inner)),
                         Some(Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral {
                             value: ruff_python_ast::Number::Int(i),
                             ..
@@ -1636,11 +1692,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
                 .forall(tparams)
             }
-            // Callback protocol. We convert it to a function so we can add function metadata.
+            // Convert non-descriptor callback protocols to functions so that they can carry function metadata.
             Type::ClassType(cls)
                 if self
                     .get_metadata_for_class(cls.class_object())
-                    .is_protocol() =>
+                    .is_protocol()
+                    && self
+                        .get_class_member(cls.class_object(), &dunder::GET)
+                        .is_none()
+                    && self
+                        .get_class_member(cls.class_object(), &dunder::SET)
+                        .is_none() =>
             {
                 let call_attr = self.instance_as_dunder_call(&cls).and_then(|call_attr| {
                     if let Type::BoundMethod(m) = call_attr {
@@ -1762,6 +1824,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        // Bare `@fn.register`: validate the impl's dispatch type against the fallback, then return
+        // the impl's own type so direct calls to the registered function are type-checked, rather
+        // than the stub `register`'s erased `Callable[..., _T]` return.
+        if let Some(fallback_first) = Self::singledispatch_register_first(&decorator) {
+            // `callable_signatures` recognizes overloaded and generic impls.
+            if let [sig, ..] = decoratee.callable_signatures().as_slice()
+                && let Some(dispatch_ty) = Self::first_positional_param_type(sig)
+            {
+                self.check_singledispatch_register(&dispatch_ty, &fallback_first, range, errors);
+            }
+            return decoratee;
+        }
         // Check if this is a decorator that's special-cased to preserve the decorated function's signature
         if let Type::KwCall(call) = &decorator
             && call.func_metadata.kind.is_signature_preserving_decorator()
@@ -1813,7 +1887,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // An invariant is that in no case should a `Type::Quantified` originating in a `Forall`
         // from either the decoratee *or* the raw `decorated_value` make it into the final result
         // without either being wrapped in a `Forall` or converted to a gradual type.
-        self.restore_decoratee_generics(decorated_value, application.decoratee_tparams)
+        let decorated =
+            self.restore_decoratee_generics(decorated_value, application.decoratee_tparams);
+        let widened = self.widen_singledispatch_never(decorated);
+        self.singledispatch_dispatcher_as_callback(widened, &application.original_decoratee)
     }
 
     /// For a type guard function, validate whether it has at least one
@@ -2039,6 +2116,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &DecoratedFunction,
         errors: &ErrorCollector,
     ) {
+        // A `@functools.singledispatch` implementation's overloads describe the registered dispatch
+        // variants, not the fallback's own signature, so implementation-consistency does not apply.
+        if Self::is_singledispatch_dispatcher(&def.ty) {
+            return;
+        }
         let impl_tparams = match &*def.ty {
             Type::Forall(forall) => Some(&forall.tparams),
             _ => None,

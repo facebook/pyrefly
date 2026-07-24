@@ -120,9 +120,7 @@ fn dump_config(
             .or_default()
             .push(path.clone());
     }
-    for error in config_finder.errors() {
-        error.print();
-    }
+    config_finder.print_errors();
     for (config, files) in configs_to_files.into_iter() {
         let config_env = clap_env("CONFIG");
         match &config.source {

@@ -50,13 +50,6 @@ def broadcast(a: list[int | symint], b: list[int | symint]) -> list[int | symint
     return [bd if ad == 1 else ad for ad, bd in zip(padded_a, padded_b)]
 
 @shape_dsl_function
-def binary_broadcast_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
-    # Unknown-rank RHS cannot be broadcast precisely; preserve the shaped LHS.
-    if not isinstance(len(other.shape), int):
-        return self
-    return ShapedArray(shape=broadcast(self.shape, other.shape))
-
-@shape_dsl_function
 def broadcast_int(
     expr: int | symint | list[int | symint], n: int
 ) -> list[int | symint]:

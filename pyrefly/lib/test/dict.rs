@@ -218,3 +218,18 @@ x = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": {"k": {"l": {"m"
 assert_type(x, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]]]]]]]]]]])
 "#,
 );
+
+testcase!(
+    test_unpack_dict_in_list,
+    r#"
+def same[T](x: T, ys: list[T]) -> None:
+      pass
+
+extra: dict[str, list[str]] = {"name": ["name"]}
+images: list[bytes] = []
+
+d = {"photo": [images[0]], "enabled": ["yes"]}
+
+same(d, [dict(photo=[images[0]], enabled=["yes"], **extra)])
+    "#,
+);

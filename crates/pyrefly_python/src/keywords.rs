@@ -10,14 +10,18 @@ use std::sync::LazyLock;
 
 use crate::sys_info::PythonVersion;
 
-/// Base Python keywords common to all supported Python versions.
-const BASE_KEYWORDS: &[&str] = &[
-    // Expression keywords
-    "True", "False", "None", "and", "or", "not", "is", "lambda", "yield",
-    // Statement keywords
-    "assert", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally",
-    "for", "from", "global", "if", "import", "in", "nonlocal", "pass", "raise", "return", "try",
-    "type", "while", "with",
+/// Python keywords that can appear at the start of, or within, an expression.
+/// These remain valid in a nested expression position (e.g. a call argument),
+/// unlike statement keywords.
+const EXPRESSION_KEYWORDS: &[&str] = &[
+    "True", "False", "None", "and", "or", "not", "is", "lambda", "yield", "if", "in", "for", "else",
+];
+
+/// Python keywords that can only introduce a statement, never appear in the
+/// middle of an expression.
+const STATEMENT_KEYWORDS: &[&str] = &[
+    "assert", "break", "class", "continue", "def", "del", "elif", "except", "finally", "from",
+    "global", "import", "nonlocal", "pass", "raise", "return", "try", "type", "while", "with",
 ];
 
 /// Additional keywords introduced in Python 3.5.
@@ -48,7 +52,8 @@ pub fn is_keyword(name: &str) -> bool {
 
 /// Returns a Vec containing all Python keywords for the specified Python version.
 pub fn get_keywords(version: PythonVersion) -> Vec<&'static str> {
-    let mut keywords: Vec<&'static str> = BASE_KEYWORDS.to_vec();
+    let mut keywords: Vec<&'static str> = EXPRESSION_KEYWORDS.to_vec();
+    keywords.extend(STATEMENT_KEYWORDS);
 
     if version.major >= 3 && version.minor >= 5 {
         keywords.extend(PYTHON_3_5_KEYWORDS);
@@ -57,6 +62,19 @@ pub fn get_keywords(version: PythonVersion) -> Vec<&'static str> {
         keywords.extend(PYTHON_3_10_KEYWORDS);
     }
 
+    keywords
+}
+
+/// Returns the Python keywords that are valid in an expression position for the
+/// specified Python version. This excludes statement-only keywords (e.g. `while`,
+/// `try`, `def`) that would be invalid inside a nested expression such as a call
+/// argument or the right-hand side of an assignment. `await` is the only
+/// expression keyword added after the base set (Python 3.5+).
+pub fn get_expression_keywords(version: PythonVersion) -> Vec<&'static str> {
+    let mut keywords: Vec<&'static str> = EXPRESSION_KEYWORDS.to_vec();
+    if version.major >= 3 && version.minor >= 5 {
+        keywords.push("await");
+    }
     keywords
 }
 
@@ -84,6 +102,29 @@ mod tests {
         assert!(keywords.contains(&"await"));
         assert!(keywords.contains(&"match"));
         assert!(keywords.contains(&"case"));
+    }
+
+    #[test]
+    fn test_expression_keywords_exclude_statement_keywords() {
+        let keywords = get_expression_keywords(PythonVersion::new(3, 10, 0));
+        // Expression keywords are present.
+        assert!(keywords.contains(&"None"));
+        assert!(keywords.contains(&"lambda"));
+        assert!(keywords.contains(&"not"));
+        assert!(keywords.contains(&"await"));
+        assert!(keywords.contains(&"for"));
+        // Statement-only keywords must not appear in an expression position.
+        assert!(!keywords.contains(&"while"));
+        assert!(!keywords.contains(&"try"));
+        assert!(!keywords.contains(&"def"));
+        assert!(!keywords.contains(&"async"));
+        assert!(!keywords.contains(&"match"));
+    }
+
+    #[test]
+    fn test_expression_keywords_await_gated_on_version() {
+        assert!(!get_expression_keywords(PythonVersion::new(3, 4, 0)).contains(&"await"));
+        assert!(get_expression_keywords(PythonVersion::new(3, 5, 0)).contains(&"await"));
     }
 
     #[test]

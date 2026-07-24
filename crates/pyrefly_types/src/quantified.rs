@@ -23,6 +23,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
 use crate::class::ClassType;
+use crate::dimension::gradual_size;
 use crate::heap::TypeHeap;
 use crate::stdlib::Stdlib;
 use crate::type_var::PreInferenceVariance;
@@ -206,6 +207,7 @@ impl PartialOrd for Quantified {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum QuantifiedKind {
     TypeVar,
+    IntVar,
     ParamSpec,
     TypeVarTuple,
 }
@@ -214,6 +216,7 @@ impl QuantifiedKind {
     fn empty_value(self) -> Type {
         match self {
             QuantifiedKind::TypeVar => Type::any_implicit(),
+            QuantifiedKind::IntVar => gradual_size(),
             QuantifiedKind::ParamSpec => Type::Ellipsis,
             QuantifiedKind::TypeVarTuple => Type::any_tuple(),
         }
@@ -221,7 +224,7 @@ impl QuantifiedKind {
 
     fn class_type(self, stdlib: &Stdlib) -> &ClassType {
         match self {
-            QuantifiedKind::TypeVar => stdlib.type_var(),
+            QuantifiedKind::TypeVar | QuantifiedKind::IntVar => stdlib.type_var(),
             QuantifiedKind::ParamSpec => stdlib.param_spec(),
             QuantifiedKind::TypeVarTuple => stdlib.type_var_tuple(),
         }
@@ -291,9 +294,10 @@ impl Quantified {
 
     /// Creates a Quantified from a TypeVar, extracting all relevant fields.
     pub fn from_type_var(tv: &TypeVar, identity: QuantifiedIdentity) -> Self {
-        Self::type_var(
-            tv.qname().id().clone(),
+        Self::new(
             identity,
+            tv.qname().id().clone(),
+            tv.kind(),
             tv.default().cloned(),
             tv.restriction().clone(),
             tv.variance(),
@@ -394,7 +398,7 @@ impl Quantified {
     }
 
     pub fn is_type_var(&self) -> bool {
-        matches!(self.kind, QuantifiedKind::TypeVar)
+        matches!(self.kind, QuantifiedKind::TypeVar | QuantifiedKind::IntVar)
     }
 
     pub fn is_param_spec(&self) -> bool {

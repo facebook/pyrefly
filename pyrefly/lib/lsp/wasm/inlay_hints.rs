@@ -328,8 +328,8 @@ impl<'a> Transaction<'a> {
         // Extract the element at the given position
         // This mirrors the logic in solve.rs for Binding::UnpackedValue
         match pos {
-            UnpackedPosition::Index(i) => elts.get(i),
-            UnpackedPosition::ReverseIndex(i) => {
+            UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => elts.get(i),
+            UnpackedPosition::ReverseIndex(i, _) => {
                 elts.len().checked_sub(i).and_then(|idx| elts.get(idx))
             }
             // For slices (starred unpacking), we can't return a single element
