@@ -15,8 +15,6 @@ use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
-use pyrefly_types::shaped_array::ShapedArrayType;
-use pyrefly_types::shaped_array::broadcast_shapes;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_util::prelude::VecExt;
@@ -74,12 +72,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             callee_errors,
             Some(context),
         );
-        self.call_infer(
+        self.call_infer_with_return_errors(
             callable,
             &[CallArg::ty(call_arg_type, range)],
             &[],
             range,
             call_errors,
+            callee_errors,
             Some(context),
             None,
             None,
@@ -584,25 +583,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(result) = self.try_tuple_repeat(lhs, rhs)
                 {
                     result
-                } else if matches!(
-                    x.op,
-                    Operator::Add
-                        | Operator::Sub
-                        | Operator::Mult
-                        | Operator::Div
-                        | Operator::Mod
-                        | Operator::Pow
-                        | Operator::FloorDiv
-                ) && let Type::ShapedArray(l_shaped_array) = lhs
-                    && let Type::ShapedArray(r_shaped_array) = rhs
-                {
-                    // Tensor element-wise operations with broadcasting
-                    self.broadcast_shaped_array_binop(
-                        l_shaped_array,
-                        r_shaped_array,
-                        x.range,
-                        errors,
-                    )
                 } else if let Some(result) = self.try_int_binop(x.op, lhs, rhs) {
                     result
                 } else if x.op == Operator::Pow
@@ -1065,30 +1045,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Handle element-wise binary operations on tensors with broadcasting.
-    /// broadcast_shapes handles all shape variants: Concrete shapes are broadcast
-    /// precisely, Unpacked shapes match suffix then middles then prefixes, and
-    /// mixed Concrete+Unpacked aligns against the suffix.
-    fn broadcast_shaped_array_binop(
-        &self,
-        left: &ShapedArrayType,
-        right: &ShapedArrayType,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Type {
-        match broadcast_shapes(&left.shape(), &right.shape()) {
-            Ok(result_shape) => self.shaped_array_with_shape(left, result_shape).to_type(),
-            Err(err) => {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::UnsupportedOperation,
-                    format!("Cannot broadcast tensor shapes: {}", err),
-                );
-                Type::any_error()
-            }
-        }
-    }
     /// Checks for incompatible equality comparisons between types that cannot overlap.
     fn check_incompatible_comparison(
         &self,

@@ -1848,6 +1848,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    pub(crate) fn call_infer_with_return_errors(
+        &self,
+        call_target: CallTarget,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        hint: Option<HintRef>,
+        ctor_targs: Option<&mut TArgs>,
+    ) -> Type {
+        self.call_infer_with_callee_range(
+            call_target,
+            args,
+            keywords,
+            arguments_range,
+            None,
+            errors,
+            return_errors,
+            context,
+            hint,
+            ctor_targs,
+        )
+    }
+
     /// Helper function hide details of call synthesis from the attribute resolution code.
     pub fn call_property_getter(
         &self,

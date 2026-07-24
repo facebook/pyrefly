@@ -2110,12 +2110,13 @@ testcase!(
     shaped_array_env(),
     r#"
 from typing import Any, reveal_type
-from shape_extensions import shaped_array
+from shape_extensions import broadcast, IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Array[Shape, DType]:
+class Array[Shape: IntTuple, DType]:
     shape: Shape
     def dtype(self) -> DType: ...
+    def __add__[OtherShape: IntTuple](self, other: Array[OtherShape, DType]) -> Array[broadcast(Shape, OtherShape), DType]: ...
 
 def f(
     x: Array[[2, 3], int],
@@ -2143,11 +2144,12 @@ testcase!(
     shaped_array_env(),
     r#"
 from typing import Literal, reveal_type
-from shape_extensions import Int, shaped_array
+from shape_extensions import broadcast, Int, IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Array[Shape, DType]:
+class Array[Shape: IntTuple, DType]:
     shape: Shape
+    def __add__[OtherShape: IntTuple](self, other: Array[OtherShape, DType]) -> Array[broadcast(Shape, OtherShape), DType]: ...
 
 def f(
     known: Array[[5, 5], int],
