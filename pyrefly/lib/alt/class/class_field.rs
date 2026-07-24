@@ -1573,6 +1573,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let mut direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
+                let mut annotation_flags = annot.and_then(|annot| {
+                    self.extract_pydantic_field_from_annotation(annot, name, &metadata)
+                });
                 if metadata.is_protocol()
                     && direct_annotation.is_none()
                     && !is_dunder(name.as_str())
@@ -1627,6 +1630,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         direct_annotation.as_ref().and_then(|a| a.ty.as_ref()),
                         dm,
                     );
+                    if let Some(f) = &mut flags
+                        && let Some(annotation_flags) = annotation_flags.as_ref()
+                        && f.strict.is_none()
+                    {
+                        f.strict = annotation_flags.strict;
+                    }
                     if flags.is_some() {
                         // A field specifier with no type annotation is a definition-time error,
                         // except under classic attrs (`auto_attribs=False`), where an unannotated
@@ -1720,7 +1729,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         f.converter_param =
                             Some(self.attrs_converter_decorator_param(method_range));
                     }
-                    ClassFieldInitialization::ClassBody(flags.map(Box::new))
+                    if let Some(flags) = flags {
+                        ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
+                    } else if let Some(mut flags) = annotation_flags.take() {
+                        flags.default = Some(self.heap.mk_any_implicit());
+                        ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
+                    } else {
+                        ClassFieldInitialization::ClassBody(None)
+                    }
+                } else if let Some(mut flags) = annotation_flags.take() {
+                    flags.default = Some(self.heap.mk_any_implicit());
+                    ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
                 } else {
                     ClassFieldInitialization::ClassBody(None)
                 };
