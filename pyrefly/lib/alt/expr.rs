@@ -85,6 +85,7 @@ use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
+use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
@@ -536,6 +537,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::BinOp(x) => self.binop_infer(x, hint, errors),
             Expr::UnaryOp(x) => self.unop_infer(x, errors),
             Expr::Lambda(lambda) => {
+                // Wide union hints are normally discarded to avoid combinatorial contextual
+                // inference. For lambdas, non-callable members cannot contribute, so retain a
+                // small callable subset (common in overloaded APIs such as pandas indexers).
+                let narrowed_hint_types = hint.and_then(|hint| {
+                    (hint.types().len() > MAX_CALL_HINT_WIDTH).then(|| {
+                        hint.types()
+                            .iter()
+                            .filter(|ty| ty.is_toplevel_callable())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
+                });
+                let hint = match narrowed_hint_types.as_deref() {
+                    Some(types) if !types.is_empty() && types.len() <= MAX_CALL_HINT_WIDTH => Some(
+                        HintRef::from_types(types, hint.and_then(|hint| hint.errors())),
+                    ),
+                    _ => hint,
+                };
                 let param_ids = if let Some(parameters) = &lambda.parameters {
                     parameters
                         .iter_non_variadic_params()

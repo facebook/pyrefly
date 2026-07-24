@@ -80,10 +80,12 @@ impl CallWithTypes {
         errors: &ErrorCollector,
     ) -> TypeOrExpr<'a> {
         match x {
-            TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_))) => {
-                // Hack: don't flatten mutable builtin containers into types before calling a
-                // function, as we know these containers often need to be contextually typed using
-                // the function's parameter types.
+            TypeOrExpr::Expr(
+                e @ (Expr::Dict(_) | Expr::Lambda(_) | Expr::List(_) | Expr::Set(_)),
+            ) => {
+                // Hack: don't flatten mutable builtin containers or lambdas into types before
+                // calling a function, as we know these expressions often need to be contextually
+                // typed using the function's parameter types.
                 TypeOrExpr::Expr(e)
             }
             TypeOrExpr::Expr(e) => {

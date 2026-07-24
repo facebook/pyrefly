@@ -45,6 +45,11 @@ impl<'a, 'b> HintRef<'a, 'b> {
         Self::new(hint, None)
     }
 
+    /// Construct a hint from an already-split collection of candidate types.
+    pub fn from_types(types: &'b [Type], errors: Option<&'a ErrorCollector>) -> Self {
+        Self(types, errors)
+    }
+
     pub fn with_ty_opt(hint: Option<Self>, ty: Option<&'b Type>) -> Option<Self> {
         let hint = hint?;
         let ty = ty?;
@@ -62,7 +67,7 @@ impl<'a, 'b> HintRef<'a, 'b> {
         self.0
     }
 
-    pub fn errors(&self) -> Option<&ErrorCollector> {
+    pub fn errors(&self) -> Option<&'a ErrorCollector> {
         self.1
     }
 }
@@ -314,19 +319,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn decompose_lambda(&self, hint: &Type, param_vars: &[(&Name, Var)]) -> Option<Type> {
-        let return_ty = self.fresh_var();
+        // An unresolved generic return hint must be inferred from the lambda body. Relating a
+        // fresh return variable to it here can prematurely solve the generic (and discard a bound
+        // failure) before the body has an actual type.
+        let hinted_return = hint.callable_return_type(self.heap);
+        let return_ty = match &hinted_return {
+            Some(ty) if !ty.collect_maybe_placeholder_vars().is_empty() => None,
+            _ => Some(self.fresh_var()),
+        };
         let params = param_vars
             .iter()
             .map(|(name, var)| {
                 Param::Pos((*name).clone(), var.to_type(self.heap), Required::Required)
             })
             .collect::<Vec<_>>();
-        let callable_ty = self
-            .heap
-            .mk_callable_from_vec(params, return_ty.to_type(self.heap));
+        let callable_ty = self.heap.mk_callable_from_vec(
+            params,
+            return_ty
+                .map(|var| var.to_type(self.heap))
+                .unwrap_or_else(|| {
+                    hinted_return
+                        .clone()
+                        .expect("missing return variable requires a callable return hint")
+                }),
+        );
 
         if self.is_subset_eq(&callable_ty, hint) {
-            self.resolve_var_opt(hint, return_ty)
+            return_ty.and_then(|var| self.resolve_var_opt(hint, var))
         } else {
             None
         }
