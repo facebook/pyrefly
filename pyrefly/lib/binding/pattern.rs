@@ -240,7 +240,11 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(name) = &p.name
                     && !Ast::is_synthesized_empty_identifier(name)
                 {
-                    self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
+                    self.bind_definition(
+                        name,
+                        Binding::PatternCapture(subject_idx),
+                        FlowStyle::Other,
+                    );
                     subject = MatchSubject::Single(NarrowingSubject::Name(name.id.clone()));
                 };
                 if let Some(pattern) = p.pattern {
@@ -369,8 +373,8 @@ impl<'a> BindingsBuilder<'a> {
                                 && !Ast::is_synthesized_empty_identifier(name)
                             {
                                 let position = UnpackedPosition::Slice(i, num_patterns - i - 1);
-                                self.bind_definition(
-                                    name,
+                                let unpacked_idx = self.insert_binding(
+                                    Key::Anon(p.range),
                                     Binding::UnpackedValue(
                                         None,
                                         subject_idx,
@@ -378,6 +382,10 @@ impl<'a> BindingsBuilder<'a> {
                                         position,
                                         None,
                                     ),
+                                );
+                                self.bind_definition(
+                                    name,
+                                    Binding::PatternCapture(unpacked_idx),
                                     FlowStyle::Other,
                                 );
                             }
@@ -522,7 +530,11 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(rest) = x.rest
                     && !Ast::is_synthesized_empty_identifier(&rest)
                 {
-                    self.bind_definition(&rest, Binding::Forward(subject_idx), FlowStyle::Other);
+                    self.bind_definition(
+                        &rest,
+                        Binding::PatternCapture(subject_idx),
+                        FlowStyle::Other,
+                    );
                 }
                 narrow_ops
             }
@@ -743,7 +755,11 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(name) = &p.name
                     && !Ast::is_synthesized_empty_identifier(name)
                 {
-                    self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
+                    self.bind_definition(
+                        name,
+                        Binding::PatternCapture(subject_idx),
+                        FlowStyle::Other,
+                    );
                 }
                 PatternNarrowOps::new()
             }

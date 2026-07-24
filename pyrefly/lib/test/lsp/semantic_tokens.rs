@@ -265,6 +265,169 @@ token-type: keyword
 }
 
 #[test]
+fn pattern_capture_test() {
+    let code = r#"
+class Point:
+    child: object
+
+def patterns(subject):
+    match subject:
+        case [head, *tail]:
+            return head, tail
+        case {"item": item, **rest}:
+            return item, rest
+        case Point(child=[nested, *nested_tail]) as whole:
+            return nested, nested_tail, whole
+        case (1, choice) | (2, choice) if choice:
+            return choice
+        case 0 as alias:
+            return alias
+        case ALL_CAPS if ALL_CAPS:
+            return ALL_CAPS
+
+def star_wildcard(subject):
+    match subject:
+        case [kept, *_]:
+            return kept
+
+def named_like_parameter(subject):
+    match subject:
+        case self if self:
+            return self
+"#;
+    // Capture names are plain variables, including names that look like constants or parameters.
+    // The class-pattern keyword `child` and the wildcards `_` and `*_` do not produce tokens.
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 5, text: Point
+token-type: class
+
+line: 2, column: 4, length: 5, text: child
+token-type: variable
+
+line: 2, column: 11, length: 6, text: object
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 4, column: 4, length: 8, text: patterns
+token-type: function
+
+line: 4, column: 13, length: 7, text: subject
+token-type: parameter
+
+line: 5, column: 10, length: 7, text: subject
+token-type: parameter
+
+line: 6, column: 14, length: 4, text: head
+token-type: variable
+
+line: 6, column: 21, length: 4, text: tail
+token-type: variable
+
+line: 7, column: 19, length: 4, text: head
+token-type: variable
+
+line: 7, column: 25, length: 4, text: tail
+token-type: variable
+
+line: 8, column: 22, length: 4, text: item
+token-type: variable
+
+line: 8, column: 30, length: 4, text: rest
+token-type: variable
+
+line: 9, column: 19, length: 4, text: item
+token-type: variable
+
+line: 9, column: 25, length: 4, text: rest
+token-type: variable
+
+line: 10, column: 13, length: 5, text: Point
+token-type: class
+
+line: 10, column: 26, length: 6, text: nested
+token-type: variable
+
+line: 10, column: 35, length: 11, text: nested_tail
+token-type: variable
+
+line: 10, column: 52, length: 5, text: whole
+token-type: variable
+
+line: 11, column: 19, length: 6, text: nested
+token-type: variable
+
+line: 11, column: 27, length: 11, text: nested_tail
+token-type: variable
+
+line: 11, column: 40, length: 5, text: whole
+token-type: variable
+
+line: 12, column: 17, length: 6, text: choice
+token-type: variable
+
+line: 12, column: 31, length: 6, text: choice
+token-type: variable
+
+line: 12, column: 42, length: 6, text: choice
+token-type: variable
+
+line: 13, column: 19, length: 6, text: choice
+token-type: variable
+
+line: 14, column: 18, length: 5, text: alias
+token-type: variable
+
+line: 15, column: 19, length: 5, text: alias
+token-type: variable
+
+line: 16, column: 13, length: 8, text: ALL_CAPS
+token-type: variable
+
+line: 16, column: 25, length: 8, text: ALL_CAPS
+token-type: variable
+
+line: 17, column: 19, length: 8, text: ALL_CAPS
+token-type: variable
+
+line: 19, column: 4, length: 13, text: star_wildcard
+token-type: function
+
+line: 19, column: 18, length: 7, text: subject
+token-type: parameter
+
+line: 20, column: 10, length: 7, text: subject
+token-type: parameter
+
+line: 21, column: 14, length: 4, text: kept
+token-type: variable
+
+line: 22, column: 19, length: 4, text: kept
+token-type: variable
+
+line: 24, column: 4, length: 20, text: named_like_parameter
+token-type: function
+
+line: 24, column: 25, length: 7, text: subject
+token-type: parameter
+
+line: 25, column: 10, length: 7, text: subject
+token-type: parameter
+
+line: 26, column: 13, length: 4, text: self
+token-type: variable
+
+line: 26, column: 21, length: 4, text: self
+token-type: variable
+
+line: 27, column: 19, length: 4, text: self
+token-type: variable
+"#,
+    );
+}
+
+#[test]
 fn multiline_syntax_token_test() {
     let code = r##"x = """one
 two"""
