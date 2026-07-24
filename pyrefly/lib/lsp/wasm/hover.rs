@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use dupe::Dupe;
 use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
@@ -746,10 +747,34 @@ pub fn get_hover(
         });
     }
 
+    let definition = transaction
+        .find_definition(
+            handle,
+            position,
+            FindPreference {
+                prefer_pyi: false,
+                ..Default::default()
+            },
+        )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
+        .into_iter()
+        .next();
+
     let mut type_ = transaction
         .subscript_operator_type_at(handle, position)
         .or_else(|| transaction.get_type_at_for_display(handle, position))
-        .or_else(|| transaction.operator_type_at(handle, position))?;
+        .or_else(|| transaction.operator_type_at(handle, position))
+        .or_else(|| {
+            let definition = definition.as_ref()?;
+            let definition_handle = Handle::new(
+                definition.module.name(),
+                definition.module.path().dupe(),
+                handle.sys_info().dupe(),
+            );
+            transaction
+                .get_type_at_for_display(&definition_handle, definition.definition_range.start())
+        })?;
     let ast = transaction.get_ast(handle);
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
     // chain highlights the whole expression. Reuses the hoisted `module_info` and
@@ -823,20 +848,7 @@ pub fn get_hover(
         module,
         docstring_range,
         display_name,
-    }) = transaction
-        .find_definition(
-            handle,
-            position,
-            FindPreference {
-                prefer_pyi: false,
-                ..Default::default()
-            },
-        )
-        .map(Vec1::into_vec)
-        .unwrap_or_default()
-        // TODO: handle more than 1 definition
-        .into_iter()
-        .next()
+    }) = definition
     {
         let kind = metadata.symbol_kind();
         let name = {

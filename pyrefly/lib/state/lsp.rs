@@ -2307,9 +2307,18 @@ impl<'a> Transaction<'a> {
         let answers = self
             .get_answers(handle)
             .ok_or(EmptyResponseReason::AnswersNotFound)?;
-        let base_type = answers
-            .get_type_trace(base_range)
-            .ok_or(EmptyResponseReason::TypeTraceNotFound)?;
+        // Annotated metadata may not trace an imported module base, but the
+        // exact identifier still resolves to the module type.
+        let base_type = if let Some(base_type) = answers.get_type_trace(base_range) {
+            base_type
+        } else if let Some(identifier) = self.identifier_at(handle, base_range.start())
+            && identifier.identifier.range == base_range
+            && let Some(base_type) = self.get_type_at(handle, base_range.start())
+        {
+            base_type
+        } else {
+            return Err(EmptyResponseReason::TypeTraceNotFound);
+        };
         if let Ok(defs) = self.find_attribute_definition_for_base_type(
             handle,
             preference,
