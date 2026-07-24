@@ -243,7 +243,9 @@ impl SpecialExport {
             Self::ShapedArray => matches!(m.as_str(), "shape_extensions"),
             Self::ProxyMethod => matches!(m.as_str(), "shape_extensions"),
             Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
-            Self::BuiltinsSentinel => matches!(m.as_str(), "builtins"),
+            // `builtins.sentinel` (3.15+) and its `typing_extensions.sentinel`
+            // backport are the same lowercase PEP 661 constructor.
+            Self::BuiltinsSentinel => matches!(m.as_str(), "builtins" | "typing_extensions"),
             Self::AttrsLegacyAttrib | Self::AttrsNextGenField | Self::AttrsNothing => {
                 matches!(m.as_str(), "attr" | "attrs")
             }
