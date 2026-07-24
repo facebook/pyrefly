@@ -3418,6 +3418,16 @@ impl<'a> Transaction<'a> {
         quick_fixes::extract_superclass::extract_superclass_code_actions(self, handle, selection)
     }
 
+    pub fn implement_abstract_members_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::implement_abstract_members::implement_abstract_members_code_actions(
+            self, handle, selection,
+        )
+    }
+
     pub fn pull_members_up_code_actions(
         &self,
         handle: &Handle,
