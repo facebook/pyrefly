@@ -1791,6 +1791,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // Therefore try these quantified cases, but only pick them if they work.
             (Type::Quantified(q), u)
                 if let Restriction::Bound(bound) = q.restriction()
+                    // A bare inference variable can preserve the quantified type itself. Expanding
+                    // it to its bound here would make inference depend on which argument is checked
+                    // first (https://github.com/facebook/pyrefly/issues/4187).
+                    && !matches!(u, Type::Union(union) if union.members.iter().any(|t| matches!(t, Type::Var(_))))
                     && self
                         .solver
                         .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
