@@ -900,3 +900,22 @@ class DB(TypedDict):
 f: Callable[[], DA] | Callable[[], DB] = lambda: {"x": B2()}
     "#,
 );
+
+testcase!(
+    test_nested_typeddict_in_union,
+    r#"
+from typing import TypedDict
+
+class A(TypedDict):
+    x: int
+
+class B(TypedDict, total=False):
+    x: str
+
+type X = list[A] | list[B]
+
+x1: X = [{"x": ""}]
+x2: X = [{}]
+x3: X = [{"x": 1.0}]  # E: `float` is not assignable to TypedDict key `x` with type `int`
+    "#,
+);
