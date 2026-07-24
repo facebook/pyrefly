@@ -188,8 +188,31 @@ impl<'a> Transaction<'a> {
                 }
                 key @ Key::Definition(_)
                     if inlay_hint_config.variable_types
-                        && let Some(ty) = self.get_type_for_display(handle, key) =>
+                        && let Some(mut ty) = self.get_type_for_display(handle, key) =>
                 {
+                    // NewType values are callable aliases, not class objects, so `type[N]` is not
+                    // a valid annotation. Show their constructor signature without offering to
+                    // insert it as an annotation.
+                    let mut insertable = true;
+                    if let Type::ClassDef(cls) = &ty
+                        && let Some(Some(constructor)) =
+                            self.ad_hoc_solve(handle, "inlay_hint_new_type", |solver| {
+                                solver.get_metadata_for_class(cls).is_new_type().then(|| {
+                                    let cls =
+                                        solver.promote_nontypeddict_silently_to_classtype(cls);
+                                    let new = solver
+                                        .get_dunder_new(&cls, false)
+                                        .expect("NewType has a synthesized __new__ method");
+                                    let constructor = solver
+                                        .bind_dunder_new(&new, cls)
+                                        .expect("NewType __new__ method can be bound");
+                                    solver.for_display(constructor)
+                                })
+                            })
+                    {
+                        ty = constructor;
+                        insertable = false;
+                    }
                     // For unpacked values, extract the element expression if available
                     let (e, is_unpacked) = match bindings.get(idx) {
                         // Pinned assignments (explicit annotation or
@@ -230,7 +253,12 @@ impl<'a> Transaction<'a> {
                         is_unpacked && !ty.is_any()
                     };
                     if should_show {
-                        res.push(make_type_hint(": ", key.range().end(), &ty, !is_unpacked));
+                        res.push(make_type_hint(
+                            ": ",
+                            key.range().end(),
+                            &ty,
+                            insertable && !is_unpacked,
+                        ));
                     }
                 }
                 _ => {}
