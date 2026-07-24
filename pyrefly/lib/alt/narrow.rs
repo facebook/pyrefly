@@ -182,7 +182,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn intersect_impl(&self, left: &Type, right: &Type, fallback: IntersectFallback) -> Type {
-        if self.is_subset_eq(right, left) {
+        if Self::enum_instance(left, right).is_some() {
+            right.clone()
+        } else if Self::enum_instance(right, left).is_some() {
+            left.clone()
+        } else if self.is_subset_eq(right, left) {
             if left.is_toplevel_callable()
                 && right.is_toplevel_callable()
                 && self.is_subset_eq(left, right)
@@ -279,9 +283,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         right: &Type,
         fallback: IntersectFallback,
     ) -> Type {
-        self.distribute_over_union(left, |l| {
-            self.distribute_over_union(right, |r| self.intersect_impl(l, r, fallback))
-        })
+        let mut narrowed = Vec::new();
+        self.map_over_union(left, |l| {
+            self.map_over_union(right, |r| {
+                let t = self.intersect_impl(l, r, fallback);
+                if !t.is_never() {
+                    narrowed.push(t);
+                }
+            });
+        });
+        match narrowed.len() {
+            0 => self.heap.mk_never(),
+            1 => narrowed.pop().expect("narrowed has one element"),
+            _ => self.unions(narrowed),
+        }
     }
 
     fn intersect(&self, left: &Type, right: &Type) -> Type {
@@ -1017,7 +1032,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Type::Literal(f) if matches!(f.value, Lit::Bool(_) | Lit::Enum(_)) => {
-                    if self.is_subset_eq(right, &facet_ty) {
+                    if !self.intersect(&facet_ty, right).is_never() {
                         t.clone()
                     } else {
                         self.heap.mk_never()
