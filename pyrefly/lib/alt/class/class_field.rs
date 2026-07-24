@@ -1312,6 +1312,15 @@ fn make_bound_method_helper(
             }
             return Ok(unions(bound_methods, heap));
         }
+        Type::Intersect(intersect) => {
+            let (members, fallback) = *intersect;
+            let bound_fallback = make_bound_method_helper(heap, obj, fallback, should_bind)?;
+            return Ok(heap.mk_intersect(members, bound_fallback));
+        }
+        Type::KwCall(mut call) => {
+            call.return_ty = make_bound_method_helper(heap, obj, call.return_ty, should_bind)?;
+            return Ok(heap.mk_kw_call(*call));
+        }
         _ => return Err(attr),
     };
     Ok(heap.mk_bound_method(BoundMethod { obj, func }))
@@ -1371,6 +1380,8 @@ pub enum DataclassMember {
 fn has_any_method_type(ty: &Type) -> bool {
     match ty {
         Type::Union(union) => union.members.iter().any(|t| t.has_toplevel_func_metadata()),
+        Type::Intersect(intersect) => intersect.1.has_toplevel_func_metadata(),
+        Type::KwCall(call) => has_any_method_type(&call.return_ty),
         _ => ty.has_toplevel_func_metadata(),
     }
 }
