@@ -41,6 +41,8 @@ pub enum ReadOnlyReason {
     Super,
     /// Field is marked as frozen via a ConfigDict
     PydanticFrozen,
+    /// Field is marked as frozen via pydantic Field(frozen=True)
+    PydanticFrozenField,
     /// Field is an enum member's value
     EnumMemberValue,
 }
@@ -71,6 +73,9 @@ impl ReadOnlyReason {
             }
             ReadOnlyReason::PydanticFrozen => {
                 "This field belongs to a frozen Pydantic model".to_owned()
+            }
+            ReadOnlyReason::PydanticFrozenField => {
+                "This field is marked as frozen by Pydantic".to_owned()
             }
             ReadOnlyReason::EnumMemberValue => {
                 "An enum member's value may not be modified".to_owned()

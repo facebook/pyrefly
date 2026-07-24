@@ -810,6 +810,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let le = map.0.get(&LE).cloned();
 
         let strict: Option<bool> = map.0.get(&STRICT).and_then(|v| v.as_bool());
+        let frozen = map.get_bool(&DataclassFieldKeywords::FROZEN);
 
         // The raw expression of the argument for `on_setattr`.
         let attrs_on_setattr_expr = args
@@ -867,6 +868,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ge,
             le,
             strict,
+            frozen,
             converter_param,
             attrs_setattr_frozen,
         }

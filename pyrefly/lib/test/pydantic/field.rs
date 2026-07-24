@@ -152,6 +152,19 @@ Example(id="123")  # E: Missing argument `attribute_1`
 );
 
 pydantic_testcase!(
+    test_frozen_field_override_covariant,
+    r#"
+from pydantic import BaseModel, Field
+
+class Foo(BaseModel):
+    id: int | None = Field(frozen=True)
+
+class Bar(Foo):
+    id: int = Field(frozen=True)
+"#,
+);
+
+pydantic_testcase!(
     bug = "consider erroring on invalid5 and invalid6",
     test_discriminated_unions,
     r#"
