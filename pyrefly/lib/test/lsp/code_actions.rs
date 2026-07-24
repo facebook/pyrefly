@@ -1393,6 +1393,52 @@ fn redundant_cast_action_after(code: &str, cursor_offset: usize) -> Option<Strin
     Some(after)
 }
 
+fn remove_unused_variable_action(code: &str, cursor_offset: usize) -> Option<(String, String)> {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main")?;
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle)?;
+    let position = TextSize::try_from(cursor_offset).ok()?;
+    let actions = transaction
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default();
+    let (title, module, range, patch) = actions
+        .into_iter()
+        .find(|(title, _, _, _)| title.starts_with("Remove unused variable `"))?;
+    if module.path() != module_info.path() {
+        return None;
+    }
+    let (_before, after) = apply_patch(&module_info, range, patch);
+    Some((title, after))
+}
+
+#[test]
+fn remove_unused_variable_quickfix() {
+    let code = "def f() -> int:\n    unused = 1\n    return 2\n";
+    let (title, after) = remove_unused_variable_action(code, code.find("unused").unwrap()).unwrap();
+    assert_eq!("Remove unused variable `unused`", title);
+    assert_eq!("def f() -> int:\n    return 2\n", after);
+}
+
+#[test]
+fn remove_unused_variable_inserts_pass_for_empty_body() {
+    let code = "def f() -> None:\n    unused = 1\n";
+    let (_title, after) =
+        remove_unused_variable_action(code, code.find("unused").unwrap()).unwrap();
+    assert_eq!("def f() -> None:\n    pass\n", after);
+}
+
+#[test]
+fn remove_unused_variable_skips_unpacking_assignment() {
+    let code = "def f(pair):\n    unused, used = pair\n    return used\n";
+    assert!(remove_unused_variable_action(code, code.find("unused").unwrap()).is_none());
+}
+
 #[test]
 fn redundant_cast_parenthesized_expr() {
     let code = "from typing import cast\na: int = 1\nb: int = 2\ncast(int, a + b)\n";
