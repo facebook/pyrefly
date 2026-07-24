@@ -57,6 +57,7 @@ pub enum ErrorQuickFix {
     ReplaceWithEnumMember { replacement: String },
     AssertNotNone,
     RemoveUnusedSuppression(SuppressionEdit),
+    ReplaceDeprecatedContextManagerReturn { from: String, to: String },
 }
 
 impl From<SuppressionEdit> for ErrorQuickFix {
