@@ -1173,6 +1173,7 @@ pub enum BindingExpect {
         narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
         subject_range: TextRange,
+        include_open_builtins: bool,
         // Should we show the raw expression of the match subject instead of the name?
         show_subject_expr: bool,
     },

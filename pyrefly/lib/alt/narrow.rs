@@ -2125,16 +2125,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    /// Determines if a type should be checked for match exhaustiveness.
-    /// We check exhaustiveness when the type has a finite, known set of possible values.
-    fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
+    /// Finite domains can report precise missing cases; selected concrete builtins
+    /// still benefit from the remaining-type check for refutable literal,
+    /// sequence, and mapping patterns.
+    pub(crate) fn should_check_exhaustiveness(
+        &self,
+        ty: &Type,
+        include_open_builtins: bool,
+    ) -> bool {
         match ty {
             Type::ClassType(cls) => {
                 // Final classes can't have subclasses, so they are exhaustible, with the exception
                 // of Flag enums, whose members can be combined into new members via bitwise ops
                 !self.is_flag_enum(cls) && self.is_final(cls.class_object())
-                    // bool is effectively Literal[True] | Literal[False]
                     || cls.is_builtin("bool")
+                    || include_open_builtins
+                        && (cls.is_builtin("bytearray")
+                            || cls.is_builtin("bytes")
+                            || cls.is_builtin("dict")
+                            || cls.is_builtin("float")
+                            || cls.is_builtin("frozenset")
+                            || cls.is_builtin("int")
+                            || cls.is_builtin("list")
+                            || cls.is_builtin("set")
+                            || cls.is_builtin("str")
+                            || cls.is_builtin("tuple"))
             }
 
             // Literal types have explicit values
@@ -2149,7 +2164,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && union
                         .members
                         .iter()
-                        .all(|m| self.should_check_exhaustiveness(m))
+                        .all(|m| self.should_check_exhaustiveness(m, include_open_builtins))
             }
 
             _ => false,
@@ -2184,13 +2199,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         narrowing_subject: Option<&NarrowingSubject>,
         narrow_ops_for_fall_through: &(Box<NarrowOp>, TextRange),
         subject_range: &TextRange,
+        include_open_builtins: bool,
         show_subject_expr: bool,
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
         let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
-        // We only check match exhaustiveness if the subject is an enum or a union of enum literals
-        if !self.should_check_exhaustiveness(subject_info.ty()) {
+        let include_open_builtins =
+            include_open_builtins && matches!(narrowing_subject, Some(NarrowingSubject::Name(_)));
+        if !self.should_check_exhaustiveness(subject_info.ty(), include_open_builtins) {
             return;
         }
         let ignore_errors = self.error_swallower();
@@ -2223,6 +2240,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if remaining_ty.is_never() || remaining_ty.is_any() {
             return;
         }
+        if include_open_builtins
+            && !self.open_builtin_match_has_reachable_case(
+                &subject_info,
+                op,
+                *narrow_range,
+                &ignore_errors,
+            )
+        {
+            return;
+        }
         let subject_display = self.for_display(subject_info.into_ty());
         let remaining_display = self.for_display(remaining_ty.clone());
         let ctx = TypeDisplayContext::new(&[&subject_display, &remaining_display]);
@@ -2238,6 +2265,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             builder = builder.with_detail(format!("Missing cases: {}", missing_cases));
         }
         builder.emit();
+    }
+
+    fn open_builtin_match_has_reachable_case(
+        &self,
+        subject_info: &TypeInfo,
+        fall_through_op: &NarrowOp,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
+        let case_can_match = |case_op: NarrowOp| {
+            Self::is_match_case_reachability_op(&case_op)
+                && !self
+                    .narrow(subject_info, &case_op, range, errors)
+                    .ty()
+                    .is_never()
+        };
+        match fall_through_op {
+            // Match fall-through is the conjunction of every previous case's
+            // negation. Negate each top-level term to recover the corresponding
+            // positive case narrow.
+            NarrowOp::And(ops) => ops.iter().any(|op| case_can_match(op.negate())),
+            op => case_can_match(op.negate()),
+        }
     }
 
     pub fn check_match_case_reachability(
