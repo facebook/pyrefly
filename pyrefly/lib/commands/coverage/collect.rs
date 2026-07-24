@@ -1873,6 +1873,7 @@ pub fn collect_module_reports(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::collections::HashSet;
     use std::path::PathBuf;
 
@@ -1892,12 +1893,17 @@ mod tests {
     use crate::state::require::Require;
     use crate::test::util::TestEnv;
 
+    /// The checked-in test-file directory from the COVERAGE_TEST_PATH env var.
+    fn test_files_dir() -> PathBuf {
+        let path =
+            std::env::var("COVERAGE_TEST_PATH").expect("COVERAGE_TEST_PATH env var must be set");
+        PathBuf::from(path)
+    }
+
     /// Load a checked-in test file from the COVERAGE_TEST_PATH directory.
     /// Normalizes `\r\n` to `\n` so snapshots pass on Windows.
     fn load_test_file(name: &str) -> String {
-        let path =
-            std::env::var("COVERAGE_TEST_PATH").expect("COVERAGE_TEST_PATH env var must be set");
-        std::fs::read_to_string(PathBuf::from(path).join(name))
+        std::fs::read_to_string(test_files_dir().join(name))
             .unwrap_or_else(|e| panic!("failed to read test file {name}: {e}"))
             .replace("\r\n", "\n")
     }
@@ -2239,33 +2245,24 @@ mod tests {
 
     #[test]
     fn test_check_findings_match_report_symbols() {
-        for file in [
-            "any_annotations.py",
-            "any_detection.py",
-            "decorators.py",
-            "dunder_attrs.py",
-            "dunder_implicit.py",
-            "functions.py",
-            "incomplete_methods.py",
-            "inheritance.py",
-            "inherited_attrs.py",
-            "instance_attrs.py",
-            "method_aliases.py",
-            "optional_imports.py",
-            "overloads.py",
-            "overloads_partial.py",
-            "partial_any.py",
-            "property_basic.py",
-            "schema_classes_methods.py",
-            "stub_ignores_py_annotations.pyi",
-            "variables.py",
-        ] {
-            // `.pyi` entries are stub-merged with their `.py` source.
-            let (p, module_path) = if let Some(stem) = file.strip_suffix(".pyi") {
-                (
-                    merged_stub_symbols(file, &format!("{stem}.py")),
-                    "test.pyi".to_owned(),
-                )
+        // These need a site-package env; see their dedicated tests.
+        const SKIP: &[&str] = &["schema_classes_pydantic.py", "schema_classes_attrs.py"];
+
+        let files: BTreeSet<String> = std::fs::read_dir(test_files_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|f| (f.ends_with(".py") || f.ends_with(".pyi")) && !SKIP.contains(&f.as_str()))
+            .collect();
+        assert!(files.len() > 30, "corpus discovery looks broken: {files:?}");
+
+        for file in &files {
+            // `.pyi` entries with a `.py` twin are stub-merged, like the production pipeline.
+            let py_twin = file
+                .strip_suffix(".pyi")
+                .map(|stem| format!("{stem}.py"))
+                .filter(|py| files.contains(py));
+            let (p, module_path) = if let Some(py) = py_twin {
+                (merged_stub_symbols(file, &py), "test.pyi".to_owned())
             } else {
                 parse_test_module(file, TestEnv::new())
             };
