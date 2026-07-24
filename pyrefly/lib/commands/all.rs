@@ -23,6 +23,7 @@ use crate::commands::dump_config::DumpConfigArgs;
 use crate::commands::infer::InferArgs;
 use crate::commands::init::InitArgs;
 use crate::commands::lsp::LspArgs;
+use crate::commands::query::QueryArgs;
 use crate::commands::stubgen::StubgenArgs;
 use crate::commands::suppress::SuppressArgs;
 use crate::commands::tsp::TspArgs;
@@ -54,6 +55,9 @@ pub enum Command {
 
     /// Start an LSP server
     Lsp(LspArgs),
+
+    /// Query semantic information and print the result as JSON
+    Query(QueryArgs),
 
     /// Start a TSP server
     Tsp(TspArgs),
@@ -99,6 +103,7 @@ impl Command {
                 )?,
                 None,
             )),
+            Command::Query(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
             Command::Tsp(args) => Ok((
                 args.run(telemetry, config_configurer_wrapper, thread_count)?,
                 None,
