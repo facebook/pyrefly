@@ -9,8 +9,10 @@ use std::sync::Arc;
 
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::FunctionKind;
@@ -19,11 +21,20 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::keywords::DataclassFieldKeywords;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::typed_dict::AnonymousTypedDictInner;
+use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::typed_dict::TypedDictField;
+use pyrefly_types::types::Union;
+use pyrefly_util::gas::Gas;
+use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -38,7 +49,9 @@ use crate::alt::types::pydantic::PydanticConfig;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::alt::types::pydantic::PydanticModelKind::RootModel;
 use crate::alt::types::pydantic::PydanticValidationFlags;
+use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
+use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::FROZEN;
@@ -166,6 +179,157 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .inner
                 .ty(),
         )
+    }
+
+    pub fn get_pydantic_model_validate(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        root_model_type: Option<Type>,
+    ) -> ClassSynthesizedField {
+        let mut seen = SmallSet::new();
+        let obj_ty = self.unions(vec![
+            self.instantiate(cls),
+            root_model_type
+                .map(|ty| self.pydantic_model_validate_type(ty, &mut seen))
+                .unwrap_or_else(|| {
+                    self.pydantic_model_validate_dict_type(cls, dataclass, &mut seen)
+                }),
+            self.heap.mk_class_type(self.stdlib.object().clone()),
+            self.heap.mk_class_type(self.stdlib.dict(
+                self.heap.mk_class_type(self.stdlib.str().clone()),
+                self.heap.mk_any_explicit(),
+            )),
+        ]);
+        let bool_or_none = self.union(
+            self.heap.mk_class_type(self.stdlib.bool().clone()),
+            Type::None,
+        );
+        let params = vec![
+            Param::PosOnly(
+                Some(Name::new_static("cls")),
+                self.heap
+                    .mk_type_of(self.heap.mk_self_type(self.as_class_type_unchecked(cls))),
+                Required::Required,
+            ),
+            Param::Pos(Name::new_static("obj"), obj_ty, Required::Required),
+            Param::KwOnly(
+                Name::new_static("strict"),
+                bool_or_none.clone(),
+                Required::Optional(None),
+            ),
+            Param::KwOnly(
+                Name::new_static("from_attributes"),
+                bool_or_none.clone(),
+                Required::Optional(None),
+            ),
+            Param::KwOnly(
+                Name::new_static("context"),
+                self.heap.mk_any_explicit(),
+                Required::Optional(None),
+            ),
+            Param::KwOnly(
+                Name::new_static("by_alias"),
+                bool_or_none.clone(),
+                Required::Optional(None),
+            ),
+            Param::KwOnly(
+                Name::new_static("by_name"),
+                bool_or_none,
+                Required::Optional(None),
+            ),
+        ];
+        let mut metadata = FuncMetadata::method(cls, Name::new_static("model_validate"));
+        metadata.flags.is_classmethod = true;
+        ClassSynthesizedField::new(self.heap.mk_function(Function {
+            signature: Callable::list(
+                ParamList::new(params),
+                self.heap.mk_self_type(self.as_class_type_unchecked(cls)),
+            ),
+            metadata,
+        }))
+    }
+
+    fn pydantic_model_validate_type(&self, ty: Type, seen: &mut SmallSet<Class>) -> Type {
+        match ty {
+            Type::ClassType(cls) => {
+                let metadata = self.get_metadata_for_class(cls.class_object());
+                if metadata.is_pydantic_model()
+                    && let Some(dataclass) = metadata.dataclass_metadata()
+                    && seen.insert(cls.class_object().clone())
+                {
+                    let dict_ty =
+                        self.pydantic_model_validate_dict_type(cls.class_object(), dataclass, seen);
+                    seen.shift_remove(cls.class_object());
+                    self.union(Type::ClassType(cls), dict_ty)
+                } else if cls.class_object() == self.stdlib.list_object()
+                    && let [elem] = cls.targs().as_slice()
+                {
+                    self.heap.mk_class_type(
+                        self.stdlib
+                            .list(self.pydantic_model_validate_type(elem.clone(), seen)),
+                    )
+                } else if cls.class_object() == self.stdlib.dict_object()
+                    && let [key, value] = cls.targs().as_slice()
+                {
+                    self.heap.mk_class_type(self.stdlib.dict(
+                        key.clone(),
+                        self.pydantic_model_validate_type(value.clone(), seen),
+                    ))
+                } else {
+                    Type::ClassType(cls)
+                }
+            }
+            Type::Union(box Union { members, .. }) => self.unions(
+                members
+                    .into_iter()
+                    .map(|member| self.pydantic_model_validate_type(member, seen))
+                    .collect(),
+            ),
+            Type::Annotated(ty, metadata) => Type::Annotated(
+                Box::new(self.pydantic_model_validate_type(*ty, seen)),
+                metadata,
+            ),
+            ty => ty,
+        }
+    }
+
+    fn pydantic_model_validate_dict_type(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        seen: &mut SmallSet<Class>,
+    ) -> Type {
+        let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
+        let force_optional = matches!(
+            self.get_metadata_for_class(cls).pydantic_model_kind(),
+            Some(PydanticModelKind::BaseSettings)
+        );
+        let mut fields = Vec::new();
+        for (name, field, field_flags) in self.iter_fields(cls, dataclass, true, &kw_only_by_class)
+        {
+            if !field_flags.init {
+                continue;
+            }
+            let has_default = force_optional
+                || field_flags.default.is_some()
+                || (field_flags.init_by_name && field_flags.init_by_alias.is_some());
+            let field_info = TypedDictField {
+                ty: self.pydantic_model_validate_type(field.ty(), seen),
+                required: !has_default,
+                read_only_reason: None,
+            };
+            if field_flags.init_by_name {
+                fields.push((name, field_info.clone()));
+            }
+            if let Some(alias) = field_flags.init_by_alias {
+                fields.push((alias, field_info));
+            }
+        }
+        self.heap
+            .mk_typed_dict(TypedDict::Anonymous(Box::new(AnonymousTypedDictInner {
+                fields,
+            })))
     }
 
     pub fn is_pydantic_strict_metadata(&self, ty: &Type) -> bool {
@@ -631,6 +795,333 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn check_pydantic_model_validate_constraints(
+        &self,
+        callee: &Type,
+        args: &[Expr],
+        keywords: &[Keyword],
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let Some(cls) = self.pydantic_model_validate_class(callee) else {
+            return;
+        };
+        let Some(obj) = args.first().or_else(|| {
+            keywords
+                .iter()
+                .find(|kw| kw.arg.as_ref().is_some_and(|arg| arg.id.as_str() == "obj"))
+                .map(|kw| &kw.value)
+        }) else {
+            return;
+        };
+        let metadata = self.get_metadata_for_class(&cls);
+        let Some(dataclass) = metadata.dataclass_metadata() else {
+            return;
+        };
+        let infer_errors = self.error_swallower();
+        let obj_ty = self.expr_infer(obj, &infer_errors);
+        let mut seen = SmallSet::new();
+        self.check_pydantic_model_validate_expr_constraints(
+            &cls, dataclass, obj, range, errors, &mut seen,
+        );
+        seen.clear();
+        if let Some(initializer) = self.pydantic_name_initializer(obj) {
+            self.check_pydantic_model_validate_expr_constraints(
+                &cls,
+                dataclass,
+                initializer,
+                range,
+                errors,
+                &mut seen,
+            );
+            seen.clear();
+        }
+        self.check_pydantic_model_validate_type_constraints(
+            &cls, dataclass, &obj_ty, range, errors, &mut seen,
+        );
+    }
+
+    fn pydantic_model_validate_class(&self, callee: &Type) -> Option<Class> {
+        callee.visit_toplevel_func_metadata(&|meta| {
+            let FunctionKind::Def(id) = &meta.kind else {
+                return None;
+            };
+            if id.name.as_str() != "model_validate" {
+                return None;
+            }
+            let cls = id.cls.clone()?;
+            if self.get_metadata_for_class(&cls).is_pydantic_model() {
+                Some(cls)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn pydantic_name_initializer<'b>(&'b self, actual: &Expr) -> Option<&'b Expr> {
+        let Expr::Name(name) = actual else {
+            return None;
+        };
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let mut idx = idx;
+        let mut gas = Gas::new(100);
+        while !gas.stop() {
+            match self.bindings().get(idx) {
+                Binding::Forward(forward)
+                | Binding::PromoteForward(forward)
+                | Binding::ForwardToFirstUse(forward) => idx = *forward,
+                binding => return Self::pydantic_initializer_from_binding(binding),
+            }
+        }
+        None
+    }
+
+    fn pydantic_initializer_from_binding(binding: &Binding) -> Option<&Expr> {
+        match binding {
+            Binding::Expr(_, expr) => Some(expr),
+            Binding::NameAssign(assign) => Some(&assign.expr),
+            Binding::AnnotatedType(_, inner) => Self::pydantic_initializer_from_binding(inner),
+            _ => None,
+        }
+    }
+
+    fn check_pydantic_model_validate_expr_constraints(
+        &self,
+        expected_cls: &Class,
+        dataclass: &DataclassMetadata,
+        actual: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+        seen: &mut SmallSet<Class>,
+    ) {
+        if !seen.insert(expected_cls.clone()) {
+            return;
+        }
+        let Expr::Dict(dict) = actual else {
+            seen.shift_remove(expected_cls);
+            return;
+        };
+        let actual_fields = self.pydantic_literal_dict_fields(&dict.items);
+        let kw_only_by_class = self.compute_kw_only_fields_by_class(expected_cls);
+        for (name, field, field_flags) in
+            self.iter_fields(expected_cls, dataclass, true, &kw_only_by_class)
+        {
+            let actual_field = field_flags
+                .init_by_name
+                .then(|| actual_fields.get(&name))
+                .flatten()
+                .or_else(|| {
+                    field_flags
+                        .init_by_alias
+                        .as_ref()
+                        .and_then(|alias| actual_fields.get(alias))
+                });
+            let Some(actual_field) = actual_field else {
+                continue;
+            };
+            if let Some(constraints) = PydanticRangeConstraints::from_keywords(&field_flags) {
+                let infer_errors = self.error_swallower();
+                let actual_ty = self.expr_infer(actual_field, &infer_errors);
+                self.emit_pydantic_argument_constraint(
+                    &actual_ty,
+                    &PydanticParamConstraint {
+                        field_name: name.clone(),
+                        constraints,
+                    },
+                    actual_field.range(),
+                    errors,
+                );
+            }
+            self.check_pydantic_field_expr_constraints(
+                &field.ty(),
+                actual_field,
+                range,
+                errors,
+                seen,
+            );
+        }
+        seen.shift_remove(expected_cls);
+    }
+
+    fn pydantic_literal_dict_fields<'b>(&self, items: &'b [DictItem]) -> SmallMap<Name, &'b Expr> {
+        Ast::flatten_dict_items(items)
+            .into_iter()
+            .filter_map(|item| {
+                let key = item.key.as_ref()?.as_string_literal_expr()?;
+                Some((Name::new(key.value.to_str()), &item.value))
+            })
+            .collect()
+    }
+
+    fn check_pydantic_field_expr_constraints(
+        &self,
+        expected: &Type,
+        actual: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+        seen: &mut SmallSet<Class>,
+    ) {
+        match expected {
+            Type::ClassType(expected)
+                if expected.class_object() == self.stdlib.list_object()
+                    && let [expected] = expected.targs().as_slice()
+                    && let Expr::List(actual) = actual =>
+            {
+                for actual in actual.elts.iter() {
+                    self.check_pydantic_field_expr_constraints(
+                        expected, actual, range, errors, seen,
+                    );
+                }
+            }
+            Type::ClassType(expected) => {
+                let metadata = self.get_metadata_for_class(expected.class_object());
+                if metadata.is_pydantic_model()
+                    && let Some(dataclass) = metadata.dataclass_metadata()
+                {
+                    self.check_pydantic_model_validate_expr_constraints(
+                        expected.class_object(),
+                        dataclass,
+                        actual,
+                        range,
+                        errors,
+                        seen,
+                    );
+                }
+            }
+            Type::Annotated(expected, _) => {
+                self.check_pydantic_field_expr_constraints(expected, actual, range, errors, seen)
+            }
+            Type::Union(union) => {
+                for expected in union.members.iter() {
+                    self.check_pydantic_field_expr_constraints(
+                        expected, actual, range, errors, seen,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn check_pydantic_model_validate_type_constraints(
+        &self,
+        expected_cls: &Class,
+        dataclass: &DataclassMetadata,
+        actual: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+        seen: &mut SmallSet<Class>,
+    ) {
+        if let Type::Union(union) = actual {
+            for actual in union.members.iter() {
+                self.check_pydantic_model_validate_type_constraints(
+                    expected_cls,
+                    dataclass,
+                    actual,
+                    range,
+                    errors,
+                    seen,
+                );
+            }
+            return;
+        }
+        if !seen.insert(expected_cls.clone()) {
+            return;
+        }
+        let Type::TypedDict(TypedDict::Anonymous(actual_fields)) = actual else {
+            seen.shift_remove(expected_cls);
+            return;
+        };
+        let actual_fields: SmallMap<_, _> = actual_fields.fields.iter().cloned().collect();
+        let kw_only_by_class = self.compute_kw_only_fields_by_class(expected_cls);
+        for (name, field, field_flags) in
+            self.iter_fields(expected_cls, dataclass, true, &kw_only_by_class)
+        {
+            let actual_field = field_flags
+                .init_by_name
+                .then(|| actual_fields.get(&name))
+                .flatten()
+                .or_else(|| {
+                    field_flags
+                        .init_by_alias
+                        .as_ref()
+                        .and_then(|alias| actual_fields.get(alias))
+                });
+            let Some(actual_field) = actual_field else {
+                continue;
+            };
+            if let Some(constraints) = PydanticRangeConstraints::from_keywords(&field_flags) {
+                self.emit_pydantic_argument_constraint(
+                    &actual_field.ty,
+                    &PydanticParamConstraint {
+                        field_name: name.clone(),
+                        constraints,
+                    },
+                    range,
+                    errors,
+                );
+            }
+            self.check_pydantic_field_type_constraints(
+                &field.ty(),
+                &actual_field.ty,
+                range,
+                errors,
+                seen,
+            );
+        }
+        seen.shift_remove(expected_cls);
+    }
+
+    fn check_pydantic_field_type_constraints(
+        &self,
+        expected: &Type,
+        actual: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+        seen: &mut SmallSet<Class>,
+    ) {
+        match (expected, actual) {
+            (Type::Union(expected), _) => {
+                for expected in expected.members.iter() {
+                    self.check_pydantic_field_type_constraints(
+                        expected, actual, range, errors, seen,
+                    );
+                }
+            }
+            (_, Type::Union(actual)) => {
+                for actual in actual.members.iter() {
+                    self.check_pydantic_field_type_constraints(
+                        expected, actual, range, errors, seen,
+                    );
+                }
+            }
+            (Type::ClassType(expected), Type::ClassType(actual))
+                if expected.class_object() == self.stdlib.list_object()
+                    && actual.class_object() == self.stdlib.list_object()
+                    && let ([expected], [actual]) =
+                        (expected.targs().as_slice(), actual.targs().as_slice()) =>
+            {
+                self.check_pydantic_field_type_constraints(expected, actual, range, errors, seen);
+            }
+            (Type::ClassType(expected), Type::TypedDict(TypedDict::Anonymous(_))) => {
+                let metadata = self.get_metadata_for_class(expected.class_object());
+                if metadata.is_pydantic_model()
+                    && let Some(dataclass) = metadata.dataclass_metadata()
+                {
+                    self.check_pydantic_model_validate_type_constraints(
+                        expected.class_object(),
+                        dataclass,
+                        actual,
+                        range,
+                        errors,
+                        seen,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn collect_pydantic_constraint_params(
         &self,
         cls: &Class,
@@ -677,6 +1168,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
+        if let Type::Union(union) = value_ty {
+            for value_ty in union.members.iter() {
+                self.emit_pydantic_argument_constraint(value_ty, info, range, errors);
+            }
+            return;
+        }
         let Some(value_lit) = int_literal_from_type(value_ty) else {
             return;
         };

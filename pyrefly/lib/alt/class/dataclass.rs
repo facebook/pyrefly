@@ -214,6 +214,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             fields.insert(Name::new_static("__attrs_init__"), init_method);
         }
+        if metadata.is_pydantic_model()
+            && !self
+                .get_class_fields(cls)
+                .is_some_and(|fields| fields.contains(&Name::new_static("model_validate")))
+        {
+            let root_model_type = self
+                .get_pydantic_root_model_type_via_mro(cls, &metadata)
+                .map(|(ty, _)| ty);
+            fields.insert(
+                Name::new_static("model_validate"),
+                self.get_pydantic_model_validate(cls, dataclass, root_model_type),
+            );
+        }
         let dataclass_fields_type = self.stdlib.dict(
             self.heap.mk_class_type(self.stdlib.str().clone()),
             self.heap.mk_any_implicit(),
