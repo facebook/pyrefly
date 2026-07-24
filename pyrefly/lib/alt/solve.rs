@@ -5769,6 +5769,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // TODO: check against duplicate keys (optional)
                 let key_ty = self.expr_infer(mapping_key, errors);
                 let binding = self.get_idx(*binding_key);
+                if let Type::TypedDict(typed_dict) = binding.ty()
+                    && let Type::Literal(lit) = &key_ty
+                    && let Lit::Str(key) = &lit.value
+                    && let Some(field) = self.typed_dict_field(typed_dict, &Name::new(key))
+                {
+                    return field.ty;
+                }
                 let arg = CallArg::ty(&key_ty, mapping_key.range());
                 self.call_method_or_error(
                     binding.ty(),
