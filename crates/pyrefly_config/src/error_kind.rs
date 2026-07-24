@@ -353,6 +353,8 @@ pub enum ErrorKind {
     RedundantCast,
     /// Attempting to use value that is equivalent to True or always False in boolean context.
     RedundantCondition,
+    /// An invalid regex pattern or regex group access.
+    Regex,
     /// Raised by a call to reveal_type().
     RevealType,
     /// Passing a string to something that expects an iterable of strings.
