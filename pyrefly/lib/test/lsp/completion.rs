@@ -46,6 +46,7 @@ fn strip_ansi(input: &str) -> String {
 struct ResultsFilter {
     include_keywords: bool,
     include_builtins: bool,
+    include_object_attributes: bool,
 }
 
 #[test]
@@ -71,8 +72,58 @@ class Foo:
     }
 }
 
+#[test]
+fn completion_dunder_attribute_inherited_from_object() {
+    let code = r#"
+from pathlib import Path
+
+Path(".").read_text.__do
+#                       ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_object_test_report());
+    assert_eq!(
+        report.matches("- (Field) __doc__").count(),
+        1,
+        "expected exactly one __doc__ completion:\n{report}"
+    );
+}
+
+#[test]
+fn completion_object_attributes_rank_after_class_attributes() {
+    let code = r#"
+class Foo:
+    def __custom__(self): ...
+
+Foo().__
+#      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_object_test_report());
+    let custom = report
+        .find("- (Method) __custom__")
+        .expect("missing class-defined dunder completion");
+    let object = report
+        .find("- (Field) __doc__")
+        .expect("missing object-inherited dunder completion");
+    assert!(
+        custom < object,
+        "expected class-defined completions before object completions:\n{report}"
+    );
+}
+
 fn get_default_test_report() -> impl Fn(&State, &Handle, TextSize) -> String {
     get_test_report(ResultsFilter::default(), ImportFormat::Absolute)
+}
+
+fn get_object_test_report() -> impl Fn(&State, &Handle, TextSize) -> String {
+    get_test_report(
+        ResultsFilter {
+            include_object_attributes: true,
+            ..Default::default()
+        },
+        ImportFormat::Absolute,
+    )
 }
 
 fn get_test_report(
@@ -90,6 +141,7 @@ fn get_test_report(
             tags,
             text_edit,
             documentation,
+            sort_text,
             ..
         } in state
             .transaction()
@@ -100,6 +152,11 @@ fn get_test_report(
             } else {
                 false
             };
+            if !filter.include_object_attributes
+                && sort_text.is_some_and(|sort_text| sort_text.starts_with("3z"))
+            {
+                continue;
+            }
             if (filter.include_keywords || kind != Some(CompletionItemKind::KEYWORD))
                 && (filter.include_builtins || data != Some(serde_json::json!("builtin")))
             {
@@ -2716,6 +2773,7 @@ def test():
             ResultsFilter {
                 include_keywords: true,
                 include_builtins: true,
+                ..Default::default()
             },
             ImportFormat::Absolute,
         ),

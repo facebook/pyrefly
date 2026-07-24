@@ -64,6 +64,8 @@ enum CompletionSource {
     Local,
     /// Defined in another module, exposed from this one.
     Reexport,
+    /// Inherited directly from `object`.
+    Object,
     /// Auto-import from a public module path.
     AutoimportPublic,
     /// Auto-import from a private module path (segment starts with `_`).
@@ -112,6 +114,7 @@ fn assign_sort_text(ranked: &mut RankedCompletion, mru_rank: Option<Option<usize
             CompletionSource::AutoimportPrivate => "4b",
             CompletionSource::AutoimportPublic => "4a",
             CompletionSource::Reexport => "1",
+            CompletionSource::Object => "3z",
             CompletionSource::Local => {
                 if ranked.item.label.starts_with("__") {
                     "3"
@@ -952,51 +955,51 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
     ) {
         self.ad_hoc_solve(handle, "completion_attributes", |solver| {
-            solver
-                .completions(base_type, None, true)
-                .iter()
-                .for_each(|attr| {
-                    let kind = match attr.ty {
-                        Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
-                        Some(Type::Function(_) | Type::Overload(_)) => {
-                            Some(CompletionItemKind::FUNCTION)
-                        }
-                        Some(Type::Module(_)) => Some(CompletionItemKind::MODULE),
-                        Some(Type::ClassDef(_)) => Some(CompletionItemKind::CLASS),
-                        _ => Some(CompletionItemKind::FIELD),
-                    };
-                    let detail = attr
-                        .ty
-                        .clone()
-                        .map(|t| t.as_lsp_string(LspDisplayMode::Hover));
-                    let documentation = self.get_docstring_for_attribute(handle, attr);
-                    let is_incompatible = self.is_incompatible_with_expected_type(
-                        handle,
-                        expected_type,
-                        attr.ty.as_ref(),
-                    );
-                    let source = if attr.is_reexport {
-                        CompletionSource::Reexport
-                    } else {
-                        CompletionSource::Local
-                    };
-                    completions.push(RankedCompletion {
-                        item: CompletionItem {
-                            label: attr.name.as_str().to_owned(),
-                            detail,
-                            kind,
-                            documentation,
-                            tags: if attr.is_deprecated {
-                                Some(vec![CompletionItemTag::DEPRECATED])
-                            } else {
-                                None
-                            },
-                            ..Default::default()
+            let attributes = solver.completions(base_type, None, true, true);
+            attributes.iter().for_each(|attr| {
+                let kind = match attr.ty {
+                    Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
+                    Some(Type::Function(_) | Type::Overload(_)) => {
+                        Some(CompletionItemKind::FUNCTION)
+                    }
+                    Some(Type::Module(_)) => Some(CompletionItemKind::MODULE),
+                    Some(Type::ClassDef(_)) => Some(CompletionItemKind::CLASS),
+                    _ => Some(CompletionItemKind::FIELD),
+                };
+                let detail = attr
+                    .ty
+                    .clone()
+                    .map(|t| t.as_lsp_string(LspDisplayMode::Hover));
+                let documentation = self.get_docstring_for_attribute(handle, attr);
+                let is_incompatible = self.is_incompatible_with_expected_type(
+                    handle,
+                    expected_type,
+                    attr.ty.as_ref(),
+                );
+                let source = if attr.is_from_object {
+                    CompletionSource::Object
+                } else if attr.is_reexport {
+                    CompletionSource::Reexport
+                } else {
+                    CompletionSource::Local
+                };
+                completions.push(RankedCompletion {
+                    item: CompletionItem {
+                        label: attr.name.as_str().to_owned(),
+                        detail,
+                        kind,
+                        documentation,
+                        tags: if attr.is_deprecated {
+                            Some(vec![CompletionItemTag::DEPRECATED])
+                        } else {
+                            None
                         },
-                        source,
-                        is_incompatible,
-                    });
+                        ..Default::default()
+                    },
+                    source,
+                    is_incompatible,
                 });
+            });
         });
     }
 
