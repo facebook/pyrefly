@@ -496,6 +496,20 @@ y = 10 // 0  # error: division by zero
 z = 10 % 0   # error: division by zero
 ```
 
+## empty-body
+
+Default severity: `ignore`
+
+A function body consists only of `...` even though the function declares a
+return type that `None` is not assignable to.
+
+Empty ellipsis bodies are allowed in stub files, protocol methods, abstract
+methods, overload declarations, and `if TYPE_CHECKING` blocks.
+
+```python
+def f() -> int: ...  # error: empty body
+```
+
 ## explicit-any
 
 Default severity: `ignore`

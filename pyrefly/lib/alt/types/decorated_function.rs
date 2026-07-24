@@ -53,6 +53,7 @@ pub struct UndecoratedFunction {
     pub params: Vec<Param>,
     pub paramspec: Option<Quantified>,
     pub stub_or_impl: FunctionStubOrImpl,
+    pub has_ellipsis_body: bool,
     pub defining_cls: Option<Class>,
     /// Maps parameter names to their resolved types - used to connect
     /// FunctionParameter and KeyUndecoratedFunction.
@@ -126,6 +127,7 @@ impl UndecoratedFunction {
             params: Vec::new(),
             paramspec: None,
             stub_or_impl: FunctionStubOrImpl::Stub,
+            has_ellipsis_body: false,
             defining_cls: None,
             resolved_param_types: SmallMap::new(),
         }

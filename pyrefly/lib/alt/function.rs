@@ -437,6 +437,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &FunctionDefData,
         def_index: FuncDefIndex,
         stub_or_impl: FunctionStubOrImpl,
+        has_ellipsis_body: bool,
         placeholder_body_kind: Option<PlaceholderBodyKind>,
         is_return_inferred: bool,
         calls_super_method: bool,
@@ -680,6 +681,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params,
             paramspec,
             stub_or_impl,
+            has_ellipsis_body,
             defining_cls,
             resolved_param_types,
         })
@@ -702,6 +704,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 stmt.name.range(),
                 ErrorKind::UnannotatedReturn,
                 format!("`{}` is missing a return annotation", stmt.name),
+            );
+        }
+        if def.has_ellipsis_body
+            && has_return_annotation
+            && !def.metadata.flags.defined_in_stub_file
+            && !def.metadata.flags.is_overload
+            && !def.metadata.flags.is_abstract_method
+            && !def
+                .defining_cls
+                .as_ref()
+                .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol())
+            && !if stmt.is_async {
+                self.unwrap_coroutine(&ret)
+                    .is_some_and(|(_, _, return_ty)| {
+                        self.is_subset_eq(&self.heap.mk_none(), &return_ty)
+                    })
+            } else {
+                self.is_subset_eq(&self.heap.mk_none(), &ret)
+            }
+        {
+            self.error(
+                errors,
+                stmt.name.range(),
+                ErrorKind::EmptyBody,
+                "Function body cannot consist only of `...` when the return type is not `None`"
+                    .to_owned(),
             );
         }
         // The first parameter of a non-static method is the implicit self/cls

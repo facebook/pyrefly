@@ -1897,6 +1897,7 @@ pub struct BindingUndecoratedFunction {
     pub def_index: FuncDefIndex,
     pub def: FunctionDefData,
     pub stub_or_impl: FunctionStubOrImpl,
+    pub has_ellipsis_body: bool,
     /// `Some` if the function body is a single placeholder statement
     /// (`raise NotImplementedError(...)` or `return NotImplemented`); `None` otherwise.
     pub placeholder_body_kind: Option<PlaceholderBodyKind>,

@@ -159,6 +159,8 @@ pub enum ErrorKind {
     Deprecated,
     /// Division, floor division, or modulo by a literal zero value.
     DivisionByZero,
+    /// A function has an empty body despite declaring a non-None return type.
+    EmptyBody,
     /// Explicit usage of `typing.Any` in an annotation.
     ExplicitAny,
     /// Raised when a class implicitly becomes abstract by defining abstract members without
@@ -517,6 +519,7 @@ impl ErrorKind {
             ErrorKind::CoveragePartial => Severity::Warn,
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
+            ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,

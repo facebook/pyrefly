@@ -1052,15 +1052,88 @@ class Foo:
 
 testcase!(
     test_ellipsis_body,
+    TestEnv::new().enable_empty_body_error(),
     r#"
-from typing import Any, assert_type
+from typing import TYPE_CHECKING, Protocol, assert_type, overload
+from abc import abstractmethod
+
 def f(): ...
-# This is technically wrong (`g()` returns `None`), but `...` is often used to stub out the bodies
-# of things like overload signatures and abstractmethods. For simplicity, we just always allow this
-# stubbing behavior.
-def g() -> str: ...
+def g() -> None: ...
+def h() -> int | None: ...
+def i() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
+
+async def j() -> None: ...
+async def k() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
+
+if TYPE_CHECKING:
+    def tc() -> str: ...
+
+DOCS_BUILDING = False
+if TYPE_CHECKING or DOCS_BUILDING:
+    def tc_or_docs() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
+
+if not TYPE_CHECKING:
+    pass
+else:
+    def tc_else() -> str: ...
+
+class P(Protocol):
+    def m(self) -> str: ...
+
+class A:
+    @abstractmethod
+    def m(self) -> str: ...
+
+@overload
+def ov(x: int) -> int: ...
+@overload
+def ov(x: str) -> str: ...
+def ov(x: int | str) -> int | str:
+    return x
+
 assert_type(f(), None)
-assert_type(g(), str)
+assert_type(g(), None)
+    "#,
+);
+
+testcase!(
+    test_ellipsis_body_in_pyi,
+    TestEnv::one_with_path("foo", "foo.pyi", "def f() -> int: ...").enable_empty_body_error(),
+    r#"
+from typing import assert_type
+from foo import f
+assert_type(f(), int)
+    "#,
+);
+
+testcase!(
+    test_ellipsis_body_type_checking_guards,
+    TestEnv::new().enable_empty_body_error(),
+    r#"
+import typing
+from typing import TYPE_CHECKING
+
+# `typing.TYPE_CHECKING` is a valid guard.
+if typing.TYPE_CHECKING:
+    def a() -> str: ...
+
+# `TYPE_CHECKING is False` / `TYPE_CHECKING == False` make the `else` type-checking-only.
+if TYPE_CHECKING is False:
+    pass
+else:
+    def b() -> str: ...
+
+if TYPE_CHECKING == False:  # noqa
+    pass
+else:
+    def c() -> str: ...
+
+# An unrelated attribute named `TYPE_CHECKING` is not a guard.
+class NotTyping:
+    TYPE_CHECKING = True
+nt = NotTyping()
+if nt.TYPE_CHECKING:
+    def d() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
     "#,
 );
 

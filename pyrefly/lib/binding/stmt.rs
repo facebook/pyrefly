@@ -10,6 +10,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
@@ -1247,6 +1248,7 @@ impl<'a> BindingsBuilder<'a> {
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
+                let mut following_runtime_only_branch = false;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
                     self.bind_narrow_ops(
@@ -1281,6 +1283,15 @@ impl<'a> BindingsBuilder<'a> {
                         }
                     }
                     is_first_branch = false;
+                    let later_branches_are_type_checking = test
+                        .as_ref()
+                        .is_some_and(SysInfo::is_not_type_checking_guard);
+                    let is_type_checking_branch = (test.is_none() && following_runtime_only_branch)
+                        || test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
+                    // Record this before any early `continue`: a `not TYPE_CHECKING` guard
+                    // always evaluates statically to `false`, so its branch is skipped below,
+                    // yet the following `else` branch must still be treated as type-checking-only.
+                    following_runtime_only_branch |= later_branches_are_type_checking;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
@@ -1308,7 +1319,13 @@ impl<'a> BindingsBuilder<'a> {
                         &Usage::NonPinningValue(None),
                     );
                     negated_prev_ops.and_all(new_narrow_ops.negate());
-                    self.stmts(body, parent);
+                    if is_type_checking_branch {
+                        self.type_checking_depth += 1;
+                        self.stmts(body, parent);
+                        self.type_checking_depth -= 1;
+                    } else {
+                        self.stmts(body, parent);
+                    }
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
                         exhaustive = true;
