@@ -1709,8 +1709,13 @@ impl<'a> Transaction<'a> {
                     Some((def_handle, export))
                 }
             }
-            IntermediateDefinition::Module(import_range, name) => {
-                if matches!(preference.import_behavior, ImportBehavior::StopAtEverything) {
+            IntermediateDefinition::Module(import_range, name, is_renamed_import) => {
+                if matches!(preference.import_behavior, ImportBehavior::StopAtEverything)
+                    || matches!(
+                        preference.import_behavior,
+                        ImportBehavior::StopAtRenamedImports if is_renamed_import
+                    )
+                {
                     return Some((
                         handle.dupe(),
                         Export {
