@@ -44,7 +44,7 @@ use crate::state::errors::sorted_multi_line_string_ranges;
 /// (e.g., "# pyrefly: ignore [x] # other" -> "# other").
 static IGNORE_COMMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"#\s*pyrefly:\s*ignore\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*|#\s*type:\s*ignore\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*|#\s*pyre-(?:fixme|ignore)\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*|#\s*pyre:\s*ignore\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*",
+        r"#\s*pyrefly:\s*ignore\s*(\[[^\]]*\])?[^#]*|#\s*type:\s*ignore\s*(\[[^\]]*\])?[^#]*|#\s*pyre-(?:fixme|ignore)\s*(\[[^\]]*\])?[^#]*|#\s*pyre:\s*ignore\s*(\[[^\]]*\])?[^#]*",
     )
     .unwrap()
 });
