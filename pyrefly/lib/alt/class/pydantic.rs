@@ -29,6 +29,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
+use crate::alt::class::class_field::DataclassMember;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
@@ -132,14 +133,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         root_model_type: Type,
         has_strict: bool,
     ) -> ClassSynthesizedField {
-        let (root_requiredness, root_model_type) =
-            if root_model_type.is_any() || matches!(root_model_type, Type::Quantified(_)) {
-                (Required::Optional(None), root_model_type)
-            } else if has_strict {
-                (Required::Required, root_model_type)
-            } else {
-                (Required::Required, self.heap.mk_any_explicit())
-            };
+        let is_any_or_quantified =
+            root_model_type.is_any() || matches!(root_model_type, Type::Quantified(_));
+        let has_default = matches!(
+            self.get_dataclass_member(cls, &ROOT),
+            DataclassMember::Field(_, keywords) if keywords.default.is_some()
+        );
+        let root_requiredness = if is_any_or_quantified || has_default {
+            Required::Optional(None)
+        } else {
+            Required::Required
+        };
+        let root_model_type = if is_any_or_quantified || has_strict {
+            root_model_type
+        } else {
+            self.heap.mk_any_explicit()
+        };
         let root_param = Param::Pos(ROOT, root_model_type, root_requiredness);
         let params = vec![self.class_self_param(cls, false), root_param];
         let ty = self.synthesized_method(cls, dunder::INIT, params, self.heap.mk_none());

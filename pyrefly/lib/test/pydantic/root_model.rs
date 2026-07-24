@@ -22,6 +22,22 @@ m5 = IntRootModel(123, 456)  # E: Expected 1 positional argument, got 2
 );
 
 pydantic_testcase!(
+    test_root_model_field_default,
+    r#"
+from pydantic import Field, RootModel
+
+class DefaultRootModel(RootModel[int]):
+    root: int = Field(default=0)
+
+class DefaultFactoryRootModel(RootModel[int]):
+    root: int = Field(default_factory=int)
+
+DefaultRootModel()
+DefaultFactoryRootModel()
+"#,
+);
+
+pydantic_testcase!(
     test_root_model_generic,
     r#"
 from pydantic import RootModel
