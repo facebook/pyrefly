@@ -21,6 +21,7 @@ use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
 use crate::module::bundled::BundledStub;
+use crate::module::bundled::bundled_module_path_is_preferred;
 use crate::module::bundled::create_bundled_stub_config;
 
 #[derive(Debug, Clone)]
@@ -60,7 +61,13 @@ impl BundledStub for BundledThirdParty {
         for (relative_path, contents) in contents {
             let adjusted_path = strip_stubs_suffix_from_path(&relative_path);
             let module_name = ModuleName::from_relative_path(&adjusted_path)?;
-            res.find.insert(module_name, relative_path.clone());
+            if res
+                .find
+                .get(&module_name)
+                .is_none_or(|existing| bundled_module_path_is_preferred(&relative_path, existing))
+            {
+                res.find.insert(module_name, relative_path.clone());
+            }
             res.load.insert(relative_path, Arc::new(contents));
         }
         Ok(res)
@@ -138,6 +145,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_bundled_third_party_prefers_package_over_module() {
+        let stubs = get_bundled_third_party().unwrap();
+        let path = stubs
+            .find
+            .get(&ModuleName::from_str("pandas.io.parsers"))
+            .expect("pandas.io.parsers should be bundled");
+        assert_eq!(path.file_name().unwrap(), "__init__.pyi");
     }
 
     #[test]

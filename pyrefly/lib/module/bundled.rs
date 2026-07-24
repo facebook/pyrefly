@@ -34,6 +34,17 @@ pub fn set_readonly(path: &Path, value: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Prefer a package initializer when a bundle contains both `foo.pyi` and
+/// `foo/__init__.pyi`, matching Python's filesystem import precedence.
+pub(crate) fn bundled_module_path_is_preferred(candidate: &Path, existing: &Path) -> bool {
+    candidate
+        .file_name()
+        .is_some_and(|name| name == "__init__.pyi")
+        && existing
+            .file_name()
+            .is_none_or(|name| name != "__init__.pyi")
+}
+
 /// Creates a base config file for bundled stubs with common settings.
 ///
 /// This helper function encapsulates the common configuration logic shared across
