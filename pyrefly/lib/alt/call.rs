@@ -1965,6 +1965,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn constructor_to_callable(&self, cls: &ClassType) -> Type {
+        let new_attr_ty = self.get_dunder_new(cls, false);
+        self.constructor_to_callable_impl(cls, new_attr_ty, false)
+    }
+
+    /// Convert a bare class definition while keeping its type parameters generic.
+    pub fn constructor_to_callable_for_class_def(&self, cls: &ClassType) -> Option<Type> {
+        let new_attr_ty = self.get_dunder_new_for_class_def(cls)?;
+        Some(self.constructor_to_callable_impl(cls, Some(new_attr_ty), true))
+    }
+
+    fn constructor_to_callable_impl(
+        &self,
+        cls: &ClassType,
+        new_attr_ty: Option<Type>,
+        preserve_class_tparams: bool,
+    ) -> Type {
         let class_type = self.heap.mk_class_type(cls.clone());
         if let Some(metaclass_call_attr_ty) = self.get_metaclass_dunder_call(cls) {
             // Use the metaclass __call__ directly (ignoring __new__ and __init__) when either:
@@ -1989,10 +2005,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ))
         };
         // Check the __new__ method and whether it comes from object or has been overridden
-        let (new_attr_ty, overrides_new) = if let Some(t) = self
-            .get_dunder_new(cls, false)
-            .and_then(|t| self.bind_dunder_new(&t, cls.clone()))
-        {
+        let bind_new = |t: Type| {
+            if preserve_class_tparams {
+                self.bind_dunder_new_for_class_def(&t, cls.clone())
+            } else {
+                self.bind_dunder_new(&t, cls.clone())
+            }
+        };
+        let (new_attr_ty, overrides_new) = if let Some(t) = new_attr_ty.and_then(bind_new) {
             if t.callable_return_type(self.heap)
                 .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
             {

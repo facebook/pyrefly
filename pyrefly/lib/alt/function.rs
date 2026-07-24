@@ -2397,6 +2397,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    /// Bind `__new__` while keeping class type parameters used by the constructor callable.
+    pub fn bind_dunder_new_for_class_def(&self, t: &Type, cls: ClassType) -> Option<Type> {
+        let mut bound = self.bind_function(
+            t,
+            &self.heap.mk_type_of(self.heap.mk_class_type(cls)),
+            false,
+            &mut |a, b| self.is_subset_eq(a, b),
+        )?;
+        self.expand_mut(&mut bound);
+        match bound {
+            Type::Forall(forall) => {
+                let Forall { tparams, body } = *forall;
+                let mut used = SmallSet::new();
+                body.visit(&mut |ty| ty.collect_quantifieds(&mut used));
+                let tparams = tparams
+                    .iter()
+                    .filter(|tparam| used.contains(*tparam))
+                    .cloned()
+                    .collect();
+                drop(used);
+                Some(body.forall(Arc::new(TParams::new(tparams))))
+            }
+            _ => Some(bound),
+        }
+    }
+
     /// Bind a `__init__` method for constructor callable conversion.
     /// Strips the first parameter and sets the return type to the first param's type.
     /// Does not instantiate type variables (they should be inferred at the call site).
