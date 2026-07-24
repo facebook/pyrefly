@@ -96,6 +96,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
 use crate::solver::solver::CallContext;
 use crate::types::callable::DefaultValue;
 use crate::types::callable::Param;
@@ -1635,7 +1636,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .map(|hint| HintRef::new(key_hint, hint.errors()))
                         }),
                         errors,
-                        None,
+                        Some(&|| TypeCheckContext::of_kind(TypeCheckKind::DictKey)),
                     );
                     let value_t = self.expr_infer_with_hint_promote(
                         &x.value,
@@ -1644,7 +1645,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .map(|hint| HintRef::new(value_hint, hint.errors()))
                         }),
                         errors,
-                        None,
+                        Some(&|| TypeCheckContext::of_kind(TypeCheckKind::DictValue)),
                     );
                     if !key_t.is_error() {
                         key_tys.push(key_t);

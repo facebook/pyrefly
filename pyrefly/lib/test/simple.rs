@@ -732,7 +732,7 @@ testcase!(
     r#"
 from typing import assert_type
 x1: dict[str, int] = {"foo": 1, **{"bar": 2}}
-x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `dict[str, int | str]` is not assignable to `dict[str, int]`
+x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `Literal['bar']` is not assignable to dict value type `int`
 assert_type({"foo": 1, **{"bar": "bar"}}, dict[str, int | str])
 {"foo": 1, **1}  # E: Expected a mapping, got Literal[1]
 "#,
@@ -1533,7 +1533,7 @@ testcase!(
     test_typing_alias,
     r#"
 from typing import Dict, assert_type
-y: Dict[str, int] = {"test": "test"} # E: `dict[str, str]` is not assignable to `dict[str, int]`
+y: Dict[str, int] = {"test": "test"} # E: `Literal['test']` is not assignable to dict value type `int`
 assert_type(y, dict[str, int])
 "#,
 );

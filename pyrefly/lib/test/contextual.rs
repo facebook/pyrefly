@@ -136,9 +136,11 @@ z: list[A] | list[B] = [B2() for _ in range(10)]
 testcase!(
     test_dict_union,
     r#"
+from typing import Sequence
 d1: dict[int, int] | dict[str, list[int]] = {"x": [True]}
 x: list[str] = []
 d2: dict[int, int] | dict[str, list[int]] = {k: [True] for k in x}
+d3: Sequence[dict[str, int]] | Sequence[dict[int, int]] = [{"x": 1}]
     "#,
 );
 
@@ -208,11 +210,11 @@ testcase!(
     r#"
 from typing import Iterable, MutableMapping, Literal
 x1: dict[str, int] = {"a": 1}
-x2: dict[str, int] = {"a": "oops"}  # E: `dict[str, str]` is not assignable to `dict[str, int]`
-x3: dict[str, Literal[1]] = {"a": 2} # E: `dict[str, int]` is not assignable to `dict[str, Literal[1]]`
+x2: dict[str, int] = {"a": "oops"}  # E: `Literal['oops']` is not assignable to dict value type `int`
+x3: dict[str, Literal[1]] = {"a": 2} # E: `Literal[2]` is not assignable to dict value type `Literal[1]`
 x4: MutableMapping[str, int] = {"a": 1}
 x5: Iterable[str] = {"a": 1}
-x6: Iterable[int] = {"oops": 1}  # E: `dict[str, int]` is not assignable to `Iterable[int]`
+x6: Iterable[int] = {"oops": 1}  # E: `Literal['oops']` is not assignable to dict key type `int`
 x7: Iterable[Literal[4]] = {4: "a"}
 x8: object = {"a": 1}
 x9: list[str] = {"a": 1}  # E: `dict[str, int]` is not assignable to `list[str]`
@@ -368,6 +370,7 @@ class B: ...
 class B2(B): ...
 f1: Callable[[], list[B]] = lambda: [B2()]
 f2: Callable[[], list[A]] | Callable[[], list[B]] = lambda: [B2()]
+f3: Callable[[], dict[int, A]] | Callable[[], dict[int, B]] = lambda: {0: B2()}
 "#,
 );
 
