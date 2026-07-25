@@ -55,7 +55,6 @@ use lsp_types::PublishDiagnosticsNotification;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::ReferencesRequest;
 use lsp_types::RegistrationParams;
-use lsp_types::CodeLensRequest;
 use lsp_types::RegistrationRequest;
 use lsp_types::RenameRequest;
 use lsp_types::Request as _;
@@ -550,15 +549,6 @@ impl TestClient {
             "position": {
                 "line": line,
                 "character": col
-            }
-        }))
-    }
-
-    pub fn code_lens(&self, file: &'static str) -> ClientRequestHandle<'_, CodeLensRequest> {
-        let path = self.get_root_or_panic().join(file);
-        self.send_request(json!({
-            "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string()
             }
         }))
     }
