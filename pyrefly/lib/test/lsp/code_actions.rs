@@ -461,7 +461,7 @@ fn compute_introduce_factory_actions(
     let (handles, state) =
         mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
     let handle = handles.get("main").unwrap();
-    let transaction = state.transaction();
+    let mut transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
     let selection = cursor_selection(module_info.contents());
     let actions = transaction
@@ -4474,7 +4474,7 @@ service = Service(1)
     );
     let main_handle = handles.get("main").unwrap();
     let consumer_handle = handles.get("consumer").unwrap();
-    let transaction = state.transaction();
+    let mut transaction = state.transaction();
     let main_info = transaction.get_module_info(main_handle).unwrap();
     let consumer_info = transaction.get_module_info(consumer_handle).unwrap();
     let selection = cursor_selection(main_info.contents());

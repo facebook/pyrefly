@@ -11,6 +11,9 @@ use dupe::Dupe;
 use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::module::Module;
+use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -20,7 +23,6 @@ use ruff_python_ast::StmtClassDef;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use vec1::Vec1;
 
 use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
@@ -28,6 +30,7 @@ use super::extract_shared::member_name_from_stmt;
 use super::extract_shared::selection_anchor;
 use super::extract_shared::unique_name;
 use super::types::LocalRefactorCodeAction;
+use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 
@@ -36,7 +39,7 @@ const DEFAULT_INDENT: &str = "    ";
 
 /// Builds introduce-factory refactor actions for a selected class name.
 pub(crate) fn introduce_factory_code_actions(
-    transaction: &Transaction<'_>,
+    transaction: &mut Transaction<'_>,
     handle: &Handle,
     selection: TextRange,
 ) -> Option<Vec<LocalRefactorCodeAction>> {
@@ -55,8 +58,8 @@ pub(crate) fn introduce_factory_code_actions(
             class_def.name.range().start(),
             FindPreference::default(),
         )
-        .map(Vec1::into_vec)
-        .unwrap_or_default()
+        .ok()?
+        .into_vec()
         .into_iter()
         .find(|def| {
             def.module.path() == module_info.path()
@@ -68,7 +71,7 @@ pub(crate) fn introduce_factory_code_actions(
     let factory_edit =
         build_factory_insertion_edit(&module_info, class_def, source, factory_name.as_str())?;
     let callsite_edits =
-        build_constructor_callsite_edits(transaction, &definition, factory_name.as_str())?;
+        build_constructor_callsite_edits(transaction, handle, &definition, factory_name.as_str())?;
 
     let mut edits = vec![factory_edit];
     edits.extend(callsite_edits);
@@ -102,11 +105,11 @@ fn generate_factory_name(class_def: &StmtClassDef) -> String {
 }
 
 fn build_factory_insertion_edit(
-    module_info: &pyrefly_python::module::Module,
+    module_info: &Module,
     class_def: &StmtClassDef,
     source: &str,
     factory_name: &str,
-) -> Option<(pyrefly_python::module::Module, TextRange, String)> {
+) -> Option<(Module, TextRange, String)> {
     let (class_indent, _) = line_indent_and_start(source, class_def.range().start())?;
     let insert_position = line_end_position(source, class_def.body.last()?.range().end());
     let method_indent = format!("{class_indent}{DEFAULT_INDENT}");
@@ -123,15 +126,29 @@ fn build_factory_insertion_edit(
 }
 
 fn build_constructor_callsite_edits(
-    transaction: &Transaction<'_>,
-    definition: &crate::state::lsp::FindDefinitionItemWithDocstring,
+    transaction: &mut Transaction<'_>,
+    handle: &Handle,
+    definition: &FindDefinitionItemWithDocstring,
     factory_name: &str,
-) -> Option<Vec<(pyrefly_python::module::Module, TextRange, String)>> {
+) -> Option<Vec<(Module, TextRange, String)>> {
     let mut edits = Vec::new();
+    let mut references = transaction
+        .find_global_references_from_definition(
+            *handle.sys_info(),
+            definition.metadata.clone(),
+            TextRangeWithModule::new(definition.module.dupe(), definition.definition_range),
+            false,
+        )
+        .ok()?;
+    // Unsaved modules may not be in the filesystem reverse-dependency graph.
     for module_handle in transaction.handles() {
-        let Some(module_info) = transaction.get_module_info(&module_handle) else {
+        if !matches!(module_handle.path().details(), ModulePathDetails::Memory(_))
+            || references
+                .iter()
+                .any(|(module, _)| module.path() == module_handle.path())
+        {
             continue;
-        };
+        }
         let Some(refs) = transaction.local_references_from_definition(
             &module_handle,
             definition.metadata.clone(),
@@ -141,12 +158,22 @@ fn build_constructor_callsite_edits(
         ) else {
             continue;
         };
-        if refs.is_empty() {
-            continue;
+        if !refs.is_empty() {
+            let module_info = transaction
+                .get_module_info(&module_handle)
+                .expect("modules containing references must have module information");
+            references.push((module_info, refs));
         }
-        let Some(ast) = transaction.get_ast(&module_handle) else {
-            continue;
-        };
+    }
+    for (module_info, refs) in references {
+        let module_handle = Handle::new(
+            module_info.name(),
+            module_info.path().dupe(),
+            *handle.sys_info(),
+        );
+        let ast = transaction
+            .get_ast(&module_handle)
+            .expect("modules containing references must have an AST");
         let ref_set: HashSet<TextRange> = refs.into_iter().collect();
         let mut module_edits = Vec::new();
         let mut failed = false;
@@ -187,19 +214,30 @@ enum ConstructorCallKind {
 
 fn constructor_call_kind(call: &ExprCall, ref_set: &HashSet<TextRange>) -> ConstructorCallKind {
     match call.func.as_ref() {
-        Expr::Name(name) => ref_set
-            .contains(&name.range())
-            .then_some(ConstructorCallKind::Rewritable)
-            .unwrap_or(ConstructorCallKind::Unrelated),
-        Expr::Attribute(attribute) => ref_set
-            .contains(&attribute.attr.range())
-            .then_some(ConstructorCallKind::Rewritable)
-            .unwrap_or(ConstructorCallKind::Unrelated),
-        _ => ref_set
-            .iter()
-            .any(|range| call.func.range().contains(range.start()))
-            .then_some(ConstructorCallKind::Unsupported)
-            .unwrap_or(ConstructorCallKind::Unrelated),
+        Expr::Name(name) => {
+            if ref_set.contains(&name.range()) {
+                ConstructorCallKind::Rewritable
+            } else {
+                ConstructorCallKind::Unrelated
+            }
+        }
+        Expr::Attribute(attribute) => {
+            if ref_set.contains(&attribute.attr.range()) {
+                ConstructorCallKind::Rewritable
+            } else {
+                ConstructorCallKind::Unrelated
+            }
+        }
+        _ => {
+            if ref_set
+                .iter()
+                .any(|range| call.func.range().contains(range.start()))
+            {
+                ConstructorCallKind::Unsupported
+            } else {
+                ConstructorCallKind::Unrelated
+            }
+        }
     }
 }
 
