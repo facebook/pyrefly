@@ -3525,7 +3525,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn introduce_factory_code_actions(
-        &self,
+        &mut self,
         handle: &Handle,
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
