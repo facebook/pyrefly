@@ -26,6 +26,7 @@ use ruff_text_size::TextSize;
 
 use crate::binding::binding::Key;
 use crate::state::ide::insert_import_edit;
+use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::pytest::pytest_conftest_handles;
@@ -370,7 +371,7 @@ pub(crate) fn pytest_fixture_type_annotation_code_actions(
     }
 
     let mut fixture_types = fixture_types_for_module(transaction, handle);
-    for conftest_handle in pytest_conftest_handles(transaction, handle) {
+    for conftest_handle in pytest_conftest_handles(transaction, handle, FindPreference::default()) {
         let conftest_types = fixture_types_for_module(transaction, &conftest_handle);
         for (name, ty) in conftest_types {
             fixture_types.entry(name).or_insert(ty);

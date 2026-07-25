@@ -6,10 +6,10 @@
  */
 
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::symbol_kind::SymbolKind;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Identifier;
@@ -19,8 +19,9 @@ use vec1::Vec1;
 
 use super::DefinitionMetadata;
 use super::FindDefinitionItemWithDocstring;
+use super::FindPreference;
 use crate::state::pytest::find_pytest_fixture_definitions_for_parameter;
-use crate::state::pytest::find_pytest_fixture_definitions_in_module;
+use crate::state::pytest::find_pytest_fixture_definitions_in_conftest;
 use crate::state::pytest::find_pytest_fixture_parameter_references;
 use crate::state::pytest::is_pytest_fixture_parameter_context;
 use crate::state::state::Transaction;
@@ -28,6 +29,7 @@ use crate::state::state::Transaction;
 pub(crate) fn pytest_conftest_handles(
     transaction: &Transaction<'_>,
     handle: &Handle,
+    preference: FindPreference,
 ) -> Vec<Handle> {
     let module_path = handle.path();
     let Some(mut dir) = module_path.as_path().parent() else {
@@ -36,20 +38,30 @@ pub(crate) fn pytest_conftest_handles(
     let root = module_path
         .root_of(handle.module())
         .unwrap_or_else(|| dir.to_path_buf());
-    let is_memory = matches!(module_path.details(), ModulePathDetails::Memory(_));
-    let mut conftest_paths = Vec::new();
+    let filenames = if preference.prefer_pyi {
+        ["conftest.pyi", "conftest.py"]
+    } else {
+        ["conftest.py", "conftest.pyi"]
+    };
+    let mut handles = Vec::new();
     loop {
-        let conftest_pyi = dir.join("conftest.pyi");
-        let conftest_py = dir.join("conftest.py");
-        if is_memory {
-            conftest_paths.push(ModulePath::memory(conftest_pyi.clone()));
-            conftest_paths.push(ModulePath::memory(conftest_py.clone()));
-        } else {
-            if conftest_pyi.exists() {
-                conftest_paths.push(ModulePath::filesystem(conftest_pyi));
-            }
-            if conftest_py.exists() {
-                conftest_paths.push(ModulePath::filesystem(conftest_py));
+        for filename in filenames {
+            let path = dir.join(filename);
+            let memory_path = ModulePath::memory(path.clone());
+            let memory_config = transaction.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                &memory_path,
+            );
+            let memory_handle = memory_config.handle_from_module_path(memory_path);
+            if transaction.get_module_info(&memory_handle).is_some() {
+                handles.push(memory_handle);
+            } else if path.exists() {
+                let filesystem_path = ModulePath::filesystem(path);
+                let filesystem_config = transaction.config_finder().python_file(
+                    ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                    &filesystem_path,
+                );
+                handles.push(filesystem_config.handle_from_module_path(filesystem_path));
             }
         }
         if dir == root {
@@ -59,13 +71,6 @@ pub(crate) fn pytest_conftest_handles(
             break;
         };
         dir = parent;
-    }
-    let mut handles = Vec::new();
-    for path in conftest_paths {
-        let config = transaction
-            .config_finder()
-            .python_file(ModuleNameWithKind::guaranteed(ModuleName::unknown()), &path);
-        handles.push(config.handle_from_module_path(path));
     }
     handles
 }
@@ -80,6 +85,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         identifier: &Identifier,
         covering_nodes: &[AnyNodeRef],
+        preference: FindPreference,
     ) -> Option<Vec1<FindDefinitionItemWithDocstring>> {
         let mod_module = self.get_ast(handle)?;
         let bindings = self.get_bindings(handle)?;
@@ -104,31 +110,26 @@ impl<'a> Transaction<'a> {
             })
             .collect();
         if definitions.is_empty() {
-            for conftest_handle in pytest_conftest_handles(self, handle) {
-                let Some(conftest_ast) = self.get_ast(&conftest_handle) else {
-                    continue;
-                };
-                let Some(conftest_bindings) = self.get_bindings(&conftest_handle) else {
-                    continue;
-                };
-                let Some(conftest_module_info) = self.get_module_info(&conftest_handle) else {
-                    continue;
-                };
+            for conftest_handle in pytest_conftest_handles(self, handle, preference) {
+                let _ = self.get_exports(&conftest_handle);
+                let conftest_module_info = self
+                    .get_module_info(&conftest_handle)
+                    .expect("conftest module must be loaded after demanding exports");
+                let conftest_ast = Ast::parse(
+                    conftest_module_info.contents(),
+                    conftest_module_info.source_type(),
+                )
+                .0;
                 definitions.extend(
-                    find_pytest_fixture_definitions_in_module(
-                        conftest_ast.as_ref(),
-                        &conftest_bindings,
-                        identifier.id(),
-                        None,
-                    )
-                    .into_iter()
-                    .map(|fixture| FindDefinitionItemWithDocstring {
-                        metadata: DefinitionMetadata::Variable(Some(SymbolKind::Function)),
-                        definition_range: fixture.range,
-                        module: conftest_module_info.clone(),
-                        docstring_range: fixture.docstring_range,
-                        display_name: Some(fixture.name.as_str().to_owned()),
-                    }),
+                    find_pytest_fixture_definitions_in_conftest(&conftest_ast, identifier.id())
+                        .into_iter()
+                        .map(|fixture| FindDefinitionItemWithDocstring {
+                            metadata: DefinitionMetadata::Variable(Some(SymbolKind::Function)),
+                            definition_range: fixture.range,
+                            module: conftest_module_info.clone(),
+                            docstring_range: fixture.docstring_range,
+                            display_name: Some(fixture.name.as_str().to_owned()),
+                        }),
                 );
                 if !definitions.is_empty() {
                     break;
