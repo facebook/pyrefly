@@ -141,6 +141,7 @@ fn combine_normal_and_stub_results(
     normal_result: Option<FindResult>,
     namespaces_found: &mut Vec<PathBuf>,
     dir_cache: &DirEntryCache,
+    replace_untyped: bool,
 ) -> Option<FindingOrError<ModulePath>> {
     match (normal_result, stub_result) {
         (None, Some(stub_result)) => {
@@ -161,6 +162,17 @@ fn combine_normal_and_stub_results(
                         missing_stub_result.as_str().to_owned().into(),
                     )),
                 )
+            } else if replace_untyped
+                && !package_has_py_typed(module, &normal_result, dir_cache)
+                // Inv 3: never convert a stub. A stub can reach this arm as
+                // `normal_result` in two shapes: a bare `foo.pyi`
+                // (`SingleFilePyiModule`) or a stub-only package `foo/__init__.pyi`
+                // (`RegularPackage` whose init path is a `.pyi`). Both provide
+                // type information and must stay typed under the flag. The check
+                // is on the resolved init path's extension so it covers both.
+                && !normal_result.is_stub()
+            {
+                Some(FindingOrError::Error(FindError::Ignored))
             } else {
                 Some(find_result_module_path(normal_result))
             }
@@ -193,6 +205,7 @@ fn find_module<'a, I>(
     style_filter: Option<ModuleStyle>,
     typeshed_third_party_stub: Option<FindingOrError<ModulePath>>,
     from_real_config_file: bool,
+    replace_untyped: bool,
     phantom_paths: &mut Option<&mut Vec<PathBuf>>,
     dir_cache: &DirEntryCache,
     timing: Option<&TransactionTimingCounters>,
@@ -208,6 +221,9 @@ where
         dir_cache,
         observer(timing),
     );
+    // A bundled typeshed stub wins before the replace-untyped hook can fire
+    // (Inv 3: stubs always win). The flag is therefore not threaded into
+    // `resolve_third_party_stub`.
     if let Some(result) = resolve_third_party_stub(
         module,
         results.stub_result.as_ref(),
@@ -224,6 +240,7 @@ where
         results.normal_result,
         namespaces_found,
         dir_cache,
+        replace_untyped,
     )
 }
 
@@ -437,6 +454,7 @@ pub fn find_import_internal(
             style_filter,
             None,
             false,
+            false,
             phantom_paths,
             dir_cache,
             timing,
@@ -454,6 +472,7 @@ pub fn find_import_internal(
         style_filter,
         None,
         false,
+        false,
         phantom_paths,
         dir_cache,
         timing,
@@ -466,6 +485,7 @@ pub fn find_import_internal(
             &mut namespaces_found,
             style_filter,
             None,
+            false,
             false,
             phantom_paths,
             dir_cache,
@@ -495,6 +515,7 @@ pub fn find_import_internal(
             style_filter,
             None,
             false,
+            false,
             phantom_paths,
             dir_cache,
             timing,
@@ -508,6 +529,10 @@ pub fn find_import_internal(
         style_filter,
         typeshed_third_party_stub.clone(),
         from_real_config_file,
+        // The replace-untyped policy is third-party only: it is passed `true`
+        // exclusively at this site-package callsite (Inv 5). Every other
+        // `find_module` call above passes `false`.
+        config.replace_untyped_imports_with_any(origin),
         phantom_paths,
         dir_cache,
         timing,
@@ -687,6 +712,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -702,6 +728,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -716,6 +743,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -742,6 +770,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -777,6 +806,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -791,6 +821,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -824,6 +855,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -855,6 +887,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -901,6 +934,7 @@ mod tests {
                     None,
                     None,
                     false,
+                    false,
                     &mut None,
                     &DirEntryCache::new(),
                     None,
@@ -926,6 +960,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -948,6 +983,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -980,6 +1016,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -997,6 +1034,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1042,6 +1080,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1060,6 +1099,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1075,6 +1115,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1115,6 +1156,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1132,6 +1174,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1182,6 +1225,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1200,6 +1244,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1215,6 +1260,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1260,6 +1306,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1279,6 +1326,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1295,6 +1343,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1346,6 +1395,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1364,6 +1414,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1379,6 +1430,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1429,6 +1481,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1448,6 +1501,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1464,6 +1518,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1510,6 +1565,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1528,6 +1584,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1543,6 +1600,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1585,6 +1643,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1601,6 +1660,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1645,6 +1705,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1661,6 +1722,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1707,6 +1769,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1723,6 +1786,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1772,6 +1836,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1791,6 +1856,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1807,6 +1873,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -1951,6 +2018,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1968,6 +2036,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -1982,6 +2051,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2014,6 +2084,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2029,6 +2100,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2043,6 +2115,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2081,6 +2154,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2096,6 +2170,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2110,6 +2185,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2143,6 +2219,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2158,6 +2235,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2172,6 +2250,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2213,6 +2292,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2230,6 +2310,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2273,6 +2354,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2287,6 +2369,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2304,6 +2387,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2328,6 +2412,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             &mut None,
             &DirEntryCache::new(),
             None,
@@ -2343,6 +2428,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2368,6 +2454,7 @@ mod tests {
                 &mut vec![],
                 None,
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2400,6 +2487,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2415,6 +2503,7 @@ mod tests {
             &mut vec![],
             None,
             None,
+            false,
             false,
             &mut None,
             &DirEntryCache::new(),
@@ -2453,6 +2542,7 @@ mod tests {
                 Some(ModuleStyle::Executable),
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2469,6 +2559,7 @@ mod tests {
                 Some(ModuleStyle::Interface),
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2483,6 +2574,7 @@ mod tests {
                 &mut vec![],
                 Some(ModuleStyle::Executable),
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2499,6 +2591,7 @@ mod tests {
                 &mut vec![],
                 Some(ModuleStyle::Interface),
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2526,6 +2619,7 @@ mod tests {
                 Some(ModuleStyle::Executable),
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2540,6 +2634,7 @@ mod tests {
                 &mut vec![],
                 Some(ModuleStyle::Interface),
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2569,6 +2664,7 @@ mod tests {
                 &mut vec![],
                 Some(ModuleStyle::Executable),
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2607,6 +2703,7 @@ mod tests {
                 Some(ModuleStyle::Executable),
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2623,6 +2720,7 @@ mod tests {
                 &mut vec![],
                 Some(ModuleStyle::Interface),
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -2642,6 +2740,7 @@ mod tests {
                 Some(ModuleStyle::Interface),
                 None,
                 false,
+                false,
                 &mut None,
                 &DirEntryCache::new(),
                 None,
@@ -2655,6 +2754,7 @@ mod tests {
                 &mut vec![],
                 Some(ModuleStyle::Executable),
                 None,
+                false,
                 false,
                 &mut None,
                 &DirEntryCache::new(),
@@ -4025,6 +4125,316 @@ mod tests {
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("rules/if.config.cconf")))
+        );
+    }
+
+    // --- `replace_untyped_imports_with_any` tests ---
+    //
+    // These exercise the `replace_untyped: bool` hook in
+    // `combine_normal_and_stub_results`'s `(Some(normal), None)` arm by calling
+    // `find_module` directly with the flag toggled. Each test maps to a spec
+    // invariant (Inv 1-6) from the IMPLICIT_SPEC.
+
+    /// Inv 1: with the flag off (the default), an untyped third-party-style
+    /// package with no `py.typed` and no stub is analyzed as a typed Finding.
+    /// Behavior is unchanged from today.
+    #[test]
+    fn test_replace_untyped_imports_off_default() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "foo",
+                vec![
+                    TestPath::file("__init__.py"),
+                    TestPath::dir("bar", vec![TestPath::file("__init__.py")]),
+                ],
+            )],
+        );
+        // Flag off (default): module resolves typed, no error attached.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("foo.bar"),
+                [root.to_path_buf()].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                false,
+                &mut None,
+                &DirEntryCache::new(),
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/bar/__init__.py")))
+        );
+    }
+
+    /// Inv 6 / opencv class: with the flag on, a package with source but no
+    /// `py.typed` and no stub is converted to `FindError::Ignored` (which
+    /// downstream makes the binder use `Any` and the wildcard loop `continue`).
+    #[test]
+    fn test_replace_untyped_imports_on_no_py_typed() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir("foo", vec![TestPath::file("__init__.py")])],
+        );
+        // Flag on, no py.typed, no stub -> Ignored.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("foo"),
+                [root.to_path_buf()].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                true,
+                &mut None,
+                &DirEntryCache::new(),
+                None,
+            )
+            .unwrap(),
+            FindingOrError::Error(FindError::Ignored)
+        );
+    }
+
+    /// Inv 4: with the flag on, a package WITH a `py.typed` marker stays typed.
+    #[test]
+    fn test_replace_untyped_imports_on_with_py_typed() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "foo",
+                vec![
+                    TestPath::file("py.typed"),
+                    TestPath::file("__init__.py"),
+                    TestPath::dir("bar", vec![TestPath::file("__init__.py")]),
+                ],
+            )],
+        );
+        // Flag on but py.typed present -> stays typed.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("foo.bar"),
+                [root.to_path_buf()].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                true,
+                &mut None,
+                &DirEntryCache::new(),
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/bar/__init__.py")))
+        );
+    }
+
+    /// Inv 3 (bundled/-stubs stub): with the flag on, a package that has a
+    /// `-stubs` sibling selected stays typed. The stub is selected in
+    /// `combine`'s `(Some(_), Some(stub_result))` arm, which returns before the
+    /// `(Some, None)` arm where the hook lives.
+    #[test]
+    fn test_replace_untyped_imports_on_with_stubs_package() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir("foo", vec![TestPath::file("__init__.py")]),
+                TestPath::dir("foo-stubs", vec![TestPath::file("__init__.pyi")]),
+            ],
+        );
+        // Flag on but a -stubs package is selected -> stub wins, stays typed.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("foo"),
+                [root.to_path_buf()].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                true,
+                &mut None,
+                &DirEntryCache::new(),
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("foo-stubs/__init__.pyi")
+            ))
+        );
+    }
+
+    /// Inv 3 (stub-only package): regression guard. A package directory
+    /// containing only `__init__.pyi` resolves as
+    /// `FindResult::RegularPackage(foo/__init__.pyi, foo)` (no `.py`, no
+    /// `py.typed`, no `-stubs`). It is a stub providing type info, so under the
+    /// flag it MUST stay typed — `FindResult::is_stub()` covers this via the
+    /// init path's `.pyi` extension. (This was the bug found during review: a
+    /// narrower `SingleFilePyiModule`-only guard missed this shape.)
+    #[test]
+    fn test_replace_untyped_imports_on_adjacent_pyi() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir("foo", vec![TestPath::file("__init__.pyi")])],
+        );
+        // Flag on, stub-only package (no py.typed) -> stays typed. A stub always wins.
+        let result = find_module(
+            ModuleName::from_str("foo"),
+            [root.to_path_buf()].iter(),
+            &mut vec![],
+            None,
+            None,
+            false,
+            true,
+            &mut None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .unwrap();
+        // The result is a typed Finding pointing at the stub, NOT Ignored.
+        assert!(
+            matches!(result, FindingOrError::Finding(_)),
+            "stub-only package must stay typed under the flag, got {:?}",
+            result
+        );
+        assert_eq!(
+            result,
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/__init__.pyi")))
+        );
+    }
+
+    /// Inv 3 (bare `.pyi`): the other stub shape. A bare `foo.pyi` file (no
+    /// `foo/` dir) resolves as `FindResult::SingleFilePyiModule(foo.pyi)`. It is
+    /// a stub, so under the flag it MUST stay typed. Covers the
+    /// `SingleFilePyiModule` arm of `FindResult::is_stub()`.
+    #[test]
+    fn test_replace_untyped_imports_on_bare_pyi() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("foo.pyi")]);
+        let result = find_module(
+            ModuleName::from_str("foo"),
+            [root.to_path_buf()].iter(),
+            &mut vec![],
+            None,
+            None,
+            false,
+            true,
+            &mut None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(result, FindingOrError::Finding(_)),
+            "bare .pyi must stay typed under the flag, got {:?}",
+            result
+        );
+        assert_eq!(
+            result,
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("foo.pyi")))
+        );
+    }
+
+    /// Inv 5: the replace-untyped policy is third-party only — it is passed
+    /// `true` exclusively at the site-package `find_module` callsite. Every
+    /// other callsite (search_path, build_system, fallback_search_path, ...)
+    /// passes `false`. This test simulates a first-party / search-path
+    /// resolution by calling `find_module` with `replace_untyped: false`, the
+    /// exact value those callsites pass, over an untyped package: it must stay
+    /// typed even though the package lacks `py.typed` and a stub.
+    #[test]
+    fn test_replace_untyped_imports_does_not_apply_to_search_path() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir("foo", vec![TestPath::file("__init__.py")])],
+        );
+        // `replace_untyped: false` is what every non-site-package callsite
+        // passes. The package is untyped, yet it stays typed because the hook
+        // is gated off.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("foo"),
+                [root.to_path_buf()].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                false,
+                &mut None,
+                &DirEntryCache::new(),
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/__init__.py")))
+        );
+    }
+
+    /// Inv 2 + recommended-stubs precedence: the pre-existing
+    /// `recommended_stubs_package` / `UntypedImport` Warn branch (first branch
+    /// in the `(Some, None)` arm) MUST still win when both it and the
+    /// replace-untyped hook could apply. The unconditional
+    /// `replace_imports_with_any` wildcard short-circuit at
+    /// `find_import_internal` (finder.rs:446-447) runs even earlier and is
+    /// structurally guaranteed to win first — verified by call ordering, not
+    /// duplicated here. This test locks the in-`combine` precedence: a package
+    /// in typeshed's recommendations with no `py.typed` gets `UntypedImport`
+    /// (Warn), NOT `Ignored`, even with the flag on. (Uses `requests`, which
+    /// `recommended_stubs_package` resolves to `types-requests`.)
+    #[test]
+    fn test_replace_untyped_imports_recommended_stubs_wins_over_flag() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "requests",
+                vec![TestPath::file("__init__.py")],
+            )],
+        );
+        let result = find_module(
+            ModuleName::from_str("requests"),
+            [root.to_path_buf()].iter(),
+            &mut vec![],
+            None,
+            None,
+            false,
+            true,
+            &mut None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .unwrap();
+        // `recommended_stubs_package("requests")` is `Some("types-requests")`,
+        // so the first branch attaches `UntypedImport` and returns before the
+        // replace-untyped hook. The result is a typed Finding carrying the
+        // UntypedImport Warn — NOT an Ignored error.
+        let FindingOrError::Finding(finding) = &result else {
+            panic!(
+                "recommended-stubs branch should win over the flag, got {:?}",
+                result
+            );
+        };
+        let error = finding
+            .error
+            .as_ref()
+            .expect("expected UntypedImport Warn to be attached");
+        assert!(
+            matches!(error, FindError::UntypedImport(module, _) if *module == ModuleName::from_str("requests")),
+            "expected UntypedImport for requests, got {:?}",
+            error
         );
     }
 }

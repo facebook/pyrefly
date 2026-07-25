@@ -1001,6 +1001,21 @@ impl ConfigFile {
         found_match == Some(true)
     }
 
+    /// True iff untyped third-party imports (no `py.typed`, no stub) should be
+    /// replaced with `Any`. Origin-independent in the `LoaderFindCache` sense:
+    /// when no sub-config sets it, the accessor returns the same value for
+    /// every `path` (used to preserve the `(module, None)` cache-key
+    /// promotion invariant, `loader.rs:204-273`).
+    pub fn replace_untyped_imports_with_any(&self, path: Option<&Path>) -> bool {
+        path.and_then(|p| {
+            self.get_from_sub_configs(ConfigBase::get_replace_untyped_imports_with_any, p)
+        })
+        .unwrap_or_else(||
+             // we can use unwrap here, because the value in the root config must
+             // be set in `ConfigFile::configure()`.
+             self.root.replace_untyped_imports_with_any.unwrap())
+    }
+
     pub fn check_unannotated_defs(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_check_unannotated_defs, path)
             .unwrap_or_else(|| self.root.check_unannotated_defs.unwrap())
@@ -1432,6 +1447,10 @@ impl ConfigFile {
 
         if self.root.ignore_missing_imports.is_none() {
             self.root.ignore_missing_imports = Some(Default::default());
+        }
+
+        if self.root.replace_untyped_imports_with_any.is_none() {
+            self.root.replace_untyped_imports_with_any = Some(false);
         }
 
         if self.root.check_unannotated_defs.is_none() {
@@ -1962,6 +1981,7 @@ mod tests {
                     strict_partial_subtyping: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
+                    replace_untyped_imports_with_any: None,
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     check_unannotated_defs: None,
                     infer_return_types: None,
@@ -1989,6 +2009,7 @@ mod tests {
                         strict_partial_subtyping: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
+                        replace_untyped_imports_with_any: None,
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         check_unannotated_defs: None,
                         infer_return_types: None,
@@ -2561,6 +2582,7 @@ output-format = "omit-errors"
                 errors: Some(Default::default()),
                 replace_imports_with_any: Some(vec![ModuleWildcard::new("root").unwrap()]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
@@ -3426,6 +3448,7 @@ output-format = "omit-errors"
                     ModuleWildcard::new("example.path.*").unwrap(),
                 ]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
@@ -3467,6 +3490,7 @@ output-format = "omit-errors"
                     ModuleWildcard::new("!example.path.specific.*").unwrap(),
                 ]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
@@ -3999,6 +4023,58 @@ output-format = "omit-errors"
             errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
             Severity::Ignore,
             "without pytorch-efficiency-lints flag, lints should default to Ignore"
+        );
+    }
+
+    /// Inv 1: `replace_untyped_imports_with_any` defaults to false, and
+    /// `configure()` materializes that default so the accessor never unwraps
+    /// a `None`.
+    #[test]
+    fn test_replace_untyped_imports_default_false() {
+        // Unset (default): configure() fills in Some(false).
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+        assert_eq!(config.root.replace_untyped_imports_with_any, Some(false));
+        assert!(!config.replace_untyped_imports_with_any(None));
+        assert!(!config.replace_untyped_imports_with_any(Some(Path::new("any/path"))));
+
+        // Explicitly false is preserved.
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                replace_untyped_imports_with_any: Some(false),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+        assert_eq!(config.root.replace_untyped_imports_with_any, Some(false));
+        assert!(!config.replace_untyped_imports_with_any(None));
+    }
+
+    /// The flag parses from TOML (kebab-case) and round-trips through the
+    /// accessor. Also verifies serde rejects non-bool values (E1 boundary:
+    /// unknown/wrong types are rejected, not silently coerced).
+    #[test]
+    fn test_replace_untyped_imports_toml_parse() {
+        let config_str = r#"
+            replace-untyped-imports-with-any = true
+        "#;
+        let mut config = ConfigFile::parse_config(config_str).unwrap();
+        config.configure();
+        assert_eq!(config.root.replace_untyped_imports_with_any, Some(true));
+        assert!(config.replace_untyped_imports_with_any(None));
+
+        // A non-bool value must be rejected by serde.
+        let bad = ConfigFile::parse_config("replace-untyped-imports-with-any = \"yes\"\n");
+        assert!(
+            bad.is_err(),
+            "non-bool value should be rejected by serde, got {:?}",
+            bad
         );
     }
 }

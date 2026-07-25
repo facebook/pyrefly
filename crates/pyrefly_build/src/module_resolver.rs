@@ -216,6 +216,22 @@ impl FindResult {
         }
     }
 
+    /// True iff this result resolves to a stub (a `.pyi` file): either a bare
+    /// `SingleFilePyiModule` or a `RegularPackage`/`LegacyNamespacePackage`
+    /// whose `__init__` is a `.pyi` (a stub-only package). Used to keep stubs
+    /// typed under policies that blanket untyped implementations to `Any`.
+    pub fn is_stub(&self) -> bool {
+        let init_path = match self {
+            Self::SingleFilePyiModule(path) => path.as_path(),
+            Self::RegularPackage(init_path, _) => init_path.as_path(),
+            Self::LegacyNamespacePackage(init_path, _) => init_path.as_path(),
+            Self::SingleFilePyModule(_)
+            | Self::CompiledModule(_)
+            | Self::ImplicitNamespacePackage(_) => return false,
+        };
+        init_path.extension().is_some_and(|ext| ext == "pyi")
+    }
+
     fn best_result(a: FindResult, b: FindResult) -> Self {
         match (&a, &b) {
             // RegularPackage and LegacyNamespacePackage share the top tier: both
