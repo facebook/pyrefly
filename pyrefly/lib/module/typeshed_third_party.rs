@@ -81,7 +81,7 @@ impl BundledStub for BundledTypeshedThirdParty {
     fn get_path_name(&self) -> String {
         format!(
             "pyrefly_bundled_typeshed_third_party_{}",
-            faster_hex::hex_string(&pyrefly_bundled::BUNDLED_TYPESHED_DIGEST[0..6])
+            faster_hex::hex_string(&pyrefly_bundled::BUNDLED_TYPESHED_THIRD_PARTY_DIGEST[0..6])
         )
     }
 

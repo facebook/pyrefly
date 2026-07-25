@@ -423,8 +423,6 @@ pub fn find_import_internal(
 ) -> FindingOrError<ModulePath> {
     let mut namespaces_found = vec![];
     let origin = origin.map(|p| p.as_path());
-    let typeshed_third_party_result = find_third_party_stub(module, style_filter);
-    let typeshed_third_party_stub = typeshed_third_party_result.clone();
     let from_real_config_file = config.from_real_config_file();
 
     if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
@@ -506,7 +504,7 @@ pub fn find_import_internal(
         config.site_package_path(),
         &mut namespaces_found,
         style_filter,
-        typeshed_third_party_stub.clone(),
+        find_third_party_stub(module, style_filter),
         from_real_config_file,
         phantom_paths,
         dir_cache,
