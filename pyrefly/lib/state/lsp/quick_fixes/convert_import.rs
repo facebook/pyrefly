@@ -52,45 +52,23 @@ pub(crate) fn convert_import_code_actions(
     let import_stmt = find_import_stmt(ast.as_ref(), selection_point)?;
 
     let mut actions = Vec::new();
-    if let Some(action) = convert_single_import_action(
-        transaction,
-        handle,
-        &module_info,
-        source,
-        import_stmt,
-        ConvertTarget::Relative,
-    ) {
-        actions.push(action);
-    }
-    if let Some(action) = convert_single_import_action(
-        transaction,
-        handle,
-        &module_info,
-        source,
-        import_stmt,
-        ConvertTarget::Absolute,
-    ) {
-        actions.push(action);
-    }
-    if let Some(action) = convert_all_imports_action(
-        transaction,
-        handle,
-        &module_info,
-        source,
-        ast.as_ref(),
-        ConvertTarget::Relative,
-    ) {
-        actions.push(action);
-    }
-    if let Some(action) = convert_all_imports_action(
-        transaction,
-        handle,
-        &module_info,
-        source,
-        ast.as_ref(),
-        ConvertTarget::Absolute,
-    ) {
-        actions.push(action);
+    for target in [ConvertTarget::Relative, ConvertTarget::Absolute] {
+        actions.extend(convert_single_import_action(
+            transaction,
+            handle,
+            &module_info,
+            source,
+            import_stmt,
+            target,
+        ));
+        actions.extend(convert_all_imports_action(
+            transaction,
+            handle,
+            &module_info,
+            source,
+            ast.as_ref(),
+            target,
+        ));
     }
 
     if actions.is_empty() {
@@ -156,31 +134,35 @@ fn convert_import_stmt(
     stmt: ImportStmtRef<'_>,
     target: ConvertTarget,
 ) -> Option<(TextRange, String)> {
-    let (stmt_range, new_text) = match (stmt, target) {
+    let stmt_range = match stmt {
+        ImportStmtRef::Import(import) => import.range(),
+        ImportStmtRef::ImportFrom(import_from) => import_from.range(),
+    };
+    if source
+        .get(stmt_range.start().to_usize()..stmt_range.end().to_usize())?
+        .contains('#')
+    {
+        return None;
+    }
+    let new_text = match (stmt, target) {
         (ImportStmtRef::Import(import), ConvertTarget::Relative) => {
-            let stmt_range = import.range();
             let indent = line_indent_and_start(source, import.range().start())?.0;
             let lines = convert_import_to_relative(transaction, handle, import)?;
-            let new_text = join_import_lines(&indent, lines);
-            (stmt_range, new_text)
+            join_import_lines(&indent, lines)
         }
         (ImportStmtRef::ImportFrom(import_from), ConvertTarget::Relative)
             if import_from.level == 0 =>
         {
-            let stmt_range = import_from.range();
             let indent = line_indent_and_start(source, import_from.range().start())?.0;
             let line = convert_from_import_to_relative(transaction, handle, import_from)?;
-            let new_text = join_import_lines(&indent, vec![line]);
-            (stmt_range, new_text)
+            join_import_lines(&indent, vec![line])
         }
         (ImportStmtRef::ImportFrom(import_from), ConvertTarget::Absolute)
             if import_from.level > 0 =>
         {
-            let stmt_range = import_from.range();
             let indent = line_indent_and_start(source, import_from.range().start())?.0;
             let line = convert_from_import_to_absolute(handle, import_from)?;
-            let new_text = join_import_lines(&indent, vec![line]);
-            (stmt_range, new_text)
+            join_import_lines(&indent, vec![line])
         }
         _ => return None,
     };
@@ -206,7 +188,7 @@ fn convert_import_to_relative(
             return None;
         }
         let relative_module = relative_module_string(handle, &target_handle)?;
-        let (base, leaf) = split_relative_module(&relative_module, module_str)?;
+        let (base, leaf) = split_relative_module(&relative_module)?;
         let name_text = render_alias(leaf.as_str(), alias);
         push_grouped_import(&mut grouped, base, name_text);
     }
@@ -273,28 +255,26 @@ fn render_alias(default_name: &str, alias: &Alias) -> String {
 }
 
 fn relative_module_string(from: &Handle, to: &Handle) -> Option<String> {
-    let module =
-        ModuleName::relative_module_name_between(from.path().as_path(), to.path().as_path())?;
-    let raw = module.as_str();
-    if raw.is_empty() {
-        Some(".".to_owned())
-    } else {
-        Some(raw.to_owned())
-    }
+    Some(
+        ModuleName::relative_module_name_between(from.path().as_path(), to.path().as_path())?
+            .as_str()
+            .to_owned(),
+    )
 }
 
-fn split_relative_module(relative_module: &str, absolute_module: &str) -> Option<(String, String)> {
-    if relative_module == "." {
-        let leaf = absolute_module
-            .rsplit_once('.')
-            .map_or(absolute_module, |(_, leaf)| leaf);
-        return Some((".".to_owned(), leaf.to_owned()));
+fn split_relative_module(relative_module: &str) -> Option<(String, String)> {
+    let rest = relative_module.trim_start_matches('.');
+    assert!(
+        rest.len() < relative_module.len(),
+        "relative module name must start with a dot"
+    );
+    // A plain import of the current package has no equivalent relative-import spelling.
+    if rest.is_empty() {
+        return None;
     }
-    if let Some((base, leaf)) = relative_module.rsplit_once('.') {
-        let base = if base.is_empty() { "." } else { base };
-        return Some((base.to_owned(), leaf.to_owned()));
-    }
-    Some((".".to_owned(), relative_module.to_owned()))
+    let dots = &relative_module[..relative_module.len() - rest.len()];
+    let (package, leaf) = rest.rsplit_once('.').unwrap_or(("", rest));
+    Some((format!("{dots}{package}"), leaf.to_owned()))
 }
 
 fn push_grouped_import(grouped: &mut Vec<(String, Vec<String>)>, base: String, name: String) {

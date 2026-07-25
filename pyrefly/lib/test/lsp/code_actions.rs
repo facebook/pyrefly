@@ -5381,3 +5381,209 @@ from . import b as mod_b
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
+
+#[test]
+fn convert_multi_level_import_to_relative() {
+    let code = r#"
+# IMPORT-START
+import baz
+# IMPORT-END
+"#;
+    let selection = find_marked_range_with(code, "# IMPORT-START", "# IMPORT-END");
+    let (module_info, actions, titles) =
+        compute_convert_import_actions(&[("foo.bar", code), ("baz", "")], "foo.bar", selection);
+    let idx = titles
+        .iter()
+        .position(|title| title == "Convert import to relative path")
+        .expect("expected relative import code action");
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[idx]);
+    let expected = r#"
+# IMPORT-START
+from .. import baz
+# IMPORT-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_relative_import_without_module_to_absolute() {
+    let code = r#"
+# IMPORT-START
+from . import b
+# IMPORT-END
+"#;
+    let selection = find_marked_range_with(code, "# IMPORT-START", "# IMPORT-END");
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path("pkg", "pkg/__init__.py", "");
+    test_env.add("pkg.a", code);
+    test_env.add("pkg.b", "");
+    let (state, get_handle) = test_env.to_state();
+    let handle = get_handle("pkg.a");
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(&handle).unwrap();
+    let actions = transaction
+        .convert_import_code_actions(&handle, selection)
+        .expect("expected import code actions");
+    let action = actions
+        .iter()
+        .find(|action| action.title == "Convert import to absolute path")
+        .expect("expected absolute import code action");
+    let updated = apply_refactor_edits_for_module(&module_info, &action.edits);
+    let expected = r#"
+# IMPORT-START
+from pkg import b
+# IMPORT-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_grouped_import_to_relative() {
+    let code = r#"
+# IMPORT-START
+import pkg.a as x, pkg.b as y
+# IMPORT-END
+"#;
+    let selection = find_marked_range_with(code, "# IMPORT-START", "# IMPORT-END");
+    let (module_info, actions, titles) = compute_convert_import_actions(
+        &[("pkg.main", code), ("pkg.a", ""), ("pkg.b", "")],
+        "pkg.main",
+        selection,
+    );
+    let idx = titles
+        .iter()
+        .position(|title| title == "Convert import to relative path")
+        .expect("expected relative import code action");
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[idx]);
+    let expected = r#"
+# IMPORT-START
+from . import a as x, b as y
+# IMPORT-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_all_imports_in_nested_scopes() {
+    let code = r#"
+# IMPORT-START
+import pkg.a as x
+# IMPORT-END
+
+def f():
+    import pkg.b as y
+"#;
+    let selection = find_marked_range_with(code, "# IMPORT-START", "# IMPORT-END");
+    let (module_info, actions, titles) = compute_convert_import_actions(
+        &[("pkg.main", code), ("pkg.a", ""), ("pkg.b", "")],
+        "pkg.main",
+        selection,
+    );
+    let idx = titles
+        .iter()
+        .position(|title| title == "Convert all imports to relative path")
+        .expect("expected convert-all relative import code action");
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[idx]);
+    let expected = r#"
+# IMPORT-START
+from . import a as x
+# IMPORT-END
+
+def f():
+    from . import b as y
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_import_does_not_drop_comments() {
+    let code = r#"
+# IMPORT-START
+from pkg.b import (
+    Foo,  # keep this comment
+)
+# IMPORT-END
+"#;
+    let selection = find_marked_range_with(code, "# IMPORT-START", "# IMPORT-END");
+    let (_, _, titles) = compute_convert_import_actions(
+        &[("pkg.a", code), ("pkg.b", "Foo = 0")],
+        "pkg.a",
+        selection,
+    );
+    assert!(
+        !titles.iter().any(|title| title.contains("relative path")),
+        "comment-bearing import should not have a lossy relative rewrite"
+    );
+}
+
+#[test]
+fn convert_stdlib_import_to_relative_is_not_offered() {
+    let code = r#"
+# IMPORT-START
+import typing
+# IMPORT-END
+"#;
+    let selection = find_marked_range_with(code, "# IMPORT-START", "# IMPORT-END");
+    let (_, _, titles) = compute_convert_import_actions(&[("main", code)], "main", selection);
+    assert!(
+        !titles.iter().any(|title| title.contains("relative path")),
+        "stdlib imports must remain absolute"
+    );
+}
+
+#[test]
+fn convert_import_from_init_to_absolute() {
+    let code = r#"
+# IMPORT-START
+from . import child
+# IMPORT-END
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path("pkg", "pkg/__init__.py", code);
+    test_env.add("pkg.child", "");
+    let (state, get_handle) = test_env.to_state();
+    let handle = get_handle("pkg");
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(&handle).unwrap();
+    let selection = find_marked_range_with(code, "# IMPORT-START", "# IMPORT-END");
+    let actions = transaction
+        .convert_import_code_actions(&handle, selection)
+        .expect("expected import code actions");
+    let action = actions
+        .iter()
+        .find(|action| action.title == "Convert import to absolute path")
+        .expect("expected absolute import code action");
+    let updated = apply_refactor_edits_for_module(&module_info, &action.edits);
+    let expected = r#"
+# IMPORT-START
+from pkg import child
+# IMPORT-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_import_of_current_package_to_relative_is_not_offered() {
+    let code = r#"
+# IMPORT-START
+import pkg
+# IMPORT-END
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path("pkg", "pkg/__init__.py", "");
+    test_env.add("pkg.child", code);
+    let (state, get_handle) = test_env.to_state();
+    let handle = get_handle("pkg.child");
+    let selection = find_marked_range_with(code, "# IMPORT-START", "# IMPORT-END");
+    let titles: Vec<String> = state
+        .transaction()
+        .convert_import_code_actions(&handle, selection)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|action| action.title)
+        .collect();
+    assert!(
+        !titles.iter().any(|title| title.contains("relative path")),
+        "the current package cannot be represented by a relative plain import"
+    );
+}
