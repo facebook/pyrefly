@@ -22,7 +22,9 @@ use starlark_map::Hashed;
 
 use crate::binding::binding::KeyClass;
 use crate::binding::bindings::Bindings;
+use crate::binding::pytest::PytestAliases;
 use crate::binding::pytest::PytestBindingInfo;
+use crate::binding::pytest::is_pytest_fixture_function as is_pytest_fixture_function_by_decorator;
 
 #[derive(Clone)]
 pub(crate) struct PytestFixtureDefinition {
@@ -287,6 +289,30 @@ pub(crate) fn find_pytest_fixture_definitions_in_module(
         None,
     );
     matches
+}
+
+pub(crate) fn find_pytest_fixture_definitions_in_conftest(
+    module: &ModModule,
+    fixture_name: &Name,
+) -> Vec<PytestFixtureDefinition> {
+    let aliases = PytestAliases::from_module(module);
+    module
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::FunctionDef(function_def)
+                if function_def.name.id() == fixture_name
+                    && is_pytest_fixture_function_by_decorator(function_def, &aliases) =>
+            {
+                Some(PytestFixtureDefinition {
+                    name: function_def.name.id.clone(),
+                    range: function_def.name.range,
+                    docstring_range: Docstring::range_from_stmts(&function_def.body),
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Returns all parameter ranges that reference the fixture definition in this module.

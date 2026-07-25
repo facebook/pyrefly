@@ -13,6 +13,7 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::arc_id::ArcId;
@@ -20,6 +21,7 @@ use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use tempfile::TempDir;
+use tempfile::tempdir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
@@ -31,7 +33,6 @@ use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
-use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let defs = state
@@ -311,6 +312,8 @@ Definition Result:
 
 #[test]
 fn pytest_fixture_parameter_goes_to_conftest_fixture_definition() {
+    let temp = tempdir().unwrap();
+    let conftest_path = temp.path().join("conftest.py");
     let conftest = r#"
 import pytest  # type: ignore
 
@@ -318,25 +321,56 @@ import pytest  # type: ignore
 def answer():
     return 42
 "#;
+    fs::write(&conftest_path, conftest).unwrap();
+    let conftest_stub_path = temp.path().join("conftest.pyi");
+    fs::write(
+        &conftest_stub_path,
+        r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def answer(): ...
+"#,
+    )
+    .unwrap();
     let code = r#"
 def test_thing(answer):
 #              ^
     assert answer == 42
 "#;
-    let (handles, state) = mk_multi_file_state_assert_no_errors(
-        &[("main", code), ("conftest", conftest)],
-        Require::Exports,
+    let main_path = temp.path().join("test_main.py");
+    let (state, handle_for_name) =
+        TestEnv::one_with_path("test_main", main_path.to_str().unwrap(), code).to_state();
+    let handle = handle_for_name("test_main");
+    let conftest_module_path = ModulePath::filesystem(conftest_path.clone());
+    let conftest_config = state.config_finder().python_file(
+        ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+        &conftest_module_path,
     );
-    let handle = handles.get("main").unwrap();
+    let conftest_handle = conftest_config.handle_from_module_path(conftest_module_path);
+    let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+    transaction
+        .as_mut()
+        .run(&[conftest_handle.clone()], Require::Indexing, None);
+    state.commit_transaction(transaction, None);
+    let transaction = state.transaction();
+    assert!(transaction.get_ast(&conftest_handle).is_none());
+
     let position = extract_cursors_for_test(code).into_iter().next().unwrap();
+    let definitions = transaction.goto_definition(&handle, position).unwrap();
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].module.path().as_path(), conftest_path);
+    let declarations = transaction.goto_declaration(&handle, position).unwrap();
+    assert_eq!(declarations.len(), 1);
+    assert_eq!(declarations[0].module.path().as_path(), conftest_stub_path);
     assert_eq!(
         r#"
-Definition Result:
 5 | def answer():
         ^^^^^^
 "#
         .trim(),
-        get_test_report(&state, handle, position).trim(),
+        code_frame_of_source_at_range(definitions[0].module.contents(), definitions[0].range)
+            .trim(),
     );
 }
 
