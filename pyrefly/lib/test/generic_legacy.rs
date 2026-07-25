@@ -220,7 +220,7 @@ from typing import Any, Generic, TypeVar, assert_type
 T = TypeVar('T')
 class A(Generic[T]):
     x: T
-def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A[T]`
     assert_type(a.x, Any)
     "#,
 );
@@ -235,7 +235,7 @@ U = TypeVar('U', default=int)
 class A(Generic[T, U]):
     x: T
     y: U
-def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A[T, U]`
     assert_type(a.x, Any)
     assert_type(a.y, int)
     "#,
@@ -289,6 +289,16 @@ from typing import TypeVar, ParamSpec, TypeVarTuple
 T = TypeVar(name = "T")
 P = ParamSpec(name = "P")
 Ts = TypeVarTuple(name = "Ts")
+    "#,
+);
+
+testcase!(
+    test_tvar_bare_call,
+    r#"
+from typing import TypeVar, ParamSpec, TypeVarTuple
+TypeVar("T")  # E: TypeVar must be assigned to a variable
+ParamSpec("P")  # E: ParamSpec must be assigned to a variable
+TypeVarTuple("Ts")  # E: TypeVarTuple must be assigned to a variable
     "#,
 );
 

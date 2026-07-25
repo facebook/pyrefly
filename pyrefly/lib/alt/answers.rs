@@ -1143,9 +1143,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self.current().solver
     }
 
-    pub fn record_resolved_trace(&self, loc: TextRange, ty: Type) {
+    pub fn record_resolved_trace(&self, loc: TextRange, ty: &Type) {
         if self.current().trace.is_some()
-            && let Some(callable) = ty.to_callable()
+            && let Some(callable) = ty.clone().to_callable()
         {
             self.trace_state().record_resolved_trace(
                 loc,

@@ -584,7 +584,8 @@ def test1(x: Any) -> None:
     assert_type(x != 1, Any)
     assert_type(x is None, Any)
     assert_type(x is not None, Any)
-    assert_type(x in [1, 2], Any)
+    assert_type(x in [1, 2], bool)
+    assert_type(x not in [1, 2], bool)
     assert_type(1 in x, Any)
 
 def test2(x: float, y: Any) -> None:
@@ -1134,4 +1135,29 @@ from typing import assert_type
 _ = [{"col": None}] * 1000
 assert_type([1, 2, 3] * 5, list[int])
 "#,
+);
+
+testcase!(
+    test_add_after_narrow,
+    r#"
+def f[T: (bytes, str)](x: T) -> T:
+    if isinstance(x, bytes):
+        return x + b""
+    else:
+        return x + ""
+    "#,
+);
+
+testcase!(
+    test_containment_with_typevars,
+    r#"
+from typing import Iterable
+def f1[T: (str, bytes)](x: T, y: Iterable[T]):
+    return x in y
+def f2[T: (str, bytes)](x: T, y: Iterable[T]):
+    if isinstance(x, str):
+        return x in y
+def f3[T: (str, bytes)](x: T, y: T):
+    return x in y
+    "#,
 );

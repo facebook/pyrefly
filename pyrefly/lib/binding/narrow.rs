@@ -49,8 +49,8 @@ use crate::types::facet::UnresolvedFacetChain;
 use crate::types::facet::UnresolvedFacetKind;
 use crate::types::types::Type;
 
-assert_words!(AtomicNarrowOp, 11);
-assert_words!(NarrowOp, 13);
+assert_words!(AtomicNarrowOp, 10);
+assert_words!(NarrowOp, 12);
 
 /// Indicates where an isinstance-style narrow operation originated from.
 /// This determines whether validation needs to happen during narrowing.
@@ -118,6 +118,13 @@ pub enum AtomicNarrowOp {
     /// narrowing for name `x` from `x is None or y is None`). We need to
     /// preserve its existence in order to handle control flow and negation
     Placeholder,
+    /// `ClassCoverageGate` is a no-op. Its negation `ClassCoverageGateNeg` narrows the class away only
+    /// when *every* referenced slot-coverage `Key::Exhaustive` solves to `Never` -- i.e. each
+    /// positional sub-pattern exhausts its matched slot. This lets a refutable but exhaustive
+    /// nested pattern subtract its class without the unsound blanket subtraction that a bare
+    /// `IsInstance` negation would perform.
+    ClassCoverageGate(Box<[Idx<Key>]>),
+    ClassCoverageGateNeg(Box<[Idx<Key>]>),
 }
 
 #[derive(Clone, Debug)]
@@ -218,6 +225,8 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::IsTruthy => write!(f, "IsTruthy"),
             AtomicNarrowOp::IsFalsy => write!(f, "IsFalsy"),
             AtomicNarrowOp::Placeholder => write!(f, "Placeholder"),
+            AtomicNarrowOp::ClassCoverageGate(ks) => write!(f, "ClassCoverageGate({ks:?})"),
+            AtomicNarrowOp::ClassCoverageGateNeg(ks) => write!(f, "ClassCoverageGateNeg({ks:?})"),
         }
     }
 }
@@ -339,6 +348,7 @@ impl AtomicNarrowOp {
                 snippet(arguments.range()).unwrap_or_default()
             )),
             Self::Placeholder => None,
+            Self::ClassCoverageGate(_) | Self::ClassCoverageGateNeg(_) => None,
         }
     }
 
@@ -381,6 +391,8 @@ impl AtomicNarrowOp {
             Self::IsTruthy => Self::IsFalsy,
             Self::IsFalsy => Self::IsTruthy,
             Self::Placeholder => Self::Placeholder,
+            Self::ClassCoverageGate(ks) => Self::ClassCoverageGateNeg(ks.clone()),
+            Self::ClassCoverageGateNeg(ks) => Self::ClassCoverageGate(ks.clone()),
         }
     }
 }
@@ -397,6 +409,10 @@ pub enum FacetOrigin {
 pub struct FacetSubject {
     pub chain: UnresolvedFacetChain,
     pub origin: FacetOrigin,
+    /// When true, narrowing this facet may collapse a non-union base to `Never`.
+    /// Set only for match-pattern subtraction (the negation of a fully-characterized
+    /// arm), where subtracting a fully-matched member is sound.
+    pub allow_never_collapse: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -419,6 +435,7 @@ impl NarrowingSubject {
                 FacetSubject {
                     chain: UnresolvedFacetChain::new(Vec1::new(prop)),
                     origin: FacetOrigin::Direct,
+                    allow_never_collapse: false,
                 },
             ),
             Self::Facets(name, facets) => {
@@ -428,6 +445,7 @@ impl NarrowingSubject {
                     FacetSubject {
                         chain: UnresolvedFacetChain::new(props),
                         origin: facets.origin,
+                        allow_never_collapse: facets.allow_never_collapse,
                     },
                 )
             }
@@ -483,6 +501,21 @@ impl NarrowOp {
             Self::Atomic(attr, op) => Self::Atomic(attr.clone(), op.negate()),
             Self::And(ops) => Self::Or(ops.map(|op| op.negate())),
             Self::Or(ops) => Self::And(ops.map(|op| op.negate())),
+        }
+    }
+
+    /// Mark every facet subject in this op tree as allowed to collapse a non-union
+    /// base to `Never`. Used on the negation of a match arm so that subtracting a
+    /// fully-matched member soundly reduces the subject (see `FacetSubject`).
+    pub fn set_allow_never_collapse(&mut self) {
+        match self {
+            Self::Atomic(Some(facet_subject), _) => facet_subject.allow_never_collapse = true,
+            Self::Atomic(None, _) => {}
+            Self::And(ops) | Self::Or(ops) => {
+                for op in ops.iter_mut() {
+                    op.set_allow_never_collapse();
+                }
+            }
         }
     }
 
@@ -545,6 +578,9 @@ impl NarrowOp {
             FacetSubject {
                 chain: UnresolvedFacetChain::new(chain),
                 origin,
+                // Unlike `rebase_facet_subject`, this operation composes 2 narrows so we
+                // conservatively set the flag if either narrow does
+                allow_never_collapse: base.allow_never_collapse || extra.allow_never_collapse,
             }
         }
 
@@ -620,6 +656,10 @@ impl NarrowOp {
                 Some(Some(FacetSubject {
                     chain: UnresolvedFacetChain::new(chain),
                     origin: extra.origin,
+                    // Base's facet chain is the prefix we are stripping from extra's facet chain;
+                    // the resulting op is the same as `extra` just w/o the prefix, so we take
+                    // the `allow_never_collapse` from `extra` only.
+                    allow_never_collapse: extra.allow_never_collapse,
                 }))
             } else {
                 Some(None)
@@ -697,6 +737,12 @@ impl NarrowOps {
                 .map(|(name, (op, range))| (name.clone(), (op.negate(), *range)))
                 .collect(),
         )
+    }
+
+    pub fn set_allow_never_collapse(&mut self) {
+        for (op, _) in self.0.values_mut() {
+            op.set_allow_never_collapse();
+        }
     }
 
     fn get_or_placeholder(&mut self, name: Name, range: TextRange) -> &mut NarrowOp {
@@ -1133,12 +1179,15 @@ impl NarrowOps {
         builder: &'a BindingsBuilder,
         name: &Name,
     ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
-        let name_read_info = builder
-            .scopes
-            .look_up_name_for_read(Hashed::new(name), &Usage::Narrowing(None));
+        let name_read_info =
+            builder.look_up_name_for_read(Hashed::new(name), &Usage::NonPinningValue(None));
         match name_read_info {
             NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
-            _ => None,
+            // Only flow values have a narrowable original binding; anywhere-static entries,
+            // implicit builtins, and missing names do not.
+            NameReadInfo::Anywhere { .. }
+            | NameReadInfo::ImplicitBuiltin { .. }
+            | NameReadInfo::NotFound => None,
         }
     }
 
@@ -1184,12 +1233,18 @@ impl NarrowOps {
                 // (True vs. False, empty vs. non-empty tuple, etc.) are immutable.
                 | AtomicNarrowOp::IsTruthy
                 | AtomicNarrowOp::IsFalsy
-                | AtomicNarrowOp::Placeholder => match builder.scopes.binding_idx_for_name(name) {
-                    // Make sure the last definition of `name` is before the narrowing operation,
-                    // so we know that `name` hasn't been redefined post-narrowing.
-                    Some((idx, _)) => builder.idx_to_key(idx).range().end() <= op_range.start(),
-                    None => true,
-                },
+                | AtomicNarrowOp::Placeholder
+                | AtomicNarrowOp::ClassCoverageGate(..)
+                | AtomicNarrowOp::ClassCoverageGateNeg(..) => {
+                    match builder.scopes.binding_idx_for_name(name) {
+                        // Make sure the last definition of `name` is before the narrowing
+                        // operation, so we know `name` hasn't been redefined post-narrowing.
+                        Some((idx, _)) => {
+                            builder.idx_to_key(idx).range().end() <= op_range.start()
+                        }
+                        None => true,
+                    }
+                }
                 _ => false,
             },
         }
@@ -1430,6 +1485,7 @@ fn dict_get_subject_for_call_expr(call_expr: &ExprCall) -> Option<NarrowingSubje
                 FacetSubject {
                     chain: UnresolvedFacetChain::new(props),
                     origin: FacetOrigin::GetMethod,
+                    allow_never_collapse: false,
                 },
             ));
         } else if let Expr::Name(name) = &*attr.value {
@@ -1439,6 +1495,7 @@ fn dict_get_subject_for_call_expr(call_expr: &ExprCall) -> Option<NarrowingSubje
                 FacetSubject {
                     chain: UnresolvedFacetChain::new(Vec1::new(UnresolvedFacetKind::Key(key))),
                     origin: FacetOrigin::GetMethod,
+                    allow_never_collapse: false,
                 },
             ));
         }
@@ -1457,6 +1514,7 @@ pub fn expr_to_subjects(expr: &Expr) -> Vec<NarrowingSubject> {
                         FacetSubject {
                             chain: facets,
                             origin: FacetOrigin::Direct,
+                            allow_never_collapse: false,
                         },
                     ));
                 }

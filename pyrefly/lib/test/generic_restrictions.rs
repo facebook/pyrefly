@@ -1167,8 +1167,7 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug =
-        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
+    bug = "conformance: Should error on unbound TypeVars in class bases, TypeAlias, expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1502,5 +1501,45 @@ def g[T: bool](x: T) -> T:
     return f(x)
 def h[S: str](x: S) -> S:
     return f(x)  # E: `S` is not assignable to any of constraints `bool`, `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_cannot_return_union_of_constraints_for_constrained_typevar,
+    r#"
+def f() -> int | str: ...
+def g[T: (int, str)](x: T) -> T:
+    return f()  # E: `int | str` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    bug = "Return type T is narrowed to int, so returning 0 should be allowed",
+    test_return_concrete_type_after_typevar_narrow,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    if isinstance(x, int):
+        return 0  # E: `Literal[0]` is not assignable to declared return type `T`
+    else:
+        return x
+    "#,
+);
+
+testcase!(
+    test_binop_on_two_typevars_after_narrow_one,
+    r#"
+from typing import reveal_type
+def f[T: (str, bytes)](x: T, y: T):
+    if isinstance(x, str):
+        return reveal_type(x + y)  # E: revealed type: str & T
+    "#,
+);
+
+testcase!(
+    test_binop_on_typevar_with_union_bound,
+    r#"
+def f[T: bytes | str](x: T):
+    if isinstance(x, str):
+        y: str = 2 * x
     "#,
 );

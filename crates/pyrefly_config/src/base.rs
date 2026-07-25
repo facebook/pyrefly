@@ -79,8 +79,11 @@ pub enum Preset {
     /// left at their defaults. Useful when Pyrefly is running only for IDE
     /// features like hover and go-to-definition, without diagnostics.
     Off,
-    /// Minimal checking for LSP users. Raises clear/obvious type errors but
-    /// disables stricter checks like override validation and unannotated def checking.
+    /// Minimal checking preset for unconfigured projects and LSP users.
+    /// Enables diagnostics covering parse errors and a small set of
+    /// high-confidence, locally-fixable checks. Stricter checks like
+    /// override validation, annotation completeness, and broader call-shape
+    /// or assignment validation are disabled.
     Basic,
     /// A looser, less-strict preset useful for codebases migrating from mypy.
     /// Pyrefly does not aim to mimic mypy's behavior precisely — this preset
@@ -117,19 +120,27 @@ impl Preset {
                 }
             }
             Preset::Basic => {
-                // Basic is an opt-in preset: only a small set of high-confidence
-                // diagnostics — crashes and clearly broken code — fire. Every
-                // other error kind is silenced so unconfigured projects and
-                // LSP users see a low-noise baseline.
+                // Basic is an opt-in preset: a small set of high-confidence,
+                // locally-fixable diagnostics fire. Every other error kind is
+                // silenced so unconfigured projects and LSP users see a
+                // low-noise baseline.
                 let mut errors = HashMap::from([
+                    (ErrorKind::BadClassDefinition, Severity::Error),
+                    (ErrorKind::BadInstantiation, Severity::Error),
+                    (ErrorKind::BadKeywordArgument, Severity::Error),
+                    (ErrorKind::BadRaise, Severity::Error),
+                    (ErrorKind::BadUnpacking, Severity::Error),
                     (ErrorKind::DivisionByZero, Severity::Error),
+                    (ErrorKind::InvalidAnnotation, Severity::Error),
+                    (ErrorKind::InvalidLiteral, Severity::Error),
+                    (ErrorKind::InvalidSuperCall, Severity::Error),
                     (ErrorKind::InvalidSyntax, Severity::Error),
                     (ErrorKind::MissingImport, Severity::Error),
+                    (ErrorKind::NotAsync, Severity::Error),
                     (ErrorKind::ParseError, Severity::Error),
                     (ErrorKind::UnexpectedKeyword, Severity::Error),
+                    (ErrorKind::UnexpectedPositionalArgument, Severity::Error),
                     (ErrorKind::UnknownName, Severity::Error),
-                    (ErrorKind::InvalidAnnotation, Severity::Error),
-                    (ErrorKind::NotAsync, Severity::Error),
                     (ErrorKind::UnusedCoroutine, Severity::Error),
                 ]);
                 // Silence every other error kind. Explicitly setting each one
@@ -158,6 +169,7 @@ impl Preset {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     check_unannotated_defs: Some(false),
                     infer_return_types: Some(InferReturnTypes::Never),
+                    legacy_overload_expansion: Some(true),
                     ..Default::default()
                 }
             }
@@ -172,6 +184,7 @@ impl Preset {
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
                     ..Default::default()
                 }
             }
@@ -188,6 +201,7 @@ impl Preset {
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
                     ..Default::default()
                 }
             }
@@ -294,6 +308,13 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_callable_subtyping: Option<bool>,
 
+    /// Whether to strictly check the parameters of a `functools.partial(...)` residual when it is
+    /// assigned to a callable. When false (the default), the residual is treated as gradual (like
+    /// `...`) for subtyping, matching the typeshed `partial` stub. When true, the residual's
+    /// parameter types and arity are checked precisely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_partial_subtyping: Option<bool>,
+
     /// Whether to use spec-compliant overload evaluation semantics.
     /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
     /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
@@ -303,6 +324,10 @@ pub struct ConfigBase {
     /// Whether to treat module-level ALL_CAPS names as final after their first assignment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub treat_all_caps_as_final: Option<bool>,
+    /// Whether to expand union arguments to narrow an already-matched overloaded call.
+    /// Off by default; enabled by the `legacy` preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_overload_expansion: Option<bool>,
 
     /// Any unknown config items
     #[serde(default, flatten)]
@@ -409,12 +434,19 @@ impl ConfigBase {
         base.strict_callable_subtyping
     }
 
+    pub fn get_strict_partial_subtyping(base: &Self) -> Option<bool> {
+        base.strict_partial_subtyping
+    }
+
     pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {
         base.spec_compliant_overloads
     }
 
     pub fn get_treat_all_caps_as_final(base: &Self) -> Option<bool> {
         base.treat_all_caps_as_final
+    }
+    pub fn get_legacy_overload_expansion(base: &Self) -> Option<bool> {
+        base.legacy_overload_expansion
     }
 }
 

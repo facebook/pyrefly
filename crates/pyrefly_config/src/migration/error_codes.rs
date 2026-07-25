@@ -23,6 +23,7 @@ impl ConfigOptionMigrater for ErrorCodes {
         mypy_cfg: &Ini,
         pyrefly_cfg: &mut ConfigFile,
     ) -> anyhow::Result<()> {
+        let warn_return_any = util::get_bool_or_default(mypy_cfg, "mypy", "warn_return_any");
         let warn_redundant_casts =
             util::get_bool_or_default(mypy_cfg, "mypy", "warn_redundant_casts");
         let disallow_untyped_defs =
@@ -39,6 +40,7 @@ impl ConfigOptionMigrater for ErrorCodes {
             util::get_bool_or_default(mypy_cfg, "mypy", "allow_redefinitions");
         let strict = util::get_bool_or_default(mypy_cfg, "mypy", "strict");
         let mypy_flags = MypyErrorConfigFlags {
+            warn_return_any,
             warn_redundant_casts,
             disallow_untyped_defs,
             disallow_incomplete_defs,
@@ -262,6 +264,97 @@ mod tests {
     }
 
     #[test]
+    fn test_migrate_from_pyright_unknown_lambda_type() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.errors.report_unknown_lambda_type = Some(Severity::Error);
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::ImplicitAnyLambda),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_unknown_variable_type() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.errors.report_unknown_variable_type = Some(Severity::Error);
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownVariableType),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_unknown_member_type() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.errors.report_unknown_member_type = Some(Severity::Error);
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        // `reportUnknownMemberType` maps to `unknown-attribute-type`.
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownAttributeType),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_untyped_class_decorator() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.errors.report_untyped_class_decorator = Some(Severity::Error);
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::UntypedClassDecorator),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_untyped_function_decorator() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.errors.report_untyped_function_decorator = Some(Severity::Error);
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::UntypedFunctionDecorator),
+            Severity::Error
+        );
+    }
+
+    #[test]
     fn test_migrate_from_pyright_use_max_severity() {
         let mut pyright_cfg = default_pyright_config();
         pyright_cfg.errors.report_unknown_parameter_type = Some(Severity::Error);
@@ -356,6 +449,31 @@ mod tests {
     }
 
     #[test]
+    fn test_migrate_from_mypy_warn_return_any() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg
+            .read("[mypy]\nwarn_return_any = True".to_owned())
+            .unwrap();
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let _ = error_codes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        assert!(pyrefly_cfg.root.errors.is_some());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(errors.severity(ErrorKind::NoAnyReturn), Severity::Error);
+        assert_eq!(
+            errors.severity(ErrorKind::NoAnyReturnImplicit),
+            Severity::Error
+        );
+        assert_eq!(
+            errors.severity(ErrorKind::NoAnyReturnExplicit),
+            Severity::Error
+        );
+    }
+
+    #[test]
     fn test_migrate_from_mypy_strict_does_not_enable_explicit_any() {
         let mut mypy_cfg = Ini::new();
         mypy_cfg.set("mypy", "strict", Some("True".to_owned()));
@@ -368,6 +486,7 @@ mod tests {
         assert!(pyrefly_cfg.root.errors.is_some());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
         assert_eq!(errors.severity(ErrorKind::RedundantCast), Severity::Warn);
+        assert_eq!(errors.severity(ErrorKind::NoAnyReturn), Severity::Error);
         assert_eq!(errors.severity(ErrorKind::ExplicitAny), Severity::Ignore);
     }
 

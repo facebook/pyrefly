@@ -263,6 +263,10 @@ impl ModuleName {
         Self::from_str("pydantic.dataclasses")
     }
 
+    pub fn pydantic_alias_generators() -> Self {
+        Self::from_str("pydantic.alias_generators")
+    }
+
     pub fn django_models_enums() -> Self {
         Self::from_str("django.db.models.enums")
     }
@@ -477,7 +481,8 @@ impl ModuleName {
         /// `service/config.cinc` → `service.config.cinc`. For standard Python
         /// files, the extension is stripped: `foo/bar.py` → `foo.bar`.
         fn path_to_module(mut path: &Path, extra_extensions: &[String]) -> Option<ModuleName> {
-            if path.file_stem() == Some(dunder::INIT.as_str().as_ref()) {
+            let is_init = path.file_stem() == Some(dunder::INIT.as_str().as_ref());
+            if is_init {
                 path = path.parent()?;
             }
             // Check if the file has an extra extension. For these files, the
@@ -504,10 +509,12 @@ impl ModuleName {
                 *first = stripped.to_owned().into();
             }
             if out.is_empty() {
-                None
-            } else {
-                Some(ModuleName::from_parts(out))
+                return None;
             }
+            if !path_parts_form_valid_module_name(&out, is_init) {
+                return None;
+            }
+            Some(ModuleName::from_parts(out))
         }
 
         for include in includes {
@@ -525,6 +532,40 @@ impl ModuleName {
     pub fn parent(&self) -> Option<Self> {
         Some(Self::from_str(self.as_str().rsplit_once('.')?.0))
     }
+}
+
+/// Whether `str.isidentifier()` would return true (Python 3 rules, no keyword check).
+fn is_python_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_alphanumeric())
+}
+
+/// Whether filesystem path components can form a round-trippable module name.
+///
+/// Each directory component must be a valid Python identifier. Directory
+/// components are everything except the file's own name (file stem). For
+/// `__init__` the filename was already dropped, so every remaining component
+/// is a directory.
+///
+/// The filename component may legitimately contain `.` for extra-extension
+/// files (e.g. `config.cinc` → `config.cinc`), where the dots become module
+/// separators. Only its stem (the first dot-separated segment, i.e. the base
+/// name) must be a valid identifier; the trailing extension segments are not
+/// checked.
+fn path_parts_form_valid_module_name(parts: &[impl AsRef<str>], is_init: bool) -> bool {
+    if is_init {
+        // Every remaining component is a directory.
+        return parts.iter().all(|c| is_python_identifier(c.as_ref()));
+    }
+    let (filename, dirs) = parts
+        .split_last()
+        .expect("path parts are non-empty when forming a module name");
+    dirs.iter().all(|c| is_python_identifier(c.as_ref()))
+        && is_python_identifier(filename.as_ref().split('.').next().unwrap_or(""))
 }
 
 #[cfg(test)]
@@ -716,9 +757,9 @@ mod tests {
 
     #[test]
     fn test_module_from_path_first_match_wins() {
-        // from_path uses first-match semantics. Callers must pass paths in the
-        // right priority order: explicit search paths, then site-package paths,
-        // then heuristic paths like import_root.
+        // from_path uses first-match semantics. Callers pass paths in priority
+        // order: explicit search paths, then site-package paths, then heuristic
+        // paths like import_root.
         let project_root = PathBuf::from("/project");
         let site_packages = PathBuf::from("/project/venv/lib/python3.13/site-packages");
 
@@ -733,9 +774,10 @@ mod tests {
             Some(ModuleName::from_str("fastapi"))
         );
 
-        // With project root first, it matches before site-packages and
-        // produces a bogus module name — this is the ordering callers must
-        // avoid for heuristic paths like import_root.
+        // Even with project root first, the file still resolves to `fastapi`.
+        // The project-root match would pass through `python3.13` (a dotted
+        // directory), which is not a valid package component, so that include
+        // is rejected and resolution falls through to site-packages.
         let root_first = [project_root.clone(), site_packages.clone()];
         assert_eq!(
             ModuleName::from_path(
@@ -743,9 +785,7 @@ mod tests {
                 root_first.iter(),
                 &[]
             ),
-            Some(ModuleName::from_str(
-                "venv.lib.python3.13.site-packages.fastapi"
-            ))
+            Some(ModuleName::from_str("fastapi"))
         );
 
         // User's own source still resolves from the project root regardless
@@ -757,6 +797,112 @@ mod tests {
                 &[]
             ),
             Some(ModuleName::from_str("myapp.main"))
+        );
+    }
+
+    #[test]
+    fn test_is_python_identifier() {
+        assert!(is_python_identifier("foo"));
+        assert!(is_python_identifier("_bar"));
+        assert!(is_python_identifier("class"));
+        assert!(!is_python_identifier(""));
+        assert!(!is_python_identifier("3.13"));
+        assert!(!is_python_identifier("pkg-v1"));
+        assert!(!is_python_identifier("123"));
+        assert!(!is_python_identifier("has space"));
+    }
+
+    #[test]
+    fn test_path_parts_form_valid_module_name() {
+        assert!(path_parts_form_valid_module_name(&["foo", "bar"], false));
+        assert!(!path_parts_form_valid_module_name(
+            &["python3.13", "site-packages"],
+            false
+        ));
+        assert!(!path_parts_form_valid_module_name(
+            &["pkg-v1", "inner"],
+            false
+        ));
+        assert!(!path_parts_form_valid_module_name(&["pkg.v1"], true));
+        // Extra-extension files: only the stem of the filename must be valid.
+        assert!(path_parts_form_valid_module_name(
+            &["service", "config.cinc"],
+            false
+        ));
+        // A filename whose stem is not a valid identifier is rejected.
+        assert!(!path_parts_form_valid_module_name(
+            &["service", "1config.cinc"],
+            false
+        ));
+        assert!(!path_parts_form_valid_module_name(&["pkg-bad"], false));
+        assert!(!path_parts_form_valid_module_name(
+            &["service", "with space"],
+            false
+        ));
+    }
+
+    #[test]
+    fn test_module_from_path_dotted_directory() {
+        // A directory whose literal name contains `.` cannot be a Python
+        // package, so it must never be joined into a module name. An include
+        // that would do so is skipped in favour of a more specific include.
+        let outer = PathBuf::from("/outer");
+        let inner = PathBuf::from("/outer/pkg.v1");
+
+        // Outer-only: the dotted directory has no valid module name, so the
+        // file is treated as not on the search path rather than getting the
+        // bogus name `pkg.v1.inner.data`.
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/outer/pkg.v1/inner/data.py"),
+                [&outer].into_iter(),
+                &[]
+            ),
+            None
+        );
+
+        // With the inner (more specific) include available, resolution falls
+        // through to it and yields the correct name even when the outer,
+        // dotted include is listed first.
+        let outer_first = [outer.clone(), inner.clone()];
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/outer/pkg.v1/inner/data.py"),
+                outer_first.iter(),
+                &[]
+            ),
+            Some(ModuleName::from_str("inner.data"))
+        );
+
+        // An `__init__.py` inside a dotted directory is likewise rejected:
+        // every component of the parent path is a directory and must be valid.
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/outer/pkg.v1/inner/__init__.py"),
+                [&outer].into_iter(),
+                &[]
+            ),
+            None
+        );
+
+        // Hyphens in a directory name are not valid Python identifiers.
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/outer/pkg-v1/inner/data.py"),
+                [&outer].into_iter(),
+                &[]
+            ),
+            None
+        );
+
+        // A filename whose stem is not a valid identifier is also rejected.
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/outer/pkg/inner/bad-name.py"),
+                [&outer].into_iter(),
+                &[]
+            ),
+            None
         );
     }
 
@@ -774,8 +920,9 @@ mod tests {
         assert_module_name("/sp/scipy-stubs/stats/foo.pyi", "scipy.stats.foo");
         assert_module_name("/sp/scipy-stubs/__init__.pyi", "scipy");
 
-        // Non-top-level `-stubs` should not be stripped.
-        assert_module_name("/sp/pkg/nested-stubs/foo.py", "pkg.nested-stubs.foo");
+        // Non-top-level `-stubs` should not be stripped (use a valid identifier
+        // so the path is not rejected for other reasons).
+        assert_module_name("/sp/pkg/nested_stubs/foo.py", "pkg.nested_stubs.foo");
 
         // Plain package without `-stubs` is unchanged.
         assert_module_name("/sp/scipy/stats/foo.py", "scipy.stats.foo");

@@ -39,6 +39,7 @@ struct IncrementalData(Arc<Mutex<SmallMap<ModuleName, Arc<String>>>>);
 /// Helper for writing incrementality tests.
 struct Incremental {
     data: IncrementalData,
+    files: Vec<String>,
     require: Option<Require>,
     state: State,
     to_set: Vec<(String, String)>,
@@ -74,13 +75,17 @@ impl Incremental {
     const USER_FILES: &[&str] = &["main", "foo", "bar", "baz"];
 
     fn new() -> Self {
+        Self::with_files(Self::USER_FILES.map(|x| (*x).to_owned()))
+    }
+
+    fn with_files(files: Vec<String>) -> Self {
         init_test();
         let data = IncrementalData::default();
 
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
-        for file in Self::USER_FILES {
+        for file in &files {
             sourcedb.insert(
                 ModuleName::from_str(file),
                 ModulePath::memory(PathBuf::from(file)),
@@ -92,6 +97,7 @@ impl Incremental {
 
         Self {
             data: data.dupe(),
+            files,
             require: None,
             state: State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT),
             to_set: Vec::new(),
@@ -141,7 +147,11 @@ impl Incremental {
             None,
             None,
         );
-        let loaded = Self::USER_FILES.map(|x| self.handle(x));
+        let loaded = self
+            .files
+            .iter()
+            .map(|x| self.handle(x))
+            .collect::<Vec<_>>();
         let errors = self.state.transaction().get_errors(&loaded);
         let project_root = PathBuf::new();
         print_errors(project_root.as_path(), &errors.collect_display_errors());
@@ -870,6 +880,64 @@ fn test_overlapping_exports_cycle_detected() {
     assert!(res.changed.contains(&"bar".to_owned()));
 }
 
+// Synthetic defense-in-depth reproducer for https://github.com/facebook/pyrefly/issues/4171.
+#[test]
+#[should_panic(expected = "Transaction has uncommitted changes")]
+fn test_deep_scc_chain_stabilizes_after_epoch_cap() {
+    const LEVELS: usize = 208;
+
+    let mut files = vec!["leaf".to_owned(), "main".to_owned()];
+    for level in 0..LEVELS {
+        files.push(format!("a_{level}"));
+        files.push(format!("b_{level}"));
+    }
+    let mut i = Incremental::with_files(files);
+
+    i.set("leaf", "value: int = 0");
+    for level in 0..LEVELS {
+        let previous = if level == 0 {
+            "leaf".to_owned()
+        } else {
+            format!("a_{}", level - 1)
+        };
+        i.set(
+            &format!("a_{level}"),
+            &format!(
+                "from typing import TYPE_CHECKING\nfrom {previous} import value as value\nif TYPE_CHECKING:\n    from b_{level} import Marker\n"
+            ),
+        );
+        i.set(
+            &format!("b_{level}"),
+            &format!(
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from a_{level} import value\nclass Marker: pass\n"
+            ),
+        );
+    }
+    i.set(
+        "main",
+        &format!(
+            "from a_{} import value\nobserved: int = value\n",
+            LEVELS - 1
+        ),
+    );
+
+    let initial = i.unchecked(&["main"]);
+    assert_eq!(initial.errors.collect_display_errors().len(), 0);
+
+    i.set("leaf", "value: str = 'changed'");
+    let changed = i.unchecked(&["main"]);
+    let errors = changed
+        .errors
+        .collect_display_errors()
+        .map(|error| error.msg().to_owned());
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected final importer error, got {errors:?}"
+    );
+    assert!(errors[0].contains("not assignable to `int`"), "{errors:?}");
+}
+
 /// Test a more complex non-overlapping case with a chain of re-exports.
 ///
 /// This models a longer dependency chain where multiple intermediate modules
@@ -1320,6 +1388,87 @@ fn test_mixed_import_failed_export_invalidated() {
         errors_after.ordinary.is_empty(),
         "Expected error after foo exports y"
     );
+}
+
+/// Test that disjoint-base changes propagate to downstream inheritance.
+///
+/// When a base class gains or loses disjoint-base status, modules that
+/// inherit through it alongside another disjoint base should gain or clear
+/// an `incompatible disjoint bases` diagnostic.
+#[test]
+fn test_disjoint_base_change_propagates_to_inheritance() {
+    let mut i = Incremental::new();
+
+    // foo.Left is NOT a disjoint base initially - no error for class Combined(Left, Right)
+    i.set("foo", "class Left: pass");
+    i.set(
+        "bar",
+        "from typing_extensions import disjoint_base\n@disjoint_base\nclass Right: pass",
+    );
+    i.set(
+        "main",
+        "from foo import Left\nfrom bar import Right\nclass Combined(Left, Right): pass",
+    );
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Make Left disjoint - main should be recomputed and gain incompatible-disjoint-bases error
+    i.set(
+        "foo",
+        "from typing_extensions import disjoint_base\n@disjoint_base\nclass Left: pass",
+    );
+    i.set(
+        "main",
+        "from foo import Left\nfrom bar import Right\nclass Combined(Left, Right): pass # E: incompatible disjoint bases",
+    );
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test that disjoint-base changes propagate to downstream narrowing.
+///
+/// When a base class gains disjoint-base status, modules narrowing against
+/// it via `isinstance` should be recomputed: an intersection that was
+/// previously inhabited should narrow to `Never`.
+#[test]
+fn test_disjoint_base_change_propagates_to_narrowing() {
+    let mut i = Incremental::new();
+
+    // foo.Base is NOT a disjoint base initially; the intersection with Other can be non-empty,
+    // so `assert_never` should error.
+    i.set("foo", "class Base: pass");
+    i.set(
+        "bar",
+        "from typing_extensions import disjoint_base, assert_never\n@disjoint_base\nclass Other: pass",
+    );
+    i.set(
+        "main",
+        r#"
+from typing_extensions import assert_never
+from foo import Base
+from bar import Other
+def f(x: Base) -> None:
+    if isinstance(x, Other):
+        assert_never(x) # E: not assignable to parameter `arg` with type `Never`
+"#,
+    );
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Make Base a disjoint base - the intersection is now Never, so assert_never should accept.
+    i.set(
+        "foo",
+        "from typing_extensions import disjoint_base\n@disjoint_base\nclass Base: pass",
+    );
+    i.set(
+        "main",
+        r#"
+from typing_extensions import assert_never
+from foo import Base
+from bar import Other
+def f(x: Base) -> None:
+    if isinstance(x, Other):
+        assert_never(x)
+"#,
+    );
+    i.check(&["main"], &["foo", "main"]);
 }
 
 /// Test that abstract class check changes propagate correctly (KeyAbstractClassCheck).
@@ -1974,7 +2123,7 @@ fn test_class_deprecation_metadata_change_invalidates() {
 
 /// Test that when an export changes from direct definition to re-export, dependents are invalidated.
 ///
-/// This tests the `is_reexport` metadata dependency. When an export changes from being
+/// This tests the `reexport_source` metadata dependency. When an export changes from being
 /// defined in this module to being re-exported from another module, dependents should
 /// be recomputed.
 #[test]

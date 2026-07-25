@@ -14,6 +14,7 @@ use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
+use lsp_types::Range;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -22,6 +23,8 @@ use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::module::Module;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
@@ -29,14 +32,17 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
+use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::type_var::Variance;
 use pyrefly_types::types::Type;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::visit::Visit;
 use regex::Regex;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -45,6 +51,7 @@ use ruff_text_size::TextSize;
 use vec1::Vec1;
 
 use crate::alt::answers_solver::AnswersSolver;
+use crate::binding::binding::Key;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::module_helpers::to_real_path;
@@ -57,6 +64,8 @@ use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
+use crate::state::lsp::IdentifierWithContext;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
 
@@ -69,11 +78,27 @@ pub struct HoverValue {
     pub kind: Option<SymbolKind>,
     pub name: Option<String>,
     pub type_: Type,
+    pub range: Option<Range>,
     pub docstring: Option<Docstring>,
     pub parameter_doc: Option<(String, String)>,
     pub type_sources: Vec<String>,
     pub display: Option<String>,
     pub show_go_to_links: bool,
+}
+
+/// Hover contents and whether another verbosity request can reveal more detail.
+///
+/// Hover verbosity currently has two states: named nested unions or fully expanded unions.
+pub struct HoverResult {
+    pub hover: Hover,
+    pub can_increase_verbosity: bool,
+}
+
+/// Display knobs for a hover request. `verbosity_level > 0` expands named nested unions.
+#[derive(Debug, Clone, Copy)]
+pub struct HoverOptions {
+    pub show_go_to_links: bool,
+    pub verbosity_level: usize,
 }
 
 impl HoverValue {
@@ -108,14 +133,7 @@ impl HoverValue {
 
     fn resolve_symbol_kind(&self) -> Option<SymbolKind> {
         match self.kind {
-            Some(SymbolKind::Attribute) if self.type_.is_toplevel_callable() => self
-                .type_
-                .visit_toplevel_func_metadata(&|meta| match &meta.kind {
-                    FunctionKind::Def(func) if func.cls.is_some() => Some(SymbolKind::Method),
-                    _ => Some(SymbolKind::Function),
-                })
-                .unwrap_or(SymbolKind::Method)
-                .into(),
+            Some(SymbolKind::Attribute) => Some(attribute_symbol_kind_from_type(&self.type_)),
             Some(other) => Some(other),
             None => None,
         }
@@ -292,7 +310,7 @@ impl HoverValue {
                     symbol_def_formatted
                 ),
             }),
-            range: None,
+            range: self.range,
         }
     }
 }
@@ -367,12 +385,8 @@ fn format_suppressed_errors_hover(errors: Vec<Error>) -> Hover {
     }
 }
 
-fn position_is_in_docstring(
-    transaction: &Transaction<'_>,
-    handle: &Handle,
-    position: TextSize,
-) -> bool {
-    let Some(ast) = transaction.get_ast(handle) else {
+fn position_is_in_docstring(ast: Option<&ModModule>, position: TextSize) -> bool {
+    let Some(ast) = ast else {
         return false;
     };
     fn body_contains_docstring(body: &[Stmt], position: TextSize) -> bool {
@@ -472,6 +486,108 @@ fn expand_callable_kwargs_for_hover<'a>(
     }
 }
 
+/// Given the position, if it corresponds to a class-scoped PEP695 type var declaration
+/// return the class. This only applies to the declaration of the type var, not to
+/// any usages.
+fn get_owner_class_of_pep695_type_parameter_at(
+    id: &IdentifierWithContext,
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<Class> {
+    if !matches!(id.context, IdentifierContext::TypeParameter) {
+        return None;
+    }
+    let module = transaction.get_ast(handle)?;
+    let owner = Ast::locate_node(&module, position)
+        .into_iter()
+        .rev()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtClassDef(class_def)
+                if class_def
+                    .type_params
+                    .as_ref()
+                    .is_some_and(|type_params| type_params.range().contains(position)) =>
+            {
+                Some(class_def.name.clone())
+            }
+            _ => None,
+        });
+    let key = Key::Definition(ShortIdentifier::new(&owner?));
+    match transaction.get_type_for_display(handle, &key)? {
+        Type::ClassDef(class) => Some(class),
+        _ => None,
+    }
+}
+
+fn display_variance_for_hover(variance: Variance) -> &'static str {
+    match variance {
+        Variance::Covariant => "covariant",
+        Variance::Contravariant => "contravariant",
+        // Bivariant is an internal result, it's treated as invariant.
+        Variance::Invariant | Variance::Bivariant => "invariant",
+    }
+}
+
+fn type_parameter_hover_display(
+    solver: &AnswersSolver<TransactionHandle<'_>>,
+    type_: &Type,
+    owner: &Class,
+) -> Option<String> {
+    let quantified = match type_ {
+        Type::Quantified(q) | Type::QuantifiedValue(q) => q,
+        _ => return None,
+    };
+    let variance = solver.type_order().get_variance_from_class(owner);
+    Some(format!(
+        "{}@{} ({})",
+        quantified.name(),
+        owner.name(),
+        display_variance_for_hover(variance.get(quantified.name()))
+    ))
+}
+
+fn class_display_type(solver: &AnswersSolver<TransactionHandle<'_>>, type_: &Type) -> Option<Type> {
+    let enum_class = match type_ {
+        Type::ClassDef(cls) => Some(cls),
+        Type::ClassType(cls) => Some(cls.class_object()),
+        Type::Type(t) => match &**t {
+            Type::ClassType(cls) => Some(cls.class_object()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(cls) = enum_class
+        && solver.get_metadata_for_class(cls).is_enum()
+    {
+        let members: Vec<Type> = solver
+            .get_enum_members(cls)
+            .into_iter()
+            .map(|lit| lit.to_implicit_type())
+            .collect();
+        return Some(if members.is_empty() {
+            type_.clone()
+        } else {
+            solver.heap.mk_union(members)
+        });
+    }
+
+    let mut constructor = match type_ {
+        Type::ClassDef(cls) if !solver.get_metadata_for_class(cls).is_typed_dict() => Some(
+            solver
+                .type_order()
+                .constructor_to_callable(&solver.promote_nontypeddict_silently_to_classtype(cls)),
+        ),
+        Type::Type(t) => match &**t {
+            Type::ClassType(cls) => Some(solver.type_order().constructor_to_callable(cls)),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    constructor.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(solver, c));
+    Some(solver.for_display(constructor))
+}
+
 fn parameter_documentation_for_callee(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -551,14 +667,10 @@ fn parameter_definition_documentation(
 
 /// Check if the cursor position is on the `in` keyword within a for loop or comprehension.
 /// Returns Some(iterable_range) if found, None otherwise.
-fn in_keyword_in_iteration_at(
-    transaction: &Transaction<'_>,
-    handle: &Handle,
-    position: TextSize,
-) -> Option<TextRange> {
-    let ast = transaction.get_ast(handle)?;
+fn in_keyword_in_iteration_at(ast: Option<&ModModule>, position: TextSize) -> Option<TextRange> {
+    let ast = ast?;
 
-    for node in Ast::locate_node(&ast, position) {
+    for node in Ast::locate_node(ast, position) {
         // Extract target end and iter range from for statements and comprehensions.
         // In valid Python syntax, the region between target and iter contains only
         // whitespace and the `in` keyword, so a position check is sufficient.
@@ -574,88 +686,109 @@ fn in_keyword_in_iteration_at(
     None
 }
 
-pub fn get_hover(
+/// Hover contents when the cursor is on an ignore comment covering suppressed errors.
+fn ignore_comment_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
+    module: Option<&Module>,
     position: TextSize,
-    show_go_to_links: bool,
-) -> Option<Hover> {
-    // Handle hovering over an ignore comment
-    if let Some(module) = transaction.get_module_info(handle) {
-        let display_pos = module.display_pos(position);
-        let line_text = module.lined_buffer().content_in_line_range(
-            display_pos.line_within_file(),
-            display_pos.line_within_file(),
-        );
-        // Find comment start in the current line and check if cursor is at or after the comment
-        if let Some(comment_offset) = find_comment_start_in_line(line_text)
-            && display_pos.column().get() >= comment_offset as u32
-        {
-            // If the comment appears on its own line, check the next line for suppressed errors
-            // Otherwise, check the current line
-            let suppression_line = if line_text.trim().starts_with("#") {
-                display_pos.line_within_file().increment()
-            } else {
-                display_pos.line_within_file()
-            };
-            if module.ignore().get(&suppression_line).is_some() {
-                let suppressed_errors = get_suppressed_errors_for_line(
-                    transaction,
-                    handle,
-                    suppression_line,
-                    module.ignore(),
-                );
-                return Some(format_suppressed_errors_hover(suppressed_errors));
-            }
-        }
-    }
-
-    if position_is_in_docstring(transaction, handle, position) {
+) -> Option<HoverResult> {
+    let module = module?;
+    let display_pos = module.display_pos(position);
+    let line_text = module.lined_buffer().content_in_line_range(
+        display_pos.line_within_file(),
+        display_pos.line_within_file(),
+    );
+    let comment_offset = find_comment_start_in_line(line_text)?;
+    if display_pos.column().get() < comment_offset as u32 {
         return None;
     }
+    // A comment on its own line suppresses errors on the next line; otherwise this line.
+    let suppression_line = if line_text.trim().starts_with("#") {
+        display_pos.line_within_file().increment()
+    } else {
+        display_pos.line_within_file()
+    };
+    module.ignore().get(&suppression_line)?;
+    let suppressed_errors =
+        get_suppressed_errors_for_line(transaction, handle, suppression_line, module.ignore());
+    Some(HoverResult {
+        hover: format_suppressed_errors_hover(suppressed_errors),
+        can_increase_verbosity: false,
+    })
+}
 
-    // Check if hovering over `in` keyword in for loop or comprehension. These `in`s are different
-    // from using `in` as a binary comparison operator and therefore needs some special handling.
-    if let Some(iterable_range) = in_keyword_in_iteration_at(transaction, handle, position)
-        && let Some(iterable_type) =
-            transaction.get_type_at_for_display(handle, iterable_range.start())
-    {
-        return Some(Hover {
+/// Hover contents for the `in` keyword of a for-loop or comprehension, which is distinct
+/// from `in` used as a binary comparison operator and needs special handling.
+fn in_keyword_hover(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    ast: Option<&ModModule>,
+    position: TextSize,
+) -> Option<HoverResult> {
+    let iterable_range = in_keyword_in_iteration_at(ast, position)?;
+    let iterable_type = transaction.get_type_at_for_display(handle, iterable_range.start())?;
+    Some(HoverResult {
+        hover: Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
-                    "```python\n(keyword) in\n```\n---\nIteration over `{}`",
-                    iterable_type
+                    "```python\n(keyword) in\n```\n---\nIteration over `{iterable_type}`"
                 ),
             }),
             range: None,
-        });
-    }
+        },
+        can_increase_verbosity: false,
+    })
+}
 
-    // Otherwise, fall through to the existing type hover logic
-    let mut type_ = transaction.get_type_at_for_display(handle, position)?;
+/// Resolve the type under the cursor, coercing it to a callable when hovering over a
+/// call's callee (or to the constructor's return type for a constructor call).
+fn resolve_hovered_type(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    ast: Option<&ModModule>,
+    position: TextSize,
+) -> Option<Type> {
+    let mut type_ = transaction
+        .subscript_operator_type_at(handle, position)
+        .or_else(|| transaction.get_type_at_for_display(handle, position))
+        .or_else(|| transaction.operator_type_at(handle, position))?;
 
-    // Helper function to check if we're hovering over a callee and get its range
-    let find_callee_range_at_position = || -> Option<TextRange> {
+    // Find the innermost call whose callee (func) encloses the cursor, returning the
+    // callee's range and whether the cursor is on the callee's own name — the attribute
+    // in `a.b()`, or the whole callee otherwise. A receiver like `a` in `a.b()` is inside
+    // the callee range but not on the name, so hovering it must not coerce its type.
+    let callee_at_position = || -> Option<(TextRange, bool)> {
         use ruff_python_ast::Expr;
-        let mod_module = transaction.get_ast(handle)?;
+        let ast = ast?;
         let mut result = None;
-        mod_module.visit(&mut |expr: &Expr| {
-            if let Expr::Call(call) = expr {
-                // Check if position is within the callee (func) range
-                if call.func.range().contains(position) {
-                    result = Some(call.func.range());
+        ast.visit(&mut |expr: &Expr| {
+            if let Expr::Call(call) = expr
+                && call.func.range().contains(position)
+            {
+                let on_callee_name = match &*call.func {
+                    Expr::Attribute(attr) => attr.attr.range(),
+                    _ => call.func.range(),
                 }
+                .contains(position);
+                result = Some((call.func.range(), on_callee_name));
             }
         });
         result
     };
 
-    // Check both: hovering in arguments area OR hovering over the callee itself
-    let callee_range_opt = transaction
-        .get_callables_from_call(handle, position)
-        .map(|info| info.callee_range)
-        .or_else(find_callee_range_at_position);
+    // Prefer the enclosing call found from the argument list; only walk the AST for a
+    // callee hover when the cursor is not inside an argument. Hovering inside arguments
+    // is never "on the callee", so coercion stays disabled there.
+    let (callee_range_opt, hovering_over_callee) =
+        match transaction.get_callables_from_call(handle, position) {
+            Some(info) => (Some(info.callee_range), false),
+            None => match callee_at_position() {
+                Some((range, on_name)) => (Some(range), on_name),
+                None => (None, false),
+            },
+        };
 
     if let Some(callee_range) = callee_range_opt {
         let is_constructor = transaction
@@ -664,8 +797,105 @@ pub fn get_hover(
             .is_some_and(is_constructor_call);
         if is_constructor && let Some(new_type) = override_constructor_return_type(type_.clone()) {
             type_ = new_type;
+        } else if hovering_over_callee {
+            type_ = transaction.coerce_type_to_callable(handle, type_);
         }
     }
+    Some(type_)
+}
+
+/// Resolve parameter documentation for the symbol under the cursor: keyword-argument docs
+/// at a call site, otherwise the docstring-derived docs for a parameter definition.
+fn resolve_hover_parameter_doc(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<(String, String)> {
+    if let Some(doc) = keyword_argument_documentation(transaction, handle, position)
+        .and_then(|(name, doc)| (!doc.trim().is_empty()).then_some((name, doc)))
+    {
+        return Some(doc);
+    }
+
+    if let Some(FindDefinitionItemWithDocstring {
+        metadata: DefinitionMetadata::Variable(Some(SymbolKind::Parameter)),
+        definition_range,
+        module,
+        ..
+    }) = transaction
+        .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+    {
+        let name = Name::new(module.code_at(definition_range));
+        return parameter_definition_documentation(transaction, handle, definition_range, &name);
+    }
+
+    None
+}
+
+pub fn get_hover(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+    show_go_to_links: bool,
+) -> Option<Hover> {
+    get_hover_with_verbosity(
+        transaction,
+        handle,
+        position,
+        HoverOptions {
+            show_go_to_links,
+            verbosity_level: 0,
+        },
+    )
+    .map(|result| result.hover)
+}
+
+/// Build hover contents and report whether the compact type display can be expanded.
+pub fn get_hover_with_verbosity(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+    options: HoverOptions,
+) -> Option<HoverResult> {
+    let module_info = transaction.get_module_info(handle);
+
+    if let Some(result) = ignore_comment_hover(transaction, handle, module_info.as_ref(), position)
+    {
+        return Some(result);
+    }
+
+    let ast = transaction.get_ast(handle);
+
+    if position_is_in_docstring(ast.as_deref(), position) {
+        return None;
+    }
+
+    if let Some(result) = in_keyword_hover(transaction, handle, ast.as_deref(), position) {
+        return Some(result);
+    }
+
+    let type_ = resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
+
+    // `a and b and c` is a single flat BoolOp, so hovering any operator in the
+    // chain highlights the whole expression.
+    let range = ast
+        .as_deref()
+        .zip(module_info.as_ref())
+        .and_then(|(ast, module_info)| {
+            Ast::locate_node(ast, position)
+                .into_iter()
+                .find(|node| node.as_expr_ref().is_some())
+                .and_then(|node| match node {
+                    AnyNodeRef::ExprBoolOp(bool_op) => {
+                        Some(module_info.to_lsp_range(bool_op.range()))
+                    }
+                    _ => None,
+                })
+        });
 
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
@@ -708,44 +938,55 @@ pub fn get_hover(
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let name_for_display = name.clone();
+    let hover_identifier = transaction.identifier_at(handle, position);
+    let type_parameter_owner_class = hover_identifier.as_ref().and_then(|id| {
+        get_owner_class_of_pep695_type_parameter_at(id, transaction, handle, position)
+    });
     let show_constructor = kind == Some(SymbolKind::Class)
-        && !transaction
-            .identifier_at(handle, position)
-            .is_some_and(|id| matches!(id.context, IdentifierContext::ClassDef { .. }));
-    let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
-        let mut cloned = type_.clone();
-        move |solver| {
-            if show_constructor {
-                let constructor = match cloned {
-                    Type::ClassDef(ref cls)
-                        if !solver.get_metadata_for_class(cls).is_typed_dict() =>
-                    {
-                        Some(solver.type_order().constructor_to_callable(
-                            &solver.promote_nontypeddict_silently_to_classtype(cls),
-                        ))
-                    }
-                    Type::Type(ref t) if let Type::ClassType(cls) = &**t => {
-                        Some(solver.type_order().constructor_to_callable(cls))
-                    }
-                    _ => None,
-                };
-                if let Some(mut constructor) = constructor {
-                    constructor.transform_toplevel_callable(|c| {
+        && hover_identifier
+            .as_ref()
+            .is_some_and(|id| !matches!(id.context, IdentifierContext::ClassDef { .. }));
+    let (type_display, can_increase_verbosity) =
+        match transaction.ad_hoc_solve(handle, "hover_display", {
+            let mut cloned = type_.clone();
+            move |solver| {
+                let unions_expanded = options.verbosity_level > 0;
+                if let Some(owner) = &type_parameter_owner_class
+                    && let Some(display) = type_parameter_hover_display(&solver, &cloned, owner)
+                {
+                    // Type parameter displays (e.g. `T@Foo (covariant)`) never contain unions.
+                    return (display, false);
+                }
+                // Named unions can be surfaced by the class/kwargs transforms, so pick the
+                // type we're about to render first.
+                let display_type = if show_constructor
+                    && let Some(class_type) = class_display_type(&solver, &cloned)
+                {
+                    class_type
+                } else {
+                    cloned.transform_toplevel_callable(|c| {
                         expand_callable_kwargs_for_hover(&solver, c)
                     });
-                    return constructor.as_lsp_string_with_fallback_name(
+                    cloned
+                };
+                let render = |expand| {
+                    display_type.as_lsp_string_with_fallback_name_and_expanded_unions(
                         name_for_display.as_deref(),
                         LspDisplayMode::Hover,
-                    );
-                }
+                        expand,
+                    )
+                };
+                let rendered = render(unions_expanded);
+                // Offer "+" only when expanding actually changes the rendered type. Deriving
+                // this from the renderer itself (rather than a structural type walk) means the
+                // affordance can never advertise an expansion that produces identical output.
+                let can_increase_verbosity = !unions_expanded && rendered != render(true);
+                (rendered, can_increase_verbosity)
             }
-            cloned.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
-            cloned.as_lsp_string_with_fallback_name(
-                name_for_display.as_deref(),
-                LspDisplayMode::Hover,
-            )
-        }
-    });
+        }) {
+            Some((display, can_increase)) => (Some(display), can_increase),
+            None => (None, false),
+        };
 
     let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
         Some(Docstring(docstring, module))
@@ -753,44 +994,23 @@ pub fn get_hover(
         None
     };
 
-    let mut parameter_doc = keyword_argument_documentation(transaction, handle, position)
-        .and_then(|(name, doc)| (!doc.trim().is_empty()).then_some((name, doc)));
+    let parameter_doc = resolve_hover_parameter_doc(transaction, handle, position);
 
-    if parameter_doc.is_none()
-        && let Some(FindDefinitionItemWithDocstring {
-            metadata: DefinitionMetadata::Variable(Some(SymbolKind::Parameter)),
-            definition_range,
-            module,
-            ..
-        }) = transaction
-            .find_definition(handle, position, FindPreference::default())
-            .map(Vec1::into_vec)
-            .unwrap_or_default()
-            .into_iter()
-            .next()
-    {
-        let name_str = module.code_at(definition_range);
-        let name = Name::new(name_str);
-        if let Some(doc) =
-            parameter_definition_documentation(transaction, handle, definition_range, &name)
-        {
-            parameter_doc = Some(doc);
-        }
-    }
-
-    Some(
-        HoverValue {
+    Some(HoverResult {
+        hover: HoverValue {
             kind,
             name,
             type_,
+            range,
             docstring,
             parameter_doc,
             type_sources: type_sources_for_hover(transaction, handle, position),
             display: type_display,
-            show_go_to_links,
+            show_go_to_links: options.show_go_to_links,
         }
         .format(transaction, handle),
-    )
+        can_increase_verbosity,
+    })
 }
 
 #[cfg(test)]

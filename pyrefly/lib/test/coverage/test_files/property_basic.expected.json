@@ -8,13 +8,15 @@
     "test.GetterSetterDeleter.x",
     "test.MultipleProperties.a",
     "test.MultipleProperties.b",
+    "test.GetterSetterUntyped.x",
     "test.Getter",
     "test.GetterSetter",
     "test.GetterSetterDeleter",
+    "test.GetterSetterUntyped",
     "test.GetterUntyped",
     "test.MultipleProperties"
   ],
-  "line_count": 54,
+  "line_count": 64,
   "symbol_reports": [
     {
       "kind": "property",
@@ -89,6 +91,18 @@
       }
     },
     {
+      "kind": "property",
+      "name": "test.GetterSetterUntyped.x",
+      "n_typable": 2,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 2,
+      "location": {
+        "line": 57,
+        "column": 5
+      }
+    },
+    {
       "kind": "class",
       "name": "test.Getter",
       "n_typable": 0,
@@ -126,6 +140,18 @@
     },
     {
       "kind": "class",
+      "name": "test.GetterSetterUntyped",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 56,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
       "name": "test.GetterUntyped",
       "n_typable": 0,
       "n_typed": 0,
@@ -150,18 +176,18 @@
     }
   ],
   "type_ignores": [],
-  "n_typable": 8,
+  "n_typable": 10,
   "n_typed": 7,
   "n_any": 0,
-  "n_untyped": 1,
-  "coverage": 87.5,
-  "strict_coverage": 87.5,
+  "n_untyped": 3,
+  "coverage": 70.0,
+  "strict_coverage": 70.0,
   "n_functions": 0,
   "n_methods": 0,
   "n_function_params": 0,
   "n_method_params": 0,
-  "n_classes": 5,
+  "n_classes": 6,
   "n_attrs": 0,
-  "n_properties": 6,
+  "n_properties": 7,
   "n_type_ignores": 0
 }

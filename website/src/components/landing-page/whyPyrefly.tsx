@@ -60,6 +60,10 @@ export default function WhyPyrefly(): React.ReactElement {
                                 log(LoggingEvent.CLICK, {
                                     button_id:
                                         'why_pyrefly_verify_ai_written_python',
+                                    // Use the beacon transport so the event
+                                    // survives the synchronous navigation this
+                                    // card triggers.
+                                    transport_type: 'beacon',
                                 })
                             }
                         />

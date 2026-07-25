@@ -187,9 +187,9 @@ testcase!(
     r#"
 class C[T]: pass
 
-x: C        # E: Cannot determine the type parameter `T` for generic class `C`
-y: C | int  # E: Cannot determine the type parameter `T` for generic class `C`
-z: list[C]  # E: Cannot determine the type parameter `T` for generic class `C`
+x: C        # E: Cannot determine the type parameter `T` for generic class `C[T]`
+y: C | int  # E: Cannot determine the type parameter `T` for generic class `C[T]`
+z: list[C]  # E: Cannot determine the type parameter `T` for generic class `C[T]`
     "#,
 );
 
@@ -198,7 +198,7 @@ testcase!(
     TestEnv::new().enable_implicit_any_error(),
     r#"
 class C[T]: pass
-class D(C): pass  # E: Cannot determine the type parameter `T` for generic class `C`
+class D(C): pass  # E: Cannot determine the type parameter `T` for generic class `C[T]`
 x: D
     "#,
 );
@@ -635,7 +635,7 @@ testcase!(
 from typing import Callable, Type
 
 def f(
-    x: list,      # E: Cannot determine the type parameter `_T` for generic class `list`
+    x: list,      # E: Cannot determine the type parameter `_T` for generic class `list[_T]`
     y: tuple,     # E: Cannot determine the type parameter for generic class `tuple`
     z: Callable,  # E: Cannot determine the type parameter for generic class `Callable`
     w: Type,      # E: Cannot determine the type parameter for generic class `type`
@@ -758,6 +758,22 @@ assert_type(b, A[int])
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3387
+testcase!(
+    test_future_annotations_forward_ref_in_generic_constructor,
+    r#"
+from __future__ import annotations
+
+class Foo[T]: ...
+
+class Bar:
+    foo = Foo[Bar]()
+    foo2 = Foo[UnknownClass]()  # E:
+    foo3 = Foo["UnknownClass"]()  # E:
+    foo4 = Foo[]()  # E:
+"#,
+);
+
 testcase!(
     test_typevar_type,
     r#"
@@ -795,6 +811,15 @@ class A[T]:
 
 assert_type(A(0).f(""), A[int | str])
 "#,
+);
+
+testcase!(
+    test_mapping_of_typevar,
+    r#"
+from typing import assert_type, Mapping
+def f[T](x: T, y: Mapping[str, T]) -> T: ...
+assert_type(f(0, {"x": "y"}), int | str)
+    "#,
 );
 
 testcase!(

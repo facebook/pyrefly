@@ -51,3 +51,13 @@ class MultipleProperties:
     @property
     def b(self) -> str:
         return ""
+
+
+class GetterSetterUntyped:
+    @property
+    def x(self):
+        return 0
+
+    @x.setter
+    def x(self, value):
+        pass

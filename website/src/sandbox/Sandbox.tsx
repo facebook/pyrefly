@@ -39,6 +39,10 @@ import { editor } from 'monaco-editor';
 import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
 import { usePythonWorker } from './usePythonWorker';
+import {
+    resetPersistedSandboxState,
+    SANDBOX_LOCAL_STORAGE_KEY,
+} from './persistedSandboxState';
 
 // Import type for Pyrefly State
 export interface PyreflyState {
@@ -893,7 +897,7 @@ export default function Sandbox({
         pythonVersion,
         models,
         activeFileName,
-        createNewFile,
+        setModels,
         setActiveFileName
     );
 
@@ -1054,15 +1058,16 @@ function getProjectFromURL(): ProjectState | null {
     return null;
 }
 
-const LOCAL_STORAGE_KEY = 'pyrefly-sandbox';
-
 function saveToLocalStorage(
     allFiles: Record<string, string>,
     activeFile: string
 ): void {
     try {
         const projectState: ProjectState = { files: allFiles, activeFile };
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(projectState));
+        localStorage.setItem(
+            SANDBOX_LOCAL_STORAGE_KEY,
+            JSON.stringify(projectState)
+        );
     } catch {
         // localStorage may be full or unavailable; silently ignore.
     }
@@ -1071,7 +1076,7 @@ function saveToLocalStorage(
 function getProjectFromLocalStorage(): ProjectState | null {
     if (typeof window === 'undefined') return null;
     try {
-        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+        const saved = localStorage.getItem(SANDBOX_LOCAL_STORAGE_KEY);
         return saved ? JSON.parse(saved) : null;
     } catch {
         return null;
@@ -1226,7 +1231,9 @@ function getMonacoButtons(
     pythonVersion: string,
     models: Map<string, editor.ITextModel>,
     activeFileName: string,
-    createNewFile: (fileName: string, content: string) => void,
+    setModels: React.Dispatch<
+        React.SetStateAction<Map<string, editor.ITextModel>>
+    >,
     setActiveFileName: (fileName: string) => void
 ): ReadonlyArray<React.ReactElement> {
     let buttons: ReadonlyArray<React.ReactElement> = [];
@@ -1241,9 +1248,9 @@ function getMonacoButtons(
                       forceRecheck,
                       codeSample,
                       isCodeSnippet,
+                      pythonVersion,
                       models,
-                      activeFileName,
-                      createNewFile,
+                      setModels,
                       setActiveFileName
                   )
                 : null,
@@ -1261,9 +1268,9 @@ function getMonacoButtons(
                 forceRecheck,
                 codeSample,
                 isCodeSnippet,
+                pythonVersion,
                 models,
-                activeFileName,
-                createNewFile,
+                setModels,
                 setActiveFileName
             ),
             getGitHubIssuesButton(models, activeFileName, pythonVersion),
@@ -1445,9 +1452,11 @@ function getResetButton(
     forceRecheck: () => void,
     codeSample: string,
     isCodeSnippet: boolean,
+    pythonVersion: string,
     models: Map<string, editor.ITextModel>,
-    activeFileName: string,
-    createNewFile: (fileName: string, content: string) => void,
+    setModels: React.Dispatch<
+        React.SetStateAction<Map<string, editor.ITextModel>>
+    >,
     setActiveFileName: (fileName: string) => void
 ): React.ReactElement {
     return (
@@ -1455,8 +1464,43 @@ function getResetButton(
             id="reset-button"
             onClick={async () => {
                 if (!isCodeSnippet) {
+                    resetPersistedSandboxState();
+                    const sandboxModel =
+                        models.get('sandbox.py') ??
+                        monaco.editor.createModel(
+                            codeSample,
+                            'python',
+                            monaco.Uri.file('/sandbox.py')
+                        );
+                    sandboxModel.setValue(codeSample);
+
+                    const defaultConfig = defaultPyreflyToml(pythonVersion);
+                    const pyreflyTomlModel =
+                        models.get('pyrefly.toml') ??
+                        monaco.editor.createModel(
+                            defaultConfig,
+                            'toml',
+                            monaco.Uri.file('/pyrefly.toml')
+                        );
+                    pyreflyTomlModel.setValue(defaultConfig);
+
+                    models.forEach((existingModel, fileName) => {
+                        if (
+                            fileName !== 'sandbox.py' &&
+                            fileName !== 'pyrefly.toml'
+                        ) {
+                            setTimeout(() => existingModel.dispose(), 100);
+                        }
+                    });
+                    setModels(
+                        new Map([
+                            ['sandbox.py', sandboxModel],
+                            ['pyrefly.toml', pyreflyTomlModel],
+                        ])
+                    );
                     setActiveFileName('sandbox.py');
                     forceRecheck();
+                    return;
                 }
                 if (model) {
                     model.setValue(codeSample);

@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cell::UnsafeCell;
+use std::fmt;
+use std::mem::MaybeUninit;
 use std::thread;
 use std::thread::ThreadId;
 
@@ -26,21 +29,23 @@ use starlark_map::smallset;
 /// which thread is being used).
 ///
 /// The type `T` is the final result.
-#[derive(Clone, Debug)]
-enum Status<T> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Status {
     /// This value has not yet been calculated.
     NotCalculated,
-    /// This value is currently being calculated by the following threads.
-    // Use a Box so the size of the struct stays small
-    Calculating(Box<SmallSet<ThreadId>>),
+    /// This value is currently being calculated by `CalcInner::calculating_threads`.
+    Calculating,
     /// This value has been calculated.
-    Calculated(T),
+    Calculated,
 }
 
 /// Interior state protected by the mutex.
 #[derive(Clone, Debug)]
-struct CalcInner<T> {
-    status: Status<T>,
+struct CalcInner {
+    // Use a Box so the mutex state stays small. The option is present iff
+    // `status` is `Calculating`.
+    calculating_threads: Option<Box<SmallSet<ThreadId>>>,
+    status: Status,
     /// True when an SCC batch commit has locked this cell for writing.
     /// `record_value` blocks while this is set; reads are unaffected.
     write_locked: bool,
@@ -59,10 +64,36 @@ pub enum ProposalResult<T> {
 }
 
 /// A cached calculation where recursive calculation returns None.
-#[derive(Debug)]
 pub struct Calculation<T> {
-    inner: Mutex<CalcInner<T>>,
+    inner: Mutex<CalcInner>,
+    /// The final result is written once before the state becomes `Calculated`;
+    /// the status inside `inner` is the initialization marker for this cell.
+    result: UnsafeCell<MaybeUninit<T>>,
     condvar: Condvar,
+}
+
+// SAFETY: `Calculation` writes `result` exactly once while holding `inner`, then
+// publishes terminal `Status::Calculated`. After that status is visible, the
+// result is never mutated again, so concurrent readers only take shared
+// references to initialized data.
+unsafe impl<T: Send + Sync> Sync for Calculation<T> {}
+
+impl<T: fmt::Debug> fmt::Debug for Calculation<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let lock = self.inner.lock();
+        // SAFETY: `result` is initialized iff `Status::Calculated` is published,
+        // which we observe here under `inner`; it is never mutated afterward.
+        let result: &dyn fmt::Debug = if lock.status == Status::Calculated {
+            unsafe { (*self.result.get()).assume_init_ref() }
+        } else {
+            &"<uninitialized>"
+        };
+        f.debug_struct("Calculation")
+            .field("inner", &*lock)
+            .field("result", result)
+            .field("condvar", &self.condvar)
+            .finish()
+    }
 }
 
 impl<T> Default for Calculation<T> {
@@ -75,10 +106,25 @@ impl<T> Calculation<T> {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(CalcInner {
+                calculating_threads: None,
                 status: Status::NotCalculated,
                 write_locked: false,
             }),
+            result: UnsafeCell::new(MaybeUninit::uninit()),
             condvar: Condvar::new(),
+        }
+    }
+}
+
+impl<T> Drop for Calculation<T> {
+    fn drop(&mut self) {
+        let initialized = self.inner.get_mut().status == Status::Calculated;
+        if initialized {
+            // SAFETY: `Status::Calculated` is published only after `result` is
+            // initialized, and `drop` has exclusive access to the calculation.
+            unsafe {
+                self.result.get_mut().assume_init_drop();
+            }
         }
     }
 }
@@ -89,7 +135,13 @@ impl<T: Dupe> Calculation<T> {
     pub fn get(&self) -> Option<T> {
         let lock = self.inner.lock();
         match &lock.status {
-            Status::Calculated(v) => Some(v.dupe()),
+            Status::Calculated => {
+                drop(lock);
+                // SAFETY: We observed terminal `Status::Calculated` under
+                // `inner`. The result was written before that status was
+                // published and is never mutated afterward.
+                Some(unsafe { (*self.result.get()).assume_init_ref() }.dupe())
+            }
             _ => None,
         }
     }
@@ -108,17 +160,28 @@ impl<T: Dupe> Calculation<T> {
         let mut lock = self.inner.lock();
         match &mut lock.status {
             Status::NotCalculated => {
-                lock.status = Status::Calculating(Box::new(smallset! {thread::current().id()}));
+                lock.calculating_threads = Some(Box::new(smallset! {thread::current().id()}));
+                lock.status = Status::Calculating;
                 ProposalResult::Calculatable
             }
-            Status::Calculating(threads) => {
+            Status::Calculating => {
+                let threads = lock
+                    .calculating_threads
+                    .as_mut()
+                    .expect("calculating status without calculating threads");
                 if threads.insert(thread::current().id()) {
                     ProposalResult::Calculatable
                 } else {
                     ProposalResult::CycleDetected
                 }
             }
-            Status::Calculated(v) => ProposalResult::Calculated(v.dupe()),
+            Status::Calculated => {
+                drop(lock);
+                // SAFETY: We observed terminal `Status::Calculated` under
+                // `inner`. The result was written before that status was
+                // published and is never mutated afterward.
+                ProposalResult::Calculated(unsafe { (*self.result.get()).assume_init_ref() }.dupe())
+            }
         }
     }
 
@@ -138,13 +201,33 @@ impl<T: Dupe> Calculation<T> {
             Status::NotCalculated => {
                 unreachable!("Should not record a result before calculating")
             }
-            Status::Calculating(_) => {
-                lock.status = Status::Calculated(value.dupe());
-                (value, true)
+            Status::Calculating => {
+                // SAFETY: We hold `inner`, and `Status::Calculating` means no
+                // final result has been written yet. This write happens before
+                // publishing terminal `Status::Calculated`.
+                unsafe {
+                    (*self.result.get()).write(value);
+                }
+                lock.calculating_threads = None;
+                lock.status = Status::Calculated;
+                drop(lock);
+                // SAFETY: This call just initialized `result` and published
+                // terminal `Status::Calculated`; the value will not be mutated.
+                (
+                    unsafe { (*self.result.get()).assume_init_ref() }.dupe(),
+                    true,
+                )
             }
-            Status::Calculated(v) => {
+            Status::Calculated => {
                 // The first thread to write a value wins
-                (v.dupe(), false)
+                drop(lock);
+                // SAFETY: We observed terminal `Status::Calculated` under
+                // `inner`. The result was written before that status was
+                // published and is never mutated afterward.
+                (
+                    unsafe { (*self.result.get()).assume_init_ref() }.dupe(),
+                    false,
+                )
             }
         }
     }
@@ -155,12 +238,11 @@ impl<T: Dupe> Calculation<T> {
     pub fn write_lock(&self) -> bool {
         let mut lock = self.inner.lock();
         lock = self.condvar.wait_while(lock, |inner| inner.write_locked);
-        match lock.status {
-            Status::Calculated(_) => false,
-            _ => {
-                lock.write_locked = true;
-                true
-            }
+        if matches!(&lock.status, Status::Calculated) {
+            false
+        } else {
+            lock.write_locked = true;
+            true
         }
     }
 
@@ -174,14 +256,29 @@ impl<T: Dupe> Calculation<T> {
             Status::NotCalculated => {
                 unreachable!("write_unlock called before calculating")
             }
-            Status::Calculating(_) => {
-                lock.status = Status::Calculated(value.dupe());
-                (value, true)
+            Status::Calculating => {
+                // SAFETY: We hold `inner` and the SCC write lock, and
+                // `Status::Calculating` means no final result has been written
+                // yet. This write happens before publishing terminal
+                // `Status::Calculated`.
+                unsafe {
+                    (*self.result.get()).write(value);
+                }
+                lock.calculating_threads = None;
+                lock.status = Status::Calculated;
+                true
             }
-            Status::Calculated(v) => (v.dupe(), false),
+            Status::Calculated => false,
         };
         self.condvar.notify_all();
-        result
+        drop(lock);
+        // SAFETY: Either this call wrote `result` and published terminal
+        // `Status::Calculated`, or it observed that another writer had already
+        // done so while holding `inner`.
+        (
+            unsafe { (*self.result.get()).assume_init_ref() }.dupe(),
+            result,
+        )
     }
 
     /// Release the write lock without writing a value.
@@ -208,5 +305,54 @@ impl<T: Dupe> Calculation<T> {
             ProposalResult::Calculated(v) => Some(v.dupe()),
             ProposalResult::CycleDetected => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn record_value_publishes_one_final_result() {
+        let calculation = Calculation::new();
+
+        assert!(matches!(
+            calculation.propose_calculation(),
+            ProposalResult::Calculatable
+        ));
+        assert!(calculation.get().is_none());
+
+        let (value, did_write) = calculation.record_value(Arc::new(1));
+        assert!(did_write);
+        assert_eq!(*value, 1);
+        assert_eq!(*calculation.get().unwrap(), 1);
+
+        let (value, did_write) = calculation.record_value(Arc::new(2));
+        assert!(!did_write);
+        assert_eq!(*value, 1);
+
+        match calculation.propose_calculation() {
+            ProposalResult::Calculated(value) => assert_eq!(*value, 1),
+            result => panic!("expected calculated result, got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn write_unlock_publishes_one_final_result() {
+        let calculation = Calculation::new();
+
+        assert!(matches!(
+            calculation.propose_calculation(),
+            ProposalResult::Calculatable
+        ));
+        assert!(calculation.write_lock());
+
+        let (value, did_write) = calculation.write_unlock(Arc::new(1));
+        assert!(did_write);
+        assert_eq!(*value, 1);
+        assert_eq!(*calculation.get().unwrap(), 1);
+        assert!(!calculation.write_lock());
     }
 }

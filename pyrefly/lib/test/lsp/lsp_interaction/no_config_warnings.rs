@@ -7,10 +7,10 @@
 
 use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentDiagnosticReportResult;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 /// With no config file, the resolver synthesizes a `Basic` preset which
 /// includes `missing-import` and `unknown-name` in its explicit

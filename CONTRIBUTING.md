@@ -20,7 +20,20 @@ When looking for an issue to pick up, consider the following things:
 4. the issue still reproduces in the sandbox, or locally on a build from the main branch
 5. the issue is part of an upcoming milestone - these are the highest priority issues to focus on
 6. the issue does not have the "needs discussion" tag - typically issues with that tag don't have a clear solution that everyone agrees on yet so they are not "shovel ready", but feel free to participate in the discussion!
-7. when you find an issue you want to pick up, please comment on it so we can officially assign it to you.
+7. when you find an issue you want to pick up, comment `#claim` on it to self-assign (see [Repository automation](#repository-automation) below).
+
+## Repository automation
+
+GitHub bots help manage issues and pull requests.
+
+### Claiming issues: `#claim` / `#unclaim`
+
+To pick up an issue, comment `#claim` on it and the bot will assign it to you. When you're done — or if you decide not to work on it after all — comment `#unclaim` to release it so someone else can take over.
+
+- `#claim` only works on **unassigned** issues. If the issue is already claimed by someone else, the bot leaves the existing assignee in place and tells you to coordinate with them — it won't reassign the issue to you. If it's already assigned to you, it just confirms that.
+- `#unclaim` only removes *your own* assignment, and only if you're currently assigned.
+- Both commands are case-insensitive and can appear anywhere in a comment (e.g. "I'd like to work on this, #claim").
+- If the bot can't assign you automatically (GitHub only allows assigning users with repository access), it leaves a comment so a maintainer can assign you manually.
 
 ## Developing Pyrefly
 
