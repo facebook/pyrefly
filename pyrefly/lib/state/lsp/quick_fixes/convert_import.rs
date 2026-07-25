@@ -21,6 +21,7 @@ use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::selection_anchor;
@@ -40,11 +41,13 @@ enum ImportStmtRef<'a> {
     ImportFrom(&'a StmtImportFrom),
 }
 
+/// Returns actions only when the selection identifies an import and at least one
+/// selected or file-wide conversion is applicable.
 pub(crate) fn convert_import_code_actions(
     transaction: &Transaction<'_>,
     handle: &Handle,
     selection: TextRange,
-) -> Option<Vec<LocalRefactorCodeAction>> {
+) -> Option<Vec1<LocalRefactorCodeAction>> {
     let module_info = transaction.get_module_info(handle)?;
     let ast = transaction.get_ast(handle)?;
     let source = module_info.contents();
@@ -52,64 +55,36 @@ pub(crate) fn convert_import_code_actions(
     let import_stmt = find_import_stmt(ast.as_ref(), selection_point)?;
 
     let mut actions = Vec::new();
-    if let Some(action) = convert_single_import_action(
-        transaction,
-        handle,
-        &module_info,
-        source,
-        import_stmt,
-        ConvertTarget::Relative,
-    ) {
-        actions.push(action);
-    }
-    if let Some(action) = convert_single_import_action(
-        transaction,
-        handle,
-        &module_info,
-        source,
-        import_stmt,
-        ConvertTarget::Absolute,
-    ) {
-        actions.push(action);
-    }
-    if let Some(action) = convert_all_imports_action(
-        transaction,
-        handle,
-        &module_info,
-        source,
-        ast.as_ref(),
-        ConvertTarget::Relative,
-    ) {
-        actions.push(action);
-    }
-    if let Some(action) = convert_all_imports_action(
-        transaction,
-        handle,
-        &module_info,
-        source,
-        ast.as_ref(),
-        ConvertTarget::Absolute,
-    ) {
-        actions.push(action);
+    for target in [ConvertTarget::Relative, ConvertTarget::Absolute] {
+        actions.extend(build_selected_import_action(
+            transaction,
+            handle,
+            &module_info,
+            import_stmt,
+            target,
+        ));
+        actions.extend(build_all_imports_action(
+            transaction,
+            handle,
+            &module_info,
+            ast.as_ref(),
+            target,
+        ));
     }
 
-    if actions.is_empty() {
-        None
-    } else {
-        actions.sort_by(|a, b| a.title.cmp(&b.title));
-        Some(actions)
-    }
+    actions.sort_by(|a, b| a.title.cmp(&b.title));
+    Vec1::try_from_vec(actions).ok()
 }
 
-fn convert_single_import_action(
+/// Builds an action when the selected statement can be converted to `target`.
+fn build_selected_import_action(
     transaction: &Transaction<'_>,
     handle: &Handle,
     module_info: &Module,
-    source: &str,
     stmt: ImportStmtRef<'_>,
     target: ConvertTarget,
 ) -> Option<LocalRefactorCodeAction> {
-    let edit = convert_import_stmt(transaction, handle, source, stmt, target)?;
+    let edit = rewrite_import(transaction, handle, module_info, stmt, target)?;
     let title = match target {
         ConvertTarget::Relative => "Convert import to relative path",
         ConvertTarget::Absolute => "Convert import to absolute path",
@@ -121,17 +96,17 @@ fn convert_single_import_action(
     })
 }
 
-fn convert_all_imports_action(
+/// Builds an action when at least one import in the file can be converted to `target`.
+fn build_all_imports_action(
     transaction: &Transaction<'_>,
     handle: &Handle,
     module_info: &Module,
-    source: &str,
     ast: &ModModule,
     target: ConvertTarget,
 ) -> Option<LocalRefactorCodeAction> {
     let mut edits = Vec::new();
     for stmt in collect_import_stmts(ast) {
-        if let Some(edit) = convert_import_stmt(transaction, handle, source, stmt, target) {
+        if let Some(edit) = rewrite_import(transaction, handle, module_info, stmt, target) {
             edits.push((module_info.dupe(), edit.0, edit.1));
         }
     }
@@ -149,49 +124,56 @@ fn convert_all_imports_action(
     })
 }
 
-fn convert_import_stmt(
+/// Returns a replacement when the statement has a semantics-preserving conversion to `target`.
+fn rewrite_import(
     transaction: &Transaction<'_>,
     handle: &Handle,
-    source: &str,
+    module_info: &Module,
     stmt: ImportStmtRef<'_>,
     target: ConvertTarget,
 ) -> Option<(TextRange, String)> {
-    let (stmt_range, new_text) = match (stmt, target) {
+    let source = module_info.contents();
+    let stmt_range = match stmt {
+        ImportStmtRef::Import(import) => import.range(),
+        ImportStmtRef::ImportFrom(import_from) => import_from.range(),
+    };
+    // Import statements cannot contain string literals, so any `#` inside the AST range starts a
+    // comment that re-rendering would discard.
+    if module_info.code_at(stmt_range).contains('#') {
+        return None;
+    }
+    let new_text = match (stmt, target) {
         (ImportStmtRef::Import(import), ConvertTarget::Relative) => {
-            let stmt_range = import.range();
             let indent = line_indent_and_start(source, import.range().start())?.0;
-            let lines = convert_import_to_relative(transaction, handle, import)?;
-            let new_text = join_import_lines(&indent, lines);
-            (stmt_range, new_text)
+            let lines = convert_plain_import_to_relative(transaction, handle, import)?;
+            join_import_lines(&indent, lines)
         }
         (ImportStmtRef::ImportFrom(import_from), ConvertTarget::Relative)
             if import_from.level == 0 =>
         {
-            let stmt_range = import_from.range();
             let indent = line_indent_and_start(source, import_from.range().start())?.0;
             let line = convert_from_import_to_relative(transaction, handle, import_from)?;
-            let new_text = join_import_lines(&indent, vec![line]);
-            (stmt_range, new_text)
+            join_import_lines(&indent, Vec1::new(line))
         }
         (ImportStmtRef::ImportFrom(import_from), ConvertTarget::Absolute)
             if import_from.level > 0 =>
         {
-            let stmt_range = import_from.range();
             let indent = line_indent_and_start(source, import_from.range().start())?.0;
             let line = convert_from_import_to_absolute(handle, import_from)?;
-            let new_text = join_import_lines(&indent, vec![line]);
-            (stmt_range, new_text)
+            join_import_lines(&indent, Vec1::new(line))
         }
         _ => return None,
     };
     Some((stmt_range, new_text))
 }
 
-fn convert_import_to_relative(
+/// Converts a plain `import` statement into one or more relative `from` import lines.
+/// Returns `None` if any alias cannot be resolved or safely represented as a relative import.
+fn convert_plain_import_to_relative(
     transaction: &Transaction<'_>,
     handle: &Handle,
     import: &StmtImport,
-) -> Option<Vec<String>> {
+) -> Option<Vec1<String>> {
     let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
     for alias in &import.names {
         let module_str = alias.name.id.as_str();
@@ -199,25 +181,19 @@ fn convert_import_to_relative(
             return None;
         }
         let module_name = ModuleName::from_name(&alias.name.id);
-        let target_handle = transaction
-            .import_handle(handle, module_name, None)
-            .finding()?;
-        if handle_require_absolute_import(transaction.config_finder(), &target_handle) {
-            return None;
-        }
-        let relative_module = relative_module_string(handle, &target_handle)?;
-        let (base, leaf) = split_relative_module(&relative_module, module_str)?;
+        let relative_module = relative_module_for_import(transaction, handle, module_name)?;
+        let (base, leaf) = split_relative_module(&relative_module)?;
         let name_text = render_alias(leaf.as_str(), alias);
         push_grouped_import(&mut grouped, base, name_text);
     }
-    if grouped.is_empty() {
-        return None;
-    }
     Some(
-        grouped
-            .into_iter()
-            .map(|(base, names)| format!("from {base} import {}", names.join(", ")))
-            .collect(),
+        Vec1::try_from_vec(
+            grouped
+                .into_iter()
+                .map(|(base, names)| format!("from {base} import {}", names.join(", ")))
+                .collect(),
+        )
+        .expect("an import statement has at least one alias"),
     )
 }
 
@@ -228,13 +204,7 @@ fn convert_from_import_to_relative(
 ) -> Option<String> {
     let module = import_from.module.as_ref()?;
     let module_name = ModuleName::from_str(module.as_str());
-    let target_handle = transaction
-        .import_handle(handle, module_name, None)
-        .finding()?;
-    if handle_require_absolute_import(transaction.config_finder(), &target_handle) {
-        return None;
-    }
-    let relative_module = relative_module_string(handle, &target_handle)?;
+    let relative_module = relative_module_for_import(transaction, handle, module_name)?;
     let names = render_imported_names(&import_from.names);
     Some(format!("from {relative_module} import {names}"))
 }
@@ -249,6 +219,7 @@ fn convert_from_import_to_absolute(
         import_from.module.as_ref().map(|module| &module.id),
     )?;
     let module_str = module.as_str();
+    // A top-level `from . import ...` has no absolute package name.
     if module_str.is_empty() {
         return None;
     }
@@ -272,29 +243,40 @@ fn render_alias(default_name: &str, alias: &Alias) -> String {
     }
 }
 
-fn relative_module_string(from: &Handle, to: &Handle) -> Option<String> {
-    let module =
-        ModuleName::relative_module_name_between(from.path().as_path(), to.path().as_path())?;
-    let raw = module.as_str();
-    if raw.is_empty() {
-        Some(".".to_owned())
-    } else {
-        Some(raw.to_owned())
+fn relative_module_for_import(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    module_name: ModuleName,
+) -> Option<String> {
+    let target_handle = transaction
+        .import_handle(handle, module_name, None)
+        .finding()?;
+    if handle_require_absolute_import(transaction.config_finder(), &target_handle) {
+        return None;
     }
+    Some(
+        ModuleName::relative_module_name_between(
+            handle.path().as_path(),
+            target_handle.path().as_path(),
+        )?
+        .as_str()
+        .to_owned(),
+    )
 }
 
-fn split_relative_module(relative_module: &str, absolute_module: &str) -> Option<(String, String)> {
-    if relative_module == "." {
-        let leaf = absolute_module
-            .rsplit_once('.')
-            .map_or(absolute_module, |(_, leaf)| leaf);
-        return Some((".".to_owned(), leaf.to_owned()));
+fn split_relative_module(relative_module: &str) -> Option<(String, String)> {
+    let rest = relative_module.trim_start_matches('.');
+    assert!(
+        rest.len() < relative_module.len(),
+        "relative module name must start with a dot"
+    );
+    // A plain import of the current package has no equivalent relative-import spelling.
+    if rest.is_empty() {
+        return None;
     }
-    if let Some((base, leaf)) = relative_module.rsplit_once('.') {
-        let base = if base.is_empty() { "." } else { base };
-        return Some((base.to_owned(), leaf.to_owned()));
-    }
-    Some((".".to_owned(), relative_module.to_owned()))
+    let dots = &relative_module[..relative_module.len() - rest.len()];
+    let (package, leaf) = rest.rsplit_once('.').unwrap_or(("", rest));
+    Some((format!("{dots}{package}"), leaf.to_owned()))
 }
 
 fn push_grouped_import(grouped: &mut Vec<(String, Vec<String>)>, base: String, name: String) {
@@ -305,19 +287,16 @@ fn push_grouped_import(grouped: &mut Vec<(String, Vec<String>)>, base: String, n
     }
 }
 
-fn join_import_lines(indent: &str, lines: Vec<String>) -> String {
-    let mut iter = lines.into_iter();
-    let Some(first) = iter.next() else {
-        return String::new();
-    };
+fn join_import_lines(indent: &str, lines: Vec1<String>) -> String {
+    let (first, remaining) = lines.split_off_first();
     if indent.is_empty() {
-        return iter.fold(first, |mut acc, line| {
+        return remaining.into_iter().fold(first, |mut acc, line| {
             acc.push('\n');
             acc.push_str(&line);
             acc
         });
     }
-    iter.fold(first, |mut acc, line| {
+    remaining.into_iter().fold(first, |mut acc, line| {
         acc.push('\n');
         acc.push_str(indent);
         acc.push_str(&line);

@@ -3773,6 +3773,7 @@ impl<'a> Transaction<'a> {
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::convert_import::convert_import_code_actions(self, handle, selection)
+            .map(Vec1::into_vec)
     }
 
     /// Determines whether a module is a third-party package.
