@@ -44,7 +44,6 @@ use lsp_types::notification::Initialized;
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::CodeActionRequest;
-use lsp_types::request::CodeLensRequest;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::DocumentHighlightRequest;
@@ -543,15 +542,6 @@ impl TestClient {
             "position": {
                 "line": line,
                 "character": col
-            }
-        }))
-    }
-
-    pub fn code_lens(&self, file: &'static str) -> ClientRequestHandle<'_, CodeLensRequest> {
-        let path = self.get_root_or_panic().join(file);
-        self.send_request(json!({
-            "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string()
             }
         }))
     }
