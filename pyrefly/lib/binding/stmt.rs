@@ -1385,7 +1385,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.bind_target_no_expr(&mut opts, &make_binding);
                     } else {
                         self.insert_binding(
-                            Key::Anon(item_range),
+                            Key::ContextValue(item_range),
                             Binding::ContextValue(None, context_idx, expr_range, kind),
                         );
                     }
