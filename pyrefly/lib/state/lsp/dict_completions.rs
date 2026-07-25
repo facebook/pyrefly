@@ -38,9 +38,8 @@ enum DictKeyLiteralContext {
         base_expr: Expr,
         literal: ExprStringLiteral,
     },
-    /// A string literal in a call argument whose completions should come from
-    /// surrounding container expressions.
-    /// Examples: `lookup(data, "na|")`, `df.select(col("na|"))`.
+    /// A string literal in a call containing a DataFrame expression.
+    /// Examples: `df.select("na|")`, `df.select(col("na|"))`.
     CallArgument {
         source_exprs: Vec<Expr>,
         literal: ExprStringLiteral,
@@ -85,10 +84,23 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn type_contains_dataframe(ty: &Type) -> bool {
+        match ty {
+            Type::DataFrame(_) => true,
+            Type::Union(u) => u.members.iter().any(Self::type_contains_dataframe),
+            _ => false,
+        }
+    }
+
     fn expr_has_typed_dict_type(&self, handle: &Handle, expr: &Expr) -> bool {
         self.get_type_trace(handle, expr.range())
             .map(|ty| Self::type_contains_typed_dict(&ty))
             .unwrap_or(false)
+    }
+
+    fn expr_has_dataframe_type(&self, handle: &Handle, expr: &Expr) -> bool {
+        self.get_type_trace(handle, expr.range())
+            .is_some_and(|ty| Self::type_contains_dataframe(&ty))
     }
 
     /// Extracts typed dict access from `.get()` method calls.
@@ -201,7 +213,7 @@ impl<'a> Transaction<'a> {
         {
             Some(DictKeyLiteralContext::DictLiteral { dict, literal })
         } else if let Some((source_exprs, literal)) =
-            Self::call_argument_string_literal_at(module, position)
+            self.dataframe_call_argument_string_literal_at(handle, module, position)
         {
             Some(DictKeyLiteralContext::CallArgument {
                 source_exprs,
@@ -213,7 +225,9 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn call_argument_string_literal_at(
+    fn dataframe_call_argument_string_literal_at(
+        &self,
+        handle: &Handle,
         module: &ModModule,
         position: TextSize,
     ) -> Option<(Vec<Expr>, ExprStringLiteral)> {
@@ -244,6 +258,7 @@ impl<'a> Transaction<'a> {
             };
 
             if let Expr::Attribute(attr) = call.func.as_ref()
+                && self.expr_has_dataframe_type(handle, attr.value.as_ref())
                 && !source_exprs
                     .iter()
                     .any(|existing: &Expr| existing.range() == attr.value.range())
@@ -251,9 +266,10 @@ impl<'a> Transaction<'a> {
                 source_exprs.push(attr.value.as_ref().clone());
             }
             for expr in call.arguments.args.iter().take(positional_count) {
-                if !source_exprs
-                    .iter()
-                    .any(|existing| existing.range() == expr.range())
+                if self.expr_has_dataframe_type(handle, expr)
+                    && !source_exprs
+                        .iter()
+                        .any(|existing| existing.range() == expr.range())
                 {
                     source_exprs.push(expr.clone());
                 }
@@ -342,12 +358,12 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn collect_typed_dict_keys(
+    fn collect_container_keys(
         &self,
         handle: &Handle,
         base_type: Type,
     ) -> Option<BTreeMap<String, Type>> {
-        self.ad_hoc_solve(handle, "typed_dict_keys", |solver| {
+        self.ad_hoc_solve(handle, "container_keys", |solver| {
             let mut map = BTreeMap::new();
             let mut stack = vec![base_type];
             while let Some(ty) = stack.pop() {
@@ -356,6 +372,11 @@ impl<'a> Transaction<'a> {
                         for (name, field) in solver.type_order().typed_dict_fields(&td) {
                             map.entry(name.to_string())
                                 .or_insert_with(|| field.ty.clone());
+                        }
+                    }
+                    Type::DataFrame(schema) => {
+                        for (name, ty) in schema.columns {
+                            map.entry(name.to_string()).or_insert(ty);
                         }
                     }
                     Type::Union(u) => {
@@ -441,7 +462,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Adds known string keys for a dict-like base: explicit keys recorded as facets
-    /// on the base's binding, plus TypedDict fields from the base's type.
+    /// on the base's binding, plus TypedDict fields or DataFrame columns from its type.
     fn extend_dict_key_suggestions(
         &self,
         handle: &Handle,
@@ -493,7 +514,7 @@ impl<'a> Transaction<'a> {
         // For key access we query the container expression; for literals we query the
         // literal itself to pick up contextual TypedDict typing from assignments.
         if let Some(base_type) = self.get_type_trace(handle, base_range)
-            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
+            && let Some(typed_keys) = self.collect_container_keys(handle, base_type)
         {
             for (key, ty) in typed_keys {
                 let entry = suggestions.entry(key).or_insert(None);

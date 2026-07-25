@@ -148,6 +148,54 @@ fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize)
         .collect()
 }
 
+fn polars_column_completion_labels(code: &str) -> Vec<String> {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "polars.dataframe.frame",
+        "polars/dataframe/frame.pyi",
+        r#"
+class DataFrame:
+    def __init__(self, data: object = None) -> None: ...
+    def select(self, *exprs: object) -> "DataFrame": ...
+"#,
+    );
+    env.add(
+        "polars",
+        r#"
+from polars.dataframe.frame import DataFrame as DataFrame
+class Expr: ...
+def col(name: str) -> Expr: ...
+"#,
+    );
+    env.add("main", code);
+    let (state, handle_for) = env.to_state();
+    let handle = handle_for("main");
+    let position = extract_cursors_for_test(code)[0];
+    dict_field_labels(&state.transaction(), &handle, position)
+}
+
+fn pandas_column_completion_labels(code: &str) -> Vec<String> {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "pandas.core.frame",
+        "pandas/core/frame.pyi",
+        r#"
+class DataFrame:
+    def __init__(self, data: object = None) -> None: ...
+    def groupby(self, by: object) -> object: ...
+"#,
+    );
+    env.add(
+        "pandas",
+        "from pandas.core.frame import DataFrame as DataFrame",
+    );
+    env.add("main", code);
+    let (state, handle_for) = env.to_state();
+    let handle = handle_for("main");
+    let position = extract_cursors_for_test(code)[0];
+    dict_field_labels(&state.transaction(), &handle, position)
+}
+
 #[test]
 fn dot_complete_basic_test() {
     let code = r#"
@@ -354,55 +402,62 @@ cfg: Config = {"": 1}
 }
 
 #[test]
-fn dict_key_completion_from_prior_call_argument() {
+fn dataframe_column_completion_from_method_argument() {
     let code = r#"
-def lookup(data: dict[str, int], key: str) -> int:
-    return data[key]
-
-payload = {"foo": 1, "bar": 2}
-lookup(payload, "")
-#                ^
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select("")
+#          ^
 "#;
-    let report =
-        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
-    let report = strip_ansi(&report);
-    assert!(
-        report.contains(
-            r#"
-Completion Results:
-- (Field) bar: Literal[2]
-- (Field) foo: Literal[1]
-"#
-            .trim()
-        ),
-        "{report}"
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["bar".to_owned(), "foo".to_owned()]
     );
 }
 
 #[test]
-fn dict_key_completion_from_enclosing_call_argument() {
+fn dataframe_column_completion_from_nested_call_argument() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select(pl.col(""))
+#                 ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["bar".to_owned(), "foo".to_owned()]
+    );
+}
+
+#[test]
+fn pandas_column_completion_from_method_argument() {
+    let code = r#"
+import pandas as pd
+df = pd.DataFrame({"foo": [1], "bar": [2]})
+df.groupby("")
+#           ^
+"#;
+    assert_eq!(
+        pandas_column_completion_labels(code),
+        vec!["bar".to_owned(), "foo".to_owned()]
+    );
+}
+
+#[test]
+fn no_column_completion_from_unrelated_call_argument() {
     let code = r#"
 def select(data: dict[str, int], expr: object) -> None: ...
-def col(name: str) -> str:
-    return name
+def col(name: str) -> str: ...
 
 payload = {"foo": 1, "bar": 2}
 select(payload, col(""))
 #                   ^
 "#;
-    let report =
-        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
-    let report = strip_ansi(&report);
-    assert!(
-        report.contains(
-            r#"
-Completion Results:
-- (Field) bar: Literal[2]
-- (Field) foo: Literal[1]
-"#
-            .trim()
-        ),
-        "{report}"
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let position = extract_cursors_for_test(code)[0];
+    assert_eq!(
+        dict_field_labels(&state.transaction(), handles.get("main").unwrap(), position),
+        Vec::<String>::new()
     );
 }
 
