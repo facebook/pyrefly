@@ -249,6 +249,29 @@ impl<'a, 'b> ExprOptions<'a, 'b> {
     }
 }
 
+/// How `expr_infer_with_hint_promote` reconciles the inferred type with the hint.
+#[derive(Clone, Copy)]
+enum HintCoercion<'a> {
+    /// Best-effort: coerce to the hint only when the inferred type already matches;
+    /// otherwise keep the inferred type and report nothing.
+    BestEffort,
+    /// Enforced: coerce to the hint even on mismatch, reporting it to `errors`
+    /// with `tcc` as the check context.
+    Enforced {
+        errors: &'a ErrorCollector,
+        tcc: &'a dyn Fn() -> TypeCheckContext,
+    },
+}
+
+impl<'a> HintCoercion<'a> {
+    fn new(hint: Option<&'a HintRef>, tcc: &'a dyn Fn() -> TypeCheckContext) -> Self {
+        match hint.and_then(|hint| hint.errors()) {
+            Some(errors) => Self::Enforced { errors, tcc },
+            None => Self::BestEffort,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum ConditionRedundantReason {
     /// The boolean indicates whether it's equivalent to True
@@ -760,7 +783,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &x.elt,
                         HintRef::with_ty_opt(hint, elem_hint.as_ref()),
                         errors,
-                        None,
+                        HintCoercion::BestEffort,
                     );
                     self.heap.mk_class_type(self.stdlib.list(elem_ty))
                 },
@@ -774,7 +797,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &x.elt,
                         HintRef::with_ty_opt(hint, elem_hint.as_ref()),
                         errors,
-                        None,
+                        HintCoercion::BestEffort,
                     );
                     self.heap.mk_class_type(self.stdlib.set(elem_ty))
                 },
@@ -803,11 +826,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // `key` is only `None` for a syntactically invalid dict comprehension
                     // (parser error recovery); the parser already reports the syntax error.
                     let key_ty = match &x.key {
-                        Some(key) => self.expr_infer_with_hint_promote(key, key_hint, errors, None),
+                        Some(key) => self.expr_infer_with_hint_promote(
+                            key,
+                            key_hint,
+                            errors,
+                            HintCoercion::BestEffort,
+                        ),
                         None => self.heap.mk_any_error(),
                     };
-                    let value_ty =
-                        self.expr_infer_with_hint_promote(&x.value, value_hint, errors, None);
+                    let value_ty = self.expr_infer_with_hint_promote(
+                        &x.value,
+                        value_hint,
+                        errors,
+                        HintCoercion::BestEffort,
+                    );
                     self.heap.mk_class_type(self.stdlib.dict(key_ty, value_ty))
                 },
             ),
@@ -1053,22 +1085,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         x: &Expr,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
-        tcc: Option<&dyn Fn() -> TypeCheckContext>,
+        coercion: HintCoercion,
     ) -> Type {
         let ty = self.expr_infer_with_hint(x, hint, errors);
         if let Some(hint) = hint {
-            let use_hint = |want| {
-                if let Some(check_errors) = hint.errors()
-                    && let Some(tcc) = tcc
-                {
-                    // If this is a hard hint, always use it, reporting any check errors that
-                    // result from its use.
-                    self.check_type(&ty, want, x.range(), check_errors, tcc);
+            let use_hint = |want| match coercion {
+                HintCoercion::Enforced { errors, tcc } => {
+                    // Coerce to the hint even on mismatch, reporting any resulting check errors.
+                    // NB: `check_type` records an expected-type trace (for the IDE) keyed by
+                    // source location; unlike errors, that write is not rolled back when a
+                    // speculative union branch is later rejected, so the IDE may show the
+                    // expected type from a branch we did not pick. Batch checking is unaffected.
+                    self.check_type(&ty, want, x.range(), errors, tcc);
                     true
-                } else {
-                    // Use a soft hint only if it is compatible.
-                    self.is_subset_eq(&ty, want)
                 }
+                // Use a best-effort hint only if it is compatible.
+                HintCoercion::BestEffort => self.is_subset_eq(&ty, want),
             };
             // Optimization: delay Type cloning until absolutely necessary.
             if let &[want] = &hint.types() {
@@ -1636,7 +1668,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .map(|hint| HintRef::new(key_hint, hint.errors()))
                         }),
                         errors,
-                        Some(&|| TypeCheckContext::of_kind(TypeCheckKind::DictKey)),
+                        HintCoercion::new(hint.as_ref(), &|| {
+                            TypeCheckContext::of_kind(TypeCheckKind::DictKey)
+                        }),
                     );
                     let value_t = self.expr_infer_with_hint_promote(
                         &x.value,
@@ -1645,7 +1679,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .map(|hint| HintRef::new(value_hint, hint.errors()))
                         }),
                         errors,
-                        Some(&|| TypeCheckContext::of_kind(TypeCheckKind::DictValue)),
+                        HintCoercion::new(hint.as_ref(), &|| {
+                            TypeCheckContext::of_kind(TypeCheckKind::DictValue)
+                        }),
                     );
                     if !key_t.is_error() {
                         key_tys.push(key_t);
@@ -2709,7 +2745,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     value,
                     HintRef::with_ty_opt(elt_hint, star_hint.as_ref()),
                     errors,
-                    None,
+                    HintCoercion::BestEffort,
                 );
                 if let Some(iterable_ty) = self.unwrap_iterable(&unpacked_ty) {
                     iterable_ty
@@ -2725,7 +2761,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             }
-            _ => self.expr_infer_with_hint_promote(x, elt_hint, errors, None),
+            _ => self.expr_infer_with_hint_promote(x, elt_hint, errors, HintCoercion::BestEffort),
         })
     }
 
