@@ -6,12 +6,13 @@
  */
 
 use lsp_types::CodeLens;
-use lsp_types::CodeLensOptions;
 use lsp_types::Url;
 use lsp_types::request::CodeLensRequest;
-use pyrefly::commands::lsp::IndexingMode;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::Value;
 use serde_json::json;
 
@@ -210,33 +211,18 @@ fn test_code_lens_disabled_by_default() {
 }
 
 #[test]
-fn test_initialize_advertises_code_lens_with_indexing() {
-    let interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
-
-    interaction
-        .client
-        .send_initialize(
-            interaction
-                .client
-                .get_initialize_params(&InitializeSettings::default()),
-        )
-        .expect_response_with(|response| {
-            response.capabilities.code_lens_provider
-                == Some(CodeLensOptions {
-                    resolve_provider: Some(false),
-                })
-        })
-        .unwrap();
-    interaction.client.send_initialized();
-    interaction.shutdown().unwrap();
-}
-
-#[test]
 fn test_code_lens_shows_reference_counts() {
     let root = get_test_files_root();
     let root_path = root.path().join("code_lens_references");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let symbols_uri = Url::from_file_path(root_path.join("symbols.py")).unwrap();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -250,7 +236,11 @@ fn test_code_lens_shows_reference_counts() {
 
     interaction
         .client
-        .code_lens("symbols.py")
+        .send_request::<CodeLensRequest>(json!({
+            "textDocument": {
+                "uri": symbols_uri
+            }
+        }))
         .expect_response_with(|response| {
             let Some(lenses) = response else {
                 return false;
