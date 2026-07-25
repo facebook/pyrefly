@@ -11,6 +11,11 @@ subdirectories (`a/` and `b/`). That makes pyrefly infer the project root
 covered by the inferred root and resolves only via the directory walk from
 the importing file in `a/`.
 
+Note on streams: with `--output-format=min-text`, diagnostic lines are written
+to **stdout** while the ` INFO N errors` summary is written to **stderr**.
+So the "fires" cases capture stdout (the diagnostic), and the clean cases
+capture stderr (the summary).
+
 ## Fires when an import resolves only via the fallback path
 
 ```scrut
@@ -21,7 +26,6 @@ $ mkdir -p $TMPDIR/on_fallback/a $TMPDIR/on_fallback/b && \
 > echo "y: int = 2" > $TMPDIR/on_fallback/b/other.py && \
 > $PYREFLY check -c $TMPDIR/on_fallback/pyrefly.toml --output-format=min-text $TMPDIR/on_fallback/a/main.py
 */a/main.py:1:8-15: Module `sibling` was imported using an implicit relative import. Prefer an explicit relative import (`from . import sibling`) or add the module's root to the configured search path. [implicit-relative-import] (glob)
- INFO * (glob)
 [1]
 ```
 
@@ -30,27 +34,27 @@ $ mkdir -p $TMPDIR/on_fallback/a $TMPDIR/on_fallback/b && \
 When `sibling` is discoverable through a configured absolute root, the
 fallback tier never runs, so no caveat is attached (no false positive).
 
-```scrut
+```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/on_search_path/a $TMPDIR/on_search_path/b && \
 > printf 'enable-fallback-search-path = true\nsearch_path = ["%s/on_search_path/a"]\n[errors]\nimplicit-relative-import = "error"\n' "$TMPDIR" > $TMPDIR/on_search_path/pyrefly.toml && \
 > echo "x: int = 1" > $TMPDIR/on_search_path/a/sibling.py && \
 > echo "import sibling" > $TMPDIR/on_search_path/a/main.py && \
 > echo "y: int = 2" > $TMPDIR/on_search_path/b/other.py && \
 > $PYREFLY check -c $TMPDIR/on_search_path/pyrefly.toml --output-format=min-text $TMPDIR/on_search_path/a/main.py
- INFO * (glob)
+ INFO 0 errors
 [0]
 ```
 
 ## Default severity is ignore (no output unless explicitly enabled)
 
-```scrut
+```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/default_ignore/a $TMPDIR/default_ignore/b && \
 > printf 'enable-fallback-search-path = true\n' > $TMPDIR/default_ignore/pyrefly.toml && \
 > echo "x: int = 1" > $TMPDIR/default_ignore/a/sibling.py && \
 > echo "import sibling" > $TMPDIR/default_ignore/a/main.py && \
 > echo "y: int = 2" > $TMPDIR/default_ignore/b/other.py && \
 > $PYREFLY check -c $TMPDIR/default_ignore/pyrefly.toml --output-format=min-text $TMPDIR/default_ignore/a/main.py
- INFO * (glob)
+ INFO 0 errors
 [0]
 ```
 
@@ -67,19 +71,18 @@ $ mkdir -p $TMPDIR/independent/a $TMPDIR/independent/b && \
 > echo "y: int = 2" > $TMPDIR/independent/b/other.py && \
 > $PYREFLY check -c $TMPDIR/independent/pyrefly.toml --output-format=min-text $TMPDIR/independent/a/main.py
 */a/main.py:2:8-15: Module `sibling` was imported using an implicit relative import. Prefer an explicit relative import (`from . import sibling`) or add the module's root to the configured search path. [implicit-relative-import] (glob)
- INFO * (glob)
 [1]
 ```
 
 ## `[implicit-relative-import]` suppression does silence it
 
-```scrut
+```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/suppressed/a $TMPDIR/suppressed/b && \
 > printf 'enable-fallback-search-path = true\n[errors]\nimplicit-relative-import = "error"\n' > $TMPDIR/suppressed/pyrefly.toml && \
 > echo "x: int = 1" > $TMPDIR/suppressed/a/sibling.py && \
 > printf '# pyrefly: ignore[implicit-relative-import]\nimport sibling\n' > $TMPDIR/suppressed/a/main.py && \
 > echo "y: int = 2" > $TMPDIR/suppressed/b/other.py && \
 > $PYREFLY check -c $TMPDIR/suppressed/pyrefly.toml --output-format=min-text $TMPDIR/suppressed/a/main.py
- INFO * (glob)
+ INFO 0 errors (1 suppressed)
 [0]
 ```
