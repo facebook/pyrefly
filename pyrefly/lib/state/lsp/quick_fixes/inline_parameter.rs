@@ -8,6 +8,7 @@
 use dupe::Dupe;
 use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -79,7 +80,6 @@ pub(crate) fn inline_parameter_code_actions(
         .arguments
         .find_argument_value(param_name, param_index)?;
     let arg_text = module_info.code_at(arg_expr.range());
-    let replacement = format!("({arg_text})");
     let mut edits = Vec::new();
     let mut collector = NameRefCollector::new(param_name.to_owned());
     collector.visit_stmts(&function_def.body);
@@ -87,7 +87,13 @@ pub(crate) fn inline_parameter_code_actions(
         return None;
     }
     for range in collector.load_refs {
-        edits.push((module_info.dupe(), range, replacement.clone()));
+        let parent = Ast::parent_node(ast.as_ref(), range);
+        let replacement = if Ast::needs_brackets(parent, arg_expr) {
+            format!("({arg_text})")
+        } else {
+            arg_text.to_owned()
+        };
+        edits.push((module_info.dupe(), range, replacement));
     }
     let param_remove_range = expand_range_to_remove_item(module_info.contents(), param.range());
     edits.push((module_info.dupe(), param_remove_range, String::new()));

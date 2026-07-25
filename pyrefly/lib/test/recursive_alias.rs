@@ -86,8 +86,7 @@ def f(x: X) -> Y:
 );
 
 testcase!(
-    bug =
-        "Iterative fixpoint reports non-convergent-recursion for recursive class attribute aliases",
+    bug = "fixpoint reports non-convergent-recursion for recursive class attribute aliases",
     test_class_attr,
     r#"
 class C:
@@ -196,7 +195,7 @@ type X[K, V] = dict[K, V] | list[X[str, V]]
 
 x1: X = {0: 1}
 x2: X[int, int] = {0: 1}
-x3: X[str, int] = {0: 1}  # E: `dict[int, int]` is not assignable to `dict[str, int] | list[X[str, int]]`
+x3: X[str, int] = {0: 1}  # E: `Literal[0]` is not assignable to dict key type `str`
 
 x4: X = [{'ok': 1}]
 x5: X[int, int] = [{'ok': 1}]
@@ -233,7 +232,7 @@ testcase!(
     test_error_implicit_any,
     TestEnv::new().enable_implicit_any_error(),
     r#"
-type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X`
+type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X[T]`
 def f(x: X[str]) -> X[int]:
     return [x]
     "#,
@@ -267,6 +266,19 @@ type T = U  # E: cyclic self-reference in `T`
 type U = T  # E: cyclic self-reference in `U`
 
 x: T = 1
+not x
+    "#,
+);
+
+testcase!(
+    test_cyclic_alias_through_type_parameter_bound,
+    r#"
+# Regression test for #2851: resolving `Y`'s scoped type parameter bound closes
+# a cycle through `X`. Using the alias used to make the solver recurse forever.
+type X = Y  # E: cyclic self-reference in `X`
+type Y[T: X] = X  # E: cyclic self-reference in `Y`
+
+x: X = 1
 not x
     "#,
 );
@@ -380,5 +392,20 @@ Outer: TypeAlias = dict[str, Inner[int]]
 
 def f(x: Outer) -> None:
     reveal_type(x)  # E: dict[str, int | list[int]]
+    "#,
+);
+
+testcase!(
+    test_nested_literal_against_recursive_alias_branch,
+    r#"
+from collections.abc import Mapping
+from typing import TypeAlias
+
+class A: ...
+class B(A): ...
+
+IncEx: TypeAlias = Mapping[int, int] | Mapping[str, "IncEx | list[A]"]
+
+ok: IncEx = {"a": {"__all__": [B()]}}
     "#,
 );

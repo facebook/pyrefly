@@ -161,10 +161,121 @@ def test(y: int):
 );
 
 testcase!(
+    test_unpack_starred_not_iterable_in_tuple,
+    r#"
+def test():
+    x: int = 42
+    y = (*x,)  # E: Expected an iterable, got `int`
+"#,
+);
+
+testcase!(
     test_unpack_index_out_of_bounds,
     r#"
 def test(x: tuple[int]) -> None:
   y, z = x  # E: Cannot unpack
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_star,
+    r#"
+from typing import assert_type
+def test(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    a, *rest, b = t
+    assert_type(a, int)
+    assert_type(rest, list[bool])
+    assert_type(b, str)
+    # A fixed suffix element that no after-star target consumes flows into the star,
+    # but the fixed prefix element does not smear in.
+    c, *carry = t
+    assert_type(c, int)
+    assert_type(carry, list[bool | str])
+    for x in t:
+        assert_type(x, int | bool | str)
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_empty_middle,
+    r#"
+from typing import assert_type
+# The unbounded middle can match zero elements, so a fixed target that indexes past
+# its own end may land on a fixed element from the opposite end.
+def prefix_only(x: tuple[str, *tuple[int, ...]]) -> None:
+    *head, last = x
+    assert_type(head, list[int | str])
+    assert_type(last, int | str)
+def suffix_only(x: tuple[*tuple[int, ...], str]) -> None:
+    first, *rest = x
+    assert_type(first, int | str)
+    assert_type(rest, list[int | str])
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_exact_length,
+    r#"
+from typing import assert_type
+# An unpack with no star pins the length exactly, so the variadic middle has a known
+# size and each target resolves to a single element -- no fixed-end smearing.
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    a, b = t  # length must be 2, so the middle is empty
+    assert_type(a, int)
+    assert_type(b, str)
+    c, d, e = t  # length must be 3, so the middle has exactly one element
+    assert_type(c, int)
+    assert_type(d, bool)
+    assert_type(e, str)
+    match t:
+        case [f, g]:
+            assert_type(f, int)
+            assert_type(g, str)
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_too_few_targets,
+    r#"
+# The fixed prefix and suffix guarantee at least 2 elements, so an exact unpack into
+# fewer targets can never succeed.
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    (a,) = t  # E: Cannot unpack tuple[int, *tuple[bool, ...], str] (of size 2+) into 1 value
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_both_ends_mandatory,
+    r#"
+from typing import assert_type
+# `b` and `c` are mandatory targets that reserve the fixed prefix `int` and suffix `str`,
+# so the empty-middle shift must not leak those into each other or into the star.
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    a, b, *rest, c = t
+    assert_type(a, int)
+    assert_type(b, bool)
+    assert_type(rest, list[bool])
+    assert_type(c, str)
+"#,
+);
+
+testcase!(
+    test_match_variadic_tuple_both_ends_mandatory,
+    r#"
+from typing import assert_type
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    match t:
+        case [a, b, *rest, c]:
+            assert_type(b, bool)
+            assert_type(c, str)
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_bad_star,
+    r#"
+def f(t: tuple[int, *int, str]) -> None: ...  # E: Expected a type form, got instance of `*int`
+def g(t: tuple[int, *list[int], str]) -> None: ...  # E: Expected a type form, got instance of `*list[int]`
 "#,
 );
 
@@ -371,12 +482,139 @@ def test[*Ts](x1: tuple[int, *tuple[str, ...]], x2: tuple[*Ts]) -> None:
 );
 
 testcase!(
+    test_unpack_typevar_bound_to_tuple,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[str, int]](x: Z):
+    u, v = x
+    reveal_type(u)  # E: revealed type: str
+    reveal_type(v)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_to_tuple_three_elements,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[str, int, bytes]](x: Z):
+    a, b, c = x
+    reveal_type(a)  # E: revealed type: str
+    reveal_type(b)  # E: revealed type: int
+    reveal_type(c)  # E: revealed type: bytes
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_to_unbounded_tuple,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[int, ...]](x: Z):
+    a, b = x
+    reveal_type(a)  # E: revealed type: int
+    reveal_type(b)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_to_tuple_starred,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[str, int, bytes]](x: Z):
+    a, *b = x
+    reveal_type(a)  # E: revealed type: str
+    reveal_type(b)  # E: revealed type: list[bytes | int]
+"#,
+);
+
+testcase!(
+    test_unpack_constrained_typevar_tuple,
+    r#"
+from typing import TypeVar, reveal_type
+Z = TypeVar("Z", tuple[str, int], tuple[bool, bytes])
+def f(x: Z):
+    a, b = x
+    reveal_type(a)  # E: revealed type: bool | str
+    reveal_type(b)  # E: revealed type: bytes | int
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_unbounded_not_iterable,
+    r#"
+def f[Z](x: Z):
+    a, b = x  # E: Type `object` is not iterable
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_not_iterable,
+    r#"
+def f[Z: int](x: Z):
+    a, b = x  # E: Type `int` is not iterable
+"#,
+);
+
+testcase!(
     test_tuple_slice_non_literal,
     r#"
 from typing import assert_type
 def test(x: tuple[int, str, bool], y: tuple[int, ...], start: int, stop: int, step: int):
     assert_type(x[start:stop:step], tuple[int | str | bool, ...])
     assert_type(y[start:stop:step], tuple[int, ...])
+"#,
+);
+
+testcase!(
+    test_slice_invalid_components,
+    r#"
+def test(xs: list[int], ys: tuple[int, ...]) -> None:
+    xs[1.5:]  # E: Slice indices must be integers or have an `__index__` method
+    ys[:1.5]  # E: Slice indices must be integers or have an `__index__` method
+    xs[::1.5]  # E: Slice indices must be integers or have an `__index__` method
+    ys[::1.5]  # E: Slice indices must be integers or have an `__index__` method
+"#,
+);
+
+testcase!(
+    test_slice_accepts_index_method,
+    r#"
+class Index:
+    def __index__(self) -> int:
+        return 0
+
+def test(xs: list[int], ys: tuple[int, ...], index: Index) -> None:
+    xs[index:]
+    ys[:index]
+    xs[::index]
+"#,
+);
+
+testcase!(
+    test_slice_zero_step,
+    r#"
+def test(xs: list[int], ys: tuple[int, ...]) -> None:
+    xs[::0]  # E: Slice step cannot be zero
+    ys[::0]  # E: Slice step cannot be zero
+"#,
+);
+
+testcase!(
+    test_slice_omitted_positions_preserved,
+    r#"
+from typing import assert_type
+
+def test(x: tuple[int, str, bool]) -> None:
+    assert_type(x[:2], tuple[int, str])
+    assert_type(x[1:], tuple[str, bool])
+"#,
+);
+
+testcase!(
+    test_slice_union_step_reported_once,
+    r#"
+def test(xs: list[int] | tuple[int, ...]) -> None:
+    xs[::0]  # E: Slice step cannot be zero
+    xs[::1.5]  # E: Slice indices must be integers or have an `__index__` method
 "#,
 );
 
@@ -406,6 +644,18 @@ testcase!(
 from typing import assert_type, Iterable
 def test(x: Iterable[int]) -> None:
     assert_type(tuple(x), tuple[int, ...])
+"#,
+);
+
+testcase!(
+    bug = "TODO: handle generator from fixed-length heterogeneous iterable",
+    test_tuple_constructor_preserves_fixed_length,
+    r#"
+from typing import assert_type
+def test(xs: tuple[int, int]) -> None:
+    ys: tuple[int, int] = tuple(xs)
+    assert_type(tuple(xs), tuple[int, int])
+    zs: tuple[int, int] = tuple(x for x in xs)  # E: `tuple[int, ...]` is not assignable to `tuple[int, int]`
 "#,
 );
 

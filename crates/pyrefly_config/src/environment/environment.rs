@@ -95,12 +95,10 @@ impl PythonEnvironment {
             self.python_version = Some(PythonVersion::default());
         }
         if self.site_package_path.is_none() {
-            let typings = PathBuf::from("./typings");
-            if typings.exists() {
-                self.site_package_path = Some(vec![PathBuf::from("./typings")]);
-            } else {
-                self.site_package_path = Some(Vec::new());
-            }
+            // The `typings/` default is applied in `ConfigFile::configure()` so it
+            // can be resolved relative to the config root and applied regardless
+            // of whether an interpreter was queried.
+            self.site_package_path = Some(Vec::new());
         }
     }
 

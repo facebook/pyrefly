@@ -1695,64 +1695,61 @@ impl GleanState<'_> {
     }
 }
 
-impl Glean {
-    pub fn new(transaction: &Transaction, handle: &Handle) -> Self {
-        let ast = &*transaction.get_ast(handle).unwrap();
-        let mut glean_state = GleanState::new(transaction, handle);
+pub fn glean(transaction: &Transaction, handle: &Handle) -> Glean {
+    let ast = &*transaction.get_ast(handle).unwrap();
+    let mut glean_state = GleanState::new(transaction, handle);
 
-        glean_state.record_name("".to_owned());
-        let file_language_fact =
-            src::FileLanguage::new(glean_state.file_fact(), src::Language::Python);
-        let digest_fact = glean_state.digest_fact();
-        let file_lines = glean_state.file_lines_fact();
-        glean_state.generate_facts(&ast.body, ast.range());
+    glean_state.record_name("".to_owned());
+    let file_language_fact = src::FileLanguage::new(glean_state.file_fact(), src::Language::Python);
+    let digest_fact = glean_state.digest_fact();
+    let file_lines = glean_state.file_lines_fact();
+    glean_state.generate_facts(&ast.body, ast.range());
 
-        let file_fact = glean_state.file_fact();
-        let gencode_fact = glean_state.gencode_fact();
+    let file_fact = glean_state.file_fact();
+    let gencode_fact = glean_state.gencode_fact();
 
-        let facts = glean_state.facts;
+    let facts = glean_state.facts;
 
-        let xrefs_via_name_by_file_fact =
-            python::XRefsViaNameByFile::new(file_fact.clone(), facts.xrefs_via_name.to_owned());
+    let xrefs_via_name_by_file_fact =
+        python::XRefsViaNameByFile::new(file_fact.clone(), facts.xrefs_via_name.to_owned());
 
-        let xrefs_via_name_by_target: Vec<python::XRefsViaNameByTarget> = facts
-            .xrefs_via_name_by_target
-            .into_iter()
-            .map(|(target, spans)| {
-                python::XRefsViaNameByTarget::new(
-                    target.to_owned(),
-                    file_fact.clone(),
-                    spans.to_owned(),
-                )
-            })
-            .collect();
+    let xrefs_via_name_by_target: Vec<python::XRefsViaNameByTarget> = facts
+        .xrefs_via_name_by_target
+        .into_iter()
+        .map(|(target, spans)| {
+            python::XRefsViaNameByTarget::new(
+                target.to_owned(),
+                file_fact.clone(),
+                spans.to_owned(),
+            )
+        })
+        .collect();
 
-        let xrefs_by_file = python_xrefs::XRefsByFile::new(file_fact.clone(), facts.xrefs);
+    let xrefs_by_file = python_xrefs::XRefsByFile::new(file_fact.clone(), facts.xrefs);
 
-        let entries = vec![
-            GleanEntry::SchemaId {
-                schema_id: builtin::SCHEMA_ID.to_owned(),
-            },
-            python::Name::new("".to_owned()).glean_entry(),
-            facts.modules.glean_entry(),
-            file_language_fact.glean_entry(),
-            file_lines.glean_entry(),
-            digest_fact.glean_entry(),
-            facts.decl_locations.glean_entry(),
-            facts.def_locations.glean_entry(),
-            facts.import_star_locations.glean_entry(),
-            facts.file_calls.glean_entry(),
-            facts.callee_to_callers.glean_entry(),
-            facts.containing_top_level_declarations.glean_entry(),
-            xrefs_via_name_by_file_fact.glean_entry(),
-            xrefs_via_name_by_target.glean_entry(),
-            xrefs_by_file.glean_entry(),
-            facts.declaration_docstrings.glean_entry(),
-            facts.name_to_sname.glean_entry(),
-            gencode_fact.glean_entry(),
-        ];
-        Glean { entries }
-    }
+    let entries = vec![
+        GleanEntry::SchemaId {
+            schema_id: builtin::SCHEMA_ID.to_owned(),
+        },
+        python::Name::new("".to_owned()).glean_entry(),
+        facts.modules.glean_entry(),
+        file_language_fact.glean_entry(),
+        file_lines.glean_entry(),
+        digest_fact.glean_entry(),
+        facts.decl_locations.glean_entry(),
+        facts.def_locations.glean_entry(),
+        facts.import_star_locations.glean_entry(),
+        facts.file_calls.glean_entry(),
+        facts.callee_to_callers.glean_entry(),
+        facts.containing_top_level_declarations.glean_entry(),
+        xrefs_via_name_by_file_fact.glean_entry(),
+        xrefs_via_name_by_target.glean_entry(),
+        xrefs_by_file.glean_entry(),
+        facts.declaration_docstrings.glean_entry(),
+        facts.name_to_sname.glean_entry(),
+        gencode_fact.glean_entry(),
+    ];
+    Glean { entries }
 }
 
 #[cfg(test)]

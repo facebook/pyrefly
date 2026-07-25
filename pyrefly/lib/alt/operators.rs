@@ -8,13 +8,13 @@
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
-use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::canonicalize;
+use pyrefly_types::dimension::int_type_is_provably_nonnegative;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::Quantified;
-use pyrefly_types::shaped_array::ShapedArrayType;
-use pyrefly_types::shaped_array::broadcast_shapes;
+use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_util::prelude::VecExt;
@@ -72,21 +72,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             callee_errors,
             Some(context),
         );
-        self.call_infer(
+        self.call_infer_with_return_errors(
             callable,
             &[CallArg::ty(call_arg_type, range)],
             &[],
             range,
             call_errors,
+            callee_errors,
             Some(context),
             None,
             None,
         )
     }
 
-    /// Try to handle binary operations on symbolic integer types (Dim and SizeExpr).
+    /// Try to handle binary operations on symbolic integer types.
     /// Returns Some(result_type) if the operation was handled, None otherwise.
-    fn try_symint_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
+    fn try_int_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
         // Only handle if tensor shapes feature is enabled
         if !self.solver().tensor_shapes {
             return None;
@@ -95,7 +96,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Only handle arithmetic operations that make sense for dimensions
         if !matches!(
             op,
-            Operator::Add | Operator::Sub | Operator::Mult | Operator::FloorDiv
+            Operator::Add | Operator::Sub | Operator::Mult | Operator::FloorDiv | Operator::Pow
         ) {
             return None;
         }
@@ -103,29 +104,86 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Literal integers are allowed as the non-shape side of dimension arithmetic, but
         // ordinary literal arithmetic should keep the normal integer operator behavior.
         let is_shape_operand = |ty: &Type| match ty {
-            Type::Dim(_) | Type::Size(_) => true,
+            Type::Int(_) => true,
+            Type::Quantified(q) => q.kind() == QuantifiedKind::IntVar,
+            Type::TypeVar(tv) => tv.kind() == QuantifiedKind::IntVar,
             _ => false,
         };
         if !is_shape_operand(lhs) && !is_shape_operand(rhs) {
             return None;
         }
 
-        // Extract the dimension type from Dim, Size, or an integer literal paired with one.
+        if op == Operator::Pow {
+            let base = match lhs {
+                Type::Literal(lit) => {
+                    let Lit::Int(base) = &lit.value else {
+                        return None;
+                    };
+                    let base = base.as_i64()?;
+                    if base < 0 {
+                        return None;
+                    }
+                    self.heap.mk_int(Int::Literal(base))
+                }
+                Type::Int(_) => lhs.clone(),
+                Type::Quantified(q) if q.kind() == QuantifiedKind::IntVar => lhs.clone(),
+                Type::TypeVar(tv) if tv.kind() == QuantifiedKind::IntVar => lhs.clone(),
+                _ => return None,
+            };
+            let exponent = match rhs {
+                Type::Literal(lit) => {
+                    let Lit::Int(exp) = &lit.value else {
+                        return None;
+                    };
+                    let exp = exp.as_i64()?;
+                    if exp < 0 {
+                        return Some(self.heap.mk_class_type(self.stdlib.float().clone()));
+                    }
+                    self.heap.mk_int(Int::Literal(exp))
+                }
+                Type::Int(Int::Literal(exp)) => {
+                    if *exp < 0 {
+                        return Some(self.heap.mk_class_type(self.stdlib.float().clone()));
+                    }
+                    rhs.clone()
+                }
+                Type::Int(_) if int_type_is_provably_nonnegative(rhs) => rhs.clone(),
+                Type::Int(_) => return Some(self.heap.mk_any_implicit()),
+                Type::Quantified(q) if q.kind() == QuantifiedKind::IntVar => {
+                    return Some(self.heap.mk_any_implicit());
+                }
+                Type::TypeVar(tv) if tv.kind() == QuantifiedKind::IntVar => {
+                    return Some(self.heap.mk_any_implicit());
+                }
+                Type::ClassType(cls) if cls.is_builtin("int") => {
+                    return Some(self.heap.mk_any_implicit());
+                }
+                Type::ClassType(cls) if cls.is_builtin("float") => {
+                    return Some(self.heap.mk_class_type(self.stdlib.float().clone()));
+                }
+                _ if self
+                    .is_subset_eq(rhs, &self.heap.mk_class_type(self.stdlib.int().clone())) =>
+                {
+                    return Some(self.heap.mk_any_implicit());
+                }
+                _ => return None,
+            };
+            return Some(canonicalize(self.heap.mk_int(Int::pow(base, exponent))));
+        }
+
+        // Extract the dimension type from Int or an integer literal paired with one.
         let to_dim_type = |ty: &Type| -> Option<Type> {
             match ty {
-                Type::Dim(inner_ty) => {
-                    // Dim wraps a dimension type (could be SizeExpr, Quantified, etc.)
-                    Some((**inner_ty).clone())
-                }
                 Type::Literal(f) if let Lit::Int(n) = &f.value => {
-                    // Convert literal to SizeExpr
-                    n.as_i64()
-                        .map(|val| self.heap.mk_size(SizeExpr::Literal(val)))
+                    // Convert literal to `Int`.
+                    n.as_i64().map(|val| self.heap.mk_int(Int::Literal(val)))
                 }
-                Type::Size(_) => {
-                    // SizeExpr is already a dimension type - pass through
+                Type::Int(_) => {
+                    // `Int` is already a dimension type.
                     Some(ty.clone())
                 }
+                Type::Quantified(q) if q.kind() == QuantifiedKind::IntVar => Some(ty.clone()),
+                Type::TypeVar(tv) if tv.kind() == QuantifiedKind::IntVar => Some(ty.clone()),
                 _ => None,
             }
         };
@@ -134,22 +192,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Perform the operation on the dimension types
         let result_ty = match op {
-            Operator::Add => canonicalize(self.heap.mk_size(SizeExpr::add(l_type, r_type))),
-            Operator::Sub => canonicalize(self.heap.mk_size(SizeExpr::sub(l_type, r_type))),
-            Operator::Mult => canonicalize(self.heap.mk_size(SizeExpr::mul(l_type, r_type))),
-            Operator::FloorDiv => {
-                canonicalize(self.heap.mk_size(SizeExpr::floor_div(l_type, r_type)))
-            }
+            Operator::Add => canonicalize(self.heap.mk_int(Int::add(l_type, r_type))),
+            Operator::Sub => canonicalize(self.heap.mk_int(Int::sub(l_type, r_type))),
+            Operator::Mult => canonicalize(self.heap.mk_int(Int::mul(l_type, r_type))),
+            Operator::FloorDiv => canonicalize(self.heap.mk_int(Int::floor_div(l_type, r_type))),
             _ => unreachable!(),
         };
 
-        // If either operand is Dim, return Dim-wrapped result. Otherwise
-        // (e.g., Dim-bounded type parameters), return the dimension expression.
-        if matches!(lhs, Type::Dim(_)) || matches!(rhs, Type::Dim(_)) {
-            Some(self.heap.mk_dim(result_ty))
-        } else {
-            Some(result_ty)
-        }
+        Some(result_ty)
     }
 
     fn try_binop_calls(
@@ -533,26 +583,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(result) = self.try_tuple_repeat(lhs, rhs)
                 {
                     result
-                } else if matches!(
-                    x.op,
-                    Operator::Add
-                        | Operator::Sub
-                        | Operator::Mult
-                        | Operator::Div
-                        | Operator::Mod
-                        | Operator::Pow
-                        | Operator::FloorDiv
-                ) && let Type::ShapedArray(l_shaped_array) = lhs
-                    && let Type::ShapedArray(r_shaped_array) = rhs
-                {
-                    // Tensor element-wise operations with broadcasting
-                    self.broadcast_shaped_array_binop(
-                        l_shaped_array,
-                        r_shaped_array,
-                        x.range,
-                        errors,
-                    )
-                } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
+                } else if let Some(result) = self.try_int_binop(x.op, lhs, rhs) {
                     result
                 } else if x.op == Operator::Pow
                     && self.is_subset_eq(lhs, &self.heap.mk_class_type(self.stdlib.int().clone()))
@@ -661,7 +692,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(r) = rhs
                 {
                     self.tuple_concat(l, r)
-                } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
+                } else if let Some(result) = self.try_int_binop(x.op, lhs, rhs) {
                     result
                 } else {
                     binop_call(x.op, lhs, rhs, x.range)
@@ -740,9 +771,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.distribute_over_union(left, |left| {
             self.distribute_over_union(right, |right| {
                 match (left, right) {
-                    // If either operand is Any, the comparison result is Any.
-                    // This mirrors the same check in binop_infer.
-                    (Type::Any(style), _) => style.propagate(),
+                    // Membership against a known container still calls its `__contains__`
+                    // method and produces `bool`, even when the item is Any.
+                    (Type::Any(style), _) if !matches!(op, CmpOp::In | CmpOp::NotIn) => {
+                        style.propagate()
+                    }
                     (_, Type::Any(style)) => style.propagate(),
                     // If the RHS of a containment check isn't a quantified, it may contain a
                     // nested quantified that on_quantifieds would fail to detect.
@@ -855,10 +888,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match t {
                 Type::Literal(lit) if let Some(ret) = f(&lit.value) => ret,
                 Type::ClassType(_)
+                | Type::Int(_)
                 | Type::SelfType(_)
                 | Type::Quantified(_)
                 | Type::ShapedArray(_)
-                | Type::NNModule(_) => {
+                | Type::NNModule(_)
+                | Type::DataFrame(_) => {
                     self.call_method_or_error(t, method, x.range, &[], &[], errors, Some(&context))
                 }
                 Type::Literal(lit) if let Lit::Enum(lit_enum) = &lit.value => self
@@ -882,13 +917,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         self.distribute_over_union(&t, |t| match x.op {
             UnaryOp::USub => {
-                // Special handling for Dim: model -N as Sub(0, N)
-                if let Type::Dim(inner_ty) = t {
-                    let zero = self.heap.mk_size(SizeExpr::Literal(0));
-                    let result_ty =
-                        canonicalize(self.heap.mk_size(SizeExpr::sub(zero, (**inner_ty).clone())));
-                    return self.heap.mk_dim(result_ty);
-                }
                 let f = |lit: &Lit| lit.negate();
                 unop(t, &f, &dunder::NEG)
             }
@@ -1017,32 +1045,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Handle element-wise binary operations on tensors with broadcasting.
-    /// broadcast_shapes handles all shape variants: Concrete shapes are broadcast
-    /// precisely, Unpacked shapes match suffix then middles then prefixes, and
-    /// mixed Concrete+Unpacked aligns against the suffix.
-    fn broadcast_shaped_array_binop(
-        &self,
-        left: &ShapedArrayType,
-        right: &ShapedArrayType,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Type {
-        match broadcast_shapes(&left.shape, &right.shape) {
-            Ok(result_shape) => {
-                ShapedArrayType::new(left.base_class.clone(), result_shape).to_type()
-            }
-            Err(err) => {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::UnsupportedOperation,
-                    format!("Cannot broadcast tensor shapes: {}", err),
-                );
-                Type::any_error()
-            }
-        }
-    }
     /// Checks for incompatible equality comparisons between types that cannot overlap.
     fn check_incompatible_comparison(
         &self,

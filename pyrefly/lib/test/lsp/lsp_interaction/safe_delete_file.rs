@@ -11,11 +11,11 @@ use lsp_types::DocumentChanges;
 use lsp_types::ResourceOp;
 use lsp_types::Url;
 use lsp_types::request::CodeActionRequest;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn init_with_delete_support(root_path: &std::path::Path) -> (LspInteraction, Url) {
     let scope_uri = Url::from_file_path(root_path).unwrap();

@@ -82,6 +82,8 @@ struct MypySection {
     #[serde(default)]
     overrides: Vec<ModuleSection>,
     #[serde(default)]
+    warn_return_any: Option<bool>,
+    #[serde(default)]
     warn_redundant_casts: Option<bool>,
     #[serde(default)]
     disallow_untyped_defs: Option<bool>,
@@ -174,6 +176,9 @@ fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
     }
     if let Some(follow_imports) = mypy.follow_imports {
         ini.set("mypy", "follow_imports", Some(follow_imports));
+    }
+    if let Some(warn_return_any) = mypy.warn_return_any {
+        ini.set("mypy", "warn_return_any", Some(warn_return_any.to_string()));
     }
     if let Some(warn_redundant_casts) = mypy.warn_redundant_casts {
         ini.set(
@@ -395,6 +400,26 @@ disable_error_code = ["union-attr"]
         assert_eq!(
             errors.severity(ErrorKind::MissingAttribute),
             Severity::Ignore
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_warn_return_any() -> anyhow::Result<()> {
+        let src = r#"[tool.mypy]
+warn_return_any = true
+"#;
+        let mut cfg = parse_pyproject_config(src)?;
+        cfg.configure();
+        let errors = cfg.errors(Path::new("."));
+        assert_eq!(errors.severity(ErrorKind::NoAnyReturn), Severity::Error);
+        assert_eq!(
+            errors.severity(ErrorKind::NoAnyReturnImplicit),
+            Severity::Error
+        );
+        assert_eq!(
+            errors.severity(ErrorKind::NoAnyReturnExplicit),
+            Severity::Error
         );
         Ok(())
     }

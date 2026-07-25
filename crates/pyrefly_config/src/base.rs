@@ -169,6 +169,7 @@ impl Preset {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     check_unannotated_defs: Some(false),
                     infer_return_types: Some(InferReturnTypes::Never),
+                    legacy_overload_expansion: Some(true),
                     ..Default::default()
                 }
             }
@@ -183,6 +184,7 @@ impl Preset {
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
                     ..Default::default()
                 }
             }
@@ -199,6 +201,7 @@ impl Preset {
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
                     ..Default::default()
                 }
             }
@@ -305,11 +308,23 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_callable_subtyping: Option<bool>,
 
+    /// Whether to strictly check the parameters of a `functools.partial(...)` residual when it is
+    /// assigned to a callable. When false (the default), the residual is treated as gradual (like
+    /// `...`) for subtyping, matching the typeshed `partial` stub. When true, the residual's
+    /// parameter types and arity are checked precisely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_partial_subtyping: Option<bool>,
+
     /// Whether to use spec-compliant overload evaluation semantics.
     /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
     /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_compliant_overloads: Option<bool>,
+
+    /// Whether to expand union arguments to narrow an already-matched overloaded call.
+    /// Off by default; enabled by the `legacy` preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_overload_expansion: Option<bool>,
 
     /// Any unknown config items
     #[serde(default, flatten)]
@@ -416,8 +431,16 @@ impl ConfigBase {
         base.strict_callable_subtyping
     }
 
+    pub fn get_strict_partial_subtyping(base: &Self) -> Option<bool> {
+        base.strict_partial_subtyping
+    }
+
     pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {
         base.spec_compliant_overloads
+    }
+
+    pub fn get_legacy_overload_expansion(base: &Self) -> Option<bool> {
+        base.legacy_overload_expansion
     }
 }
 

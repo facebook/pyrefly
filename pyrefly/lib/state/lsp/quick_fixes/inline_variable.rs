@@ -82,13 +82,18 @@ pub(crate) fn inline_variable_code_actions(
     if value_text.contains('\n') {
         return None;
     }
-    let replacement = format!("({value_text})");
     let mut edits = Vec::new();
     for range in references {
         if range == def.definition_range {
             continue;
         }
-        edits.push((module_info.dupe(), range, replacement.clone()));
+        let parent = Ast::parent_node(ast.as_ref(), range);
+        let replacement = if Ast::needs_brackets(parent, value_expr) {
+            format!("({value_text})")
+        } else {
+            value_text.to_owned()
+        };
+        edits.push((module_info.dupe(), range, replacement));
     }
     if edits.is_empty() {
         return None;

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub mod attrs;
 pub mod base_class;
 pub mod binding;
 pub mod bindings;
