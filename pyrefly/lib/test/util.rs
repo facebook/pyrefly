@@ -135,6 +135,7 @@ pub struct TestEnv {
     implicit_any_lambda_error: bool,
     invalid_abstract_method_error: bool,
     empty_body_error: bool,
+    unknown_argument_type_error: bool,
     unknown_variable_type_error: bool,
     implicit_reexport_error: bool,
     default_require_level: Require,
@@ -185,6 +186,7 @@ impl TestEnv {
             implicit_any_lambda_error: false,
             invalid_abstract_method_error: false,
             empty_body_error: false,
+            unknown_argument_type_error: false,
             unknown_variable_type_error: false,
             implicit_reexport_error: false,
             default_require_level: Require::Exports,
@@ -424,6 +426,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unknown_argument_type_error(mut self) -> Self {
+        self.unknown_argument_type_error = true;
+        self
+    }
+
     pub fn enable_unknown_variable_type_error(mut self) -> Self {
         self.unknown_variable_type_error = true;
         self
@@ -597,6 +604,9 @@ impl TestEnv {
         }
         if self.string_as_iterable_warning {
             errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);
+        }
+        if self.unknown_argument_type_error {
+            errors.set_error_severity(ErrorKind::UnknownArgumentType, Severity::Error);
         }
         if self.implicit_any_lambda_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyLambda, Severity::Error);

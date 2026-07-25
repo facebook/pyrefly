@@ -379,6 +379,10 @@ pub enum ErrorKind {
     UnexpectedPositionalArgument,
     /// Attempting to use a type checker directive without importing it from `typing`.
     UnimportedDirective,
+    /// A call argument whose type is an implicit `Any` (unknown), because the value
+    /// passed has an unknown type.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    UnknownArgumentType,
     /// An unannotated attribute assigned a value with unknown type.
     UnknownAttributeType,
     /// Accessing a DataFrame column that does not exist in the inferred schema.
@@ -485,7 +489,8 @@ impl ErrorKind {
             | ErrorKind::ImplicitAnyEmptyContainer
             | ErrorKind::ImplicitAnyLambda
             | ErrorKind::ImplicitAnyParameter
-            | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
+            | ErrorKind::ImplicitAnyTypeArgument
+            | ErrorKind::UnknownArgumentType => Some(ErrorKind::ImplicitAny),
             ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
                 Some(ErrorKind::NoAnyReturn)
             }
@@ -556,6 +561,7 @@ impl ErrorKind {
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
+            ErrorKind::UnknownArgumentType => Severity::Ignore,
             ErrorKind::ImplicitAnyLambda => Severity::Ignore,
             ErrorKind::UnknownAttributeType => Severity::Ignore,
             ErrorKind::UnknownVariableType => Severity::Ignore,
@@ -589,7 +595,10 @@ impl ErrorKind {
     /// or other type-inference decisions. The type check itself passed, but the
     /// code pattern is suspicious.
     pub fn is_soft(self) -> bool {
-        matches!(self, ErrorKind::StringAsIterable)
+        matches!(
+            self,
+            ErrorKind::StringAsIterable | ErrorKind::UnknownArgumentType
+        )
     }
 
     /// Coverage kinds are emitted only by `pyrefly coverage check`.

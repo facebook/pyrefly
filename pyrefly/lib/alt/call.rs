@@ -1759,7 +1759,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         // If the call succeeds, attempt contextual typing with the hint.
         let (chosen_ctor_targs, chosen_call_errors, chosen_arg_errors, chosen_res) =
-            if call_errors_no_hint.is_empty() && hint.is_some() {
+            if !call_errors_no_hint.has_hard() && hint.is_some() {
                 let mut ctor_targs_with_hint = ctor_targs.as_ref().map(|x| (**x).clone());
                 let arg_errors_with_hint = self.error_collector();
                 let call_errors_with_hint = self.error_collector();
@@ -1778,8 +1778,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     hint,
                     ctor_targs_with_hint.as_mut(),
                 );
-                if call_errors_with_hint.is_empty()
-                    && arg_errors_with_hint.len() <= arg_errors_no_hint.len()
+                if !call_errors_with_hint.has_hard()
+                    && arg_errors_with_hint.len_hard() <= arg_errors_no_hint.len_hard()
                 {
                     (
                         ctor_targs_with_hint,

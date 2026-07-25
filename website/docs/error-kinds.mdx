@@ -1813,6 +1813,21 @@ reveal_type(1)  # error
 assert_type(1, int)  # error
 ```
 
+## unknown-argument-type
+
+Default severity: `ignore`
+
+A call argument whose type is an implicit `Any` (unknown) is passed without the type checker being able to verify it against the parameter, hiding potential bugs. This is a sub-kind of [implicit-any](#implicit-any), so suppressing `implicit-any` also suppresses it. This mirrors pyright's `reportUnknownArgumentType`.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))  # the argument's type is unknown [unknown-argument-type]
+```
+
 ## unknown-attribute-type
 
 Default severity: `ignore`
@@ -1834,6 +1849,7 @@ class C:
 ## unknown-column
 
 Accessing a DataFrame column that does not exist in the inferred schema.
+
 
 ## unknown-name
 

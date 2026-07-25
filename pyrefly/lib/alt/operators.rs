@@ -235,7 +235,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 dunder,
                 arg,
             );
-            if call_errors.is_empty() {
+            // Soft errors (e.g. unknown-argument-type) must not reject an otherwise
+            // valid dunder call, so gate on hard errors only.
+            if !call_errors.has_hard() {
                 errors.extend(callee_errors);
                 return ret;
             } else if first_call.is_none() {

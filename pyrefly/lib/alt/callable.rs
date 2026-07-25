@@ -59,6 +59,7 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
+use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -302,6 +303,7 @@ impl<'a> CallArg<'a> {
                     }
                 }
                 let ty = e.infer(solver, arg_errors);
+                solver.maybe_error_unknown_argument_type(&ty, *_range, arg_errors);
                 let iterables = solver.iterate(&ty, *_range, arg_errors, None);
                 // If we have a union of iterables, use a fixed length only if every iterable is
                 // fixed and has the same length. Otherwise, use star.
@@ -403,6 +405,7 @@ impl CallArgPreEval<'_> {
                     range,
                     TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                 );
+                solver.maybe_error_unknown_argument_type(ty, range, arg_errors);
                 Some((*ty).clone())
             }
             Self::Expr(x, done) => {
@@ -419,6 +422,7 @@ impl CallArgPreEval<'_> {
                         call_context,
                     )
                 {
+                    solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
                     return Some(ty);
                 }
                 if matches!(
@@ -434,22 +438,17 @@ impl CallArgPreEval<'_> {
                         range,
                         TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                     );
+                    solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
                     return Some(ty);
                 }
-                Some(
-                    solver
-                        .expr_with_options(
-                            x,
-                            ExprOptions::check(
-                                hint,
-                                arg_errors,
-                                call_errors,
-                                tcc,
-                                Some(call_context),
-                            ),
-                        )
-                        .into_ty(),
-                )
+                let ty = solver
+                    .expr_with_options(
+                        x,
+                        ExprOptions::check(hint, arg_errors, call_errors, tcc, Some(call_context)),
+                    )
+                    .into_ty();
+                solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                Some(ty)
             }
             Self::Star(ty, done) => {
                 *done = vararg;
@@ -470,6 +469,7 @@ impl CallArgPreEval<'_> {
                     TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                 );
                 *i += 1;
+                solver.maybe_error_unknown_argument_type(&arg_ty, range, arg_errors);
                 Some(arg_ty)
             }
         }
@@ -604,6 +604,25 @@ enum NameOrigin<'a> {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Flag a call argument whose type is an implicit `Any` (unknown). Emitted into
+    /// `arg_errors` (not `call_errors`), which is not used to decide overload/hint
+    /// matches.
+    fn maybe_error_unknown_argument_type(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        arg_errors: &ErrorCollector,
+    ) {
+        if matches!(ty, Type::Any(AnyStyle::Implicit)) {
+            self.error(
+                arg_errors,
+                range,
+                ErrorKind::UnknownArgumentType,
+                "The type of this argument is unknown".to_owned(),
+            );
+        }
+    }
+
     fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
         match x {
             CallArg::Star(x, _) => {
@@ -1143,6 +1162,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match kw.arg {
                 None => {
                     let ty = kw.value.infer(self, arg_errors);
+                    self.maybe_error_unknown_argument_type(&ty, kw.range, arg_errors);
                     if let Type::TypedDict(typed_dict) = ty {
                         for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
                             let name = name_owner.push(name);
@@ -1322,6 +1342,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             (*x).clone()
                         }
                     };
+                    self.maybe_error_unknown_argument_type(&arg_ty, kw.range, arg_errors);
                     record(bound_args, &id.id, unhinted_arg_ty.unwrap_or(arg_ty));
                 }
             }
