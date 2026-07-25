@@ -842,7 +842,7 @@ fn resolve_hovered_type(
     handle: &Handle,
     ast: Option<&ModModule>,
     position: TextSize,
-) -> Option<Type> {
+) -> Option<(Type, bool)> {
     let mut type_ = transaction
         .subscript_operator_type_at(handle, position)
         .or_else(|| transaction.get_type_at_for_display(handle, position))
@@ -894,7 +894,7 @@ fn resolve_hovered_type(
             type_ = transaction.coerce_type_to_callable(handle, type_);
         }
     }
-    Some(type_)
+    Some((type_, callee_range_opt.is_none()))
 }
 
 /// Resolve parameter documentation for the symbol under the cursor: keyword-argument docs
@@ -971,7 +971,8 @@ pub fn get_hover_with_verbosity(
         return Some(result);
     }
 
-    let type_ = resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
+    let (type_, use_declared_function_display) =
+        resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
 
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
     // chain highlights the whole expression.
@@ -1014,11 +1015,11 @@ pub fn get_hover_with_verbosity(
         });
     let (kind, name, definition_range, docstring_range, module) =
         if let Some(FindDefinitionItemWithDocstring {
-        metadata,
-        definition_range: definition_location,
-        module,
-        docstring_range,
-        display_name,
+            metadata,
+            definition_range: definition_location,
+            module,
+            docstring_range,
+            display_name,
         }) = definition
         {
             let kind = metadata.symbol_kind();
@@ -1049,7 +1050,7 @@ pub fn get_hover_with_verbosity(
         && hover_identifier
             .as_ref()
             .is_some_and(|id| !matches!(id.context, IdentifierContext::ClassDef { .. }));
-    let declared_function_display = if callee_range_opt.is_none() {
+    let declared_function_display = if use_declared_function_display {
         match (&type_, module.as_ref(), definition_range) {
             (Type::Function(_), Some(module), Some(definition_range)) => {
                 transaction.get_ast(handle).and_then(|ast| {
@@ -1097,15 +1098,14 @@ pub fn get_hover_with_verbosity(
             (rendered, can_increase_verbosity)
         }
     });
-    let (type_display, can_increase_verbosity) =
-        match (declared_function_display, solved_display) {
-            (Some(display), Some((_, can_increase))) if options.verbosity_level == 0 => {
-                (Some(display), can_increase)
-            }
-            (_, Some((display, can_increase))) => (Some(display), can_increase),
-            (Some(display), None) => (Some(display), false),
-            (None, None) => (None, false),
-        };
+    let (type_display, can_increase_verbosity) = match (declared_function_display, solved_display) {
+        (Some(display), Some((_, can_increase))) if options.verbosity_level == 0 => {
+            (Some(display), can_increase)
+        }
+        (_, Some((display, can_increase))) => (Some(display), can_increase),
+        (Some(display), None) => (Some(display), false),
+        (None, None) => (None, false),
+    };
 
     let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
         Some(Docstring(docstring, module))
