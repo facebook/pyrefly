@@ -803,9 +803,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // `key` is only `None` for a syntactically invalid dict comprehension
                     // (parser error recovery); the parser already reports the syntax error.
                     let key_ty = match &x.key {
-                        Some(key) => {
-                            self.dict_key_infer_with_hint(key, key_hint, errors, None)
-                        }
+                        Some(key) => self.dict_key_infer_with_hint(key, key_hint, errors, None),
                         None => self.heap.mk_any_error(),
                     };
                     let value_ty =
