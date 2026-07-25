@@ -203,6 +203,26 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    /// Whether a sequence element sub-pattern's refutability is fully captured by
+    /// `sequence_element_atomic_op`, or it is irrefutable. Only when every element is
+    /// fully characterized is it sound to strip the spurious capture `Placeholder`s and let
+    /// the arm's negation subtract its covered union member for subsequent cases & exhaustiveness checks.
+    /// This behavior is conservative; a refutable element we can't fully express (nested patterns, class pattern with sub-arguments)
+    /// keeps its `Placeholder`.
+    fn sequence_element_fully_characterized(pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::MatchAs(p) => p
+                .pattern
+                .as_deref()
+                .is_none_or(Self::sequence_element_fully_characterized),
+            Pattern::MatchClass(x) => {
+                x.arguments.patterns.is_empty() && x.arguments.keywords.is_empty()
+            }
+            Pattern::MatchValue(_) | Pattern::MatchSingleton(_) | Pattern::MatchStar(_) => true,
+            _ => false,
+        }
+    }
+
     /// Traverse a pattern and bind all the names; key is the reference for
     /// the value that's being matched on.
     fn bind_pattern(
@@ -283,6 +303,10 @@ impl<'a> BindingsBuilder<'a> {
                     .patterns
                     .iter()
                     .all(|p| p.is_irrefutable() || p.is_wildcard());
+                let sequence_fully_characterized = num_patterns == num_non_star_patterns
+                    && x.patterns
+                        .iter()
+                        .all(Self::sequence_element_fully_characterized);
                 let mut subject_idx = subject_idx;
                 let synthesized_len = Expr::NumberLiteral(ExprNumberLiteral {
                     node_index: AtomicNodeIndex::default(),
@@ -302,28 +326,37 @@ impl<'a> BindingsBuilder<'a> {
                     NarrowOp::Atomic(None, AtomicNarrowOp::IsSequence),
                     NarrowOp::Atomic(None, len_narrow_op.clone()),
                 ]);
-                let subject_narrow_op = if num_patterns == num_non_star_patterns {
+                let element_facet_ops: Vec<NarrowOp> = if num_patterns == num_non_star_patterns {
+                    x.patterns
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| {
+                            Self::sequence_element_atomic_op(p).map(|atomic| {
+                                NarrowOp::Atomic(
+                                    Some(FacetSubject {
+                                        chain: UnresolvedFacetChain::new(Vec1::new(
+                                            UnresolvedFacetKind::Index(i as i64),
+                                        )),
+                                        origin: FacetOrigin::Direct,
+                                        allow_never_collapse: false,
+                                    }),
+                                    atomic,
+                                )
+                            })
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let subject_narrow_op = if element_facet_ops.is_empty() {
+                    combined_narrow_op.clone()
+                } else {
                     let mut ops = vec![
                         NarrowOp::Atomic(None, AtomicNarrowOp::IsSequence),
                         NarrowOp::Atomic(None, len_narrow_op.clone()),
                     ];
-                    for (i, p) in x.patterns.iter().enumerate() {
-                        if let Some(atomic) = Self::sequence_element_atomic_op(p) {
-                            ops.push(NarrowOp::Atomic(
-                                Some(FacetSubject {
-                                    chain: UnresolvedFacetChain::new(Vec1::new(
-                                        UnresolvedFacetKind::Index(i as i64),
-                                    )),
-                                    origin: FacetOrigin::Direct,
-                                    allow_never_collapse: false,
-                                }),
-                                atomic,
-                            ));
-                        }
-                    }
+                    ops.extend(element_facet_ops.iter().cloned());
                     NarrowOp::And(ops)
-                } else {
-                    combined_narrow_op.clone()
                 };
                 subject_idx = self.insert_binding(
                     Key::PatternNarrow(x.range()),
@@ -350,6 +383,13 @@ impl<'a> BindingsBuilder<'a> {
                 } else if match_subject.is_synthetic() {
                     let subject_op = if all_subpatterns_irrefutable {
                         combined_narrow_op
+                    } else if sequence_fully_characterized {
+                        let mut ops = vec![
+                            NarrowOp::Atomic(None, AtomicNarrowOp::IsSequence),
+                            NarrowOp::Atomic(None, len_narrow_op.clone()),
+                        ];
+                        ops.extend(element_facet_ops.iter().cloned());
+                        NarrowOp::And(ops)
                     } else {
                         NarrowOp::And(vec![
                             combined_narrow_op,
@@ -457,7 +497,7 @@ impl<'a> BindingsBuilder<'a> {
                     KeyExpect::UnpackedLength(x.range),
                     BindingExpect::UnpackedLength(subject_idx, x.range, expect),
                 );
-                if all_subpatterns_irrefutable
+                if (all_subpatterns_irrefutable || sequence_fully_characterized)
                     && let Some(subject) = match_subject.as_single()
                     && let Some((op, _)) = narrow_ops.scope.0.get_mut(subject.name())
                 {

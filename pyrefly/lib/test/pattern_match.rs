@@ -1437,7 +1437,6 @@ def f(n: Node) -> int:
 
 // https://github.com/facebook/pyrefly/issues/3805
 testcase!(
-    bug = "match on a union of tuples is not seen as exhaustive: the arms cover it but a missing-return is still reported (per-element narrowing is fixed; exhaustiveness needs a sequence coverage gate)",
     test_match_tuple_union_narrowing,
     r#"
 def foo(b: bool) -> tuple[str, int] | tuple[int, str]:
@@ -1445,7 +1444,7 @@ def foo(b: bool) -> tuple[str, int] | tuple[int, str]:
         return "foo", 1
     else:
         return 2, "bar"
-def bar(b: bool) -> int:  # E: one or more paths are missing an explicit
+def bar(b: bool) -> int:
     match foo(b):
         case (str() as x, y):
             return y
@@ -1468,6 +1467,10 @@ def named(t: tuple[str, int] | tuple[int, str]) -> None:
         case (str() as x, y):
             assert_type(x, str)
             assert_type(y, int)
+        case (x2, y2):
+            assert_type(x2, int)
+            assert_type(y2, str)
+    match t:
         case (x2, str() as y2):
             assert_type(x2, int)
             assert_type(y2, str)
@@ -1476,9 +1479,47 @@ def synthetic() -> None:
         case (str() as x, y):
             assert_type(x, str)
             assert_type(y, int)
+        case (x2, y2):
+            assert_type(x2, int)
+            assert_type(y2, str)
+    match foo(True):
         case (x2, str() as y2):
             assert_type(x2, int)
             assert_type(y2, str)
+"#,
+);
+
+testcase!(
+    test_match_sequence_union_exhaustive,
+    r#"
+def f(t: tuple[int, str] | tuple[str, int]) -> int:
+    match t:
+        case (int(), str()):
+            return 1
+        case (str(), int()):
+            return 2
+"#,
+);
+
+testcase!(
+    test_match_sequence_union_partial_not_exhaustive,
+    r#"
+def f(t: tuple[int, str] | tuple[str, int]) -> int:  # E: one or more paths are missing an explicit
+    match t:
+        case (int(), str()):
+            return 1
+"#,
+);
+
+testcase!(
+    test_match_sequence_nested_element_not_exhaustive,
+    r#"
+def f(t: tuple[tuple[int], str] | tuple[str, int]) -> int:  # E: one or more paths are missing an explicit
+    match t:
+        case ([a], str()):
+            return 1
+        case (str(), int()):
+            return 2
 "#,
 );
 
@@ -1511,12 +1552,11 @@ def f(t: tuple[object, int] | tuple[object, str]) -> None:
 
 // https://github.com/facebook/pyrefly/issues/3883
 testcase!(
-    bug = "sequence pattern with a literal element does not subtract the tuple from the union, so the match is not seen as exhaustive",
     test_match_sequence_literal_element,
     r#"
 from typing import Literal, reveal_type
 type MyUnion = Literal["a"] | tuple[Literal["b"], int] | tuple[Literal["c"], int]
-def broken(value: MyUnion) -> str:  # E: one or more paths are missing an explicit
+def exhaustive(value: MyUnion) -> str:
     match value:
         case "a":
             return "a"
@@ -1524,7 +1564,7 @@ def broken(value: MyUnion) -> str:  # E: one or more paths are missing an explic
             return "b"
         case "c", v:
             return "c"
-    reveal_type(value)  # E: revealed type: tuple[Literal['b'], int] | tuple[Literal['c'], int]
+    reveal_type(value)  # E: revealed type: Never
 "#,
 );
 
