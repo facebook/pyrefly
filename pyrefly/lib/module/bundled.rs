@@ -25,6 +25,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lock::Mutex;
+use starlark_map::small_map::SmallMap;
 use tempfile::NamedTempFile;
 
 pub fn set_readonly(path: &Path, value: bool) -> anyhow::Result<()> {
@@ -32,6 +33,118 @@ pub fn set_readonly(path: &Path, value: bool) -> anyhow::Result<()> {
     permissions.set_readonly(value);
     fs::set_permissions(path, permissions)?;
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BundleFile {
+    pub(crate) import_path: PathBuf,
+    pub(crate) storage_path: PathBuf,
+    pub(crate) contents: String,
+}
+
+#[derive(Debug)]
+struct Candidate {
+    path: PathBuf,
+    is_package: bool,
+}
+
+/// An eagerly resolved view of one virtual import root.
+///
+/// Package initializers take precedence over same-name modules, and modules block descendants.
+#[derive(Debug, Clone)]
+pub(crate) struct Bundle {
+    find: SmallMap<ModuleName, PathBuf>,
+    load: SmallMap<PathBuf, Arc<String>>,
+}
+
+impl Bundle {
+    pub(crate) fn new<Files>(files: Files) -> anyhow::Result<Self>
+    where
+        Files: IntoIterator<Item = BundleFile>,
+    {
+        let mut candidates: SmallMap<ModuleName, Candidate> = SmallMap::new();
+        let mut load = SmallMap::new();
+        for file in files {
+            let module = ModuleName::from_relative_path(&file.import_path)?;
+            let is_package = file
+                .import_path
+                .file_stem()
+                .is_some_and(|stem| stem == "__init__");
+            if let Some(candidate) = candidates.get_mut(&module) {
+                if is_package && !candidate.is_package {
+                    candidate.path = file.storage_path.clone();
+                    candidate.is_package = true;
+                }
+            } else {
+                candidates.insert(
+                    module,
+                    Candidate {
+                        path: file.storage_path.clone(),
+                        is_package,
+                    },
+                );
+            }
+            load.insert(file.storage_path, Arc::new(file.contents));
+        }
+
+        let mut find = SmallMap::new();
+        'modules: for (module, candidate) in &candidates {
+            let mut ancestor = *module;
+            while let Some(parent) = ancestor.parent() {
+                ancestor = parent;
+                if candidates
+                    .get(&parent)
+                    .is_some_and(|candidate| !candidate.is_package)
+                {
+                    continue 'modules;
+                }
+            }
+            find.insert(*module, candidate.path.clone());
+        }
+        Ok(Self { find, load })
+    }
+
+    pub(crate) fn find(&self, module: ModuleName) -> Option<&PathBuf> {
+        self.find.get(&module)
+    }
+
+    pub(crate) fn load(&self, path: &Path) -> Option<Arc<String>> {
+        self.load.get(path).cloned()
+    }
+
+    pub(crate) fn modules(&self) -> impl Iterator<Item = ModuleName> + '_ {
+        self.find.keys().copied()
+    }
+
+    pub(crate) fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)> {
+        self.load.iter()
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn assert_bundle_order_independent(files: impl IntoIterator<Item = BundleFile>) {
+    fn loaded_modules(bundle: &Bundle) -> Vec<(ModuleName, PathBuf, Arc<String>)> {
+        let mut modules = bundle.modules().collect::<Vec<_>>();
+        modules.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        modules
+            .into_iter()
+            .map(|module| {
+                let path = bundle
+                    .find(module)
+                    .expect("bundle modules have selected paths");
+                let contents = bundle
+                    .load(path)
+                    .expect("selected bundle paths have contents");
+                (module, path.clone(), contents)
+            })
+            .collect()
+    }
+
+    let files = files.into_iter().collect::<Vec<_>>();
+    let forward = Bundle::new(files.clone()).expect("static bundle files should be valid");
+    let reverse =
+        Bundle::new(files.into_iter().rev()).expect("static bundle files should be valid");
+    assert_eq!(loaded_modules(&forward), loaded_modules(&reverse));
 }
 
 /// Creates a base config file for bundled stubs with common settings.
@@ -165,4 +278,88 @@ pub trait BundledStub {
     }
     fn get_path_name(&self) -> String;
     fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bundle(files: &[(&str, &str)]) -> Bundle {
+        Bundle::new(files.iter().map(|(module_path, path)| BundleFile {
+            import_path: PathBuf::from(module_path),
+            storage_path: PathBuf::from(path),
+            contents: path.to_string(),
+        }))
+        .unwrap()
+    }
+
+    fn assert_found(bundle: &Bundle, module: &str, path: &str) {
+        let path = PathBuf::from(path);
+        assert_eq!(bundle.find(ModuleName::from_str(module)), Some(&path));
+        assert_eq!(
+            bundle.load(&path).as_deref().map(String::as_str),
+            path.to_str()
+        );
+    }
+
+    #[test]
+    fn test_bundled_package_initializer_precedes_module_file() {
+        let module_then_package = bundle(&[
+            ("foo.pyi", "foo.pyi"),
+            ("foo/__init__.pyi", "foo/__init__.pyi"),
+        ]);
+        let package_then_module = bundle(&[
+            ("foo/__init__.pyi", "foo/__init__.pyi"),
+            ("foo.pyi", "foo.pyi"),
+        ]);
+        assert_found(&module_then_package, "foo", "foo/__init__.pyi");
+        assert_found(&package_then_module, "foo", "foo/__init__.pyi");
+    }
+
+    #[test]
+    fn test_bundled_module_parent_blocks_child_module() {
+        let bundle = bundle(&[("foo/bar.pyi", "foo/bar.pyi"), ("foo.pyi", "foo.pyi")]);
+        assert_found(&bundle, "foo", "foo.pyi");
+        assert!(bundle.find(ModuleName::from_str("foo.bar")).is_none());
+    }
+
+    #[test]
+    fn test_bundled_namespace_package_merges_files() {
+        let bundle = bundle(&[
+            ("ns/left.pyi", "first/ns/left.pyi"),
+            ("ns/right.pyi", "second/ns/right.pyi"),
+        ]);
+        assert_found(&bundle, "ns.left", "first/ns/left.pyi");
+        assert_found(&bundle, "ns.right", "second/ns/right.pyi");
+    }
+
+    #[test]
+    fn test_bundled_equal_kind_candidates_follow_file_order() {
+        let bundle = bundle(&[
+            ("duplicate.pyi", "first/duplicate.pyi"),
+            ("duplicate.pyi", "second/duplicate.pyi"),
+        ]);
+        assert_found(&bundle, "duplicate", "first/duplicate.pyi");
+    }
+
+    #[test]
+    fn test_bundled_regular_package_includes_all_children_in_the_root() {
+        let bundle = bundle(&[
+            ("pkg/__init__.pyi", "first/pkg/__init__.pyi"),
+            ("pkg/child.pyi", "second/pkg/child.pyi"),
+        ]);
+        assert_found(&bundle, "pkg", "first/pkg/__init__.pyi");
+        assert_found(&bundle, "pkg.child", "second/pkg/child.pyi");
+    }
+
+    #[test]
+    fn test_bundled_regular_package_preserves_overlaid_namespace_children() {
+        let bundle = bundle(&[
+            ("ns/left.pyi", "first/ns/left.pyi"),
+            ("ns/__init__.pyi", "second/ns/__init__.pyi"),
+            ("ns/right.pyi", "second/ns/right.pyi"),
+        ]);
+        assert_found(&bundle, "ns.left", "first/ns/left.pyi");
+        assert_found(&bundle, "ns.right", "second/ns/right.pyi");
+    }
 }

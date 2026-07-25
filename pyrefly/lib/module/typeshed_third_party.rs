@@ -19,55 +19,63 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
+use crate::module::bundled::Bundle;
+use crate::module::bundled::BundleFile;
 use crate::module::bundled::BundledStub;
 use crate::module::bundled::create_bundled_stub_config;
 
 #[derive(Debug, Clone)]
 pub struct BundledTypeshedThirdParty {
-    /// Maps module name to (stub path, typeshed package name).
-    /// The package name is needed for correct `types-{package}` recommendations,
-    /// since the module name often differs from the package name
-    /// (e.g., module `dateutil` comes from package `python-dateutil`).
-    pub find: SmallMap<ModuleName, (PathBuf, ModuleName)>,
-    pub load: SmallMap<PathBuf, Arc<String>>,
+    bundle: Bundle,
+    package_names: SmallMap<ModuleName, ModuleName>,
 }
 
 impl BundledStub for BundledTypeshedThirdParty {
     fn new() -> anyhow::Result<Self> {
         let (contents, path_to_package) = bundled_third_party_stubs()?;
-        let mut res = Self {
-            find: SmallMap::new(),
-            load: SmallMap::new(),
-        };
-        for (relative_path, contents) in contents {
-            let module_name = ModuleName::from_relative_path(&relative_path)?;
-            let package_name = path_to_package
-                .get(&relative_path)
-                .map(|s| ModuleName::from_str(s))
-                .unwrap_or_else(|| ModuleName::from_name(&module_name.first_component()));
-            res.find
-                .insert(module_name, (relative_path.clone(), package_name));
-            res.load.insert(relative_path, Arc::new(contents));
-        }
-        Ok(res)
+        let files = contents
+            .into_iter()
+            .map(|(relative_path, contents)| BundleFile {
+                import_path: relative_path.clone(),
+                storage_path: relative_path,
+                contents,
+            });
+        let bundle = Bundle::new(files)?;
+        let package_names = bundle
+            .modules()
+            .map(|module| {
+                let path = bundle
+                    .find(module)
+                    .expect("bundle modules have selected paths");
+                let package_name = path_to_package
+                    .get(path)
+                    .map(|name| ModuleName::from_str(name))
+                    .unwrap_or_else(|| ModuleName::from_name(&module.first_component()));
+                (module, package_name)
+            })
+            .collect();
+        Ok(Self {
+            bundle,
+            package_names,
+        })
     }
 
     fn find(&self, module: ModuleName) -> Option<ModulePath> {
-        self.find
-            .get(&module)
-            .map(|(path, _)| ModulePath::bundled_typeshed_third_party(path.clone()))
+        self.bundle
+            .find(module)
+            .map(|path| ModulePath::bundled_typeshed_third_party(path.clone()))
     }
 
     fn load(&self, path: &Path) -> Option<Arc<String>> {
-        self.load.get(path).cloned()
+        self.bundle.load(path)
     }
 
     fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)> {
-        self.load.iter()
+        self.bundle.load_map()
     }
 
     fn modules(&self) -> impl Iterator<Item = ModuleName> {
-        self.find.keys().copied()
+        self.bundle.modules()
     }
 
     fn get_path_name(&self) -> String {
@@ -88,7 +96,7 @@ impl BundledStub for BundledTypeshedThirdParty {
 
 impl BundledTypeshedThirdParty {
     pub fn package_name(&self, module: ModuleName) -> Option<&ModuleName> {
-        self.find.get(&module).map(|(_, pkg)| pkg)
+        self.package_names.get(&module)
     }
 }
 
@@ -105,6 +113,7 @@ pub fn typeshed_third_party() -> anyhow::Result<&'static BundledTypeshedThirdPar
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::module::bundled::assert_bundle_order_independent;
 
     #[test]
     fn test_typeshed_materialize() {
@@ -129,5 +138,15 @@ mod tests {
             .expect("google.cloud.ndb should have a package name");
         assert_eq!(protobuf_pkg.as_str(), "protobuf");
         assert_eq!(ndb_pkg.as_str(), "google-cloud-ndb");
+    }
+
+    #[test]
+    fn test_typeshed_third_party_lookup_is_file_order_independent() {
+        let typeshed = typeshed_third_party().unwrap();
+        assert_bundle_order_independent(typeshed.load_map().map(|(path, contents)| BundleFile {
+            import_path: path.clone(),
+            storage_path: path.clone(),
+            contents: contents.as_str().to_owned(),
+        }));
     }
 }

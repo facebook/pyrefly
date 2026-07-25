@@ -20,49 +20,49 @@ use pyrefly_config::error_kind::Severity;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
-use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
+use crate::module::bundled::Bundle;
+use crate::module::bundled::BundleFile;
 use crate::module::bundled::BundledStub;
 use crate::module::bundled::create_bundled_stub_config;
 
 #[derive(Debug, Clone)]
 pub struct BundledTypeshedStdlib {
-    pub find: SmallMap<ModuleName, PathBuf>,
-    pub load: SmallMap<PathBuf, Arc<String>>,
+    bundle: Bundle,
 }
 
 impl BundledStub for BundledTypeshedStdlib {
     fn new() -> anyhow::Result<Self> {
         let contents = bundled_typeshed()?;
-        let mut res = Self {
-            find: SmallMap::new(),
-            load: SmallMap::new(),
-        };
-        for (relative_path, contents) in contents {
-            let module_name = ModuleName::from_relative_path(&relative_path)?;
-            res.find.insert(module_name, relative_path.clone());
-            res.load.insert(relative_path, Arc::new(contents));
-        }
-        Ok(res)
+        let provider = contents
+            .into_iter()
+            .map(|(relative_path, contents)| BundleFile {
+                import_path: relative_path.clone(),
+                storage_path: relative_path,
+                contents,
+            });
+        Ok(Self {
+            bundle: Bundle::new(provider)?,
+        })
     }
 
     fn find(&self, module: ModuleName) -> Option<ModulePath> {
-        self.find
-            .get(&module)
+        self.bundle
+            .find(module)
             .map(|path| ModulePath::bundled_typeshed(path.clone()))
     }
 
     fn load(&self, path: &Path) -> Option<Arc<String>> {
-        self.load.get(path).cloned()
+        self.bundle.load(path)
     }
 
     fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)> {
-        self.load.iter()
+        self.bundle.load_map()
     }
 
     fn modules(&self) -> impl Iterator<Item = ModuleName> {
-        self.find.keys().copied()
+        self.bundle.modules()
     }
 
     fn get_path_name(&self) -> String {
@@ -134,6 +134,7 @@ pub fn stdlib_search_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::module::bundled::assert_bundle_order_independent;
 
     #[test]
     fn test_typeshed_materialize() {
@@ -142,5 +143,15 @@ mod tests {
         // Do it twice, to check that works.
         typeshed.materialized_path_on_disk().unwrap();
         typeshed.write(&path).unwrap();
+    }
+
+    #[test]
+    fn test_typeshed_lookup_is_file_order_independent() {
+        let typeshed = typeshed().unwrap();
+        assert_bundle_order_independent(typeshed.load_map().map(|(path, contents)| BundleFile {
+            import_path: path.clone(),
+            storage_path: path.clone(),
+            contents: contents.as_str().to_owned(),
+        }));
     }
 }
