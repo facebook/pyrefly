@@ -25,6 +25,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lock::Mutex;
+use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use tempfile::NamedTempFile;
 
@@ -44,7 +45,7 @@ pub(crate) struct BundleFile {
 
 #[derive(Debug)]
 struct Candidate {
-    path: PathBuf,
+    load_index: usize,
     is_package: bool,
 }
 
@@ -53,7 +54,7 @@ struct Candidate {
 /// Package initializers take precedence over same-name modules, and modules block descendants.
 #[derive(Debug, Clone)]
 pub(crate) struct Bundle {
-    find: SmallMap<ModuleName, PathBuf>,
+    find: SmallMap<ModuleName, usize>,
     load: SmallMap<PathBuf, Arc<String>>,
 }
 
@@ -70,21 +71,25 @@ impl Bundle {
                 .import_path
                 .file_stem()
                 .is_some_and(|stem| stem == "__init__");
+            let storage_path = Hashed::new(file.storage_path);
+            let load_index = load
+                .get_index_of_hashed(storage_path.as_ref())
+                .unwrap_or(load.len());
             if let Some(candidate) = candidates.get_mut(&module) {
                 if is_package && !candidate.is_package {
-                    candidate.path = file.storage_path.clone();
+                    candidate.load_index = load_index;
                     candidate.is_package = true;
                 }
             } else {
                 candidates.insert(
                     module,
                     Candidate {
-                        path: file.storage_path.clone(),
+                        load_index,
                         is_package,
                     },
                 );
             }
-            load.insert(file.storage_path, Arc::new(file.contents));
+            load.insert_hashed(storage_path, Arc::new(file.contents));
         }
 
         let mut find = SmallMap::new();
@@ -99,13 +104,18 @@ impl Bundle {
                     continue 'modules;
                 }
             }
-            find.insert(*module, candidate.path.clone());
+            find.insert(*module, candidate.load_index);
         }
         Ok(Self { find, load })
     }
 
     pub(crate) fn find(&self, module: ModuleName) -> Option<&PathBuf> {
-        self.find.get(&module)
+        let index = *self.find.get(&module)?;
+        let (path, _) = self
+            .load
+            .get_index(index)
+            .expect("bundle find indices refer to immutable load entries");
+        Some(path)
     }
 
     pub(crate) fn load(&self, path: &Path) -> Option<Arc<String>> {
@@ -340,6 +350,33 @@ mod tests {
             ("duplicate.pyi", "second/duplicate.pyi"),
         ]);
         assert_found(&bundle, "duplicate", "first/duplicate.pyi");
+    }
+
+    #[test]
+    fn test_bundled_duplicate_storage_path_keeps_stable_indices() {
+        let bundle = Bundle::new([
+            BundleFile {
+                import_path: PathBuf::from("first.pyi"),
+                storage_path: PathBuf::from("shared.pyi"),
+                contents: "first".to_owned(),
+            },
+            BundleFile {
+                import_path: PathBuf::from("second.pyi"),
+                storage_path: PathBuf::from("shared.pyi"),
+                contents: "second".to_owned(),
+            },
+        ])
+        .unwrap();
+        let shared = PathBuf::from("shared.pyi");
+        assert_eq!(bundle.find(ModuleName::from_str("first")), Some(&shared));
+        assert_eq!(bundle.find(ModuleName::from_str("second")), Some(&shared));
+        assert_eq!(
+            bundle
+                .load(Path::new("shared.pyi"))
+                .as_deref()
+                .map(String::as_str),
+            Some("second")
+        );
     }
 
     #[test]
