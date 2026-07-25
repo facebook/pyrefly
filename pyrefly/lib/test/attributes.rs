@@ -2402,7 +2402,7 @@ testcase!(
     r#"
 # Partial union failure with 3 types: attribute exists on 1, missing on 2
 def f(x: str | int | None):
-    return x.split()  # E: Object of class `NoneType` has no attribute `split`\nObject of class `int` has no attribute `split` # !E: Did you mean
+    return x.split()  # E: Object of type `int | str | None` has no attribute `split` # !E: Did you mean
 "#,
 );
 
@@ -2434,7 +2434,7 @@ class A:
 class B:
     value: str
 def f(x: A | B):
-    return x.vaule  # E: Object of class `A` has no attribute `vaule`\nObject of class `B` has no attribute `vaule`\n  Did you mean `value`?
+    return x.vaule  # E: Object of type `A | B` has no attribute `vaule`\n  Object of class `A` has no attribute `vaule`\n  Object of class `B` has no attribute `vaule`\n  Did you mean `value`?
 "#,
 );
 
