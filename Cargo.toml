@@ -1,6 +1,5 @@
 [patch.crates-io]
 backtrace = { git = "https://github.com/rust-lang/backtrace-rs", rev = "df979dcf80027eb047d7bb9e0874710c15009f31" }
-rustversion = { git = "https://github.com/fbsource/rustversion", rev = "3f072e049635b7463275fc4edebbbed3840d9297" }
 
 [profile.release]
 debug = 1
@@ -21,7 +20,9 @@ members = [
   "crates/pyrefly_bundled",
   "crates/pyrefly_config",
   "crates/pyrefly_derive",
+  "crates/pyrefly_glean_schema",
   "crates/pyrefly_graph",
+  "crates/pyrefly_lsp_test",
   "crates/pyrefly_python",
   "crates/pyrefly_types",
   "crates/pyrefly_util",

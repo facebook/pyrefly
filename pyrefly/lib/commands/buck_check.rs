@@ -12,7 +12,7 @@ use std::str::FromStr;
 use anyhow::Context as _;
 use clap::Parser;
 use dupe::Dupe;
-use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::buck_check::BuckCheckSourceDatabase;
 use pyrefly_config::base::InferReturnTypes;
 use pyrefly_config::error::ErrorDisplayConfig;
@@ -104,7 +104,7 @@ fn read_input_file(path: &Path) -> anyhow::Result<InputFile> {
 
 fn compute_errors(
     sys_info: SysInfo,
-    sourcedb: impl SourceDatabase + 'static,
+    sourcedb: impl ModuleEnumerator + 'static,
     thread_count: ThreadCount,
     report_pysa: Option<&Path>,
     report_pysa_format: report::pysa::PysaFormat,

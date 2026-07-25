@@ -10,6 +10,9 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Function;
+use pyrefly_types::dimension::Int;
+use pyrefly_types::dimension::gradual_size;
+use pyrefly_util::display::commas_iter;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
@@ -24,11 +27,13 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::QuantifiedHandle;
+use crate::solver::solver::type_as_intvar_solution;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::literal::Lit;
 use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedIdentity;
@@ -43,6 +48,19 @@ use crate::types::types::Forallable;
 use crate::types::types::TArgs;
 use crate::types::types::TParams;
 use crate::types::types::Type;
+
+/// Format a generic entity for implicit-any error messages, e.g.
+/// `` class `Foo[T, *Ts]` `` (or `` class `Foo` `` when there are no tparams).
+fn format_generic_entity(noun: &str, name: &Name, tparams: &TParams) -> String {
+    if tparams.is_empty() {
+        format!("{noun} `{name}`")
+    } else {
+        format!(
+            "{noun} `{name}[{}]`",
+            commas_iter(|| tparams.iter().map(|t| t.display_name_with_prefix()))
+        )
+    }
+}
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
@@ -193,13 +211,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
+        let tparams = self.get_class_tparams(cls);
+        let tparams_for_error = tparams.dupe();
         let targs = self.create_default_targs(
-            self.get_class_tparams(cls),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("class `{}`", cls.name()),
+                    format_generic_entity("class", cls.name(), &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -213,13 +233,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        let tparams = forall.tparams.dupe();
+        let tparams_for_error = tparams.dupe();
+        let alias_name = forall.body.name();
         let targs = self.create_default_targs(
-            forall.tparams.dupe(),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("type alias `{}`", forall.body.name()),
+                    format_generic_entity("type alias", &alias_name, &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -453,6 +476,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                         ));
                     }
+                    QuantifiedKind::IntVar => {
+                        checked_targs.push(self.create_next_intvar_arg(
+                            param,
+                            targs_cursor.consume_for_typevar_arg(),
+                            range,
+                            errors,
+                        ));
+                    }
                 }
             } else {
                 // We've run out of arguments, and we have type parameters left to consume.
@@ -611,6 +642,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorKind::InvalidTypeVarTuple,
                         "`TypeVarTuple` must be unpacked".to_owned(),
                     )
+                } else if matches!(arg, Type::Ellipsis) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidAnnotation,
+                        "`...` cannot be used for type parameter".to_owned(),
+                    )
                 } else if arg.is_kind_param_spec() {
                     self.error(
                         errors,
@@ -620,6 +658,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 } else {
                     let restriction = param.restriction();
+                    // Match the cheap `arg` literal shape before materializing the
+                    // parameter's upper bound, so only an integer literal argument
+                    // pays for computing the bound.
+                    let arg =
+                        if let Type::Literal(lit) = arg
+                            && let Lit::Int(i) = &lit.value
+                            && matches!(param.upper_bound(self.stdlib, self.heap), Type::Int(_))
+                        {
+                            Type::Int(i.as_i64().map(Int::Literal).unwrap_or_else(|| {
+                                Int::Symbolic(Box::new(Type::Literal(lit.clone())))
+                            }))
+                        } else {
+                            arg.clone()
+                        };
                     if validate_restriction && restriction.is_restricted() {
                         let tcc = &|| {
                             TypeCheckContext::of_kind(TypeCheckKind::TypeVarSpecialization(
@@ -644,9 +696,50 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             tcc,
                         );
                     }
-                    arg.clone()
+                    arg
                 }
             }
+        }
+    }
+
+    fn create_next_intvar_arg(
+        &self,
+        param: &Quantified,
+        arg: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match arg {
+            Type::Unpack(_) => {
+                // Shape argument parsing normally rejects this first; keep the
+                // targ-level recovery path for callers that bypass that parser.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadUnpacking,
+                    format!(
+                        "Unpacked argument cannot be used for type parameter {}",
+                        param.name()
+                    ),
+                );
+                gradual_size()
+            }
+            _ => type_as_intvar_solution(arg).unwrap_or_else(|| {
+                // Shape argument parsing normally rejects concrete source errors
+                // first; this is the class-targ recovery path for invalid values
+                // that reach specialization directly.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadSpecialization,
+                    format!(
+                        "Expected a valid Int expression for type parameter `{}`, got `{}`",
+                        param.name(),
+                        self.for_display(arg.clone())
+                    ),
+                );
+                gradual_size()
+            }),
         }
     }
 

@@ -24,8 +24,10 @@ use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::context::PysaResolver;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionDefinition;
+use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionParameter;
 use crate::report::pysa::function::FunctionParameters;
+use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::FunctionSignature;
 use crate::report::pysa::function::export_function_definitions;
 use crate::report::pysa::module::ModuleIds;
@@ -116,12 +118,18 @@ fn test_exported_functions(
         &context,
     );
 
-    // Sort definitions by function Id.
+    // Sort definitions by name (with function id as a deterministic tiebreaker).
     let mut actual_function_definitions = actual_function_definitions
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect::<Vec<_>>();
-    actual_function_definitions.sort_by_key(|(function_id, _)| function_id.clone());
+    actual_function_definitions.sort_by(|(id_a, def_a), (id_b, def_b)| {
+        def_a
+            .base
+            .name
+            .cmp(&def_b.base.name)
+            .then_with(|| id_a.cmp(id_b))
+    });
     let actual_function_definitions = actual_function_definitions
         .into_iter()
         .map(|(_, function_definition)| function_definition)
@@ -492,13 +500,6 @@ def foo():
     &|_context: &ModuleContext| {
         vec![
             create_function_definition(
-                "foo",
-                ScopeParent::TopLevel,
-                /* overloads */
-                vec![create_simple_signature(vec![], PysaType::none())],
-            )
-            .with_name_location(Some(create_location(2, 5, 2, 8))),
-            create_function_definition(
                 "bar",
                 ScopeParent::Function {
                     func_def_index: FuncDefIndex(0),
@@ -507,6 +508,13 @@ def foo():
                 vec![create_simple_signature(vec![], PysaType::none())],
             )
             .with_name_location(Some(create_location(3, 9, 3, 12))),
+            create_function_definition(
+                "foo",
+                ScopeParent::TopLevel,
+                /* overloads */
+                vec![create_simple_signature(vec![], PysaType::none())],
+            )
+            .with_name_location(Some(create_location(2, 5, 2, 8))),
         ]
     },
 );
@@ -975,6 +983,48 @@ class Foo:
         ]
     },
 );
+
+#[test]
+fn test_class_field_id_distinct_and_stable() {
+    let module_name = "test";
+    let python_code = r#"
+import typing
+class Foo:
+    x: typing.Callable[[int], int] = lambda x: x
+    y: typing.Callable[[int], int] = lambda x: x
+"#;
+
+    let state = create_state(module_name, python_code);
+    let transaction = state.transaction();
+    let handles = transaction.handles();
+    let module_ids = ModuleIds::new(&handles);
+    let test_module_handle = get_handle_for_module_name(module_name, &transaction);
+    let resolver = PysaResolver::new_for_test(
+        &transaction,
+        &module_ids,
+        test_module_handle.dupe(),
+        &handles,
+    );
+    let context = ModuleContext {
+        answers_context: ModuleAnswersContext::create(
+            test_module_handle.dupe(),
+            &transaction,
+            &module_ids,
+        ),
+        resolver: &resolver,
+    };
+
+    let field_id = |ref_: &FunctionRef| match &ref_.function_id {
+        FunctionId::ClassField { field_id, .. } => field_id.to_int(),
+        other => panic!("expected a ClassField function id, got {other:?}"),
+    };
+
+    let x_ref = get_method_ref(module_name, "Foo", "x", &context);
+    let y_ref = get_method_ref(module_name, "Foo", "y", &context);
+
+    assert_eq!(field_id(&x_ref), 0);
+    assert_eq!(field_id(&y_ref), 1);
+}
 
 exported_functions_testcase!(
     test_export_field_alias_function,
@@ -1635,6 +1685,43 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
             .with_is_def_statement(false)
             .with_defining_class(get_class_ref("test", "MyTuple", context))
             .with_overridden_base_method(get_method_ref("builtins", "tuple", "__new__", context)),
+            create_function_definition(
+                "_replace",
+                ScopeParent::Class {
+                    class_id: ClassId::from_int(0),
+                },
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::PosOnly {
+                            name: Some("self".into()),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "MyTuple", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::KwOnly {
+                            name: "x".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: false,
+                        },
+                        FunctionParameter::KwOnly {
+                            name: "y".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: false,
+                        },
+                    ],
+                    PysaType::from_class(&get_class("test", "MyTuple", context), context),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "MyTuple", context))
+            .with_overridden_base_method(get_method_ref(
+                "_typeshed._type_checker_internals",
+                "NamedTupleFallback",
+                "_replace",
+                context,
+            )),
         ]
     },
 );

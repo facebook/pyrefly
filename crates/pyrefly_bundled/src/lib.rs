@@ -14,12 +14,14 @@ use starlark_map::small_map::SmallMap;
 use tar::Archive;
 use zstd::stream::read::Decoder;
 
-const BUNDLED_TYPESHED_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.tar.zst"));
+static BUNDLED_TYPESHED_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.tar.zst"));
 
 pub const BUNDLED_TYPESHED_DIGEST: &[u8; 32] =
     include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.sha256"));
 
-const BUNDLED_THIRD_PARTY_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/stubs.tar.zst"));
+static BUNDLED_THIRD_PARTY_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/stubs.tar.zst"));
 
 pub const BUNDLED_THIRD_PARTY_DIGEST: &[u8; 32] =
     include_bytes!(concat!(env!("OUT_DIR"), "/stubs.sha256"));

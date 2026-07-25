@@ -183,7 +183,7 @@ impl<W: Write> ErrorRenderer<W> {
 
 impl Error {
     /// Return the path with a cell fragment if the error is in a notebook cell.
-    fn path_string_with_fragment(&self, project_root: &Path) -> String {
+    pub fn path_string_with_fragment(&self, project_root: &Path) -> String {
         let path = self.path().as_path();
         let path = path.strip_prefix(project_root).unwrap_or(path);
         if let Some(cell) = self.display_range.start.cell() {
@@ -334,7 +334,7 @@ impl Error {
                 Severity::Ignore => lsp_types::DiagnosticSeverity::INFORMATION,
             }),
             source: Some("Pyrefly".to_owned()),
-            message: self.msg().to_owned(),
+            message: self.msg().to_owned().into(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
             tags: if self.error_kind() == ErrorKind::Deprecated {

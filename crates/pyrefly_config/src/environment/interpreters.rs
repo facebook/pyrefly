@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::skip_serializing_none;
 #[cfg(not(target_arch = "wasm32"))]
 use which::which;
 
@@ -20,24 +21,22 @@ use crate::environment::conda;
 use crate::environment::venv;
 use crate::util::ConfigOrigin;
 
+#[skip_serializing_none]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Interpreters {
     #[serde(
-                default,
-                skip_serializing_if = "ConfigOrigin::should_skip_serializing_option",
-                // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
-                // alias while we migrate existing fields from snake case to kebab case.
-                alias = "python_interpreter",
-                alias = "python-interpreter",
-            )]
+        skip_serializing_if = "ConfigOrigin::should_skip_serializing_option",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "python_interpreter",
+        alias = "python-interpreter",
+    )]
     pub(crate) python_interpreter_path: Option<ConfigOrigin<PathBuf>>,
 
     /// Should we turn a generic command into a `python_interpreter` path?
-    #[serde(default)]
     pub(crate) fallback_python_interpreter_name: Option<ConfigOrigin<String>>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) conda_environment: Option<ConfigOrigin<String>>,
 
     /// Should we do any querying of an interpreter?

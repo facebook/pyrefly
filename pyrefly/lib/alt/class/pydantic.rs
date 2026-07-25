@@ -12,12 +12,9 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::annotation::Annotation;
-use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
-use pyrefly_types::callable::Function;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
-use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
 use pyrefly_types::keywords::DataclassFieldKeywords;
 use pyrefly_types::lit_int::LitInt;
@@ -145,10 +142,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
         let root_param = Param::Pos(ROOT, root_model_type, root_requiredness);
         let params = vec![self.class_self_param(cls, false), root_param];
-        let ty = self.heap.mk_function(Function {
-            signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::method(cls, dunder::INIT),
-        });
+        let ty = self.synthesized_method(cls, dunder::INIT, params, self.heap.mk_none());
         ClassSynthesizedField::new(ty)
     }
 
@@ -301,6 +295,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return Some(PydanticConfig {
                     frozen: None,
                     validation_flags: PydanticValidationFlags::default(),
+                    validation_alias_generator: None,
                     extra: None,
                     strict: None,
                     pydantic_model_kind: PydanticModelKind::DataClass,
@@ -343,6 +338,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             strict,
             validate_by_name,
             validate_by_alias,
+            alias_generator,
         } = pydantic_config_dict;
 
         // Note: class keywords take precedence over ConfigDict keywords.
@@ -367,6 +363,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 default_flags.validate_by_alias,
             ),
         };
+        let validation_alias_generator = alias_generator.clone().or_else(|| {
+            self.find_inherited_keyword_value(bases_with_metadata, |dm| {
+                dm.init_defaults.alias_generator.clone()
+            })
+            .flatten()
+        });
 
         // Here, "ignore" and "allow" translate to true, while "forbid" translates to false.
         // With no keyword, the default is "true" and I default to "false" on a wrong keyword.
@@ -422,6 +424,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(PydanticConfig {
             frozen: Some(frozen),
             validation_flags,
+            validation_alias_generator,
             extra: Some(extra),
             strict: Some(strict),
             pydantic_model_kind,
@@ -556,6 +559,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn extract_pydantic_field_from_annotation(
         &self,
         annot: Idx<KeyAnnotation>,
+        field_name: &Name,
         metadata: &ClassMetadata,
     ) -> Option<DataclassFieldKeywords> {
         let dm = metadata.dataclass_metadata()?;
@@ -571,7 +575,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
-                    && let Some(keywords) = self.compute_dataclass_field_initialization(call, dm)
+                    && let Some(keywords) =
+                        self.compute_dataclass_field_initialization(call, field_name, None, dm)
                 {
                     return Some(keywords);
                 }

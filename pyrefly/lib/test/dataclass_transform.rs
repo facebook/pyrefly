@@ -182,6 +182,134 @@ class MutableChild(FrozenChild, frozen=False):  # E: Cannot inherit non-frozen d
 );
 
 testcase!(
+    test_kw_only_inherited_by_subclass,
+    r#"
+from typing import dataclass_transform
+
+# SQLAlchemy-style: the transform comes from a metaclass, which re-applies the dataclass
+# keywords to every subclass.
+@dataclass_transform()
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+# `kw_only=True` on the base configures the whole subtree (facebook/pyrefly#3881), so a field
+# without a default may follow one with a default.
+class Base(ModelBase, kw_only=True): ...
+
+class SomeClass(Base):
+    some_str: str = ""
+    some_number: int
+
+SomeClass(some_str="x", some_number=1)
+# Positional construction is rejected, confirming the fields are actually keyword-only.
+SomeClass("x", some_number=1)  # E: Expected 0 positional arguments, got 1
+    "#,
+);
+
+testcase!(
+    test_kw_only_inherited_through_multiple_levels,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+class Base(ModelBase, kw_only=True): ...
+
+# `kw_only` keeps propagating past the first subclass: neither `b` nor `d` triggers a
+# field-ordering error.
+class Mid(Base):
+    a: str = ""
+    b: int
+class Leaf(Mid):
+    c: str = ""
+    d: int
+
+Leaf(a="x", b=1, c="y", d=2)
+    "#,
+);
+
+testcase!(
+    test_kw_only_not_propagated_without_metaclass,
+    r#"
+from typing import dataclass_transform
+
+# A plain `@dataclass_transform` base (not a metaclass) does not re-apply keywords to
+# subclasses, so `kw_only=True` configures `Base` only, not `Sub`.
+@dataclass_transform()
+class ModelBase: ...
+
+class Base(ModelBase, kw_only=True): ...
+
+class Sub(Base):
+    a: str = ""
+    b: int  # E: Dataclass field `b` without a default may not follow dataclass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_still_errors_without_kw_only,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+class Base(ModelBase, kw_only=False): ...
+
+class SomeClass(Base):
+    some_str: str = ""
+    some_number: int  # E: Dataclass field `some_number` without a default may not follow dataclass field with a default
+    "#,
+);
+
+testcase!(
+    test_order_inherited_by_subclass,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+# `order=True` on a base propagates to subclasses, so comparison operators are synthesized.
+class Base(ModelBase, order=True): ...
+
+class C(Base):
+    x: int
+
+C(x=1) < C(x=2)
+    "#,
+);
+
+testcase!(
+    test_eq_inherited_by_subclass,
+    r#"
+from typing import dataclass_transform, Hashable
+
+# Start from a hashable base (eq_default=False) so the propagated `eq=True` is observable:
+# it synthesizes `__eq__` and sets `__hash__ = None`, making instances unhashable.
+@dataclass_transform(eq_default=False)
+class ModelMeta(type): ...
+class ModelBase(metaclass=ModelMeta): ...
+
+class EqBase(ModelBase, eq=True): ...
+class Eq(EqBase):
+    x: int
+
+# Control: a subclass that doesn't inherit `eq=True` stays hashable.
+class Plain(ModelBase):
+    y: int
+
+def f(x: Hashable): pass
+f(Plain(y=1))
+f(Eq(x=1))  # E: Argument `Eq` is not assignable to parameter `x` with type `Hashable`
+    "#,
+);
+
+testcase!(
     test_call_transform,
     r#"
 from typing import dataclass_transform

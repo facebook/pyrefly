@@ -922,12 +922,12 @@ assert_type(f(0), A)
     "#,
 );
 
+// Regression test for a false `incompatible-overload-residual` error when
+// passing a generic overloaded function (like `operator.add`) to a
+// higher-order function (like `functools.reduce`). The overload's first
+// branch (`SupportsAdd`) is applicable, but a self-referential probe var
+// leaking into the captured residual bound used to prune every branch.
 testcase!(
-    // Regression test for a false `incompatible-overload-residual` error when
-    // passing a generic overloaded function (like `operator.add`) to a
-    // higher-order function (like `functools.reduce`). The overload's first
-    // branch (`SupportsAdd`) is applicable, but a self-referential probe var
-    // leaking into the captured residual bound used to prune every branch.
     test_overload_residual_generic_protocol_arg_not_pruned,
     r#"
 from typing import Callable, Iterable, TypeVar, Protocol, assert_type, overload

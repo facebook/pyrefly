@@ -1,6 +1,7 @@
 # @generated
 from typing import TypeAlias
 
+__all__ = ["public_func", "PublicClass", "PUBLIC_VAR", "Vector"]
 Vector: TypeAlias
 
 

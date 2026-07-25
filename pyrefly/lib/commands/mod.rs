@@ -6,6 +6,7 @@
  */
 
 pub mod all;
+pub mod bazel_check;
 pub mod buck_check;
 pub mod check;
 pub mod config_finder;
