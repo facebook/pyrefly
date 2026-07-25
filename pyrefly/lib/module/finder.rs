@@ -500,7 +500,25 @@ pub fn find_import_internal(
             timing,
         )
     {
-        path
+        // This tier is the directory-upward fallback. A successful resolution here
+        // means the module was found by walking the importing file's directory
+        // ancestors, not through any configured absolute root — surface the
+        // implicit-relative caveat via the same non-fatal-error channel used by
+        // UntypedImport/MissingSource so the emitter can report it.
+        //
+        // `with_error` is a no-op when a caveat is already attached: a fallback
+        // hit that also lacks stubs already carries `UntypedImport` (set by
+        // `combine_normal_and_stub_results`), and that more actionable signal
+        // takes precedence over the implicit-relative one. Both describe the
+        // same successful resolution; the co-occurrence is rare.
+        //
+        // Cache-safety invariant: the implicit-relative signal is origin-dependent,
+        // but it is safe to attach here because fallback-tier hits are filesystem
+        // paths (never bundled typeshed variants), so `is_bundled()` is false and
+        // they are never promoted to the origin-independent `(module, None)` cache
+        // entry — see `LoaderFindCache::find_import`. Do not widen `is_bundled`
+        // without revisiting this.
+        path.with_error(FindError::ImplicitRelativeImport(module))
     } else if let Some(path) = find_module(
         module,
         config.site_package_path(),
@@ -656,12 +674,15 @@ fn suggest_stdlib_import_uncached(missing: ModuleName) -> Option<ModuleName> {
 #[cfg(test)]
 mod tests {
     use pyrefly_config::config::ConfigSource;
+    use pyrefly_config::config::DirectoryRelativeFallbackSearchPathCache;
+    use pyrefly_config::config::FallbackSearchPath;
     use pyrefly_config::environment::environment::PythonEnvironment;
     use pyrefly_config::environment::interpreters::Interpreters;
     use pyrefly_python::module_path::ModulePathDetails;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
+    use crate::state::loader::FindError;
     use crate::state::loader::Finding;
 
     #[test]
@@ -4026,5 +4047,206 @@ mod tests {
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("rules/if.config.cconf")))
         );
+    }
+
+    /// Build a config whose only way to resolve `module` is the directory-upward
+    /// fallback tier. `search_path` is empty and site packages are empty, so no
+    /// absolute tier can satisfy the lookup. `fallback_search_path` walks the
+    /// importing file's ancestors toward `fallback_root` (or to `/` if `None`).
+    fn fallback_config(
+        search_path: Vec<PathBuf>,
+        fallback_root: Option<PathBuf>,
+        disable_search_path_heuristics: bool,
+    ) -> ConfigFile {
+        let mut interpreters = Interpreters::default();
+        interpreters.skip_interpreter_query = true;
+        let mut config = ConfigFile {
+            search_path_from_file: search_path,
+            interpreters,
+            python_environment: PythonEnvironment {
+                site_package_path: Some(vec![]),
+                ..Default::default()
+            },
+            // Configure() leaves an already-set DirectoryRelative fallback alone
+            // (it only auto-populates the Empty case), so set it directly here.
+            fallback_search_path: FallbackSearchPath::DirectoryRelative(
+                DirectoryRelativeFallbackSearchPathCache::new(fallback_root),
+            ),
+            disable_search_path_heuristics,
+            ..Default::default()
+        };
+        config.configure();
+        config
+    }
+
+    /// I2/I4: a module resolved only via the directory-upward fallback tier
+    /// carries `FindError::ImplicitRelativeImport` as a non-fatal caveat, while
+    /// the resolution itself still succeeds (the module path is found).
+    #[test]
+    fn test_implicit_relative_import_attached_on_fallback_resolution() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // `src/main.py` imports `sibling`, which lives next to it but is on no
+        // configured search path, so only the directory walk finds it.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "src",
+                vec![TestPath::file("main.py"), TestPath::file("sibling.py")],
+            )],
+        );
+        let config = fallback_config(vec![], None, false);
+        let origin = ModulePath::filesystem(root.join("src/main.py"));
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("sibling"),
+            Some(&origin),
+            None,
+            &DirEntryCache::new(),
+            None,
+        );
+        match result {
+            FindingOrError::Finding(Finding {
+                finding,
+                error: Some(FindError::ImplicitRelativeImport(module)),
+            }) => {
+                assert_eq!(finding, ModulePath::filesystem(root.join("src/sibling.py")));
+                assert_eq!(module, ModuleName::from_str("sibling"));
+            }
+            other => {
+                panic!("expected a Finding with ImplicitRelativeImport attached, got: {other:?}")
+            }
+        }
+    }
+
+    /// I1: when an earlier (absolute) tier resolves the module, the
+    /// implicit-relative caveat is NOT attached — no false positive.
+    #[test]
+    fn test_no_implicit_relative_import_when_search_path_resolves() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "src",
+                vec![TestPath::file("main.py"), TestPath::file("sibling.py")],
+            )],
+        );
+        // Put `src/` on the configured search path: now the search_path tier
+        // (tier 3) resolves `sibling` before the fallback tier is consulted.
+        let config = fallback_config(vec![root.join("src")], None, false);
+        let origin = ModulePath::filesystem(root.join("src/main.py"));
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("sibling"),
+            Some(&origin),
+            None,
+            &DirEntryCache::new(),
+            None,
+        );
+        match result {
+            FindingOrError::Finding(Finding { finding, error }) => {
+                assert_eq!(finding, ModulePath::filesystem(root.join("src/sibling.py")));
+                assert!(
+                    error.is_none(),
+                    "no caveat expected when search path resolves, got: {error:?}"
+                );
+            }
+            other => panic!("expected a clean Finding, got: {other:?}"),
+        }
+    }
+
+    /// I3: with `disable_search_path_heuristics = true`, the fallback tier is
+    /// never consulted, so the implicit-relative caveat can never be attached.
+    /// The module either resolves via an earlier tier or fails to resolve.
+    #[test]
+    fn test_no_implicit_relative_import_when_heuristics_disabled() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "src",
+                vec![TestPath::file("main.py"), TestPath::file("sibling.py")],
+            )],
+        );
+        let config = fallback_config(vec![], None, true);
+        let origin = ModulePath::filesystem(root.join("src/main.py"));
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("sibling"),
+            Some(&origin),
+            None,
+            &DirEntryCache::new(),
+            None,
+        );
+        // The fallback tier is gated off, so the module is unresolvable and the
+        // result is a fatal MissingImport error (never a Finding carrying the
+        // implicit-relative caveat).
+        match result {
+            FindingOrError::Error(FindError::MissingImport(..)) => {}
+            FindingOrError::Finding(Finding { error, .. }) => {
+                assert!(
+                    !matches!(error, Some(FindError::ImplicitRelativeImport(..))),
+                    "ImplicitRelativeImport must not be attached when heuristics are disabled, \
+                     got error: {error:?}"
+                );
+            }
+            other => panic!("expected MissingImport (or a non-implicit finding), got: {other:?}"),
+        }
+    }
+
+    /// I7 (scoped-out limitation): a namespace package resolved via the fallback
+    /// tier is NOT flagged today. Provenance threading through the cross-tier
+    /// namespace accumulator is a larger follow-up; this test pins the current
+    /// behavior so the gap is visible.
+    ///
+    /// BUG: namespace packages resolved via the fallback tier are not flagged
+    /// (tracked separately); see PLAN.md "Namespace packages (scoped out)".
+    ///
+    /// This is a plain `#[test]` rather than a `testcase!`-with-`bug` marker:
+    /// `testcase!` embeds Python source and asserts *type-checking* diagnostics,
+    /// whereas this asserts a *module-resolution tier* property
+    /// (`find_import_filtered` provenance) that `testcase!` cannot express. The
+    /// `BUG:` line above documents the limitation in the same spirit.
+    #[test]
+    fn test_namespace_package_via_fallback_not_flagged() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // `ns/` has NO `__init__.py`, so importing `ns` itself resolves it as a
+        // namespace package. Namespace packages are accumulated across tiers and
+        // materialized at the end of the cascade via `ModulePath::namespace(...)`
+        // with no per-tier provenance, so the implicit-relative caveat is absent.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "src",
+                vec![
+                    TestPath::file("main.py"),
+                    TestPath::dir("ns", vec![TestPath::file("mod.py")]),
+                ],
+            )],
+        );
+        let config = fallback_config(vec![], None, false);
+        let origin = ModulePath::filesystem(root.join("src/main.py"));
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("ns"),
+            Some(&origin),
+            None,
+            &DirEntryCache::new(),
+            None,
+        );
+        match result {
+            FindingOrError::Finding(Finding { error, .. }) => {
+                assert!(
+                    !matches!(error, Some(FindError::ImplicitRelativeImport(..))),
+                    "namespace packages via fallback are not flagged today, but got: {error:?}"
+                );
+            }
+            FindingOrError::Error(e) => {
+                panic!("expected the namespace package to resolve, got error: {e:?}")
+            }
+        }
     }
 }

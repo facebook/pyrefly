@@ -45,6 +45,11 @@ pub enum FindError {
     UntypedImport(ModuleName, Arc<String>),
     /// This is the condition where we are using stubs but we do not have the source files
     MissingSourceForStubs(ModuleName),
+    /// The module resolved successfully, but only via the directory-upward fallback
+    /// search path (not through any configured absolute root). This is a non-fatal
+    /// caveat on a successful resolution: the module is still usable, but the import
+    /// is fragile (breaks when the importing file moves, can shadow installed packages).
+    ImplicitRelativeImport(ModuleName),
 }
 
 impl FindError {
@@ -123,6 +128,14 @@ impl FindError {
                 Some(Box::new(|| ErrorContext::ImportNotTyped(*source_package))),
                 vec1![format!("Hint: install the `{stubs_package}` package")],
             ),
+            Self::ImplicitRelativeImport(module) => (
+                None,
+                vec1![format!(
+                    "Module `{module}` was imported using an implicit relative import. \
+                    Prefer an explicit relative import (`from . import {module}`) or add the \
+                    module's root to the configured search path."
+                )],
+            ),
         }
     }
 
@@ -132,6 +145,7 @@ impl FindError {
             Self::MissingSource(..) => Some(ErrorKind::MissingSource),
             Self::MissingSourceForStubs(..) => Some(ErrorKind::MissingSourceForStubs),
             Self::UntypedImport(..) => Some(ErrorKind::UntypedImport),
+            Self::ImplicitRelativeImport(..) => Some(ErrorKind::ImplicitRelativeImport),
             Self::Ignored => None,
         }
     }
@@ -365,6 +379,8 @@ mod tests {
 
     use pyrefly_build::source_db::map_db::MapDatabase;
 
+    use crate::config::config::DirectoryRelativeFallbackSearchPathCache;
+
     use super::*;
 
     #[test]
@@ -412,6 +428,115 @@ mod tests {
             keys,
             vec![None],
             "missing shape_extensions should be cached once under the origin-independent key"
+        );
+    }
+
+    /// Precedence: when a successful resolution already carries a more specific
+    /// caveat (`UntypedImport`), attaching `ImplicitRelativeImport` afterwards
+    /// is a no-op. Both describe the same resolution, and `UntypedImport`
+    /// ("install stubs") is strictly more actionable. This is the contract the
+    /// fallback-tier attach in `find_import_internal` relies on: it calls
+    /// `with_error(ImplicitRelativeImport)` unconditionally, and this test pins
+    /// that an existing error is preserved rather than clobbered.
+    #[test]
+    fn test_with_error_implicit_relative_does_not_clobber_existing_caveat() {
+        let module = ModuleName::from_str("sibling");
+        let path = ModulePath::filesystem(PathBuf::from("src/sibling.py"));
+        // Simulate a fallback-tier hit whose resolution already lacks stubs.
+        let with_untyped = FindingOrError::Finding(Finding {
+            finding: path,
+            error: Some(FindError::UntypedImport(
+                module,
+                "types-sibling".to_owned().into(),
+            )),
+        });
+        let after_implicit = with_untyped.with_error(FindError::ImplicitRelativeImport(module));
+        match after_implicit {
+            FindingOrError::Finding(Finding {
+                error: Some(FindError::UntypedImport(..)),
+                ..
+            }) => {}
+            other => panic!("expected UntypedImport to be preserved, got: {other:?}"),
+        }
+        // And the reverse ordering invariant: a clean implicit-relative finding
+        // does get the caveat attached (the no-existing-error case).
+        let clean = FindingOrError::<ModulePath>::new_finding(ModulePath::filesystem(
+            PathBuf::from("src/sibling.py"),
+        ));
+        match clean.with_error(FindError::ImplicitRelativeImport(module)) {
+            FindingOrError::Finding(Finding {
+                error: Some(FindError::ImplicitRelativeImport(m)),
+                ..
+            }) => assert_eq!(m, module),
+            other => panic!("expected ImplicitRelativeImport to attach, got: {other:?}"),
+        }
+    }
+
+    /// Cache-safety: an origin-dependent implicit-relative resolution must be
+    /// cached under `(module, Some(origin))` and NEVER promoted to the
+    /// origin-independent `(module, None)` key. The `(module, None)` fast-path
+    /// (`find_import`, above) returns to ANY origin, so a promotion there would
+    /// leak the implicit-relative caveat to origins where the module actually
+    /// resolves through a configured absolute root.
+    ///
+    /// Today the promotion gate is `import.finding.is_bundled()` (typeshed-only,
+    /// `module_path.rs`), so a filesystem fallback hit is never promoted. This
+    /// test pins that invariant against a future widening of `is_bundled` (or a
+    /// new promotion path) that would reintroduce the leak.
+    #[test]
+    fn test_implicit_relative_resolution_not_promoted_to_origin_independent_key() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // `src/main.py` imports `sibling`, which lives next to it and is on no
+        // configured search path — so it resolves only via the directory walk
+        // (fallback tier) and carries the implicit-relative caveat.
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.py"), "import sibling").unwrap();
+        std::fs::write(root.join("src/sibling.py"), "x: int = 1").unwrap();
+
+        let mut config = ConfigFile {
+            search_path_from_file: vec![],
+            fallback_search_path: FallbackSearchPath::DirectoryRelative(
+                DirectoryRelativeFallbackSearchPathCache::new(None),
+            ),
+            ..ConfigFile::default()
+        };
+        config.python_environment.set_empty_to_default();
+        config.configure();
+
+        let loader = LoaderFindCache::new(ArcId::new(config));
+        let module = ModuleName::from_str("sibling");
+        let origin = ModulePath::filesystem(root.join("src/main.py"));
+
+        // Resolve from `origin`. The fallback tier finds `src/sibling.py` and
+        // attaches the implicit-relative caveat.
+        let result = loader.find_import(module, Some(&origin), None);
+        assert!(
+            matches!(
+                result,
+                FindingOrError::Finding(Finding {
+                    error: Some(FindError::ImplicitRelativeImport(..)),
+                    ..
+                })
+            ),
+            "expected the fallback resolution to carry the caveat, got: {result:?}"
+        );
+
+        // The resolution must be cached under the origin-keyed entry, NOT the
+        // origin-independent `(module, None)` entry. The `(module, None)` key
+        // is the fast-path that any future origin would hit, so a promotion
+        // here would leak the caveat across origins.
+        let keys: Vec<Option<ModulePath>> = loader
+            .cache
+            .keys()
+            .filter(|(m, _)| *m == module)
+            .map(|(_, o)| o.dupe())
+            .collect();
+        assert_eq!(
+            keys,
+            vec![Some(origin.clone())],
+            "implicit-relative resolution must cache under (module, Some(origin)) only, \
+             never (module, None); got keys: {keys:?}"
         );
     }
 }

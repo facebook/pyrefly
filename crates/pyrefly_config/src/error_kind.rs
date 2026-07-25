@@ -201,6 +201,13 @@ pub enum ErrorKind {
     /// only re-exported when redundantly aliased (`from x import y as y`),
     /// listed in `__all__`, or brought in via a wildcard import.
     ImplicitReexport,
+    /// An unqualified `import` resolved only via the directory-upward fallback
+    /// search path, not through any configured absolute root. Such imports are
+    /// fragile (they break when the importing file moves and can unexpectedly
+    /// shadow installed packages). Prefer an explicit relative import
+    /// (`from . import ...`) or add the module's root to the configured search
+    /// path.
+    ImplicitRelativeImport,
     /// An attribute was implicitly defined by assignment to `self` in a method that we
     /// do not recognize as always executing (we recognize constructors and some test setup
     /// methods).
@@ -534,6 +541,7 @@ impl ErrorKind {
             ErrorKind::ImplicitAnyTypeArgument => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,
             ErrorKind::ImplicitReexport => Severity::Ignore,
+            ErrorKind::ImplicitRelativeImport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::IncompatibleComparison => Severity::Ignore,
             ErrorKind::InvalidAbstractMethod => Severity::Ignore,

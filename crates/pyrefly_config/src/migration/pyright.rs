@@ -541,7 +541,7 @@ impl RuleOverrides {
         // Import rules
         add(
             self.report_implicit_relative_import,
-            ErrorKind::MissingImport,
+            ErrorKind::ImplicitRelativeImport,
         );
 
         // Type argument rules
@@ -646,6 +646,36 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_pyright_implicit_relative_import_maps_to_its_own_kind() {
+        // Pyright's `reportImplicitRelativeImport` must migrate to the dedicated
+        // `ImplicitRelativeImport` kind (not `MissingImport`), while
+        // `reportMissingImports` stays on `MissingImport`. The two kinds are
+        // independent after migration (I6).
+        let overrides = RuleOverrides {
+            report_implicit_relative_import: Some(Severity::Warn),
+            report_missing_imports: Some(Severity::Error),
+            ..Default::default()
+        };
+        let config = overrides.to_config().expect("expected an error config");
+        assert_eq!(
+            config.severity(ErrorKind::ImplicitRelativeImport),
+            Severity::Warn,
+            "reportImplicitRelativeImport must map to ImplicitRelativeImport"
+        );
+        assert_eq!(
+            config.severity(ErrorKind::MissingImport),
+            Severity::Error,
+            "reportMissingImports must still map to MissingImport"
+        );
+        // The implicit-relative kind is NOT a sub-kind of missing-import, so its
+        // severity is reported independently of the missing-import entry.
+        assert_ne!(
+            config.severity(ErrorKind::ImplicitRelativeImport),
+            config.severity(ErrorKind::MissingImport),
+        );
     }
 
     #[test]
