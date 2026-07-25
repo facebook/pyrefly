@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+mod code_lens;
+
 use std::cmp::min;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -40,10 +42,7 @@ use lsp_types::CodeActionParams;
 use lsp_types::CodeActionProviderCapability;
 use lsp_types::CodeActionResponse;
 use lsp_types::CodeActionTriggerKind;
-use lsp_types::CodeLens;
 use lsp_types::CodeLensOptions;
-use lsp_types::CodeLensParams;
-use lsp_types::Command;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
@@ -285,7 +284,6 @@ use crate::lsp::non_wasm::call_hierarchy::find_function_at_position_in_ast;
 use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
 use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
-use crate::lsp::non_wasm::code_lens::runnable_lsp_code_lens;
 use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
 use crate::lsp::non_wasm::document_symbols::flatten_to_symbol_information;
 use crate::lsp::non_wasm::external_provider::ExternalProvider;
@@ -1123,12 +1121,6 @@ struct InitializeResult<C> {
     capabilities: C,
     #[serde(skip_serializing_if = "Option::is_none")]
     server_info: Option<ServerInfo>,
-}
-
-#[derive(Debug, Clone)]
-struct CodeLensTarget {
-    range: Range,
-    definition: FindDefinitionItemWithDocstring,
 }
 
 pub fn initialize_finish<C: Serialize>(
@@ -2830,24 +2822,6 @@ impl Server {
         };
 
         telemetry.set_file_stats(TelemetryFileStats { uri, config_root });
-    }
-
-    fn runnable_code_lens_cwd(&self, path: &std::path::Path) -> Option<String> {
-        let config = self.state.config_finder().python_file(
-            ModuleNameWithKind::guaranteed(ModuleName::unknown()),
-            &ModulePath::filesystem(path.to_path_buf()),
-        );
-        let cwd = config
-            .source
-            .root()
-            .map(std::path::Path::to_path_buf)
-            .or_else(|| {
-                self.workspaces
-                    .get_with(path.to_path_buf(), |(workspace_root, _)| {
-                        workspace_root.cloned()
-                    })
-            })?;
-        Some(cwd.to_string_lossy().into_owned())
     }
 
     fn send_response(&self, x: Response) {
@@ -4841,64 +4815,6 @@ impl Server {
         Ok((!actions.is_empty()).then_some(actions))
     }
 
-    fn code_lens_targets(
-        &self,
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        uri: &Url,
-    ) -> Result<Vec<CodeLensTarget>, EmptyResponseReason> {
-        fn recurse_symbols<'a>(symbols: &'a [DocumentSymbol], out: &mut Vec<&'a DocumentSymbol>) {
-            for symbol in symbols {
-                if matches!(
-                    symbol.kind,
-                    SymbolKind::CLASS | SymbolKind::FUNCTION | SymbolKind::METHOD
-                ) {
-                    out.push(symbol);
-                }
-                if let Some(children) = symbol.children.as_deref() {
-                    recurse_symbols(children, out);
-                }
-            }
-        }
-
-        let module_info = transaction
-            .get_module_info(handle)
-            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
-        let symbols = transaction
-            .symbols(handle, None)
-            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
-        let mut symbol_defs = Vec::new();
-        recurse_symbols(&symbols, &mut symbol_defs);
-
-        let mut seen = SmallSet::new();
-        let mut targets = Vec::new();
-        for symbol in symbol_defs {
-            let position = self.from_lsp_position(uri, &module_info, symbol.selection_range.start);
-            let definition = match transaction.find_definition(
-                handle,
-                position,
-                FindPreference {
-                    import_behavior: ImportBehavior::StopAtRenamedImports,
-                    ..Default::default()
-                },
-            ) {
-                Ok(definitions) => definitions.into_vec().swap_remove(0),
-                Err(_) => {
-                    continue;
-                }
-            };
-            let key = (definition.module.path().dupe(), definition.definition_range);
-            if !seen.insert(key) {
-                continue;
-            }
-            targets.push(CodeLensTarget {
-                range: symbol.selection_range,
-                definition,
-            });
-        }
-        Ok(targets)
-    }
-
     fn document_highlight(
         &self,
         transaction: &Transaction<'_>,
@@ -5171,150 +5087,6 @@ impl Server {
                 locations
             },
         )
-    }
-
-    fn code_lens<'a>(
-        &'a self,
-        request_id: RequestId,
-        transaction: &Transaction<'a>,
-        params: CodeLensParams,
-        activity_key: Option<ActivityKey>,
-    ) -> Result<(), EmptyResponseReason> {
-        let uri = &params.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            self.send_response(new_response(request_id, Ok(Some(Vec::<CodeLens>::new()))));
-            return Ok(());
-        }
-        let handle = self.make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))?;
-        let runnable_lenses = self.runnable_code_lenses(transaction, &handle, &params)?;
-        let targets = if self.indexing_mode == IndexingMode::None {
-            Vec::new()
-        } else {
-            self.code_lens_targets(transaction, &handle, uri)?
-        };
-        if targets.is_empty() {
-            self.send_response(new_response(request_id, Ok(Some(runnable_lenses))));
-            return Ok(());
-        }
-
-        let path_remapper = self.path_remapper.clone();
-        let source_uri = uri.clone();
-        self.find_reference_queue.queue_task(
-            TelemetryEventKind::FindFromDefinition,
-            Box::new(move |server, _telemetry, telemetry_event| {
-                telemetry_event.set_activity_key(activity_key);
-                let mut transaction = server.state.cancellable_transaction();
-                server
-                    .cancellation_handles
-                    .lock()
-                    .insert(request_id.clone(), transaction.get_cancellation_handle());
-                server.validate_in_memory_for_transaction(
-                    transaction.as_mut(),
-                    telemetry_event,
-                    None,
-                );
-
-                let mut lenses = runnable_lenses;
-                for target in targets {
-                    let local_results = match transaction.find_global_references_from_definition(
-                        *handle.sys_info(),
-                        target.definition.metadata,
-                        TextRangeWithModule::new(
-                            target.definition.module.clone(),
-                            target.definition.definition_range,
-                        ),
-                        false,
-                    ) {
-                        Ok(results) => results,
-                        Err(Cancelled) => {
-                            let message = format!("Request {request_id} is canceled");
-                            info!("{message}");
-                            server.connection.send(Message::Response(Response::new_err(
-                                request_id,
-                                ErrorCode::RequestCanceled as i32,
-                                message,
-                            )));
-                            return;
-                        }
-                    };
-
-                    let mut locations = Vec::new();
-                    for (info, ranges) in local_results {
-                        if let Some(uri) = module_info_to_uri(&info, path_remapper.as_ref()) {
-                            for range in ranges {
-                                locations.push(Location {
-                                    uri: uri.clone(),
-                                    range: info.to_lsp_range(range),
-                                });
-                            }
-                        }
-                    }
-
-                    let reference_count = locations.len();
-                    let title = if reference_count == 1 {
-                        "1 reference".to_owned()
-                    } else {
-                        format!("{reference_count} references")
-                    };
-                    lenses.push(CodeLens {
-                        range: target.range,
-                        command: Some(Command {
-                            title,
-                            command: "editor.action.showReferences".to_owned(),
-                            arguments: Some(vec![
-                                serde_json::to_value(&source_uri)
-                                    .expect("URI should serialize for code lens"),
-                                serde_json::to_value(target.range.start)
-                                    .expect("Position should serialize for code lens"),
-                                serde_json::to_value(&locations)
-                                    .expect("Locations should serialize for code lens"),
-                            ]),
-                        }),
-                        data: None,
-                    });
-                }
-
-                server.cancellation_handles.lock().remove(&request_id);
-                server.connection.send(Message::Response(new_response(
-                    request_id,
-                    Ok(Some(lenses)),
-                )));
-            }),
-        );
-        Ok(())
-    }
-
-    fn runnable_code_lenses(
-        &self,
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        params: &CodeLensParams,
-    ) -> Result<Vec<CodeLens>, EmptyResponseReason> {
-        let uri = &params.text_document.uri;
-        let path = self
-            .path_for_uri(uri)
-            .ok_or(EmptyResponseReason::NoFilePath)?;
-        let runnable_code_lens = self
-            .workspaces
-            .get_with(path.clone(), |(_, workspace)| workspace.runnable_code_lens);
-        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
-        let info = transaction
-            .get_module_info(handle)
-            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
-        let entries = transaction
-            .runnable_code_lens_entries(handle, uri, runnable_code_lens)
-            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
-        let cwd = self.runnable_code_lens_cwd(&path);
-
-        let mut lenses = Vec::new();
-        for entry in entries {
-            if info.to_cell_for_lsp(entry.range.start()) != maybe_cell_idx {
-                continue;
-            }
-            let range = info.to_lsp_range(entry.range);
-            lenses.push(runnable_lsp_code_lens(uri, range, entry, cwd.as_deref()));
-        }
-        Ok(lenses)
     }
 
     fn rename<'a>(
