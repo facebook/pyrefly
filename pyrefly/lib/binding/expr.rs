@@ -1360,8 +1360,8 @@ impl<'a> BindingsBuilder<'a> {
                     allow_proxy_method,
                 );
             }
-            Expr::StringLiteral(literal)
-                if let Some(literal) = as_forward_ref(literal, in_string_literal) =>
+            Expr::StringLiteral(expr_literal)
+                if let Some(literal) = as_forward_ref(expr_literal, in_string_literal) =>
             {
                 if literal.flags.prefix().is_raw() {
                     self.error(
@@ -1370,7 +1370,7 @@ impl<'a> BindingsBuilder<'a> {
                         "Raw string literals are not allowed in type expressions".to_owned(),
                     );
                 }
-                match Ast::parse_type_literal(literal) {
+                match Ast::parse_type_literal(expr_literal, self.module_info.contents()) {
                     Ok(expr) => {
                         *x = expr;
                         self.ensure_type_impl(
