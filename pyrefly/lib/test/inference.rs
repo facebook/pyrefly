@@ -176,6 +176,8 @@ x1 = [] # E: Cannot infer type of empty container
 x2 = {} # E: Cannot infer type of empty container
 x3: Iterable[int] = {} # ok
 x4: Mapping[str, str] = {} # ok
+def f(_symbols=[]): # E: Cannot infer type of empty container
+    pass
 "#,
 );
 
@@ -188,6 +190,8 @@ x1 = [] # E: Cannot infer type of empty container
 x2 = {} # E: Cannot infer type of empty container
 x3: Iterable[int] = {} # ok
 x4: Mapping[str, str] = {} # ok
+def f(_symbols=[]): # E: Cannot infer type of empty container
+    pass
 "#,
 );
 

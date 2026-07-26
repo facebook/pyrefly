@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
@@ -207,7 +208,7 @@ impl ClassAttribute {
     }
 }
 
-#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
+#[derive(Debug, Clone, TypeEq, PartialEq, Eq, Visit, VisitMut)]
 pub struct Descriptor {
     /// The location of the property where the descriptor is bound, where we should raise
     /// errors attempting to access the getter/setter.
@@ -243,7 +244,7 @@ pub enum DescriptorBase {
 /// Correctly analyzing which attributes are visible on class objects, as well
 /// as handling method binding correctly, requires distinguishing which fields
 /// are assigned values in the class body.
-#[derive(Clone, Debug, TypeEq, VisitMut, PartialEq, Eq)]
+#[derive(Clone, Debug, TypeEq, Visit, VisitMut, PartialEq, Eq)]
 pub enum ClassFieldInitialization {
     /// If this is a dataclass field, DataclassFieldKeywords stores the field's
     /// dataclass flags (which are options that control how fields behave).
@@ -302,7 +303,7 @@ impl ClassFieldInitialization {
 /// Raw information about an attribute declared somewhere in a class. We need to
 /// know whether it is initialized in the class body in order to determine
 /// both visibility rules and whether method binding should be performed.
-#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
+#[derive(Debug, Clone, TypeEq, PartialEq, Eq, Visit, VisitMut)]
 pub struct ClassField(ClassFieldInner, IsInherited);
 
 pub enum ClassFieldVariance<'a> {
@@ -311,7 +312,7 @@ pub enum ClassFieldVariance<'a> {
     Field { ty: &'a Type, read_only: bool },
 }
 
-#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
+#[derive(Debug, Clone, TypeEq, PartialEq, Eq, Visit, VisitMut)]
 enum ClassFieldInner {
     /// Properties discovered via @property decorator.
     /// Read-onlyness is handled by presence of and type of setter.
@@ -377,7 +378,7 @@ enum ProxyMethodAnnotationForm {
 /// that this is not an inherited field so that we can skip override consistency
 /// checks. This information is not needed to understand the class field, it is
 /// only used for efficiency.
-#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
+#[derive(Debug, Clone, TypeEq, PartialEq, Eq, Visit, VisitMut)]
 enum IsInherited {
     No,
     Maybe,

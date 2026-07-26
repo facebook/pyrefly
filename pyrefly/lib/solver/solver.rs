@@ -197,6 +197,29 @@ mod tests {
         (solver, var)
     }
 
+    #[test]
+    fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
+        let solver = Solver::new(false, true, false, false, false, false);
+        let uniques = UniqueFactory::new();
+        let range = TextRange::new(TextSize::new(1), TextSize::new(3));
+        let partial = solver.fresh_partial_contained(&uniques, range);
+        let outer = Var::new(&uniques);
+        solver
+            .variables
+            .lock()
+            .insert_fresh(outer, Variable::Answer(Type::Var(partial)));
+        let ty = Type::Var(outer);
+
+        let errors = solver.sanitize_type_vars(&ty, true);
+
+        assert!(matches!(
+            errors.as_slice(),
+            [PinError::ImplicitPartialContained(error_range)] if *error_range == range
+        ));
+        assert!(solver.force_var(partial).is_any());
+        assert_eq!(ty, Type::Var(outer));
+    }
+
     fn quantified(kind: QuantifiedKind, index: u32) -> Quantified {
         quantified_with_restriction(kind, index, Restriction::Unrestricted)
     }
@@ -1197,6 +1220,29 @@ impl Solver {
                 None
             }
         }
+    }
+
+    /// Resolve every solver variable reachable from `ty` without rewriting the type itself.
+    ///
+    /// Answers may retain `Type::Var` indirections, but after this returns every reachable
+    /// variable has a stable answer and can be read safely from another calculation.
+    pub fn sanitize_type_vars(&self, ty: &Type, pin_partial_types: bool) -> Vec<PinError> {
+        self.sanitize_vars(ty.collect_all_vars(), pin_partial_types)
+    }
+
+    pub fn sanitize_vars(&self, mut pending: Vec<Var>, pin_partial_types: bool) -> Vec<PinError> {
+        let mut seen = SmallSet::new();
+        let mut errors = Vec::new();
+        while let Some(var) = pending.pop() {
+            if !seen.insert(var) {
+                continue;
+            }
+            if let Some(error) = self.pin_placeholder_type(var, pin_partial_types) {
+                errors.push(error);
+            }
+            pending.extend(self.force_var(var).collect_all_vars());
+        }
+        errors
     }
 
     /// Check whether a Var represents a partial/placeholder type that would be

@@ -142,7 +142,6 @@ use crate::error::style::ErrorStyle;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::solver::solver::CallContext;
-use crate::solver::solver::PinError;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypeVarSpecializationError;
@@ -5695,22 +5694,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let vars = ty.collect_all_vars();
         // Pin all relevant vars and collect ranges of PartialContained vars
         for var in vars {
-            match self.solver().pin_placeholder_type(var, pin_partial_types) {
-                Some(PinError::ImplicitPartialContained(container_range)) => errors
-                    .error_builder(
-                        container_range,
-                        ErrorKind::ImplicitAnyEmptyContainer,
-                        "Cannot infer type of empty container; it will be treated as containing `Any`".to_owned(),
-                    )
-                    .with_detail(
-                        "Consider adding a type annotation or initializing with a non-empty value".to_owned(),
-                    )
-                    .emit(),
-                Some(PinError::UnfinishedQuantified(q)) => errors.internal_error(
-                    ty_range,
-                    format!("Unfinished Variable::Quantified: {q}"),
-                ),
-                None => {}
+            if let Some(error) = self.solver().pin_placeholder_type(var, pin_partial_types) {
+                self.report_pin_error(error, ty_range, errors);
             }
         }
     }

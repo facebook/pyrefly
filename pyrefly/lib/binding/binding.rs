@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
@@ -32,6 +33,7 @@ use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::display::intersperse_iter;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -384,7 +386,7 @@ pub enum AnyExportedKey {
 pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + 'static {
     const EXPORTED: bool = false;
     type Value: Debug + DisplayWith<Bindings>;
-    type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type> + Send + Sync;
+    type Answer: Clone + Debug + Display + TypeEq + Visit<Type> + VisitMut<Type> + Send + Sync;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx;
 
     /// Resolve the source range for this key, given access to the bindings.
@@ -1400,7 +1402,7 @@ impl DisplayWith<Bindings> for BindingTypeAlias {
     }
 }
 
-#[derive(Debug, Clone, TypeEq, VisitMut, PartialEq, Eq)]
+#[derive(Debug, Clone, TypeEq, Visit, VisitMut, PartialEq, Eq)]
 pub struct EmptyAnswer;
 
 impl Display for EmptyAnswer {
@@ -1409,7 +1411,7 @@ impl Display for EmptyAnswer {
     }
 }
 
-#[derive(Debug, Clone, TypeEq, VisitMut, PartialEq, Eq)]
+#[derive(Debug, Clone, TypeEq, Visit, VisitMut, PartialEq, Eq)]
 pub struct NoneIfRecursive<T>(pub Option<T>);
 
 impl<T> Display for NoneIfRecursive<T>
@@ -1503,7 +1505,7 @@ impl DisplayWith<ModuleInfo> for KeyUndecoratedFunctionRange {
 
 /// Trivial answer type for KeyUndecoratedFunctionRange — just a copy of the
 /// binding value (the function's ShortIdentifier).
-#[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct UndecoratedFunctionRangeAnswer(pub ShortIdentifier);
 
 impl Display for UndecoratedFunctionRangeAnswer {
@@ -1822,7 +1824,7 @@ pub enum FunctionParameter {
 }
 
 /// Is the body of this function stubbed out (contains nothing but `...`)?
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TypeEq, VisitMut)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, TypeEq, Visit, VisitMut)]
 pub enum FunctionStubOrImpl {
     /// The function body is `...`.
     Stub,
@@ -2884,13 +2886,13 @@ impl DisplayWith<Bindings> for BindingExport {
 
 /// Does an AnnAssign defining an Annotation have a value? Used to validate
 /// some qualifiers like `Final` that require an initial value.
-#[derive(Debug, Clone, Copy, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum AnnAssignHasValue {
     Yes,
     No,
 }
 
-#[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct AnnotationWithTarget {
     pub target: AnnotationTarget,
     pub annotation: Annotation,
@@ -2936,7 +2938,7 @@ impl Display for AnnotationWithTarget {
     }
 }
 
-#[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum AnnotationTarget {
     /// A function parameter with a type annotation
     Param(Name),

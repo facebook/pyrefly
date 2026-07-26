@@ -41,6 +41,7 @@ use pyrefly_types::type_var::Restriction;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -82,6 +83,7 @@ use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallContext;
+use crate::solver::solver::PinError;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
@@ -2222,18 +2224,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         };
 
-        // For exported keys, eagerly resolve all type variables in the answer.
-        // This avoids redundant clone+force work in solve_exported_key and post_solve,
-        // which would otherwise repeat this work on every cross-module lookup.
-        // Arc::unwrap_or_clone avoids cloning since the refcount is 1 here.
-        let raw_answer = if K::EXPORTED {
-            let mut forced = Arc::unwrap_or_clone(raw_answer);
-            forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
-            Arc::new(forced)
-        } else {
-            raw_answer
-        };
-
         if self.stack().is_scc_participant(&current) {
             // Became an SCC member during computation: an SCC was discovered by
             // a dependency chain during K::solve above, and this node is now in
@@ -2249,6 +2239,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 raw_answer
             };
+            self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
+            let answer = self.force_exported_answer::<K>(answer);
             // Also store in SccNodeState::Done for SCC-local isolation (the SCC
             // uses these answers via SccLocalAnswer without touching Calculation).
             let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
@@ -2266,6 +2258,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Not an SCC member even after computation: write directly to
             // Calculation. No recursive placeholder can exist because
             // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
+            self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
+            let raw_answer = self.force_exported_answer::<K>(raw_answer);
             let (answer, did_write) = calculation.record_value(raw_answer);
             if did_write {
                 self.base_errors.extend(local_errors);
@@ -2275,6 +2269,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             answer
+        }
+    }
+
+    fn force_exported_answer<K: Solve<Ans>>(&self, answer: Arc<K::Answer>) -> Arc<K::Answer> {
+        if K::EXPORTED {
+            let mut forced = Arc::unwrap_or_clone(answer);
+            forced.visit_mut(&mut |ty| self.current.solver().force_mut(ty));
+            Arc::new(forced)
+        } else {
+            answer
+        }
+    }
+
+    fn sanitize_answer_vars<K: Solve<Ans>>(
+        &self,
+        answer: &K::Answer,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let mut vars = Vec::new();
+        answer.visit(&mut |ty| vars.extend(ty.collect_all_vars()));
+        for error in self.solver().sanitize_vars(vars, true) {
+            self.report_pin_error(error, range, errors);
+        }
+    }
+
+    pub(crate) fn report_pin_error(
+        &self,
+        error: PinError,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        match error {
+            PinError::ImplicitPartialContained(container_range) => errors
+                .error_builder(
+                    container_range,
+                    ErrorKind::ImplicitAnyEmptyContainer,
+                    "Cannot infer type of empty container; it will be treated as containing `Any`"
+                        .to_owned(),
+                )
+                .with_detail(
+                    "Consider adding a type annotation or initializing with a non-empty value"
+                        .to_owned(),
+                )
+                .emit(),
+            PinError::UnfinishedQuantified(q) => {
+                errors.internal_error(range, format!("Unfinished Variable::Quantified: {q}"))
+            }
         }
     }
 
@@ -2406,6 +2448,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             raw_answer
         };
+
+        self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
 
         // Deep-force the answer to resolve all type variables. This is required
         // for convergence comparisons: without forcing, structurally identical
