@@ -1629,6 +1629,13 @@ impl Type {
         self.visit_toplevel_func_metadata(&|meta| meta.flags.is_abstract_method)
     }
 
+    /// True if this is a (top-level) `@staticmethod`. Used to exclude static
+    /// methods from method-rebinding checks, since they are stored as
+    /// `ClassFieldInner::Method` but should not be flagged as methods there.
+    pub fn is_staticmethod(&self) -> bool {
+        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_staticmethod)
+    }
+
     pub fn is_override(&self) -> bool {
         self.visit_toplevel_func_metadata(&|meta| meta.flags.is_override)
     }
