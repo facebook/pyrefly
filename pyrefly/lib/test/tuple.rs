@@ -527,6 +527,19 @@ def f[Z: tuple[str, int, bytes]](x: Z):
 );
 
 testcase!(
+    test_unpack_unpacked_tuple_assignment,
+    r#"
+from typing import assert_type
+
+def f(x: tuple[str, *tuple[int, ...]]) -> str:
+    head, *tail = x
+    assert_type(head, str)
+    assert_type(tail, list[int])
+    return head
+"#,
+);
+
+testcase!(
     test_unpack_constrained_typevar_tuple,
     r#"
 from typing import TypeVar, reveal_type
