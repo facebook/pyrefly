@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.89401754.js" defer="defer"></script>
-<script src="/assets/js/main.434fb920.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.be1ec66f.js" defer="defer"></script>
+<script src="/assets/js/main.d37f7a8a.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -53,7 +53,6 @@ a threshold, useful as a CI gate.</li>
 <li><a href="#generating-a-json-report"><code>pyrefly coverage report</code></a> emits a JSON report with per-module
 statistics.</li>
 </ul>
-<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Experimental</div><div class="admonitionContent_BuS1"><p>The output format and behavior may change in future releases without notice.</p></div></div>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="how-coverage-is-measured">How coverage is measured<a href="#how-coverage-is-measured" class="hash-link" aria-label="Direct link to How coverage is measured" title="Direct link to How coverage is measured">​</a></h2>
 <p>Coverage is counted over <em>typables</em>: function return types, function parameters, module-level
 variables, and class attributes. Each typable is either <strong>typed</strong> (annotated, no <code>Any</code> in the
