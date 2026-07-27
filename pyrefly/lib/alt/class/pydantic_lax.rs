@@ -243,10 +243,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let expanded_members = self.expand_types(&f.members);
                 self.unions(expanded_members)
             }
-            // Known atomic types with conversion tables, or Any for everything else
-            _ => self
+            // Pydantic validates class instances without coercing them.
+            Type::ClassType(_) => self
                 .get_atomic_lax_conversion(ty)
-                .unwrap_or_else(|| self.heap.mk_any_explicit()),
+                .unwrap_or_else(|| ty.clone()),
+            // Runtime validation determines whether unsupported forms such as callables are valid.
+            _ => self.heap.mk_any_explicit(),
         }
     }
 
