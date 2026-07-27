@@ -187,56 +187,6 @@ def h() -> list[int | str]: ...
 }
 
 #[test]
-fn test_type_table_include_display_false_omits_per_location_display() {
-    let tdir = TempDir::new().unwrap();
-    let file_path = tdir.path().join("main.py");
-    let code = r#"from typing import Callable
-
-f: Callable[[int, str], bool]
-x: list[int]
-"#;
-    fs_anyhow::write(&file_path, code).unwrap();
-
-    let query = create_query();
-    let module_name = ModuleName::from_str("main");
-    let path = ModulePath::filesystem(file_path.clone());
-
-    let errors = query.add_files(vec![(module_name, path.clone())]);
-    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
-
-    let response = query
-        .get_type_table_in_file(module_name, path, false)
-        .unwrap();
-
-    assert!(
-        !response.types.is_empty(),
-        "expected located refs even without display",
-    );
-    assert!(
-        response
-            .types
-            .iter()
-            .all(|located_type| located_type.display.is_none()),
-        "no located ref should carry a display when include_display=false:\n{:#?}",
-        response.types,
-    );
-    // The deduped type table is still built off the structural shapes.
-    let table = indexed_shape_values(&response.type_table);
-    assert!(
-        table
-            .iter()
-            .any(|shape| shape.get("kind").and_then(Value::as_str) == Some("callable")),
-        "expected the structural type table to be populated:\n{table:#?}",
-    );
-    // The `display` key must be absent from the serialized wire, not null.
-    let serialized = serde_json::to_value(&response.types[0]).unwrap();
-    assert!(
-        serialized.get("display").is_none(),
-        "display must be omitted from the wire when include_display=false:\n{serialized:#?}",
-    );
-}
-
-#[test]
 fn test_type_table_direct_conversion_includes_callable_union_optional_and_dedup() {
     let tdir = TempDir::new().unwrap();
     let file_path = tdir.path().join("main.py");
@@ -258,20 +208,11 @@ second: list[int]
     assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
 
     let response = query
-        .get_type_table_in_file_with_timing(module_name, path, true)
+        .get_type_table_in_file_with_timing(module_name, path)
         .unwrap()
         .0;
     let table = indexed_shape_values(&response.type_table);
 
-    assert!(
-        response
-            .types
-            .iter()
-            .any(|located_type| located_type.display.as_deref()
-                == Some("(builtins.int, builtins.str) -> builtins.bool")),
-        "Expected callable top-level display in located refs:\n{:#?}",
-        response.types,
-    );
     assert!(
         table.iter().any(|shape| {
             shape.get("kind").and_then(Value::as_str) == Some("callable")
@@ -365,7 +306,7 @@ c = Color.RED
     assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
 
     let response = query
-        .get_type_table_in_file_with_timing(module_name, path, true)
+        .get_type_table_in_file_with_timing(module_name, path)
         .unwrap()
         .0;
     let table = indexed_shape_values(&response.type_table);
@@ -402,7 +343,7 @@ fn test_type_table_anonymous_typed_dict_is_dict() {
     assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
 
     let response = query
-        .get_type_table_in_file_with_timing(module_name, path, true)
+        .get_type_table_in_file_with_timing(module_name, path)
         .unwrap()
         .0;
     let table = indexed_shape_values(&response.type_table);

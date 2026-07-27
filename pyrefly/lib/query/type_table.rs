@@ -40,10 +40,6 @@ pub struct LocatedTypeTableRef {
     pub location: PythonASTRange,
     #[serde(rename = "type")]
     pub type_index: usize,
-    // Omitted from the wire when the caller opted out of per-location display
-    // (the structured client resolves types from the table alone).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -765,14 +761,12 @@ fn union_to_indexed_shape(
 
 pub(super) fn located_type_table_refs(
     types: Vec<(PythonASTRange, (usize, String))>,
-    include_display: bool,
 ) -> Vec<LocatedTypeTableRef> {
     types
         .into_iter()
-        .map(|(location, (type_index, display))| LocatedTypeTableRef {
+        .map(|(location, (type_index, _display))| LocatedTypeTableRef {
             location,
             type_index,
-            display: include_display.then_some(display),
         })
         .collect()
 }

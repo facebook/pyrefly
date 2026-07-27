@@ -1237,31 +1237,28 @@ impl Query {
         self.get_types_in_file_transformed(name, path, true, None, |_context, _ty, display| display)
     }
 
-    /// `include_display` controls whether each located type carries its display
-    /// string. Structured clients that resolve types from the table alone can pass
-    /// `false` to skip per-location `type_to_string` (and the write-only type-cache
-    /// population) on the server and omit `display` from the wire.
+    /// The type-table response never carries per-location display strings: clients
+    /// resolve types from the deduped `type_table` alone, so the server skips
+    /// per-location `type_to_string` (and the write-only type-cache population).
     pub fn get_type_table_in_file(
         &self,
         name: ModuleName,
         path: ModulePath,
-        include_display: bool,
     ) -> Option<TypeTableResponseData> {
-        self.get_type_table_in_file_filtered(name, path, include_display, None)
+        self.get_type_table_in_file_filtered(name, path, None)
     }
 
     pub fn get_type_table_in_file_filtered(
         &self,
         name: ModuleName,
         path: ModulePath,
-        include_display: bool,
         walker: Option<&TypeQueryStmtWalker>,
     ) -> Option<TypeTableResponseData> {
         let type_table = RefCell::new(TypeTableBuilder::new());
         let types = self.get_types_in_file_transformed(
             name,
             path,
-            include_display,
+            false,
             walker,
             |context, ty, display| {
                 let type_index = type_to_indexed_shape(context, ty, &mut type_table.borrow_mut());
@@ -1270,7 +1267,7 @@ impl Query {
         )?;
         Some(TypeTableResponseData {
             type_table: type_table.into_inner().into_type_table(),
-            types: located_type_table_refs(types, include_display),
+            types: located_type_table_refs(types),
         })
     }
 
@@ -1278,23 +1275,21 @@ impl Query {
         &self,
         name: ModuleName,
         path: ModulePath,
-        include_display: bool,
     ) -> Option<(TypeTableResponseData, TypeQueryTiming)> {
-        self.get_type_table_in_file_with_timing_filtered(name, path, include_display, None)
+        self.get_type_table_in_file_with_timing_filtered(name, path, None)
     }
 
     pub fn get_type_table_in_file_with_timing_filtered(
         &self,
         name: ModuleName,
         path: ModulePath,
-        include_display: bool,
         walker: Option<&TypeQueryStmtWalker>,
     ) -> Option<(TypeTableResponseData, TypeQueryTiming)> {
         let type_table = RefCell::new(TypeTableBuilder::new());
         let (types, timing) = self.get_types_in_file_with_timing(
             name,
             path,
-            include_display,
+            false,
             walker,
             |context, ty, display| {
                 let type_index = type_to_indexed_shape(context, ty, &mut type_table.borrow_mut());
@@ -1304,7 +1299,7 @@ impl Query {
         Some((
             TypeTableResponseData {
                 type_table: type_table.into_inner().into_type_table(),
-                types: located_type_table_refs(types, include_display),
+                types: located_type_table_refs(types),
             },
             timing,
         ))
