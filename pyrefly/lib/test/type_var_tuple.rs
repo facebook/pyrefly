@@ -134,6 +134,30 @@ assert_type(test((1, 2, 3)), tuple[int, int, int])
 );
 
 testcase!(
+    test_type_var_tuple_constructor_inference_from_generic,
+    r#"
+from collections.abc import Callable
+
+class Codec[*Ts]:
+    def map[T](
+        self,
+        f: Callable[[*Ts], T],
+        inv_f: Callable[[T], tuple[*Ts]],
+    ) -> Map[T, *Ts]:
+        return Map(self, f, inv_f)
+
+class Map[T, *Ts](Codec[T]):
+    def __init__(
+        self,
+        parser: Codec[*Ts],
+        f: Callable[[*Ts], T],
+        inv_f: Callable[[T], tuple[*Ts]],
+    ) -> None:
+        ...
+"#,
+);
+
+testcase!(
     test_type_var_tuple_subtype,
     r#"
 from typing import assert_type
