@@ -24,7 +24,6 @@ use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprNamed;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
-use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprUnaryOp;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Number;
@@ -1279,99 +1278,61 @@ pub(crate) fn int_from_slice(slice: &Expr) -> Option<i64> {
     }
 }
 
+fn facet_kind_for_slice(slice: &Expr) -> Option<UnresolvedFacetKind> {
+    if let Some(idx) = int_from_slice(slice) {
+        Some(UnresolvedFacetKind::Index(idx))
+    } else if let Expr::Name(var) = slice {
+        Some(UnresolvedFacetKind::VariableSubscript(var.clone()))
+    } else if let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = slice {
+        Some(UnresolvedFacetKind::Key(key.to_string()))
+    } else {
+        None
+    }
+}
+
+fn parse_identifier_chain_inner(
+    expr: &Expr,
+    rev_chain: &mut Vec<UnresolvedFacetKind>,
+    truncate_on_unknown_subscript: bool,
+) -> Option<Identifier> {
+    match expr {
+        Expr::Name(name) => Some(Ast::expr_name_identifier(name.clone())),
+        Expr::Attribute(attr) => {
+            rev_chain.push(UnresolvedFacetKind::Attribute(attr.attr.id.clone()));
+            parse_identifier_chain_inner(&attr.value, rev_chain, truncate_on_unknown_subscript)
+        }
+        Expr::Subscript(subscript) => {
+            if let Some(kind) = facet_kind_for_slice(&subscript.slice) {
+                rev_chain.push(kind);
+                parse_identifier_chain_inner(
+                    &subscript.value,
+                    rev_chain,
+                    truncate_on_unknown_subscript,
+                )
+            } else if truncate_on_unknown_subscript {
+                rev_chain.clear();
+                parse_identifier_chain_inner(
+                    &subscript.value,
+                    rev_chain,
+                    truncate_on_unknown_subscript,
+                )
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Given an expression, determine whether it is a chain of properties (attribute/concrete index) rooted at a name,
 /// and if so, return the name and the chain of properties.
 /// For example: x.y.[0].z
 pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, UnresolvedFacetChain)> {
-    fn f(
-        expr: &Expr,
-        mut rev_chain: Vec<UnresolvedFacetKind>,
-    ) -> Option<(Identifier, UnresolvedFacetChain)> {
-        if let Expr::Attribute(attr) = expr {
-            match &*attr.value {
-                Expr::Name(name) => {
-                    let mut final_chain = Vec1::from_vec_push(
-                        rev_chain,
-                        UnresolvedFacetKind::Attribute(attr.attr.id.clone()),
-                    );
-                    final_chain.reverse();
-                    Some((
-                        Ast::expr_name_identifier(name.clone()),
-                        UnresolvedFacetChain::new(final_chain),
-                    ))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(UnresolvedFacetKind::Attribute(attr.attr.id.clone()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Some(idx) = int_from_slice(slice)
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    let mut final_chain =
-                        Vec1::from_vec_push(rev_chain, UnresolvedFacetKind::Index(idx));
-                    final_chain.reverse();
-                    Some((
-                        Ast::expr_name_identifier(name.clone()),
-                        UnresolvedFacetChain::new(final_chain),
-                    ))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(UnresolvedFacetKind::Index(idx));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::Name(var) = &**slice
-        {
-            // The subscript slice is a variable which can have an arbitrary type
-            // the type gets resolved later
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    let mut final_chain = Vec1::from_vec_push(
-                        rev_chain,
-                        UnresolvedFacetKind::VariableSubscript(var.clone()),
-                    );
-                    final_chain.reverse();
-                    Some((
-                        Ast::expr_name_identifier(name.clone()),
-                        UnresolvedFacetChain::new(final_chain),
-                    ))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(UnresolvedFacetKind::VariableSubscript(var.clone()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &**slice
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    let mut final_chain =
-                        Vec1::from_vec_push(rev_chain, UnresolvedFacetKind::Key(key.to_string()));
-                    final_chain.reverse();
-                    Some((
-                        Ast::expr_name_identifier(name.clone()),
-                        UnresolvedFacetChain::new(final_chain),
-                    ))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(UnresolvedFacetKind::Key(key.to_string()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        }
-    }
-    f(expr, Vec::new())
+    let mut rev_chain = Vec::new();
+    let id = parse_identifier_chain_inner(expr, &mut rev_chain, false)?;
+    let mut chain = Vec1::try_from_vec(rev_chain).ok()?;
+    chain.reverse();
+    Some((id, UnresolvedFacetChain::new(chain)))
 }
 
 /// Similar to identifier_and_chain_for_expr, except if we encounter a non-concrete subscript in the chain
@@ -1380,85 +1341,13 @@ pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, Unresol
 pub fn identifier_and_chain_prefix_for_expr(
     expr: &Expr,
 ) -> Option<(Identifier, Vec<UnresolvedFacetKind>)> {
-    fn f(
-        expr: &Expr,
-        mut rev_chain: Vec<UnresolvedFacetKind>,
-    ) -> Option<(Identifier, Vec<UnresolvedFacetKind>)> {
-        if let Expr::Attribute(attr) = expr {
-            match &*attr.value {
-                Expr::Name(name) => {
-                    rev_chain.push(UnresolvedFacetKind::Attribute(attr.attr.id.clone()));
-                    rev_chain.reverse();
-                    Some((Ast::expr_name_identifier(name.clone()), rev_chain))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(UnresolvedFacetKind::Attribute(attr.attr.id.clone()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Some(idx) = int_from_slice(slice)
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    rev_chain.push(UnresolvedFacetKind::Index(idx));
-                    rev_chain.reverse();
-                    Some((Ast::expr_name_identifier(name.clone()), rev_chain))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(UnresolvedFacetKind::Index(idx));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::Name(var) = &**slice
-        {
-            // The subscript slice is a variable which can have an arbitrary type
-            // the type gets resolved later
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    rev_chain.push(UnresolvedFacetKind::VariableSubscript(var.clone()));
-                    rev_chain.reverse();
-                    Some((Ast::expr_name_identifier(name.clone()), rev_chain))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(UnresolvedFacetKind::VariableSubscript(var.clone()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &**slice
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    rev_chain.push(UnresolvedFacetKind::Key(key.to_string()));
-                    rev_chain.reverse();
-                    Some((Ast::expr_name_identifier(name.clone()), rev_chain))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(UnresolvedFacetKind::Key(key.to_string()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript) = expr {
-            // The subscript does not contain an integer or string literal, so we drop everything that we encountered so far
-            match &*subscript.value {
-                Expr::Name(name) => Some((Ast::expr_name_identifier(name.clone()), Vec::new())),
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.clear();
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        }
+    if matches!(expr, Expr::Name(_)) {
+        return None;
     }
-    f(expr, Vec::new())
+    let mut rev_chain = Vec::new();
+    let id = parse_identifier_chain_inner(expr, &mut rev_chain, true)?;
+    rev_chain.reverse();
+    Some((id, rev_chain))
 }
 
 // Handle narrowing on `dict.get("key")`. During solving, if the resolved
