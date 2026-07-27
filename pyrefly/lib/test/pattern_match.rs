@@ -1435,6 +1435,77 @@ def f(n: Node) -> int:
 "#,
 );
 
+testcase!(
+    test_match_keyword_class_pattern_exhaustive,
+    r#"
+from typing import assert_never
+class Leaf:
+    pass
+class Box:
+    item: Leaf
+def f(b: Box) -> int:
+    match b:
+        case Box(item=Leaf()):
+            return 1
+def g(b: Box) -> int:
+    match b:
+        case Box(item=Leaf()):
+            return 1
+        case _:
+            assert_never(b)
+"#,
+);
+
+// An irrefutable keyword sub-pattern (a bare capture) fully exhausts its slot, so the
+// class must be subtracted from later cases -- mirroring the positional irrefutable case.
+testcase!(
+    test_match_irrefutable_keyword_class_pattern_exhaustive,
+    r#"
+from typing import assert_never
+class Box:
+    item: int
+def f(b: Box) -> int:
+    match b:
+        case Box(item=x):
+            return x
+        case _:
+            assert_never(b)
+"#,
+);
+
+testcase!(
+    test_match_mixed_positional_keyword_class_pattern_exhaustive,
+    r#"
+class A:
+    pass
+class Pair:
+    __match_args__ = ("first",)
+    first: A
+    tag: A
+def f(p: Pair) -> int:
+    match p:
+        case Pair(A(), tag=A()):
+            return 1
+"#,
+);
+
+testcase!(
+    test_match_keyword_class_pattern_partial_not_exhaustive,
+    r#"
+class A:
+    pass
+class B:
+    pass
+class Holder:
+    val: A | B
+def f(h: Holder) -> int:  # E: one or more paths are missing an explicit
+    # `val` still admits `B` after `A()`, so the class is not covered.
+    match h:
+        case Holder(val=A()):
+            return 1
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/3805
 testcase!(
     test_match_tuple_union_narrowing,
