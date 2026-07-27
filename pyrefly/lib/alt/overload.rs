@@ -88,6 +88,8 @@ pub struct ArgsExpander<'a, Ans: LookupAnswer> {
     arg_lists: Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>,
     /// Hard-coded limit to how many times we'll expand.
     gas: Gas,
+    /// Set once `gas` is exhausted, so the caller can report the truncated expansion.
+    limit_hit: bool,
     solver: &'a AnswersSolver<'a, Ans>,
 }
 
@@ -107,6 +109,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
             },
             arg_lists: vec![(posargs, keywords)],
             gas: Gas::new(Self::GAS as isize),
+            limit_hit: false,
             solver,
         }
     }
@@ -172,6 +175,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                     if self.gas.stop() {
                         // We've hit our hard-coded limit; stop expanding, and move `idx` past the
                         // end of the keywords so that subsequent `expand` calls know we're done.
+                        self.limit_hit = true;
                         self.idx = Either::Right(keywords.len());
                         return None;
                     }
@@ -403,6 +407,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         matched = true;
                         break;
                     }
+                }
+                if args_expander.limit_hit && !matched {
+                    // Expansion stopped early at the hard limit without finding a match, so we may
+                    // have given up on a call that would otherwise match. Surface it rather than
+                    // silently truncating. (When `matched` is already set we only truncated a
+                    // return-type refinement, which does not change the result, so stay quiet.)
+                    self.error(
+                        errors,
+                        arguments_range,
+                        ErrorKind::OverloadArgumentExpansionLimit,
+                        format!(
+                            "Argument type expansion for this overloaded call hit the limit of {} expansions; some argument type combinations were not checked",
+                            ArgsExpander::<Ans>::GAS
+                        ),
+                    );
                 }
                 (
                     closest_overload,

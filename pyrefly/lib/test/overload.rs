@@ -2519,3 +2519,43 @@ if TYPE_CHECKING:
     def f(a: str): ...
     "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/4213: when argument type expansion for an
+// overloaded call exhausts its expansion limit, that truncation is reported instead of
+// silently giving up. Seven `bool` arguments against overloads that never match force the
+// expansion to split each argument (2^7 combinations) and exceed the limit.
+testcase!(
+    test_overload_argument_expansion_limit_reported,
+    r#"
+from typing import overload
+
+@overload
+def f(a: str, b: str, c: str, d: str, e: str, g: str, h: str, /) -> int: ...
+@overload
+def f(a: bytes, b: bytes, c: bytes, d: bytes, e: bytes, g: bytes, h: bytes, /) -> str: ...
+def f(*args: str | bytes) -> int | str: ...
+
+def call(x: bool) -> None:
+    f(x, x, x, x, x, x, x)  # E: No matching overload found  # E: hit the limit of 100 expansions
+"#,
+);
+
+// The limit warning must not fire when the call already matched: under legacy overload
+// expansion, expansion also runs to refine a union return type, and exhausting the limit there
+// does not change the (correct) result. https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_argument_expansion_limit_not_reported_when_matched,
+    TestEnv::new().enable_legacy_overload_expansion(),
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(a: object, b: object, c: object, d: object, e: object, g: object, h: object, /) -> int | str: ...
+@overload
+def f(a: int, b: int, c: int, d: int, e: int, g: int, h: int, /) -> bytes: ...
+def f(*args: object) -> int | str | bytes: ...
+
+def call(x: bool) -> None:
+    assert_type(f(x, x, x, x, x, x, x), int | str)
+"#,
+);
