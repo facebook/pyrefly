@@ -249,6 +249,44 @@ impl<'a> BindingsBuilder<'a> {
         false
     }
 
+    fn accumulate_class_pattern_subpattern(
+        &mut self,
+        match_subject: &MatchSubject,
+        class_narrow_op: &AtomicNarrowOp,
+        cls_range: TextRange,
+        sub_ops: PatternNarrowOps,
+        probe_range: TextRange,
+        is_irrefutable: bool,
+        coverage_check: bool,
+        coverage_keys: &mut Vec<Idx<Key>>,
+        narrow_ops: &mut PatternNarrowOps,
+    ) {
+        if coverage_check {
+            if !is_irrefutable {
+                // Build this slot's coverage probe: narrow the subject to this class
+                // first (so other union members don't pollute the slot), then require
+                // the negated sub-pattern residual to be `Never`. Irrefutable slots are
+                // already exhausted, so only refutable slots need solve-time probes.
+                let mut coverage_scope = match_subject
+                    .subject_narrow_op(NarrowOp::Atomic(None, class_narrow_op.clone()), cls_range)
+                    .scope;
+                coverage_scope.and_all(sub_ops.scope.negate());
+                let narrow_entries = self.build_narrow_entries(&coverage_scope);
+                coverage_keys.push(self.insert_binding(
+                    Key::Exhaustive(ExhaustivenessKind::ClassPatternCoverage, probe_range),
+                    Binding::Exhaustive(Box::new(ExhaustiveBinding {
+                        kind: ExhaustivenessKind::ClassPatternCoverage,
+                        narrow_entries,
+                    })),
+                ));
+            }
+            narrow_ops.body_only.and_all(sub_ops.scope);
+            narrow_ops.body_only.and_all(sub_ops.body_only);
+        } else {
+            narrow_ops.and_all(sub_ops);
+        }
+    }
+
     /// Traverse a pattern and bind all the names; key is the reference for
     /// the value that's being matched on.
     fn bind_pattern(
@@ -704,37 +742,20 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         MatchSubject::None
                     };
+                    let pattern_range = pattern.range();
+                    let is_irrefutable = pattern.is_irrefutable();
                     let sub_ops = self.bind_pattern(subject_for_slot, pattern.clone(), attr_key);
-                    if coverage_check {
-                        if !pattern.is_irrefutable() {
-                            // Build this slot's coverage probe: narrow the subject to this class
-                            // first (so other union members don't pollute the slot), then require
-                            // the negated sub-pattern residual to be `Never`. Irrefutable slots are
-                            // already exhausted, so only refutable slots need solve-time probes.
-                            let mut coverage_scope = match_subject
-                                .subject_narrow_op(
-                                    NarrowOp::Atomic(None, narrow_op.clone()),
-                                    x.cls.range(),
-                                )
-                                .scope;
-                            coverage_scope.and_all(sub_ops.scope.negate());
-                            let narrow_entries = self.build_narrow_entries(&coverage_scope);
-                            coverage_keys.push(self.insert_binding(
-                                Key::Exhaustive(
-                                    ExhaustivenessKind::ClassPatternCoverage,
-                                    pattern.range(),
-                                ),
-                                Binding::Exhaustive(Box::new(ExhaustiveBinding {
-                                    kind: ExhaustivenessKind::ClassPatternCoverage,
-                                    narrow_entries,
-                                })),
-                            ));
-                        }
-                        narrow_ops.body_only.and_all(sub_ops.scope);
-                        narrow_ops.body_only.and_all(sub_ops.body_only);
-                    } else {
-                        narrow_ops.and_all(sub_ops);
-                    }
+                    self.accumulate_class_pattern_subpattern(
+                        &match_subject,
+                        &narrow_op,
+                        x.cls.range(),
+                        sub_ops,
+                        pattern_range,
+                        is_irrefutable,
+                        coverage_check,
+                        &mut coverage_keys,
+                        &mut narrow_ops,
+                    );
                 }
                 for PatternKeyword {
                     node_index: _,
@@ -763,36 +784,17 @@ impl<'a> BindingsBuilder<'a> {
                         ))),
                     );
                     let sub_ops = self.bind_pattern(subject_for_attr, pattern, attr_key);
-                    if coverage_check {
-                        if !is_irrefutable {
-                            // Build this slot's coverage probe: narrow the subject to this class
-                            // first (so other union members don't pollute the slot), then require
-                            // the negated sub-pattern residual to be `Never`. Irrefutable slots are
-                            // already exhausted, so only refutable slots need solve-time probes.
-                            let mut coverage_scope = match_subject
-                                .subject_narrow_op(
-                                    NarrowOp::Atomic(None, narrow_op.clone()),
-                                    x.cls.range(),
-                                )
-                                .scope;
-                            coverage_scope.and_all(sub_ops.scope.negate());
-                            let narrow_entries = self.build_narrow_entries(&coverage_scope);
-                            coverage_keys.push(self.insert_binding(
-                                Key::Exhaustive(
-                                    ExhaustivenessKind::ClassPatternCoverage,
-                                    pattern_range,
-                                ),
-                                Binding::Exhaustive(Box::new(ExhaustiveBinding {
-                                    kind: ExhaustivenessKind::ClassPatternCoverage,
-                                    narrow_entries,
-                                })),
-                            ));
-                        }
-                        narrow_ops.body_only.and_all(sub_ops.scope);
-                        narrow_ops.body_only.and_all(sub_ops.body_only);
-                    } else {
-                        narrow_ops.and_all(sub_ops);
-                    }
+                    self.accumulate_class_pattern_subpattern(
+                        &match_subject,
+                        &narrow_op,
+                        x.cls.range(),
+                        sub_ops,
+                        pattern_range,
+                        is_irrefutable,
+                        coverage_check,
+                        &mut coverage_keys,
+                        &mut narrow_ops,
+                    );
                 }
                 if coverage_check {
                     // The class is subtracted from later cases only when every refutable slot
