@@ -3115,12 +3115,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn solve_class_synthesized_fields(
         &self,
         errors: &ErrorCollector,
-        fields: &BindingClassSynthesizedFields,
+        binding: &BindingClassSynthesizedFields,
     ) -> Arc<ClassSynthesizedFields> {
-        let fields = match &self.get_idx(fields.0).0 {
+        let fields = match &self.get_idx(binding.class_idx).0 {
             None => ClassSynthesizedFields::default(),
             Some(cls) => {
                 let mut fields = ClassSynthesizedFields::default();
+                if let Some(registrations) = binding.nn_module_registrations.as_deref()
+                    && let Some(new_fields) =
+                        self.get_nn_module_synthesized_fields(cls, registrations)
+                {
+                    fields = fields.combine(new_fields);
+                }
                 if let Some(new_fields) = self.get_typed_dict_synthesized_fields(cls) {
                     fields = fields.combine(new_fields);
                 }
