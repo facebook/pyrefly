@@ -1234,14 +1234,6 @@ impl Query {
         &self,
         name: ModuleName,
         path: ModulePath,
-    ) -> Option<TypeTableResponseData> {
-        self.get_type_table_in_file_filtered(name, path, None)
-    }
-
-    pub fn get_type_table_in_file_filtered(
-        &self,
-        name: ModuleName,
-        path: ModulePath,
         walker: Option<&TypeQueryStmtWalker>,
     ) -> Option<TypeTableResponseData> {
         let type_table = RefCell::new(TypeTableBuilder::new());
