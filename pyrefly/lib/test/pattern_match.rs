@@ -1641,13 +1641,20 @@ def exhaustive(value: MyUnion) -> str:
 
 // https://github.com/facebook/pyrefly/issues/2474
 testcase!(
-    bug = "mapping pattern `{}` does not narrow the negative (else) case the way isinstance(x, Mapping) does",
     test_match_mapping_pattern_else_narrow,
     r#"
 from typing import reveal_type
-def test_match(x: dict | int) -> None:
+def empty_pattern(x: dict | int) -> None:
     match x:
         case {}:
+            reveal_type(x)  # E: revealed type: dict[Unknown, Unknown]
+        case _:
+            reveal_type(x)  # E: revealed type: int
+def keyed_pattern_does_not_narrow_else(x: dict | int) -> None:
+    # `case {"k": _}` is refutable on key presence: a dict without `"k"` falls through, so
+    # the `else` must keep `dict` (only `{}` / `{**rest}` match every mapping).
+    match x:
+        case {"k": _}:
             reveal_type(x)  # E: revealed type: dict[Unknown, Unknown]
         case _:
             reveal_type(x)  # E: revealed type: dict[Unknown, Unknown] | int

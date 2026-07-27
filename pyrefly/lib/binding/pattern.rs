@@ -507,6 +507,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             Pattern::MatchMapping(x) => {
                 let mut narrow_ops = PatternNarrowOps::new();
+                let matches_all_mappings = x.keys.is_empty();
                 let mut subject_idx = subject_idx;
                 let narrow_op = AtomicNarrowOp::IsMapping;
                 subject_idx = self.insert_binding(
@@ -560,6 +561,12 @@ impl<'a> BindingsBuilder<'a> {
                             match_key_idx,
                         ))
                     });
+                if matches_all_mappings
+                    && let Some(subject) = match_subject.as_single()
+                    && let Some((op, _)) = narrow_ops.scope.0.get_mut(subject.name())
+                {
+                    op.strip_placeholders();
+                }
                 if let Some(rest) = x.rest
                     && !Ast::is_synthesized_empty_identifier(&rest)
                 {
