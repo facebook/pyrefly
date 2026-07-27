@@ -226,6 +226,9 @@ pub struct Descriptor {
     setter: bool,
     /// Does `__delete__` exist on the descriptor?
     deleter: bool,
+    /// A framework-provided instance access type that overrides the descriptor's `__get__`.
+    /// Class access still calls `__get__` so it can return the descriptor object.
+    instance_getter_type: Option<Type>,
     /// How the descriptor field was initialized. Used to distinguish class-body
     /// descriptors (which have an actual object on the class) from annotation-only
     /// descriptors (which rely on metaclass or other runtime machinery).
@@ -327,6 +330,8 @@ enum ClassFieldInner {
         ty: Type,
         annotation: Option<Annotation>,
         descriptor: Descriptor,
+        is_foreign_key: bool,
+        has_choices: bool,
     },
     /// Methods (including abstract methods, functions without return annotations). We always
     /// treat them as read only.
@@ -591,16 +596,23 @@ impl ClassField {
                 ty,
                 annotation,
                 descriptor,
+                is_foreign_key,
+                has_choices,
             } => {
                 let mut ty = ty.clone();
                 f(&mut ty);
                 let mut descriptor = descriptor.clone();
                 descriptor.cls.visit_mut(f);
+                if let Some(instance_getter_type) = &mut descriptor.instance_getter_type {
+                    f(instance_getter_type);
+                }
                 Self(
                     ClassFieldInner::Descriptor {
                         ty,
                         annotation: annotation.clone(),
                         descriptor,
+                        is_foreign_key: *is_foreign_key,
+                        has_choices: *has_choices,
                     },
                     self.1.clone(),
                 )
@@ -881,7 +893,7 @@ impl ClassField {
     pub fn is_foreign_key(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,
-            ClassFieldInner::Descriptor { .. } => false,
+            ClassFieldInner::Descriptor { is_foreign_key, .. } => *is_foreign_key,
             ClassFieldInner::Method { .. } => false,
             ClassFieldInner::ProxyMethod { .. } => false,
             ClassFieldInner::NestedClass { .. } => false,
@@ -893,7 +905,7 @@ impl ClassField {
     pub fn has_choices(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,
-            ClassFieldInner::Descriptor { .. } => false,
+            ClassFieldInner::Descriptor { has_choices, .. } => *has_choices,
             ClassFieldInner::Method { .. } => false,
             ClassFieldInner::ProxyMethod { .. } => false,
             ClassFieldInner::NestedClass { .. } => false,
@@ -1987,6 +1999,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             getter,
                             setter,
                             deleter,
+                            instance_getter_type: None,
                             initialization: initialization.clone(),
                             is_override: descriptor_is_override,
                         })
@@ -2025,7 +2038,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             descriptor = None;
             special_ty
         } else {
-            ty
+            let initial_value_expr = match field_definition {
+                ClassFieldDefinition::AssignedInBody { value, .. } => {
+                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
+                        Some(expr)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(django_ty) =
+                self.get_django_field_type(&ty, class, Some(name), initial_value_expr)
+            {
+                if let Some(descriptor) = &mut descriptor {
+                    if let Some(field_type) = self.specialize_django_field_descriptor(
+                        descriptor.cls.class_object(),
+                        django_ty.clone(),
+                    ) {
+                        descriptor.cls = field_type;
+                    }
+                    descriptor.instance_getter_type = Some(django_ty.clone());
+                }
+                django_ty
+            } else {
+                ty
+            }
         };
 
         // Pin any vars in the type: leaking a var in a class field is particularly
@@ -2166,6 +2204,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ty,
                     annotation,
                     descriptor,
+                    is_foreign_key,
+                    has_choices,
                 },
                 is_inherited,
             )
@@ -2390,19 +2430,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
         .or_else(|| self.get_property_class_field_type(class, name, field_definition))
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
-        .or_else(|| {
-            let initial_value_expr = match field_definition {
-                ClassFieldDefinition::AssignedInBody { value, .. } => {
-                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
-                        Some(expr)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            self.get_django_field_type(ty, class, Some(name), initial_value_expr)
-        })
     }
 
     /// Recognize `x = property(fget, fset, fdel)` and return the corresponding
@@ -5490,6 +5517,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Ok(self.call_property_getter(getter, range, errors, context))
             }
             ClassAttribute::Descriptor(x, base) => {
+                if matches!(
+                    &base,
+                    DescriptorBase::Instance(_) | DescriptorBase::SelfInstance(_)
+                ) && let Some(instance_getter_type) = x.instance_getter_type.clone()
+                {
+                    return Ok(instance_getter_type);
+                }
                 if let Some(getter) = self.resolve_descriptor_getter(attr_name, &x, errors) {
                     // Reading a descriptor with a getter resolves to a method call
                     //
