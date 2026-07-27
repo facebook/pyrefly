@@ -80,6 +80,7 @@ use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
 use crate::error::suppress::CommentLocation;
 use crate::error::suppress::SerializedError;
+use crate::error::suppress::UnusedIgnoreKind;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::load::FileContents;
@@ -235,7 +236,7 @@ impl SnippetCheckArgs {
                 check_all: false,
                 suppress_errors: false,
                 expectations: false,
-                remove_unused_ignores: false,
+                remove_unused_ignores: None,
             },
         };
         let (status, check_result) =
@@ -420,9 +421,17 @@ struct BehaviorArgs {
     /// Check against any `E:` lines in the file.
     #[arg(long)]
     expectations: bool,
-    /// Remove unused ignores from the input files.
-    #[arg(long)]
-    remove_unused_ignores: bool,
+    /// Remove unused ignores from the input files, optionally selecting `pyrefly`, `type`, or `all`.
+    /// Defaults to `pyrefly` when no kind is specified.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "KIND",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "pyrefly"
+    )]
+    remove_unused_ignores: Option<UnusedIgnoreKind>,
 }
 
 fn write_errors_to_file(
@@ -1392,11 +1401,11 @@ impl CheckArgs {
                 .collect();
             suppress::suppress_errors(serialized_errors, CommentLocation::LineBefore);
         }
-        if self.behavior.remove_unused_ignores {
+        if let Some(kind) = self.behavior.remove_unused_ignores {
             // TODO: Deprecate this in favor of `pyrefly suppress`
             let collected = loads.collect_errors();
             let unused_errors = loads.collect_unused_ignore_errors(&collected);
-            suppress::remove_unused_ignores(unused_errors);
+            suppress::remove_unused_ignores(unused_errors, kind);
         }
 
         // We update the baseline file if requested, after reporting any new
@@ -1789,6 +1798,35 @@ mod tests {
         output.inherit_defaults_from_config(&config);
 
         assert_eq!(output.output_format(), OutputFormat::Json);
+    }
+
+    #[test]
+    fn remove_unused_ignores_cli_values() {
+        for (argument, expected) in [
+            (None, None),
+            (
+                Some("--remove-unused-ignores"),
+                Some(UnusedIgnoreKind::Pyrefly),
+            ),
+            (
+                Some("--remove-unused-ignores=pyrefly"),
+                Some(UnusedIgnoreKind::Pyrefly),
+            ),
+            (
+                Some("--remove-unused-ignores=type"),
+                Some(UnusedIgnoreKind::Type),
+            ),
+            (
+                Some("--remove-unused-ignores=all"),
+                Some(UnusedIgnoreKind::All),
+            ),
+        ] {
+            let args = argument.map_or_else(
+                || CheckArgs::parse_from(["check"]),
+                |argument| CheckArgs::parse_from(["check", argument]),
+            );
+            assert_eq!(args.behavior.remove_unused_ignores, expected);
+        }
     }
 
     fn upsell_string(reason: SynthesizedPresetReason) -> String {
