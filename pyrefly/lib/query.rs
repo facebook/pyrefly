@@ -1229,14 +1229,6 @@ impl Query {
         Some(find_callees.process(location))
     }
 
-    pub fn get_types_in_file(
-        &self,
-        name: ModuleName,
-        path: ModulePath,
-    ) -> Option<Vec<(PythonASTRange, String)>> {
-        self.get_types_in_file_transformed(name, path, true, None, |_context, _ty, display| display)
-    }
-
     /// The type-table response never carries per-location display strings: clients
     /// resolve types from the deduped `type_table` alone, so the server skips
     /// per-location `type_to_string` (and the write-only type-cache population).
@@ -1255,16 +1247,9 @@ impl Query {
         walker: Option<&TypeQueryStmtWalker>,
     ) -> Option<TypeTableResponseData> {
         let type_table = RefCell::new(TypeTableBuilder::new());
-        let types = self.get_types_in_file_transformed(
-            name,
-            path,
-            false,
-            walker,
-            |context, ty, display| {
-                let type_index = type_to_indexed_shape(context, ty, &mut type_table.borrow_mut());
-                (type_index, display)
-            },
-        )?;
+        let types = self.get_types_in_file_transformed(name, path, walker, |context, ty| {
+            type_to_indexed_shape(context, ty, &mut type_table.borrow_mut())
+        })?;
         Some(TypeTableResponseData {
             type_table: type_table.into_inner().into_type_table(),
             types: located_type_table_refs(types),
@@ -1286,16 +1271,10 @@ impl Query {
         walker: Option<&TypeQueryStmtWalker>,
     ) -> Option<(TypeTableResponseData, TypeQueryTiming)> {
         let type_table = RefCell::new(TypeTableBuilder::new());
-        let (types, timing) = self.get_types_in_file_with_timing(
-            name,
-            path,
-            false,
-            walker,
-            |context, ty, display| {
-                let type_index = type_to_indexed_shape(context, ty, &mut type_table.borrow_mut());
-                (type_index, display)
-            },
-        )?;
+        let (types, timing) =
+            self.get_types_in_file_with_timing(name, path, walker, |context, ty| {
+                type_to_indexed_shape(context, ty, &mut type_table.borrow_mut())
+            })?;
         Some((
             TypeTableResponseData {
                 type_table: type_table.into_inner().into_type_table(),
@@ -1309,40 +1288,30 @@ impl Query {
         &self,
         name: ModuleName,
         path: ModulePath,
-        include_display: bool,
         walker: Option<&TypeQueryStmtWalker>,
         transform: F,
     ) -> Option<Vec<(PythonASTRange, T)>>
     where
-        F: Fn(&TypeShapeContext, &Type, String) -> T,
+        F: Fn(&TypeShapeContext, &Type) -> T,
     {
-        self.get_types_in_file_with_optional_timing(
-            name,
-            path,
-            include_display,
-            walker,
-            transform,
-            None,
-        )
+        self.get_types_in_file_with_optional_timing(name, path, walker, transform, None)
     }
 
     fn get_types_in_file_with_timing<T, F>(
         &self,
         name: ModuleName,
         path: ModulePath,
-        include_display: bool,
         walker: Option<&TypeQueryStmtWalker>,
         transform: F,
     ) -> Option<(Vec<(PythonASTRange, T)>, TypeQueryTiming)>
     where
-        F: Fn(&TypeShapeContext, &Type, String) -> T,
+        F: Fn(&TypeShapeContext, &Type) -> T,
     {
         let mut timing = TypeQueryTiming::default();
         let total_start = Instant::now();
         let types = self.get_types_in_file_with_optional_timing(
             name,
             path,
-            include_display,
             walker,
             transform,
             Some(&mut timing),
@@ -1355,13 +1324,12 @@ impl Query {
         &self,
         name: ModuleName,
         path: ModulePath,
-        include_display: bool,
         walker: Option<&TypeQueryStmtWalker>,
         transform: F,
         mut timing: Option<&mut TypeQueryTiming>,
     ) -> Option<Vec<(PythonASTRange, T)>>
     where
-        F: Fn(&TypeShapeContext, &Type, String) -> T,
+        F: Fn(&TypeShapeContext, &Type) -> T,
     {
         let setup_start = timing.as_ref().map(|_| Instant::now());
         let handle = self.make_handle(name, path);
@@ -1386,42 +1354,14 @@ impl Query {
             range: TextRange,
             module_info: &ModuleInfo,
             res: &mut Vec<(PythonASTRange, T)>,
-            type_cache: &TypeCache,
             transform: &F,
             type_shape_context: &TypeShapeContext,
-            include_display: bool,
             timing: &mut Option<&mut TypeQueryTiming>,
         ) where
-            F: Fn(&TypeShapeContext, &Type, String) -> T,
+            F: Fn(&TypeShapeContext, &Type) -> T,
         {
-            // The display string is only needed by callers that ship it per location.
-            // When they opt out we skip both `type_to_string` and the type-cache
-            // population (the cache is keyed on display and only read by is_subtype).
-            let display = if include_display {
-                let stringify_start = timing.as_ref().map(|_| Instant::now());
-                let display = type_to_string(ty);
-                if let (Some(timing), Some(stringify_start)) =
-                    (timing.as_deref_mut(), stringify_start)
-                {
-                    timing.stringify += stringify_start.elapsed();
-                }
-
-                // Only clone ty if not already in cache
-                let cache_start = timing.as_ref().map(|_| Instant::now());
-                type_cache
-                    .cache
-                    .entry(display.clone())
-                    .or_insert_with(|| ty.clone());
-                if let (Some(timing), Some(cache_start)) = (timing.as_deref_mut(), cache_start) {
-                    timing.cache += cache_start.elapsed();
-                }
-                display
-            } else {
-                String::new()
-            };
-
             let transform_start = timing.as_ref().map(|_| Instant::now());
-            let transformed = transform(type_shape_context, ty, display);
+            let transformed = transform(type_shape_context, ty);
             if let (Some(timing), Some(transform_start)) = (timing.as_deref_mut(), transform_start)
             {
                 timing.transform += transform_start.elapsed();
@@ -1454,14 +1394,12 @@ impl Query {
             answers: &Answers,
             bindings: &Bindings,
             res: &mut Vec<(PythonASTRange, T)>,
-            type_cache: &TypeCache,
             transform: &F,
             type_shape_context: &TypeShapeContext,
-            include_display: bool,
             timing: &mut Option<&mut TypeQueryTiming>,
         ) -> bool
         where
-            F: Fn(&TypeShapeContext, &Type, String) -> T,
+            F: Fn(&TypeShapeContext, &Type) -> T,
         {
             let range = x.range();
             if let Expr::Name(name) = x
@@ -1475,10 +1413,8 @@ impl Query {
                     range,
                     module_info,
                     res,
-                    type_cache,
                     transform,
                     type_shape_context,
-                    include_display,
                     timing,
                 );
                 true
@@ -1490,10 +1426,8 @@ impl Query {
                     range,
                     module_info,
                     res,
-                    type_cache,
                     transform,
                     type_shape_context,
-                    include_display,
                     timing,
                 );
                 true
@@ -1511,10 +1445,8 @@ impl Query {
                 &answers,
                 &bindings,
                 &mut res,
-                &self.type_cache,
                 &transform,
                 &type_shape_context,
-                include_display,
                 &mut timing,
             )
         };

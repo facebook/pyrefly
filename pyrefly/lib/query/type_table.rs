@@ -760,11 +760,11 @@ fn union_to_indexed_shape(
 }
 
 pub(super) fn located_type_table_refs(
-    types: Vec<(PythonASTRange, (usize, String))>,
+    types: Vec<(PythonASTRange, usize)>,
 ) -> Vec<LocatedTypeTableRef> {
     types
         .into_iter()
-        .map(|(location, (type_index, _display))| LocatedTypeTableRef {
+        .map(|(location, type_index)| LocatedTypeTableRef {
             location,
             type_index,
         })
