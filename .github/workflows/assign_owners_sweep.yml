@@ -5,7 +5,8 @@ name: Assign team owners to unassigned PRs
 # PRs that are ready for a team member to shepherd but nobody has picked up.
 #
 # Selection is least-loaded (balanced against each owner's current open-PR
-# backlog) and each assignment is announced in the team Discord channel.
+# backlog). The picked owner is both assigned and requested as a reviewer,
+# and each assignment is announced in the team Discord channel.
 #
 # Run manually from the Actions tab. Keep "dry_run" checked to preview what
 # would happen (logs only, plus the exact Discord messages), then uncheck it
@@ -191,6 +192,9 @@ jobs:
                 assignable[0],
               );
 
+              // A PR author can't review their own PR, so we only assign in that case.
+              const isAuthor = pr.user.login.toLowerCase() === pick;
+
               if (!dryRun) {
                 await github.rest.issues.addAssignees({
                   owner, repo, issue_number: pr.number, assignees: [pick],
@@ -201,10 +205,23 @@ jobs:
                   console.log(`#${pr.number}: could not assign ${pick} (no repo access?)`);
                   continue;
                 }
+                if (isAuthor) {
+                  console.log(`#${pr.number}: ${pick} is the PR author, skipping review request`);
+                } else {
+                  try {
+                    await github.rest.pulls.requestReviewers({
+                      owner, repo, pull_number: pr.number, reviewers: [pick],
+                    });
+                  } catch (e) {
+                    console.log(`#${pr.number}: could not request review from ${pick}: ${e.message}`);
+                  }
+                }
               }
 
               load.set(pick, load.get(pick) + 1);
-              console.log(`${dryRun ? '[dry-run] would assign' : '#' + pr.number + ': assigned'} ${pick}${dryRun ? ` to #${pr.number}` : ''} (load now ${load.get(pick)})`);
+              const action = isAuthor ? 'assign' : 'assign + request review from';
+              const pastAction = isAuthor ? 'assigned' : 'assigned + requested review from';
+              console.log(`${dryRun ? '[dry-run] would ' + action : '#' + pr.number + ': ' + pastAction} ${pick}${dryRun ? ` to #${pr.number}` : ''} (load now ${load.get(pick)})`);
               await notify(pick, pr);
               assigned++;
             }
