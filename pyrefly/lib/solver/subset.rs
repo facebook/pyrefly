@@ -2779,7 +2779,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
         for (got_arg, want_arg, param) in izip!(got, want, params.iter()) {
             if param.kind() == QuantifiedKind::TypeVarTuple {
-                self.is_consistent(got_arg, want_arg)?;
+                let as_tuple_carrier = |arg: &Type| {
+                    // A symbolic variadic argument represents the whole tuple, like `tuple[*Ts]`.
+                    if matches!(arg, Type::Var(_)) || arg.is_kind_type_var_tuple() {
+                        self.solver
+                            .heap
+                            .mk_unpacked_tuple(Vec::new(), arg.clone(), Vec::new())
+                    } else {
+                        arg.clone()
+                    }
+                };
+                self.is_consistent(&as_tuple_carrier(got_arg), &as_tuple_carrier(want_arg))?;
             } else if param.kind() == QuantifiedKind::IntVar {
                 let got_arg = Self::intvar_targ_for_compare(got_arg)?;
                 let want_arg = Self::intvar_targ_for_compare(want_arg)?;
