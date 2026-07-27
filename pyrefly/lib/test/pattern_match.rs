@@ -1681,7 +1681,6 @@ def example(a: list[int] | None, b: list[int] | None) -> list[int]:
 
 // https://github.com/facebook/pyrefly/issues/2932
 testcase!(
-    bug = "variables assigned in every non-raising match arm are still reported as possibly-unbound after the match",
     test_match_false_positive_unbound_name,
     r#"
 from typing import assert_type
@@ -1697,8 +1696,37 @@ def test(x: int | None, y: int | None) -> None:
             v = n // 3
         case _, _:
             raise ValueError
-    assert_type(u, int)  # E: `u` may be uninitialized
-    assert_type(v, int)  # E: `v` may be uninitialized
+    assert_type(u, int)
+    assert_type(v, int)
+"#,
+);
+
+testcase!(
+    test_match_tuple_wildcard_catch_all_is_exhaustive,
+    r#"
+from typing import assert_type
+def f(x: int | None, y: int | None) -> None:
+    match x, y:
+        case None, None:
+            u = 0
+        case int(m), None:
+            u = m
+        case None, int(n):
+            u = n
+        case _, _:
+            u = 1
+    assert_type(u, int)
+"#,
+);
+
+testcase!(
+    test_match_starred_tuple_subject_is_not_fixed_arity,
+    r#"
+def f(xs: list[int], y: int) -> None:
+    match *xs, y:
+        case a, b:
+            u = 0
+    print(u)  # E: `u` may be uninitialized
 "#,
 );
 

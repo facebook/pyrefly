@@ -57,7 +57,7 @@ enum MatchSubject {
     /// Python evaluates the subject once before matching, so we need a stable internal
     /// subject for branch narrowing while diagnostics still point at the source expression.
     Synthetic { display_subject_range: TextRange },
-    /// Per-element subjects from a tuple match (e.g., `match x, y:`).
+    /// Per-element subjects from a fixed-arity tuple match (e.g., `match x, y:`).
     Tuple(Vec<Option<NarrowingSubject>>),
 }
 
@@ -221,6 +221,32 @@ impl<'a> BindingsBuilder<'a> {
             Pattern::MatchValue(_) | Pattern::MatchSingleton(_) | Pattern::MatchStar(_) => true,
             _ => false,
         }
+    }
+
+    /// Whether `pattern` always matches `match_subject`. Beyond ruff's syntactic
+    /// `is_irrefutable`, a sequence pattern over a fixed-arity tuple subject (e.g.
+    /// `case _, _` for `match x, y`) is irrefutable when its arity matches and every
+    /// element is irrefutable: the subject is always a tuple of exactly that length, so
+    /// the pattern is a catch-all.
+    fn pattern_is_irrefutable_for_subject(pattern: &Pattern, match_subject: &MatchSubject) -> bool {
+        if pattern.is_wildcard() || pattern.is_irrefutable() {
+            return true;
+        }
+        if let (Pattern::MatchSequence(seq), MatchSubject::Tuple(subjects)) =
+            (pattern, match_subject)
+        {
+            let has_star = seq
+                .patterns
+                .iter()
+                .any(|p| matches!(p, Pattern::MatchStar(_)));
+            return !has_star
+                && seq.patterns.len() == subjects.len()
+                && seq
+                    .patterns
+                    .iter()
+                    .all(|p| p.is_wildcard() || p.is_irrefutable());
+        }
+        false
     }
 
     /// Traverse a pattern and bind all the names; key is the reference for
@@ -833,9 +859,14 @@ impl<'a> BindingsBuilder<'a> {
         let subject_expr = x.subject.clone();
         let subject_idx =
             self.insert_binding_current(subject, Binding::Expr(None, Box::new(*x.subject.clone())));
-        // When the match subject is a tuple (e.g., `match x, y:`), extract per-element
-        // narrowing subjects so that sequence patterns can narrow each element individually.
-        let match_subject = if let Expr::Tuple(ref tuple_expr) = *x.subject {
+        // When the match subject is a fixed-arity tuple (e.g., `match x, y:`), extract
+        // per-element narrowing subjects so sequence patterns can narrow each element individually.
+        let match_subject = if let Expr::Tuple(ref tuple_expr) = *x.subject
+            && tuple_expr
+                .elts
+                .iter()
+                .all(|elt| !matches!(elt, Expr::Starred(_)))
+        {
             MatchSubject::Tuple(
                 tuple_expr
                     .elts
@@ -872,7 +903,8 @@ impl<'a> BindingsBuilder<'a> {
                 ..
             } = case;
             self.start_branch();
-            let case_is_irrefutable = pattern.is_wildcard() || pattern.is_irrefutable();
+            let case_is_irrefutable =
+                Self::pattern_is_irrefutable_for_subject(&pattern, &match_subject);
             if case_is_irrefutable {
                 exhaustive = true;
             }
