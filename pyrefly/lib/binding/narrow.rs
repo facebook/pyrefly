@@ -403,6 +403,8 @@ pub enum FacetOrigin {
     Direct,
     // This facet came from a call to a `get` method, like `x.get("key")`
     GetMethod,
+    // This facet belongs to the evaluated tuple in a multi-subject match.
+    MatchSubject,
 }
 
 #[derive(Clone, Debug)]
@@ -519,6 +521,17 @@ impl NarrowOp {
         }
     }
 
+    /// Whether this operation narrows an element of a multi-subject match tuple.
+    pub(crate) fn has_match_subject_facet(&self) -> bool {
+        match self {
+            Self::Atomic(Some(facet_subject), _) => {
+                facet_subject.origin == FacetOrigin::MatchSubject
+            }
+            Self::Atomic(None, _) => false,
+            Self::And(ops) | Self::Or(ops) => ops.iter().any(Self::has_match_subject_facet),
+        }
+    }
+
     fn and(&mut self, other: Self) {
         match self {
             Self::And(ops) => ops.push(other),
@@ -573,6 +586,9 @@ impl NarrowOp {
             chain.extend(extra.chain.facets().clone());
             let origin = match (base.origin, extra.origin) {
                 (FacetOrigin::GetMethod, _) | (_, FacetOrigin::GetMethod) => FacetOrigin::GetMethod,
+                (FacetOrigin::MatchSubject, _) | (_, FacetOrigin::MatchSubject) => {
+                    FacetOrigin::MatchSubject
+                }
                 _ => FacetOrigin::Direct,
             };
             FacetSubject {
