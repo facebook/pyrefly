@@ -244,11 +244,12 @@ impl<'a> SelfAttrNames<'a> {
         parameters: &mut Box<Parameters>,
         body: ThinVec<Stmt>,
     ) -> Option<SelfAssignments> {
-        let self_name = if let Some(p) = parameters.iter_non_variadic_params().next() {
-            &p.parameter.name.id
-        } else {
-            return None;
-        };
+        let self_name = &parameters
+            .iter_non_variadic_params()
+            .next()?
+            .parameter
+            .name
+            .id;
         let mut finder = SelfAttrNames {
             self_name,
             names: SmallMap::new(),

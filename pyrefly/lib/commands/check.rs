@@ -1562,7 +1562,7 @@ impl CheckArgs {
                 // Generate a safe filename using hash to avoid OS filename length limits
                 let module_hash = blake3::hash(handle.path().to_string().as_bytes());
                 fs_anyhow::write(
-                    &glean.join(format!("{}.json", &module_hash)),
+                    &glean.join(format!("{}.json", module_hash)),
                     report::glean::glean(transaction, handle),
                 )?;
             }

@@ -417,7 +417,7 @@ impl FallbackSearchPath {
 
     pub fn repr_for_directory(&self, directory: Option<&Path>) -> String {
         match (self, directory) {
-            (Self::Explicit(paths), _) => format!("{:?}", &**paths),
+            (Self::Explicit(paths), _) => format!("{:?}", **paths),
             (Self::DirectoryRelative(c), Some(start)) => format!("{:?}", &**c.get_ancestors(start)),
             (Self::DirectoryRelative(c), None) => format!(
                 "<paths from parent directory of all files up to {:?}>",

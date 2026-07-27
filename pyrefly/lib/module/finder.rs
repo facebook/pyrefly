@@ -329,7 +329,7 @@ fn find_extra_extension_module<'a>(
             // Prefer .pyi stub files (e.g., foo.thrift.pyi) over raw files
             // (e.g., foo.thrift). This allows generated type stubs to provide
             // Python type information for non-Python file extensions.
-            let pyi_candidate = dir.join(format!("{}.pyi", &filename));
+            let pyi_candidate = dir.join(format!("{}.pyi", filename));
             if pyi_candidate.is_file() {
                 return Some(FindingOrError::new_finding(ModulePath::filesystem(
                     pyi_candidate,

@@ -121,7 +121,7 @@ fn get_test_report(
                 }
                 if let Some(text_edit) = text_edit {
                     report.push_str(" with text edit: ");
-                    report.push_str(&format!("{:?}", &text_edit));
+                    report.push_str(&format!("{:?}", text_edit));
                 }
                 if let Some(documentation) = documentation {
                     report.push('\n');

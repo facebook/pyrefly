@@ -3946,26 +3946,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Vec<Type>> {
         let mut dims = Vec::new();
         for arg in args {
-            if let Some(dim) = self.parse_dimension_expr(arg, errors) {
-                let simplified = canonicalize(dim);
+            let dim = self.parse_dimension_expr(arg, errors)?;
+            let simplified = canonicalize(dim);
 
-                // Validate that literal dimensions are positive
-                if let Type::Int(Int::Literal(value)) = &simplified
-                    && value <= &0
-                {
-                    self.error(
-                        errors,
-                        arg.range(),
-                        ErrorKind::InvalidAnnotation,
-                        format!("Tensor shape dimension must be positive, got {}", value),
-                    );
-                    return None;
-                }
-
-                dims.push(simplified);
-            } else {
+            // Validate that literal dimensions are positive
+            if let Type::Int(Int::Literal(value)) = &simplified
+                && value <= &0
+            {
+                self.error(
+                    errors,
+                    arg.range(),
+                    ErrorKind::InvalidAnnotation,
+                    format!("Tensor shape dimension must be positive, got {}", value),
+                );
                 return None;
             }
+
+            dims.push(simplified);
         }
         Some(dims)
     }

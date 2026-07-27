@@ -4438,7 +4438,6 @@ impl Server {
                     metadata: _,
                     definition_range,
                     module,
-                    docstring_range: _,
                     ..
                 } = definition;
                 // find_global_implementations_from_definition returns Vec<TextRangeWithModule>
@@ -4992,7 +4991,6 @@ impl Server {
                     metadata,
                     definition_range,
                     module,
-                    docstring_range: _,
                     ..
                 } = definition;
 

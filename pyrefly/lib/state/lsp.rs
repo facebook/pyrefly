@@ -3719,7 +3719,6 @@ impl<'a> Transaction<'a> {
                  metadata,
                  definition_range,
                  module,
-                 docstring_range: _,
                  ..
              }| {
                 self.local_references_from_definition(

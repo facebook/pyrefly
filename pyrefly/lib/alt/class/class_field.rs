@@ -2268,7 +2268,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         range,
                         ErrorKind::ImplicitlyDefinedAttribute,
-                        format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", &name),
+                        format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", name),
                     );
                 }
             }

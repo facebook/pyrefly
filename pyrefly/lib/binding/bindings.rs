@@ -555,7 +555,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for lambda parameter `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -571,7 +571,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for parameter `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -590,7 +590,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for return type `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
