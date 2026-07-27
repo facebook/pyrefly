@@ -52,6 +52,7 @@ mod named_tuple;
 mod narrow;
 mod natural;
 mod new_type;
+mod nn_module;
 mod operators;
 mod overload;
 mod pandas;
