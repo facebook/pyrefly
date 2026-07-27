@@ -34,7 +34,6 @@ use ruff_python_ast::PythonVersion as RuffPythonVersion;
 use ruff_python_ast::Singleton;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtIf;
-use ruff_python_ast::StringFlags;
 use ruff_python_ast::StringLiteral;
 use ruff_python_ast::StringLiteralFlags;
 use ruff_python_ast::StringLiteralValue;
@@ -49,6 +48,7 @@ use ruff_python_parser::Parsed;
 use ruff_python_parser::UnsupportedSyntaxError;
 use ruff_python_parser::parse_expression_range;
 use ruff_python_parser::parse_unchecked;
+use ruff_python_parser::typing::parse_type_annotation;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -178,20 +178,8 @@ impl Ast {
             .body)
     }
 
-    pub fn parse_type_literal(x: &StringLiteral) -> anyhow::Result<Expr> {
-        let mut s = &*x.value;
-        let buffer;
-        let mut add = x.flags.prefix().text_len() + TextSize::new(1);
-
-        if x.flags.is_triple_quoted() {
-            // Implicitly bracketed, so add them explicitly
-            buffer = format!("({s})");
-            s = &buffer;
-            add += TextSize::new(1); // 3 for the quotes, minus 1 for the bracket, minus 1 for the raw quote
-        }
-        // Make sure the range is precise, so that we get the right UTF8 indices.
-        // We might have a problem with \ escapes moving indices, but if necessary we can ban those.
-        Ast::parse_expr(s, x.range.start() + add)
+    pub fn parse_type_literal(x: &ExprStringLiteral, source: &str) -> anyhow::Result<Expr> {
+        Ok(parse_type_annotation(x, source)?.expression().clone())
     }
 
     pub fn unpack_slice(x: &Expr) -> &[Expr] {
