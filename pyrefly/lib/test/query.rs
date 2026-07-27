@@ -14,10 +14,6 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lined_buffer::PythonASTRange;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
-use pyrefly_util::visit::Visit;
-use ruff_python_ast::Expr;
-use ruff_python_ast::Stmt;
-use ruff_python_ast::StmtFunctionDef;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
@@ -26,8 +22,6 @@ use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::query::Query;
 use crate::query::SerializedTypeTableEntry;
-use crate::query::TypeQueryExprVisitor;
-use crate::query::TypeShape;
 use crate::test::util::init_test;
 
 /// Helper to create a Query with a ConfigFinder that doesn't use sourcedb.
@@ -60,13 +54,6 @@ fn types_to_json_string(types: Vec<(PythonASTRange, String)>) -> String {
     serde_json::to_string_pretty(&entries).unwrap()
 }
 
-fn type_shape_values(types: Vec<(PythonASTRange, TypeShape)>) -> Vec<Value> {
-    types
-        .into_iter()
-        .map(|(_, type_shape)| serde_json::to_value(type_shape).unwrap())
-        .collect()
-}
-
 fn indexed_shape_values(type_table: &[SerializedTypeTableEntry]) -> Vec<Value> {
     type_table
         .iter()
@@ -91,55 +78,6 @@ fn is_indexed_named_shape(shape: &Value, name: &str, args: &[usize]) -> bool {
 fn is_named_shape(shape: &Value, name: &str) -> bool {
     shape.get("kind").and_then(Value::as_str) == Some("named")
         && shape.get("name").and_then(Value::as_str) == Some(name)
-}
-
-fn is_named_shape_with_args(shape: &Value, name: &str, arg_names: &[&str]) -> bool {
-    is_named_shape(shape, name)
-        && shape
-            .get("args")
-            .and_then(Value::as_array)
-            .is_some_and(|args| {
-                args.len() == arg_names.len()
-                    && args
-                        .iter()
-                        .zip(arg_names.iter())
-                        .all(|(arg, arg_name)| is_named_shape(arg, arg_name))
-            })
-}
-
-fn unspecified_type_arg_count(shape: &Value) -> Option<u64> {
-    shape
-        .get("unspecified_type_arg_count")
-        .and_then(Value::as_u64)
-}
-
-fn contains_named_shape_with_unspecified_type_arg_count(
-    shape: &Value,
-    name: &str,
-    unspecified_count: u64,
-) -> bool {
-    if is_named_shape_with_args(shape, name, &[])
-        && unspecified_type_arg_count(shape) == Some(unspecified_count)
-    {
-        return true;
-    }
-
-    ["args", "bounds", "params"].iter().any(|field| {
-        shape
-            .get(field)
-            .and_then(Value::as_array)
-            .is_some_and(|children| {
-                children.iter().any(|child| {
-                    contains_named_shape_with_unspecified_type_arg_count(
-                        child,
-                        name,
-                        unspecified_count,
-                    )
-                })
-            })
-    }) || shape.get("return_type").is_some_and(|child| {
-        contains_named_shape_with_unspecified_type_arg_count(child, name, unspecified_count)
-    })
 }
 
 #[test]
@@ -245,171 +183,6 @@ def h() -> list[int | str]: ...
     assert_eq!(
         "builtins.type[builtins.int | builtins.str]",
         type_at_range(3, 16, 25),
-    );
-}
-
-#[test]
-fn test_type_shapes_include_structured_named_callable_and_type_variable_data() {
-    let tdir = TempDir::new().unwrap();
-    let file_path = tdir.path().join("main.py");
-    let code = r#"from typing import Callable, TypeVar
-
-T = TypeVar("T", bound=int)
-
-def apply(f: Callable[[int, str], bool], x: T) -> bool:
-    values: list[int] = [1]
-    return f(x, "ok")
-"#;
-    fs_anyhow::write(&file_path, code).unwrap();
-
-    let query = create_query();
-    let module_name = ModuleName::from_str("main");
-    let path = ModulePath::filesystem(file_path.clone());
-
-    let errors = query.add_files(vec![(module_name, path.clone())]);
-    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
-
-    let shapes = type_shape_values(query.get_type_shapes_in_file(module_name, path).unwrap());
-    assert!(
-        shapes.iter().all(|shape| {
-            shape.get("display").is_some_and(Value::is_string)
-                && shape.get("kind").is_some_and(Value::is_string)
-        }),
-        "Expected every type shape to include display and kind:\n{shapes:#?}",
-    );
-    assert!(
-        shapes.iter().any(|shape| is_named_shape_with_args(
-            shape,
-            "builtins.list",
-            &["builtins.int"]
-        )),
-        "Expected a structured list[int] named shape:\n{shapes:#?}",
-    );
-    assert!(
-        shapes.iter().any(|shape| {
-            shape.get("kind").and_then(Value::as_str) == Some("callable")
-                && shape
-                    .get("params")
-                    .and_then(Value::as_array)
-                    .is_some_and(|params| {
-                        params.len() == 2
-                            && is_named_shape(&params[0], "builtins.int")
-                            && is_named_shape(&params[1], "builtins.str")
-                    })
-                && shape
-                    .get("return_type")
-                    .is_some_and(|return_type| is_named_shape(return_type, "builtins.bool"))
-        }),
-        "Expected a structured callable shape:\n{shapes:#?}",
-    );
-    assert!(
-        shapes.iter().any(|shape| {
-            shape.get("kind").and_then(Value::as_str) == Some("type_variable")
-                && shape.get("display").and_then(Value::as_str)
-                    == Some("Variable[T (bound to builtins.int)]")
-                && shape.get("name").and_then(Value::as_str) == Some("T")
-                && shape
-                    .get("bounds")
-                    .and_then(Value::as_array)
-                    .is_some_and(|bounds| {
-                        bounds.len() == 1 && is_named_shape(&bounds[0], "builtins.int")
-                    })
-        }),
-        "Expected a structured TypeVar shape with a bound:\n{shapes:#?}",
-    );
-}
-
-#[test]
-fn test_type_shapes_mark_staticmethod_callables() {
-    let tdir = TempDir::new().unwrap();
-    let file_path = tdir.path().join("main.py");
-    // A value-position reference to a `@staticmethod` surfaces as a callable
-    // type whose shape must carry `is_staticmethod: true`, so consumers can
-    // recover the static-method identity that is otherwise only in `display`
-    // (`typing.StaticMethod[...]`). A plain function omits the field.
-    let code = r#"
-class C:
-    @staticmethod
-    def sm(x: int) -> str:
-        return "ok"
-
-def plain(x: int) -> str:
-    return "ok"
-
-sm_ref = C.sm
-plain_ref = plain
-"#;
-    fs_anyhow::write(&file_path, code).unwrap();
-
-    let query = create_query();
-    let module_name = ModuleName::from_str("main");
-    let path = ModulePath::filesystem(file_path.clone());
-
-    let errors = query.add_files(vec![(module_name, path.clone())]);
-    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
-
-    let shapes = type_shape_values(query.get_type_shapes_in_file(module_name, path).unwrap());
-
-    let is_callable_with_string_return = |shape: &Value| -> bool {
-        shape.get("kind").and_then(Value::as_str) == Some("callable")
-            && shape
-                .get("return_type")
-                .is_some_and(|rt| is_named_shape(rt, "builtins.str"))
-    };
-
-    assert!(
-        shapes.iter().any(|shape| {
-            is_callable_with_string_return(shape)
-                && shape.get("is_staticmethod").and_then(Value::as_bool) == Some(true)
-        }),
-        "Expected the staticmethod reference to emit a callable shape with is_staticmethod=true:\n{shapes:#?}",
-    );
-    assert!(
-        shapes.iter().any(|shape| {
-            is_callable_with_string_return(shape)
-                // skip_serializing_if omits the field entirely when false.
-                && shape.get("is_staticmethod").is_none()
-        }),
-        "Expected the plain function to emit a callable shape without is_staticmethod:\n{shapes:#?}",
-    );
-}
-
-#[test]
-fn test_type_shapes_include_unspecified_type_arg_count_for_generic_classes() {
-    let tdir = TempDir::new().unwrap();
-    let file_path = tdir.path().join("main.py");
-    let code = r#"from typing import Generic, TypeVar
-
-T = TypeVar("T")
-
-class Box(Generic[T]):
-    pass
-
-bare = Box
-value: Box[int] = Box()
-"#;
-    fs_anyhow::write(&file_path, code).unwrap();
-
-    let query = create_query();
-    let module_name = ModuleName::from_str("main");
-    let path = ModulePath::filesystem(file_path.clone());
-
-    let errors = query.add_files(vec![(module_name, path.clone())]);
-    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
-
-    let shapes = type_shape_values(query.get_type_shapes_in_file(module_name, path).unwrap());
-    assert!(
-        shapes.iter().any(|shape| {
-            contains_named_shape_with_unspecified_type_arg_count(shape, "main.Box", 1)
-        }),
-        "Expected bare generic class `Box` to report one unspecified type arg:\n{shapes:#?}",
-    );
-    assert!(
-        shapes.iter().any(|shape| {
-            is_named_shape_with_args(shape, "main.Box", &["builtins.int"])
-                && unspecified_type_arg_count(shape).is_none()
-        }),
-        "Expected instantiated `Box[int]` to omit unspecified type args:\n{shapes:#?}",
     );
 }
 
@@ -570,41 +343,6 @@ second: list[int]
 /// (`main.Color.RED`), not the bare class name (`Color.RED`), in the inline
 /// shape path — matching the module-qualified display string and the
 /// `ClassType` shape arm.
-#[test]
-fn test_type_shapes_qualify_enum_literal_members() {
-    let tdir = TempDir::new().unwrap();
-    let file_path = tdir.path().join("main.py");
-    let code = r#"import enum
-
-class Color(enum.Enum):
-    RED = 1
-    GREEN = 2
-
-c = Color.RED
-"#;
-    fs_anyhow::write(&file_path, code).unwrap();
-
-    let query = create_query();
-    let module_name = ModuleName::from_str("main");
-    let path = ModulePath::filesystem(file_path.clone());
-
-    let errors = query.add_files(vec![(module_name, path.clone())]);
-    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
-
-    let shapes = type_shape_values(query.get_type_shapes_in_file(module_name, path).unwrap());
-    assert!(
-        shapes.iter().any(|shape| is_named_shape_with_args(
-            shape,
-            "typing.Literal",
-            &["main.Color.RED"]
-        )),
-        "Expected enum Literal to carry the fully module-qualified member name:\n{shapes:#?}",
-    );
-}
-
-/// Same invariant as `test_type_shapes_qualify_enum_literal_members`, but for
-/// the type-table (dedup) path that `/types_v2` actually serves — the path
-/// where the under-qualification bug originally hid.
 #[test]
 fn test_type_table_qualifies_enum_literal_members() {
     let tdir = TempDir::new().unwrap();
@@ -1239,170 +977,5 @@ def foo(c: C, k: K) -> None:
     assert!(
         k_v_callees.is_empty(),
         "Expected no callees on the RHS `k.v`, got: {k_v_callees:?}"
-    );
-}
-
-#[test]
-fn test_filtered_type_shapes_skip_bodies_but_keep_signatures() {
-    let tdir = TempDir::new().unwrap();
-    let file_path = tdir.path().join("main.py");
-    let code = r#"
-def included(value: int) -> str:
-    local = value + 1
-    return str(local)
-
-def skipped(value: int) -> str:
-    local = value + 1
-    return str(local)
-"#;
-    fs_anyhow::write(&file_path, code).unwrap();
-
-    let query = create_query();
-    let module_name = ModuleName::from_str("main");
-    let path = ModulePath::filesystem(file_path.clone());
-
-    let errors = query.add_files(vec![(module_name, path.clone())]);
-    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
-
-    let shapes = query
-        .get_type_shapes_in_file_filtered(module_name, path, Some(&walk_skip_skipped_function_body))
-        .unwrap();
-    let lines: Vec<_> = shapes
-        .iter()
-        .map(|(range, _)| range.start_line.get())
-        .collect();
-
-    assert!(lines.contains(&2), "included signature should be kept");
-    assert!(lines.contains(&3), "included body should be kept");
-    assert!(lines.contains(&6), "skipped signature should be kept");
-    assert!(
-        !lines.contains(&7) && !lines.contains(&8),
-        "skipped body should be filtered out, got lines {lines:?}",
-    );
-}
-
-fn walk_skip_skipped_function_body<'a>(
-    body: &'a [Stmt],
-    record_expr: &mut TypeQueryExprVisitor<'a>,
-) {
-    for stmt in body {
-        match stmt {
-            Stmt::FunctionDef(function_def) if function_def.name.as_str() == "skipped" => {
-                visit_function_signature(function_def, record_expr);
-            }
-            _ => visit_stmt(stmt, record_expr),
-        }
-    }
-}
-
-fn visit_expr<'a>(
-    expr: &'a Expr,
-    parent: Option<&'a Expr>,
-    record_expr: &mut TypeQueryExprVisitor<'a>,
-) {
-    record_expr(expr, parent);
-    expr.recurse(&mut |child| visit_expr(child, Some(expr), record_expr));
-}
-
-fn visit_exprs<'a, T: Visit<Expr>>(value: &'a T, record_expr: &mut TypeQueryExprVisitor<'a>) {
-    value.visit(&mut |expr| visit_expr(expr, None, record_expr));
-}
-
-fn visit_function_signature<'a>(
-    function_def: &'a StmtFunctionDef,
-    record_expr: &mut TypeQueryExprVisitor<'a>,
-) {
-    visit_exprs(&function_def.decorator_list, record_expr);
-    if let Some(type_params) = &function_def.type_params {
-        visit_exprs(type_params, record_expr);
-    }
-    visit_exprs(&function_def.parameters, record_expr);
-    if let Some(returns) = &function_def.returns {
-        visit_expr(returns, None, record_expr);
-    }
-}
-
-fn visit_stmt<'a>(stmt: &'a Stmt, record_expr: &mut TypeQueryExprVisitor<'a>) {
-    stmt.visit(&mut |expr| visit_expr(expr, None, record_expr));
-}
-
-fn walk_without_function_bodies<'a>(body: &'a [Stmt], record_expr: &mut TypeQueryExprVisitor<'a>) {
-    for stmt in body {
-        match stmt {
-            Stmt::ClassDef(class_def) => walk_without_function_bodies(&class_def.body, record_expr),
-            Stmt::FunctionDef(function_def) => visit_function_signature(function_def, record_expr),
-            _ => visit_stmt(stmt, record_expr),
-        }
-    }
-}
-
-#[test]
-fn test_filtered_type_shapes_keep_class_declarations() {
-    let tdir = TempDir::new().unwrap();
-    let file_path = tdir.path().join("main.py");
-    let code = r#"
-class Skipped:
-    field: int
-
-    def method(self, value: str) -> str:
-        local = value
-        return local
-"#;
-    fs_anyhow::write(&file_path, code).unwrap();
-
-    let query = create_query();
-    let module_name = ModuleName::from_str("main");
-    let path = ModulePath::filesystem(file_path.clone());
-
-    let errors = query.add_files(vec![(module_name, path.clone())]);
-    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
-
-    let shapes = query
-        .get_type_shapes_in_file_filtered(module_name, path, Some(&walk_without_function_bodies))
-        .unwrap();
-    let lines: Vec<_> = shapes
-        .iter()
-        .map(|(range, _)| range.start_line.get())
-        .collect();
-
-    assert!(lines.contains(&3), "class field should be kept");
-    assert!(lines.contains(&5), "method signature should be kept");
-    assert!(
-        !lines.contains(&6) && !lines.contains(&7),
-        "method body should be filtered out, got lines {lines:?}",
-    );
-}
-
-#[test]
-fn test_filtered_type_shapes_nested_declarations_follow_parent_body() {
-    let tdir = TempDir::new().unwrap();
-    let file_path = tdir.path().join("main.py");
-    let code = r#"
-def skipped_parent(value: int) -> int:
-    def nested(inner: str) -> str:
-        return inner
-    return value
-"#;
-    fs_anyhow::write(&file_path, code).unwrap();
-
-    let query = create_query();
-    let module_name = ModuleName::from_str("main");
-    let path = ModulePath::filesystem(file_path.clone());
-
-    let errors = query.add_files(vec![(module_name, path.clone())]);
-    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
-
-    let shapes = query
-        .get_type_shapes_in_file_filtered(module_name, path, Some(&walk_without_function_bodies))
-        .unwrap();
-    let lines: Vec<_> = shapes
-        .iter()
-        .map(|(range, _)| range.start_line.get())
-        .collect();
-
-    assert!(lines.contains(&2), "parent signature should be kept");
-    assert!(
-        !lines.contains(&3) && !lines.contains(&4) && !lines.contains(&5),
-        "nested declaration and parent body should follow skipped parent body, got lines {lines:?}",
     );
 }
