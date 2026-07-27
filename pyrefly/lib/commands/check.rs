@@ -1433,9 +1433,14 @@ impl CheckArgs {
             write_error_json_to_file(baseline_path, relative_to.as_path(), &new_baseline)?;
         }
 
-        // Count only ordinary errors for exit code determination. Directives
-        // (e.g. reveal_type) do not contribute to the error count.
-        let ordinary_errors_count = config_errors_count + ordinary_errors.len();
+        // Directives always display, but only affect the exit code when they
+        // meet the user's severity threshold.
+        let diagnostics_count = config_errors_count
+            + ordinary_errors.len()
+            + directives
+                .iter()
+                .filter(|e| e.severity() >= min_severity)
+                .count();
 
         // Merge directives into the display list, re-sorting by module
         // name, path, and source range so output preserves file/line
@@ -1472,7 +1477,7 @@ impl CheckArgs {
             } else {
                 "error"
             };
-            let mut parts = vec![count(ordinary_errors_count, label)];
+            let mut parts = vec![count(diagnostics_count, label)];
             if suppress_count > 0 {
                 parts.push(format!("{} suppressed", number_thousands(suppress_count)));
             }
@@ -1597,7 +1602,7 @@ impl CheckArgs {
         if self.behavior.expectations {
             loads.check_against_expectations()?;
             Ok((CommandExitStatus::Success, output_errors))
-        } else if ordinary_errors_count > 0 {
+        } else if diagnostics_count > 0 {
             Ok((CommandExitStatus::UserError, output_errors))
         } else {
             Ok((CommandExitStatus::Success, output_errors))
