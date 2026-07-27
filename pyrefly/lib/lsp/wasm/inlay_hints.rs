@@ -144,6 +144,28 @@ impl<'a> Transaction<'a> {
         (text, ctx.referenced_modules())
     }
 
+    /// NewType values are callable aliases, not class objects, so `type[N]` is
+    /// not a valid annotation. If `ty` is a NewType, returns its constructor
+    /// signature to display in place of `type[N]`; callers should then avoid
+    /// offering it as an insertable annotation. Returns `None` otherwise.
+    fn new_type_constructor_signature(&self, handle: &Handle, ty: &Type) -> Option<Type> {
+        let Type::ClassDef(cls) = ty else {
+            return None;
+        };
+        self.ad_hoc_solve(handle, "inlay_hint_new_type", |solver| {
+            if !solver.get_metadata_for_class(cls).is_new_type() {
+                return None;
+            }
+            let cls = solver.promote_nontypeddict_silently_to_classtype(cls);
+            let new = solver.get_dunder_new(&cls, false)?;
+            let constructor = solver
+                .bind_dunder_new(&new, cls)
+                .expect("NewType __new__ method can be bound");
+            Some(solver.for_display(constructor))
+        })
+        .flatten()
+    }
+
     pub fn inlay_hints(
         &self,
         handle: &Handle,
@@ -217,12 +239,13 @@ impl<'a> Transaction<'a> {
             match bindings.idx_to_key(idx) {
                 key @ Key::ReturnType(id) if inlay_hint_config.function_return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                        Binding::Function(x, _pred, _class_meta) => {
+                        Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(mut ty) = self.get_type_for_display(handle, key)
                                 && !ty.is_any()
                             {
-                                let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                                let fun =
+                                    bindings.get(bindings.get(*decorated_idx).undecorated_idx);
                                 if fun.def.is_async
                                     && let Some(Some((_, _, return_ty))) = self.ad_hoc_solve(
                                         handle,
@@ -245,10 +268,23 @@ impl<'a> Transaction<'a> {
                 }
                 key @ Key::Definition(_)
                     if inlay_hint_config.variable_types
-                        && let Some(ty) = self.get_type_for_display(handle, key) =>
+                        && let Some(mut ty) = self.get_type_for_display(handle, key) =>
                 {
-                    // For unpacked values, extract the element expression if available
-                    let (e, is_unpacked) = match bindings.get(idx) {
+                    let mut insertable = true;
+                    if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
+                        ty = constructor;
+                        insertable = false;
+                    }
+                    // Inspect the value-producing binding before deciding whether to show a hint.
+                    // A pattern capture is a definition boundary for navigation, but stays
+                    // transparent here when examining how its type was produced.
+                    let binding = bindings.get(idx);
+                    let is_pattern_capture = matches!(binding, Binding::PatternCapture(_));
+                    let source = match binding {
+                        Binding::PatternCapture(source_idx) => bindings.get(*source_idx),
+                        _ => binding,
+                    };
+                    let (e, is_unpacked) = match source {
                         // Pinned assignments (explicit annotation or
                         // receiver-constrained class rebind) are already
                         // authoritatively typed; suggesting an explicit
@@ -287,7 +323,12 @@ impl<'a> Transaction<'a> {
                         is_unpacked && !ty.is_any()
                     };
                     if should_show {
-                        res.push(make_type_hint(": ", key.range().end(), &ty, !is_unpacked));
+                        res.push(make_type_hint(
+                            ": ",
+                            key.range().end(),
+                            &ty,
+                            insertable && !is_unpacked && !is_pattern_capture,
+                        ));
                     }
                 }
                 _ => {}
@@ -309,7 +350,12 @@ impl<'a> Transaction<'a> {
                     let Some(class_field) = answers.get_idx::<KeyClassField>(field_idx) else {
                         continue;
                     };
-                    let ty = answers.solver().for_display(class_field.ty());
+                    let mut ty = answers.solver().for_display(class_field.ty());
+                    let mut insertable = true;
+                    if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
+                        ty = constructor;
+                        insertable = false;
+                    }
                     let expr = match values
                         .first()
                         .expect("DefinedInMethod must have at least one value")
@@ -336,7 +382,7 @@ impl<'a> Transaction<'a> {
                         None => !ty.is_any(),
                     };
                     if should_show {
-                        res.push(make_type_hint(": ", field.range.end(), &ty, true));
+                        res.push(make_type_hint(": ", field.range.end(), &ty, insertable));
                     }
                 }
             }
@@ -387,8 +433,8 @@ impl<'a> Transaction<'a> {
         // Extract the element at the given position
         // This mirrors the logic in solve.rs for Binding::UnpackedValue
         match pos {
-            UnpackedPosition::Index(i) => elts.get(i),
-            UnpackedPosition::ReverseIndex(i) => {
+            UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => elts.get(i),
+            UnpackedPosition::ReverseIndex(i, _) => {
                 elts.len().checked_sub(i).and_then(|idx| elts.get(idx))
             }
             // For slices (starred unpacking), we can't return a single element
@@ -647,9 +693,9 @@ impl<'a> Transaction<'a> {
                 .flat_map(|idx| {
                     let binding = bindings.get(idx);
                     // Check if this binding is a function
-                    if let Binding::Function(key_function, _, _) = binding {
+                    if let Binding::Function { decorated_idx, .. } = binding {
                         let binding_func =
-                            bindings.get(bindings.get(*key_function).undecorated_idx);
+                            bindings.get(bindings.get(*decorated_idx).undecorated_idx);
                         let args = binding_func.def.parameters.args.clone();
                         let func_args: Vec<ParameterAnnotation> = args
                             .into_iter()
@@ -695,12 +741,13 @@ impl<'a> Transaction<'a> {
                 // Return Annotation
                 key @ Key::ReturnType(id) if return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                        Binding::Function(x, _pred, _class_meta) => {
+                        Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(ty) = self.get_type_for_display(handle, key)
                                 && is_interesting_type(&ty)
                             {
-                                let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                                let fun =
+                                    bindings.get(bindings.get(*decorated_idx).undecorated_idx);
                                 res.push((
                                     fun.def.parameters.range.end(),
                                     ty,

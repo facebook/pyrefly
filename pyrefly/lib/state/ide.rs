@@ -41,7 +41,8 @@ const KEY_TO_DEFINITION_INITIAL_GAS: Gas = Gas::new(100);
 pub enum IntermediateDefinition {
     Local(Export),
     NamedImport(TextRange, ModuleName, Name, Option<TextRange>),
-    Module(TextRange, ModuleName),
+    /// The flag records whether the module was bound to an explicit alias.
+    Module(TextRange, ModuleName, bool),
 }
 
 /// An edit that imports a single name into a module.
@@ -173,10 +174,11 @@ fn create_intermediate_definition_from(
                 return Some(IntermediateDefinition::Module(
                     def_key.range(),
                     imported_module_name,
+                    matches!(def_key, Key::Definition(..)),
                 ));
             }
-            Binding::Function(idx, ..) => {
-                let func = bindings.get(*idx);
+            Binding::Function { decorated_idx, .. } => {
+                let func = bindings.get(*decorated_idx);
                 let undecorated = bindings.get(func.undecorated_idx);
                 let symbol_kind = if undecorated.class_key.is_some() {
                     SymbolKind::Method

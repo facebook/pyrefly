@@ -600,7 +600,7 @@ impl Callable {
         let mut changed = false;
         let mut consumed_residual = false;
         match &mut self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 for param in params.items_mut() {
                     let (param_changed, param_consumed) = param
                         .as_type_mut()

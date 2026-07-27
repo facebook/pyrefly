@@ -11,9 +11,9 @@
  * file contains the implementations of a few special calls that need to be hard-coded.
  */
 
+use pyrefly_python::dunder;
 use pyrefly_types::callable::FuncMetadata;
-use pyrefly_types::shaped_array::ShapedArrayShape;
-use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
@@ -97,6 +97,62 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ret
     }
 
+    /// `len(x)`: typeshed types this as `len(obj: Sized) -> int`, discarding the
+    /// argument's `__len__` return type. When that return type is a strict subtype
+    /// of `int` (e.g. a shaped array's `Int[N]`), we return it instead so the size
+    /// carries into downstream shape-DSL reasoning. A non-integer `__len__` return
+    /// crashes at runtime (`len` requires an integer), so trusting only int-subtype
+    /// returns keeps the static result faithful to runtime; anything else falls back
+    /// to the ordinary `int` typing, which also emits the `Sized` error when the
+    /// argument has no `__len__`.
+    pub fn call_len(
+        &self,
+        args: &[CallArg],
+        callee_ty: Type,
+        keywords: &[CallKeyword],
+        func_range: TextRange,
+        arguments_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let arg = match &args[0] {
+            CallArg::Arg(arg) => arg,
+            CallArg::Star(_, _) => unreachable!("starred len argument is excluded by the caller"),
+        };
+        let arg_ty = arg.infer(self, errors);
+        let args = [CallArg::ty(&arg_ty, arg.range())];
+        // The ordinary call reports any argument/protocol errors and yields `int`.
+        let default = self.freeform_call_infer(
+            callee_ty,
+            &args,
+            keywords,
+            func_range,
+            arguments_range,
+            hint,
+            errors,
+        );
+        // Probe `__len__` silently, since `default` already emitted the real errors.
+        let silent_errors = self.error_swallower();
+        let int_ty = self.stdlib.int().clone().to_type();
+        if let Some(ret) = self.call_magic_dunder_method(
+            &arg_ty,
+            &dunder::LEN,
+            arguments_range,
+            &[],
+            &[],
+            &silent_errors,
+            None,
+        )
+            // Strict subtype of `int`: excludes plain `int` (no gain) and `Any`
+            // (`int <: Any`, so `len(x: Any)` stays `int` rather than widening).
+            && self.is_subset_eq(&ret, &int_ty)
+            && !self.is_subset_eq(&int_ty, &ret)
+        {
+            return ret;
+        }
+        default
+    }
+
     pub fn call_reveal_type(
         &self,
         args: &[Expr],
@@ -156,9 +212,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .force(self.expr_infer_with_hint(&args[0], hint, errors));
             if let Type::ShapedArray(shaped_array) = &actual {
                 if let Some(shape) = self.parse_assert_shape_expr(&args[1], errors) {
-                    let expected =
-                        ShapedArrayType::new(shaped_array.base_class.clone(), shape.clone())
-                            .to_type();
+                    let expected = self
+                        .shaped_array_with_shape(shaped_array, shape.clone())
+                        .to_type();
                     if !self.is_equivalent(&actual, &expected) {
                         self.error(
                             errors,
@@ -166,7 +222,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorKind::AssertType,
                             format!(
                                 "assert_shape({}, {}) failed",
-                                format_assert_shape_shape(&shaped_array.shape),
+                                format_assert_shape_shape(&shaped_array.shape()),
                                 format_assert_shape_shape(&shape)
                             ),
                         );
@@ -716,7 +772,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 }
 
-fn format_assert_shape_shape(shape: &ShapedArrayShape) -> String {
+fn format_assert_shape_shape(shape: &IntTuple) -> String {
     match shape.as_concrete() {
         Some([]) => "()".to_owned(),
         Some([dim]) => format!("({dim},)"),

@@ -13,12 +13,14 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_types::callable::Deprecation;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::commas_iter;
+use pyrefly_util::visit::Visit as VisitTrait;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -28,6 +30,7 @@ use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::pydantic::PydanticModelKind;
+use crate::binding::pydantic::PydanticAliasGenerator;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::class::Class;
@@ -141,6 +144,31 @@ impl VisitMut<Type> for ClassMetadata {
         }
         if let Some(shaped_array_shape) = &mut self.shaped_array_shape {
             shaped_array_shape.visit_mut(f);
+        }
+    }
+}
+
+impl VisitTrait<Type> for ClassMetadata {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        if let Some(metaclass) = self.metaclass.get() {
+            metaclass.visit(f);
+        }
+        for (_name, ty) in &self.keywords.0 {
+            ty.visit(f);
+        }
+        if let Some(typed_dict_metadata) = &self.typed_dict_metadata
+            && let ExtraItems::Extra(extra_item) = &typed_dict_metadata.extra_items
+        {
+            extra_item.ty.visit(f);
+        }
+        if let Some(enum_metadata) = &self.enum_metadata {
+            enum_metadata.cls.visit(f);
+        }
+        if let Some(dataclass_transform_metadata) = &self.dataclass_transform_metadata {
+            dataclass_transform_metadata.visit(f);
+        }
+        if let Some(shaped_array_shape) = &self.shaped_array_shape {
+            shaped_array_shape.visit(f);
         }
     }
 }
@@ -439,6 +467,12 @@ impl VisitMut<Type> for ClassSynthesizedField {
     }
 }
 
+impl VisitTrait<Type> for ClassSynthesizedField {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        self.inner.recurse(f);
+    }
+}
+
 impl Display for ClassSynthesizedField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.inner)
@@ -460,7 +494,7 @@ impl ClassSynthesizedField {
 }
 
 /// A class's synthesized fields, such as a dataclass's `__init__` method.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default, VisitMut)]
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default, Visit, VisitMut)]
 pub struct ClassSynthesizedFields(SmallMap<Name, ClassSynthesizedField>);
 
 impl ClassSynthesizedFields {
@@ -470,6 +504,10 @@ impl ClassSynthesizedFields {
 
     pub fn get(&self, name: &Name) -> Option<&ClassSynthesizedField> {
         self.0.get(name)
+    }
+
+    pub fn get_index_of(&self, name: &Name) -> Option<usize> {
+        self.0.get_index_of(name)
     }
 
     /// Combines two sets of synthesized fields, with the second set
@@ -567,8 +605,6 @@ pub struct TypedDictMetadata {
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct EnumMetadata {
     pub cls: ClassType,
-    /// Whether this enum inherits from enum.Flag.
-    pub is_flag: bool,
     /// Is there any `_value_` field present.
     pub has_value: bool,
     /// Whether this is a special Django enum.
@@ -590,6 +626,7 @@ pub struct NamedTupleMetadata {
 pub struct InitDefaults {
     pub init_by_name: bool,
     pub init_by_alias: bool,
+    pub alias_generator: Option<PydanticAliasGenerator>,
 }
 
 impl Default for InitDefaults {
@@ -597,6 +634,7 @@ impl Default for InitDefaults {
         Self {
             init_by_name: false,
             init_by_alias: true,
+            alias_generator: None,
         }
     }
 }
@@ -707,7 +745,7 @@ pub struct TotalOrderingMetadata {
 /// `linearization_complete` is false when `ancestors` is only a recovery prefix
 /// after nonlinearizable inheritance. Callers that need an exact ancestor list
 /// must check it.
-#[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum ClassMro {
     Resolved {
         ancestors: Vec<ClassType>,
@@ -803,7 +841,7 @@ impl ClassMro {
 /// the inherited representative from a direct base. `None` means no
 /// disjoint-base information, in which case narrowing falls back to
 /// `object`.
-#[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct ClassDisjointBase {
     representative: Option<Class>,
 }

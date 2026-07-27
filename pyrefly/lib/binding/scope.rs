@@ -1387,12 +1387,9 @@ impl Scope {
         }
     }
 
-    fn class_and_metadata_keys(&self) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
+    fn class_key(&self) -> Option<Idx<KeyClass>> {
         match &self.kind {
-            ScopeKind::Class(class_scope) => Some((
-                class_scope.indices.class_idx,
-                class_scope.indices.metadata_idx,
-            )),
+            ScopeKind::Class(class_scope) => Some(class_scope.indices.class_idx),
             _ => None,
         }
     }
@@ -1587,6 +1584,14 @@ impl Scopes {
         }
     }
 
+    /// The `ClassDefIndex` of the current class body, if the innermost scope is one.
+    pub fn current_class_def_index(&self) -> Option<ClassDefIndex> {
+        match &self.current().kind {
+            ScopeKind::Class(c) => Some(c.indices.def_index),
+            _ => None,
+        }
+    }
+
     pub fn in_function_scope(&self) -> bool {
         self.iter_rev()
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
@@ -1677,11 +1682,9 @@ impl Scopes {
             .is_some_and(|l| l.finally_depth == self.current().finally_depth)
     }
 
-    /// Are we currently in a class body. If so, return the keys for the class and its metadata.
-    pub fn current_class_and_metadata_keys(
-        &self,
-    ) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
-        self.current().class_and_metadata_keys()
+    /// Are we currently in a class body. If so, return the key for the class.
+    pub fn current_class_key(&self) -> Option<Idx<KeyClass>> {
+        self.current().class_key()
     }
 
     /// Are we anywhere inside a class? If so, return the class object idx.
@@ -1695,11 +1698,13 @@ impl Scopes {
         None
     }
 
-    /// Check if we're currently in the body of a class with `Protocol` in its base class list
+    /// Check if we're directly in the body of a class with `Protocol` in its base class list
     pub fn is_in_protocol_class(&self) -> bool {
         for scope in self.iter_rev() {
-            if let ScopeKind::Class(class_scope) = &scope.kind {
-                return class_scope.has_protocol_base;
+            match &scope.kind {
+                ScopeKind::Class(class_scope) => return class_scope.has_protocol_base,
+                ScopeKind::Function(_) | ScopeKind::Method(_) => return false,
+                _ => {}
             }
         }
         false
@@ -2381,7 +2386,7 @@ impl Scopes {
             // `name` is absent from lexical scope, so it may resolve to an implicit builtin.
             match self.look_up_name_for_read(
                 Hashed::new(name),
-                &Usage::Narrowing(None),
+                &Usage::NonPinningValue(None),
                 lookup,
                 current_module,
             ) {
@@ -3126,7 +3131,7 @@ impl Scopes {
                 } else {
                     flow_info.initialized()
                 };
-                // Because class body scopes are dynamic, if we know that the the name is
+                // Because class body scopes are dynamic, if we know that the name is
                 // definitely not initialized in the flow, we should skip it.
                 if is_class && matches!(initialized, InitializedInFlow::No) {
                     return None;
@@ -3570,7 +3575,7 @@ impl<'a> BindingsBuilder<'a> {
             };
             let branch_idx = flow_info.idx();
 
-            // The BranchInfo always sees the branch_idx, which will will be
+            // The BranchInfo always sees the branch_idx, which will be
             // a narrow if one exists, otherwise the value. Each branch may have a
             // termination key, which potentially causes us to ignore it in the Phi based
             // on Never/NoReturn type information.
@@ -3921,7 +3926,7 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_narrow_ops(
             &narrow_ops.negate(),
             NarrowUseLocation::Span(other_range),
-            &Usage::Narrowing(None),
+            &Usage::NonPinningValue(None),
         );
         self.stmts(orelse, parent);
         // Exiting from a break skips past any `else`, so we merge them after, and the
@@ -4026,7 +4031,7 @@ impl<'a> BindingsBuilder<'a> {
                 negated_prev_ops,
                 // Generate a range that is distinct from other use_ranges of the same narrow.
                 NarrowUseLocation::End(fork.range),
-                &Usage::Narrowing(None),
+                &Usage::NonPinningValue(None),
             );
             if let Some(key) = base_termination_key {
                 self.scopes.current_mut().flow.last_stmt_expr = Some(key);

@@ -7,17 +7,20 @@
 
 from typing import assert_type, TYPE_CHECKING
 
+from shape_extensions import IntVar
+
+
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_masked_fill_broadcasting[B, NHead, T](
-    att: Tensor[B, NHead, T, T], mask: Tensor[1, 1, T, T]
+def test_masked_fill_broadcasting[B: IntVar, NHead: IntVar, T: IntVar](
+    att: Tensor[[B, NHead, T, T]], mask: Tensor[[1, 1, T, T]]
 ):
-    # mask == 0 should produce Tensor[1, 1, T, T] (bool)
+    # mask == 0 should produce Tensor[[1, 1, T, T]] (bool)
     mask_bool = mask == 0
-    assert_type(mask_bool, Tensor[1, 1, T, T])
+    assert_type(mask_bool, Tensor[[1, 1, T, T]])
 
     # masked_fill should preserve att's shape
     result = att.masked_fill(mask == 0, float("-inf"))
-    assert_type(result, Tensor[B, NHead, T, T])
+    assert_type(result, Tensor[[B, NHead, T, T]])

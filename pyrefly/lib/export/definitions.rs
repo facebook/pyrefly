@@ -772,7 +772,8 @@ impl DefinitionsBuilder {
                         Expr::StringLiteral(lit) => Some(lit.value.to_str()),
                         _ => None,
                     });
-                    let is_wildcard = alias.is_none() || alias == Some("*");
+                    let is_wildcard =
+                        alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
 
                     if is_wildcard {
                         self.inner.import_all.insert(m, func_name.range);

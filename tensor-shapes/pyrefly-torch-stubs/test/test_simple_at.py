@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 def test_at_literal():
     """Test @ with literal dimensions"""
-    a: Tensor[5, 10] = torch.randn(5, 10)
-    b: Tensor[10, 7] = torch.randn(10, 7)
+    a: Tensor[[5, 10]] = torch.randn(5, 10)
+    b: Tensor[[10, 7]] = torch.randn(10, 7)
     c = a @ b
-    assert_type(c, Tensor[5, 7])
+    assert_type(c, Tensor[[5, 7]])
