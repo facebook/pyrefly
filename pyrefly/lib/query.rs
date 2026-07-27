@@ -192,8 +192,6 @@ pub struct Attribute {
 pub struct TypeQueryTiming {
     pub located_count: usize,
     pub setup: Duration,
-    pub stringify: Duration,
-    pub cache: Duration,
     pub transform: Duration,
     pub total: Duration,
 }
