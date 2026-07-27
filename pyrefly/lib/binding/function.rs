@@ -170,6 +170,7 @@ impl<'a, 'b> SourceOrderVisitor<'a> for SuperMethodCallFinder<'b> {
 pub struct SelfAssignments {
     pub method_name: Name,
     pub instance_attributes: SmallMap<Name, InstanceAttribute>,
+    pub nn_module_registrations: SmallMap<Name, Vec<Expr>>,
 }
 
 /// Determine whether a function definition is annotated.
@@ -274,6 +275,7 @@ impl<'a> SelfAttrNames<'a> {
         Some(SelfAssignments {
             method_name: func_name.id.clone(),
             instance_attributes,
+            nn_module_registrations: SmallMap::new(),
         })
     }
 }
