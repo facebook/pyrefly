@@ -10,6 +10,7 @@ use pyrefly_python::module_name::is_python_identifier;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::class::Class;
+use pyrefly_types::class::ClassType;
 use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::function::Function;
 use pyrefly_types::function::PropertyMetadata;
@@ -19,6 +20,7 @@ use pyrefly_types::keywords::KwCall;
 use pyrefly_types::keywords::TypeMap;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
@@ -43,6 +45,7 @@ use crate::error::collector::ErrorCollector;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
 const DJANGO_PRIVATE_GET_TYPE: Name = Name::new_static("_pyi_private_get_type");
+const DJANGO_PRIVATE_SET_TYPE: Name = Name::new_static("_pyi_private_set_type");
 
 pub fn is_django_choices_subclass(bases_with_metadata: &[(Class, &ClassMetadata)]) -> bool {
     bases_with_metadata.iter().any(|(base, base_meta)| {
@@ -235,6 +238,45 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         )
     }
 
+    /// Infer missing field arguments and return the effective instance setter type.
+    pub fn specialize_django_field_descriptor(
+        &self,
+        field: &ClassType,
+        get_type: Type,
+    ) -> (ClassType, Type) {
+        // Relation stubs contain placeholder Any types. Their resolved model or manager
+        // supplies the instance setter contract instead.
+        let is_relation = self.is_foreign_key_like_field(field.class_object())
+            || self.is_many_to_many_field(field.class_object());
+        let mut set_type = if is_relation {
+            get_type.clone()
+        } else {
+            self.get_class_member(field.class_object(), &DJANGO_PRIVATE_SET_TYPE)
+                .map_or_else(|| get_type.clone(), |member| member.ty())
+        };
+        if get_type.is_none()
+            || matches!(&get_type, Type::Union(union) if union.members.iter().any(Type::is_none))
+        {
+            set_type = self.union(set_type, self.heap.mk_none());
+        }
+        let mut field = field.clone();
+        for (param, arg) in field.targs_mut().iter_paired_mut() {
+            match param.name().as_str() {
+                "_ST" => {
+                    if matches!(arg, Type::Any(AnyStyle::Implicit)) {
+                        *arg = set_type.clone();
+                    }
+                    set_type = arg.clone();
+                }
+                "_GT" if matches!(arg, Type::Any(AnyStyle::Implicit)) => {
+                    *arg = get_type.clone();
+                }
+                _ => {}
+            }
+        }
+        (field, set_type)
+    }
+
     pub fn get_django_field_type(
         &self,
         ty: &Type,
@@ -248,12 +290,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             {
                 cls.targs().as_slice().first().cloned()
             }
-            Type::ClassType(cls) => self.get_django_field_type_from_class(
-                cls.class_object(),
-                class,
-                field_name,
-                initial_value_expr,
-            ),
+            Type::ClassType(cls) => {
+                let inferred = self.get_django_field_type_from_class(
+                    cls.class_object(),
+                    class,
+                    field_name,
+                    initial_value_expr,
+                )?;
+                // A concrete getter argument takes precedence over the stub's default.
+                let explicit_getter = cls.targs().iter_paired().find_map(|(param, arg)| {
+                    if param.name().as_str() == "_GT" {
+                        let arg = self.solver().force(arg.clone());
+                        if !matches!(arg, Type::Any(AnyStyle::Implicit)) {
+                            return Some(arg);
+                        }
+                    }
+                    None
+                });
+                Some(explicit_getter.unwrap_or(inferred))
+            }
             Type::ClassDef(cls) => {
                 self.get_django_field_type_from_class(cls, class, field_name, initial_value_expr)
             }
