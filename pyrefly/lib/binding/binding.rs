@@ -1364,12 +1364,15 @@ pub enum BindingExpect {
         /// If any don't, the variable may be uninitialized.
         termination_keys: Vec<Idx<Key>>,
     },
-    /// Check whether a class-body attribute is initialized on every completing path.
+    /// Check that a class attribute is initialized on every control-flow path.
     UninitializedAttributeCheck {
         name: Name,
         range: TextRange,
-        class: Idx<KeyClass>,
-        /// All missing paths must terminate. None means a path lacks termination evidence.
+        /// The owning class when this is an instance attribute. Its `__getattr__` may make a
+        /// conditionally initialized attribute safe to access.
+        getattr_class: Option<Idx<KeyClass>>,
+        /// `None` means binding proved the declaration conditional. Otherwise, initialization
+        /// depends on whether all of these branches terminate with `Never`.
         termination_keys: Option<Vec<Idx<Key>>>,
     },
     /// Check for forward reference string literal in union type.
@@ -1547,7 +1550,7 @@ impl DisplayWith<Bindings> for BindingExpect {
             Self::UninitializedAttributeCheck {
                 name,
                 range,
-                class,
+                getattr_class,
                 termination_keys,
             } => {
                 write!(
@@ -1555,7 +1558,7 @@ impl DisplayWith<Bindings> for BindingExpect {
                     "UninitializedAttributeCheck({}, {}, {:?}, {:?})",
                     name,
                     ctx.module().display(range),
-                    class,
+                    getattr_class,
                     termination_keys
                 )
             }

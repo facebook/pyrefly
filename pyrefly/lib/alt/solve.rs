@@ -3206,27 +3206,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             BindingExpect::UninitializedAttributeCheck {
                 name,
                 range,
-                class,
+                getattr_class,
                 termination_keys,
             } => {
-                let initialized = termination_keys
+                let may_be_uninitialized = termination_keys
                     .as_ref()
-                    .is_some_and(|keys| keys.iter().all(|key| self.get_idx(*key).ty().is_never()));
-                let inherited = !initialized
-                    && self.get_idx(*class).0.as_ref().is_some_and(|cls| {
-                        self.get_mro_for_class(cls)
-                            .ancestors_no_object()
-                            .iter()
-                            .any(|base| {
-                                base.class_object() != cls
-                                    && self.get_class_member(base.class_object(), name).is_some()
-                            })
-                    });
-                if !initialized && !inherited {
+                    .is_none_or(|keys| !keys.iter().all(|key| self.get_idx(*key).ty().is_never()));
+                let has_getattr_fallback = getattr_class.is_some_and(|class_idx| {
+                    self.get_idx(class_idx)
+                        .0
+                        .as_ref()
+                        .is_some_and(|cls| self.get_class_member(cls, &dunder::GETATTR).is_some())
+                });
+                if may_be_uninitialized && !has_getattr_fallback {
                     errors
                         .error_builder(
                             *range,
-                            ErrorKind::PossiblyUninitializedAttribute,
+                            ErrorKind::MissingAttribute,
                             format!("Attribute `{name}` may be uninitialized"),
                         )
                         .emit();
