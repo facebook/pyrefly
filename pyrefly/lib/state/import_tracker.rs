@@ -5,22 +5,19 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Helpers for harvesting imports and formatting type strings for inlay hints.
+//! Resolve structured annotation references against imports in a module.
 
 use std::cmp::Reverse;
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::type_output::AnnotationPart;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
-use ruff_python_ast::StmtImport;
-use ruff_python_ast::StmtImportFrom;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
-/// Tracks imports already present in a module and can determine which modules are still missing
-/// for a given set of referenced modules. Also supports alias-aware replacement when displaying
-/// type strings.
+/// Tracks names made available by top-level imports.
 #[derive(Default)]
 pub struct ImportTracker {
     canonical_modules: SmallSet<ModuleName>,
@@ -29,14 +26,40 @@ pub struct ImportTracker {
 }
 
 impl ImportTracker {
-    /// Build an import tracker from the top-level `import ...` statements in a module.
+    /// Build an import tracker from the top-level imports in a module.
     pub fn from_ast(ast: &ModModule) -> Self {
         let mut tracker = Self::default();
         for stmt in &ast.body {
             if let Stmt::Import(stmt_import) = stmt {
-                tracker.record_import(stmt_import);
+                for alias in &stmt_import.names {
+                    let module = ModuleName::from_str(alias.name.as_str());
+                    if let Some(asname) = &alias.asname {
+                        tracker.alias_modules.push((module, asname.id.to_string()));
+                    } else {
+                        tracker.canonical_modules.insert(module);
+                    }
+                }
             } else if let Stmt::ImportFrom(stmt_import_from) = stmt {
-                tracker.record_import_from(stmt_import_from);
+                let Some(module) = &stmt_import_from.module else {
+                    continue;
+                };
+                let names = tracker
+                    .imported_names
+                    .entry(ModuleName::from_str(module.as_str()))
+                    .or_default();
+                for alias in &stmt_import_from.names {
+                    let name = alias.name.as_str();
+                    if name != "*" {
+                        names.insert(
+                            name.to_owned(),
+                            alias
+                                .asname
+                                .as_ref()
+                                .map(|id| id.id.to_string())
+                                .unwrap_or_else(|| name.to_owned()),
+                        );
+                    }
+                }
             }
         }
         tracker
@@ -45,114 +68,59 @@ impl ImportTracker {
         tracker
     }
 
-    /// Record an `import ...` statement into the tracker.
-    pub fn record_import(&mut self, stmt_import: &StmtImport) {
-        for alias in &stmt_import.names {
-            let module_name = ModuleName::from_str(alias.name.as_str());
-            if let Some(asname) = &alias.asname {
-                self.alias_modules
-                    .push((module_name, asname.id.to_string()));
+    /// Resolve annotation references to names available in the current module.
+    pub fn resolve_annotation(
+        &self,
+        parts: &[AnnotationPart],
+        current_module: ModuleName,
+    ) -> (String, SmallSet<ModuleName>) {
+        let mut text = String::new();
+        let mut missing = SmallSet::new();
+        for part in parts {
+            let (module, name) = match part {
+                AnnotationPart::Text(part) => {
+                    text.push_str(part);
+                    continue;
+                }
+                AnnotationPart::Reference { module, name } => (module, name),
+            };
+            if module.as_str().is_empty()
+                || *module == current_module
+                || *module == ModuleName::builtins()
+                || *module == ModuleName::extra_builtins()
+            {
+                text.push_str(name);
             } else {
-                self.canonical_modules.insert(module_name);
-            }
-        }
-    }
-
-    /// Record a `from ... import ...` statement into the tracker.
-    pub fn record_import_from(&mut self, stmt_import_from: &StmtImportFrom) {
-        let Some(module) = &stmt_import_from.module else {
-            return;
-        };
-        let module_name = ModuleName::from_str(module.as_str());
-        let entry = self.imported_names.entry(module_name).or_default();
-        for alias in &stmt_import_from.names {
-            let name = alias.name.as_str();
-            if name == "*" {
-                continue;
-            }
-            let alias_name = alias
-                .asname
-                .as_ref()
-                .map(|id| id.id.to_string())
-                .unwrap_or_else(|| name.to_owned());
-            entry.insert(name.to_owned(), alias_name);
-        }
-    }
-
-    fn module_is_imported(&self, module: ModuleName) -> bool {
-        self.alias_for(module).is_some() || self.has_canonical(module)
-    }
-
-    /// Whether the module is imported via `import module` (with or without alias).
-    pub fn has_module_import(&self, module: ModuleName) -> bool {
-        self.module_is_imported(module)
-    }
-
-    /// Returns the alias for a module if it was imported as `import module as alias`.
-    /// If a parent module was aliased, returns the alias with the remaining suffix.
-    pub fn alias_for_module(&self, module: ModuleName) -> Option<String> {
-        self.alias_for(module)
-    }
-
-    /// Returns the locally imported name for a `from module import name` statement.
-    pub fn imported_name_alias(&self, module: ModuleName, name: &str) -> Option<&str> {
-        self.imported_names
-            .get(&module)
-            .and_then(|names| names.get(name))
-            .map(|s| s.as_str())
-    }
-
-    /// Replace imported module prefixes with aliases where possible.
-    pub fn apply_aliases(&self, text: &str) -> String {
-        if self.alias_modules.is_empty() {
-            return text.to_owned();
-        }
-        let bytes = text.as_bytes();
-        let mut result = String::with_capacity(text.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            let mut replaced = false;
-            for (module, alias) in &self.alias_modules {
-                let module_str = module.as_str();
-                let module_bytes = module_str.as_bytes();
-                if i + module_bytes.len() <= bytes.len()
-                    && &bytes[i..i + module_bytes.len()] == module_bytes
-                    && Self::is_boundary(bytes, i, i + module_bytes.len())
+                let mut name_parts = name.splitn(2, '.');
+                let head = name_parts
+                    .next()
+                    .expect("splitn always returns at least one part");
+                let suffix = name_parts.next();
+                if let Some(imported) = self
+                    .imported_names
+                    .get(module)
+                    .and_then(|names| names.get(head))
                 {
-                    result.push_str(alias);
-                    i += module_bytes.len();
-                    replaced = true;
-                    break;
+                    text.push_str(imported);
+                    if let Some(suffix) = suffix {
+                        text.push('.');
+                        text.push_str(suffix);
+                    }
+                } else if let Some(alias) = self.alias_for(module.dupe()) {
+                    text.push_str(&alias);
+                    text.push('.');
+                    text.push_str(name);
+                } else {
+                    text.push_str(module.as_str());
+                    text.push('.');
+                    text.push_str(name);
+                    if !self.has_canonical(module.dupe()) {
+                        missing.insert(module.dupe());
+                    }
                 }
             }
-            if !replaced {
-                result.push(bytes[i] as char);
-                i += 1;
-            }
         }
-        result
-    }
-
-    /// Modules referenced by a type annotation that do not already have an import.
-    pub fn missing_modules(
-        &self,
-        modules: &SmallSet<ModuleName>,
-        current_module: ModuleName,
-    ) -> SmallSet<ModuleName> {
-        let mut missing = SmallSet::new();
-        for module in modules.iter() {
-            let module = module.dupe();
-            if module.as_str().is_empty()
-                || module == current_module
-                || module == ModuleName::builtins()
-                || module == ModuleName::extra_builtins()
-                || self.module_is_imported(module)
-            {
-                continue;
-            }
-            missing.insert(module);
-        }
-        missing
+        (text, missing)
     }
 
     fn alias_for(&self, module: ModuleName) -> Option<String> {
@@ -186,13 +154,59 @@ impl ImportTracker {
                     && target.as_bytes()[imported_str.len()] == b'.')
         })
     }
+}
 
-    fn is_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
-        (start == 0 || !Self::is_ident(bytes[start - 1]))
-            && (end == bytes.len() || !Self::is_ident(bytes[end]))
+#[cfg(test)]
+mod tests {
+    use pyrefly_python::ast::Ast;
+    use ruff_python_ast::PySourceType;
+
+    use super::*;
+
+    fn reference(module: &str, name: &str) -> AnnotationPart {
+        AnnotationPart::Reference {
+            module: ModuleName::from_str(module),
+            name: name.to_owned(),
+        }
     }
 
-    fn is_ident(byte: u8) -> bool {
-        matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
+    #[test]
+    fn resolves_module_and_imported_name_aliases_without_touching_text() {
+        let ast = Ast::parse(
+            "import foo as f\nfrom bar import Bar as B\nfrom typing import Literal\n",
+            PySourceType::Python,
+        )
+        .0;
+        let tracker = ImportTracker::from_ast(&ast);
+        let parts = vec![
+            reference("typing", "Literal"),
+            AnnotationPart::Text("['é'] | ".to_owned()),
+            reference("foo", "C"),
+            AnnotationPart::Text(" | ".to_owned()),
+            reference("bar", "Bar.Inner"),
+        ];
+
+        let (text, missing) = tracker.resolve_annotation(&parts, ModuleName::from_str("current"));
+        assert_eq!(text, "Literal['é'] | f.C | B.Inner");
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn tracks_missing_modules_per_reference() {
+        let ast = Ast::parse("from foo import Other\n", PySourceType::Python).0;
+        let tracker = ImportTracker::from_ast(&ast);
+        let parts = vec![
+            reference("foo", "Foo"),
+            AnnotationPart::Text(" | ".to_owned()),
+            reference("bar", "Bar"),
+            AnnotationPart::Text(" | ".to_owned()),
+            reference("foo", "Foo"),
+        ];
+
+        let (text, missing) = tracker.resolve_annotation(&parts, ModuleName::from_str("current"));
+        assert_eq!(text, "foo.Foo | bar.Bar | foo.Foo");
+        assert_eq!(missing.len(), 2);
+        assert!(missing.contains(&ModuleName::from_str("foo")));
+        assert!(missing.contains(&ModuleName::from_str("bar")));
     }
 }

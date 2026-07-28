@@ -12,7 +12,6 @@ use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
-use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::Lit;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -26,7 +25,6 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::ClassFieldDefinition;
@@ -45,7 +43,7 @@ use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::callable::Params;
-use crate::types::display::TypeDisplayContext;
+use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 
 pub struct InlayHintData {
@@ -118,30 +116,28 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         tracker: Option<&ImportTracker>,
         ast: Option<&ModModule>,
+        stdlib: &Stdlib,
     ) -> RenderedTypeHint {
-        let (mut text, modules) = Self::format_type_for_annotation(ty);
+        let parts = ty.get_annotation_parts(Some(stdlib));
+        let empty_tracker = ImportTracker::default();
+        let tracker = tracker.unwrap_or(&empty_tracker);
+        let (text, missing) = tracker.resolve_annotation(&parts, handle.module());
         let mut import_edits = Vec::new();
-        if let (Some(tracker), Some(ast)) = (tracker, ast) {
-            text = tracker.apply_aliases(&text);
-            for module in tracker
-                .missing_modules(&modules, handle.module())
-                .into_iter()
-            {
+        if let Some(ast) = ast {
+            let mut missing = missing.into_iter().collect::<Vec<_>>();
+            missing.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+            let mut import_edit = None;
+            for module in missing {
                 if let Some(handle_to_import) = self.import_handle(handle, module, None).finding() {
                     let (position, insert_text, _) =
                         import_regular_import_edit(ast, handle_to_import, None);
-                    import_edits.push((position, insert_text));
+                    let (_, combined) = import_edit.get_or_insert((position, String::new()));
+                    combined.push_str(&insert_text);
                 }
             }
+            import_edits.extend(import_edit);
         }
         RenderedTypeHint { text, import_edits }
-    }
-
-    fn format_type_for_annotation(ty: &Type) -> (String, SmallSet<ModuleName>) {
-        let mut ctx = TypeDisplayContext::new(&[ty]);
-        ctx.always_display_module_name_except_builtins();
-        let text = ctx.display(ty).to_string();
-        (text, ctx.referenced_modules())
     }
 
     /// NewType values are callable aliases, not class objects, so `type[N]` is
@@ -220,8 +216,9 @@ impl<'a> Transaction<'a> {
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
                 let type_parts = Self::label_parts_for_display(ty, &stdlib);
                 let label_parts = once((prefix.to_owned(), None)).chain(type_parts).collect();
-                let rendered = insertable
-                    .then(|| self.render_type_hint(ty, handle, import_tracker.as_ref(), ast_ref));
+                let rendered = insertable.then(|| {
+                    self.render_type_hint(ty, handle, import_tracker.as_ref(), ast_ref, &stdlib)
+                });
                 let text_edit = rendered
                     .as_ref()
                     .map(|rendered| format!("{prefix}{}", rendered.text));

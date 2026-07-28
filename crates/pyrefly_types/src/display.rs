@@ -11,7 +11,6 @@ use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Display;
 
-use dupe::Dupe;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
@@ -45,6 +44,8 @@ use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_alias::TypeAliasRef;
 use crate::type_alias::TypeAliasStyle;
+use crate::type_output::AnnotationOutput;
+use crate::type_output::AnnotationPart;
 use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
 use crate::type_output::TypeOutput;
@@ -156,7 +157,6 @@ pub struct TypeDisplayContext<'a> {
     /// quantified by an enclosing Forall), but shown for free variables from outer scopes
     /// (e.g. `F1@bar.f1` inside a nested function `f2[F2]` — F1 is free, F2 is bound).
     forall_tparam_uniques: RefCell<Vec<QuantifiedIdentity>>,
-    display_modules: RefCell<SmallSet<ModuleName>>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -265,16 +265,28 @@ impl<'a> TypeDisplayContext<'a> {
         self.stdlib = Some(stdlib);
     }
 
-    fn module_from_qname_or(&self, qname: Option<&QName>, fallback: &str) -> ModuleName {
-        qname
-            .map(|qname| qname.module_name())
-            .unwrap_or_else(|| ModuleName::from_str(fallback))
+    pub(crate) fn special_form_reference_module(
+        &self,
+        qname: Option<&QName>,
+    ) -> Option<ModuleName> {
+        if !self.always_display_module_name {
+            return None;
+        }
+        let module = qname
+            .map(QName::module_name)
+            .unwrap_or_else(|| ModuleName::from_str("typing"));
+        (module != ModuleName::builtins() && module != ModuleName::extra_builtins())
+            .then_some(module)
     }
 
-    fn write_module_prefix(&self, output: &mut impl TypeOutput, module: ModuleName) -> fmt::Result {
-        self.display_modules.borrow_mut().insert(module);
-        output.write_str(module.as_str())?;
-        output.write_str(".")
+    pub(crate) fn qname_needs_module(&self, qname: &QName) -> bool {
+        match self.qnames.get(qname.id()) {
+            Some(info) => {
+                matches!(info.info.get(&qname.module_name()), Some(None) | None)
+                    || info.info.len() > 1
+            }
+            None => true,
+        }
     }
     /// Get the QName for a special form, enabling go-to-definition functionality.
     fn get_special_form_qname(&self, name: &str) -> Option<&QName> {
@@ -543,14 +555,11 @@ impl<'a> TypeDisplayContext<'a> {
         name: &str,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
-        self.display_modules
-            .borrow_mut()
-            .insert(ModuleName::from_str(module));
         if self.always_display_module_name {
-            output.write_str(module)?;
-            output.write_str(".")?;
+            output.write_reference(ModuleName::from_str(module), name)
+        } else {
+            output.write_str(name)
         }
-        output.write_str(name)
     }
 
     /// Helper function to format a sequence of types with a separator.
@@ -597,29 +606,18 @@ impl<'a> TypeDisplayContext<'a> {
         if self.always_display_module_name {
             let module = kind.module_name();
             if let Some(cls) = kind.class() {
-                write!(
-                    output,
-                    "{module}.{}.{func_name}",
-                    Fmt(|f| cls.qname().fmt_name(f))
+                output.write_reference(
+                    module,
+                    &format!("{}.{func_name}", Fmt(|f| cls.qname().fmt_name(f))),
                 )
             } else if let Some(outer) = kind.outer_funcs() {
-                write!(output, "{module}.{outer}.{func_name}")
+                output.write_reference(module, &format!("{outer}.{func_name}"))
             } else {
-                write!(output, "{module}.{func_name}")
+                output.write_reference(module, func_name.as_ref())
             }
         } else {
             output.write_str(func_name.as_ref())
         }
-    }
-
-    pub fn referenced_modules(&self) -> SmallSet<ModuleName> {
-        let mut modules = self.display_modules.borrow().clone();
-        for info in self.qnames.values() {
-            for module in info.info.keys() {
-                modules.insert(module.dupe());
-            }
-        }
-        modules
     }
 
     /// Push forall-bound type variable uniques onto the tracking stack, returning a guard
@@ -816,11 +814,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
             Type::TypeVar(t) => {
                 let type_var_qname = self.stdlib.map(|s| s.type_var().qname());
-                if self.always_display_module_name {
-                    let module = self.module_from_qname_or(type_var_qname, "typing");
-                    self.write_module_prefix(output, module)?;
-                }
-                output.write_builtin("TypeVar", type_var_qname)?;
+                output.write_special_form("TypeVar", type_var_qname)?;
                 output.write_str("[")?;
                 output.write_qname(t.qname())?;
                 output.write_str("]")
@@ -828,22 +822,14 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Sentinel(t) => output.write_qname(t.qname()),
             Type::TypeVarTuple(t) => {
                 let type_var_tuple_qname = self.stdlib.map(|s| s.type_var_tuple().qname());
-                if self.always_display_module_name {
-                    let module = self.module_from_qname_or(type_var_tuple_qname, "typing");
-                    self.write_module_prefix(output, module)?;
-                }
-                output.write_builtin("TypeVarTuple", type_var_tuple_qname)?;
+                output.write_special_form("TypeVarTuple", type_var_tuple_qname)?;
                 output.write_str("[")?;
                 output.write_qname(t.qname())?;
                 output.write_str("]")
             }
             Type::ParamSpec(t) => {
                 let param_spec_qname = self.stdlib.map(|s| s.param_spec().qname());
-                if self.always_display_module_name {
-                    let module = self.module_from_qname_or(param_spec_qname, "typing");
-                    self.write_module_prefix(output, module)?;
-                }
-                output.write_builtin("ParamSpec", param_spec_qname)?;
+                output.write_special_form("ParamSpec", param_spec_qname)?;
                 output.write_str("[")?;
                 output.write_qname(t.qname())?;
                 output.write_str("]")
@@ -860,22 +846,14 @@ impl<'a> TypeDisplayContext<'a> {
             // Other things
             Type::Literal(lit) => {
                 let literal_qname = self.get_special_form_qname("Literal");
-                if self.always_display_module_name {
-                    let module = self.module_from_qname_or(literal_qname, "typing");
-                    self.write_module_prefix(output, module)?;
-                }
-                output.write_builtin("Literal", literal_qname)?;
+                output.write_special_form("Literal", literal_qname)?;
                 output.write_str("[")?;
                 output.write_lit(&lit.value)?;
                 output.write_str("]")
             }
             Type::LiteralString(_) => {
                 let qname = self.get_special_form_qname("LiteralString");
-                if self.always_display_module_name {
-                    let module = self.module_from_qname_or(qname, "typing");
-                    self.write_module_prefix(output, module)?;
-                }
-                output.write_builtin("LiteralString", qname)
+                output.write_special_form("LiteralString", qname)
             }
             Type::Callable(c) => {
                 // Hover output should be readable even when callables appear inside unions
@@ -1144,34 +1122,22 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::Never(NeverStyle::NoReturn) => {
                 let qname = self.get_special_form_qname("NoReturn");
-                if self.always_display_module_name {
-                    let module = self.module_from_qname_or(qname, "typing");
-                    self.write_module_prefix(output, module)?;
-                }
-                output.write_builtin("NoReturn", qname)
+                output.write_special_form("NoReturn", qname)
             }
             Type::Never(NeverStyle::Never) => {
                 let qname = self.get_special_form_qname("Never");
-                if self.always_display_module_name {
-                    let module = self.module_from_qname_or(qname, "typing");
-                    self.write_module_prefix(output, module)?;
-                }
-                output.write_builtin("Never", qname)
+                output.write_special_form("Never", qname)
             }
             Type::Union(u) if u.members.is_empty() => {
                 let qname = self.get_special_form_qname("Never");
-                if self.always_display_module_name {
-                    let module = self.module_from_qname_or(qname, "typing");
-                    self.write_module_prefix(output, module)?;
-                }
-                output.write_builtin("Never", qname)
+                output.write_special_form("Never", qname)
             }
             Type::Union(u)
                 if !(self.always_display_expanded_unions || is_toplevel)
                     && let Some((module, name)) = &u.display_name =>
             {
                 if self.always_display_module_name && *module != ModuleName::unknown() {
-                    write!(output, "{}.{}", module, name)
+                    output.write_reference(*module, name.as_ref())
                 } else {
                     output.write_str(name.as_str())
                 }
@@ -1248,11 +1214,8 @@ impl<'a> TypeDisplayContext<'a> {
 
                         if i == idx {
                             // This is where the combined Literal goes
-                            if self.always_display_module_name {
-                                output.write_str("typing.")?;
-                            }
                             let literal_qname = self.get_special_form_qname("Literal");
-                            output.write_builtin("Literal", literal_qname)?;
+                            output.write_special_form("Literal", literal_qname)?;
                             output.write_str("[")?;
                             for (j, lit) in literals.iter().enumerate() {
                                 if j > 0 {
@@ -1412,41 +1375,29 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("]")
             }
             Type::TypeGuard(ty) => {
-                if self.always_display_module_name {
-                    output.write_str("typing.")?;
-                }
                 let qname = self.get_special_form_qname("TypeGuard");
-                output.write_builtin("TypeGuard", qname)?;
+                output.write_special_form("TypeGuard", qname)?;
                 output.write_str("[")?;
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
             Type::TypeIs(ty) => {
-                if self.always_display_module_name {
-                    output.write_str("typing.")?;
-                }
                 let qname = self.get_special_form_qname("TypeIs");
-                output.write_builtin("TypeIs", qname)?;
+                output.write_special_form("TypeIs", qname)?;
                 output.write_str("[")?;
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
             Type::Annotated(ty, _metadata) => {
-                if self.always_display_module_name {
-                    output.write_str("typing.")?;
-                }
                 let qname = self.get_special_form_qname("Annotated");
-                output.write_builtin("Annotated", qname)?;
+                output.write_special_form("Annotated", qname)?;
                 output.write_str("[")?;
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
             Type::Unpack(inner) if matches!(**inner, Type::TypedDict(_)) => {
-                if self.always_display_module_name {
-                    output.write_str("typing.")?;
-                }
                 let qname = self.get_special_form_qname("Unpack");
-                output.write_builtin("Unpack", qname)?;
+                output.write_special_form("Unpack", qname)?;
                 output.write_str("[")?;
                 self.fmt_helper_generic(inner, false, output)?;
                 output.write_str("]")
@@ -1578,15 +1529,14 @@ impl<'a> TypeDisplayContext<'a> {
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
         if self.always_display_module_name {
-            write!(output, "{}.", r.module_name)?;
+            output.write_reference(r.module_name, r.name.as_ref())?;
+        } else {
+            output.write_str(r.name.as_ref())?;
         }
         match r {
             TypeAliasRef {
-                name,
-                args: Some(args),
-                ..
+                args: Some(args), ..
             } => {
-                output.write_str(name.as_str())?;
                 write!(output, "[")?;
                 for (i, t) in args.as_slice().iter().enumerate() {
                     if i > 0 {
@@ -1596,7 +1546,7 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 write!(output, "]")
             }
-            _ => output.write_str(r.name.as_str()),
+            _ => Ok(()),
         }
     }
 
@@ -1680,6 +1630,18 @@ impl Type {
         let mut output = OutputWithLocations::new(&ctx);
         ctx.fmt_helper_generic(self, false, &mut output).unwrap();
         output.parts().to_vec()
+    }
+
+    /// Render an annotation while preserving semantic module references.
+    pub fn get_annotation_parts(&self, stdlib: Option<&Stdlib>) -> Vec<AnnotationPart> {
+        let mut ctx = TypeDisplayContext::new(&[self]);
+        if let Some(stdlib) = stdlib {
+            ctx.set_stdlib(stdlib);
+        }
+        ctx.always_display_module_name_except_builtins();
+        let mut output = AnnotationOutput::new(&ctx);
+        ctx.fmt_helper_generic(self, false, &mut output).unwrap();
+        output.into_parts()
     }
 }
 
@@ -2212,6 +2174,33 @@ pub mod tests {
             ctx.always_display_module_name_except_builtins();
             assert_eq!(ctx.display(&union_foo_int).to_string(), "test.foo | int");
         }
+    }
+
+    #[test]
+    fn test_annotation_parts_preserve_references_and_unicode() {
+        let foo = Type::ClassType(ClassType::new(
+            fake_class("Foo", "test_module", 5),
+            TArgs::default(),
+        ));
+        assert_eq!(
+            foo.get_annotation_parts(None),
+            vec![AnnotationPart::Reference {
+                module: ModuleName::from_str("test_module"),
+                name: "Foo".to_owned(),
+            }]
+        );
+
+        let literal = Lit::Str("é".into()).to_implicit_type();
+        assert_eq!(
+            literal.get_annotation_parts(None),
+            vec![
+                AnnotationPart::Reference {
+                    module: ModuleName::from_str("typing"),
+                    name: "Literal".to_owned(),
+                },
+                AnnotationPart::Text("['é']".to_owned()),
+            ]
+        );
     }
 
     #[test]

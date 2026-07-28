@@ -8,6 +8,7 @@
 use std::fmt;
 
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
 
 use crate::display::TypeDisplayContext;
@@ -24,10 +25,12 @@ pub trait TypeOutput {
     fn write_str(&mut self, s: &str) -> fmt::Result;
     fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result;
     fn write_qname(&mut self, qname: &QName) -> fmt::Result;
+    fn write_reference(&mut self, module: ModuleName, name: &str) -> fmt::Result;
     fn write_lit(&mut self, lit: &Lit) -> fmt::Result;
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result;
     fn write_type(&mut self, ty: &Type) -> fmt::Result;
     fn write_builtin(&mut self, name: &str, qname: Option<&QName>) -> fmt::Result;
+    fn write_special_form(&mut self, name: &str, qname: Option<&QName>) -> fmt::Result;
 }
 
 /// Implementation of `TypeOutput` that writes formatted types to plain text.
@@ -58,6 +61,10 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
         self.context.fmt_qname(q, self.formatter)
     }
 
+    fn write_reference(&mut self, module: ModuleName, name: &str) -> fmt::Result {
+        write!(self.formatter, "{module}.{name}")
+    }
+
     fn write_lit(&mut self, lit: &Lit) -> fmt::Result {
         self.context.fmt_lit(lit, self.formatter)
     }
@@ -73,6 +80,108 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
 
     fn write_builtin(&mut self, name: &str, _qname: Option<&QName>) -> fmt::Result {
         self.formatter.write_str(name)
+    }
+
+    fn write_special_form(&mut self, name: &str, qname: Option<&QName>) -> fmt::Result {
+        if let Some(module) = self.context.special_form_reference_module(qname) {
+            return self.write_reference(module, name);
+        }
+        self.formatter.write_str(name)
+    }
+}
+
+/// A semantic component of a type annotation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AnnotationPart {
+    Text(String),
+    Reference { module: ModuleName, name: String },
+}
+
+/// Type output that preserves references for alias and import resolution.
+pub struct AnnotationOutput<'a> {
+    parts: Vec<AnnotationPart>,
+    context: &'a TypeDisplayContext<'a>,
+}
+
+impl<'a> AnnotationOutput<'a> {
+    pub fn new(context: &'a TypeDisplayContext<'a>) -> Self {
+        Self {
+            parts: Vec::new(),
+            context,
+        }
+    }
+
+    pub fn into_parts(self) -> Vec<AnnotationPart> {
+        self.parts
+    }
+
+    fn push_text(&mut self, text: &str) {
+        if let Some(AnnotationPart::Text(previous)) = self.parts.last_mut() {
+            previous.push_str(text);
+        } else {
+            self.parts.push(AnnotationPart::Text(text.to_owned()));
+        }
+    }
+}
+
+impl TypeOutput for AnnotationOutput<'_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.push_text(s);
+        Ok(())
+    }
+
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
+        use std::fmt::Write;
+        let mut text = String::new();
+        text.write_fmt(args)?;
+        self.push_text(&text);
+        Ok(())
+    }
+
+    fn write_qname(&mut self, qname: &QName) -> fmt::Result {
+        let name = qname.name_with_parent();
+        if self.context.qname_needs_module(qname) {
+            self.write_reference(qname.module_name(), &name)
+        } else {
+            self.write_str(&name)
+        }
+    }
+
+    fn write_reference(&mut self, module: ModuleName, name: &str) -> fmt::Result {
+        self.parts.push(AnnotationPart::Reference {
+            module,
+            name: name.to_owned(),
+        });
+        Ok(())
+    }
+
+    fn write_lit(&mut self, lit: &Lit) -> fmt::Result {
+        if let Lit::Enum(lit_enum) = lit {
+            self.write_qname(lit_enum.class.qname())?;
+            self.write_fmt(format_args!(".{}", lit_enum.member))
+        } else {
+            self.write_fmt(format_args!("{lit}"))
+        }
+    }
+
+    fn write_targs(&mut self, targs: &TArgs) -> fmt::Result {
+        let context = self.context;
+        context.fmt_targs(targs, self)
+    }
+
+    fn write_type(&mut self, ty: &Type) -> fmt::Result {
+        self.context.fmt_helper_generic(ty, false, self)
+    }
+
+    fn write_builtin(&mut self, name: &str, _qname: Option<&QName>) -> fmt::Result {
+        self.write_str(name)
+    }
+
+    fn write_special_form(&mut self, name: &str, qname: Option<&QName>) -> fmt::Result {
+        if let Some(module) = self.context.special_form_reference_module(qname) {
+            return self.write_reference(module, name);
+        }
+        self.write_str(name)
     }
 }
 
@@ -120,6 +229,11 @@ impl TypeOutput for OutputWithLocations<'_> {
         Ok(())
     }
 
+    fn write_reference(&mut self, module: ModuleName, name: &str) -> fmt::Result {
+        self.parts.push((format!("{module}.{name}"), None));
+        Ok(())
+    }
+
     fn write_lit(&mut self, lit: &Lit) -> fmt::Result {
         // Format the literal and extract location if it's an Enum literal
         let formatted = lit.to_string();
@@ -151,6 +265,22 @@ impl TypeOutput for OutputWithLocations<'_> {
     }
 
     fn write_builtin(&mut self, name: &str, qname: Option<&QName>) -> fmt::Result {
+        match qname {
+            Some(q) => {
+                let location = TextRangeWithModule::new(q.module().clone(), q.range());
+                self.parts.push((name.to_owned(), Some(location)));
+            }
+            None => {
+                self.parts.push((name.to_owned(), None));
+            }
+        }
+        Ok(())
+    }
+
+    fn write_special_form(&mut self, name: &str, qname: Option<&QName>) -> fmt::Result {
+        if let Some(module) = self.context.special_form_reference_module(qname) {
+            self.parts.push((format!("{module}."), None));
+        }
         match qname {
             Some(q) => {
                 let location = TextRangeWithModule::new(q.module().clone(), q.range());

@@ -129,6 +129,17 @@ impl QName {
         }
     }
 
+    /// The dotted name without its module (e.g. `Outer.Inner`).
+    pub fn name_with_parent(&self) -> String {
+        struct Adapter<'a>(&'a QName);
+        impl Display for Adapter<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt_name(f)
+            }
+        }
+        Adapter(self).to_string()
+    }
+
     pub fn fmt_with_module(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.module_name())?;
         if !self.parent().is_toplevel() {
