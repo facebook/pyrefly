@@ -1810,8 +1810,9 @@ impl<'a> BindingsBuilder<'a> {
             // intercept_lookup which wraps them in PossibleLegacyTParam.
             // By finalize time we can follow through to the original
             // binding to check whether it's actually a type alias.
-            Binding::PossibleLegacyTParam(tparam_idx, _)
-                if let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) =>
+            Binding::PossibleLegacyTParam(tparam_idxs, _)
+                if let Some(tparam_idx) = tparam_idxs.first()
+                    && let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) =>
             {
                 self.follow_to_type_alias(legacy_binding.idx())
             }
@@ -2411,7 +2412,7 @@ impl<'a> BindingsBuilder<'a> {
         let idx = self.insert_binding(
             id.as_possible_legacy_tparam_key(),
             Binding::PossibleLegacyTParam(
-                tparam_idx,
+                Box::new([tparam_idx]),
                 if has_scoped_type_params {
                     Some(id.range())
                 } else {
@@ -2480,13 +2481,46 @@ impl<'a> BindingsBuilder<'a> {
     /// of those names point at legacy (pre-PEP-695) type variable declarations, in which
     /// case the name should be treated as a Quantified type parameter inside this scope.
     pub fn add_name_definitions(&mut self, legacy_tparams: &LegacyTParamCollector) {
+        // Several legacy type parameters can be hosted as attributes of the same module
+        // (e.g. `foo.T`, `foo.P`). They all collapse onto a single base-name scope entry
+        // (`foo`), keyed by the *last* occurrence's range. If we left each reference's binding
+        // narrowing only its own attribute, references to every tparam but the last would fall
+        // through to the raw module-level declaration. So we group by base identifier and give
+        // the surviving entry a binding that narrows the module at *all* hosted facets.
+        // For each base name we track (all hosted tparam keys, the surviving scope entry's key,
+        // the surviving occurrence's range). The surviving entry is the last one added, matching
+        // `add_possible_legacy_tparam`'s upsert.
+        let mut by_base: SmallMap<Name, (Vec<Idx<KeyLegacyTypeParam>>, Key, TextRange)> =
+            SmallMap::new();
         for entry in legacy_tparams.legacy_tparams.values() {
-            match entry {
-                TParamLookupResult::MaybeTParam(possible_tparam) => {
-                    self.scopes
-                        .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
+            if let TParamLookupResult::MaybeTParam(possible_tparam) = entry {
+                self.scopes
+                    .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
+                let base = possible_tparam.id.as_identifier().id.clone();
+                let key = possible_tparam.id.as_possible_legacy_tparam_key();
+                let range = possible_tparam.id.range();
+                if let Some((idxs, entry_key, entry_range)) = by_base.get_mut(&base) {
+                    idxs.push(possible_tparam.tparam_idx);
+                    *entry_key = key;
+                    *entry_range = range;
+                } else {
+                    by_base.insert(base, (vec![possible_tparam.tparam_idx], key, range));
                 }
-                _ => {}
+            }
+        }
+        for (_base, (idxs, entry_key, entry_range)) in by_base {
+            if idxs.len() > 1 {
+                // The scope entry for the base name resolves to the surviving occurrence's key;
+                // overwrite that binding so the module is narrowed at every hosted tparam's attr.
+                let scoped = if legacy_tparams.has_scoped_tparams {
+                    Some(entry_range)
+                } else {
+                    None
+                };
+                self.insert_binding_overwrite(
+                    entry_key,
+                    Binding::PossibleLegacyTParam(idxs.into_boxed_slice(), scoped),
+                );
             }
         }
     }
