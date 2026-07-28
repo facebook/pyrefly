@@ -11,9 +11,9 @@ use lsp_types::DocumentChanges;
 use lsp_types::ResourceOp;
 use lsp_types::Url;
 use lsp_types::request::CodeActionRequest;
-use serde_json::Value;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
+use serde_json::Value;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
