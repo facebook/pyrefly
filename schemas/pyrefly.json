@@ -105,6 +105,11 @@
     {
       "type": "object",
       "properties": {
+        "required-version": {
+          "description": "A PEP 440 version specifier that the running version of Pyrefly must satisfy.",
+          "type": "string",
+          "examples": [">=1.2.0", ">=1.2.0,<2.0.0", "==1.2.0"]
+        },
         "preset": {
           "description": "Named preset that provides default error severities and behavior settings. User-specified settings override the preset.",
           "type": "string",
