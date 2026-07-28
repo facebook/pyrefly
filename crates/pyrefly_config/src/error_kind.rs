@@ -667,11 +667,6 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_cast_default_severity() {
-        assert_eq!(ErrorKind::InvalidCast.default_severity(), Severity::Ignore);
-    }
-
-    #[test]
     fn test_doc_headers() {
         // Verifies that the secondary headers in error-kinds.mdx contain the same variants as the ErrorKind enum and are sorted lexicographically.
 

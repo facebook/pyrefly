@@ -337,7 +337,7 @@ class Parametrize(Protocol):
 class Mark:
     parametrize: Parametrize
 
-mark = cast(Mark, object())
+mark = cast(Mark, ...)
 mark.parametrize("role", ids=["owner"])
 #    ^^^^^^^^^^^
 "#;

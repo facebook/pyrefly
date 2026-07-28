@@ -2181,13 +2181,13 @@ fn test_special_export_usage_change_invalidates() {
     // main uses cast from typing
     i.set(
         "main",
-        "from typing import cast\nx: int = cast(int, object())",
+        "from typing import cast\nx: int = cast(int, 'hello')",
     );
     i.check(&["main"], &["main"]);
 
     // Change to use a different cast that's not special - main should be recomputed
     i.set("foo", "def cast(ty, val): return val");
-    i.set("main", "from foo import cast\nx: int = cast(int, object())");
+    i.set("main", "from foo import cast\nx: int = cast(int, 'hello')");
     i.check(&["foo", "main"], &["foo", "main"]);
 }
 

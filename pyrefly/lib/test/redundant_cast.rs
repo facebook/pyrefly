@@ -142,29 +142,37 @@ testcase!(
     test_invalid_cast_disjoint_types,
     TestEnv::new().enable_invalid_cast_warning(),
     r#"
-from typing import Any, Never, cast, final
+from typing import Any, LiteralString, Never, TypedDict, cast, final
 from typing_extensions import cast as extensions_cast, disjoint_base
 
 x: int = 42
 cast(str, x)  # E: Cast from `int` to `str` is invalid because the types are disjoint
+extensions_cast(str, x)  # E: Cast from `int` to `str` is invalid because the types are disjoint
 cast(int | str, x)
 cast(object, x)
 
 cast(str, 1)  # E: Cast from `Literal[1]` to `str` is invalid because the types are disjoint
 cast(str, None)  # E: Cast from `None` to `str` is invalid because the types are disjoint
-extensions_cast(str, 1)  # E: Cast from `Literal[1]` to `str` is invalid because the types are disjoint
 
 xs: list[int] = []
 cast(str, xs)  # E: Cast from `list[int]` to `str` is invalid because the types are disjoint
 
-def bounded_typevar[T: int](x: T) -> None:
-    cast(str, x)  # E: Cast from `T` to `str` is invalid because the types are disjoint
+def disjoint_union(x: int | bytes) -> None:
+    cast(str, x)  # E: Cast from `bytes | int` to `str` is invalid because the types are disjoint
 
-def constrained_typevar[T: (int, bytes)](x: T) -> None:
-    cast(str, x)  # E: Cast from `T` to `str` is invalid because the types are disjoint
+def literal_string(x: LiteralString) -> None:
+    cast(int, x)  # E: Cast from `LiteralString` to `int` is invalid because the types are disjoint
 
-def bounded_generic_typevar[T: list[int]](x: T) -> None:
-    cast(str, x)  # E: Cast from `T` to `str` is invalid because the types are disjoint
+def tuple_value(x: tuple[int, ...]) -> None:
+    cast(list[int], x)  # E: Cast from `tuple[int, ...]` to `list[int]` is invalid because the types are disjoint
+
+class Movie(TypedDict):
+    title: str
+
+def typed_dict_value(x: Movie) -> None:
+    cast(str, x)  # E: Cast from `Movie` to `str` is invalid because the types are disjoint
+
+cast(str, int)  # E: Cast from `type[int]` to `str` is invalid because the types are disjoint
 
 @final
 class A: pass
@@ -206,9 +214,13 @@ testcase!(
     test_no_warning_plausibly_overlapping_casts,
     TestEnv::new().enable_invalid_cast_warning(),
     r#"
-from typing import Callable, Never, TypedDict, cast
+import re
+from typing import Callable, Never, Protocol, TypedDict, cast, final
 
 def union_with_typevar[T](x: T | int) -> None:
+    cast(str, x)
+
+def bounded_typevar[T: int](x: T) -> None:
     cast(str, x)
 
 def overlapping_constrained_typevar[T: (int, str)](x: T) -> None:
@@ -221,6 +233,21 @@ def unbounded_tuples(x: tuple[int, ...]) -> None:
 def generic_arguments(x: list[int]) -> None:
     # Generic arguments do not affect the underlying runtime class.
     cast(list[str], x)
+
+@final
+class Box[T]: pass
+
+def final_generic_arguments(x: Box[int]) -> None:
+    cast(Box[str], x)
+
+def typeshed_generic_arguments(x: re.Pattern[str]) -> None:
+    cast(re.Pattern[bytes], x)
+
+class SupportsFoo(Protocol):
+    def foo(self) -> None: ...
+
+def protocol_value(x: SupportsFoo) -> None:
+    cast(int, x)
 
 def callable_value(x: Callable[..., object]) -> None:
     # An int subclass may define __call__.

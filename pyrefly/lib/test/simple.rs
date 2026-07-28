@@ -1440,16 +1440,16 @@ testcase!(
     r#"
 from typing import assert_type, cast
 
-x = cast(str, object())
+x = cast(str, 1)
 assert_type(x, str)
 
-y = cast("str", object())
+y = cast("str", 1)
 assert_type(y, str)
 
-z = cast(val=object(), typ=str)
+z = cast(val=1, typ=str)
 assert_type(z, str)
 
-w = cast(val=object(), typ="str")
+w = cast(val=1, typ="str")
 assert_type(w, str)
 
 cast()  # E: `typing.cast` missing required argument `typ`  # E: `typing.cast` missing required argument `val`

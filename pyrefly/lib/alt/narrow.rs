@@ -298,55 +298,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Whether two types have no possible runtime value in common.
+    /// Whether two types have no possible runtime value in common for the `invalid-cast` check.
+    ///
+    /// This is intentionally incomplete: uncertain type forms return `false` to avoid noisy
+    /// diagnostics.
     pub fn is_provably_disjoint(&self, left: &Type, right: &Type) -> bool {
-        let is_dict = |ty: &Type| {
-            matches!(
-                ty,
-                Type::ClassType(cls) | Type::SelfType(cls)
-                    if self.has_superclass(cls.class_object(), self.stdlib.dict_object())
-            )
+        // Normalize types with a precise nominal runtime class, where disjointness is high signal.
+        // Return `None` for structural and gradual forms to avoid noisy invalid-cast diagnostics.
+        let runtime_type = |ty: &Type| match ty {
+            Type::ClassType(cls) if !cls.class_object().is_protocol() => {
+                let mut cls = cls.clone();
+                for arg in cls.targs_mut().as_mut() {
+                    *arg = self.heap.mk_any_implicit();
+                }
+                Some(self.heap.mk_class_type(cls))
+            }
+            Type::ClassDef(cls) => Some(
+                self.heap.mk_class_type(
+                    self.get_metadata_for_class(cls)
+                        .metaclass(self.stdlib)
+                        .clone(),
+                ),
+            ),
+            Type::Literal(lit) => Some(
+                self.heap
+                    .mk_class_type(lit.value.general_class_type(self.stdlib).clone()),
+            ),
+            Type::LiteralString(_) => Some(self.heap.mk_class_type(self.stdlib.str().clone())),
+            Type::None => Some(self.heap.mk_class_type(self.stdlib.none_type().clone())),
+            Type::Tuple(_) => Some(
+                self.heap
+                    .mk_class_type(self.stdlib.tuple(self.heap.mk_any_implicit())),
+            ),
+            Type::TypedDict(_) | Type::PartialTypedDict(_) => Some(
+                self.heap.mk_class_type(
+                    self.stdlib
+                        .dict(self.heap.mk_any_implicit(), self.heap.mk_any_implicit()),
+                ),
+            ),
+            _ => None,
         };
-        if (left.is_typed_dict() && is_dict(right)) || (right.is_typed_dict() && is_dict(left)) {
-            return false;
-        }
-        let normalize = |ty: &Type| {
-            ty.clone()
-                .transform(&mut |ty| match ty {
-                    Type::Quantified(q) if q.is_type_var() && q.restriction().is_restricted() => {
-                        *ty = q.upper_bound(self.stdlib, self.heap);
-                    }
-                    Type::TypeVar(tv) if tv.restriction().is_restricted() => {
-                        *ty = tv.upper_bound(self.stdlib, self.heap);
-                    }
-                    _ => {}
-                })
-                .transform(&mut |ty| match ty {
-                    Type::ClassType(cls) | Type::SelfType(cls) => {
-                        for arg in cls.targs_mut().as_mut() {
-                            *arg = self.heap.mk_class_type(self.stdlib.object().clone());
-                        }
-                    }
-                    _ => {}
-                })
+        let normalize = |ty: &Type| match ty {
+            Type::Union(union) => union
+                .members
+                .iter()
+                .map(&runtime_type)
+                .collect::<Option<Vec<_>>>()
+                .map(|members| self.unions(members)),
+            _ => runtime_type(ty),
         };
-        let [left, right] = [left, right].map(normalize);
-        if left.is_never() || right.is_never() {
+        let [Some(left), Some(right)] = [left, right].map(normalize) else {
             return false;
-        }
-        if [&left, &right].iter().any(|ty| {
-            ty.any(|ty| {
-                ty.is_any()
-                    || matches!(ty, Type::Quantified(_) | Type::TypeVar(_))
-                    || matches!(
-                        ty,
-                        Type::ClassType(cls) | Type::SelfType(cls)
-                            if cls.class_object().is_protocol()
-                    )
-            })
-        }) {
-            return false;
-        }
+        };
         self.intersect_with_fallback(&left, &right, IntersectFallback::Right)
             .is_never()
     }
