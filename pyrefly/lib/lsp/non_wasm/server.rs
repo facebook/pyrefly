@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-mod event_loop;
 mod code_lens;
+mod event_loop;
 
 use std::cmp::min;
 use std::collections::HashMap;
@@ -176,6 +176,7 @@ use lsp_types::request::CallHierarchyOutgoingCalls;
 use lsp_types::request::CallHierarchyPrepare;
 use lsp_types::request::CodeActionRequest;
 use lsp_types::request::CodeLensRequest;
+use lsp_types::request::CodeLensResolve;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::DocumentHighlightRequest;
@@ -1361,7 +1362,7 @@ pub fn capabilities(
             ..Default::default()
         })),
         code_lens_provider: Some(CodeLensOptions {
-            resolve_provider: Some(false),
+            resolve_provider: Some(true),
         }),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
@@ -2012,6 +2013,7 @@ impl Server {
                 // status-bar item hidden until the next unrelated event; stale data is fine here.
                 const ONLY_ONCE: &[&str] = &[
                     Completion::METHOD,
+                    CodeLensResolve::METHOD,
                     ResolveCompletionItem::METHOD,
                     SignatureHelpRequest::METHOD,
                     GotoDefinition::METHOD,
@@ -2384,15 +2386,29 @@ impl Server {
                         )
                     {
                         self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
-                        if let Err(reason) = self.code_lens(
+                        let response = match self.code_lens(&transaction, params) {
+                            Ok(response) => response,
+                            Err(reason) => {
+                                telemetry_event.set_empty_response_reason(reason);
+                                None
+                            }
+                        };
+                        self.send_response(new_response(x.id, Ok(response)));
+                    }
+                } else if let Some(params) = as_request::<CodeLensResolve>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<CodeLensResolve>(
+                            params, &x.id,
+                        )
+                        && let Err(reason) = self.resolve_code_lens(
                             x.id.clone(),
                             &transaction,
-                            params,
+                            &params,
                             telemetry_event.activity_key.clone(),
-                        ) {
-                            self.send_response(new_response(x.id, Ok(None::<()>)));
-                            telemetry_event.set_empty_response_reason(reason);
-                        }
+                        )
+                    {
+                        telemetry_event.set_empty_response_reason(reason);
+                        self.send_response(new_response(x.id, Ok(params)));
                     }
                 } else if let Some(params) = as_request::<WorkspaceSymbolRequest>(&x) {
                     if let Some(params) = self
