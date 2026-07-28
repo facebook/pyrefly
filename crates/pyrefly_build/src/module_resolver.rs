@@ -25,6 +25,9 @@ use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
 const PKGUTIL_DETECTION_MAX_BYTES: usize = 4096;
+/// A `partial` marker is only ever the literal `partial`, so a small cap is
+/// plenty; the cap also stops a third-party `py.typed` from dictating read size.
+const PY_TYPED_DETECTION_MAX_BYTES: usize = 128;
 
 pub trait ModuleResolutionObserver {
     fn observe_stat(&self, elapsed_ns: u64);
@@ -63,39 +66,49 @@ static PKGUTIL_EXTEND_PATH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         .expect("PKGUTIL_EXTEND_PATH_PATTERN regex should be valid")
 });
 
-fn is_pkgutil_namespace(init_path: &Path, observer: Option<&dyn ModuleResolutionObserver>) -> bool {
+/// Read up to `buf.len()` bytes from the start of `path` into `buf`, returning
+/// the number of bytes read. The read is capped at the buffer size so a
+/// third-party file cannot force an unbounded read. Returns `None` if the file
+/// cannot be opened or read; the read is timed when an `observer` is given.
+fn read_capped(
+    path: &Path,
+    buf: &mut [u8],
+    observer: Option<&dyn ModuleResolutionObserver>,
+) -> Option<usize> {
     let start = observer.map(|_| Timer::start());
-    let Ok(mut file) = std::fs::File::open(init_path) else {
-        return false;
-    };
-    let mut buf = [0u8; PKGUTIL_DETECTION_MAX_BYTES];
+    let mut file = std::fs::File::open(path).ok()?;
     let mut total = 0;
     while total < buf.len() {
         match file.read(&mut buf[total..]) {
             Ok(0) => break,
             Ok(n) => total += n,
-            Err(_) => return false,
+            Err(_) => return None,
         }
     }
     if let Some(observer) = observer {
         observer.observe_read(start.unwrap().elapsed_nanos());
     }
-    let contents = String::from_utf8_lossy(&buf[..total]);
-    PKGUTIL_EXTEND_PATH_PATTERN.is_match(&contents)
+    Some(total)
+}
+
+fn is_pkgutil_namespace(init_path: &Path, observer: Option<&dyn ModuleResolutionObserver>) -> bool {
+    let mut buf = [0u8; PKGUTIL_DETECTION_MAX_BYTES];
+    read_capped(init_path, &mut buf, observer).is_some_and(|total| {
+        PKGUTIL_EXTEND_PATH_PATTERN.is_match(&String::from_utf8_lossy(&buf[..total]))
+    })
 }
 
 fn is_partial_py_typed(
     py_typed_path: &Path,
     observer: Option<&dyn ModuleResolutionObserver>,
 ) -> bool {
-    let start = observer.map(|_| Timer::start());
-    let Ok(contents) = std::fs::read_to_string(py_typed_path) else {
-        return false;
-    };
-    if let Some(observer) = observer {
-        observer.observe_read(start.unwrap().elapsed_nanos());
-    }
-    contents.trim() == "partial"
+    let mut buf = [0u8; PY_TYPED_DETECTION_MAX_BYTES];
+    read_capped(py_typed_path, &mut buf, observer).is_some_and(|total| {
+        // If the read filled the buffer we cannot tell EOF from truncation, so the
+        // file is larger than any bare `partial` marker (or was truncated) — reject
+        // rather than trust a prefix that happens to trim to `partial`.
+        total < buf.len() && String::from_utf8_lossy(&buf[..total]).trim() == "partial"
+    })
 }
 
 /// Cache of directory listings to avoid repeated stat() calls during module resolution.
@@ -980,12 +993,17 @@ mod tests {
     fn test_partial_py_typed_detection() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
+        // `partial` followed by whitespace that fills the read cap and then real
+        // content: the read-back prefix trims to `partial`, so this must not be
+        // mistaken for a valid marker.
+        let truncated = format!("partial\n{}extra", " ".repeat(PY_TYPED_DETECTION_MAX_BYTES));
         TestPath::setup_test_directory(
             root,
             vec![
                 TestPath::file_with_contents("partial.py.typed", "partial\n"),
                 TestPath::file_with_contents("complete.py.typed", ""),
                 TestPath::file_with_contents("invalid.py.typed", "not-partial\n"),
+                TestPath::file_with_contents("truncated.py.typed", &truncated),
             ],
         );
 
@@ -993,6 +1011,7 @@ mod tests {
         assert!(cache.is_partial_py_typed(&root.join("partial.py.typed"), None));
         assert!(!cache.is_partial_py_typed(&root.join("complete.py.typed"), None));
         assert!(!cache.is_partial_py_typed(&root.join("invalid.py.typed"), None));
+        assert!(!cache.is_partial_py_typed(&root.join("truncated.py.typed"), None));
     }
 
     #[test]
