@@ -267,6 +267,11 @@ class BaseModel:
     }
 
     #[test]
+    fn test_stubgen_type_alias_explicit() {
+        assert_stubgen_snapshot("type_alias_explicit");
+    }
+
+    #[test]
     fn test_stubgen_generics() {
         assert_stubgen_snapshot("generics");
     }
