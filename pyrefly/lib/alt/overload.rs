@@ -691,6 +691,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut arg_counts = closest_overload_signature.arg_counts();
             let nposargs = args.len();
             let nkwargs = keywords.len();
+            let missing_self_param = self_obj.is_some() && arg_counts.positional.max == Some(0);
             if self_obj.is_some() {
                 arg_counts.positional.min = arg_counts.positional.min.saturating_sub(1);
                 if let Some(max) = arg_counts.positional.max {
@@ -719,13 +720,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None
                 }
             };
-            let arity_mismatch =
+            let arity_mismatch = if missing_self_param {
+                "This method has no `self` parameter to receive the implicit instance argument. Add a `self` parameter.".to_owned()
+            } else {
                 check(nposargs + nkwargs, arg_counts.overall, "").unwrap_or_else(|| {
                     check(nposargs, arg_counts.positional, "positional ").unwrap_or_else(|| {
                         check(nkwargs, arg_counts.keyword, "keyword ")
                             .expect("Overload evaluation: expected arity mismatch not found")
                     })
-                });
+                })
+            };
             builder = builder.with_detail(arity_mismatch);
         } else {
             builder = builder.with_errors_as_details(closest_overload_call_errors);
