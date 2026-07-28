@@ -1801,11 +1801,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None,
             ctor_targs_no_hint.as_mut(),
         );
-        // If the call succeeds, attempt contextual typing with the hint.
+        // Attempt contextual typing with the hint. When the no-hint pass already succeeds we
+        // always try the hint (this is ordinary contextual typing). When the no-hint pass
+        // produced hard errors, the hint can still steer type variable solving toward a valid
+        // solution the no-hint pass missed (e.g. when a parameter is a union in which the same
+        // type variable appears in multiple branches). But a speculative hinted pass mutates
+        // shared solver vars, so on that recovery path we only take the risk when the hint is
+        // "ground" — it has no free placeholder vars belonging to an enclosing call that the
+        // pass could pollute. The hinted result is only adopted when it is at least as good as
+        // the no-hint result (see below).
+        let run_hinted = hint.is_some_and(|h| {
+            !call_errors_no_hint.has_hard()
+                || h.types()
+                    .iter()
+                    .all(|t| t.collect_maybe_placeholder_vars().is_empty())
+        });
+        // `retry_input` is `Some` exactly when `hint` is, and `run_hinted` implies `hint.is_some()`,
+        // so this destructuring never fails — it only recovers the clones made above.
         let (chosen_ctor_targs, chosen_call_errors, chosen_arg_errors, chosen_res) =
-            if !call_errors_no_hint.has_hard()
-                && let Some((callable, self_obj)) = retry_input
-            {
+            if run_hinted && let Some((callable, self_obj)) = retry_input {
                 let mut ctor_targs_with_hint = ctor_targs.as_ref().map(|x| (**x).clone());
                 let arg_errors_with_hint = self.error_collector();
                 let call_errors_with_hint = self.error_collector();

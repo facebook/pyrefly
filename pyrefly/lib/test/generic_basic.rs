@@ -866,3 +866,34 @@ def test2(cls: T2) -> str:
     return cls.name  # E:
     "#,
 );
+
+// A function type variable appearing in multiple branches of a union parameter must
+// solve to the branch matched by the argument, not collapse to the widest branch. Here
+// the return hint `T` (from `fn2`) steers the call so `T` in `fn` binds to `fn2`'s `T`.
+testcase!(
+    test_typevar_in_multiple_union_branches_with_hint,
+    r#"
+class Foo[T, U]:
+    def t(self) -> T: ...
+    def u(self) -> U: ...
+def fn[T](foo: Foo[T, object] | Foo[object, T], value: list[T]) -> T: ...
+def fn2[T](value: list[T]) -> T:
+    return fn(Foo[T, object](), value)
+    "#,
+);
+
+// Without a return hint the greedy union-branch matching commits `T` to the widest
+// branch (`object`) instead of the branch matched by the argument.
+testcase!(
+    bug = "T should reveal as T, not object (greedy union-branch matching)",
+    test_typevar_in_multiple_union_branches_no_hint,
+    r#"
+from typing import reveal_type
+class Foo[T, U]:
+    def t(self) -> T: ...
+    def u(self) -> U: ...
+def fn[T](foo: Foo[T, object] | Foo[object, T], value: T) -> T: ...
+def fn2[T](value: T) -> None:
+    reveal_type(fn(Foo[T, object](), value))  # E: revealed type: object
+    "#,
+);
