@@ -34,6 +34,7 @@ use ruff_python_ast::PythonVersion as RuffPythonVersion;
 use ruff_python_ast::Singleton;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtIf;
+use ruff_python_ast::StringFlags;
 use ruff_python_ast::StringLiteral;
 use ruff_python_ast::StringLiteralFlags;
 use ruff_python_ast::StringLiteralValue;
@@ -48,6 +49,7 @@ use ruff_python_parser::Parsed;
 use ruff_python_parser::UnsupportedSyntaxError;
 use ruff_python_parser::parse_expression_range;
 use ruff_python_parser::parse_unchecked;
+use ruff_python_parser::typing::AnnotationKind;
 use ruff_python_parser::typing::parse_type_annotation;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -179,7 +181,19 @@ impl Ast {
     }
 
     pub fn parse_type_literal(x: &ExprStringLiteral, source: &str) -> anyhow::Result<Expr> {
-        Ok(parse_type_annotation(x, source)?.expression().clone())
+        let parsed = parse_type_annotation(x, source)?;
+        match parsed.kind() {
+            AnnotationKind::Simple => Ok(parsed.expression().clone()),
+            AnnotationKind::Complex => {
+                // Complex strings have no exact decoded-to-source range mapping, but
+                // binding keys still require distinct, module-relative ranges.
+                let value = x.value.to_str();
+                Ast::parse_expr(
+                    value,
+                    x.start() + x.value.first_literal_flags().opener_len(),
+                )
+            }
+        }
     }
 
     pub fn unpack_slice(x: &Expr) -> &[Expr] {
@@ -598,6 +612,27 @@ mod tests {
             Some(Stmt::Expr(stmt)) => *stmt.value,
             other => panic!("expected an expression statement, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn complex_type_literal_ranges_are_module_relative() {
+        let source = "prefix: int\nx: \"lib.Literal['\\\\n']\"\n";
+        let (module, errors, _) = Ast::parse(source, PySourceType::Python);
+        assert!(errors.is_empty());
+        let Stmt::AnnAssign(stmt) = &module.body[1] else {
+            panic!("expected an annotated assignment");
+        };
+        let Expr::StringLiteral(literal) = stmt.annotation.as_ref() else {
+            panic!("expected a string annotation");
+        };
+        let Expr::Subscript(subscript) = Ast::parse_type_literal(literal, source).unwrap() else {
+            panic!("expected a subscript annotation");
+        };
+        let Expr::Attribute(attribute) = subscript.value.as_ref() else {
+            panic!("expected an attribute annotation");
+        };
+        let start = TextSize::new(source.find("Literal").unwrap() as u32);
+        assert_eq!(attribute.attr.range, TextRange::at(start, TextSize::new(7)));
     }
 
     #[test]
