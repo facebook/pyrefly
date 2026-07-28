@@ -2520,10 +2520,8 @@ if TYPE_CHECKING:
     "#,
 );
 
-// https://github.com/facebook/pyrefly/issues/4213: when argument type expansion for an
-// overloaded call exhausts its expansion limit, that truncation is reported instead of
-// silently giving up. Seven `bool` arguments against overloads that never match force the
-// expansion to split each argument (2^7 combinations) and exceed the limit.
+// Regression test for https://github.com/facebook/pyrefly/issues/4213: seven `bool` arguments
+// against non-matching overloads exceed the expansion limit, which is now reported.
 testcase!(
     test_overload_argument_expansion_limit_reported,
     r#"
@@ -2540,9 +2538,28 @@ def call(x: bool) -> None:
 "#,
 );
 
-// The limit warning must not fire when the call already matched: under legacy overload
-// expansion, expansion also runs to refine a union return type, and exhausting the limit there
-// does not change the (correct) result. https://github.com/facebook/pyrefly/issues/4213
+// A concrete tuple applies the same limit while expanding its element combinations, so seven
+// `bool` elements (2^7 combinations) must report that truncation too.
+// https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_tuple_argument_expansion_limit_reported,
+    r#"
+from typing import overload
+
+@overload
+def f(x: tuple[str, str, str, str, str, str, str], /) -> int: ...
+@overload
+def f(x: tuple[bytes, bytes, bytes, bytes, bytes, bytes, bytes], /) -> str: ...
+def f(x: tuple[object, object, object, object, object, object, object], /) -> int | str: ...
+
+def call(x: bool) -> None:
+    f((x, x, x, x, x, x, x))  # E: No matching overload found  # E: hit the limit of 100 expansions
+"#,
+);
+
+// The limit warning must not fire once a call has matched (legacy union-return refinement runs
+// expansion too, but truncating it doesn't change the result).
+// https://github.com/facebook/pyrefly/issues/4213
 testcase!(
     test_overload_argument_expansion_limit_not_reported_when_matched,
     TestEnv::new().enable_legacy_overload_expansion(),
@@ -2557,5 +2574,113 @@ def f(*args: object) -> int | str | bytes: ...
 
 def call(x: bool) -> None:
     assert_type(f(x, x, x, x, x, x, x), int | str)
+"#,
+);
+
+// Arguments that already satisfy an identical parameter type in every overload aren't expanded
+// (only `key` disambiguates here), so the seven shared `bool`s don't exhaust the limit.
+// https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_expansion_skips_non_disambiguating_args,
+    r#"
+from typing import Literal, assert_type, overload
+
+@overload
+def f(a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, key: Literal["x"], /) -> int: ...
+@overload
+def f(a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, key: Literal["y"], /) -> str: ...
+def f(a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, key: Literal["x", "y"], /) -> int | str: ...
+
+def call(flag: bool, k: Literal["x", "y"]) -> None:
+    assert_type(f(flag, flag, flag, flag, flag, flag, flag, k), int | str)
+"#,
+);
+
+// The seven `bool`s already satisfy the only arity-compatible overload, so only `key` expands and
+// the call reports a precise argument error instead of exhausting the limit.
+// https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_expansion_skipped_for_single_arity_candidate,
+    r#"
+from typing import overload
+
+@overload
+def f(a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, key: int, /) -> int: ...
+@overload
+def f(a: str, /) -> str: ...
+def f(*args: object) -> int | str: ...
+
+def call(flag: bool, k: int | str) -> None:
+    f(flag, flag, flag, flag, flag, flag, flag, k)  # E: Argument `int | str` is not assignable to parameter `key`
+"#,
+);
+
+// The pruning is what keeps this call under the limit: without it the six shared `str | bytes`
+// arguments expand to 2^6 combinations before `flag` is ever reached.
+// https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_expansion_skips_shared_args_to_stay_under_limit,
+    r#"
+from typing import Literal, assert_type, overload
+
+class A: ...
+class B: ...
+
+@overload
+def f(x: str | bytes, y: str | bytes, z: str | bytes, w: str | bytes, v: str | bytes, u: str | bytes, /, *, flag: Literal[True]) -> A: ...
+@overload
+def f(x: str | bytes, y: str | bytes, z: str | bytes, w: str | bytes, v: str | bytes, u: str | bytes, /, *, flag: Literal[False] = ...) -> B: ...
+def f(*args: str | bytes, flag: bool = False) -> A | B: ...
+
+def call(a: str | bytes, flag: bool) -> None:
+    assert_type(f(a, a, a, a, a, a, flag=flag), A | B)
+"#,
+);
+
+// An argument that only becomes assignable once split has to keep expanding, even though it binds
+// the same parameter in every candidate. https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_expansion_not_skipped_when_splitting_is_what_matches,
+    r#"
+from typing import assert_type
+
+def call(d: dict[tuple[str, str] | tuple[None, str], str], k: tuple[str | None, str]) -> None:
+    assert_type(d.get(k), str | None)
+"#,
+);
+
+// Deciding what to prune probes parameter types for equivalence and assignability, which must not
+// pin placeholder vars owned by the receiver (here `{}`'s key/value types).
+// https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_expansion_pruning_does_not_pin_receiver_vars,
+    r#"
+from collections.abc import Sequence
+from typing import reveal_type
+
+class Value: ...
+
+def call(by: Sequence[Value] | str) -> None:
+    groups = {}
+    groups.update(by)  # E: No matching overload found
+    reveal_type(groups)  # E: revealed type: dict[Unknown, Unknown]
+"#,
+);
+
+// An over-limit tuple argument is skipped (not aborted), so a later argument can still resolve the
+// call. https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_fixed_tuple_limit_does_not_abort_expansion,
+    r#"
+from typing import Literal, assert_type, overload
+
+@overload
+def f(t: tuple[bool, bool, bool, bool, bool, bool, bool], flag: Literal[True]) -> int: ...
+@overload
+def f(t: tuple[object, object, object, object, object, object, object], flag: Literal[False]) -> str: ...
+def f(t: object, flag: bool) -> int | str: ...
+
+def call(x: bool, flag: bool) -> None:
+    assert_type(f((x, x, x, x, x, x, x), flag), int | str)
 "#,
 );
