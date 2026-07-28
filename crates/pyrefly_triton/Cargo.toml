@@ -1,0 +1,7 @@
+[package]
+name = "pyrefly_triton"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5", features = ["serde"] }
