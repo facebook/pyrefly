@@ -2585,14 +2585,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Some(module) = module else {
             // If we can't resolve the module (or it is present but untyped/ignored), skip patch
             // validation to avoid spurious failures when patching third-party libraries.
-            // This keeps the check focused on modules Pyrefly can actually analyze.
             return;
         };
-        if module != self.module().name() {
-            // For other modules, Pyrefly may only see stubs or partial third-party exports.
-            // Avoid turning this best-effort check into project-wide false positives.
-            return;
-        }
 
         let mut base_ty = ModuleType::new_as(module).to_type(self.heap);
         for attr in &parts[module_prefix_len..] {
@@ -2609,15 +2603,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let module_attr_exists = self.exports.export_exists(module_name, &attr_name)
                     || self.exports.export_exists(module_name, &dunder::GETATTR);
                 if !module_attr_exists {
-                    if module_name == self.module().name() {
-                        errors
-                            .error_builder(
-                                range,
-                                ErrorKind::MissingAttribute,
-                                format!("No attribute `{attr_name}` in module `{module_name}`"),
-                            )
-                            .emit();
-                    }
+                    errors
+                        .error_builder(
+                            range,
+                            ErrorKind::MissingAttribute,
+                            format!("No attribute `{attr_name}` in module `{module_name}`"),
+                        )
+                        .emit();
                     return;
                 }
             }

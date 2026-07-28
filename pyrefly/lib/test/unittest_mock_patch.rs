@@ -51,8 +51,19 @@ with patch("main._MAXLINE"):
 );
 
 testcase!(
-    test_unittest_mock_patch_target_other_module_skipped,
+    test_unittest_mock_patch_target_other_module_checked,
     TestEnv::one("other", ""),
+    r#"
+from unittest.mock import patch
+
+with patch("other.foo"):  # E: No attribute `foo` in module `other`
+    pass
+"#,
+);
+
+testcase!(
+    test_unittest_mock_patch_target_other_module_valid,
+    TestEnv::one("other", "def foo() -> None: ..."),
     r#"
 from unittest.mock import patch
 
