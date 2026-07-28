@@ -39,8 +39,8 @@ use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
-use crate::state::lsp::ast_helpers::find_containing_function_def;
 use crate::state::lsp::ReferenceOptions;
+use crate::state::lsp::ast_helpers::find_containing_function_def;
 use crate::state::state::CancellableTransaction;
 
 pub struct CallerInfo {

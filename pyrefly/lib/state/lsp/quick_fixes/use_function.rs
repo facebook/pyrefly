@@ -47,6 +47,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::ModuleInfo;
+use crate::state::ide::ImportEdit;
 use crate::state::ide::insert_import_edit;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
@@ -399,7 +400,9 @@ fn call_target_for_module(
     if module_has_top_level_binding(ast, &pattern.name) {
         return None;
     }
-    let (position, insert_text, _) = insert_import_edit(
+    let ImportEdit {
+        range, insert_text, ..
+    } = insert_import_edit(
         ast,
         transaction.config_finder(),
         target_handle.dupe(),
@@ -407,7 +410,6 @@ fn call_target_for_module(
         &pattern.name,
         ImportFormat::Absolute,
     );
-    let range = TextRange::at(position, TextSize::new(0));
     Some(CallTarget {
         callee: pattern.name.clone(),
         import_edit: Some((range, insert_text)),
