@@ -577,7 +577,7 @@ impl<'a> CalleesWithLocation<'a> {
         format!("{}.{}", n.module_name(), n.id())
     }
     fn class_name_from_def_kind(kind: &FunctionKind) -> String {
-        if let FunctionKind::Def(f) = kind
+        if let Some(f) = kind.definition_id()
             && let Some(cls) = &f.cls
         {
             format!("{}.{}", f.module.name(), cls.name())
@@ -588,26 +588,26 @@ impl<'a> CalleesWithLocation<'a> {
         }
     }
     fn target_from_def_kind(kind: &FunctionKind, module_name_override: Option<&str>) -> String {
-        match kind {
-            FunctionKind::Def(f) => {
-                if let Some(module_name_override) = module_name_override {
-                    format!("{module_name_override}.{}", f.name)
-                } else {
-                    match &f.cls {
-                        Some(cls) => {
-                            format!("{}.{}.{}", f.module.name(), cls.name(), f.name)
-                        }
-                        None => {
-                            format!("{}.{}", f.module.name(), f.name)
-                        }
+        if let Some(f) = kind.definition_id() {
+            if let Some(module_name_override) = module_name_override {
+                format!("{module_name_override}.{}", f.name)
+            } else {
+                match &f.cls {
+                    Some(cls) => {
+                        format!("{}.{}.{}", f.module.name(), cls.name(), f.name)
+                    }
+                    None => {
+                        format!("{}.{}", f.module.name(), f.name)
                     }
                 }
             }
-            FunctionKind::CallbackProtocol(cls) => {
-                format!("{}.__call__", Self::qname_to_string(cls.qname()))
+        } else {
+            match kind {
+                FunctionKind::CallbackProtocol(cls) => {
+                    format!("{}.__call__", Self::qname_to_string(cls.qname()))
+                }
+                x => x.format(ModuleName::builtins()),
             }
-
-            x => x.format(ModuleName::builtins()),
         }
     }
     fn repr_from_arguments(&self, arguments: &Arguments) -> Option<Callee> {

@@ -31,7 +31,6 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -327,11 +326,13 @@ pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
         ty if ty.is_toplevel_callable() => {
             // A callable attribute is a method unless its metadata proves it is a free
             // function. Overloads and bound dunder methods (e.g. `__getitem__`, an
-            // overloaded operator) carry no directly resolvable `Def` metadata, so they
+            // overloaded operator) carry no directly resolvable definition metadata, so they
             // must default to method rather than function.
-            let is_function = ty.visit_toplevel_func_metadata(
-                &|meta| matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_none()),
-            );
+            let is_function = ty.visit_toplevel_func_metadata(&|meta| {
+                meta.kind
+                    .definition_id()
+                    .is_some_and(|func| func.cls.is_none())
+            });
             if is_function {
                 SymbolKind::Function
             } else {

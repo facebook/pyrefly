@@ -41,6 +41,8 @@ use crate::equality::TypeEqCtx;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::meta_shape_dsl::ShapeTransform;
+use crate::type_level_dsl::TypeShapeDslDomain;
+use crate::type_level_dsl::ValidatedTypeShapeDslFunction;
 use crate::type_output::DisplayOutput;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
@@ -935,6 +937,12 @@ pub enum FunctionKind {
         Arc<ShapeDslFunction>,
         IdentityIgnored<Arc<Vec<Arc<ShapeDslFunction>>>>,
     ),
+    /// A validated user-defined type-level shape DSL function.
+    TypeShapeDsl(
+        Arc<FuncId>,
+        TypeShapeDslDomain,
+        Arc<ValidatedTypeShapeDslFunction>,
+    ),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,
     /// The `shape_extensions.defines_assert_shape` decorator function itself.
@@ -1362,6 +1370,16 @@ impl Display for Param {
 }
 
 impl FunctionKind {
+    /// Return source-definition identity for variants that preserve an ordinary function def.
+    pub fn definition_id(&self) -> Option<&FuncId> {
+        match self {
+            Self::Def(func_id) | Self::ShapeDsl(func_id, ..) | Self::TypeShapeDsl(func_id, ..) => {
+                Some(func_id)
+            }
+            _ => None,
+        }
+    }
+
     pub fn from_name(
         module: Module,
         cls: Option<Class>,
@@ -1445,7 +1463,7 @@ impl FunctionKind {
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Def(func_id) => func_id.module.name().dupe(),
-            Self::ShapeDsl(id, _, _) => id.module.name().dupe(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.module.name().dupe(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
             Self::DefinesAssertShape => ModuleName::from_str("shape_extensions"),
         }
@@ -1484,7 +1502,7 @@ impl FunctionKind {
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
-            Self::ShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
             Self::DefinesAssertShape => Cow::Owned(Name::new_static("defines_assert_shape")),
         }
@@ -1523,7 +1541,7 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
-            Self::ShapeDsl(id, _, _) => id.cls.clone(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.cls.clone(),
             Self::UsesShapeDsl => None,
             Self::DefinesAssertShape => None,
         }
@@ -1531,7 +1549,9 @@ impl FunctionKind {
 
     pub fn outer_funcs(&self) -> Option<&Name> {
         match self {
-            Self::Def(func_id) | Self::ShapeDsl(func_id, _, _) => func_id.outer_funcs.as_ref(),
+            Self::Def(func_id)
+            | Self::ShapeDsl(func_id, _, _)
+            | Self::TypeShapeDsl(func_id, _, _) => func_id.outer_funcs.as_ref(),
             _ => None,
         }
     }

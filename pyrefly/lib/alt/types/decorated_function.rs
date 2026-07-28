@@ -25,6 +25,7 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::class::Class;
 use pyrefly_types::keywords::TypeMap;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::types::TParams;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
@@ -55,6 +56,7 @@ pub struct UndecoratedFunction {
     pub stub_or_impl: FunctionStubOrImpl,
     pub has_ellipsis_body: bool,
     pub defining_cls: Option<Class>,
+    pub type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
     /// Maps parameter names to their resolved types - used to connect
     /// FunctionParameter and KeyUndecoratedFunction.
     pub resolved_param_types: SmallMap<Name, Type>,
@@ -129,6 +131,7 @@ impl UndecoratedFunction {
             stub_or_impl: FunctionStubOrImpl::Stub,
             has_ellipsis_body: false,
             defining_cls: None,
+            type_shape_dsl_def: None,
             resolved_param_types: SmallMap::new(),
         }
     }

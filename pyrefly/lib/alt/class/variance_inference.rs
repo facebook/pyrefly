@@ -33,7 +33,6 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Params;
 use crate::types::class::Class;
 use crate::types::quantified::Quantified;
@@ -797,10 +796,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// falls back to the field range. Current-module only: variance checks a class's own
     /// fields, so `def_index` is always local — we don't resolve cross-module `FuncId`s.
     fn func_def_range(&self, metadata: &FuncMetadata) -> Option<TextRange> {
-        let def_index = match &metadata.kind {
-            FunctionKind::Def(func_id) | FunctionKind::ShapeDsl(func_id, ..) => func_id.def_index?,
-            _ => return None,
-        };
+        let def_index = metadata.kind.definition_id()?.def_index?;
         let idx = self
             .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))?;

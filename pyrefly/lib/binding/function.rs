@@ -18,6 +18,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
+use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
@@ -912,6 +913,35 @@ impl<'a> BindingsBuilder<'a> {
         let is_shape_dsl = x.decorator_list.iter().any(|d| {
             self.as_special_export(&d.expression) == Some(SpecialExport::ShapeDslFunction)
         });
+        let is_type_shape_dsl = x.decorator_list.iter().any(|d| {
+            self.as_special_export(&d.expression) == Some(SpecialExport::TypeShapeDslFunction)
+        });
+        if is_shape_dsl && is_type_shape_dsl {
+            self.error(
+                func_name.range(),
+                ErrorKind::InvalidArgument,
+                "`@shape_dsl_function` and `@type_shape_dsl_function` cannot be combined"
+                    .to_owned(),
+            );
+        }
+
+        let type_shape_dsl_def = if is_type_shape_dsl && !is_shape_dsl {
+            let is_top_level =
+                class_key.is_none() && parent.ancestor_function_path(&self.module_info).is_none();
+            match ValidatedTypeShapeDslFunction::try_new(x.clone(), is_top_level) {
+                Ok(definition) => Some(Arc::new(definition)),
+                Err(error) => {
+                    self.error(
+                        error.range,
+                        ErrorKind::InvalidArgument,
+                        format!("@type_shape_dsl_function {}", error.message),
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Extract the IR function name from @uses_shape_dsl(ir_fn) if present.
         let uses_shape_dsl_ir_name = x.decorator_list.iter().find_map(|d| {
@@ -928,7 +958,7 @@ impl<'a> BindingsBuilder<'a> {
 
         // Convert the function to DSL IR before `function_header` takes `returns`
         // and before `function_body` takes `body`.
-        let shape_dsl_def = if is_shape_dsl {
+        let shape_dsl_def = if is_shape_dsl && !is_type_shape_dsl {
             // Warn about parameter kinds the DSL silently ignores.
             if let Some(vararg) = &x.parameters.vararg {
                 self.error(
@@ -1030,6 +1060,7 @@ impl<'a> BindingsBuilder<'a> {
                 module_style: self.module_info.path().style(),
                 outer_funcs,
                 shape_dsl_def,
+                type_shape_dsl_def,
                 uses_shape_dsl_ir_name,
             },
         );

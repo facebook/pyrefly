@@ -7,13 +7,17 @@
 
 use std::path::PathBuf;
 
+use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::type_var::Restriction;
 use ruff_python_ast::name::Name;
 
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTParams;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 use crate::test::class_keywords::get_class_metadata;
 use crate::test::util::TestEnv;
 use crate::test::util::get_class;
@@ -190,6 +194,150 @@ class Tensor[Shape: IntTuple]:
     );
     env
 }
+
+#[test]
+fn test_type_shape_dsl_function_declarations() {
+    let mut env = shaped_array_env();
+    env.add(
+        "main",
+        r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def int_identity(x: Int) -> Int:
+    return x
+
+@type_shape_dsl_function
+def shape_identity(shape: IntTuple) -> IntTuple:
+    return shape
+"#,
+    );
+    let (state, handle) = env.to_state();
+    let main = handle("main");
+    let solutions = state
+        .transaction()
+        .get_solutions(&main)
+        .expect("module should solve");
+    for (name, expected_domain) in [
+        ("int_identity", TypeShapeDslDomain::Int),
+        ("shape_identity", TypeShapeDslDomain::IntTuple),
+    ] {
+        let ty = &**solutions.get(&KeyExport(Name::new(name)));
+        assert!(
+            matches!(ty, Type::Function(function)
+                if matches!(&function.metadata.kind,
+                    FunctionKind::TypeShapeDsl(_, domain, _) if *domain == expected_domain)),
+            "expected `{name}` to retain type-level DSL metadata, got `{ty}`"
+        );
+        assert_eq!(attribute_symbol_kind_from_type(ty), SymbolKind::Function);
+    }
+}
+
+#[test]
+fn test_invalid_type_shape_dsl_function_recovers_as_def() {
+    let mut env = shaped_array_env();
+    env.add(
+        "main",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions.dsl import shape_dsl_function
+
+@type_shape_dsl_function
+def invalid(x: Int) -> Int:
+    return x + 1
+
+@type_shape_dsl_function
+def invalid_domain(x: str) -> str:
+    return x
+
+@shape_dsl_function
+@type_shape_dsl_function
+def conflicting(x: Int) -> Int:
+    return x
+"#,
+    );
+    let (state, handle) = env.to_state();
+    let main = handle("main");
+    let solutions = state
+        .transaction()
+        .get_solutions(&main)
+        .expect("module should solve");
+    for name in ["invalid", "invalid_domain", "conflicting"] {
+        let ty = &**solutions.get(&KeyExport(Name::new(name)));
+        assert!(
+            matches!(ty, Type::Function(function)
+                if matches!(&function.metadata.kind, FunctionKind::Def(_))),
+            "expected invalid DSL declaration `{name}` to recover as an ordinary function, got `{ty}`"
+        );
+    }
+}
+
+testcase!(
+    test_type_shape_dsl_function_invalid_syntax,
+    shaped_array_env(),
+    r#"
+from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions.dsl import shape_dsl_function
+
+@type_shape_dsl_function
+async def asynchronous(x: Int) -> Int:  # E: @type_shape_dsl_function does not support async functions
+    return x
+
+@type_shape_dsl_function
+def generic[T](x: Int) -> Int:  # E: @type_shape_dsl_function does not support type parameters
+    return x
+
+@type_shape_dsl_function
+def two_parameters(x: Int, y: Int) -> Int:  # E: @type_shape_dsl_function requires exactly one ordinary positional parameter
+    return x
+
+@type_shape_dsl_function
+def default(x: Int = 1) -> Int:  # E: @type_shape_dsl_function does not support parameter defaults
+    return x
+
+@type_shape_dsl_function
+def expression(x: Int) -> Int:
+    return x + 1  # E: @type_shape_dsl_function return value must be the bare parameter name
+
+@type_shape_dsl_function
+def wrong_name(x: Int) -> Int:
+    return other  # E: @type_shape_dsl_function returned name must match the parameter name  # E: Could not find name `other`
+
+def outer() -> None:
+    @type_shape_dsl_function
+    def nested(x: Int) -> Int:  # E: @type_shape_dsl_function must decorate a top-level function
+        return x
+
+@shape_dsl_function
+@type_shape_dsl_function
+def conflicting(x: Int) -> Int:  # E: `@shape_dsl_function` and `@type_shape_dsl_function` cannot be combined
+    return x
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_function_invalid_annotations,
+    shaped_array_env(),
+    r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def missing_parameter(x) -> Int:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`
+    return x
+
+@type_shape_dsl_function
+def missing_return(x: Int):  # E: `@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`
+    return x
+
+@type_shape_dsl_function
+def wrong_type(x: str) -> str:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`
+    return x
+
+@type_shape_dsl_function
+def cross_domain(x: Int) -> IntTuple:  # E: `@type_shape_dsl_function` parameter and return annotations must use the same domain
+    return x  # E: Returned type `Int[int]` is not assignable to declared return type `IntTuple`
+"#,
+);
 
 fn assert_shaped_array_shape(shape: &Quantified, name: &str, kind: QuantifiedKind) {
     assert_eq!(shape.name().as_str(), name);

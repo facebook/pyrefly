@@ -263,6 +263,12 @@ def broadcast(*_args):
     return IntTuple()
 
 
+def type_shape_dsl_function[F: typing.Callable](fn: F) -> F:
+    """Runtime no-op for a user-defined type-level shape DSL function."""
+
+    return fn
+
+
 class IntVar:
     """Symbolic variable with arithmetic support for tensor shape dimensions.
 

@@ -6069,6 +6069,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             x.module_style,
             x.outer_funcs.clone(),
             x.shape_dsl_def.clone(),
+            x.type_shape_dsl_def.clone(),
             x.uses_shape_dsl_ir_name,
             errors,
         )

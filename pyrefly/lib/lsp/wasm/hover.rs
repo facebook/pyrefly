@@ -27,7 +27,6 @@ use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
@@ -194,7 +193,7 @@ impl HoverValue {
         // For methods, search in parent class; for constructors, use the return type
         let search_type = context_type
             .visit_toplevel_func_metadata(&|meta| {
-                if let FunctionKind::Def(func) = &meta.kind
+                if let Some(func) = meta.kind.definition_id()
                     && let Some(class) = &func.cls
                 {
                     Some(Type::ClassType(ClassType::new(
