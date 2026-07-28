@@ -6,8 +6,6 @@
  */
 use std::collections::HashMap;
 use std::fs;
-
-use std::collections::HashMap;
 use std::fs::create_dir_all;
 use std::sync::Arc;
 
