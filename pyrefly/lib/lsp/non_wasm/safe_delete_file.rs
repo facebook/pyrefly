@@ -142,6 +142,7 @@ fn find_usages_code_action(
                 "uri": uri,
                 "locations": locations,
             })]),
+            tooltip: None,
         }),
         ..Default::default()
     })
