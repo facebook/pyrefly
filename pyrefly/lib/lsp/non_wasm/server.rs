@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-mod event_loop;
 mod code_lens;
+mod event_loop;
 
 use std::cmp::min;
 use std::collections::HashMap;
@@ -55,6 +55,7 @@ use lsp_types::CodeActionResponse;
 use lsp_types::CodeActionTriggerKind;
 use lsp_types::CodeLensOptions;
 use lsp_types::CodeLensRequest;
+use lsp_types::CodeLensResolveRequest;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
@@ -1622,7 +1623,7 @@ pub fn capabilities(
             ..Default::default()
         })),
         code_lens_provider: Some(CodeLensOptions {
-            resolve_provider: Some(false),
+            resolve_provider: Some(true),
             work_done_progress_options: Default::default(),
         }),
         completion_provider: Some(CompletionOptions {
@@ -2283,6 +2284,7 @@ impl Server {
                     DefinitionRequest::METHOD.as_str(),
                     ProvideType::METHOD.as_str(),
                     TypeErrorDisplayStatusRequest::METHOD.as_str(),
+                    CodeLensResolveRequest::METHOD.as_str(),
                 ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
@@ -2659,15 +2661,29 @@ impl Server {
                         )
                     {
                         self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
-                        if let Err(reason) = self.code_lens(
+                        let response = match self.code_lens(&transaction, params) {
+                            Ok(response) => response,
+                            Err(reason) => {
+                                telemetry_event.set_empty_response_reason(reason);
+                                None
+                            }
+                        };
+                        self.send_response(new_response(x.id, Ok(response)));
+                    }
+                } else if let Some(params) = as_request::<CodeLensResolveRequest>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<CodeLensResolveRequest>(
+                            params, &x.id,
+                        )
+                        && let Err(reason) = self.resolve_code_lens(
                             x.id.clone(),
                             &transaction,
-                            params,
+                            &params,
                             telemetry_event.activity_key.clone(),
-                        ) {
-                            self.send_response(new_response(x.id, Ok(None::<()>)));
-                            telemetry_event.set_empty_response_reason(reason);
-                        }
+                        )
+                    {
+                        telemetry_event.set_empty_response_reason(reason);
+                        self.send_response(new_response(x.id, Ok(params)));
                     }
                 } else if let Some(params) = as_request::<WorkspaceSymbolRequest>(&x) {
                     if let Some(params) = self
