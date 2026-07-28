@@ -10,6 +10,11 @@ strip = "debuginfo"
 [profile.dev]
 debug = 1
 
+[profile.bench]
+lto = false
+codegen-units = 16
+inherits = "release"
+
 [profile.dbg]
 debug = true
 inherits = "dev"
