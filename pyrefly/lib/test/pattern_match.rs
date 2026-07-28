@@ -182,6 +182,52 @@ def my_func(x: dict[MyEnumType, int]) -> int:
 );
 
 testcase!(
+    test_mapping_pattern_typed_dict_preserves_literal_value_type,
+    r#"
+from dataclasses import dataclass
+from typing import Literal, TypeAlias, TypedDict, TypeVar, assert_never
+
+T = TypeVar("T")
+Pair: TypeAlias = tuple[T, T]
+PairSpec: TypeAlias = T | Pair[T]
+BoundaryStr: TypeAlias = Literal["closed", "periodic"]
+
+class BoundaryDictSpec(TypedDict):
+    x: PairSpec[BoundaryStr]
+    y: PairSpec[BoundaryStr]
+
+BoundarySpec: TypeAlias = BoundaryStr | BoundaryDictSpec
+
+def as_pair(b: PairSpec[BoundaryStr], /) -> Pair[BoundaryStr]:
+    match b:
+        case str():
+            return (b, b)
+        case (str(b1), str(b2)):
+            return (b1, b2)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BoundarySet:
+    x: Pair[BoundaryStr]
+    y: Pair[BoundaryStr]
+
+    @staticmethod
+    def from_spec(spec: BoundarySpec, /) -> "BoundarySet | None":
+        match spec:
+            case str() as b:
+                return BoundarySet(x=as_pair(b), y=as_pair(b))
+            case {
+                "x": (str() | (str(), str())) as bx,
+                "y": (str() | (str(), str())) as by,
+            } if len(spec) == 2:
+                return BoundarySet(x=as_pair(bx), y=as_pair(by))
+            case _:
+                raise TypeError
+"#,
+);
+
+testcase!(
     test_non_exhaustive_flow_merging,
     r#"
 from typing import assert_type, Literal
