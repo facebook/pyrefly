@@ -328,8 +328,9 @@ impl Errors {
     /// Each baseline is loaded once (cached per config) and resolved relative to its
     /// config's source root, falling back to the baseline file's own directory.
     pub fn collect_lsp_errors_with_baselines(&self) -> (Vec<Error>, Vec<Error>) {
-        let collected = self.collect_errors();
+        let mut collected = self.collect_errors();
         let unused = self.collect_unused_ignore_errors_for_display(&collected);
+        collected.ordinary.extend(unused.ordinary);
         let config_by_path: SmallMap<&ModulePath, &ArcId<ConfigFile>> = self
             .loads
             .iter()
@@ -366,7 +367,6 @@ impl Errors {
             }
         }
 
-        ordinary.extend(unused.ordinary);
         (
             Self::merge_display_errors(ordinary, errors.directives),
             Self::merge_display_errors(errors.baseline, Vec::new()),
