@@ -70,6 +70,7 @@ use crate::binding::binding::ReturnImplicit;
 use crate::binding::binding::ReturnType;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::InitializedInFlow;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::scope::FlowStyle;
@@ -269,6 +270,7 @@ impl<'a> SelfAttrNames<'a> {
                         None,
                         r,
                         MethodSelfKind::Instance,
+                        InitializedInFlow::Yes,
                     ),
                 )
             })

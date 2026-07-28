@@ -1465,18 +1465,87 @@ def f():
 "#,
 );
 
-// https://github.com/facebook/pyrefly/issues/2929
+// https://github.com/facebook/pyrefly/issues/4318
 testcase!(
-    bug = "Should detect possibly-missing attribute on conditionally-defined class members",
     test_conditionally_defined_class_member,
     r#"
 def coin() -> bool:
     return True
 
+from typing import Any, Never
+
+def stop() -> Never:
+    raise Exception()
+
 class Config:
     name: str = "default"
     if coin():
-        debug = True
+        debug = True  # E: Attribute `debug` may be uninitialized
+
+class Complete:
+    if coin():
+        value = 1
+    else:
+        value = 2
+
+class Child(Config):
+    pass
+
+class Instance:
+    def __init__(self) -> None:
+        if coin():
+            self.complete = 1
+        else:
+            self.complete = 2
+        if coin():
+            self.partial = 1  # E: Attribute `partial` may be uninitialized
+
+class DynamicInstance:
+    if coin():
+        class_value = 1  # E: Attribute `class_value` may be uninitialized
+
+    def __getattr__(self, name: str) -> Any: ...
+
+    def __init__(self) -> None:
+        if coin():
+            self.value = 1
+
+class CompleteWithReturn:
+    def __init__(self) -> None:
+        if coin():
+            self.value = 1
+            return
+        self.value = 2
+
+class PartialWithReturn:
+    def __init__(self) -> None:
+        if coin():
+            return
+        self.value = 1  # E: Attribute `value` may be uninitialized
+
+class BareAnnotation:
+    def __init__(self) -> None:
+        self.value: int  # E: Attribute `value` may be uninitialized
+
+class CompleteWithNever:
+    def __init__(self) -> None:
+        if coin():
+            self.value = 1
+        else:
+            stop()
+
+Config.name
+Config.debug
+Config().debug
+Child.debug
+Child().debug
+Complete.value
+Instance().complete
+Instance().partial
+CompleteWithReturn().value
+PartialWithReturn().value
+BareAnnotation().value
+CompleteWithNever().value
 "#,
 );
 

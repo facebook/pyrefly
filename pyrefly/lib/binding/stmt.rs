@@ -1003,11 +1003,13 @@ impl<'a> BindingsBuilder<'a> {
                             None,
                         ),
                     );
-                    let value = match x.value {
+                    let (value, attr_idx) = match x.value {
                         Some(mut assigned) => {
-                            self.bind_attr_assign(attr.clone(), &mut assigned, |v, _| {
-                                ExprOrBinding::Expr(v.clone())
-                            })
+                            let (value, idx) =
+                                self.bind_attr_assign(attr.clone(), &mut assigned, |v, _| {
+                                    ExprOrBinding::Expr(v.clone())
+                                });
+                            (value, Some(idx))
                         }
                         _ => {
                             self.ensure_expr(
@@ -1016,13 +1018,18 @@ impl<'a> BindingsBuilder<'a> {
                                     is_annotation: false,
                                 },
                             );
-                            ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))
+                            (
+                                ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
+                                None,
+                            )
                         }
                     };
-                    if !self
-                        .scopes
-                        .record_self_attr_assign(&attr, value.clone(), Some(ann_key))
-                    {
+                    if !self.scopes.record_self_attr_assign(
+                        &attr,
+                        value.clone(),
+                        Some(ann_key),
+                        attr_idx,
+                    ) {
                         self.error(
                             x.range,
                             ErrorKind::BadAssignment,
