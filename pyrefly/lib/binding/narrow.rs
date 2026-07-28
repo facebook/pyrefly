@@ -19,6 +19,7 @@ use ruff_python_ast::BoolOp;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBoolOp;
+use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprNamed;
@@ -1034,7 +1035,18 @@ impl NarrowOps {
                     BoolOp::And => NarrowOps::and_all,
                     BoolOp::Or => NarrowOps::or_all,
                 };
-                let mut exprs = values.iter();
+                let mut exprs = values.iter().filter(|expr| {
+                    !matches!(
+                        (op, expr),
+                        (
+                            BoolOp::And,
+                            Expr::BooleanLiteral(ExprBooleanLiteral { value: true, .. })
+                        ) | (
+                            BoolOp::Or,
+                            Expr::BooleanLiteral(ExprBooleanLiteral { value: false, .. })
+                        )
+                    )
+                });
                 let mut narrow_ops = Self::from_expr_helper(builder, exprs.next(), seen.clone());
                 for next_val in exprs {
                     extend(

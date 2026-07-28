@@ -709,6 +709,20 @@ def f(x: str | None, y: int):
 );
 
 testcase!(
+    test_ternary_isinstance_with_neutral_boolean,
+    r#"
+from typing import reveal_type
+
+def f(value: type[int] | str):
+    reveal_type(None if isinstance(value, type) else value)  # E: revealed type: str | None
+    reveal_type(None if isinstance(value, type) and True else value)  # E: revealed type: str | None
+    reveal_type(None if True and isinstance(value, type) else value)  # E: revealed type: str | None
+    reveal_type(None if isinstance(value, type) or False else value)  # E: revealed type: str | None
+    reveal_type(None if False or isinstance(value, type) else value)  # E: revealed type: str | None
+    "#,
+);
+
+testcase!(
     test_is_supertype,
     r#"
 from typing import Literal, assert_type
