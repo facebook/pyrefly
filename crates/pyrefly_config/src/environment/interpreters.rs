@@ -18,6 +18,7 @@ use which::which;
 
 use crate::environment::active_environment::ActiveEnvironment;
 use crate::environment::conda;
+use crate::environment::environment::PythonEnvironment;
 use crate::environment::venv;
 use crate::util::ConfigOrigin;
 
@@ -187,24 +188,20 @@ impl Interpreters {
         Ok(self.python_interpreter_path.clone())
     }
 
-    /// Get the first interpreter available on the path by using `which`
-    /// and querying for [`Self::DEFAULT_INTERPRETERS`] in order.
+    /// Get the first executable interpreter available on the path.
+    ///
+    /// Query the interpreter environment as the validation step. The result is cached, so the
+    /// caller's environment lookup does not spawn the same interpreter a second time.
     pub(crate) fn get_default_interpreter() -> Option<&'static Path> {
         static SYSTEM_INTERP: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
             // disable query with `which` on wasm
             #[cfg(not(target_arch = "wasm32"))]
             for binary_name in Interpreters::DEFAULT_INTERPRETERS {
-                use std::process::Command;
-
-                let Ok(binary_path) = which(binary_name) else {
-                    continue;
-                };
-                let mut check = Command::new(&binary_path);
-                check.arg("--version");
-                if let Ok(output) = check.output()
-                    && output.status.success()
-                {
-                    return Some(binary_path);
+                if let Ok(binary_path) = which(binary_name) {
+                    let (_, error) = PythonEnvironment::get_interpreter_env(&binary_path);
+                    if error.is_none() {
+                        return Some(binary_path);
+                    }
                 }
             }
             None
