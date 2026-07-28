@@ -826,7 +826,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // `key` is only `None` for a syntactically invalid dict comprehension
                     // (parser error recovery); the parser already reports the syntax error.
                     let key_ty = match &x.key {
-                        Some(key) => self.expr_infer_with_hint_promote(
+                        Some(key) => self.dict_key_infer_with_hint(
                             key,
                             key_hint,
                             errors,
@@ -1115,6 +1115,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         ty.promote_implicit_literals(self.stdlib)
+    }
+
+    fn dict_key_infer_with_hint(
+        &self,
+        x: &Expr,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+        hint_coercion: HintCoercion,
+    ) -> Type {
+        let has_hint = hint.is_some();
+        let key_ty = self.expr_infer_with_hint_promote(x, hint, errors, hint_coercion);
+        if has_hint {
+            key_ty
+        } else if matches!(key_ty, Type::LiteralString(_)) {
+            // `expr_infer_with_hint_promote` already promotes implicit literal types.
+            // When inferring dict literals in absence of a contextual typing hint,
+            // go one step further promote explicit `LiteralString` keys as well.
+            //
+            // `LiteralString` is too strict when combined with dict invariance, and it's
+            // unlikely the user intended to have such a narrow type.
+            self.heap.mk_class_type(self.stdlib.str().clone())
+        } else {
+            key_ty
+        }
     }
 
     /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
@@ -1661,7 +1685,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut value_tys = Vec::new();
             items.iter().for_each(|x| match &x.key {
                 Some(key) => {
-                    let key_t = self.expr_infer_with_hint_promote(
+                    let key_t = self.dict_key_infer_with_hint(
                         key,
                         key_hint.as_ref().and_then(|key_hint| {
                             hint.as_ref()
