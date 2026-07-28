@@ -39,6 +39,7 @@ b: Answers
 (32 builtin demands hidden)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)
+a -> b::Exports(is_implicit_reexport)
 a -> b::Exports(get_deprecated)
 a -> b::KeyExport(Name("Foo"))
 a -> b::KeyClassMetadata(ClassDefIndex(0))

@@ -53,6 +53,7 @@ use lsp_types::ConfigurationItem;
 use lsp_types::ConfigurationParams;
 use lsp_types::DeclarationCapability;
 use lsp_types::Diagnostic;
+use lsp_types::DiagnosticMessage;
 use lsp_types::DiagnosticSeverity;
 use lsp_types::DiagnosticTag;
 use lsp_types::DidChangeConfigurationParams;
@@ -63,10 +64,10 @@ use lsp_types::DidChangeWatchedFilesRegistrationOptions;
 use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DocumentDiagnosticParams;
 use lsp_types::DocumentDiagnosticReport;
+use lsp_types::DocumentDiagnosticReportKind;
 use lsp_types::DocumentHighlight;
 use lsp_types::DocumentHighlightKind;
 use lsp_types::DocumentHighlightParams;
-use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolParams;
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::FileEvent;
@@ -89,9 +90,12 @@ use lsp_types::InlayHintLabel;
 use lsp_types::InlayHintLabelPart;
 use lsp_types::InlayHintParams;
 use lsp_types::Location;
-use lsp_types::NotebookCellSelector;
+use lsp_types::MarkupContent;
+use lsp_types::MarkupKind;
+use lsp_types::NotebookCellLanguage;
+use lsp_types::NotebookDocumentFilterWithCells;
+use lsp_types::NotebookDocumentSyncFilter;
 use lsp_types::NotebookDocumentSyncOptions;
-use lsp_types::NotebookSelector;
 use lsp_types::NumberOrString;
 use lsp_types::OneOf;
 use lsp_types::Position;
@@ -110,6 +114,10 @@ use lsp_types::RelativePattern;
 use lsp_types::RenameFilesParams;
 use lsp_types::RenameOptions;
 use lsp_types::RenameParams;
+use lsp_types::SaveOptions;
+use lsp_types::SelectionRange;
+use lsp_types::SelectionRangeParams;
+use lsp_types::SelectionRangeProviderCapability;
 use lsp_types::SemanticTokens;
 use lsp_types::SemanticTokensFullOptions;
 use lsp_types::SemanticTokensOptions;
@@ -130,6 +138,8 @@ use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
+use lsp_types::TextDocumentSyncOptions;
+use lsp_types::TextDocumentSyncSaveOptions;
 use lsp_types::TextEdit;
 use lsp_types::TypeDefinitionProviderCapability;
 use lsp_types::TypeHierarchyItem;
@@ -188,6 +198,7 @@ use lsp_types::request::RegisterCapability;
 use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
 use lsp_types::request::ResolveCompletionItem;
+use lsp_types::request::SelectionRangeRequest;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SemanticTokensRefresh;
@@ -207,6 +218,7 @@ use pyrefly_config::config::ConfigSource;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::folding::FoldKind;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
@@ -243,6 +255,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -263,6 +276,7 @@ use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
+use crate::config::config::ConfigScope;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
@@ -273,6 +287,7 @@ use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
 use crate::lsp::non_wasm::code_lens::runnable_lsp_code_lens;
 use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
+use crate::lsp::non_wasm::document_symbols::flatten_to_symbol_information;
 use crate::lsp::non_wasm::external_provider::ExternalProvider;
 use crate::lsp::non_wasm::external_provider::compute_qualified_name;
 use crate::lsp::non_wasm::lsp::apply_change_events;
@@ -289,7 +304,6 @@ use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::lsp::non_wasm::move_symbol_new_file::move_symbol_to_new_file_code_action;
 use crate::lsp::non_wasm::mru::CompletionMru;
 use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
@@ -313,11 +327,14 @@ use crate::lsp::non_wasm::unsaved_file_tracker::UnsavedFileTracker;
 use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::DiagnosticMode;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
+use crate::lsp::non_wasm::workspace::ServerMode;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::completion::CompletionOptions as CompletionRequestOptions;
 use crate::lsp::wasm::completion::supports_snippet_completions;
-use crate::lsp::wasm::hover::get_hover;
+use crate::lsp::wasm::hover::HoverOptions;
+use crate::lsp::wasm::hover::HoverResult;
+use crate::lsp::wasm::hover::get_hover_with_verbosity;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
@@ -345,6 +362,7 @@ use crate::state::state::Transaction;
 use crate::state::subscriber::CompositeSubscriber;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
 use crate::state::subscriber::Subscriber;
+use crate::tsp::type_conversion::StdlibClasses;
 use crate::tsp::type_conversion::convert_type_with_resolvers;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassType;
@@ -358,6 +376,17 @@ impl From<Cancelled> for RequestError {
     fn from(Cancelled: Cancelled) -> Self {
         RequestError::Cancelled
     }
+}
+
+/// Bundled parameters for finding references, grouped to keep function signatures small.
+struct FindReferencesRequest {
+    request_id: RequestId,
+    handle: Handle,
+    uri: Url,
+    position: Position,
+    find_preference: FindPreference,
+    include_declaration: bool,
+    activity_key: Option<ActivityKey>,
 }
 
 pub struct InitializeInfo {
@@ -397,7 +426,7 @@ pub trait TspInterface: Send + Sync + 'static {
     fn pending_watched_file_changes(&self) -> &Mutex<Vec<FileEvent>>;
 
     /// Get access to the recheck queue for async task processing
-    fn run_recheck_queue(&self, telemetry: &impl Telemetry);
+    fn run_recheck_queue(&self, telemetry: &dyn Telemetry);
 
     fn stop_recheck_queue(&self);
 
@@ -408,7 +437,7 @@ pub trait TspInterface: Send + Sync + 'static {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
+        telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
@@ -521,7 +550,7 @@ impl ServerConnection {
     fn publish_diagnostics_for_uri(
         &self,
         uri: Url,
-        diags: Vec<Diagnostic>,
+        mut diags: Vec<Diagnostic>,
         version: Option<i32>,
         source: DiagnosticSource,
         diagnostic_markdown_support: bool,
@@ -532,25 +561,21 @@ impl ServerConnection {
             info!("Published {} diagnostics for {}", diags.len(), uri);
         }
         if diagnostic_markdown_support {
-            let mut params =
-                serde_json::to_value(PublishDiagnosticsParams::new(uri, diags, version)).unwrap();
-            apply_diagnostic_markup(&mut params);
-            self.send(Message::Notification(Notification {
-                method: PublishDiagnostics::METHOD.to_owned(),
-                params,
-                activity_key: None,
-            }));
-        } else {
-            self.send(Message::Notification(
-                new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(
-                    uri, diags, version,
-                )),
-            ));
+            diags.iter_mut().for_each(diagnostic_message_to_markdown);
         }
+        self.send(Message::Notification(
+            new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(
+                uri, diags, version,
+            )),
+        ));
     }
 }
 
 const PROGRESS_REPORT_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Default inlay hint debounce window, applied when the client doesn't set
+/// `analysis.inlayHintDebounceMs`. See [`Server::inlay_hint_debounce_remaining`].
+const DEFAULT_INLAY_HINT_DEBOUNCE_MS: u64 = 150;
 
 struct LspProgressSubscriber<'a> {
     server: &'a Server,
@@ -705,35 +730,37 @@ fn diagnostic_markdown_support(params: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn apply_diagnostic_markup(value: &mut Value) {
-    fn wrap_messages(diagnostics: &mut [Value]) {
-        for diagnostic in diagnostics {
-            let message = match diagnostic.get("message").and_then(|value| value.as_str()) {
-                Some(message) => format_diagnostic_message_for_markdown(message),
-                None => continue,
-            };
-            if let Some(obj) = diagnostic.as_object_mut() {
-                obj.insert(
-                    "message".to_owned(),
-                    serde_json::json!({"kind": "markdown", "value": message}),
-                );
-            }
+/// Rewrite a diagnostic's plain-text message into a markdown
+/// message for clients that advertise `markupMessageSupport` (LSP 3.18)
+fn diagnostic_message_to_markdown(diagnostic: &mut Diagnostic) {
+    if let DiagnosticMessage::String(message) = &diagnostic.message {
+        let value = format_diagnostic_message_for_markdown(message);
+        diagnostic.message = MarkupContent {
+            kind: MarkupKind::Markdown,
+            value,
         }
+        .into();
+    }
+}
+
+/// Apply `diagnostic_message_to_markdown` to every diagnostic in a document
+/// diagnostic report, including those reported for related documents.
+fn apply_markdown_to_document_report(report: &mut DocumentDiagnosticReport) {
+    fn wrap_full(report: &mut FullDocumentDiagnosticReport) {
+        report
+            .items
+            .iter_mut()
+            .for_each(diagnostic_message_to_markdown);
     }
 
-    if let Some(diagnostics) = value.get_mut("diagnostics").and_then(|v| v.as_array_mut()) {
-        wrap_messages(diagnostics);
-    }
-
-    if let Some(items) = value.get_mut("items").and_then(|v| v.as_array_mut()) {
-        wrap_messages(items);
-    }
-
-    if let Some(related_documents) = value.get_mut("relatedDocuments")
-        && let Some(related_documents) = related_documents.as_object_mut()
-    {
-        for report in related_documents.values_mut() {
-            apply_diagnostic_markup(report);
+    if let DocumentDiagnosticReport::Full(report) = report {
+        wrap_full(&mut report.full_document_diagnostic_report);
+        if let Some(related_documents) = &mut report.related_documents {
+            for related in related_documents.values_mut() {
+                if let DocumentDiagnosticReportKind::Full(report) = related {
+                    wrap_full(report);
+                }
+            }
         }
     }
 }
@@ -771,8 +798,11 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use lsp_types::CodeActionKind;
+    use lsp_types::InitializeParams;
+    use serde_json::json;
 
     use super::SOURCE_FIX_ALL_PYREFLY;
+    use super::client_uses_custom_hover_provider;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
 
@@ -835,6 +865,16 @@ mod tests {
         assert!(!matches_fix_all_kind(&CodeActionKind::QUICKFIX));
         assert!(!matches_fix_all_kind(&CodeActionKind::REFACTOR_EXTRACT));
     }
+
+    #[test]
+    fn test_custom_hover_provider_requires_explicit_opt_in() {
+        let mut params = InitializeParams::default();
+        assert!(!client_uses_custom_hover_provider(&params));
+        params.initialization_options = Some(json!({
+            "pyrefly": {"customHoverProvider": true}
+        }));
+        assert!(client_uses_custom_hover_provider(&params));
+    }
 }
 
 pub struct Server {
@@ -851,6 +891,11 @@ pub struct Server {
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
+    /// Whether Pyrefly is its own language server or another editor's backing
+    /// type server. In [`ServerMode::TypeServer`] the forwarded `pyrefly.*`
+    /// client settings are ignored — see
+    /// [`Workspaces::apply_client_configuration`].
+    server_mode: ServerMode,
     state: State,
     /// This is a mapping from open notebook cells to the paths of the notebooks they belong to,
     /// which can be used to look up the notebook contents in `open_files`.
@@ -1039,6 +1084,31 @@ pub struct ServerCapabilitiesWithTypeHierarchy {
     base: ServerCapabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     type_hierarchy_provider: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HoverParamsWithVerbosity {
+    #[serde(flatten)]
+    params: HoverParams,
+    #[serde(default)]
+    verbosity_level: usize,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HoverWithVerbosity {
+    #[serde(flatten)]
+    hover: Hover,
+    can_increase_verbosity: bool,
+}
+
+enum HoverRequestWithVerbosity {}
+
+impl lsp_types::request::Request for HoverRequestWithVerbosity {
+    type Params = HoverParamsWithVerbosity;
+    type Result = Option<HoverWithVerbosity>;
+    const METHOD: &'static str = HoverRequest::METHOD;
 }
 
 impl ServerCapabilitiesWithTypeHierarchy {
@@ -1236,6 +1306,16 @@ fn client_augments_syntax_tokens(initialization_params: &InitializeParams) -> bo
         .unwrap_or(false)
 }
 
+fn client_uses_custom_hover_provider(initialization_params: &InitializeParams) -> bool {
+    initialization_params
+        .initialization_options
+        .as_ref()
+        .and_then(|opts| opts.get("pyrefly"))
+        .and_then(|pyrefly| pyrefly.get("customHoverProvider"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub fn capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
@@ -1258,8 +1338,15 @@ pub fn capabilities(
 
     let base = ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(
-            TextDocumentSyncKind::INCREMENTAL,
+        text_document_sync: Some(TextDocumentSyncCapability::Options(
+            TextDocumentSyncOptions {
+                open_close: Some(true),
+                change: Some(TextDocumentSyncKind::INCREMENTAL),
+                save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
+                    include_text: Some(false),
+                })),
+                ..Default::default()
+            },
         )),
         definition_provider: Some(OneOf::Left(true)),
         declaration_provider: Some(DeclarationCapability::Simple(true)),
@@ -1307,11 +1394,15 @@ pub fn capabilities(
             trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
             ..Default::default()
         }),
-        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        // The extension registers its richer provider only when VS Code grants the proposed API.
+        hover_provider: Some(HoverProviderCapability::Simple(
+            !client_uses_custom_hover_provider(initialization_params),
+        )),
         inlay_hint_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         // Call hierarchy needs indexing to find cross-file callers/callees
         call_hierarchy_provider: match indexing_mode {
             IndexingMode::None => None,
@@ -1358,15 +1449,18 @@ pub fn capabilities(
                 }),
                 ..Default::default()
             }),
+            text_document_content: None,
         }),
         notebook_document_sync: if sync_notebooks {
             Some(OneOf::Left(NotebookDocumentSyncOptions {
-                notebook_selector: vec![NotebookSelector::ByCells {
-                    notebook: None,
-                    cells: vec![NotebookCellSelector {
-                        language: "python".into(),
-                    }],
-                }],
+                notebook_selector: vec![NotebookDocumentSyncFilter::WithCells(
+                    NotebookDocumentFilterWithCells {
+                        notebook: None,
+                        cells: vec![NotebookCellLanguage {
+                            language: "python".into(),
+                        }],
+                    },
+                )],
                 save: None,
             }))
         } else {
@@ -1409,7 +1503,7 @@ pub fn lsp_loop(
     build_system_blocking: bool,
     path_remapper: Option<PathRemapper>,
     thrift_remapper: Option<ThriftRemapper>,
-    telemetry: &impl Telemetry,
+    telemetry: &dyn Telemetry,
     external_references: Arc<dyn ExternalProvider>,
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
@@ -1428,6 +1522,7 @@ pub fn lsp_loop(
         indexing_mode,
         workspace_indexing_limit,
         build_system_blocking,
+        ServerMode::LanguageServer,
         from,
         agent_session_id,
         agent_invocation_id,
@@ -1739,7 +1834,7 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
+        telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         // After this event there is another mutation
         subsequent_mutation: bool,
@@ -1926,8 +2021,11 @@ impl Server {
                     info!("Response for unknown request: {x:?}");
                 }
             }
-            LspEvent::LspRequest(mut x) => {
-                telemetry_event.set_activity_key(std::mem::take(&mut x.activity_key));
+            LspEvent::LspRequest(x) => {
+                // Clone (not take): a debounced inlay hint is re-enqueued below
+                // and re-enters this arm, so `x` must retain its activity_key for
+                // the re-delivered request's telemetry.
+                telemetry_event.set_activity_key(x.activity_key.clone());
                 telemetry_event.request_id = Some(x.id.to_string());
 
                 // Extract file stats from the raw JSON params so all requests
@@ -1976,6 +2074,27 @@ impl Server {
                         ErrorCode::RequestCanceled as i32,
                         message,
                     ));
+                    return Ok(ProcessEvent::Continue);
+                }
+
+                // Debounce inlay hints so their widths don't jitter on every
+                // keystroke (#4138). If the document was edited within the
+                // debounce window, hold the request in the queue until editing
+                // pauses, then cancel any older held request it supersedes so the
+                // client isn't left waiting on a request we'll never answer.
+                if x.method == InlayHintRequest::METHOD
+                    && let Some(remaining) = self.inlay_hint_debounce_remaining(&x)
+                {
+                    if let Some(superseded) =
+                        self.lsp_queue.send_delayed(x, Instant::now() + remaining)
+                    {
+                        canceled_requests.remove(&superseded.id);
+                        self.send_response(Response::new_err(
+                            superseded.id,
+                            ErrorCode::RequestCanceled as i32,
+                            "Superseded by a newer inlay hint request".to_owned(),
+                        ));
+                    }
                     return Ok(ProcessEvent::Continue);
                 }
 
@@ -2207,17 +2326,24 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<HoverRequest>(&x) {
+                } else if let Some(params) = as_request::<HoverRequestWithVerbosity>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<HoverRequest>(params, &x.id)
+                        .extract_request_params_or_send_err_response::<HoverRequestWithVerbosity>(
+                            params, &x.id,
+                        )
                     {
-                        let response = match self.hover(&transaction, params) {
-                            Ok(response) => response,
-                            Err(reason) => {
-                                telemetry_event.set_empty_response_reason(reason);
-                                None
+                        let response =
+                            match self.hover(&transaction, params.params, params.verbosity_level) {
+                                Ok(response) => response,
+                                Err(reason) => {
+                                    telemetry_event.set_empty_response_reason(reason);
+                                    None
+                                }
                             }
-                        };
+                            .map(|result| HoverWithVerbosity {
+                                hover: result.hover,
+                                can_increase_verbosity: result.can_increase_verbosity,
+                            });
                         self.send_response(new_response(x.id, Ok(response)));
                     }
                 } else if let Some(params) = as_request::<InlayHintRequest>(&x) {
@@ -2271,14 +2397,13 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let response =
-                            match self.hierarchical_document_symbols(&transaction, params) {
-                                Ok(response) => response.map(DocumentSymbolResponse::Nested),
-                                Err(reason) => {
-                                    telemetry_event.set_empty_response_reason(reason);
-                                    None
-                                }
-                            };
+                        let response = match self.document_symbol(&transaction, params) {
+                            Ok(response) => response,
+                            Err(reason) => {
+                                telemetry_event.set_empty_response_reason(reason);
+                                None
+                            }
+                        };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
                 } else if let Some(params) = as_request::<CodeLensRequest>(&x) {
@@ -2320,15 +2445,13 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let mut result =
-                            serde_json::to_value(self.document_diagnostics(&transaction, params))
-                                .unwrap();
+                        let mut report = self.document_diagnostics(&transaction, params);
                         if self.diagnostic_markdown_support {
-                            apply_diagnostic_markup(&mut result);
+                            apply_markdown_to_document_report(&mut report);
                         }
                         self.send_response(Response {
                             id: x.id,
-                            result: Some(result),
+                            result: Some(serde_json::to_value(report).unwrap()),
                             error: None,
                         });
                     }
@@ -2386,6 +2509,21 @@ impl Server {
                             }
                         };
                         self.send_response(new_response(x.id, Ok(result)));
+                    }
+                } else if let Some(params) = as_request::<SelectionRangeRequest>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<SelectionRangeRequest>(
+                            params, &x.id,
+                        )
+                    {
+                        let response = match self.selection_ranges(&transaction, params) {
+                            Ok(response) => response,
+                            Err(reason) => {
+                                telemetry_event.set_empty_response_reason(reason);
+                                None
+                            }
+                        };
+                        self.send_response(new_response(x.id, Ok(response)));
                     }
                 } else if let Some(params) = as_request::<CallHierarchyPrepare>(&x) {
                     if let Some(params) = self
@@ -2537,6 +2675,7 @@ impl Server {
         indexing_mode: IndexingMode,
         workspace_indexing_limit: usize,
         build_system_blocking: bool,
+        server_mode: ServerMode,
         surface: Option<String>,
         agent_session_id: Option<String>,
         agent_invocation_id: Option<String>,
@@ -2575,15 +2714,6 @@ impl Server {
             initialize_params.initialization_options.as_ref(),
         );
 
-        let dir_cache_enabled = initialize_params
-            .initialization_options
-            .as_ref()
-            .and_then(|opts| opts.get("pyrefly"))
-            .and_then(|pyrefly| pyrefly.get("experiments"))
-            .and_then(|exp| exp.get("dirEntryCache"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
         let should_request_workspace_settings = initialize_params
             .capabilities
             .workspace
@@ -2601,7 +2731,8 @@ impl Server {
             indexing_mode,
             workspace_indexing_limit,
             build_system_blocking,
-            state: State::new_with_options(config_finder, thread_count, dir_cache_enabled),
+            server_mode,
+            state: State::new(config_finder, thread_count),
             open_notebook_cells: RwLock::new(HashMap::new()),
             open_files: RwLock::new(HashMap::new()),
             published_workspace_diagnostics: Mutex::new(HashMap::new()),
@@ -2642,14 +2773,19 @@ impl Server {
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
             let mut modified = false;
-            s.workspaces
-                .apply_client_configuration(&mut modified, &None, init_options.clone());
+            s.workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                init_options.clone(),
+                server_mode,
+            );
             if let Some(workspace_folders) = &s.initialize_params.workspace_folders {
                 for folder in workspace_folders {
                     s.workspaces.apply_client_configuration(
                         &mut modified,
                         &Some(folder.uri.clone()),
                         init_options.clone(),
+                        server_mode,
                     );
                 }
             }
@@ -2661,10 +2797,6 @@ impl Server {
     }
 
     pub fn telemetry_state(&self) -> TelemetryServerState {
-        let mut active_experiments = Vec::new();
-        if self.state.dir_cache_enabled() {
-            active_experiments.push("dir_entry_cache".to_owned());
-        }
         TelemetryServerState {
             has_sourcedb: self.workspaces.sourcedb_available(),
             id: self.id,
@@ -2672,7 +2804,7 @@ impl Server {
             server_start_time: self.server_start_time,
             agent_session_id: self.agent_session_id.clone(),
             agent_invocation_id: self.agent_invocation_id.clone(),
-            active_experiments,
+            active_experiments: vec![],
         }
     }
 
@@ -2866,7 +2998,8 @@ impl Server {
     ) -> Option<ProvideTypeResponse> {
         let uri = &params.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, None).ok()?;
-        provide_type(transaction, &handle, params.positions)
+        let notebook_cell = self.maybe_get_code_cell_index(uri);
+        provide_type(transaction, &handle, params.positions, notebook_cell)
     }
 
     fn type_error_display_status(&self, path: &Path) -> TypeErrorDisplayStatus {
@@ -3014,11 +3147,20 @@ impl Server {
                 diags.insert(handle_path_buf, Vec::new());
             }
         }
-        for e in transaction
+        let (normal_errors, baseline_errors) = transaction
             .get_errors(handles)
-            .collect_display_errors_with_unused_ignores()
-        {
+            .collect_lsp_errors_with_baselines();
+        for e in normal_errors {
             if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
+                diags.entry(path.to_owned()).or_default().push(diag);
+            }
+        }
+        for e in baseline_errors {
+            // Errors in open files that match a baseline file are downgraded to HINT.
+            if let Some((path, mut diag)) = self.get_diag_if_shown(&e, &open_files, None) {
+                if to_real_path(e.path()).is_some_and(|p| open_files.contains_key(&p)) {
+                    diag.severity = Some(DiagnosticSeverity::HINT);
+                }
                 diags.entry(path.to_owned()).or_default().push(diag);
             }
         }
@@ -3316,7 +3458,7 @@ impl Server {
 
         info!("Populating all files in the config ({:?}).", config.source);
 
-        let project_path_blobs = config.get_filtered_globs(None);
+        let project_path_blobs = config.get_filtered_globs(None, ConfigScope::Default);
         let mut handles = Vec::new();
         if let Ok(paths) = project_path_blobs.files_iter() {
             for path in paths {
@@ -3482,7 +3624,7 @@ impl Server {
     /// invalidate find and perform a recheck.
     fn queue_source_db_rebuild_and_recheck(
         &self,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         force: bool,
     ) {
@@ -3537,7 +3679,7 @@ impl Server {
     fn did_open<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         url: Url,
@@ -3834,7 +3976,7 @@ impl Server {
     fn did_change_watched_files(
         &self,
         params: DidChangeWatchedFilesParams,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
     ) {
         let events = CategorizedEvents::new_lsp(params.changes);
@@ -3905,7 +4047,7 @@ impl Server {
         &self,
         url: Url,
         kind: DidCloseKind,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
     ) {
         let Some(path) = self.path_for_uri(&url) else {
@@ -4031,8 +4173,12 @@ impl Server {
 
         let mut modified = false;
         if let Some(python) = params.settings.get(PYTHON_SECTION) {
-            self.workspaces
-                .apply_client_configuration(&mut modified, &None, python.clone());
+            self.workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                python.clone(),
+                self.server_mode,
+            );
         }
 
         if modified {
@@ -4058,6 +4204,7 @@ impl Server {
                     &mut modified,
                     &id.scope_uri,
                     value.clone(),
+                    self.server_mode,
                 );
                 info!(
                     "Client configuration applied to workspace: {:?}",
@@ -4303,7 +4450,6 @@ impl Server {
                     metadata: _,
                     definition_range,
                     module,
-                    docstring_range: _,
                     ..
                 } = definition;
                 // find_global_implementations_from_definition returns Vec<TextRangeWithModule>
@@ -4372,12 +4518,16 @@ impl Server {
         let complete_function_parens = lsp_config
             .and_then(|c| c.complete_function_parens)
             .unwrap_or(false);
+        let auto_import = lsp_config
+            .and_then(|c| c.auto_import_completions)
+            .unwrap_or(true);
         let completion_options = CompletionRequestOptions {
             supports_completion_item_details: self.supports_completion_item_details(),
             complete_function_parens,
             supports_snippet_completions: supports_snippet_completions(
                 &self.initialize_params.capabilities,
             ),
+            auto_import,
         };
         let mru_snapshot = self.completion_mru.lock().clone();
         let info = transaction
@@ -4877,15 +5027,19 @@ impl Server {
     /// the common case of finding references, including external references.
     fn async_find_references_helper<'a, V: serde::Serialize>(
         &'a self,
-        request_id: RequestId,
         transaction: &Transaction<'a>,
-        handle: Handle,
-        uri: &Url,
-        position: Position,
-        include_declaration: bool,
-        activity_key: Option<ActivityKey>,
+        request: FindReferencesRequest,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) -> Result<(), EmptyResponseReason> {
+        let FindReferencesRequest {
+            request_id,
+            handle,
+            uri,
+            position,
+            find_preference,
+            include_declaration,
+            activity_key,
+        } = request;
         let path_remapper = self.path_remapper.clone();
         let external_references = self.external_references.clone();
         let source_uri = uri.clone();
@@ -4895,12 +5049,9 @@ impl Server {
             request_id,
             transaction,
             handle,
-            uri,
+            &uri,
             position,
-            FindPreference {
-                import_behavior: ImportBehavior::StopAtRenamedImports,
-                ..Default::default()
-            },
+            find_preference,
             activity_key,
             move |transaction, handle, definition, telemetry, telemetry_event| {
                 let qualified_name =
@@ -4910,7 +5061,6 @@ impl Server {
                     metadata,
                     definition_range,
                     module,
-                    docstring_range: _,
                     ..
                 } = definition;
 
@@ -4995,13 +5145,19 @@ impl Server {
         let uri = &params.text_document_position.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(References::METHOD))?;
         self.async_find_references_helper(
-            request_id,
             transaction,
-            handle,
-            uri,
-            params.text_document_position.position,
-            params.context.include_declaration,
-            activity_key,
+            FindReferencesRequest {
+                request_id,
+                handle,
+                uri: uri.clone(),
+                position: params.text_document_position.position,
+                find_preference: FindPreference {
+                    import_behavior: ImportBehavior::StopAtRenamedImports,
+                    ..Default::default()
+                },
+                include_declaration: params.context.include_declaration,
+                activity_key,
+            },
             move |results| {
                 let mut locations = Vec::new();
                 for (uri, ranges) in results {
@@ -5170,14 +5326,22 @@ impl Server {
     ) -> Result<(), EmptyResponseReason> {
         let uri = &params.text_document_position.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
+        let new_name = params.new_name.clone();
         self.async_find_references_helper(
-            request_id,
             transaction,
-            handle,
-            uri,
-            params.text_document_position.position,
-            true,
-            activity_key,
+            FindReferencesRequest {
+                request_id,
+                handle,
+                uri: uri.clone(),
+                position: params.text_document_position.position,
+                find_preference: FindPreference {
+                    import_behavior: ImportBehavior::StopAtRenamedImports,
+                    resolve_call_dunders: false,
+                    ..Default::default()
+                },
+                include_declaration: true,
+                activity_key,
+            },
             move |results| {
                 let mut changes = HashMap::new();
                 for (uri, ranges) in results {
@@ -5185,7 +5349,7 @@ impl Server {
                         uri,
                         ranges.into_map(|range| TextEdit {
                             range,
-                            new_text: params.new_name.clone(),
+                            new_text: new_name.clone(),
                         }),
                     );
                 }
@@ -5232,7 +5396,8 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         params: HoverParams,
-    ) -> Result<Option<Hover>, EmptyResponseReason> {
+        verbosity_level: usize,
+    ) -> Result<Option<HoverResult>, EmptyResponseReason> {
         let uri = &params.text_document_position_params.text_document.uri;
         let (handle, lsp_config) =
             self.make_handle_with_lsp_analysis_config_if_enabled(uri, Some(HoverRequest::METHOD))?;
@@ -5244,7 +5409,46 @@ impl Server {
         let show_go_to_links = lsp_config
             .and_then(|c| c.show_hover_go_to_links)
             .unwrap_or(true);
-        Ok(get_hover(transaction, &handle, position, show_go_to_links))
+        Ok(get_hover_with_verbosity(
+            transaction,
+            &handle,
+            position,
+            HoverOptions {
+                show_go_to_links,
+                verbosity_level,
+            },
+        ))
+    }
+
+    /// How long an inlay hint request should be deferred to debounce it, or
+    /// `None` if it can run now. VS Code has no client-side inlay-hint debounce
+    /// (microsoft/vscode#133730), so without this, hints recompute on every
+    /// keystroke and their widths jitter distractingly (#4138). We defer the
+    /// request while the document is still being edited so hints only settle
+    /// once typing pauses. The window is `analysis.inlayHintDebounceMs`
+    /// (default [`DEFAULT_INLAY_HINT_DEBOUNCE_MS`]); `0` disables debouncing.
+    fn inlay_hint_debounce_remaining(&self, request: &Request) -> Option<Duration> {
+        // No edit has happened yet (e.g. right after startup): nothing to
+        // debounce against, so run immediately.
+        let time_since_last_edit = self.lsp_queue.time_since_last_edit()?;
+        let debounce_ms = request
+            .params
+            .get("textDocument")
+            .and_then(|td| td.get("uri"))
+            .and_then(|u| u.as_str())
+            .and_then(|s| Url::parse(s).ok())
+            .and_then(|uri| self.path_for_uri_or_notebook_cell(&uri))
+            .and_then(|path| {
+                self.workspaces.get_with(path, |(_, workspace)| {
+                    workspace
+                        .lsp_analysis_config
+                        .and_then(|c| c.inlay_hint_debounce_ms)
+                })
+            })
+            .unwrap_or(DEFAULT_INLAY_HINT_DEBOUNCE_MS);
+        Duration::from_millis(debounce_ms)
+            .checked_sub(time_since_last_edit)
+            .filter(|remaining| !remaining.is_zero())
     }
 
     fn inlay_hints(
@@ -5363,34 +5567,46 @@ impl Server {
         })))
     }
 
-    fn hierarchical_document_symbols(
+    fn document_symbol(
         &self,
         transaction: &Transaction<'_>,
         params: DocumentSymbolParams,
-    ) -> Result<Option<Vec<DocumentSymbol>>, EmptyResponseReason> {
+    ) -> Result<Option<DocumentSymbolResponse>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let path = self
             .path_for_uri_or_notebook_cell(uri)
             .ok_or(EmptyResponseReason::NoFilePath)?;
-        if self
-            .workspaces
-            .get_with(path, |(_, workspace)| workspace.disable_language_services)
-        {
+        if self.workspaces.get_with(path, |(_, workspace)| {
+            workspace.disabled_language_services.is_some()
+        }) {
             return Err(EmptyResponseReason::LanguageServicesDisabled);
         }
-        let Some(true) = self
+
+        // Avoid creating a handle when the client doesn't support document symbols
+        let document_symbols_caps = self
             .initialize_params
             .capabilities
             .text_document
             .as_ref()
-            .and_then(|t| t.document_symbol.as_ref())
-            .and_then(|d| d.hierarchical_document_symbol_support)
-        else {
+            .and_then(|t| t.document_symbol.as_ref());
+        if document_symbols_caps.is_none() {
             return Ok(None);
-        };
+        }
+
+        let supports_hierarchical = document_symbols_caps
+            .and_then(|d| d.hierarchical_document_symbol_support)
+            == Some(true);
+
         let handle = self.make_handle_if_enabled(uri, Some(DocumentSymbolRequest::METHOD))?;
-        Ok(transaction.symbols(&handle, maybe_cell_idx))
+        let symbols = transaction.symbols(&handle, maybe_cell_idx);
+        Ok(symbols.map(|syms| {
+            if supports_hierarchical {
+                DocumentSymbolResponse::Nested(syms)
+            } else {
+                DocumentSymbolResponse::Flat(flatten_to_symbol_information(syms, uri))
+            }
+        }))
     }
 
     /// Run local and external workspace symbol queries in parallel, merging
@@ -5401,7 +5617,7 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         query: &str,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
     ) -> anyhow::Result<Vec<SymbolInformation>> {
         let external_provider = self.external_references.clone();
@@ -5484,7 +5700,9 @@ impl Server {
                     range: lsp_range,
                     severity: Some(DiagnosticSeverity::HINT),
                     source: Some("Pyrefly".to_owned()),
-                    message: "This code is unreachable for the current configuration".to_owned(),
+                    message: "This code is unreachable for the current configuration"
+                        .to_owned()
+                        .into(),
                     code: Some(NumberOrString::String("unreachable-code".to_owned())),
                     code_description: None,
                     related_information: None,
@@ -5511,7 +5729,7 @@ impl Server {
                     range: lsp_range,
                     severity: Some(DiagnosticSeverity::HINT),
                     source: Some("Pyrefly".to_owned()),
-                    message: format!("Parameter `{}` is unused", unused.name.as_str()),
+                    message: format!("Parameter `{}` is unused", unused.name.as_str()).into(),
                     code: Some(NumberOrString::String("unused-parameter".to_owned())),
                     code_description: None,
                     related_information: None,
@@ -5535,7 +5753,7 @@ impl Server {
                     range: lsp_range,
                     severity: Some(DiagnosticSeverity::HINT),
                     source: Some("Pyrefly".to_owned()),
-                    message: format!("Import `{}` is unused", unused.name.as_str()),
+                    message: format!("Import `{}` may be unused", unused.name.as_str()).into(),
                     code: Some(NumberOrString::String("unused-import".to_owned())),
                     code_description: None,
                     related_information: None,
@@ -5562,7 +5780,7 @@ impl Server {
                     range: lsp_range,
                     severity: Some(DiagnosticSeverity::HINT),
                     source: Some("Pyrefly".to_owned()),
-                    message: format!("Variable `{}` is unused", unused.name.as_str()),
+                    message: format!("Variable `{}` is unused", unused.name.as_str()).into(),
                     code: Some(NumberOrString::String("unused-variable".to_owned())),
                     code_description: None,
                     related_information: None,
@@ -5620,10 +5838,16 @@ impl Server {
                     {
                         return None;
                     }
-                    // Filter out comment section folding ranges (Region) unless enabled
-                    if !self.comment_folding_ranges && kind == Some(FoldingRangeKind::Region) {
+                    if !self.comment_folding_ranges && kind == FoldKind::CommentSection {
                         return None;
                     }
+                    let kind = match kind {
+                        FoldKind::Code => None,
+                        FoldKind::Comment => Some(FoldingRangeKind::Comment),
+                        FoldKind::CommentSection | FoldKind::Region => {
+                            Some(FoldingRangeKind::Region)
+                        }
+                    };
                     let lsp_range = module.to_lsp_range(range);
                     if lsp_range.start.line >= lsp_range.end.line {
                         return None;
@@ -5646,6 +5870,60 @@ impl Server {
                         kind,
                         collapsed_text: None,
                     })
+                })
+                .collect(),
+        ))
+    }
+
+    fn selection_ranges(
+        &self,
+        transaction: &Transaction<'_>,
+        params: SelectionRangeParams,
+    ) -> Result<Option<Vec<SelectionRange>>, EmptyResponseReason> {
+        let uri = &params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, Some(SelectionRangeRequest::METHOD))?;
+        let module = transaction
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        let ast = transaction
+            .get_ast(&handle)
+            .ok_or(EmptyResponseReason::AstNotFound)?;
+        let notebook_cell = self.maybe_get_code_cell_index(uri);
+        let document_range = if let Some(cell) = notebook_cell {
+            module
+                .notebook()
+                .expect("a notebook cell URI should map to a notebook module")
+                .cell_offsets()
+                .content_ranges()
+                .nth(cell)
+                .expect("a notebook cell URI should have a matching code cell")
+        } else {
+            TextRange::up_to(TextSize::of(module.lined_buffer().contents().as_str()))
+        };
+
+        Ok(Some(
+            params
+                .positions
+                .into_iter()
+                .map(|position| {
+                    let position = self.from_lsp_position(uri, &module, position);
+                    let mut selection = SelectionRange {
+                        range: module.to_lsp_range(document_range),
+                        parent: None,
+                    };
+                    let mut last_range = Some(document_range);
+                    for node in Ast::locate_node(&ast, position).into_iter().rev() {
+                        let range = node.range();
+                        if !document_range.contains_range(range) || last_range == Some(range) {
+                            continue;
+                        }
+                        selection = SelectionRange {
+                            range: module.to_lsp_range(range),
+                            parent: Some(Box::new(selection)),
+                        };
+                        last_range = Some(range);
+                    }
+                    selection
                 })
                 .collect(),
         ))
@@ -5676,11 +5954,20 @@ impl Server {
         let handle = make_open_handle(&self.state, &path);
         let mut items = Vec::new();
         let open_files = &self.open_files.read();
-        for e in transaction
+        let (normal_errors, baseline_errors) = transaction
             .get_errors(once(&handle))
-            .collect_display_errors_with_unused_ignores()
-        {
+            .collect_lsp_errors_with_baselines();
+        for e in normal_errors {
             if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
+                items.push(diag);
+            }
+        }
+        for e in baseline_errors {
+            // Errors in open files that match a baseline file are downgraded to HINT.
+            if let Some((_, mut diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
+                if to_real_path(e.path()).is_some_and(|p| open_files.contains_key(&p)) {
+                    diag.severity = Some(DiagnosticSeverity::HINT);
+                }
                 items.push(diag);
             }
         }
@@ -6412,6 +6699,44 @@ impl Server {
         )
     }
 
+    /// Build a read transaction and the handle the type checker analyzes `path`
+    /// under, so `(uri, range)` queries resolve for any analyzable file rather
+    /// than only open documents.
+    ///
+    /// Open files are served from their in-memory overlay (already committed by
+    /// the recheck that ran on `didOpen`). For anything else we reuse the handle
+    /// the file was already analyzed under — an imported dependency's filesystem
+    /// handle, or a bundled stdlib stub's `BundledTypeshed` handle whose
+    /// `SysInfo` we can't reconstruct here, hence the by-path lookup — and force
+    /// a full solve (`Require::Everything` is the only level that retains
+    /// bindings/answers, which the type lookup reads) so narrowed/computed types
+    /// are available. A file that isn't analyzed yet falls back to a fresh
+    /// filesystem handle read from disk.
+    fn query_transaction_and_handle<'a>(&'a self, path: &Path) -> (Transaction<'a>, Handle) {
+        if self.open_files.read().contains_key(path) {
+            return (
+                self.state.transaction(),
+                make_open_handle(&self.state, path),
+            );
+        }
+        let mut transaction = self.state.transaction();
+        // Imported dependencies live under a filesystem handle we can rebuild
+        // directly; only scan when that misses (bundled stubs, unusual SysInfo).
+        let fs_handle =
+            handle_from_module_path(&self.state, ModulePath::filesystem(path.to_owned()));
+        let handle = if transaction.get_module_info(&fs_handle).is_some() {
+            fs_handle
+        } else {
+            transaction
+                .handles()
+                .into_iter()
+                .find(|h| !h.path().is_memory() && to_real_path(h.path()).as_deref() == Some(path))
+                .unwrap_or(fs_handle)
+        };
+        transaction.run(&[handle.dupe()], Require::Everything, None);
+        (transaction, handle)
+    }
+
     /// Open `uri` at `(line, character)`: resolve the path, build a handle, and
     /// start a transaction, returning it alongside the handle and the resolved
     /// in-file position.
@@ -6427,8 +6752,7 @@ impl Server {
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
+        let (transaction, handle) = self.query_transaction_and_handle(&path);
         let module_info = transaction.get_module_info(&handle)?;
         let position =
             module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
@@ -6481,11 +6805,21 @@ impl Server {
         let resolve_export = |module_name: ModuleName, name: &Name| {
             resolve_export_location(transaction, source_handle, module_name, name)
         };
+        // Sentinel-like types (`None`, `TypeGuard`/`TypeIs`, `Size`/`Dim`) are
+        // encoded as the stdlib's version-aware classes. Computing `ty` already
+        // populated this transaction's `Stdlib`, so `get_stdlib` stays on the
+        // warm path (see the doc comment above).
+        let stdlib = transaction.get_stdlib(source_handle);
         convert_type_with_resolvers(
             ty,
             Some(&resolve_func_range),
             Some(&resolve_module_path),
             Some(&resolve_export),
+            StdlibClasses {
+                none_type: stdlib.none_type(),
+                bool_type: stdlib.bool(),
+                int_type: stdlib.int(),
+            },
         )
     }
 }
@@ -6538,7 +6872,7 @@ impl TspInterface for Server {
         dispatch_lsp_events(self, reader);
     }
 
-    fn run_recheck_queue(&self, telemetry: &impl Telemetry) {
+    fn run_recheck_queue(&self, telemetry: &dyn Telemetry) {
         self.recheck_queue.run_until_stopped(self, telemetry);
     }
 
@@ -6550,7 +6884,7 @@ impl TspInterface for Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
+        telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
@@ -6645,8 +6979,7 @@ impl TspInterface for Server {
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
+        let (transaction, handle) = self.query_transaction_and_handle(&path);
         let module_info = transaction.get_module_info(&handle)?;
         let start = module_info.from_lsp_position(
             lsp_types::Position {

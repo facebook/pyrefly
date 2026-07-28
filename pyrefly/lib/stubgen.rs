@@ -1,0 +1,466 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+pub mod emit;
+pub mod extract;
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use dupe::Dupe;
+    use pyrefly_util::forgetter::Forgetter;
+    use pyrefly_util::fs_anyhow;
+    use pyrefly_util::globs::FilteredGlobs;
+    use pyrefly_util::globs::Globs;
+    use pyrefly_util::globs::HiddenDirFilter;
+    use pyrefly_util::includes::Includes;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+
+    use super::emit::emit_stub;
+    use super::extract::ExtractConfig;
+    use super::extract::extract_module_stub;
+    use crate::state::require::Require;
+    use crate::state::state::State;
+    use crate::test::util::TestEnv;
+
+    fn run_stubgen(input: &str) -> String {
+        run_stubgen_with_config(
+            input,
+            &ExtractConfig {
+                include_private: false,
+                include_docstrings: false,
+            },
+        )
+    }
+
+    fn run_stubgen_with_config(input: &str, config: &ExtractConfig) -> String {
+        let tdir = tempfile::tempdir().unwrap();
+        let path = tdir.path().join("input.py");
+        fs_anyhow::write(&path, input).unwrap();
+        let mut t = TestEnv::new();
+        t.add(&path.display().to_string(), input);
+        let includes = Globs::new(vec![format!("{}/**/*", tdir.path().display())]).unwrap();
+        run_stubgen_inner(&mut t, includes, config)
+    }
+
+    /// Pydantic shim providing `@dataclass_transform` on `BaseModel` so the
+    /// type checker synthesizes `__init__` for pydantic model subclasses.
+    const PYDANTIC_SHIM: &str = r#"from typing import dataclass_transform
+
+def Field(**kwargs): ...
+
+def computed_field(fn=None, **_kw):
+    return fn
+
+@dataclass_transform(
+    kw_only_default=False,
+    field_specifiers=(Field,),
+)
+class BaseModel:
+    pass
+"#;
+
+    /// Like `run_stubgen`, but injects a minimal pydantic shim so that
+    /// `BaseModel` subclasses get synthesized `__init__` in the stub output.
+    fn run_stubgen_pydantic(input: &str) -> String {
+        let config = ExtractConfig {
+            include_private: false,
+            include_docstrings: false,
+        };
+        let tdir = tempfile::tempdir().unwrap();
+
+        // Write the pydantic shim as a real package on disk.
+        let pydantic_dir = tdir.path().join("pydantic");
+        fs_anyhow::create_dir_all(&pydantic_dir).unwrap();
+        let pydantic_init = pydantic_dir.join("__init__.py");
+        fs_anyhow::write(&pydantic_init, PYDANTIC_SHIM).unwrap();
+
+        // Write the test input alongside the shim.
+        let path = tdir.path().join("input.py");
+        fs_anyhow::write(&path, input).unwrap();
+
+        let mut t = TestEnv::new();
+        t.add(&path.display().to_string(), input);
+        t.add_real_path("pydantic", pydantic_init);
+
+        // Only process the input file — not the pydantic shim.
+        let includes = Globs::new(vec![path.display().to_string()]).unwrap();
+        run_stubgen_inner(&mut t, includes, &config)
+    }
+
+    /// Shared stubgen runner: sets up `FilteredGlobs`, `State`, and
+    /// `Transaction`, then extracts and emits stubs for the matched files.
+    fn run_stubgen_inner(t: &mut TestEnv, includes: Globs, config: &ExtractConfig) -> String {
+        let f_globs = Box::new(FilteredGlobs::new(
+            includes,
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        ));
+        let config_finder = t.config_finder();
+
+        let expanded = config_finder.checkpoint(f_globs.files_iter()).unwrap();
+        let state = State::new(config_finder, TEST_THREAD_COUNT);
+        let holder = Forgetter::new(state, false);
+
+        let handles_obj = crate::commands::check::Handles::new(expanded);
+        let mut forgetter = Forgetter::new(
+            holder.as_ref().new_transaction(Require::Everything, None),
+            true,
+        );
+        let transaction = forgetter.as_mut();
+
+        let (handles, _, _) = handles_obj.all(holder.as_ref().config_finder());
+
+        let mut result = String::new();
+        for handle in &handles {
+            transaction.run(&[handle.dupe()], Require::Everything, None);
+            if let Some(stub) = extract_module_stub(transaction, handle, config) {
+                result = emit_stub(&stub);
+            }
+        }
+        result
+    }
+
+    /// Get the path to the stubgen test fixtures directory.
+    fn get_test_dir() -> PathBuf {
+        let test_path = std::env::var("STUBGEN_TEST_PATH")
+            .expect("STUBGEN_TEST_PATH env var not set: buck should set this automatically");
+        let mut dir = std::env::current_dir().expect("Failed to get current directory");
+        dir.push(test_path);
+        dir
+    }
+
+    /// Run a snapshot test for a specific test case directory.
+    fn assert_stubgen_snapshot(test_name: &str) {
+        assert_stubgen_snapshot_with(test_name, run_stubgen);
+    }
+
+    /// Like `assert_stubgen_snapshot` but injects the pydantic shim so
+    /// `BaseModel` subclasses get synthesized `__init__` in the output.
+    fn assert_stubgen_pydantic_snapshot(test_name: &str) {
+        assert_stubgen_snapshot_with(test_name, run_stubgen_pydantic);
+    }
+
+    /// Shared snapshot runner: reads `input.py`, produces a stub via
+    /// `stub_fn`, and compares against `expected.pyi`.
+    fn assert_stubgen_snapshot_with(test_name: &str, stub_fn: impl Fn(&str) -> String) {
+        let test_dir = get_test_dir().join(test_name);
+        let input_path = test_dir.join("input.py");
+        let expected_path = test_dir.join("expected.pyi");
+
+        assert!(
+            input_path.exists(),
+            "Input file does not exist: {}",
+            input_path.display()
+        );
+
+        let input = fs_anyhow::read_to_string(&input_path).unwrap();
+        let actual = stub_fn(&input);
+
+        if std::env::var("STUBGEN_UPDATE_SNAPSHOTS").is_ok() {
+            fs_anyhow::create_dir_all(&test_dir).unwrap();
+            let out = test_dir.join("expected.pyi");
+            fs_anyhow::write(&out, &actual).unwrap();
+            println!("Updated snapshot for {} -> {}", test_name, out.display());
+            return;
+        }
+
+        assert!(
+            expected_path.exists(),
+            "Expected file does not exist: {}\nRun with STUBGEN_UPDATE_SNAPSHOTS=1 to generate.",
+            expected_path.display()
+        );
+
+        let expected = fs_anyhow::read_to_string(&expected_path)
+            .unwrap()
+            .replace("\r\n", "\n");
+        // Strip the AT generated header and trim whitespace so the expected
+        // files can keep the header for tooling without affecting comparison.
+        let expected = expected
+            .strip_prefix(&format!("# @{}generated\n", "")) // Avoid this file from being recognized as generated
+            .unwrap_or(&expected)
+            .trim()
+            .to_owned();
+        let actual = actual.replace("\r\n", "\n").trim().to_owned();
+
+        pretty_assertions::assert_str_eq!(
+            expected,
+            actual,
+            "Stub mismatch for {test_name}.\nTo update, run with STUBGEN_UPDATE_SNAPSHOTS=1."
+        );
+    }
+
+    #[test]
+    fn test_stubgen_functions() {
+        assert_stubgen_snapshot("functions");
+    }
+
+    #[test]
+    fn test_stubgen_classes() {
+        assert_stubgen_snapshot("classes");
+    }
+
+    #[test]
+    fn test_stubgen_variables() {
+        assert_stubgen_snapshot("variables");
+    }
+
+    #[test]
+    fn test_stubgen_unpack_assignments() {
+        assert_stubgen_snapshot("unpack_assignments");
+    }
+
+    #[test]
+    fn test_stubgen_imports() {
+        assert_stubgen_snapshot("imports");
+    }
+
+    #[test]
+    fn test_stubgen_try_except_imports() {
+        assert_stubgen_snapshot("try_except_imports");
+    }
+
+    #[test]
+    fn test_stubgen_type_checking_or_guard() {
+        assert_stubgen_snapshot("type_checking_or_guard");
+    }
+
+    #[test]
+    fn test_stubgen_mixed() {
+        assert_stubgen_snapshot("mixed");
+    }
+
+    #[test]
+    fn test_stubgen_overloads() {
+        assert_stubgen_snapshot("overloads");
+    }
+
+    #[test]
+    fn test_stubgen_callable_values() {
+        assert_stubgen_snapshot("callable_values");
+    }
+
+    #[test]
+    fn test_stubgen_class_vars() {
+        assert_stubgen_snapshot("class_vars");
+    }
+
+    #[test]
+    fn test_stubgen_literal_import() {
+        assert_stubgen_snapshot("literal_import");
+    }
+
+    #[test]
+    fn test_stubgen_typevar() {
+        assert_stubgen_snapshot("typevar");
+    }
+
+    #[test]
+    fn test_stubgen_type_alias_old_style() {
+        assert_stubgen_snapshot("type_alias_old_style");
+    }
+
+    #[test]
+    fn test_stubgen_generics() {
+        assert_stubgen_snapshot("generics");
+    }
+
+    #[test]
+    fn test_stubgen_dunder_all() {
+        assert_stubgen_snapshot("dunder_all");
+    }
+
+    #[test]
+    fn test_stubgen_dunder_all_reexport() {
+        assert_stubgen_snapshot("dunder_all_reexport");
+    }
+
+    #[test]
+    fn test_stubgen_async_generator() {
+        assert_stubgen_snapshot("async_generator");
+    }
+
+    #[test]
+    fn test_stubgen_docstrings() {
+        let input = r#"
+def greet(name: str) -> str:
+    """Say hello."""
+    return f"Hello, {name}!"
+
+def no_doc(x: int) -> int:
+    return x
+
+class MyClass:
+    """A class with a docstring."""
+
+    def method(self) -> None:
+        """Do something."""
+        pass
+"#;
+        let config = ExtractConfig {
+            include_private: false,
+            include_docstrings: true,
+        };
+        let actual = run_stubgen_with_config(input, &config);
+        assert!(
+            actual.contains(r#""""Say hello.""""#),
+            "Function docstring should be emitted:\n{actual}"
+        );
+        assert!(
+            actual.contains(r#""""A class with a docstring.""""#),
+            "Class docstring should be emitted:\n{actual}"
+        );
+        assert!(
+            actual.contains(r#""""Do something.""""#),
+            "Method docstring should be emitted:\n{actual}"
+        );
+
+        // Without docstrings, none should appear.
+        let no_doc_config = ExtractConfig {
+            include_private: false,
+            include_docstrings: false,
+        };
+        let without = run_stubgen_with_config(input, &no_doc_config);
+        assert!(
+            !without.contains("Say hello."),
+            "Function docstring should not appear with include_docstrings=false:\n{without}"
+        );
+        assert!(
+            !without.contains("A class with a docstring."),
+            "Class docstring should not appear with include_docstrings=false:\n{without}"
+        );
+    }
+
+    #[test]
+    fn test_stubgen_unannotated_dunder_new_uses_self() {
+        let actual = run_stubgen(
+            r#"
+class C:
+    def __new__(cls):
+        return super().__new__(cls)
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+from typing import Self
+
+class C:
+    def __new__(cls) -> Self: ...
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
+
+    /// Instance fields assigned in `__init__` (without class-level annotations) appear in the stub
+    /// using inferred types. See <https://github.com/facebook/pyrefly/issues/3208>.
+    #[test]
+    fn test_stubgen_instance_fields_from_init() {
+        let actual = run_stubgen(
+            r#"
+class A:
+    def __init__(self, name: str) -> None:
+        self.name = name
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+class A:
+    name: str
+
+    def __init__(self, name: str) -> None: ...
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
+
+    /// Parenthesized multi-line annotations, return types, and values stay valid
+    /// when collapsed onto one logical line. See <https://github.com/facebook/pyrefly/issues/3887>.
+    #[test]
+    fn test_stubgen_multiline_parenthesized() {
+        let actual = run_stubgen(
+            r#"
+from typing import Callable
+
+class Agent:
+    instructions: (
+        str
+        | Callable[[int], str]
+        | None
+    ) = None
+
+    def f(
+        self,
+        x: (
+            int
+            | str
+        ),
+    ) -> (
+        int
+        | None
+    ): ...
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+from typing import Callable
+
+
+class Agent:
+    instructions: (str
+        | Callable[[int], str]
+        | None) = None
+
+    def f(self, x: (int
+            | str)) -> (int
+        | None): ...
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
+
+    #[test]
+    fn test_stubgen_dataclass() {
+        assert_stubgen_snapshot("dataclass");
+    }
+
+    #[test]
+    fn test_stubgen_pydantic() {
+        assert_stubgen_pydantic_snapshot("pydantic");
+    }
+
+    /// Instance attrs from `__init__` are emitted in alphabetical order by name (not assignment
+    /// order), so stubs stay deterministic and easy to scan.
+    #[test]
+    fn test_stubgen_instance_fields_from_init_sorted_by_name() {
+        let actual = run_stubgen(
+            r#"
+class A:
+    def __init__(self, u: str, v: int, w: float) -> None:
+        self.z_attr = u
+        self.a_attr = v
+        self.m_attr = w
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+class A:
+    a_attr: int
+    m_attr: float
+    z_attr: str
+
+    def __init__(self, u: str, v: int, w: float) -> None: ...
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
+}

@@ -31,6 +31,141 @@ def anywhere():
     "#,
 );
 
+testcase!(
+    test_useless_overload_body,
+    r#"
+from typing import overload
+
+# should warn
+
+@overload
+def returns_expr(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    return x + 1
+
+@overload
+def returns_expr(x: str) -> str:
+    ...
+
+@overload
+def raises_other(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    raise ValueError("bad")
+
+@overload
+def raises_other(x: str) -> str:
+    ...
+
+@overload
+def has_assignment(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    x = 1
+    return x
+
+@overload
+def has_assignment(x: str) -> str:
+    ...
+
+@overload
+def has_multiple_stmts(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    print("side effect")
+    return x
+
+@overload
+def has_multiple_stmts(x: str) -> str:
+    ...
+
+def returns_expr(x: int | str) -> int | str:
+    return x
+
+def raises_other(x: int | str) -> int | str:
+    return x
+
+def has_assignment(x: int | str) -> int | str:
+    return x
+
+def has_multiple_stmts(x: int | str) -> int | str:
+    return x
+
+# should not warn 
+
+@overload
+def body_pass(x: int) -> int:
+    pass
+
+@overload
+def body_pass(x: str) -> str:
+    ...
+
+def body_pass(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_ellipsis(x: int) -> int:
+    ...
+
+@overload
+def body_ellipsis(x: str) -> str:
+    ...
+
+def body_ellipsis(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_docstring_only(x: int) -> int:
+    """This is fine."""
+
+@overload
+def body_docstring_only(x: str) -> str:
+    ...
+
+def body_docstring_only(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_raise_not_impl(x: int) -> int:
+    raise NotImplementedError
+
+@overload
+def body_raise_not_impl(x: str) -> str:
+    ...
+
+def body_raise_not_impl(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_raise_not_impl_msg(x: int) -> int:
+    raise NotImplementedError("not done")
+
+@overload
+def body_raise_not_impl_msg(x: str) -> str:
+    ...
+
+def body_raise_not_impl_msg(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_return_not_impl(x: int) -> int:
+    return NotImplemented
+
+@overload
+def body_return_not_impl(x: str) -> str:
+    ...
+
+def body_return_not_impl(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_docstring_then_pass(x: int) -> int:
+    """docstring stripped first, then pass is trivial."""
+    pass
+
+@overload
+def body_docstring_then_pass(x: str) -> str:
+    ...
+
+def body_docstring_then_pass(x: int | str) -> int | str:
+    return x
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2867
 testcase!(
     test_urlunparse_prefers_string_overload_for_parse_result,
@@ -721,7 +856,7 @@ def f(x: int) -> int: ...
 def f(x: str) -> str: ...
 
 @overload
-def f(x: int | str) -> int | str: # E: @overload decorator should not be used on function implementation
+def f(x: int | str) -> int | str: # E: @overload decorator should not be used on function implementation  # E: `@overload` bodies should not contain executable logic
     return x
     "#,
 );
@@ -765,7 +900,7 @@ from typing import overload, Any
 @overload
 def foo(a: int) -> int: ...
 @overload
-def foo(a: str) -> str:
+def foo(a: str) -> str:  # E: `@overload` bodies should not contain executable logic
     """Docstring"""
     return 123             # E: Returned type `Literal[123]` is not assignable to declared return type `str`
 def foo(*args, **kwargs) -> Any:
@@ -961,10 +1096,10 @@ def catch(f: S | None = None, *, exception: T) -> S | T: ...
 testcase!(
     test_abstract,
     r#"
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import Literal, overload
 
-class Derp:
+class Derp(ABC):
     @overload
     @abstractmethod
     def f(self, m: Literal["x"] = "x") -> int: ...
@@ -1128,6 +1263,92 @@ def f(x: tuple[int, bool]) -> int | str:
 
 def g(x: tuple[int, bool]):
     assert_type(f(x), str | int)
+    "#,
+);
+
+testcase!(
+    test_expand_refines_generic_match_dropping_never,
+    TestEnv::new().enable_legacy_overload_expansion(),
+    r#"
+from typing import assert_type, overload, NoReturn, TypeVar
+T = TypeVar("T")
+
+@overload
+def not_none(x: None) -> NoReturn: ...
+@overload
+def not_none(x: T) -> T: ...
+def not_none(x: T | None) -> T:
+    raise NotImplementedError
+
+def g(x: int | None):
+    assert_type(not_none(x), int)
+    "#,
+);
+
+testcase!(
+    test_no_refine_matched_overload_by_default,
+    r#"
+from typing import assert_type, overload, NoReturn, TypeVar
+T = TypeVar("T")
+
+@overload
+def not_none(x: None) -> NoReturn: ...
+@overload
+def not_none(x: T) -> T: ...
+def not_none(x: T | None) -> T:
+    raise NotImplementedError
+
+def g(x: int | None):
+    assert_type(not_none(x), int | None)
+    "#,
+);
+
+testcase!(
+    test_expand_refines_when_unrelated_arg_expands_first,
+    TestEnv::new().enable_legacy_overload_expansion(),
+    r#"
+from typing import assert_type, Never, overload, TypeVar
+T = TypeVar("T")
+@overload
+def f(x: object, y: None) -> Never: ...
+@overload
+def f(x: object, y: T) -> T: ...
+def f(x: object, y: T | None) -> T:
+    if y is None:
+        raise AssertionError
+    return y
+def test(x: int | str, y: int | None) -> None:
+    # `x` expands first without dropping an arm; refinement must keep going to `y`.
+    assert_type(f(x, y), int)
+    "#,
+);
+
+testcase!(
+    test_expand_refine_only_does_not_broaden,
+    TestEnv::new().enable_legacy_overload_expansion(),
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(x: int) -> bytes: ...
+@overload
+def f(x: object) -> str: ...
+def f(x: object) -> bytes | str:
+    raise NotImplementedError
+
+def g(x: int | str):
+    assert_type(f(x), str)
+    "#,
+);
+
+testcase!(
+    test_expand_no_refine_without_uninhabited_arm,
+    TestEnv::new().enable_legacy_overload_expansion(),
+    r#"
+from typing import assert_type
+
+def f(a: list[int] | list[str], b: list[bytes]):
+    assert_type(zip(a, b), zip[tuple[int | str, bytes]])
     "#,
 );
 
@@ -2182,5 +2403,23 @@ def f(x, y="", z=0.0): return x
 
 y: Any = ...
 f(y=y)  # E: (x: int, y: str = ..., ...) -> int [closest match]\n    (x: str, y: int = ..., ...) -> str
+    "#,
+);
+
+testcase!(
+    test_arg_error_isolation,
+    r#"
+from typing import Callable, Literal, assert_type, overload
+
+@overload
+def f(tag: Literal[1], xs: list[Callable[[int], str]]) -> int: ...
+
+@overload
+def f(tag: Literal[2], xs: list[Callable[[str], str]]) -> str: ...
+
+def f(tag: Literal[1, 2], xs: list[Callable[..., str]]) -> int | str:
+    return 0 if tag == 1 else ""
+
+assert_type(f(2, [lambda value: value + "x"]), str)
     "#,
 );

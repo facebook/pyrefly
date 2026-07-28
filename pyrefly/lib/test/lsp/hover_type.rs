@@ -567,8 +567,8 @@ Hover Result: `int`
     );
 }
 
-// todo(kylei): When the callee's implementation uses *args/**kwargs, we can't refine the
-// keyword argument to a specific parameter. Ideally we'd resolve through the matched overload.
+// When the callee's implementation uses *args/**kwargs, keyword argument hovers fall back
+// to the matched overload when there is one.
 #[test]
 fn kwarg_with_overload() {
     let code = r#"
@@ -592,7 +592,7 @@ foo(y="hello")
 # main.py
 11 | foo(x=42)
          ^
-Hover Result: None
+Hover Result: `int`
 
 13 | foo(y="hello")
          ^

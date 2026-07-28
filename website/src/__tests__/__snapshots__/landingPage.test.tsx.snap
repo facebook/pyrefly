@@ -13,7 +13,7 @@ exports[`Home page renders external site correctly 1`] = `
       <div>
         <div>
           <span>
-            🎉 Pyrefly v1.0 is now available!
+            🎉 Pyrefly v1.1 is now available!
           </span>
           <div>
             <button>
@@ -568,7 +568,7 @@ exports[`Home page renders internal site correctly 1`] = `
       <div>
         <div>
           <span>
-            🎉 Pyrefly v1.0 is now available!
+            🎉 Pyrefly v1.1 is now available!
           </span>
           <div>
             <button>

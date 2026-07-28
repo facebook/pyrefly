@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use fxhash::FxHashMap;
+use fxhash::FxHashSet;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::calculation::ProposalResult;
 use pyrefly_graph::index::Idx;
@@ -32,6 +33,7 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedIdentity;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::quantified::QuantifiedOrigin;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::PreInferenceVariance;
@@ -39,6 +41,7 @@ use pyrefly_types::type_var::Restriction;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -80,6 +83,7 @@ use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallContext;
+use crate::solver::solver::PinError;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
@@ -91,6 +95,12 @@ use crate::types::stdlib::Stdlib;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
 use crate::types::types::Var;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum JaxtypingQuantifiedKey {
+    Dim(Name, QuantifiedKind),
+    ShapeCarrier(Name, QuantifiedKind),
+}
 
 pub struct TypeCheckOptions<'a> {
     errors: &'a ErrorCollector,
@@ -1602,6 +1612,10 @@ pub struct ThreadState {
     /// is pushed here. When the nested call takes its sink, the previous
     /// one is restored.
     trace_sink_stack: RefCell<Vec<Option<TraceSideEffects>>>,
+    /// `(self_type, self_param)` pairs whose overload-self-type compatibility
+    /// check is currently in progress, used as a coinductive guard against
+    /// self-referential protocols. See `filter_overloads_by_self_type`.
+    overload_self_filter_stack: RefCell<FxHashSet<(Type, Type)>>,
 }
 
 impl ThreadState {
@@ -1614,6 +1628,7 @@ impl ThreadState {
             lambda_param_vars: RefCell::new(FxHashMap::default()),
             trace_sink: RefCell::new(None),
             trace_sink_stack: RefCell::new(Vec::new()),
+            overload_self_filter_stack: RefCell::new(FxHashSet::default()),
         }
     }
 
@@ -1713,11 +1728,11 @@ pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     pub recurser: &'a VarRecurser,
     pub stdlib: &'a Stdlib,
     pub heap: &'a TypeHeap,
-    /// Cache for jaxtyping dimension name → Quantified type mappings.
-    /// Module-scoped: the same dimension name always maps to the same Quantified,
+    /// Cache for jaxtyping synthetic quantifieds.
+    /// Module-scoped: the same dimension key always maps to the same Quantified,
     /// which is correct because each function independently wraps its signature
     /// in a Forall (just like legacy TypeVars defined at module scope).
-    jaxtyping_dims: RefCell<FxHashMap<Name, Quantified>>,
+    jaxtyping_dims: RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
 }
 
 /// RAII guard that releases write locks on panic during SCC batch commit.
@@ -1795,28 +1810,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Get or create a Quantified type for a jaxtyping dimension name.
-    /// Cached per module: the same name always returns the same Quantified.
+    /// Cached per module on the `(name, kind)` pair: the same name reused with a
+    /// different `QuantifiedKind` intentionally yields a distinct Quantified.
     pub fn get_or_create_jaxtyping_dim(&self, name: Name, kind: QuantifiedKind) -> Quantified {
         let mut dims = self.jaxtyping_dims.borrow_mut();
-        dims.entry(name.clone())
+        // Jaxtyping dims have no real source location. Use the current map size as a
+        // collision-free ordinal to distinguish synthetic quantifieds at the same
+        // (default) anchor. Shared with `get_or_create_jaxtyping_shape_carrier`, which
+        // uses the same map, so ordinals stay unique across both.
+        let ordinal = dims.len() as u32;
+        dims.entry(JaxtypingQuantifiedKey::Dim(name.clone(), kind))
             .or_insert_with(|| {
-                // Jaxtyping dims have no real source location. Use a hash of the name
-                // as ordinal to distinguish different dims in the same module.
-                // The slot discriminates from other synthetic quantifieds at the same anchor.
-                let ordinal = {
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    name.hash(&mut h);
-                    h.finish() as u32
-                };
                 let identity = QuantifiedIdentity::new(
                     self.module().name(),
                     AnchorIndex::new(TextRange::default(), ordinal),
                     QuantifiedOrigin::SyntheticCallableResidual,
                 );
                 match kind {
-                    QuantifiedKind::TypeVar => Quantified::type_var(
-                        name,
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
                         identity,
+                        name,
+                        kind,
                         None,
                         Restriction::Unrestricted,
                         PreInferenceVariance::Invariant,
@@ -1826,6 +1840,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     QuantifiedKind::ParamSpec => {
                         unreachable!("jaxtyping dimensions cannot be ParamSpec")
+                    }
+                }
+            })
+            .clone()
+    }
+
+    /// Get or create a tuple-carrier TypeVar or IntVar for a jaxtyping variadic shape name.
+    ///
+    /// A variadic jaxtyping shape (`*name`) whose enclosing shaped-array class uses a
+    /// `TypeVar`/`IntVar` (IntTuple) shape parameter needs a carrier bounded by
+    /// `tuple[int, ...]`, rather than the `TypeVarTuple` produced for `*Shape` classes.
+    pub fn get_or_create_jaxtyping_shape_carrier(
+        &self,
+        name: Name,
+        kind: QuantifiedKind,
+    ) -> Quantified {
+        let mut dims = self.jaxtyping_dims.borrow_mut();
+        // See `get_or_create_jaxtyping_dim`: the shared map's size is a collision-free ordinal.
+        let ordinal = dims.len() as u32;
+        dims.entry(JaxtypingQuantifiedKey::ShapeCarrier(name.clone(), kind))
+            .or_insert_with(|| {
+                let identity = QuantifiedIdentity::new(
+                    self.module().name(),
+                    AnchorIndex::new(TextRange::default(), ordinal),
+                    QuantifiedOrigin::SyntheticCallableResidual,
+                );
+                match kind {
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
+                        identity,
+                        name,
+                        kind,
+                        None,
+                        Restriction::Bound(Type::Tuple(Tuple::Unbounded(Box::new(
+                            self.heap.mk_class_type(self.stdlib.int().clone()),
+                        )))),
+                        PreInferenceVariance::Invariant,
+                    ),
+                    QuantifiedKind::TypeVarTuple | QuantifiedKind::ParamSpec => {
+                        unreachable!("jaxtyping shape carriers must be TypeVar or IntVar")
                     }
                 }
             })
@@ -1964,6 +2017,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .borrow()
             .get(&(def_idx, height))
             .cloned()
+    }
+
+    /// Mark an overload-self-type compatibility check `(self_type, self_param)` as in
+    /// progress. Returns `true` if it was already active, signaling a coinductive cycle
+    /// (a self-referential protocol). See `filter_overloads_by_self_type`.
+    pub(crate) fn enter_overload_self_filter(&self, key: (Type, Type)) -> bool {
+        !self
+            .thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .insert(key)
+    }
+
+    pub(crate) fn exit_overload_self_filter(&self, key: &(Type, Type)) {
+        self.thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .remove(key);
     }
 
     /// Given the target idx of a ForwardToFirstUse binding, find the NameAssign's
@@ -2153,18 +2224,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         };
 
-        // For exported keys, eagerly resolve all type variables in the answer.
-        // This avoids redundant clone+force work in solve_exported_key and post_solve,
-        // which would otherwise repeat this work on every cross-module lookup.
-        // Arc::unwrap_or_clone avoids cloning since the refcount is 1 here.
-        let raw_answer = if K::EXPORTED {
-            let mut forced = Arc::unwrap_or_clone(raw_answer);
-            forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
-            Arc::new(forced)
-        } else {
-            raw_answer
-        };
-
         if self.stack().is_scc_participant(&current) {
             // Became an SCC member during computation: an SCC was discovered by
             // a dependency chain during K::solve above, and this node is now in
@@ -2180,6 +2239,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 raw_answer
             };
+            self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
+            let answer = self.force_exported_answer::<K>(answer);
             // Also store in SccNodeState::Done for SCC-local isolation (the SCC
             // uses these answers via SccLocalAnswer without touching Calculation).
             let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
@@ -2197,6 +2258,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Not an SCC member even after computation: write directly to
             // Calculation. No recursive placeholder can exist because
             // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
+            self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
+            let raw_answer = self.force_exported_answer::<K>(raw_answer);
             let (answer, did_write) = calculation.record_value(raw_answer);
             if did_write {
                 self.base_errors.extend(local_errors);
@@ -2206,6 +2269,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             answer
+        }
+    }
+
+    fn force_exported_answer<K: Solve<Ans>>(&self, answer: Arc<K::Answer>) -> Arc<K::Answer> {
+        if K::EXPORTED {
+            let mut forced = Arc::unwrap_or_clone(answer);
+            forced.visit_mut(&mut |ty| self.current.solver().force_mut(ty));
+            Arc::new(forced)
+        } else {
+            answer
+        }
+    }
+
+    fn sanitize_answer_vars<K: Solve<Ans>>(
+        &self,
+        answer: &K::Answer,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let mut vars = Vec::new();
+        answer.visit(&mut |ty| vars.extend(ty.collect_all_vars()));
+        for error in self.solver().sanitize_vars(vars, true) {
+            self.report_pin_error(error, range, errors);
+        }
+    }
+
+    pub(crate) fn report_pin_error(
+        &self,
+        error: PinError,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        match error {
+            PinError::ImplicitPartialContained(container_range) => errors
+                .error_builder(
+                    container_range,
+                    ErrorKind::ImplicitAnyEmptyContainer,
+                    "Cannot infer type of empty container; it will be treated as containing `Any`"
+                        .to_owned(),
+                )
+                .with_detail(
+                    "Consider adding a type annotation or initializing with a non-empty value"
+                        .to_owned(),
+                )
+                .emit(),
+            PinError::UnfinishedQuantified(q) => {
+                errors.internal_error(range, format!("Unfinished Variable::Quantified: {q}"))
+            }
         }
     }
 
@@ -2337,6 +2448,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             raw_answer
         };
+
+        self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
 
         // Deep-force the answer to resolve all type variables. This is required
         // for convergence comparisons: without forcing, structurally identical

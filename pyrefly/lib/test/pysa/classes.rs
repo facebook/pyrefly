@@ -34,6 +34,26 @@ use crate::test::pysa::utils::get_class_ref;
 use crate::test::pysa::utils::get_function_ref;
 use crate::test::pysa::utils::get_handle_for_module_name;
 
+fn typed_dict_keys_field(context: &ModuleContext) -> PysaClassField {
+    PysaClassField {
+        type_: PysaType::from_type(
+            &context.answers_context.answers.heap().mk_class_type(
+                context.answers_context.stdlib.frozenset(
+                    context
+                        .answers_context
+                        .answers
+                        .heap()
+                        .mk_class_type(context.answers_context.stdlib.str().clone()),
+                ),
+            ),
+            context,
+        ),
+        explicit_annotation: None,
+        location: None,
+        declaration_kind: None,
+    }
+}
+
 fn create_simple_class(
     name: &str,
     id: u32,
@@ -447,6 +467,8 @@ class Point(TypedDict):
                         declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
                     },
                 ),
+                ("__required_keys__".into(), typed_dict_keys_field(context)),
+                ("__optional_keys__".into(), typed_dict_keys_field(context)),
             ]),
             decorator_callees: HashMap::new(),
         }
@@ -512,6 +534,8 @@ class Point(TypedDict, total=False):
                         declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
                     },
                 ),
+                ("__required_keys__".into(), typed_dict_keys_field(context)),
+                ("__optional_keys__".into(), typed_dict_keys_field(context)),
             ]),
             decorator_callees: HashMap::new(),
         }

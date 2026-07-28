@@ -136,9 +136,11 @@ z: list[A] | list[B] = [B2() for _ in range(10)]
 testcase!(
     test_dict_union,
     r#"
+from typing import Sequence
 d1: dict[int, int] | dict[str, list[int]] = {"x": [True]}
 x: list[str] = []
 d2: dict[int, int] | dict[str, list[int]] = {k: [True] for k in x}
+d3: Sequence[dict[str, int]] | Sequence[dict[int, int]] = [{"x": 1}]
     "#,
 );
 
@@ -208,11 +210,11 @@ testcase!(
     r#"
 from typing import Iterable, MutableMapping, Literal
 x1: dict[str, int] = {"a": 1}
-x2: dict[str, int] = {"a": "oops"}  # E: `dict[str, str]` is not assignable to `dict[str, int]`
-x3: dict[str, Literal[1]] = {"a": 2} # E: `dict[str, int]` is not assignable to `dict[str, Literal[1]]`
+x2: dict[str, int] = {"a": "oops"}  # E: `Literal['oops']` is not assignable to dict value type `int`
+x3: dict[str, Literal[1]] = {"a": 2} # E: `Literal[2]` is not assignable to dict value type `Literal[1]`
 x4: MutableMapping[str, int] = {"a": 1}
 x5: Iterable[str] = {"a": 1}
-x6: Iterable[int] = {"oops": 1}  # E: `dict[str, int]` is not assignable to `Iterable[int]`
+x6: Iterable[int] = {"oops": 1}  # E: `Literal['oops']` is not assignable to dict key type `int`
 x7: Iterable[Literal[4]] = {4: "a"}
 x8: object = {"a": 1}
 x9: list[str] = {"a": 1}  # E: `dict[str, int]` is not assignable to `list[str]`
@@ -368,6 +370,7 @@ class B: ...
 class B2(B): ...
 f1: Callable[[], list[B]] = lambda: [B2()]
 f2: Callable[[], list[A]] | Callable[[], list[B]] = lambda: [B2()]
+f3: Callable[[], dict[int, A]] | Callable[[], dict[int, B]] = lambda: {0: B2()}
 "#,
 );
 
@@ -838,20 +841,37 @@ f(list())
     "#,
 );
 
+// Regression: a list/set literal against `Alias | Collection[Alias]`, where the
+// `Literal[...]` alias is wide, must still pick up the `Collection` element hint.
+// Flattening the alias used to count its members against `MAX_DECOMPOSE_HINT_WIDTH`,
+// incorrectly triggering the cap so the literal fell back to `list[str]`.
 testcase!(
-    // Regression: when a TypeVar's only constraints are upper bounds, multiple
-    // such bounds where one is a subtype of the other must collapse to the
-    // *narrowest* one. Previously `get_new_bound`'s absorb logic kept the wider
-    // type for both lower and upper bounds, which is correct for lower bounds
-    // but throws away the tighter constraint for upper bounds.
-    //
-    // Here `f(bar)` against return hint `int | Callable[[], int]` records:
-    //   T <: int                  (from callback contravariance)
-    //   T <: int                  (from `() -> T` arm matching `() -> int`)
-    //   T <: int | Callable[[], int]  (from bare `T` arm matching the hint)
-    // No lower bounds. Without the fix, the wider union wins and the call's
-    // return becomes `(int | () -> int) | () -> (int | () -> int)`, producing a
-    // spurious bad-return. With the fix, T solves to `int` and the return matches.
+    test_list_hint_with_wide_literal_alias_union,
+    r#"
+from typing import Literal, TypeAlias
+from collections.abc import Collection
+L: TypeAlias = Literal["a", "b", "c", "d", "e", "f", "g", "h"]
+def f(*, x: L | Collection[L] = "a") -> None: ...
+f(x=["a", "b"])
+f(x={"a", "b"})
+f(x=["a", "bad"])  # E: `list[str]` is not assignable to parameter `x`
+    "#,
+);
+
+// Regression: when a TypeVar's only constraints are upper bounds, multiple
+// such bounds where one is a subtype of the other must collapse to the
+// *narrowest* one. Previously `get_new_bound`'s absorb logic kept the wider
+// type for both lower and upper bounds, which is correct for lower bounds
+// but throws away the tighter constraint for upper bounds.
+//
+// Here `f(bar)` against return hint `int | Callable[[], int]` records:
+//   T <: int                  (from callback contravariance)
+//   T <: int                  (from `() -> T` arm matching `() -> int`)
+//   T <: int | Callable[[], int]  (from bare `T` arm matching the hint)
+// No lower bounds. Without the fix, the wider union wins and the call's
+// return becomes `(int | () -> int) | () -> (int | () -> int)`, producing a
+// spurious bad-return. With the fix, T solves to `int` and the return matches.
+testcase!(
     test_typevar_upper_bound_narrowing,
     r#"
 from typing import Callable, TypeVar
@@ -862,5 +882,43 @@ def bar(x: int) -> None: ...
 
 def make() -> int | Callable[[], int]:
     return f(bar)
+    "#,
+);
+
+testcase!(
+    test_typeddict_in_lambda,
+    r#"
+from typing import Callable, TypedDict
+
+class A: ...
+class B: ...
+class B2(B): ...
+
+class DA(TypedDict):
+    x: A
+
+class DB(TypedDict):
+    x: B
+
+f: Callable[[], DA] | Callable[[], DB] = lambda: {"x": B2()}
+    "#,
+);
+
+testcase!(
+    test_nested_typeddict_in_union,
+    r#"
+from typing import TypedDict
+
+class A(TypedDict):
+    x: int
+
+class B(TypedDict, total=False):
+    x: str
+
+type X = list[A] | list[B]
+
+x1: X = [{"x": ""}]
+x2: X = [{}]
+x3: X = [{"x": 1.0}]  # E: `float` is not assignable to TypedDict key `x` with type `int`
     "#,
 );
