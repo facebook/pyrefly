@@ -157,6 +157,7 @@ fn polars_column_completion_labels(code: &str) -> Vec<String> {
 class DataFrame:
     def __init__(self, data: object = None) -> None: ...
     def select(self, *exprs: object) -> "DataFrame": ...
+    def write_csv(self, file: str) -> None: ...
 "#,
     );
     env.add(
@@ -446,19 +447,38 @@ df.groupby("")
 #[test]
 fn no_column_completion_from_unrelated_call_argument() {
     let code = r#"
-def select(data: dict[str, int], expr: object) -> None: ...
-def col(name: str) -> str: ...
-
-payload = {"foo": 1, "bar": 2}
-select(payload, col(""))
-#                   ^
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+def f(frame: object, value: str) -> None: ...
+f(df, "")
+#      ^
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
-    let position = extract_cursors_for_test(code)[0];
-    assert_eq!(
-        dict_field_labels(&state.transaction(), handles.get("main").unwrap(), position),
-        Vec::<String>::new()
-    );
+    assert_eq!(polars_column_completion_labels(code), Vec::<String>::new());
+}
+
+#[test]
+fn no_column_completion_from_non_column_dataframe_method() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.write_csv("")
+#             ^
+"#;
+    assert_eq!(polars_column_completion_labels(code), Vec::<String>::new());
+}
+
+#[test]
+fn dataframe_union_completion_intersects_columns() {
+    let code = r#"
+import polars as pl
+def f(cond: bool) -> None:
+    a = pl.DataFrame({"id": [1], "x": [1]})
+    b = pl.DataFrame({"id": [1], "y": [1]})
+    df = a if cond else b
+    df.select("")
+#              ^
+"#;
+    assert_eq!(polars_column_completion_labels(code), vec!["id".to_owned()]);
 }
 
 #[test]

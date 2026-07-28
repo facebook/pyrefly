@@ -6,6 +6,7 @@
  */
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
@@ -24,6 +25,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::alt::polars_specials::is_dataframe_column_method;
 use crate::binding::binding::Key;
 use crate::binding::narrow::int_from_slice;
 use crate::lsp::wasm::completion::RankedCompletion;
@@ -41,7 +43,7 @@ enum DictKeyLiteralContext {
     /// A string literal in a call containing a DataFrame expression.
     /// Examples: `df.select("na|")`, `df.select(col("na|"))`.
     CallArgument {
-        source_exprs: Vec<Expr>,
+        source_expr: Expr,
         literal: ExprStringLiteral,
     },
     /// A key literal inside a dict literal being constructed.
@@ -84,10 +86,16 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn type_contains_dataframe(ty: &Type) -> bool {
+    fn type_is_dataframe(ty: &Type) -> bool {
         match ty {
             Type::DataFrame(_) => true,
-            Type::Union(u) => u.members.iter().any(Self::type_contains_dataframe),
+            Type::Union(u) => {
+                let (first, rest) = u
+                    .members
+                    .split_first()
+                    .expect("a union must contain at least one member");
+                Self::type_is_dataframe(first) && rest.iter().all(Self::type_is_dataframe)
+            }
             _ => false,
         }
     }
@@ -100,7 +108,7 @@ impl<'a> Transaction<'a> {
 
     fn expr_has_dataframe_type(&self, handle: &Handle, expr: &Expr) -> bool {
         self.get_type_trace(handle, expr.range())
-            .is_some_and(|ty| Self::type_contains_dataframe(&ty))
+            .is_some_and(|ty| Self::type_is_dataframe(&ty))
     }
 
     /// Extracts typed dict access from `.get()` method calls.
@@ -212,11 +220,11 @@ impl<'a> Transaction<'a> {
         } else if let Some((dict, literal)) = Self::dict_literal_string_literal_at(module, position)
         {
             Some(DictKeyLiteralContext::DictLiteral { dict, literal })
-        } else if let Some((source_exprs, literal)) =
+        } else if let Some((source_expr, literal)) =
             self.dataframe_call_argument_string_literal_at(handle, module, position)
         {
             Some(DictKeyLiteralContext::CallArgument {
-                source_exprs,
+                source_expr,
                 literal,
             })
         } else {
@@ -230,53 +238,42 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         module: &ModModule,
         position: TextSize,
-    ) -> Option<(Vec<Expr>, ExprStringLiteral)> {
+    ) -> Option<(Expr, ExprStringLiteral)> {
         let nodes = Ast::locate_node(module, position);
         let literal = nodes.iter().find_map(|node| match node {
             AnyNodeRef::ExprStringLiteral(literal) => Some((*literal).clone()),
             _ => None,
         })?;
         let literal_range = literal.range();
-        let mut source_exprs = Vec::new();
+        let mut best: Option<(TextSize, Expr)> = None;
 
         for node in nodes {
             let AnyNodeRef::ExprCall(call) = node else {
                 continue;
             };
-            let positional_count = if let Some(idx) = call.arguments.args.iter().position(|arg| {
-                arg.range().start() <= literal_range.start()
-                    && literal_range.end() <= arg.range().end()
-            }) {
-                idx
-            } else if call.arguments.keywords.iter().any(|kw| {
-                kw.value.range().start() <= literal_range.start()
-                    && literal_range.end() <= kw.value.range().end()
-            }) {
-                call.arguments.args.len()
-            } else {
+            if !(call.range().start() <= literal_range.start()
+                && literal_range.end() <= call.range().end())
+            {
+                continue;
+            }
+            let Expr::Attribute(attr) = call.func.as_ref() else {
                 continue;
             };
-
-            if let Expr::Attribute(attr) = call.func.as_ref()
-                && self.expr_has_dataframe_type(handle, attr.value.as_ref())
-                && !source_exprs
-                    .iter()
-                    .any(|existing: &Expr| existing.range() == attr.value.range())
+            if !is_dataframe_column_method(attr.attr.id.as_str())
+                || !self.expr_has_dataframe_type(handle, attr.value.as_ref())
             {
-                source_exprs.push(attr.value.as_ref().clone());
+                continue;
             }
-            for expr in call.arguments.args.iter().take(positional_count) {
-                if self.expr_has_dataframe_type(handle, expr)
-                    && !source_exprs
-                        .iter()
-                        .any(|existing| existing.range() == expr.range())
-                {
-                    source_exprs.push(expr.clone());
-                }
+            let call_len = call.range().len();
+            if best
+                .as_ref()
+                .is_none_or(|(best_len, _)| call_len < *best_len)
+            {
+                best = Some((call_len, attr.value.as_ref().clone()));
             }
         }
 
-        (!source_exprs.is_empty()).then_some((source_exprs, literal))
+        best.map(|(_, source_expr)| (source_expr, literal))
     }
 
     fn dict_literal_string_literal_at(
@@ -358,12 +355,12 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn collect_container_keys(
+    fn collect_typed_dict_keys(
         &self,
         handle: &Handle,
         base_type: Type,
     ) -> Option<BTreeMap<String, Type>> {
-        self.ad_hoc_solve(handle, "container_keys", |solver| {
+        self.ad_hoc_solve(handle, "typed_dict_keys", |solver| {
             let mut map = BTreeMap::new();
             let mut stack = vec![base_type];
             while let Some(ty) = stack.pop() {
@@ -374,11 +371,6 @@ impl<'a> Transaction<'a> {
                                 .or_insert_with(|| field.ty.clone());
                         }
                     }
-                    Type::DataFrame(schema) => {
-                        for (name, ty) in schema.columns {
-                            map.entry(name.to_string()).or_insert(ty);
-                        }
-                    }
                     Type::Union(u) => {
                         stack.extend(u.members);
                     }
@@ -387,6 +379,31 @@ impl<'a> Transaction<'a> {
             }
             map
         })
+    }
+
+    fn collect_dataframe_columns(ty: &Type) -> Option<BTreeSet<String>> {
+        match ty {
+            Type::DataFrame(schema) => Some(
+                schema
+                    .columns
+                    .iter()
+                    .map(|(name, _)| name.to_string())
+                    .collect(),
+            ),
+            Type::Union(u) => {
+                let (first, rest) = u
+                    .members
+                    .split_first()
+                    .expect("a union must contain at least one member");
+                let mut columns = Self::collect_dataframe_columns(first)?;
+                for member in rest {
+                    let member_columns = Self::collect_dataframe_columns(member)?;
+                    columns.retain(|name| member_columns.contains(name));
+                }
+                Some(columns)
+            }
+            _ => None,
+        }
     }
 
     /// Adds dict key completions for the given position. Handles a key string being
@@ -427,16 +444,13 @@ impl<'a> Transaction<'a> {
                     base_expr.range(),
                     &mut suggestions,
                 ),
-            DictKeyLiteralContext::CallArgument { source_exprs, .. } => {
-                for expr in source_exprs {
-                    self.extend_dict_key_suggestions(
-                        handle,
-                        Some(expr),
-                        expr.range(),
-                        &mut suggestions,
-                    );
-                }
-            }
+            DictKeyLiteralContext::CallArgument { source_expr, .. } => self
+                .extend_dict_key_suggestions(
+                    handle,
+                    Some(source_expr),
+                    source_expr.range(),
+                    &mut suggestions,
+                ),
             DictKeyLiteralContext::DictLiteral { dict, .. } => {
                 self.extend_dict_key_suggestions(handle, None, dict.range(), &mut suggestions)
             }
@@ -461,8 +475,8 @@ impl<'a> Transaction<'a> {
         None
     }
 
-    /// Adds known string keys for a dict-like base: explicit keys recorded as facets
-    /// on the base's binding, plus TypedDict fields or DataFrame columns from its type.
+    /// Adds known string keys for a dict-like base: explicit keys recorded as facets,
+    /// TypedDict fields, and DataFrame columns that are safe across every union member.
     fn extend_dict_key_suggestions(
         &self,
         handle: &Handle,
@@ -513,13 +527,18 @@ impl<'a> Transaction<'a> {
 
         // For key access we query the container expression; for literals we query the
         // literal itself to pick up contextual TypedDict typing from assignments.
-        if let Some(base_type) = self.get_type_trace(handle, base_range)
-            && let Some(typed_keys) = self.collect_container_keys(handle, base_type)
-        {
-            for (key, ty) in typed_keys {
-                let entry = suggestions.entry(key).or_insert(None);
-                if entry.is_none() {
-                    *entry = Some(ty);
+        if let Some(base_type) = self.get_type_trace(handle, base_range) {
+            if let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type.clone()) {
+                for (key, ty) in typed_keys {
+                    let entry = suggestions.entry(key).or_insert(None);
+                    if entry.is_none() {
+                        *entry = Some(ty);
+                    }
+                }
+            }
+            if let Some(columns) = Self::collect_dataframe_columns(&base_type) {
+                for column in columns {
+                    suggestions.entry(column).or_insert(None);
                 }
             }
         }
