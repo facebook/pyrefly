@@ -952,28 +952,54 @@ assert_type(y, str)
 
 // https://github.com/facebook/pyrefly/issues/2928
 testcase!(
-    bug = "Should detect too many values when unpacking a string literal",
     test_unpack_string_too_many,
     r#"
-a, b = "abc"
+a, b = "abc"  # E: Cannot unpack Literal['abc'] (of size 3) into 2 values
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2927
 testcase!(
-    bug = "Should detect too few values when unpacking a single-char string",
     test_unpack_string_too_few,
     r#"
-a, b = "x"
+a, b = "x"  # E: Cannot unpack Literal['x'] (of size 1) into 2 values
 "#,
 );
 
 testcase!(
-    bug = "Should detect zero step size in slice",
+    test_unpack_string_exact,
+    r#"
+a, b, c = "abc"
+"#,
+);
+
+testcase!(
+    test_unpack_string_splat,
+    r#"
+a, *b = "abc"
+x, y, *z = "w"  # E: Cannot unpack Literal['w'] (of size 1) into 2+ values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_too_many,
+    r#"
+a, b = b"abc"  # E: Cannot unpack Literal[b'abc'] (of size 3) into 2 values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_exact,
+    r#"
+a, b, c = b"abc"
+"#,
+);
+
+testcase!(
     test_slice_zero_step,
     r#"
 items = [1, 2, 3, 4]
-bad = items[::0]
+bad = items[::0]  # E: Slice step cannot be zero
 "#,
 );
 
@@ -1482,7 +1508,6 @@ class Container:
 );
 
 testcase!(
-    bug = "Multi-target rebind of a class name bypasses receiver detection",
     test_class_rebind_multi_target,
     r#"
 from typing import reveal_type
@@ -1495,18 +1520,14 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    # The single-target form errors here. The multi-target form silently
-    # allows the incompatible rebind, which then poisons the call site
-    # below with spurious argument errors against `Dummy.__init__`.
-    other = Real = Dummy
+    other = Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real]
 "#,
 );
 
 testcase!(
-    bug = "Unpacking rebind of a class name bypasses receiver detection",
     test_class_rebind_unpacked,
     r#"
 from typing import reveal_type
@@ -1519,12 +1540,9 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    # The single-target form errors here. The unpacking form silently
-    # allows the incompatible rebind, which then poisons the call site
-    # below with spurious argument errors against `Dummy.__init__`.
-    Real, _ = (Dummy, 0)
+    Real, _ = (Dummy, 0)  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real]
 "#,
 );

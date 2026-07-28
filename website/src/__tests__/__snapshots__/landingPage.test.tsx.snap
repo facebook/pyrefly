@@ -13,7 +13,7 @@ exports[`Home page renders external site correctly 1`] = `
       <div>
         <div>
           <span>
-            🎉 Pyrefly v1.0 is now available!
+            🎉 Pyrefly v1.1 is now available!
           </span>
           <div>
             <button>
@@ -83,14 +83,20 @@ exports[`Home page renders external site correctly 1`] = `
                     </button>
                   </pre>
                 </div>
-                <a
-                  href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
-                  target="_blank"
-                >
-                   
-                  Get VSCode Extension
-                   
-                </a>
+                <div>
+                  <a
+                    href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
+                    target="_blank"
+                  >
+                    Get VSCode Extension
+                  </a>
+                  <a
+                    href="https://open-vsx.org/extension/meta/pyrefly"
+                    target="_blank"
+                  >
+                    Get OpenVSX Extension
+                  </a>
+                </div>
               </section>
             </div>
             <section>
@@ -128,7 +134,9 @@ exports[`Home page renders external site correctly 1`] = `
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0s;"
+                    tabindex="0"
                   >
                     <h3>
                       Scale with Confidence
@@ -150,13 +158,18 @@ exports[`Home page renders external site correctly 1`] = `
                         </sup>
                       </span>
                     </p>
+                    <span>
+                      →
+                    </span>
                   </div>
                 </div>
                 <div
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0.05s;"
+                    tabindex="0"
                   >
                     <h3>
                       Developer Delight
@@ -164,26 +177,48 @@ exports[`Home page renders external site correctly 1`] = `
                     <p>
                       Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor.
                     </p>
+                    <span>
+                      →
+                    </span>
                   </div>
                 </div>
                 <div
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0.1s;"
+                    tabindex="0"
+                  >
+                    <h3>
+                      Verify AI-written Python
+                    </h3>
+                    <p>
+                      Catch type bugs in code your AI agent writes
+                    </p>
+                    <span>
+                      read the blog →
+                    </span>
+                  </div>
+                </div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0.15000000000000002s;"
                   >
                     <h3>
                       Support at your Fingertips
                     </h3>
                     <p>
-                      Have questions or feedback to share? Connect with us on 
-                      <a
-                        href="https://discord.gg/Cf7mFQtW7W"
-                        target="_blank"
-                      >
-                        Discord
-                      </a>
+                      Have questions or feedback to share? Connect with us!
                     </p>
+                    <a
+                      href="https://discord.gg/Cf7mFQtW7W"
+                      target="_blank"
+                    >
+                      Join our Discord →
+                    </a>
                   </div>
                 </div>
               </div>
@@ -198,6 +233,109 @@ exports[`Home page renders external site correctly 1`] = `
                   id="firefly"
                 />
               </section>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section
+        id="ide-carousel-section"
+      >
+        <div
+          class="container"
+        >
+          <div
+            style="opacity: 0;"
+          >
+            <div>
+              <div
+                class="container"
+              >
+                <h2>
+                  Works where
+                   
+                  <span>
+                    you or your agent
+                  </span>
+                   
+                  writes Python
+                </h2>
+              </div>
+              <div>
+                <div>
+                  <div>
+                    <img
+                      alt="VS Code"
+                      src="/img/vscode.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="PyCharm"
+                      src="/img/PyCharm.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Google Antigravity"
+                      src="/img/Google_Antigravity_Logo_2025.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Cursor"
+                      src="/img/cursor_logo_light.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Windsurf"
+                      src="/img/windsurf.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Neovim"
+                      src="/img/neovim.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="VS Code"
+                      src="/img/vscode.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="PyCharm"
+                      src="/img/PyCharm.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Google Antigravity"
+                      src="/img/Google_Antigravity_Logo_2025.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Cursor"
+                      src="/img/cursor_logo_light.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Windsurf"
+                      src="/img/windsurf.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Neovim"
+                      src="/img/neovim.svg"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -430,7 +568,7 @@ exports[`Home page renders internal site correctly 1`] = `
       <div>
         <div>
           <span>
-            🎉 Pyrefly v1.0 is now available!
+            🎉 Pyrefly v1.1 is now available!
           </span>
           <div>
             <button>
@@ -500,14 +638,20 @@ exports[`Home page renders internal site correctly 1`] = `
                     </button>
                   </pre>
                 </div>
-                <a
-                  href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
-                  target="_blank"
-                >
-                   
-                  Get VSCode Extension
-                   
-                </a>
+                <div>
+                  <a
+                    href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
+                    target="_blank"
+                  >
+                    Get VSCode Extension
+                  </a>
+                  <a
+                    href="https://open-vsx.org/extension/meta/pyrefly"
+                    target="_blank"
+                  >
+                    Get OpenVSX Extension
+                  </a>
+                </div>
               </section>
             </div>
             <section>
@@ -545,7 +689,9 @@ exports[`Home page renders internal site correctly 1`] = `
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0s;"
+                    tabindex="0"
                   >
                     <h3>
                       Scale with Confidence
@@ -567,13 +713,18 @@ exports[`Home page renders internal site correctly 1`] = `
                         </sup>
                       </span>
                     </p>
+                    <span>
+                      →
+                    </span>
                   </div>
                 </div>
                 <div
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0.05s;"
+                    tabindex="0"
                   >
                     <h3>
                       Developer Delight
@@ -581,26 +732,48 @@ exports[`Home page renders internal site correctly 1`] = `
                     <p>
                       Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor.
                     </p>
+                    <span>
+                      →
+                    </span>
                   </div>
                 </div>
                 <div
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0.1s;"
+                    tabindex="0"
+                  >
+                    <h3>
+                      Verify AI-written Python
+                    </h3>
+                    <p>
+                      Catch type bugs in code your AI agent writes
+                    </p>
+                    <span>
+                      read the blog →
+                    </span>
+                  </div>
+                </div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0.15000000000000002s;"
                   >
                     <h3>
                       Support at your Fingertips
                     </h3>
                     <p>
-                      Have questions or feedback to share? Connect with us on 
-                      <a
-                        href="https://discord.gg/Cf7mFQtW7W"
-                        target="_blank"
-                      >
-                        Discord
-                      </a>
+                      Have questions or feedback to share? Connect with us!
                     </p>
+                    <a
+                      href="https://discord.gg/Cf7mFQtW7W"
+                      target="_blank"
+                    >
+                      Join our Discord →
+                    </a>
                   </div>
                 </div>
               </div>
@@ -615,6 +788,109 @@ exports[`Home page renders internal site correctly 1`] = `
                   id="firefly"
                 />
               </section>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section
+        id="ide-carousel-section"
+      >
+        <div
+          class="container"
+        >
+          <div
+            style="opacity: 0;"
+          >
+            <div>
+              <div
+                class="container"
+              >
+                <h2>
+                  Works where
+                   
+                  <span>
+                    you or your agent
+                  </span>
+                   
+                  writes Python
+                </h2>
+              </div>
+              <div>
+                <div>
+                  <div>
+                    <img
+                      alt="VS Code"
+                      src="/img/vscode.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="PyCharm"
+                      src="/img/PyCharm.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Google Antigravity"
+                      src="/img/Google_Antigravity_Logo_2025.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Cursor"
+                      src="/img/cursor_logo_light.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Windsurf"
+                      src="/img/windsurf.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Neovim"
+                      src="/img/neovim.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="VS Code"
+                      src="/img/vscode.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="PyCharm"
+                      src="/img/PyCharm.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Google Antigravity"
+                      src="/img/Google_Antigravity_Logo_2025.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Cursor"
+                      src="/img/cursor_logo_light.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Windsurf"
+                      src="/img/windsurf.svg"
+                    />
+                  </div>
+                  <div>
+                    <img
+                      alt="Neovim"
+                      src="/img/neovim.svg"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

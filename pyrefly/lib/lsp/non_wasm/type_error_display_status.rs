@@ -290,6 +290,7 @@ fn type_checking_mode_kebab(mode: TypeCheckingMode) -> &'static str {
         TypeCheckingMode::Legacy => "legacy",
         TypeCheckingMode::Default => "default",
         TypeCheckingMode::Strict => "strict",
+        TypeCheckingMode::All => "all",
     }
 }
 

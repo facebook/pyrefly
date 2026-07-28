@@ -220,6 +220,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn literal_typed_dict_key_name(&self, ty: &Type) -> Option<Name> {
+        let Type::Literal(lit) = ty else {
+            return None;
+        };
+        match &lit.value {
+            Lit::Str(field_name) => Some(Name::new(field_name)),
+            Lit::Enum(lit_enum) => {
+                let metadata = self.get_metadata_for_class(lit_enum.class.class_object());
+                let enum_metadata = metadata.enum_metadata()?;
+                let value_ty =
+                    self.enum_value_lookup_on_member(&lit_enum.class, lit_enum, enum_metadata);
+                match value_ty {
+                    Type::Literal(value_lit) => match value_lit.value {
+                        Lit::Str(field_name) => Some(Name::new(&field_name)),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Look up the `_value_` attribute for a specific enum member (e.g. `MyEnum.X._value_`).
     /// Whether `_value_` should be read-write is unspecified, but we need to allow assigning
     /// it in `__init__` so we make it read-write.
@@ -276,31 +299,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_any_implicit()
             };
         }
-        if let Some(mixed_in) = mixed_in {
-            return mixed_in;
-        }
         // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type.
         let enum_value_types: Vec<_> = self
             .get_enum_members(class.class_object())
             .into_iter()
             .filter_map(|lit| {
-                if let Lit::Enum(lit_enum) = lit {
-                    let value_ty =
-                        self.enum_literal_to_value_type(*lit_enum, enum_metadata.is_django);
-                    if value_ty.is_implicit_literal() {
-                        Some(value_ty.promote_implicit_literals(self.stdlib))
+                let Lit::Enum(lit_enum) = lit else {
+                    return None;
+                };
+                let value_ty = self.enum_literal_to_value_type(*lit_enum, enum_metadata.is_django);
+                Some(if let Some(ref mixed_in) = mixed_in {
+                    let promoted = value_ty.clone().promote_implicit_literals(self.stdlib);
+                    if &promoted == mixed_in {
+                        value_ty
                     } else {
-                        Some(value_ty)
+                        mixed_in.clone()
                     }
+                } else if value_ty.is_implicit_literal() {
+                    value_ty.promote_implicit_literals(self.stdlib)
                 } else {
-                    None
-                }
+                    value_ty
+                })
             })
             .collect();
         if enum_value_types.is_empty() {
-            // Don't assume Never if there are no members, because they may
-            // be created dynamically and we don't want false-positives downstream.
-            self.heap.mk_any_implicit()
+            // Don't assume Never if there are no members, because they may be created
+            // dynamically and we don't want false-positives downstream.
+            if let Some(mixed_in) = mixed_in {
+                mixed_in
+            } else {
+                self.heap.mk_any_implicit()
+            }
         } else {
             self.unions(enum_value_types)
         }
@@ -439,7 +468,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Lit::Enum(Box::new(LitEnum {
                     class: enum_.cls.clone(),
                     member: name.clone(),
-                    ty: self.solver().deep_force(ty.clone()),
+                    ty: self.solver().force(ty.clone()),
                 }))
                 .to_implicit_type(),
             )

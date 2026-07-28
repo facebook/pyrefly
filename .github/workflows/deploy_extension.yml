@@ -44,4 +44,29 @@ jobs:
             - name: upload
               uses: actions/download-artifact@v7
             - name: publish
-              run: npx ovsx publish ${{ needs.build.outputs.prerelease_flag }} --skip-duplicate --packagePath $(find . -iname '*.vsix') --pat ${{ secrets.OPENVSX_TOKEN }}
+              shell: bash
+              run: |
+                set -euo pipefail
+
+                shopt -s nullglob
+                packages=(./*/*.vsix)
+                if [ "${#packages[@]}" -eq 0 ]; then
+                  echo "No VSIX packages found"
+                  exit 1
+                fi
+
+                for attempt in 1 2 3; do
+                  if npx ovsx publish ${{ needs.build.outputs.prerelease_flag }} --skip-duplicate --packagePath "${packages[@]}"; then
+                    exit 0
+                  fi
+
+                  if [ "$attempt" -eq 3 ]; then
+                    exit 1
+                  fi
+
+                  sleep_seconds=$((30 * (2 ** (attempt - 1))))
+                  echo "OpenVSX publish failed; retrying in ${sleep_seconds}s"
+                  sleep "$sleep_seconds"
+                done
+              env:
+                OVSX_PAT: ${{ secrets.OPENVSX_TOKEN }}

@@ -13,7 +13,6 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::error::collector::ErrorCollector;
 use crate::solver::solver::SubsetError;
-use crate::solver::solver::SubsetWithSnapshotResult;
 use crate::types::callable::Param;
 use crate::types::callable::Required;
 use crate::types::class::ClassType;
@@ -427,30 +426,117 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect()
     }
 
-    pub fn infer_with_decomposed_hint<'b, D>(
+    pub fn infer_with_decomposed_hint<D>(
         &self,
-        hint: Option<HintRef<'_, 'b>>,
-        decompose: impl Fn(&'b Type) -> Option<D>,
-        infer: impl Fn(Option<D>) -> Type,
+        hint: Option<HintRef<'_, '_>>,
+        decompose: impl Fn(&Type) -> Option<D>,
+        // The inputs to `infer` are the result of decomposing the hint, plus the original hint.
+        // The latter is passed in because we swap in a fresh error collector.
+        infer: impl Fn(Option<D>, Option<HintRef>) -> Type,
     ) -> Type {
-        if let Some(hint) = hint
-            && hint.types().len() <= MAX_DECOMPOSE_HINT_WIDTH
-        {
-            for (hint, vs) in self.solver().partial_sort_by_vars(hint.types()) {
-                let mut ret = None;
-                match self.solver().with_snapshot(&vs, || {
-                    let d = decompose(hint);
-                    if d.is_none() {
-                        return Err(SubsetError::Other);
+        if let Some(hint) = hint {
+            let raw_hints = hint.types();
+            let flattened_hints = self.flatten_alias_union_hints(raw_hints);
+            let hints = flattened_hints.as_ref().map_or(raw_hints, |x| x);
+            let decomposable_width = hints.iter().filter(|h| !h.is_scalar()).count();
+            if decomposable_width <= MAX_DECOMPOSE_HINT_WIDTH {
+                let mut ret_with_errors = None;
+                for (branch_hint, vs) in self.solver().partial_sort_by_vars(hints) {
+                    if branch_hint.is_scalar() {
+                        continue;
                     }
-                    ret = Some(infer(d));
-                    self.is_subset_eq_with_reason(ret.as_ref().unwrap(), hint)
-                }) {
-                    SubsetWithSnapshotResult::Ok => return ret.unwrap(),
-                    SubsetWithSnapshotResult::Err(_) => {}
+                    if vs.is_empty() {
+                        // No placeholder vars to pin, so inference has no solver state to
+                        // roll back. Infer directly and collect this hint's errors against
+                        // a fresh collector; they are speculative until we commit to it.
+                        let Some(d) = decompose(branch_hint) else {
+                            continue;
+                        };
+                        let error_collectors = hint.errors().map(|e| (e, self.error_collector()));
+                        let ret = infer(
+                            Some(d),
+                            Some(HintRef(
+                                hint.types(),
+                                error_collectors
+                                    .as_ref()
+                                    .map(|(_, branch_errors)| branch_errors),
+                            )),
+                        );
+                        if !self.is_subset_eq(&ret, branch_hint) {
+                            continue;
+                        }
+                        match error_collectors {
+                            // This hint matches but produces hard errors. Remember the first
+                            // such hint as a fallback and keep looking for a clean match.
+                            Some((errors, branch_errors)) if branch_errors.has_hard() => {
+                                if ret_with_errors.is_none() {
+                                    ret_with_errors = Some((ret, errors, branch_errors));
+                                }
+                            }
+                            // Matched with at most soft errors: commit, propagating them.
+                            Some((errors, branch_errors)) => {
+                                errors.extend(branch_errors);
+                                return ret;
+                            }
+                            None => return ret,
+                        }
+                    } else {
+                        // Pinning vars mutates solver state, so infer under a snapshot that
+                        // rolls back when the inferred type doesn't match the hint. Emitting
+                        // errors from possibly-partial var answers is unsafe, so pass none.
+                        let mut ret = None;
+                        let matched = self.solver().with_snapshot(&vs, || {
+                            let Some(d) = decompose(branch_hint) else {
+                                return Err(SubsetError::Other);
+                            };
+                            let ty = infer(Some(d), Some(HintRef(hint.types(), None)));
+                            let result = self.is_subset_eq_with_reason(&ty, branch_hint);
+                            ret = Some(ty);
+                            result
+                        });
+                        if matched.is_ok() {
+                            return ret.unwrap();
+                        }
+                    }
+                }
+                // If we didn't find a completely successful result, take the first hint that
+                // matched but produced hard errors.
+                if let Some((ret, errors, branch_errors)) = ret_with_errors {
+                    errors.extend(branch_errors);
+                    return ret;
                 }
             }
         }
-        infer(None)
+        infer(None, hint)
+    }
+
+    /// Flatten the hint candidates produced by `HintRef::split`, additionally looking through type
+    /// aliases. Otherwise, if the alias is a union, the solver pins the decomposition vars to
+    /// whichever union arm matches first, which is usually the wrong one.
+    fn flatten_alias_union_hints(&self, hints: &[Type]) -> Option<Vec<Type>> {
+        if !hints
+            .iter()
+            .any(|hint| matches!(hint, Type::UntypedAlias(_) | Type::Union(_)))
+        {
+            return None;
+        }
+        let mut flattened_hints = Vec::new();
+        for hint in hints {
+            match hint {
+                Type::UntypedAlias(data) => {
+                    let expanded_alias = self.untype_alias(data);
+                    if let Type::Union(u) = expanded_alias {
+                        flattened_hints.extend(u.members);
+                    } else {
+                        flattened_hints.push(expanded_alias);
+                    }
+                }
+                Type::Union(u) => {
+                    flattened_hints.extend(u.members.clone());
+                }
+                _ => flattened_hints.push(hint.clone()),
+            }
+        }
+        Some(flattened_hints)
     }
 }

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
@@ -20,12 +21,14 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
+use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::binding::binding::ClassDefData;
 use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyClassBaseType;
+use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
@@ -64,6 +67,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def_index: ClassDefIndex,
         x: &ClassDefData,
         parent: &NestingContext,
+        is_protocol: bool,
         tparams_require_binding: bool,
         errors: &ErrorCollector,
     ) -> Class {
@@ -79,6 +83,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             parent.dupe(),
             self.module().dupe(),
             precomputed_tparams,
+            is_protocol,
         )
     }
 
@@ -94,12 +99,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             parent.dupe(),
             self.module().dupe(),
             Some(Arc::new(TParams::default())),
+            false,
         )
     }
 
     pub fn get_metadata_for_class(&self, cls: &Class) -> Arc<ClassMetadata> {
         self.get_from_class(cls, &KeyClassMetadata(cls.index()))
             .unwrap_or_else(|| Arc::new(ClassMetadata::recursive()))
+    }
+
+    pub fn shaped_array_shape_for_class(&self, cls: &Class) -> Option<Quantified> {
+        // Shaped-array registration is explicit per class, via the `@shaped_array` decorator.
+        self.get_metadata_for_class(cls)
+            .shaped_array_shape()
+            .cloned()
+    }
+
+    pub fn shaped_array_shape_for_class_type(&self, cls: &ClassType) -> Option<Quantified> {
+        self.shaped_array_shape_for_class(cls.class_object())
     }
 
     pub fn get_abstract_members_for_class(&self, cls: &Class) -> Arc<AbstractClassMembers> {
@@ -120,6 +137,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_mro_for_class(&self, cls: &Class) -> Arc<ClassMro> {
         self.get_from_class(cls, &KeyClassMro(cls.index()))
             .unwrap_or_else(|| Arc::new(ClassMro::recursive()))
+    }
+
+    pub fn get_disjoint_base_for_class(&self, cls: &Class) -> Arc<ClassDisjointBase> {
+        self.get_from_class(cls, &KeyClassDisjointBase(cls.index()))
+            .unwrap_or_else(|| Arc::new(ClassDisjointBase::recursive()))
     }
 
     pub fn get_class_field_map(&self, cls: &Class) -> SmallMap<Name, Arc<ClassField>> {

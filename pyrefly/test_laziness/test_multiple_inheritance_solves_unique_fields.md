@@ -48,15 +48,17 @@ a: Solutions
 b: Answers
 c: Answers
 
-(191 builtin demands hidden)
+(84 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> c::Exports(is_special_export)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)
+a -> b::Exports(is_implicit_reexport)
 a -> b::Exports(get_deprecated)
 a -> b::KeyExport(Name("B1"))
 a -> c::Load(module_exists)
 a -> c::Exports(export_exists)
+a -> c::Exports(is_implicit_reexport)
 a -> c::Exports(get_deprecated)
 a -> c::KeyExport(Name("B2"))
 a -> b::KeyClassMetadata(ClassDefIndex(0))
@@ -70,6 +72,8 @@ a -> b::KeyClassField(ClassDefIndex(0), Name("shared"))
 a -> c::KeyClassField(ClassDefIndex(0), Name("p2"))
 a -> c::KeyClassField(ClassDefIndex(0), Name("shared"))
 a -> b::KeyClassField(ClassDefIndex(0), Name("shared"))
+a -> b::KeyClassDisjointBase(ClassDefIndex(0))
+a -> c::KeyClassDisjointBase(ClassDefIndex(0))
 a -> b::KeyClassSynthesizedFields(ClassDefIndex(0))
 a -> c::KeyClassSynthesizedFields(ClassDefIndex(0))
 ```

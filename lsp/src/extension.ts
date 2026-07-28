@@ -28,12 +28,10 @@ import {
 } from './status-bar';
 import {runDocstringFoldingCommand} from './docstring';
 import {registerCodeLensCommands} from './codeLens';
+import {registerHoverProvider} from './hover';
 import {PythonEnvironment} from './python-environment';
 import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
-  disableWindsurfPyrightIfInstalled,
-  disableBasedPyrightIfInstalled,
-  disableCursorPyrightIfInstalled,
 } from './extension-interop';
 
 let client: LanguageClient;
@@ -129,6 +127,9 @@ export async function activate(context: ExtensionContext) {
   const rawInitialisationOptions = JSON.parse(
     JSON.stringify(vscode.workspace.getConfiguration('pyrefly') ?? {}),
   );
+  // Proposed APIs are omitted at runtime when the editor has not granted access.
+  // In that case, let vscode-languageclient register the ordinary LSP hover provider.
+  const supportsHoverVerbosity = vscode.VerboseHover !== undefined;
 
   // Opt into the V2 wire shape for the typeErrorDisplayStatus request.
   // An older binary that doesn't know V2 still returns its V1 bare
@@ -141,6 +142,7 @@ export async function activate(context: ExtensionContext) {
     pyrefly: {
       ...((rawInitialisationOptions as any).pyrefly ?? {}),
       typeErrorDisplayStatusVersion: TYPE_ERROR_DISPLAY_STATUS_VERSION,
+      customHoverProvider: supportsHoverVerbosity,
     },
   };
 
@@ -197,6 +199,9 @@ export async function activate(context: ExtensionContext) {
     serverOptions,
     clientOptions,
   );
+  if (supportsHoverVerbosity) {
+    registerHoverProvider(context, () => client);
+  }
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async () => {
@@ -323,20 +328,6 @@ export async function activate(context: ExtensionContext) {
       await triggerMsPythonRefreshLanguageServersIfInstalled();
     }
   });
-
-  // Disable Windsurf Pyright language services if the extension is installed
-  await disableWindsurfPyrightIfInstalled();
-
-  // Disable Cursor Pyright language services if the extension is installed
-  await disableCursorPyrightIfInstalled();
-
-  // Disable Based Pyright language services if the extension is installed and Pyrefly is enabled
-  const pyreflyDisabled = vscode.workspace
-    .getConfiguration('python.pyrefly')
-    .get<boolean>('disableLanguageServices', false);
-  if (!pyreflyDisabled) {
-    await disableBasedPyrightIfInstalled();
-  }
 
   // Start the client. This will also launch the server
   await client.start();

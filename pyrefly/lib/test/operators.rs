@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -121,6 +122,49 @@ class CandidateWeight(Generic[Weight]):
     def __add__(self, other: CandidateWeight[Weight]) -> Weight:
         return self.weight + other.weight
     "#,
+);
+
+testcase!(
+    test_incompatible_equality_comparison,
+    TestEnv::new().enable_incompatible_comparison_error(),
+    r#"
+from decimal import Decimal
+
+def compare(
+    x: int,
+    y: str,
+    z: int | str,
+    f: float,
+    b: bytes,
+    ba: bytearray,
+    s: set[int],
+    fs: frozenset[int],
+    d: Decimal,
+    bo: bool,
+    c: complex,
+    mv: memoryview,
+) -> None:
+    x == y  # E: Comparison `==` between incompatible types `int` and `str`
+    x != y  # E: Comparison `!=` between incompatible types `int` and `str`
+    z == y
+    x == f
+    x == d
+    b == ba
+    s == fs
+    x == bo
+    c == f
+    b == mv
+    bo == y  # E: Comparison `==` between incompatible types `bool` and `str`
+    mv == y  # E: Comparison `==` between incompatible types `memoryview` and `str`
+"#,
+);
+
+testcase!(
+    test_incompatible_equality_comparison_default_off,
+    r#"
+def compare(x: int, y: str) -> None:
+    x == y
+"#,
 );
 
 testcase!(
@@ -540,7 +584,8 @@ def test1(x: Any) -> None:
     assert_type(x != 1, Any)
     assert_type(x is None, Any)
     assert_type(x is not None, Any)
-    assert_type(x in [1, 2], Any)
+    assert_type(x in [1, 2], bool)
+    assert_type(x not in [1, 2], bool)
     assert_type(1 in x, Any)
 
 def test2(x: float, y: Any) -> None:
@@ -698,7 +743,7 @@ testcase!(
 from typing import Callable, cast, assert_type
 
 class Tensor:
-    __pow__ = cast(Callable[[Tensor, int], Tensor], lambda x, y: x)  # No redundant cast warning - types are not exactly equal
+    __pow__ = cast("Callable[[Tensor, int], Tensor]", lambda x, y: x)  # No redundant cast warning - types are not exactly equal
 
 def f(x: Tensor, i: int):
     assert_type(x ** i, Tensor)
@@ -1090,4 +1135,29 @@ from typing import assert_type
 _ = [{"col": None}] * 1000
 assert_type([1, 2, 3] * 5, list[int])
 "#,
+);
+
+testcase!(
+    test_add_after_narrow,
+    r#"
+def f[T: (bytes, str)](x: T) -> T:
+    if isinstance(x, bytes):
+        return x + b""
+    else:
+        return x + ""
+    "#,
+);
+
+testcase!(
+    test_containment_with_typevars,
+    r#"
+from typing import Iterable
+def f1[T: (str, bytes)](x: T, y: Iterable[T]):
+    return x in y
+def f2[T: (str, bytes)](x: T, y: Iterable[T]):
+    if isinstance(x, str):
+        return x in y
+def f3[T: (str, bytes)](x: T, y: T):
+    return x in y
+    "#,
 );
