@@ -75,6 +75,11 @@
                 "command": "pyrefly.unfoldAllDocstrings"
             },
             {
+                "title": "Infer Types for Current File",
+                "category": "pyrefly",
+                "command": "pyrefly.infer"
+            },
+            {
                 "title": "Run File",
                 "category": "pyrefly",
                 "command": "pyrefly.runMain"
