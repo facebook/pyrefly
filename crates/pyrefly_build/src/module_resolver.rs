@@ -634,18 +634,27 @@ pub struct ModuleSearchResult {
 }
 
 #[derive(Debug)]
-pub struct StubSearchResult {
-    pub result: FindResult,
-    /// True for an explicitly partial stub package or an implicit stub namespace.
-    pub is_partial: bool,
+pub enum StubSearchResult {
+    /// The stub package provides a module for this import: either a concrete
+    /// package/module file, or a namespace from a stub that is not marked
+    /// `partial` (and so shadows the runtime). It is preferred over the runtime
+    /// package, preserving the normal `.pyi`-before-`.py` precedence.
+    Provides(FindResult),
+    /// A partial stub whose lookup landed on a bare namespace directory: it does
+    /// not itself provide this module, so the runtime package is preferred. The
+    /// namespace roots are retained as a fallback for when no runtime module
+    /// exists, and to merge with a runtime namespace of the same name.
+    Transparent(Vec1<PathBuf>),
 }
 
 impl StubSearchResult {
-    /// A partial stub that resolved only to a bare namespace directory does not
-    /// itself provide this module, so the runtime package should be preferred
-    /// (the stub namespace remains a fallback when no runtime module exists).
-    pub fn is_partial_namespace(&self) -> bool {
-        self.is_partial && matches!(self.result, FindResult::ImplicitNamespacePackage(_))
+    pub fn into_find_result(self) -> FindResult {
+        match self {
+            StubSearchResult::Provides(result) => result,
+            StubSearchResult::Transparent(namespaces) => {
+                FindResult::ImplicitNamespacePackage(namespaces)
+            }
+        }
     }
 }
 
@@ -688,7 +697,12 @@ where
                 observer,
             )
             .is_some_and(|(top_level, _)| top_level.stub_package_is_partial(dir_cache, observer));
-        StubSearchResult { result, is_partial }
+        match result {
+            FindResult::ImplicitNamespacePackage(namespaces) if is_partial => {
+                StubSearchResult::Transparent(namespaces)
+            }
+            result => StubSearchResult::Provides(result),
+        }
     });
     let normal_result = find_module_components(
         first,
@@ -735,10 +749,10 @@ impl ModuleResolver {
             None,
         );
         match (result.normal_result, result.stub_result) {
-            (Some(normal_result), Some(stub_result)) if stub_result.is_partial_namespace() => {
+            (Some(normal_result), Some(StubSearchResult::Transparent(_))) => {
                 normal_result.module_path()
             }
-            (_, Some(stub_result)) => stub_result.result.module_path(),
+            (_, Some(stub_result)) => stub_result.into_find_result().module_path(),
             (Some(normal_result), None) => normal_result.module_path(),
             (None, None) => None,
         }

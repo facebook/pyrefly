@@ -80,7 +80,7 @@ fn find_result_module_path(result: FindResult) -> FindingOrError<ModulePath> {
 /// - Using a real config file with no source package installed
 fn resolve_third_party_stub(
     module: ModuleName,
-    stub_result: Option<&FindResult>,
+    stub_result: Option<&StubSearchResult>,
     normal_result: Option<&FindResult>,
     bundled_stub: Option<FindingOrError<ModulePath>>,
     from_real_config_file: bool,
@@ -145,31 +145,26 @@ fn combine_normal_and_stub_results(
 ) -> Option<FindingOrError<ModulePath>> {
     match (normal_result, stub_result) {
         // A partial stub that resolved only to a bare namespace does not itself
-        // provide this module: defer to the runtime package, keeping the stub
-        // namespace as a fallback only when there is no runtime module.
-        (normal_result, Some(stub_result)) if stub_result.is_partial_namespace() => {
-            match normal_result {
-                Some(FindResult::ImplicitNamespacePackage(normal_namespaces)) => {
-                    namespaces_found.append(&mut normal_namespaces.into_vec());
-                    if let FindResult::ImplicitNamespacePackage(stub_namespaces) =
-                        stub_result.result
-                    {
-                        namespaces_found.extend(stub_namespaces);
-                    }
-                    None
-                }
-                Some(normal_result) => Some(find_result_module_path(normal_result)),
-                None => Some(
-                    find_result_module_path(stub_result.result)
-                        .with_error(FindError::MissingSource(module)),
-                ),
-            }
+        // provide this module: defer to the runtime package, merging the stub's
+        // namespace roots into the runtime namespace when both are namespaces.
+        (
+            Some(FindResult::ImplicitNamespacePackage(normal_namespaces)),
+            Some(StubSearchResult::Transparent(stub_namespaces)),
+        ) => {
+            namespaces_found.append(&mut normal_namespaces.into_vec());
+            namespaces_found.extend(stub_namespaces);
+            None
+        }
+        (Some(normal_result), Some(StubSearchResult::Transparent(_))) => {
+            Some(find_result_module_path(normal_result))
         }
         (None, Some(stub_result)) => Some(
-            find_result_module_path(stub_result.result)
+            find_result_module_path(stub_result.into_find_result())
                 .with_error(FindError::MissingSource(module)),
         ),
-        (Some(_), Some(stub_result)) => Some(find_result_module_path(stub_result.result)),
+        (Some(_), Some(stub_result)) => {
+            Some(find_result_module_path(stub_result.into_find_result()))
+        }
         (Some(FindResult::ImplicitNamespacePackage(namespaces)), _) => {
             namespaces_found.append(&mut namespaces.into_vec());
             None
@@ -233,10 +228,7 @@ where
     );
     if let Some(result) = resolve_third_party_stub(
         module,
-        results
-            .stub_result
-            .as_ref()
-            .map(|stub_result| &stub_result.result),
+        results.stub_result.as_ref(),
         results.normal_result.as_ref(),
         typeshed_third_party_stub,
         from_real_config_file,
