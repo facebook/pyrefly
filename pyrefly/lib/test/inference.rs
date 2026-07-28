@@ -230,6 +230,19 @@ def f(value: Any) -> Any:  # E: Explicit `Any` is not allowed # E: Explicit `Any
 
 xs: list[Any] = []  # E: Explicit `Any` is not allowed
 Alias: TypeAlias = dict[str, Any]  # E: Explicit `Any` is not allowed
+    "#,
+);
+
+testcase!(
+    test_explicit_any_in_tparam_default_does_not_leak_to_specialization,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any
+
+class C[T = Any]:  # E: Explicit `Any` is not allowed
+    pass
+
+x: C[int]
 "#,
 );
 

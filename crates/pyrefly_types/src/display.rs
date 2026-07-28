@@ -1793,6 +1793,22 @@ pub mod tests {
     }
 
     #[test]
+    fn test_display_ignores_tparam_qnames_for_disambiguation() {
+        let hidden = Type::ClassType(ClassType::new(
+            fake_class("C", "hidden", 0),
+            TArgs::default(),
+        ));
+        let tparam = fake_tparam(0, "T", QuantifiedKind::TypeVar)
+            .with_restriction(Restriction::Bound(hidden));
+        let visible = Type::ClassType(ClassType::new(
+            fake_class("C", "visible", 0),
+            TArgs::new(fake_tparams(vec![tparam]), vec![Type::None]),
+        ));
+
+        assert_eq!(visible.to_string(), "C[None]");
+    }
+
+    #[test]
     fn test_display_int_type_marks_standalone_sizes() {
         let heap = TypeHeap::new();
         let n = fake_tparam(0, "N", QuantifiedKind::IntVar).to_type(&heap);

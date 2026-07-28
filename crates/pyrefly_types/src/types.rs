@@ -237,7 +237,7 @@ pub struct TArgs(Arc<(Arc<TParams>, Box<[Type]>)>);
 
 impl Visit<Type> for TArgs {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
-        self.0.0.visit(f);
+        // TParams describe the declaration; only applied arguments are contained types.
         self.0.1.visit(f);
     }
 }
@@ -2164,16 +2164,50 @@ impl<'a> TypeVariable<'a> {
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
+    use std::sync::Arc;
 
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_util::visit::Visit;
     use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
 
     use crate::equality::TypeEq;
     use crate::equality::TypeEqCtx;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
+    use crate::quantified::AnchorIndex;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
+    use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::Restriction;
+    use crate::types::TArgs;
+    use crate::types::TParams;
     use crate::types::Type;
     use crate::types::Union;
+
+    #[test]
+    fn test_targs_visit_only_visits_applied_arguments() {
+        let tparam = Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("test"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static("T"),
+            QuantifiedKind::TypeVar,
+            Some(Type::None),
+            Restriction::Bound(Type::LiteralString(LitStyle::Implicit)),
+            PreInferenceVariance::Undefined,
+        );
+        let targs = TArgs::new(Arc::new(TParams::new(vec![tparam])), vec![Type::Ellipsis]);
+        let mut visited = Vec::new();
+
+        targs.visit(&mut |ty| visited.push(ty.clone()));
+
+        assert_eq!(visited, vec![Type::Ellipsis]);
+    }
 
     /// `display_name` is presentation-only, so two unions with identical members
     /// but different names must agree across `Eq`, `Ord`, and `TypeEq`.
