@@ -84,6 +84,20 @@ fn is_pkgutil_namespace(init_path: &Path, observer: Option<&dyn ModuleResolution
     PKGUTIL_EXTEND_PATH_PATTERN.is_match(&contents)
 }
 
+fn is_partial_py_typed(
+    py_typed_path: &Path,
+    observer: Option<&dyn ModuleResolutionObserver>,
+) -> bool {
+    let start = observer.map(|_| Timer::start());
+    let Ok(contents) = std::fs::read_to_string(py_typed_path) else {
+        return false;
+    };
+    if let Some(observer) = observer {
+        observer.observe_read(start.unwrap().elapsed_nanos());
+    }
+    contents.trim() == "partial"
+}
+
 /// Cache of directory listings to avoid repeated stat() calls during module resolution.
 ///
 /// Each directory is read at most once. Entries store
@@ -97,6 +111,8 @@ pub struct DirEntryCache {
     entry_cache: LockedMap<PathBuf, Option<Arc<SmallMap<OsString, bool>>>>,
     /// Cached `pkgutil.extend_path` namespace-package check, keyed by `__init__` path.
     pkgutil_cache: LockedMap<PathBuf, bool>,
+    /// Cached partial-package marker check, keyed by `py.typed` path.
+    partial_py_typed_cache: LockedMap<PathBuf, bool>,
 }
 
 impl Debug for DirEntryCache {
@@ -110,6 +126,7 @@ impl DirEntryCache {
         Self {
             entry_cache: LockedMap::new(),
             pkgutil_cache: LockedMap::new(),
+            partial_py_typed_cache: LockedMap::new(),
         }
     }
 
@@ -125,6 +142,20 @@ impl DirEntryCache {
         }
         let result = is_pkgutil_namespace(init_path, observer);
         self.pkgutil_cache.insert(key, result);
+        result
+    }
+
+    fn is_partial_py_typed(
+        &self,
+        py_typed_path: &Path,
+        observer: Option<&dyn ModuleResolutionObserver>,
+    ) -> bool {
+        let key = py_typed_path.to_path_buf();
+        if let Some(cached) = self.partial_py_typed_cache.get(&key) {
+            return *cached;
+        }
+        let result = is_partial_py_typed(py_typed_path, observer);
+        self.partial_py_typed_cache.insert(key, result);
         result
     }
 
@@ -230,6 +261,31 @@ impl FindResult {
             (FindResult::CompiledModule(_), _) => a,
             (_, FindResult::CompiledModule(_)) => b,
             (FindResult::ImplicitNamespacePackage(_), _) => a,
+        }
+    }
+
+    fn stub_package_is_partial(
+        &self,
+        dir_cache: &DirEntryCache,
+        observer: Option<&dyn ModuleResolutionObserver>,
+    ) -> bool {
+        match self {
+            FindResult::RegularPackage(_, package_dir) => {
+                dir_cache.is_partial_py_typed(&package_dir.join("py.typed"), observer)
+            }
+            FindResult::LegacyNamespacePackage(init_path, _) => {
+                init_path.parent().is_some_and(|package_dir| {
+                    dir_cache.is_partial_py_typed(&package_dir.join("py.typed"), observer)
+                })
+            }
+            FindResult::ImplicitNamespacePackage(package_dirs) => {
+                package_dirs.iter().any(|package_dir| {
+                    dir_cache.is_partial_py_typed(&package_dir.join("py.typed"), observer)
+                })
+            }
+            FindResult::SingleFilePyiModule(_)
+            | FindResult::SingleFilePyModule(_)
+            | FindResult::CompiledModule(_) => false,
         }
     }
 
@@ -560,8 +616,24 @@ where
 
 #[derive(Debug, Default)]
 pub struct ModuleSearchResult {
-    pub stub_result: Option<FindResult>,
+    pub stub_result: Option<StubSearchResult>,
     pub normal_result: Option<FindResult>,
+}
+
+#[derive(Debug)]
+pub struct StubSearchResult {
+    pub result: FindResult,
+    /// True for an explicitly partial stub package or an implicit stub namespace.
+    pub is_partial: bool,
+}
+
+impl StubSearchResult {
+    /// A partial stub that resolved only to a bare namespace directory does not
+    /// itself provide this module, so the runtime package should be preferred
+    /// (the stub namespace remains a fallback when no runtime module exists).
+    pub fn is_partial_namespace(&self) -> bool {
+        self.is_partial && matches!(self.result, FindResult::ImplicitNamespacePackage(_))
+    }
 }
 
 pub fn find_module_results<'a, I>(
@@ -586,7 +658,25 @@ where
         phantom_paths,
         dir_cache,
         observer,
-    );
+    )
+    .map(|result| {
+        // A namespace package below the top-level stub package is always
+        // incomplete; otherwise the top-level stub package's `py.typed` decides.
+        // The top-level lookup is only performed when the cheap namespace check
+        // does not already settle it, and it reuses the populated directory cache.
+        let is_partial = (!rest.is_empty()
+            && matches!(&result, FindResult::ImplicitNamespacePackage(_)))
+            || find_one_part(
+                &stub_first,
+                include.clone(),
+                style_filter,
+                &mut None,
+                dir_cache,
+                observer,
+            )
+            .is_some_and(|(top_level, _)| top_level.stub_package_is_partial(dir_cache, observer));
+        StubSearchResult { result, is_partial }
+    });
     let normal_result = find_module_components(
         first,
         rest,
@@ -632,7 +722,10 @@ impl ModuleResolver {
             None,
         );
         match (result.normal_result, result.stub_result) {
-            (_, Some(stub_result)) => stub_result.module_path(),
+            (Some(normal_result), Some(stub_result)) if stub_result.is_partial_namespace() => {
+                normal_result.module_path()
+            }
+            (_, Some(stub_result)) => stub_result.result.module_path(),
             (Some(normal_result), None) => normal_result.module_path(),
             (None, None) => None,
         }
@@ -881,6 +974,57 @@ mod tests {
         padding.push_str("__path__ = pkgutil.extend_path(__path__, __name__)\n");
         std::fs::write(&init_truncated, &padding).unwrap();
         assert!(!is_pkgutil_namespace(&init_truncated, None));
+    }
+
+    #[test]
+    fn test_partial_py_typed_detection() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file_with_contents("partial.py.typed", "partial\n"),
+                TestPath::file_with_contents("complete.py.typed", ""),
+                TestPath::file_with_contents("invalid.py.typed", "not-partial\n"),
+            ],
+        );
+
+        let cache = DirEntryCache::new();
+        assert!(cache.is_partial_py_typed(&root.join("partial.py.typed"), None));
+        assert!(!cache.is_partial_py_typed(&root.join("complete.py.typed"), None));
+        assert!(!cache.is_partial_py_typed(&root.join("invalid.py.typed"), None));
+    }
+
+    #[test]
+    fn test_module_resolver_merges_partial_stub_package() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "foo",
+                    vec![TestPath::file("__init__.py"), TestPath::file("bar.py")],
+                ),
+                TestPath::dir(
+                    "foo-stubs",
+                    vec![
+                        TestPath::file_with_contents("py.typed", "partial\n"),
+                        TestPath::file("bar.pyi"),
+                    ],
+                ),
+            ],
+        );
+
+        let resolver = ModuleResolver::new([root.to_path_buf()]);
+        assert_eq!(
+            resolver.resolve(ModuleName::from_str("foo"), None),
+            Some(ModulePath::filesystem(root.join("foo/__init__.py"))),
+        );
+        assert_eq!(
+            resolver.resolve(ModuleName::from_str("foo.bar"), None),
+            Some(ModulePath::filesystem(root.join("foo-stubs/bar.pyi"))),
+        );
     }
 
     #[test]
