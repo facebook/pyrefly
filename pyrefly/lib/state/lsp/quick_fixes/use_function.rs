@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use dupe::Dupe;
 use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
+use pyrefly_config::config::ConfigSource;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePathDetails;
@@ -47,6 +48,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::ModuleInfo;
+use crate::state::ide::ImportEdit;
 use crate::state::ide::insert_import_edit;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
@@ -113,20 +115,23 @@ pub(crate) fn use_function_code_actions(
             ModulePathDetails::FileSystem(_)
             | ModulePathDetails::Memory(_)
             | ModulePathDetails::Namespace(_) => {
-                if function_config.source.root().is_none() {
-                    true
-                } else {
+                let project_root = match &function_config.source {
+                    ConfigSource::Synthetic(root) => root.as_deref(),
+                    source => source.root_from_file(),
+                };
+                if let Some(project_root) = project_root {
                     let path = target_path.as_path();
-                    let path_for_match = if path.is_absolute() {
-                        None
-                    } else if let Some(root) = function_config.source.root() {
-                        Some(path.absolutize_from(root))
+                    let absolute_path;
+                    let path = if path.is_absolute() {
+                        path
                     } else {
-                        Some(path.absolutize())
+                        absolute_path = path.absolutize_from(project_root);
+                        &absolute_path
                     };
-                    let path_for_match = path_for_match.as_deref().unwrap_or(path);
-                    function_config.project_includes.covers(path_for_match)
-                        && !function_config.project_excludes.covers(path_for_match)
+                    function_config.project_includes.covers(path)
+                        && !function_config.project_excludes.covers(path)
+                } else {
+                    true
                 }
             }
             _ => false,
@@ -399,7 +404,9 @@ fn call_target_for_module(
     if module_has_top_level_binding(ast, &pattern.name) {
         return None;
     }
-    let (position, insert_text, _) = insert_import_edit(
+    let ImportEdit {
+        range, insert_text, ..
+    } = insert_import_edit(
         ast,
         transaction.config_finder(),
         target_handle.dupe(),
@@ -407,7 +414,6 @@ fn call_target_for_module(
         &pattern.name,
         ImportFormat::Absolute,
     );
-    let range = TextRange::at(position, TextSize::new(0));
     Some(CallTarget {
         callee: pattern.name.clone(),
         import_edit: Some((range, insert_text)),

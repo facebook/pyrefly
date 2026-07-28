@@ -28,6 +28,6 @@ pub(crate) mod pytest_fixture;
 pub(crate) mod redundant_cast;
 pub(crate) mod safe_delete;
 pub(crate) mod types;
-pub(crate) mod use_function;
 pub(crate) mod unnecessary_type_conversion;
 pub(crate) mod unused_import;
+pub(crate) mod use_function;
