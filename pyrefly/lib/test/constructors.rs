@@ -188,6 +188,79 @@ assert_type(C(), C[Any]) # Correct, because invalid metaclass.
 );
 
 testcase!(
+    test_init_subclass_class_keywords,
+    r#"
+class Foo:
+    def __init_subclass__(cls, asdf: int) -> None:
+        pass
+
+class Bar(Foo, asdf=1): ...
+class Baz(Foo, asdf=""): ...  # E: Argument `Literal['']` is not assignable to parameter `asdf` with type `int`
+class Qux(Foo): ...  # E: Missing argument `asdf`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_skips_custom_metaclass_keywords,
+    r#"
+class Meta(type):
+    def __new__(cls, name, bases, namespace, abstract: bool = False):
+        return super().__new__(cls, name, bases, namespace)
+
+class Base(metaclass=Meta): ...
+class Child(Base, abstract=True): ...
+    "#,
+);
+
+testcase!(
+    test_init_subclass_metaclass_without_keywords_still_checked,
+    r#"
+# A custom metaclass only consumes class-header keywords; with no keywords, a
+# required `__init_subclass__` argument still goes unfilled at runtime, so the
+# missing-argument error must fire even in the presence of a metaclass.
+class Meta(type): ...
+
+class Base(metaclass=Meta):
+    def __init_subclass__(cls, x: int) -> None:
+        pass
+
+class Child(Base): ...  # E: Missing argument `x`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_follows_mro_not_first_base,
+    r#"
+class A:
+    def __init_subclass__(cls, kw: str) -> None:
+        pass
+
+class B: ...
+
+# `__init_subclass__` is resolved through C's MRO, so A's requirement applies
+# even though A is not the first base.
+class C(B, A): ...  # E: Missing argument `kw`
+class D(B, A, kw="x"): ...
+class E(B, A, kw=1): ...  # E: Argument `Literal[1]` is not assignable to parameter `kw` with type `str`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_inherited_without_keywords,
+    r#"
+class Grandparent:
+    def __init_subclass__(cls, kw: str) -> None:
+        pass
+
+class Parent(Grandparent, kw="x"): ...
+
+# `Child` inherits `Grandparent.__init_subclass__`, which requires `kw`, so this
+# reports a missing argument even though `Child` passes no keywords.
+class Child(Parent): ...  # E: Missing argument `kw`
+    "#,
+);
+
+testcase!(
     test_metaclass_invalid_generic_legacy_typevar,
     r#"
 from typing import Any, Generic, TypeVar, assert_type

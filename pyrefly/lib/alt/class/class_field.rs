@@ -4862,6 +4862,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_dunder_init_helper(&Instance::of_class(cls), get_object_init)
     }
 
+    /// Get the `__init_subclass__` method defined directly on `cls`, excluding
+    /// `object.__init_subclass__` and synthesized fields. This only inspects
+    /// `cls` itself (not its ancestors), so it is safe to call while class
+    /// metadata is still being computed; callers that need an inherited
+    /// definition must walk the bases themselves.
+    pub(crate) fn get_dunder_init_subclass(&self, cls: &ClassType) -> Option<Type> {
+        if cls.class_object().is_builtin("object") {
+            return None;
+        }
+        let field = self.get_non_synthesized_field_from_current_class_only(
+            cls.class_object(),
+            &dunder::INIT_SUBCLASS,
+        )?;
+        if field.is_init_var() {
+            return None;
+        }
+        Arc::unwrap_or_clone(field)
+            .as_raw_special_method_type(self.heap, &Instance::of_class(cls))
+            .and_then(|ty| {
+                make_bound_classmethod(self.heap, &ClassBase::ClassType(cls.clone()), ty).ok()
+            })
+    }
+
     pub fn get_typed_dict_dunder_init(&self, td: &TypedDictInner) -> Type {
         // We synthesize `__init__`, so the lookup will never entirely fail.
         //

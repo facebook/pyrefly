@@ -13,7 +13,10 @@ is found on the first class checked.
 
 **Superfluous demands:**
 - ALL demands involving `c` (Base's module) are superfluous — `child_attr`
-  is on `Child`, so `Base` is never needed.
+  is on `Child`, so `Base` is never needed. One of the `c::KeyClassMetadata`
+  demands now comes from validating class-header keywords against an
+  inherited `__init_subclass__`, which walks Child's bases while Child's
+  metadata is computed.
 - `a -> b::KeyAbstractClassCheck(0)` is superfluous for attribute access
   (only needed for instantiation).
 - `a -> b::KeyClassMro(0)` and the cascading `b -> c::*` demands are
@@ -62,6 +65,7 @@ a -> b::KeyClassMetadata(ClassDefIndex(0))
   b -> c::Exports(is_implicit_reexport)
   b -> c::Exports(get_deprecated)
   b -> c::KeyExport(Name("Base"))
+  b -> c::KeyClassMetadata(ClassDefIndex(0))
   b -> c::KeyClassMetadata(ClassDefIndex(0))
   b -> c::KeyClassMetadata(ClassDefIndex(0))
   b -> c::KeyClassMetadata(ClassDefIndex(0))
