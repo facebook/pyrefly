@@ -104,6 +104,15 @@ pub fn is_dataframe_column_method(method: &str) -> bool {
     )
 }
 
+/// Whether `ty` is a Polars `DataFrame`, schema-carrying or an opaque class instance.
+fn is_polars_dataframe_type(ty: &Type) -> bool {
+    match ty {
+        Type::DataFrame(schema) => schema.kind == DataFrameKind::Polars,
+        Type::ClassType(ct) => is_polars_dataframe(ct.class_object()),
+        _ => false,
+    }
+}
+
 /// Whether a callee is the module-level `polars.concat`, seen through any `Forall`/`Overload`
 /// wrapper via `callee_kind`.
 pub fn is_polars_concat(callee: &Type) -> bool {
@@ -862,9 +871,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Model row-only transforms (`filter`, `sort`, `fill_null`) as returning the receiver's
-    /// schema unchanged, since they reorder rows or replace values without touching the column
-    /// set or its types. Falls back with `None` for a receiver that carries no schema.
+    /// Model row-only transforms as returning the receiver's schema unchanged; they reorder or
+    /// replace rows without touching the column set. `None` for a receiver with no schema.
     pub fn polars_row_transform(
         &self,
         base: &Type,
@@ -895,6 +903,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for kw in args.keywords.iter() {
             self.expr_infer(&kw.value, errors);
         }
+        Some(base.clone())
+    }
+
+    /// Model `df.vstack(other)`/`df.extend(other)` as the receiver schema unchanged: both append rows
+    /// and raise unless `other` has the identical schema, so `other` needs no inspection. `other` must
+    /// be a Polars `DataFrame`; a non-frame, pandas, or any keyword (`in_place=` unmodeled) falls back.
+    pub fn polars_row_append(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if !matches!(func.attr.id.as_str(), "vstack" | "extend")
+            || schema.kind != DataFrameKind::Polars
+            || !args.keywords.is_empty()
+        {
+            return None;
+        }
+        let [other_expr] = &args.args[..] else {
+            return None;
+        };
+        if !is_polars_dataframe_type(&self.expr_infer(other_expr, &self.error_swallower())) {
+            return None;
+        }
+        // Now committed to a schema, so infer `other` with real errors as the sole reporter of any
+        // error inside it, since returning here bypasses ordinary call-checking.
+        self.expr_infer(other_expr, errors);
         Some(base.clone())
     }
 
@@ -1066,6 +1105,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         // A suffixed name that already exists is a runtime `DuplicateError`, so fall back rather than
         // emit a schema with a duplicate column.
+        let mut seen = SmallSet::new();
+        if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
+            return None;
+        }
+        // Now committed to a schema, so infer `other` with real errors as the sole reporter of any
+        // error inside it, since returning here bypasses ordinary call-checking.
+        self.expr_infer(other_expr, errors);
+        Some(
+            DataFrameSchema {
+                underlying: schema.underlying.clone(),
+                columns,
+                completeness: schema.completeness.clone(),
+                kind: schema.kind.clone(),
+            }
+            .to_type(),
+        )
+    }
+
+    /// Model `df.hstack(other)` as the receiver columns followed by `other`'s (dtypes copy from each
+    /// side). Only a schema-carrying Polars `DataFrame` is modeled; a non-frame, keyword, or
+    /// overlapping name (runtime `DuplicateError`) falls back.
+    pub fn polars_hstack(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let schema = column_transform_schema(base, func, "hstack", args)?;
+        // Appending columns this way is Polars-only; pandas has no `hstack`.
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        let [other_expr] = &args.args[..] else {
+            return None;
+        };
+        let Type::DataFrame(other) = self.expr_infer(other_expr, &self.error_swallower()) else {
+            return None;
+        };
+        // A pandas frame raises `AttributeError` at runtime, so fall back rather than fabricate a
+        // merged Polars schema and swallow the argument-type error.
+        if other.kind != DataFrameKind::Polars {
+            return None;
+        }
+        let mut columns = schema.columns.clone();
+        columns.extend(other.columns.iter().cloned());
         let mut seen = SmallSet::new();
         if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
             return None;

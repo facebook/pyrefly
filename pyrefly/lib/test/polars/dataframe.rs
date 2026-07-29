@@ -37,6 +37,9 @@ class DataFrame:
     def fill_null(self, value: object = None) -> "DataFrame": ...
     def cast(self, dtypes: object, *, strict: bool = True) -> "DataFrame": ...
     def join(self, other: "DataFrame", on: object = None, how: str = "inner", *, left_on: object = None, right_on: object = None, suffix: str = "_right", coalesce: object = None) -> "DataFrame": ...
+    def hstack(self, columns: object, *, in_place: bool = False) -> "DataFrame": ...
+    def vstack(self, other: "DataFrame", *, in_place: bool = False) -> "DataFrame": ...
+    def extend(self, other: "DataFrame") -> "DataFrame": ...
 "#,
     );
     env.add_with_path(
@@ -101,6 +104,26 @@ class DataFrame:
         r#"
 from pandas.core.frame import DataFrame as DataFrame
 "#,
+    );
+    env
+}
+
+/// Polars stubs plus a pandas `DataFrame` at its real qname, so tests can pin cross-library
+/// behavior where a pandas frame is passed to a Polars method.
+fn env_with_polars_and_pandas_stubs() -> TestEnv {
+    let mut env = env_with_polars_stubs();
+    env.add_with_path(
+        "pandas.core.frame",
+        "pandas/core/frame.pyi",
+        r#"
+class DataFrame:
+    columns: list[str]
+    def __init__(self, data: object = None, columns: object = None, dtype: object = None) -> None: ...
+"#,
+    );
+    env.add(
+        "pandas",
+        "from pandas.core.frame import DataFrame as DataFrame",
     );
     env
 }
@@ -2971,5 +2994,221 @@ from typing import reveal_type
 d1 = pl.DataFrame(schema={"k": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Int64})
 reveal_type(d1.join(d2, on="k", **{"how": "inner"}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_vstack_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+other = pl.DataFrame({"a": [2], "b": ["y"]})
+reveal_type(df.vstack(other))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_extend_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+other = pl.DataFrame({"a": [2], "b": ["y"]})
+reveal_type(df.extend(other))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_vstack_opaque_other_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# vstack requires an identical schema at runtime, so the receiver schema is returned without
+# inspecting `other`, even when `other` carries no schema of its own.
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+opaque = pl.DataFrame(schema={1: pl.Int64})
+reveal_type(df.vstack(opaque))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_vstack_reports_error_in_other,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.vstack(undefined_name)  # E: Could not find name `undefined_name`
+"#,
+);
+
+testcase!(
+    test_vstack_cross_file_schema,
+    env_cross_file(),
+    r#"
+from defs import df
+from typing import reveal_type
+reveal_type(df.vstack(df))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_hstack_appends_columns,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+other = pl.DataFrame({"c": [1.0], "d": [True]})
+reveal_type(df.hstack(other))  # E: revealed type: DataFrame[a: Int64, b: String, c: Float64, d: Boolean]
+"#,
+);
+
+testcase!(
+    test_hstack_three_frame_chain,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+a = pl.DataFrame({"a": [1]})
+b = pl.DataFrame({"b": [1.0]})
+c = pl.DataFrame({"c": [True]})
+reveal_type(a.hstack(b).hstack(c))  # E: revealed type: DataFrame[a: Int64, b: Float64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_hstack_overlapping_name_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# An overlapping column raises DuplicateError at runtime, so fall back rather than emit a duplicate.
+df = pl.DataFrame({"a": [1]})
+other = pl.DataFrame({"a": [2.0]})
+reveal_type(df.hstack(other))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_hstack_series_list_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A list of Series carries only runtime column names, so fall back rather than guess.
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.hstack([df["a"]]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_hstack_opaque_other_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+opaque = pl.DataFrame(schema={1: pl.Int64})
+reveal_type(df.hstack(opaque))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_hstack_in_place_keyword_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+other = pl.DataFrame({"b": [2.0]})
+reveal_type(df.hstack(other, in_place=True))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_hstack_opaque_receiver_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+opaque = pl.DataFrame(schema={1: pl.Int64})
+other = pl.DataFrame({"a": [1]})
+reveal_type(opaque.hstack(other))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_hstack_reports_error_in_other,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.hstack(pl.DataFrame({"b": [undefined_name]}))  # E: Could not find name `undefined_name`
+"#,
+);
+
+testcase!(
+    test_hstack_cross_file_schema,
+    env_cross_file(),
+    r#"
+import polars as pl
+from defs import df
+from typing import reveal_type
+other = pl.DataFrame({"c": [1.0]})
+reveal_type(df.hstack(other))  # E: revealed type: DataFrame[a: Int64, b: String, c: Float64]
+"#,
+);
+
+testcase!(
+    test_vstack_non_frame_arg_reports_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+# A non-frame argument raises TypeError at runtime, so fall back and let the arg-type check fire.
+df = pl.DataFrame({"a": [1]})
+df.vstack(5)  # E: Argument `Literal[5]` is not assignable to parameter `other` with type `DataFrame`
+"#,
+);
+
+testcase!(
+    test_extend_non_frame_arg_reports_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+# A non-frame argument raises TypeError at runtime, so fall back and let the arg-type check fire.
+df = pl.DataFrame({"a": [1]})
+df.extend("foo")  # E: Argument `Literal['foo']` is not assignable to parameter `other` with type `DataFrame`
+"#,
+);
+
+testcase!(
+    test_vstack_pandas_arg_reports_error,
+    env_with_polars_and_pandas_stubs(),
+    r#"
+import polars as pl
+import pandas as pd
+# A pandas frame is not a Polars frame, so fall back and let the arg-type check fire instead of
+# swallowing the runtime TypeError.
+df = pl.DataFrame({"a": [1]})
+other = pd.DataFrame({"a": [1]})
+df.vstack(other)  # E: is not assignable to parameter `other` with type `polars.dataframe.frame.DataFrame`
+"#,
+);
+
+testcase!(
+    test_hstack_pandas_arg_falls_back,
+    env_with_polars_and_pandas_stubs(),
+    r#"
+import polars as pl
+import pandas as pd
+from typing import reveal_type
+# A pandas frame raises AttributeError at runtime, so hstack must not fabricate a merged schema.
+df = pl.DataFrame({"a": [1]})
+other = pd.DataFrame({"c": [1.0]})
+reveal_type(df.hstack(other))  # E: revealed type: DataFrame
 "#,
 );

@@ -279,6 +279,28 @@ reveal_type(df.filter(items=["a"]))  # E: revealed type: DataFrame
 );
 
 testcase!(
+    test_pandas_vstack_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+# Pandas has no `vstack`, so the row-transform must not fire and swallow the real error.
+df = pd.DataFrame({"a": [1]})
+df.vstack(df)  # E: Object of class `DataFrame` has no attribute `vstack`
+"#,
+);
+
+testcase!(
+    test_pandas_hstack_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+# Pandas has no `hstack`, so the column append must not fire and swallow the real error.
+df = pd.DataFrame({"a": [1]})
+df.hstack(df)  # E: Object of class `DataFrame` has no attribute `hstack`
+"#,
+);
+
+testcase!(
     test_pandas_drop_falls_back,
     env_with_pandas_frame_stubs(),
     r#"
