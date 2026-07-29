@@ -409,3 +409,51 @@ IncEx: TypeAlias = Mapping[int, int] | Mapping[str, "IncEx | list[A]"]
 ok: IncEx = {"a": {"__all__": [B()]}}
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4324: a
+// self-referential alias reached *through* another alias used to leave a live
+// reference into the cycle, so attribute lookup recursed until the stack
+// overflowed. Contrast with `type T2 = T2` alone, which was already detected.
+testcase!(
+    test_cyclic_indirect_self_reference,
+    r#"
+type T1 = T2  # E: cyclic self-reference in `T1`
+type T2 = T2  # E: cyclic self-reference in `T2`
+
+x: T1 = 1
+x.__str__
+    "#,
+);
+
+// Indirection depth is irrelevant: the cycle is reachable from `T1` without
+// `T1` participating in it.
+testcase!(
+    test_cyclic_indirect_self_reference_multi_hop,
+    r#"
+type T1 = T2  # E: cyclic self-reference in `T1`
+type T2 = T3  # E: cyclic self-reference in `T2`
+type T3 = T3  # E: cyclic self-reference in `T3`
+
+x: T1 = 1
+x.foo
+    "#,
+);
+
+// Guard for the fix above: recording the names of recursive references must not
+// flag an alias that merely *points at* a well-founded recursive alias, nor one
+// whose cycle runs through a user-defined generic that can be inhabited.
+testcase!(
+    test_alias_referencing_valid_recursive_alias_is_not_cyclic,
+    r#"
+type Inner = int | list[Inner]
+type Outer = Inner
+
+class C[T]:
+    x: T | None = None
+type A = C[A]
+type B = A
+
+v: Outer = 1
+w: B = C()
+    "#,
+);

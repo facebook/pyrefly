@@ -1545,8 +1545,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// user-defined `class C[T]: x: T | None` makes `type A = C[A]`
     /// inhabitable (e.g. `C(x=C(x=None))`), so we can't assume all generic
     /// containers require their type parameter.
+    /// `names` holds the alias being resolved plus any alias left as a
+    /// recursive reference while expanding its body, so a cycle that is merely
+    /// reachable is caught as well as one the alias belongs to.
     /// Returns `true` if a cyclic self-reference was found.
-    fn type_alias_has_cyclic_reference(&self, name: &Name, ta: &TypeAlias) -> bool {
+    fn type_alias_has_cyclic_reference(&self, names: &SmallSet<Name>, ta: &TypeAlias) -> bool {
         // Unwrap the type[body] wrapper. We operate on the inner body because
         // map_over_union wraps inner union members in type[...] when traversing
         // inside Type::Type, which would prevent matching UntypedAlias nodes.
@@ -1557,7 +1560,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(inner) => inner.as_ref(),
             _ => return false,
         };
-        let is_self_ref = |ty: &Type| matches!(ty, Type::UntypedAlias(ta) if ta.name() == name);
+        let is_self_ref =
+            |ty: &Type| matches!(ty, Type::UntypedAlias(ta) if names.contains(ta.name()));
 
         fn collect_tuple_members(tuple: &Tuple) -> Vec<&Type> {
             match tuple {
@@ -1644,15 +1648,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // inlining the referenced alias's body. Only runs for binding-time
         // aliases (current_index is Some); implicit legacy aliases detected
         // at solve time skip expansion.
+        let mut cyclic_names = SmallSet::new();
+        cyclic_names.insert(name.clone());
         if let Some(index) = current_index {
-            self.expand_type_alias_refs(ta.as_type_mut(), index);
+            cyclic_names.extend(self.expand_type_alias_refs(ta.as_type_mut(), index));
         }
 
         // Step 2: Check for cyclic self-references after expansion.
         // If a cycle is found, replace the body with an error type to prevent
         // infinite recursion when downstream operations (e.g. attribute lookup,
         // subset checks) try to resolve the alias.
-        if self.type_alias_has_cyclic_reference(name, &ta) {
+        if self.type_alias_has_cyclic_reference(&cyclic_names, &ta) {
             return self.error(
                 errors,
                 range,
@@ -1811,10 +1817,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Recursive references (detected via a visiting set) are left in place.
     /// `current_index` is the alias being defined — pre-seeded in the
     /// visiting set so self-references are immediately recognized as recursive.
-    fn expand_type_alias_refs(&self, ty: &mut Type, current_index: TypeAliasIndex) {
+    /// Returns the names of aliases left in place as recursive references.
+    /// A cycle can be reachable from the alias being resolved without that
+    /// alias taking part in it (`type T1 = T2` where `type T2 = T2`), so those
+    /// names also count as self-references for `type_alias_has_cyclic_reference`.
+    fn expand_type_alias_refs(
+        &self,
+        ty: &mut Type,
+        current_index: TypeAliasIndex,
+    ) -> SmallSet<Name> {
         let mut visiting = SmallSet::new();
         visiting.insert((self.module().name(), current_index));
-        self.expand_type_alias_refs_inner(ty, &mut visiting);
+        let mut recursive_refs = SmallSet::new();
+        self.expand_type_alias_refs_inner(ty, &mut visiting, &mut recursive_refs);
+        recursive_refs
     }
 
     /// Inner recursive walker for `expand_type_alias_refs`. Matches
@@ -1825,6 +1841,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         ty: &mut Type,
         visiting: &mut SmallSet<(ModuleName, TypeAliasIndex)>,
+        recursive_refs: &mut SmallSet<Name>,
     ) {
         match ty {
             Type::UntypedAlias(f)
@@ -1833,7 +1850,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 let key = (r.module_name, r.index);
                 if visiting.contains(&key) {
-                    // Recursive reference — leave as Ref for cycle detection
+                    // Recursive reference — leave as Ref for cycle detection,
+                    // and record the name so the caller treats it as a
+                    // self-reference even when the cycle does not include the
+                    // alias currently being resolved.
+                    recursive_refs.insert(r.name.clone());
                     return;
                 }
                 let key_type_alias = KeyTypeAlias(r.index);
@@ -1857,7 +1878,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Recursively expand any Refs in the inlined body, so that all nested
                 // alias bodies are inlined before we apply the outer substitution.
                 visiting.insert(key);
-                self.expand_type_alias_refs_inner(&mut body, visiting);
+                self.expand_type_alias_refs_inner(&mut body, visiting, recursive_refs);
                 visiting.shift_remove(&key);
                 // Apply type arguments if the reference was parameterized.
                 // For generic aliases used without explicit args, promote_forall
@@ -1868,7 +1889,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 *ty = body;
             }
             _ => ty.recurse_mut(&mut |child: &mut Type| {
-                self.expand_type_alias_refs_inner(child, visiting);
+                self.expand_type_alias_refs_inner(child, visiting, recursive_refs);
             }),
         }
     }
