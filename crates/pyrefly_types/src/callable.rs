@@ -756,6 +756,7 @@ pub struct FuncFlags {
     pub is_assert_shape: bool,
     /// A method directly inside a `Protocol` class.
     pub is_in_protocol_class: bool,
+    pub is_in_type_checking_block: bool,
 }
 
 impl FuncFlags {

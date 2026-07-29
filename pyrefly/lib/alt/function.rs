@@ -521,6 +521,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def_index: FuncDefIndex,
         stub_or_impl: FunctionStubOrImpl,
         has_ellipsis_body: bool,
+        is_in_type_checking_block: bool,
         body_kind: BodyKind,
         is_return_inferred: bool,
         calls_super_method: bool,
@@ -631,6 +632,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         flags.is_in_protocol_class = defining_cls
             .as_ref()
             .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol());
+        flags.is_in_type_checking_block = is_in_type_checking_block;
         if stub_or_impl == FunctionStubOrImpl::Stub {
             flags.lacks_implementation = true;
         }
@@ -795,6 +797,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         if def.has_ellipsis_body
+            && !def.metadata.flags.is_in_type_checking_block
             && has_return_annotation
             && !def.metadata.flags.defined_in_stub_file
             && !def.metadata.flags.is_overload
