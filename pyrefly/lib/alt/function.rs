@@ -2540,7 +2540,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // For each callable, set its return type to its first param's type (i.e. `self`).
         func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
             if let Some(self_type) = c.get_first_param() {
-                c.ret = self_type;
+                c.ret = self_type.clone();
             }
         });
         self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)

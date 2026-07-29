@@ -1180,9 +1180,15 @@ impl Callable {
         }
     }
 
-    pub fn get_first_param(&self) -> Option<Type> {
-        self.split_first_param(&mut Owner::new())
-            .map(|(first, _)| first.clone())
+    pub fn get_first_param(&self) -> Option<&Type> {
+        match &self.params {
+            Params::List(params) | Params::Partial(params) => {
+                params.0.first().map(|param| param.as_type())
+            }
+            Params::ParamSpec(prefix, _) => prefix.first().map(|param| param.ty()),
+            Params::Ellipsis => Some(&Type::Any(AnyStyle::Implicit)),
+            Params::Materialization => None,
+        }
     }
 
     /// Whether this signature can be called with a single positional argument, i.e. none of the
@@ -1586,6 +1592,7 @@ pub fn unexpected_keyword(error: &dyn Fn(String), func: &str, keyword: &Keyword)
 #[cfg(test)]
 mod tests {
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_util::owner::Owner;
     use pyrefly_util::visit::Visit;
     use pyrefly_util::visit::VisitMut;
     use ruff_python_ast::name::Name;
@@ -1595,6 +1602,7 @@ mod tests {
     use crate::callable::DefaultValue;
     use crate::callable::Param;
     use crate::callable::ParamList;
+    use crate::callable::Params;
     use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::quantified::AnchorIndex;
@@ -1605,6 +1613,38 @@ mod tests {
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::types::Type;
+
+    #[test]
+    fn test_get_first_param_matches_split_first_param() {
+        let callables = [
+            Callable::list(ParamList::new(Vec::new()), Type::None),
+            Callable::list(
+                ParamList::new(vec![Param::PosOnly(None, Type::None, Required::Required)]),
+                Type::None,
+            ),
+            Callable::partial(
+                ParamList::new(vec![Param::Varargs(None, Type::any_implicit())]),
+                Type::None,
+            ),
+            Callable::concatenate(
+                vec![PrefixParam::new(Type::None, Required::Required)].into_boxed_slice(),
+                Type::any_implicit(),
+                Type::None,
+            ),
+            Callable::param_spec(Type::any_implicit(), Type::None),
+            Callable::ellipsis(Type::None),
+            Callable {
+                params: Params::Materialization,
+                ret: Type::None,
+            },
+        ];
+        for callable in callables {
+            let expected = callable
+                .split_first_param(&mut Owner::new())
+                .map(|(first, _)| first.clone());
+            assert_eq!(callable.get_first_param(), expected.as_ref());
+        }
+    }
 
     #[test]
     fn test_arg_counts_positional() {

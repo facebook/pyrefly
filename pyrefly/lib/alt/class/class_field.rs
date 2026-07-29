@@ -3256,9 +3256,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let p = match tparams {
                         Some(tparams) => {
                             let any = self.heap.mk_any_implicit();
-                            p.subst(&tparams.iter().map(|q| (q, &any)).collect())
+                            p.clone()
+                                .subst(&tparams.iter().map(|q| (q, &any)).collect())
                         }
-                        None => p,
+                        None => p.clone(),
                     };
                     // A non-protocol `self:` can't re-enter protocol conformance, so check
                     // it directly. A protocol-typed `self:`, however, makes
@@ -5209,16 +5210,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     else {
                         unreachable!("guarded by matches! above")
                     };
-                    let self_param = |sig: &OverloadType| match sig {
-                        OverloadType::Function(f) => f.signature.get_first_param(),
-                        OverloadType::Forall(forall) => forall.body.signature.get_first_param(),
-                    };
                     let applicable: Vec<_> = overload
                         .signatures
                         .into_iter()
                         .filter(|sig| {
-                            self_param(sig)
-                                .is_none_or(|param| self.is_subset_eq(&child_type, &param))
+                            let self_param = match sig {
+                                OverloadType::Function(f) => f.signature.get_first_param(),
+                                OverloadType::Forall(forall) => {
+                                    forall.body.signature.get_first_param()
+                                }
+                            };
+                            self_param.is_none_or(|param| self.is_subset_eq(&child_type, param))
                         })
                         .collect();
                     let signatures = vec1::Vec1::try_from_vec(applicable).ok()?;
@@ -5368,7 +5370,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         && let Some(rest) = setter_sig.strip_first_param()
                         && let Some(setter_value_type) = rest.get_first_param()
                     {
-                        is_subset(&setter_value_type, got).map_err(|subset_error| {
+                        is_subset(setter_value_type, got).map_err(|subset_error| {
                             Box::new(AttrSubsetError::Contravariant {
                                 want: want_setter.clone(),
                                 got: got.clone(),

@@ -1834,7 +1834,7 @@ impl Type {
         let mut params = Vec::new();
         let mut get_param = |callable: &Callable| {
             if let Some(p) = callable.get_first_param() {
-                params.push(p);
+                params.push(p.clone());
             }
         };
         self.visit_toplevel_callable(&mut get_param);

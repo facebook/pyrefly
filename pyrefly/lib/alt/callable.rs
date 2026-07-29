@@ -1639,7 +1639,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Quantifieds in `self` need to be finished as soon as `self_arg` is matched, unlike
             // other quantifieds that are finished at the end of the call, so we split them out to
             // be handled separately.
-            let (self_qs, remaining_qs) = callable_qs.partition_by(&first_param);
+            let (self_qs, remaining_qs) = callable_qs.partition_by(first_param);
             (Some(self_qs), remaining_qs)
         } else {
             (None, callable_qs)

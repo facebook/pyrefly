@@ -1015,6 +1015,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .filter(|sig| sig.accepts_single_positional_arg())
                 .filter_map(|sig| sig.get_first_param())
+                .cloned()
                 .collect();
             if inputs.is_empty() {
                 self.heap.mk_any_implicit()
