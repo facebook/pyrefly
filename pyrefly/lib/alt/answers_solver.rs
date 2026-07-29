@@ -6,6 +6,7 @@
  */
 
 use std::any::Any;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -221,6 +222,10 @@ pub struct CalcStack {
     /// hasn't been committed yet. Taken by `get_idx` after each frame completes.
     /// At most one SCC can complete per completion point.
     pending_completed_scc: RefCell<Option<Scc>>,
+    /// Allocates identities that track which calculation, and later iterative
+    /// driver, owns an SCC. Merges preserve the oldest identity so nested
+    /// drivers leave the merged SCC for the suspended outer driver to commit.
+    next_scc_owner: Cell<u64>,
 }
 
 impl CalcStack {
@@ -230,6 +235,7 @@ impl CalcStack {
             scc_stack: RefCell::new(Vec::new()),
             position_of: RefCell::new(FxHashMap::default()),
             pending_completed_scc: RefCell::new(None),
+            next_scc_owner: Cell::new(0),
         }
     }
 
@@ -502,7 +508,10 @@ impl CalcStack {
         let calc_stack_vec = self.into_vec();
 
         // Create the new SCC
-        let new_scc = Scc::new(raw, &calc_stack_vec);
+        let owner = self.next_scc_owner.get();
+        self.next_scc_owner
+            .set(owner.checked_add(1).expect("SCC ownership token overflow"));
+        let new_scc = Scc::new(raw, &calc_stack_vec, SccOwner::Phase0(owner));
         let detected_at = new_scc.detected_at.dupe();
         let cycle_start_pos = new_scc.bottom_pos_inclusive;
 
@@ -594,6 +603,7 @@ impl CalcStack {
         let stack_len = self.stack.borrow().len();
         let mut scc_stack = self.scc_stack.borrow_mut();
         if let Some(scc) = scc_stack.last()
+            && matches!(scc.owner, SccOwner::Phase0(_))
             && stack_len <= scc.bottom_pos_inclusive + 1
         {
             let completed = scc_stack.pop().unwrap();
@@ -915,22 +925,12 @@ impl CalcStack {
     /// Called when a node's answer differs from its previous-iteration answer,
     /// indicating the fixpoint has not yet converged.
     ///
-    /// Silently does nothing if there is no top SCC. This can occur in the
-    /// LSP when the SCC is prematurely popped from the stack due to a
-    /// stale `bottom_pos_inclusive` (see pyrefly-docs/scc-stack-invariants/v0-doc.md).
-    /// In that case the SCC has already been committed by a nested driver, so
-    /// there is no top SCC left to update and skipping is safe.
+    /// The iterating SCC must remain on the stack throughout the calculation.
     fn mark_iteration_changed(&self) {
         let mut scc_stack = self.scc_stack.borrow_mut();
-        let Some(top_scc) = scc_stack.last_mut() else {
-            // TODO(stroxler): Consider panicking here once we're confident this
-            // path is unreachable in the LSP. The silent no-op may mask bugs.
-            debug_assert!(
-                false,
-                "mark_iteration_changed: no iterating SCC on the stack"
-            );
-            return;
-        };
+        let top_scc = scc_stack
+            .last_mut()
+            .expect("mark_iteration_changed: no iterating SCC on the stack");
         top_scc.iterative.has_changed = true;
     }
 
@@ -1007,56 +1007,12 @@ impl CalcStack {
             .expect("pop_scc: SCC stack is empty")
     }
 
-    /// Return the `detected_at` of the top SCC on the stack.
-    ///
-    /// Used by the iteration driver for absorption detection: if the top
-    /// SCC's `detected_at` changed, this SCC was merged into an ancestor.
-    ///
-    /// Panics if the SCC stack is empty.
-    fn top_scc_detected_at(&self) -> CalcId {
+    fn top_scc_owner(&self) -> SccOwner {
         self.scc_stack
             .borrow()
             .last()
-            .expect("top_scc_detected_at: SCC stack is empty")
-            .detected_at
-            .dupe()
-    }
-
-    /// Returns true if any SCC exists below the top of the stack.
-    ///
-    /// Used by the absorption check in `iterative_resolve_scc`: when the top
-    /// SCC's `detected_at` has changed (indicating a merge), the driver can
-    /// only return early if an ancestor SCC is still on the stack to own the
-    /// merged SCC. If no ancestor SCC exists, the current driver must continue
-    /// with the merged SCC to avoid orphaning it.
-    fn has_ancestor_scc(&self) -> bool {
-        let scc_stack = self.scc_stack.borrow();
-        // Skip the last element (the top SCC) and check the rest.
-        let len = scc_stack.len();
-        len >= 2
-    }
-
-    /// Returns true if the top SCC's `node_state` contains the given CalcId.
-    /// Returns false if the stack is empty (callers should guard with
-    /// `sccs_is_empty` first).
-    ///
-    /// Used after nested absorption to distinguish two cases:
-    /// - Our SCC was merged into the top SCC (detected_at changed, but our
-    ///   members are in the top SCC's node_state) → continue driving.
-    /// - Our SCC was committed by a nested driver, and a pre-existing SCC
-    ///   (e.g. a Phase 0 SCC that was below us on the stack) is now the top
-    ///   → return.
-    ///
-    /// This works because `detected_at` is always a member of the SCC's
-    /// `node_state`, and merges union the `node_state` maps. Within a single
-    /// thread's `scc_stack`, SCCs are disjoint (overlapping membership
-    /// triggers a merge), so an unrelated SCC will not contain our CalcId.
-    fn top_scc_contains_member(&self, calc_id: &CalcId) -> bool {
-        self.scc_stack
-            .borrow()
-            .last()
-            .map(|scc| scc.node_state.contains_key(calc_id))
-            .unwrap_or(false)
+            .expect("top_scc_owner: SCC stack is empty")
+            .owner
     }
 
     /// Returns true if the top SCC's iteration state has `merge_happened` set.
@@ -1261,6 +1217,27 @@ impl SccNodeState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SccOwner {
+    Phase0(u64),
+    Driver(u64),
+}
+
+impl SccOwner {
+    fn id(self) -> u64 {
+        match self {
+            Self::Phase0(id) | Self::Driver(id) => id,
+        }
+    }
+
+    fn start_driver(self) -> Self {
+        match self {
+            Self::Phase0(id) => Self::Driver(id),
+            Self::Driver(_) => panic!("iterative SCC already has a driver"),
+        }
+    }
+}
+
 /// Represent an SCC (Strongly Connected Component) we are currently solving.
 ///
 /// This simplified model tracks SCC participants with explicit state rather than
@@ -1285,6 +1262,9 @@ pub struct Scc {
     /// The segment is [bottom_pos_inclusive, top_pos_exclusive).
     /// Initially set to the stack length when the SCC is created; updated on merge.
     top_pos_exclusive: usize,
+    /// Calculation or iterative driver responsible for committing this SCC.
+    /// Merges preserve the oldest owner, which is suspended below newer work.
+    owner: SccOwner,
     /// Iteration state for iterative fixpoint solving.
     /// Invariant: every active SCC has iteration state, initialized to
     /// iteration 0 on creation (Phase 0 discovery), then reset to
@@ -1305,7 +1285,7 @@ impl Display for Scc {
 
 impl Scc {
     #[allow(clippy::mutable_key_type)] // CalcId's Hash impl doesn't depend on mutable parts
-    fn new(raw: Vec1<CalcId>, calc_stack_vec: &[CalcId]) -> Self {
+    fn new(raw: Vec1<CalcId>, calc_stack_vec: &[CalcId], owner: SccOwner) -> Self {
         let detected_at = raw.first().dupe();
 
         // Initialize all nodes as Fresh
@@ -1330,6 +1310,7 @@ impl Scc {
             detected_at,
             bottom_pos_inclusive,
             top_pos_exclusive: calc_stack_vec.len(),
+            owner,
             iterative: SccIterationState {
                 iteration: 0,
                 previous_answers: BTreeMap::new(),
@@ -1422,6 +1403,9 @@ impl Scc {
         self.detected_at = self.detected_at.min(other.detected_at);
         // Keep the minimum anchor position
         self.bottom_pos_inclusive = self.bottom_pos_inclusive.min(other.bottom_pos_inclusive);
+        if other.owner.id() < self.owner.id() {
+            self.owner = other.owner;
+        }
         // Note: top_pos_exclusive is NOT updated here. After a merge, everything from
         // the merged anchor to the current stack top is part of this single SCC.
         // The caller must recompute top_pos_exclusive = stack.len().
@@ -2751,14 +2735,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// state is updated (previous answers extracted, fresh state set), and
     /// it is pushed back for the next iteration (pop-mutate-push pattern).
     ///
-    /// Absorption detection: if the top SCC's `detected_at` changes during
-    /// iteration (because this SCC was merged into an ancestor), the driver
-    /// returns without committing if an ancestor SCC still exists on stack to
-    /// own the merged SCC. If no ancestor SCC exists, the current driver
-    /// continues with the updated identity to avoid orphaning.
+    /// If this SCC merges with one owned by an older iterative driver, this
+    /// driver returns without popping or committing it. The older driver is
+    /// suspended lower on the Rust call stack and resumes ownership when the
+    /// nested calculation returns.
     #[allow(clippy::mutable_key_type)]
     fn iterative_resolve_scc(&self, mut scc: Scc) {
-        let mut scc_identity = scc.detected_at.dupe();
+        let owner = scc.owner.start_driver();
+        scc.owner = owner;
         let mut demotions: u32 = 0;
         let mut exceeded_max_iterations = false;
 
@@ -2772,41 +2756,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Drive all fresh members until none remain.
             self.drive_all_iteration_members();
 
-            // Defensive guard: if the SCC stack is empty here, another driver
-            // (via nested absorption) has already committed all members.
-            // We investigated this path during cleanup but could not confirm
-            // it is unreachable, so we keep the defensive return rather than
-            // asserting.
-            if self.stack().sccs_is_empty() {
-                return;
-            }
+            assert!(
+                !self.stack().sccs_is_empty(),
+                "iterative SCC disappeared while its driver was active"
+            );
 
-            // Absorption detection: if the top SCC's detected_at no longer
-            // matches our identity, this SCC was absorbed during iteration.
-            // Three cases:
-            // 1. An ancestor SCC still exists on stack → that owner context
-            //    will handle the merged SCC, so return.
-            // 2. No ancestor, but the top SCC contains our original
-            //    detected_at as a member → our SCC was merged into the top
-            //    SCC (merge changes detected_at to min). Continue driving
-            //    with the updated identity.
-            // 3. No ancestor, and the top SCC does NOT contain our member
-            //    → our SCC was committed by a nested driver, and a
-            //    pre-existing SCC (e.g. Phase 0) remains on top. Return
-            //    to avoid taking ownership of an unrelated SCC.
-            if self.stack().top_scc_detected_at() != scc_identity {
-                if self.stack().has_ancestor_scc() {
-                    return;
-                }
-                if !self.stack().top_scc_contains_member(&scc_identity) {
-                    // The top SCC doesn't contain our member. Our SCC was
-                    // committed by a nested driver; the remaining SCC is
-                    // unrelated.
-                    return;
-                }
-                // The top SCC absorbed our SCC via merge. Continue driving
-                // with the updated identity.
-                scc_identity = self.stack().top_scc_detected_at();
+            // A merge with an SCC owned by an older driver transfers ownership
+            // to that driver. Leave the merged SCC on the stack for it.
+            if self.stack().top_scc_owner() != owner {
+                return;
             }
 
             // Pop the SCC to inspect its iteration outcome.
@@ -2819,7 +2777,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             if demoted {
                 demotions += 1;
-                check_demotion_limit(demotions, &scc_identity);
+                check_demotion_limit(demotions, &scc.detected_at);
                 scc.reset_for_cold_start();
                 continue;
             }
@@ -3647,6 +3605,7 @@ mod scc_tests {
             detected_at,
             bottom_pos_inclusive,
             top_pos_exclusive,
+            owner: SccOwner::Phase0(0),
             iterative: SccIterationState {
                 iteration: 0,
                 previous_answers: BTreeMap::new(),
@@ -3962,6 +3921,45 @@ mod scc_tests {
     }
 
     #[test]
+    fn test_iterating_scc_is_not_completed_by_stack_position() {
+        let a = CalcId::for_test("m", 0);
+        let calc_stack = make_calc_stack(&[a.dupe()]);
+        let mut scc = make_test_scc(fresh_nodes(&[a.dupe()]), a.dupe(), 0);
+        scc.iterative.iteration = 1;
+        scc.owner = SccOwner::Driver(0);
+        calc_stack.scc_stack.borrow_mut().push(scc);
+
+        let answer: Arc<dyn Any + Send + Sync> = Arc::new(Arc::new(42usize));
+        let _ = calc_stack.on_calculation_finished(&a, answer, None, None);
+
+        assert_eq!(calc_stack.borrow_scc_stack().len(), 1);
+        assert!(calc_stack.pending_completed_scc.borrow().is_none());
+    }
+
+    #[test]
+    fn test_merge_preserves_oldest_owner() {
+        let a = CalcId::for_test("m", 0);
+        let b = CalcId::for_test("m", 1);
+        let mut outer = make_test_scc(fresh_nodes(&[a.dupe()]), a.dupe(), 0);
+        let mut inner = make_test_scc(fresh_nodes(&[b.dupe()]), b.dupe(), 1);
+        outer.owner = SccOwner::Phase0(3);
+        inner.owner = SccOwner::Driver(7);
+
+        let merged = Scc::merge_many(vec1![inner, outer], b.dupe());
+
+        assert_eq!(merged.owner, SccOwner::Phase0(3));
+
+        let mut outer = make_test_scc(fresh_nodes(&[a.dupe()]), a, 0);
+        let mut inner = make_test_scc(fresh_nodes(&[b.dupe()]), b.dupe(), 1);
+        outer.owner = SccOwner::Driver(3);
+        inner.owner = SccOwner::Phase0(7);
+
+        let merged = Scc::merge_many(vec1![inner, outer], b);
+
+        assert_eq!(merged.owner, SccOwner::Driver(3));
+    }
+
+    #[test]
     fn test_stale_calculation_panic() {
         // Reproduces the panic where Calculation has stale state but CalcStack is fresh.
         let calc_id = CalcId::for_test("m", 0);
@@ -4026,6 +4024,7 @@ mod scc_tests {
                 detected_at: a.dupe(),
                 bottom_pos_inclusive: 0,
                 top_pos_exclusive: 2,
+                owner: SccOwner::Driver(0),
                 iterative: SccIterationState {
                     iteration: 2,
                     previous_answers: BTreeMap::new(),
@@ -4047,6 +4046,7 @@ mod scc_tests {
                 detected_at: d.dupe(),
                 bottom_pos_inclusive: 3,
                 top_pos_exclusive: 5,
+                owner: SccOwner::Driver(1),
                 iterative: SccIterationState {
                     iteration: 1,
                     previous_answers: BTreeMap::new(),
@@ -4123,155 +4123,6 @@ mod scc_tests {
         assert!(
             matches!(action, BindingAction::Calculate),
             "push should return Calculate for a Fresh member after merge"
-        );
-    }
-
-    #[test]
-    #[allow(clippy::mutable_key_type)]
-    fn test_absorption_detection() {
-        // Verify the absorption detection mechanism used by iterative_resolve_scc:
-        // when an iterating inner SCC is merged into an ancestor SCC during
-        // iteration, top_scc_detected_at() changes, allowing the driver to
-        // detect that absorption occurred and return without committing.
-        //
-        // Setup:
-        //   CalcStack = [A, B, C, D, E]
-        //   SCC_outer (ancestor): members {A, B}, detected_at = A, iterating at iteration 2
-        //   SCC_inner (top):      members {D, E}, detected_at = D, iterating at iteration 1
-        //   C is between the two SCCs but not a member of either.
-        //
-        // The iterative_resolve_scc driver for SCC_inner would have saved
-        // scc_identity = D (the inner SCC's detected_at) before pushing it
-        // onto the stack and driving members.
-        //
-        // Action: push(A, ...) -- simulates a dependency on A discovered during
-        //   driving of SCC_inner. A is a member of SCC_outer, triggering a
-        //   membership back-edge merge that absorbs SCC_inner into SCC_outer.
-        //
-        // Expected:
-        //   - After merge, only one SCC remains on the stack.
-        //   - top_scc_detected_at() returns A (the ancestor's detected_at),
-        //     NOT D (the inner SCC's original detected_at).
-        //   - This mismatch (top_scc_detected_at() != scc_identity) is the
-        //     absorption detection condition in iterative_resolve_scc.
-        let a = CalcId::for_test("m", 0);
-        let b = CalcId::for_test("m", 1);
-        let c = CalcId::for_test("m", 2);
-        let d = CalcId::for_test("m", 3);
-        let e = CalcId::for_test("m", 4);
-
-        // Build the iterative CalcStack with [A, B, C, D, E].
-        let calc_stack = make_calc_stack(&[a.dupe(), b.dupe(), c.dupe(), d.dupe(), e.dupe()]);
-
-        // Manually construct SCC_outer (ancestor) with iterative state at iteration 2.
-        let scc_outer = {
-            let mut node_state = BTreeMap::new();
-            node_state.insert(a.dupe(), SccNodeState::Fresh);
-            node_state.insert(b.dupe(), SccNodeState::Fresh);
-            Scc {
-                node_state,
-                detected_at: a.dupe(),
-                bottom_pos_inclusive: 0,
-                top_pos_exclusive: 2,
-                iterative: SccIterationState {
-                    iteration: 2,
-                    previous_answers: BTreeMap::new(),
-                    demoted: false,
-                    has_changed: false,
-                    merge_happened: false,
-                    recursion_breaks: BTreeSet::new(),
-                },
-            }
-        };
-
-        // Manually construct SCC_inner (top) with iterative state at iteration 1.
-        let scc_inner = {
-            let mut node_state = BTreeMap::new();
-            node_state.insert(d.dupe(), SccNodeState::Fresh);
-            node_state.insert(e.dupe(), SccNodeState::Fresh);
-            Scc {
-                node_state,
-                detected_at: d.dupe(),
-                bottom_pos_inclusive: 3,
-                top_pos_exclusive: 5,
-                iterative: SccIterationState {
-                    iteration: 1,
-                    previous_answers: BTreeMap::new(),
-                    demoted: false,
-                    has_changed: false,
-                    merge_happened: false,
-                    recursion_breaks: BTreeSet::new(),
-                },
-            }
-        };
-
-        // Save the inner SCC's identity, as iterative_resolve_scc would.
-        let scc_identity = scc_inner.detected_at.dupe();
-
-        // Verify scc_identity is D (not A).
-        assert_eq!(
-            scc_identity, d,
-            "scc_identity should be D (the inner SCC's detected_at)"
-        );
-
-        // Push both SCCs: SCC_outer at bottom, SCC_inner on top.
-        {
-            let mut scc_stack = calc_stack.scc_stack.borrow_mut();
-            scc_stack.push(scc_outer);
-            scc_stack.push(scc_inner);
-        }
-
-        // Verify initial state: two SCCs, top detected_at == D.
-        assert_eq!(calc_stack.borrow_scc_stack().len(), 2);
-        assert_eq!(
-            calc_stack.top_scc_detected_at(),
-            d,
-            "before merge, top_scc_detected_at should be D"
-        );
-
-        // No absorption yet: the identity matches the top SCC's detected_at.
-        assert_eq!(
-            calc_stack.top_scc_detected_at(),
-            scc_identity,
-            "before merge, no absorption should be detected"
-        );
-
-        // Simulate what happens during driving: push(A) triggers a
-        // membership back-edge merge because A is in SCC_outer.
-        let _action = calc_stack.push(a.dupe());
-
-        // After merge, there should be exactly one SCC.
-        assert_eq!(
-            calc_stack.borrow_scc_stack().len(),
-            1,
-            "SCCs should have merged into one after membership back-edge"
-        );
-
-        // The absorption detection condition: top_scc_detected_at() != scc_identity.
-        // After merging, the top SCC's detected_at should be A (the ancestor's),
-        // which differs from D (the saved scc_identity).
-        let top_detected_at = calc_stack.top_scc_detected_at();
-        assert_eq!(
-            top_detected_at, a,
-            "after merge, top_scc_detected_at should be A (the ancestor's detected_at)"
-        );
-        assert_ne!(
-            top_detected_at, scc_identity,
-            "absorption detection: top_scc_detected_at should differ from the \
-             inner SCC's saved identity, signaling that the inner SCC was absorbed"
-        );
-
-        // Verify the merged SCC has merge_happened = true (confirming the
-        // merge actually happened; demotion is deferred to drive_all_iteration_members).
-        let scc_stack = calc_stack.borrow_scc_stack();
-        let merged = &scc_stack[0];
-        assert!(
-            merged.iterative.merge_happened,
-            "merged SCC should have merge_happened = true"
-        );
-        assert!(
-            !merged.iterative.demoted,
-            "merged SCC should have demoted = false (demotion is deferred)"
         );
     }
 
