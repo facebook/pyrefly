@@ -361,7 +361,7 @@ struct OutputArgs {
     baseline: Option<PathBuf>,
 
     /// When specified, emit a sorted/formatted JSON of the errors to the baseline file
-    #[arg(long, requires("baseline"))]
+    #[arg(long)]
     update_baseline: bool,
 
     /// Minimum severity level for errors to be displayed.
@@ -1275,6 +1275,13 @@ impl CheckArgs {
         require: Require,
         upsell: UpsellDecision,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let baseline_path = if self.output.update_baseline {
+            Some(self.output.baseline.as_ref().context(
+                "`--update-baseline` requires a baseline file set by `--baseline` or configuration",
+            )?)
+        } else {
+            None
+        };
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         if let Some(pysa_directory) = &self.output.report_pysa {
@@ -1399,9 +1406,7 @@ impl CheckArgs {
         // errors using the old baseline. Directives are structurally excluded
         // — they live in `directives`, not `ordinary_errors`. The baseline only
         // tracks errors that meet the min-severity threshold.
-        if self.output.update_baseline
-            && let Some(baseline_path) = &self.output.baseline
-        {
+        if let Some(baseline_path) = baseline_path {
             let mut new_baseline = ordinary_errors.clone();
             new_baseline.extend(
                 errors

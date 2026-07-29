@@ -50,6 +50,36 @@ $ mkdir -p $TMPDIR/baseline_relative/subdir && \
 [0]
 ```
 
+## Updating a baseline uses the path from pyproject.toml
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_update_from_pyproject && \
+> echo "x: str = 1" > $TMPDIR/baseline_update_from_pyproject/bad.py && \
+> printf '[tool.pyrefly]\nbaseline = "baseline.json"\n' > $TMPDIR/baseline_update_from_pyproject/pyproject.toml && \
+> cd $TMPDIR/baseline_update_from_pyproject && \
+> $PYREFLY check --update-baseline --output-format=min-text
+ERROR *bad.py* ?bad-assignment? (glob)
+[1]
+```
+
+```scrut {output_stream: stdout}
+$ grep '"name": "bad-assignment"' $TMPDIR/baseline_update_from_pyproject/baseline.json
+      "name": "bad-assignment",
+[0]
+```
+
+## Updating a baseline requires a path from the CLI or configuration
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/baseline_update_without_path && \
+> echo "x: str = 1" > $TMPDIR/baseline_update_without_path/bad.py && \
+> touch $TMPDIR/baseline_update_without_path/pyrefly.toml && \
+> cd $TMPDIR/baseline_update_without_path && \
+> $PYREFLY check bad.py --update-baseline --summary=none
+`--update-baseline` requires a baseline file set by `--baseline` or configuration
+[1]
+```
+
 ## Updating a baseline records unused `# type: ignore` errors
 
 ```scrut {output_stream: stdout}
