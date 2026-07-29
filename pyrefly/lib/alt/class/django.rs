@@ -444,9 +444,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some((pk_type, true))
         } else {
             // No custom pk, use default AutoField type
+            let django_models_fields = ModuleName::django_models_fields();
+            if !self
+                .exports
+                .export_exists(django_models_fields, &AUTO_FIELD)
+            {
+                return None;
+            }
             let auto_field_export = KeyExport(AUTO_FIELD);
             let auto_field_type =
-                self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
+                self.get_from_export(django_models_fields, None, &auto_field_export);
             self.get_django_field_type(&auto_field_type, model, None, None)
                 .map(|ty| (ty, false))
         }
