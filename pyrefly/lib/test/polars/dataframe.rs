@@ -36,6 +36,7 @@ class DataFrame:
     def sort(self, by: object, *more: object, descending: bool = False) -> "DataFrame": ...
     def fill_null(self, value: object = None) -> "DataFrame": ...
     def cast(self, dtypes: object, *, strict: bool = True) -> "DataFrame": ...
+    def join(self, other: "DataFrame", on: object = None, how: str = "inner", *, left_on: object = None, right_on: object = None, suffix: str = "_right", coalesce: object = None) -> "DataFrame": ...
 "#,
     );
     env.add_with_path(
@@ -60,6 +61,7 @@ class UInt64: ...
 class UInt128: ...
 class Float64: ...
 class String: ...
+class Boolean: ...
 "#,
     );
     env
@@ -2567,5 +2569,381 @@ import polars as pl
 from defs import df
 from typing import reveal_type
 reveal_type(pl.concat([df, df], how="vertical"))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+fn env_join() -> TestEnv {
+    let mut env = env_with_polars_stubs();
+    env.add(
+        "frames",
+        r#"
+import polars as pl
+left = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Float64, "b": pl.String})
+right = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64, "c": pl.Boolean})
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_join_inner_coalesces_left_primary,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="inner"))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_left_matches_inner_shape,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="left"))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_right_coalesces_right_primary,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="right"))  # E: revealed type: DataFrame[a: Float64, b: String, k: Int64, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_full_keeps_both_keys_suffixed,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="full"))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, k_right: Int64, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_semi_keeps_left_only,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="semi"))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String]
+"#,
+);
+
+testcase!(
+    test_join_anti_keeps_left_only,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="anti"))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String]
+"#,
+);
+
+testcase!(
+    test_join_cross_no_keys_keeps_both_suffixed,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, how="cross"))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, k_right: Int64, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_default_how_is_inner,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "b": pl.Int64})
+reveal_type(d1.join(d2, on="k"))  # E: revealed type: DataFrame[k: Int64, a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_join_multi_key_inner,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k1": pl.Int64, "k2": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k1": pl.Int64, "k2": pl.Int64, "b": pl.Int64})
+reveal_type(d1.join(d2, on=["k1", "k2"], how="inner"))  # E: revealed type: DataFrame[k1: Int64, k2: Int64, a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_join_multi_key_full_suffixes_both_keys,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k1": pl.Int64, "k2": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k1": pl.Int64, "k2": pl.Int64, "b": pl.Int64})
+reveal_type(d1.join(d2, on=["k1", "k2"], how="full"))  # E: revealed type: DataFrame[k1: Int64, k2: Int64, a: Int64, k1_right: Int64, k2_right: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_join_tuple_key,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "b": pl.Int64})
+reveal_type(d1.join(d2, on=("k",), how="inner"))  # E: revealed type: DataFrame[k: Int64, a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_join_no_overlap_no_suffix,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "b": pl.String})
+reveal_type(d1.join(d2, on="k", how="inner"))  # E: revealed type: DataFrame[k: Int64, a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_join_result_schema_reads_columns,
+    env_join(),
+    r#"
+from frames import left, right
+joined = left.join(right, on="k", how="inner")
+joined["a_right"]
+joined["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_join_cross_file_schema,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="left"))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_leaves_receiver_schema_unchanged,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+left.join(right, on="k", how="inner")
+reveal_type(left)  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String]
+"#,
+);
+
+testcase!(
+    test_join_unknown_key_errors_and_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+reveal_type(d1.join(d2, on="missing", how="inner"))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_key_missing_from_right_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"j": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="inner"))  # E: Column `k` is not in the DataFrame schema # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_coalesced_key_dtype_mismatch_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A coalesced key with differing dtypes is cast or rejected at runtime, so we fall back rather
+# than pick one side's dtype.
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Float64, "b": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="inner"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_full_dtype_mismatch_kept_separately,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A full join keeps both keys, so differing key dtypes never coalesce and the schema stands.
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Float64, "b": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="full"))  # E: revealed type: DataFrame[k: Int64, a: Int64, k_right: Float64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_join_suffix_collision_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# The right `a` would become `a_right`, which already exists on the left, a runtime DuplicateError,
+# so we fall back rather than emit a schema with a duplicate column.
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64, "a_right": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="inner"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_cross_with_keys_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A cross join with join keys raises at runtime, so we fall back and let call-checking report it.
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="cross"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_non_cross_without_keys_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+reveal_type(d1.join(d2, how="inner"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_non_literal_how_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+how = "inner"
+reveal_type(d1.join(d2, on="k", how=how))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_unmodeled_how_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="outer"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_non_literal_key_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+k = "k"
+reveal_type(d1.join(d2, on=k, how="inner"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_left_on_right_on_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Differing key names via left_on/right_on are not yet modeled, so we fall back.
+d1 = pl.DataFrame(schema={"kl": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"kr": pl.Int64, "a": pl.Int64})
+reveal_type(d1.join(d2, left_on="kl", right_on="kr", how="inner"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_explicit_coalesce_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# An explicit coalesce= is not yet modeled, so we fall back.
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "b": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="inner", coalesce=False))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_custom_suffix_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A custom suffix= is not yet modeled, so we fall back.
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="inner", suffix="_r"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_other_without_schema_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+opaque = pl.DataFrame(schema={1: pl.Int64})
+reveal_type(d1.join(opaque, on="k", how="inner"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_error_in_other_reported_once,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d1.join(pl.DataFrame({"k": [undefined_name]}), on="k", how="inner")  # E: Could not find name `undefined_name`
+"#,
+);
+
+testcase!(
+    test_join_spread_keyword_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+reveal_type(d1.join(d2, on="k", **{"how": "inner"}))  # E: revealed type: DataFrame
 "#,
 );

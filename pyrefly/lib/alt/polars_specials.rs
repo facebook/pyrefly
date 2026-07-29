@@ -199,6 +199,57 @@ fn schema_dict_entries(dict: &ExprDict) -> Option<Vec<(Name, Option<PolarsDType>
     Some(entries)
 }
 
+/// The join strategies column inference models. They differ only in which key columns survive and
+/// which name overlaps get suffixed.
+#[derive(Clone, Copy)]
+enum JoinHow {
+    Inner,
+    Left,
+    Right,
+    Full,
+    Semi,
+    Anti,
+    Cross,
+}
+
+impl JoinHow {
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "inner" => Self::Inner,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "full" => Self::Full,
+            "semi" => Self::Semi,
+            "anti" => Self::Anti,
+            "cross" => Self::Cross,
+            _ => return None,
+        })
+    }
+
+    /// Whether a paired key coalesces into one primary-side column by default, dropping the other
+    /// side's key. `full` and `cross` keep every key; `semi`/`anti` output only the left columns.
+    fn coalesces(self) -> bool {
+        matches!(self, Self::Inner | Self::Left | Self::Right)
+    }
+}
+
+/// The key names from an `on=` argument, each with its literal range for error reporting, or `None`
+/// when it is not a string literal or a list/tuple of string literals.
+fn join_key_names(on: &Expr) -> Option<Vec<(Name, TextRange)>> {
+    let elts = match on {
+        Expr::StringLiteral(s) => return Some(vec![(Name::new(s.value.to_str()), on.range())]),
+        Expr::List(list) => &list.elts,
+        Expr::Tuple(tuple) => &tuple.elts,
+        _ => return None,
+    };
+    elts.iter()
+        .map(|elt| match elt {
+            Expr::StringLiteral(s) => Some((Name::new(s.value.to_str()), elt.range())),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Whether a `select`/`drop` string is a `pl.col` selector (`"*"` or `"^regex$"`) rather than an
 /// exact column name.
 fn is_polars_selector_string(arg: &Expr) -> bool {
@@ -898,6 +949,124 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect()
             }
         };
+        Some(
+            DataFrameSchema {
+                underlying: schema.underlying.clone(),
+                columns,
+                completeness: schema.completeness.clone(),
+                kind: schema.kind.clone(),
+            }
+            .to_type(),
+        )
+    }
+
+    /// Model `df.join(other, on=..., how=...)` as the merged schema of the two frames; dtypes copy
+    /// straight from each side, so the result is a pure column-name computation (see [JoinStrategy]).
+    /// Only same-name `on=` keys with the default coalesce and suffix are modeled; `left_on`/`right_on`,
+    /// an explicit `coalesce=`, or a custom `suffix=` fall back.
+    pub fn polars_join(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if func.attr.id.as_str() != "join" || schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        let [other_expr] = &args.args[..] else {
+            return None;
+        };
+        let mut on = None;
+        let mut how = JoinHow::Inner;
+        for kw in &args.keywords {
+            let Some(arg) = &kw.arg else {
+                return None;
+            };
+            match arg.id.as_str() {
+                "on" => on = Some(&kw.value),
+                "how" => {
+                    let Expr::StringLiteral(s) = &kw.value else {
+                        return None;
+                    };
+                    how = JoinHow::parse(s.value.to_str())?;
+                }
+                _ => return None,
+            }
+        }
+        // `cross` takes no keys and every other strategy needs `on=` here since `left_on`/`right_on`
+        // are not yet modeled; both mismatches raise at runtime, so fall back.
+        let keys = match (how, on) {
+            (JoinHow::Cross, None) => Vec::new(),
+            (JoinHow::Cross, Some(_)) | (_, None) => return None,
+            (_, Some(on)) => join_key_names(on)?,
+        };
+        let Type::DataFrame(other) = self.expr_infer(other_expr, &self.error_swallower()) else {
+            return None;
+        };
+        // A key absent from either frame makes the join malformed, so report it at its declaration
+        // site and fall back, matching the `drop`/`cast`/`rename` convention.
+        for (name, range) in &keys {
+            if !schema.has_column(name) || !other.has_column(name) {
+                errors
+                    .error_builder(
+                        *range,
+                        ErrorKind::UnknownColumn,
+                        format!("Column `{name}` is not in the DataFrame schema"),
+                    )
+                    .emit();
+                return None;
+            }
+        }
+        let key_set: SmallSet<Name> = keys.into_iter().map(|(name, _)| name).collect();
+        let column_dtype = |columns: &[(Name, PolarsDType)], name: &Name| {
+            columns.iter().find(|(c, _)| c == name).map(|(_, t)| *t)
+        };
+        // A coalesced key keeps the primary side's dtype, so paired keys with differing dtypes could
+        // be cast or rejected at runtime; fall back rather than pick one side.
+        if how.coalesces()
+            && key_set.iter().any(|name| {
+                column_dtype(&schema.columns, name) != column_dtype(&other.columns, name)
+            })
+        {
+            return None;
+        }
+        let not_key = |(name, _): &&(Name, PolarsDType)| !key_set.contains(name);
+        let (base_columns, other_columns): (Vec<_>, Vec<_>) = match how {
+            JoinHow::Semi | JoinHow::Anti => (schema.columns.clone(), Vec::new()),
+            JoinHow::Inner | JoinHow::Left => (
+                schema.columns.clone(),
+                other.columns.iter().filter(not_key).cloned().collect(),
+            ),
+            JoinHow::Full | JoinHow::Cross => (schema.columns.clone(), other.columns.clone()),
+            JoinHow::Right => (
+                schema.columns.iter().filter(not_key).cloned().collect(),
+                other.columns.clone(),
+            ),
+        };
+        let base_names: SmallSet<Name> =
+            base_columns.iter().map(|(name, _)| name.clone()).collect();
+        let mut columns = base_columns;
+        for (name, ty) in other_columns {
+            let out = if base_names.contains(&name) {
+                Name::new(format!("{name}_right"))
+            } else {
+                name
+            };
+            columns.push((out, ty));
+        }
+        // A suffixed name that already exists is a runtime `DuplicateError`, so fall back rather than
+        // emit a schema with a duplicate column.
+        let mut seen = SmallSet::new();
+        if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
+            return None;
+        }
+        // Now committed to a schema, so infer `other` with real errors as the sole reporter of any
+        // error inside it, since returning here bypasses ordinary call-checking.
+        self.expr_infer(other_expr, errors);
         Some(
             DataFrameSchema {
                 underlying: schema.underlying.clone(),
