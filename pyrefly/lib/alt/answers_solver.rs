@@ -479,30 +479,25 @@ impl CalcStack {
         self.scc_stack.borrow()
     }
 
-    /// Check if an existing SCC overlaps with a newly detected cycle.
+    /// Does the newly detected cycle `new` enclose `existing`?
     ///
-    /// Uses O(1) position arithmetic: if the existing SCC's exclusive upper bound
-    /// (top_pos_exclusive) is greater than the cycle start position,
-    /// the segments overlap and must be merged.
+    /// Only valid when `new.detected_at` belongs to no SCC, i.e. the caller has
+    /// already ruled out membership via `find_scc_containing`. A cycle whose
+    /// back-edge target is an SCC member never reaches here: `push` routes such
+    /// targets through the membership branches before cycle detection runs.
     ///
-    /// This works because segments are contiguous - all frames between bottom_pos_inclusive
-    /// and top_pos_exclusive belong to this SCC.
-    fn check_overlap(existing: &Scc, cycle_start_pos: usize) -> bool {
-        // O(1) overlap check using segment bounds.
-        // If the existing SCC's upper bound <= cycle start, there's no overlap.
-        existing.top_pos_exclusive > cycle_start_pos
+    /// Given that precondition the cycle covers `stack[new.bottom_pos_inclusive..]`,
+    /// a contiguous suffix, so it encloses exactly those SCCs anchored above its
+    /// own anchor. Comparing anchors is therefore an exact containment test, not
+    /// an approximation, and no membership check is needed to complete it.
+    fn encloses(new: &Scc, existing: &Scc) -> bool {
+        new.bottom_pos_inclusive < existing.bottom_pos_inclusive
     }
 
     /// Handle an SCC we just detected.
     ///
     /// When a new SCC overlaps with existing SCCs (shares participants),
     /// we merge them to form a larger SCC.
-    ///
-    /// Optimization: We use stack depth to efficiently find overlapping SCCs.
-    /// The cycle spans CalcStack positions [N, M] where M = stack_depth - 1 and
-    /// N = M - cycle_length + 1. Any SCC with max_stack_depth < N cannot overlap.
-    /// Once we find the first overlapping SCC, all subsequent SCCs must also
-    /// overlap (due to LIFO ordering of the SCC stack).
     #[allow(clippy::mutable_key_type)] // CalcId's Hash impl doesn't depend on mutable parts
     fn on_scc_detected(&self, raw: Vec1<CalcId>) {
         let calc_stack_vec = self.into_vec();
@@ -513,22 +508,17 @@ impl CalcStack {
             .set(owner.checked_add(1).expect("SCC ownership token overflow"));
         let new_scc = Scc::new(raw, &calc_stack_vec, SccOwner::Phase0(owner));
         let detected_at = new_scc.detected_at.dupe();
-        let cycle_start_pos = new_scc.bottom_pos_inclusive;
-
         // Check for overlapping SCCs and merge if needed
         let mut scc_stack = self.scc_stack.borrow_mut();
 
-        // Find the first (oldest) SCC that overlaps with the new cycle.
-        // Overlap is determined by O(1) segment arithmetic: if the existing SCC's
-        // upper bound (top_pos_exclusive) exceeds cycle_start_pos, they overlap.
-        // Due to LIFO ordering, once we find one overlapping SCC, all subsequent ones
-        // on the stack must also overlap.
+        // Find the first (oldest) SCC the new cycle encloses. Due to LIFO ordering,
+        // every SCC above that one is also enclosed.
         let mut first_merge_idx: Option<usize> = None;
 
         for (i, existing) in scc_stack.iter().enumerate() {
-            if Self::check_overlap(existing, cycle_start_pos) {
+            if Self::encloses(&new_scc, existing) {
                 first_merge_idx = Some(i);
-                break; // All subsequent SCCs will also overlap
+                break; // All subsequent SCCs are also enclosed
             }
         }
 
@@ -3631,6 +3621,20 @@ mod scc_tests {
     }
 
     #[test]
+    fn test_scc_encloses() {
+        let a = CalcId::for_test("m", 0);
+        let b = CalcId::for_test("m", 1);
+        let c = CalcId::for_test("m", 2);
+        let existing = make_test_scc(fresh_nodes(&[a, b.dupe()]), b, 2);
+
+        let enclosing = make_test_scc(fresh_nodes(&[c.dupe()]), c.dupe(), 1);
+        assert!(CalcStack::encloses(&enclosing, &existing));
+
+        let disjoint = make_test_scc(fresh_nodes(&[c.dupe()]), c, 3);
+        assert!(!CalcStack::encloses(&disjoint, &existing));
+    }
+
+    #[test]
     fn test_current_cycle_no_cycle() {
         // Stack with unique entries: no cycle
         let a = CalcId::for_test("m", 0);
@@ -3688,90 +3692,10 @@ mod scc_tests {
     }
 
     #[test]
-    fn test_subcycle_within_active_cycle() {
-        // Setup: CalcStack = [M0, M1, M2, M3], existing SCC with {M0, M1, M2, M3}
-        // New cycle detected: [M3, M2, M1] (sub-cycle within the existing SCC)
-        // Expected: Merged into same SCC
-        let a = CalcId::for_test("m", 0);
-        let b = CalcId::for_test("m", 1);
-        let c = CalcId::for_test("m", 2);
-        let d = CalcId::for_test("m", 3);
-
-        let calc_stack = make_calc_stack(&[a.dupe(), b.dupe(), c.dupe(), d.dupe()]);
-
-        // Create initial SCC with A, B, C, D
-        let initial_cycle = vec1![d.dupe(), c.dupe(), b.dupe(), a.dupe()];
-        calc_stack.on_scc_detected(initial_cycle);
-
-        // Now detect sub-cycle D -> B
-        let sub_cycle = vec1![d.dupe(), c.dupe(), b.dupe()];
-        calc_stack.on_scc_detected(sub_cycle);
-
-        // The sub-cycle overlaps with existing SCC, so they merge
-        let stack = calc_stack.borrow_scc_stack();
-        assert_eq!(
-            stack.len(),
-            1,
-            "Should still have exactly one SCC after merging"
-        );
-
-        // All nodes should be in the merged SCC
-        let scc = &stack[0];
-        assert!(scc.node_state.contains_key(&a));
-        assert!(scc.node_state.contains_key(&b));
-        assert!(scc.node_state.contains_key(&c));
-        assert!(scc.node_state.contains_key(&d));
-    }
-
-    #[test]
-    fn test_back_edge_into_existing_cycle() {
-        // CalcStack: [M0, M1, M2, M3, M4, M5]
-        // Existing SCC: {M1, M2, M3}
-        // New cycle: [M5, M4, M3, M2] (back-edge from M5 to M2)
-        // Expected: Merge creates SCC with {M1, M2, M3, M4, M5}
-        let a = CalcId::for_test("m", 0);
-        let b = CalcId::for_test("m", 1);
-        let c = CalcId::for_test("m", 2);
-        let d = CalcId::for_test("m", 3);
-        let e = CalcId::for_test("m", 4);
-        let f = CalcId::for_test("m", 5);
-
-        let calc_stack =
-            make_calc_stack(&[a.dupe(), b.dupe(), c.dupe(), d.dupe(), e.dupe(), f.dupe()]);
-
-        // Create initial SCC with B, C, D (detected from D going back to B)
-        let initial_cycle = vec1![d.dupe(), c.dupe(), b.dupe()];
-        calc_stack.on_scc_detected(initial_cycle);
-
-        // Verify initial state
-        {
-            let stack = calc_stack.borrow_scc_stack();
-            assert_eq!(stack.len(), 1);
-            assert_eq!(stack[0].node_state.len(), 3);
-        }
-
-        // Now detect cycle [F, E, D, C] - overlaps with existing at C and D
-        let new_cycle = vec1![f.dupe(), e.dupe(), d.dupe(), c.dupe()];
-        calc_stack.on_scc_detected(new_cycle);
-
-        // Should merge because new cycle overlaps with existing SCC
-        let stack = calc_stack.borrow_scc_stack();
-        assert_eq!(stack.len(), 1, "Should have merged into one SCC");
-
-        let scc = &stack[0];
-        // B, C, D, E, F should all be in the merged SCC
-        assert!(scc.node_state.contains_key(&b));
-        assert!(scc.node_state.contains_key(&c));
-        assert!(scc.node_state.contains_key(&d));
-        assert!(scc.node_state.contains_key(&e));
-        assert!(scc.node_state.contains_key(&f));
-    }
-
-    #[test]
     fn test_back_edge_before_existing_cycle() {
         // CalcStack: [M0, M1, M2, M3, M4, M5]
         // Existing SCC: {M1, M2, M3}
-        // New cycle: [M5, M4, M3, M2, M1, M0] (back-edge from M5 to M0)
+        // New cycle is a back-edge from M5 to M0
         // Expected: Merge creates SCC with {M0, M1, M2, M3, M4, M5}
         let a = CalcId::for_test("m", 0);
         let b = CalcId::for_test("m", 1);
@@ -3784,11 +3708,11 @@ mod scc_tests {
             make_calc_stack(&[a.dupe(), b.dupe(), c.dupe(), d.dupe(), e.dupe(), f.dupe()]);
 
         // Create initial SCC with B, C, D
-        let initial_cycle = vec1![d.dupe(), c.dupe(), b.dupe()];
+        let initial_cycle = vec1![b.dupe(), d.dupe(), c.dupe()];
         calc_stack.on_scc_detected(initial_cycle);
 
-        // Now detect cycle [F, E, D, C, B, A] - includes everything from A to F
-        let new_cycle = vec1![f.dupe(), e.dupe(), d.dupe(), c.dupe(), b.dupe(), a.dupe()];
+        // The cycle is in recency order, starting with the repeated target A.
+        let new_cycle = vec1![a.dupe(), f.dupe(), e.dupe(), d.dupe(), c.dupe(), b.dupe()];
         calc_stack.on_scc_detected(new_cycle);
 
         // Should merge because new cycle contains the existing SCC
