@@ -260,8 +260,7 @@ impl<'a> TypeDisplayContext<'a> {
         self.render_self_type_as_self = true;
     }
 
-    /// Always display the module name, except for builtins.
-    pub fn always_display_module_name_except_builtins(&mut self) {
+    fn qualify_qnames_except_builtins(&mut self) {
         let builtins_module = ModuleName::from_str("builtins");
         let fake_module = ModuleName::from_str("__pyrefly__type__display__context__");
         for c in self.qnames.values_mut() {
@@ -276,6 +275,16 @@ impl<'a> TypeDisplayContext<'a> {
                 c.info.insert(fake_module, None);
             }
         }
+    }
+
+    /// Always qualify names backed by a `QName`, except for builtins.
+    pub fn always_display_qname_module_name_except_builtins(&mut self) {
+        self.qualify_qnames_except_builtins();
+    }
+
+    /// Always display the module name, except for builtins.
+    pub fn always_display_module_name_except_builtins(&mut self) {
+        self.qualify_qnames_except_builtins();
         self.always_display_module_name = true;
     }
 

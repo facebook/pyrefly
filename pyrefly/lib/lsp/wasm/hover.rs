@@ -34,6 +34,7 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::type_var::Variance;
 use pyrefly_types::types::Type;
 use pyrefly_util::absolutize::Absolutize as _;
@@ -100,6 +101,33 @@ pub struct HoverResult {
 pub struct HoverOptions {
     pub show_go_to_links: bool,
     pub verbosity_level: usize,
+}
+
+/// Render a hover type, optionally qualifying canonical names except for builtins.
+fn display_type_for_hover(
+    type_: &Type,
+    fallback_name: Option<&str>,
+    expand_unions: bool,
+    qualify_names: bool,
+) -> String {
+    let mut context = TypeDisplayContext::new(&[type_]);
+    context.set_lsp_display_mode(LspDisplayMode::Hover);
+    if qualify_names {
+        context.always_display_qname_module_name_except_builtins();
+    }
+    if expand_unions {
+        context.always_display_expanded_unions();
+    }
+    let rendered = context.display(type_).to_string();
+    if let Some(name) = fallback_name
+        && type_.is_toplevel_callable()
+    {
+        let trimmed = rendered.trim_start();
+        if trimmed.starts_with('(') {
+            return format!("def {name}{trimmed}: ...");
+        }
+    }
+    rendered
 }
 
 impl HoverValue {
@@ -289,8 +317,12 @@ impl HoverValue {
             section
         };
         let type_display = self.display.clone().unwrap_or_else(|| {
-            self.type_
-                .as_lsp_string_with_fallback_name(self.name.as_deref(), LspDisplayMode::Hover)
+            display_type_for_hover(
+                &self.type_,
+                self.name.as_deref(),
+                false,
+                self.kind != Some(SymbolKind::Class) && !self.type_.is_toplevel_callable(),
+            )
         });
 
         Hover {
@@ -1030,11 +1062,14 @@ pub fn get_hover_with_verbosity(
                     });
                     cloned
                 };
+                let qualify_names =
+                    kind != Some(SymbolKind::Class) && !display_type.is_toplevel_callable();
                 let render = |expand| {
-                    display_type.as_lsp_string_with_fallback_name_and_expanded_unions(
+                    display_type_for_hover(
+                        &display_type,
                         name_for_display.as_deref(),
-                        LspDisplayMode::Hover,
                         expand,
+                        qualify_names,
                     )
                 };
                 let rendered = render(unions_expanded);
