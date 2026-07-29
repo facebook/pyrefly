@@ -701,13 +701,7 @@ impl<'a> BindingsBuilder<'a> {
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
-    ) -> (
-        FunctionStubOrImpl,
-        bool,
-        BodyKind,
-        bool,
-        Option<SelfAssignments>,
-    ) {
+    ) -> (FunctionStubOrImpl, BodyKind, bool, Option<SelfAssignments>) {
         // If the first statement in the body is a docstring, remove it
         let body_no_docstring = if let Some(s) = body.first()
             && is_docstring(s)
@@ -867,7 +861,6 @@ impl<'a> BindingsBuilder<'a> {
 
         (
             stub_or_impl,
-            body_kind == BodyKind::Ellipsis,
             body_kind,
             is_return_inferred,
             self_assignments,
@@ -1010,19 +1003,18 @@ impl<'a> BindingsBuilder<'a> {
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let calls_super_method = SuperMethodCallFinder::find(&func_name.id, &x.body);
-        let (stub_or_impl, has_ellipsis_body, body_kind, is_return_inferred, self_assignments) =
-            self.function_body(
-                &mut x.parameters,
-                mem::take(&mut x.body),
-                &decorators,
-                x.range,
-                x.is_async,
-                return_ann_with_range,
-                &func_name,
-                parent,
-                undecorated_idx,
-                class_key,
-            );
+        let (stub_or_impl, body_kind, is_return_inferred, self_assignments) = self.function_body(
+            &mut x.parameters,
+            mem::take(&mut x.body),
+            &decorators,
+            x.range,
+            x.is_async,
+            return_ann_with_range,
+            &func_name,
+            parent,
+            undecorated_idx,
+            class_key,
+        );
 
         // Pop the annotation scope to get back to the parent scope, and handle this
         // case where we need to track assignments to `self` from methods.
@@ -1036,7 +1028,6 @@ impl<'a> BindingsBuilder<'a> {
                 def_index: func_def_index,
                 def: FunctionDefData::new(x),
                 stub_or_impl,
-                has_ellipsis_body,
                 is_in_type_checking_block: self.type_checking_depth > 0,
                 body_kind,
                 is_return_inferred,

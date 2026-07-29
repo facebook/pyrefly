@@ -520,7 +520,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &FunctionDefData,
         def_index: FuncDefIndex,
         stub_or_impl: FunctionStubOrImpl,
-        has_ellipsis_body: bool,
         is_in_type_checking_block: bool,
         body_kind: BodyKind,
         is_return_inferred: bool,
@@ -770,7 +769,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params,
             paramspec,
             stub_or_impl,
-            has_ellipsis_body,
             defining_cls,
             type_shape_dsl_def,
             resolved_param_types,
@@ -796,7 +794,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("`{}` is missing a return annotation", stmt.name),
             );
         }
-        if def.has_ellipsis_body
+        if def.metadata.flags.body_kind == BodyKind::Ellipsis
             && !def.metadata.flags.is_in_type_checking_block
             && has_return_annotation
             && !def.metadata.flags.defined_in_stub_file

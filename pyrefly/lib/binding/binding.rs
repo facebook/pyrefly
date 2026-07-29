@@ -1904,7 +1904,6 @@ pub struct BindingUndecoratedFunction {
     pub def_index: FuncDefIndex,
     pub def: FunctionDefData,
     pub stub_or_impl: FunctionStubOrImpl,
-    pub has_ellipsis_body: bool,
     /// Whether the function is defined in an `if TYPE_CHECKING:` block.
     pub is_in_type_checking_block: bool,
     /// The shape of the function body.

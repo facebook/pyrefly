@@ -6061,7 +6061,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &x.def,
             x.def_index,
             x.stub_or_impl,
-            x.has_ellipsis_body,
             x.is_in_type_checking_block,
             x.body_kind,
             x.is_return_inferred,
