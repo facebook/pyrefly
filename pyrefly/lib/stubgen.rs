@@ -196,6 +196,56 @@ class BaseModel:
         );
     }
 
+    fn run_stubgen_polars(input: &str) -> String {
+        let config = ExtractConfig {
+            include_private: false,
+            include_docstrings: false,
+        };
+        let tdir = tempfile::tempdir().unwrap();
+        let frame_dir = tdir.path().join("polars").join("dataframe");
+        fs_anyhow::create_dir_all(&frame_dir).unwrap();
+        let polars_init = tdir.path().join("polars").join("__init__.py");
+        fs_anyhow::write(
+            &polars_init,
+            "from polars.dataframe.frame import DataFrame as DataFrame\n",
+        )
+        .unwrap();
+        let dataframe_init = frame_dir.join("__init__.py");
+        fs_anyhow::write(&dataframe_init, "").unwrap();
+        let frame = frame_dir.join("frame.py");
+        fs_anyhow::write(
+            &frame,
+            "class DataFrame:\n    def __init__(self, data: object = None) -> None: ...\n",
+        )
+        .unwrap();
+
+        let path = tdir.path().join("input.py");
+        fs_anyhow::write(&path, input).unwrap();
+
+        let mut t = TestEnv::new();
+        t.add(&path.display().to_string(), input);
+        t.add_real_path("polars", polars_init);
+        t.add_real_path("polars.dataframe", dataframe_init);
+        t.add_real_path("polars.dataframe.frame", frame);
+
+        let includes = Globs::new(vec![path.display().to_string()]).unwrap();
+        run_stubgen_inner(&mut t, includes, &config)
+    }
+
+    /// A generated stub emits the plain class, not the schema form.
+    #[test]
+    fn test_stubgen_dataframe_uses_plain_class() {
+        let actual = run_stubgen_polars("import polars as pl\ndf = pl.DataFrame({\"a\": [1]})\n");
+        assert!(
+            actual.contains("df: DataFrame"),
+            "expected a plain class annotation, got:\n{actual}"
+        );
+        assert!(
+            !actual.contains("DataFrame["),
+            "the schema display form must not appear in a stub, got:\n{actual}"
+        );
+    }
+
     #[test]
     fn test_stubgen_functions() {
         assert_stubgen_snapshot("functions");

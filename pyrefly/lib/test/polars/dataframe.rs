@@ -1192,3 +1192,14 @@ df = pl.DataFrame({"a": [1]})
 reveal_type(df.cast({"z": pl.Int32, "a": 5}))  # E: revealed type: DataFrame
 "#,
 );
+
+testcase!(
+    test_schema_form_shown_in_error_messages,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+def want_int(x: int) -> None: ...
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+want_int(df)  # E: Argument `DataFrame[a: Int64, b: String]` is not assignable to parameter `x` with type `int` in function `want_int`
+"#,
+);

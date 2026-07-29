@@ -464,6 +464,7 @@ fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
     }
     let mut display = TypeDisplayContext::new(&[ty]);
     display.render_self_type_as_self();
+    display.strip_library_schemas();
     let s = display.display(ty).to_string();
     if s.contains("@") || s.contains("Unknown") {
         ctx.uses_incomplete = true;

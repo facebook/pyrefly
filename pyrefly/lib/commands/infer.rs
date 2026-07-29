@@ -204,7 +204,12 @@ fn format_hints(
             if matches!(sub_type, Type::SelfType(_)) {
                 return;
             }
-            if let Some(qname) = sub_type.qname() {
+            // A DataFrame renders as its underlying class, which `universe` does not visit.
+            let qname = match sub_type {
+                Type::DataFrame(schema) => Some(schema.underlying.qname()),
+                _ => sub_type.qname(),
+            };
+            if let Some(qname) = qname {
                 let module_name = qname.module_name();
                 if module_name != ModuleName::builtins() && module_name != current_module_name {
                     hint_imports.push((module_name, importable_name_for_qname(qname)));
@@ -277,6 +282,7 @@ fn hint_to_string(
     };
     let mut ctx = TypeDisplayContext::new(&[&hint]);
     ctx.render_self_type_as_self();
+    ctx.strip_library_schemas();
     ctx.display(&hint).to_string()
 }
 
@@ -520,6 +526,51 @@ mod test {
             got_file,
             "File content after infer doesn't match expected output"
         );
+    }
+
+    #[test]
+    fn infer_dataframe_return_uses_plain_class() -> anyhow::Result<()> {
+        let tdir = tempfile::TempDir::with_prefix("pyrefly_infer_df").unwrap();
+        let frame_dir = tdir.path().join("polars").join("dataframe");
+        fs_anyhow::create_dir_all(&frame_dir)?;
+        fs_anyhow::write(
+            &tdir.path().join("polars").join("__init__.py"),
+            "from polars.dataframe.frame import DataFrame as DataFrame\n",
+        )?;
+        fs_anyhow::write(&frame_dir.join("__init__.py"), "")?;
+        fs_anyhow::write(
+            &frame_dir.join("frame.py"),
+            "class DataFrame:\n    def __init__(self, data: object = None) -> None: ...\n",
+        )?;
+
+        let input = "import polars as pl\ndef make():\n    return pl.DataFrame({\"a\": [1]})\n";
+        let test_path = tdir.path().join("test.py");
+        fs_anyhow::write(&test_path, input)?;
+        let config_path = tdir.path().join("pyrefly.toml");
+        fs_anyhow::write(
+            &config_path,
+            "project_includes = [\"test.py\"]\nproject_excludes = []\n",
+        )?;
+
+        let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
+        let result = args.run(None, TEST_THREAD_COUNT);
+        assert!(result.is_ok(), "infer command failed: {:?}", result.err());
+
+        let got = fs_anyhow::read_to_string(&test_path)?;
+        // Emits the plain class and adds its import, discovered from the stripped class QName.
+        assert!(
+            got.contains("-> DataFrame:"),
+            "expected a plain class return annotation, got:\n{got}"
+        );
+        assert!(
+            !got.contains("DataFrame["),
+            "the schema display form is not legal annotation syntax, got:\n{got}"
+        );
+        assert!(
+            got.contains("from polars.dataframe.frame import DataFrame"),
+            "the plain class import must be added, got:\n{got}"
+        );
+        Ok(())
     }
 
     #[test]

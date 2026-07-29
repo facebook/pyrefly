@@ -1973,6 +1973,17 @@ impl Type {
         self
     }
 
+    /// Replace every DataFrame schema with its plain underlying class. The
+    /// `DataFrame[a: Int64, ...]` schema form is not valid annotation syntax, so a
+    /// surface that emits a type as a source annotation must strip the schema first.
+    pub fn strip_library_schemas(self) -> Type {
+        self.transform(&mut |t| {
+            if let Type::DataFrame(schema) = t {
+                *t = schema.underlying_type();
+            }
+        })
+    }
+
     /// If this type represents a (possibly narrowed) quantified (i.e., `Q`  or `Q & T`), returns
     /// the quantified `Q` plus the type `T` it is narrowed to.
     pub fn as_quantified(&self) -> Option<(&Quantified, Option<&Type>)> {

@@ -210,6 +210,54 @@ mod tests {
     }
 
     #[test]
+    fn strip_library_schemas_replaces_every_schema_with_its_class() {
+        let underlying = Type::ClassType(underlying_class());
+
+        // Every completeness collapses to the plain class, including empty and partial.
+        for (columns, completeness) in [
+            (
+                vec![col("a", PolarsDType::Int64)],
+                SchemaCompleteness::Complete,
+            ),
+            (vec![], SchemaCompleteness::Complete),
+            (
+                vec![col("a", PolarsDType::Int64)],
+                SchemaCompleteness::Partial,
+            ),
+        ] {
+            let stripped = schema(columns, completeness)
+                .to_type()
+                .strip_library_schemas();
+            assert_eq!(stripped, underlying);
+        }
+
+        // A pandas frame strips the same way.
+        let pandas = DataFrameSchema {
+            kind: DataFrameKind::Pandas,
+            ..schema(
+                vec![col("a", PolarsDType::Int64)],
+                SchemaCompleteness::Complete,
+            )
+        }
+        .to_type();
+        assert_eq!(pandas.strip_library_schemas(), underlying);
+
+        // The strip recurses into nested positions and leaves non-DataFrame types untouched.
+        let optional = Type::optional(
+            schema(
+                vec![col("a", PolarsDType::Int64)],
+                SchemaCompleteness::Complete,
+            )
+            .to_type(),
+        );
+        assert_eq!(
+            optional.strip_library_schemas(),
+            Type::optional(underlying.clone())
+        );
+        assert_eq!(underlying.clone().strip_library_schemas(), underlying);
+    }
+
+    #[test]
     fn traversal_preserves_underlying() {
         // Columns are Polars dtypes, not `Type`s, so type traversal reaches only `underlying`.
         let df = schema(
