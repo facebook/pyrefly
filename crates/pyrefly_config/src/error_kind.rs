@@ -412,6 +412,8 @@ pub enum ErrorKind {
     Unsupported,
     /// Attempting to `del` something that cannot be deleted
     UnsupportedDelete,
+    /// A dynamically created class has a base that cannot be statically resolved.
+    UnsupportedDynamicBase,
     /// Attempting to apply an operation to arguments that do not support it.
     UnsupportedOperation,
     /// A class decorator whose own type is `Any`, obscuring the decorated class type.
@@ -570,6 +572,7 @@ impl ErrorKind {
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnreachableMatchCase => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            ErrorKind::UnsupportedDynamicBase => Severity::Ignore,
             ErrorKind::UntypedClassDecorator => Severity::Ignore,
             ErrorKind::UntypedFunctionDecorator => Severity::Ignore,
             ErrorKind::UntypedImport => Severity::Warn,
