@@ -4897,11 +4897,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         // `__getattr__` fallback: a module-level `__getattr__` makes
         // any attribute access succeed at runtime via its return type.
-        if self.exports.export_exists(m, &dunder::GETATTR) {
-            let getattr_ty = self
-                .get_from_export(m, None, &KeyExport(dunder::GETATTR.clone()))
-                .arc_clone();
+        if let Some(getattr_ty) = self.try_get_from_export(m, dunder::GETATTR) {
             return getattr_ty
+                .arc_clone()
                 .callable_return_type(self.heap)
                 .unwrap_or_else(|| self.heap.mk_any_implicit());
         }

@@ -39,7 +39,6 @@ use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
-use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -473,10 +472,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn attrs_attribute_class(&self) -> Option<Class> {
         let name = Name::new_static("Attribute");
         for module in [ModuleName::attr(), ModuleName::attrs()] {
-            if self.exports.export_exists(module, &name)
-                && let Type::ClassDef(cls) = self
-                    .get_from_export(module, None, &KeyExport(name.clone()))
-                    .as_ref()
+            if let Some(Type::ClassDef(cls)) =
+                self.try_get_from_export(module, name.clone()).as_deref()
             {
                 return Some(cls.clone());
             }

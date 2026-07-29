@@ -34,7 +34,6 @@ use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::expr::TypeOrExpr;
 use crate::binding::binding::ExprOrBinding;
-use crate::binding::binding::KeyExport;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -2175,11 +2174,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             FindingOrError::Error(_) => return Some(Attribute::simple(self.heap.mk_any_error())), // This module doesn't exist, we must have already errored
         };
 
-        if self.exports.export_exists(module_name, attr_name) {
-            Some(Attribute::simple(
-                self.get_from_export(module_name, None, &KeyExport(attr_name.clone()))
-                    .arc_clone(),
-            ))
+        if let Some(attr) = self.try_get_from_export(module_name, attr_name.clone()) {
+            Some(Attribute::simple(attr.arc_clone()))
         } else if self
             .exports
             .is_submodule_imported_implicitly(module_name, attr_name)

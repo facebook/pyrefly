@@ -3077,6 +3077,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    pub fn try_get_from_export(&self, module: ModuleName, attr: Name) -> Option<Arc<Type>> {
+        self.exports
+            .export_exists(module, &attr)
+            .then(|| self.get_from_export(module, None, &KeyExport(attr)))
+    }
+
     /// Might return None if the class is no longer present on the underlying module.
     pub fn get_from_class<K: Solve<Ans> + Exported>(
         &self,
