@@ -85,8 +85,6 @@ pub struct SerializedError {
     pub line: usize,
     /// The kebab-case name of the error kind (e.g., "bad-assignment").
     pub name: String,
-    /// The human-readable error message.
-    pub message: String,
     /// An exact machine-applicable edit when this diagnostic reports an unused suppression.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suppression_edit: Option<SerializedSuppressionEdit>,
@@ -128,7 +126,6 @@ impl SerializedError {
                 path: (**path).clone(),
                 line: line.to_zero_indexed() as usize,
                 name: error.error_kind().to_name().to_owned(),
-                message: error.msg().to_owned(),
                 suppression_edit,
             })
         } else {
@@ -408,7 +405,6 @@ fn add_suppressions(
                     path: e.path.clone(),
                     line: new_line.to_zero_indexed() as usize,
                     name: e.name.clone(),
-                    message: e.message.clone(),
                     suppression_edit: e.suppression_edit.clone(),
                 }
             })
@@ -983,14 +979,12 @@ def foo() -> None:
                 path: path.clone(),
                 line: 2, // x = 1 (0-indexed)
                 name: "new-error".to_owned(),
-                message: String::new(),
                 suppression_edit: None,
             },
             SerializedError {
                 path: path.clone(),
                 line: 4, // y = 2 (0-indexed)
                 name: "new-error".to_owned(),
-                message: String::new(),
                 suppression_edit: None,
             },
         ];
@@ -1226,7 +1220,6 @@ def g() -> str:
             path: path.clone(),
             line: 0,
             name: ErrorKind::UnusedIgnore.to_name().to_owned(),
-            message: "Unused `# pyrefly: ignore` comment".to_owned(),
             suppression_edit: Some(SerializedSuppressionEdit {
                 tool: Tool::Pyrefly,
                 start,
@@ -1707,7 +1700,6 @@ def f() -> int:
         path: PathBuf,
         line: usize,
         name: &str,
-        message: &str,
         tool: Tool,
         start: usize,
         end: usize,
@@ -1718,7 +1710,6 @@ def f() -> int:
             path,
             line,
             name: name.to_owned(),
-            message: message.to_owned(),
             suppression_edit: Some(SerializedSuppressionEdit {
                 tool,
                 start,
@@ -1788,6 +1779,21 @@ def f() -> int:
     }
 
     #[test]
+    fn test_serialized_error_accepts_obsolete_message_field() {
+        let error: SerializedError = serde_json::from_str(
+            r#"{"path":"test.py","line":0,"name":"bad-assignment","message":"ignored"}"#,
+        )
+        .unwrap();
+        assert_eq!(error.path, PathBuf::from("test.py"));
+        assert_eq!(error.line, 0);
+        assert_eq!(error.name, "bad-assignment");
+        assert!(error.suppression_edit.is_none());
+
+        let serialized = serde_json::to_value(error).unwrap();
+        assert!(serialized.get("message").is_none());
+    }
+
+    #[test]
     fn test_unused_ignore_without_structured_edit_is_rejected() {
         let tdir = tempfile::tempdir().unwrap();
         let path = get_path(&tdir);
@@ -1797,7 +1803,6 @@ def f() -> int:
             path: path.clone(),
             line: 0,
             name: "unused-ignore".to_owned(),
-            message: "Unused `# pyrefly: ignore` comment".to_owned(),
             suppression_edit: None,
         };
 
@@ -1820,7 +1825,6 @@ def f() -> int:
             PathBuf::from("test.py"),
             0,
             "unused-ignore",
-            "The diagnostic wording is irrelevant",
             Tool::Pyrefly,
             7,
             26,
@@ -1846,7 +1850,6 @@ def f() -> int:
             PathBuf::from("test.py"),
             0,
             "unused-type-ignore",
-            "The diagnostic wording is irrelevant",
             Tool::Type,
             7,
             23,
@@ -1874,7 +1877,6 @@ def f() -> int:
                     PathBuf::from("test.py"),
                     0,
                     "unused-ignore",
-                    "unused",
                     Tool::Pyrefly,
                     7,
                     26,
@@ -1885,7 +1887,6 @@ def f() -> int:
                     PathBuf::from("test.py"),
                     0,
                     "unused-type-ignore",
-                    "unused",
                     Tool::Type,
                     26,
                     40,
@@ -1909,7 +1910,6 @@ def f() -> int:
                     PathBuf::from("test.py"),
                     0,
                     "unused-ignore",
-                    "unused",
                     Tool::Pyrefly,
                     pyrefly_start,
                     pyrefly_end,
@@ -1920,7 +1920,6 @@ def f() -> int:
                     PathBuf::from("test.py"),
                     0,
                     "unused-type-ignore",
-                    "unused",
                     Tool::Type,
                     type_start,
                     type_end,
@@ -1950,7 +1949,6 @@ def f() -> int:
             PathBuf::from("test.py"),
             1,
             "unused-ignore",
-            "unused",
             Tool::Pyrefly,
             19,
             36,
@@ -1974,7 +1972,6 @@ a: int = ""
             PathBuf::from("test.py"),
             1,
             "unused-ignore",
-            "This message contains no error codes",
             Tool::Pyrefly,
             0,
             "# pyrefly: ignore[bad-assignment,bad-override]".len(),
@@ -2000,7 +1997,6 @@ def foo() -> str:
             PathBuf::from("test.py"),
             2,
             "unused-ignore",
-            "unused",
             Tool::Pyrefly,
             4,
             "    # pyrefly: ignore[bad-return, unsupported-operation, bad-assignment]".len(),
@@ -2025,7 +2021,6 @@ def g() -> str:
             PathBuf::from("test.py"),
             2,
             "unused-ignore",
-            "unused",
             Tool::Pyrefly,
             source_line.find('#').unwrap(),
             source_line.len(),
@@ -2052,7 +2047,6 @@ def g() -> str:
                 path1.clone(),
                 0,
                 "unused-ignore",
-                "unused",
                 Tool::Pyrefly,
                 7,
                 content1.trim_end().len(),
@@ -2063,7 +2057,6 @@ def g() -> str:
                 path2.clone(),
                 0,
                 "unused-ignore",
-                "unused",
                 Tool::Pyrefly,
                 7,
                 content2.trim_end().len(),
@@ -2099,7 +2092,6 @@ def g() -> str:
             PathBuf::from("test.py"),
             1,
             "unused-ignore",
-            "unused",
             Tool::Pyrefly,
             source_line.find('#').unwrap(),
             source_line.len(),
@@ -2137,7 +2129,6 @@ y = 1 + 1
             PathBuf::from("test.py"),
             0,
             "unused-ignore",
-            "unused",
             Tool::Pyrefly,
             source_line.rfind('#').unwrap(),
             source_line.len(),
@@ -2519,7 +2510,6 @@ build_query(
             PathBuf::from("test.py"),
             0,
             "unused-ignore",
-            "unused",
             Tool::Pyre,
             7,
             input.trim_end().len(),
@@ -2537,7 +2527,6 @@ build_query(
             PathBuf::from("test.py"),
             0,
             "unused-ignore",
-            "unused",
             Tool::Pyre,
             7,
             input.trim_end().len(),
@@ -2556,7 +2545,6 @@ build_query(
             PathBuf::from("test.py"),
             0,
             "unused-ignore",
-            "unused",
             Tool::Pyre,
             0,
             source_line.len(),
@@ -2574,7 +2562,6 @@ build_query(
             PathBuf::from("test.py"),
             0,
             "unused-ignore",
-            "unused",
             Tool::Pyre,
             7,
             input.trim_end().len(),
@@ -2592,7 +2579,6 @@ build_query(
             PathBuf::from("test.py"),
             0,
             "unused-ignore",
-            "unused",
             Tool::Pyre,
             7,
             input.trim_end().len(),
@@ -2611,7 +2597,6 @@ build_query(
             PathBuf::from("test.py"),
             0,
             "unused-ignore",
-            "unused",
             Tool::Pyre,
             7,
             source_line.rfind('#').unwrap(),
@@ -2633,7 +2618,6 @@ build_query(
             path.clone(),
             1,
             "unused-ignore",
-            "unused",
             Tool::Pyre,
             source_line.rfind('#').unwrap(),
             source_line.len(),
@@ -2655,7 +2639,6 @@ build_query(
             path: PathBuf::from("foo.py"),
             line: 1,
             name: name.to_owned(),
-            message: String::new(),
             suppression_edit: None,
         };
         assert!(!error("unused-ignore").is_suppressable());
