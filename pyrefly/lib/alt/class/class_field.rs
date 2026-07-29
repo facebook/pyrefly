@@ -874,18 +874,6 @@ impl ClassField {
         }
     }
 
-    fn is_non_callable_protocol_method(&self) -> bool {
-        match &self.0 {
-            ClassFieldInner::Property { .. } => false,
-            ClassFieldInner::Descriptor { .. } => false,
-            ClassFieldInner::Method { ty, .. } => ty.is_non_callable_protocol_method(),
-            ClassFieldInner::ProxyMethod { .. } => false,
-            ClassFieldInner::NestedClass { .. } => false,
-            ClassFieldInner::ClassAttribute { ty, .. } => ty.is_non_callable_protocol_method(),
-            ClassFieldInner::InstanceAttribute { ty, .. } => ty.is_non_callable_protocol_method(),
-        }
-    }
-
     pub fn is_foreign_key(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,
@@ -4757,13 +4745,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .visit_toplevel_func_metadata::<bool>(&|meta| {
                 meta.flags.lacks_runtime_implementation()
             });
-        if member.value.is_abstract() && lacks_runtime_impl {
-            return Some(NoAccessReason::SuperMethodNeedsImplementation(
-                member.defining_class.dupe(),
-            ));
-        }
-        let metadata = self.get_metadata_for_class(&member.defining_class);
-        if metadata.is_protocol() && member.value.is_non_callable_protocol_method() {
+        if (member.value.is_abstract()
+            || self
+                .get_metadata_for_class(&member.defining_class)
+                .is_protocol())
+            && lacks_runtime_impl
+        {
             Some(NoAccessReason::SuperMethodNeedsImplementation(
                 member.defining_class.dupe(),
             ))
