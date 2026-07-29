@@ -2023,6 +2023,15 @@ mod tests {
         compare_snapshot("optional_imports.expected.json", &report);
     }
 
+    // `involves_import` must not treat a `match` capture over an imported subject as import-involved:
+    // `PatternCapture` is a definition boundary, so the capture branch of the module-level `x` Phi is
+    // not followed through to `import json`, and `x` is reported as an untyped variable (not skipped).
+    #[test]
+    fn test_report_match_capture_import() {
+        let report = build_module_report_for_test("match_capture_import.py");
+        compare_snapshot("match_capture_import.expected.json", &report);
+    }
+
     #[test]
     fn test_report_multi_target_aliases() {
         let report = build_module_report_for_test("multi_target_aliases.py");
