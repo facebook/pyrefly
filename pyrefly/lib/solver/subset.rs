@@ -673,7 +673,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         //    that could be invalidated by rollback)
         let used_coinductive = self.coinductive_assumptions_used;
         if has_no_vars && !used_coinductive {
-            self.solver.store_protocol_cache(got, want, res.clone());
+            self.solver
+                .store_protocol_cache(&got, &want, &res, self.type_order);
         }
 
         // Restore: propagate any coinductive usage upward
@@ -1207,7 +1208,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         let used_coinductive = self.coinductive_assumptions_used;
         if cacheable && !used_coinductive {
             self.solver
-                .store_typed_dict_cache(got.clone(), want.clone(), res.clone());
+                .store_typed_dict_cache(got, want, &res, self.type_order);
         }
         self.coinductive_assumptions_used = prev_coinductive || used_coinductive;
         res

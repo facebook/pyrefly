@@ -1154,8 +1154,21 @@ impl Solver {
     }
 
     /// Store a protocol conformance result.
-    pub fn store_protocol_cache(&self, got: Type, want: Type, result: Result<(), SubsetError>) {
-        self.protocol_cache.lock().insert((got, want), result);
+    pub fn store_protocol_cache<Ans: LookupAnswer>(
+        &self,
+        got: &Type,
+        want: &Type,
+        result: &Result<(), SubsetError>,
+        type_order: TypeOrder<'_, Ans>,
+    ) {
+        // SCC-local answers are provisional until the SCC converges. They may use
+        // stable cached results, but must not publish results to a persistent cache.
+        if type_order.has_active_scc() {
+            return;
+        }
+        self.protocol_cache
+            .lock()
+            .insert((got.clone(), want.clone()), result.clone());
     }
 
     pub fn check_typed_dict_cache(
@@ -1169,13 +1182,21 @@ impl Solver {
             .cloned()
     }
 
-    pub fn store_typed_dict_cache(
+    pub fn store_typed_dict_cache<Ans: LookupAnswer>(
         &self,
-        got: TypedDict,
-        want: TypedDict,
-        result: Result<(), SubsetError>,
+        got: &TypedDict,
+        want: &TypedDict,
+        result: &Result<(), SubsetError>,
+        type_order: TypeOrder<'_, Ans>,
     ) {
-        self.typed_dict_cache.lock().insert((got, want), result);
+        // SCC-local answers are provisional until the SCC converges. They may use
+        // stable cached results, but must not publish results to a persistent cache.
+        if type_order.has_active_scc() {
+            return;
+        }
+        self.typed_dict_cache
+            .lock()
+            .insert((got.clone(), want.clone()), result.clone());
     }
 
     /// Force all non-recursive Vars in `vars`.

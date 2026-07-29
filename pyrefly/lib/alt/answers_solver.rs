@@ -1967,6 +1967,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self.thread_state.stack
     }
 
+    pub(crate) fn has_active_scc(&self) -> bool {
+        !self.stack().sccs_is_empty()
+    }
+
     /// Access the thread-local state for trace recording.
     pub(crate) fn trace_state(&self) -> &ThreadState {
         self.thread_state

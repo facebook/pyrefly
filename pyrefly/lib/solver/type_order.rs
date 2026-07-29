@@ -58,6 +58,10 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.is_debug()
     }
 
+    pub fn has_active_scc(self) -> bool {
+        self.0.has_active_scc()
+    }
+
     pub fn stdlib(self) -> &'a Stdlib {
         self.0.stdlib
     }
