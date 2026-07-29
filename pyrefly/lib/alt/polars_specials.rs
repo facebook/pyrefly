@@ -100,11 +100,18 @@ pub fn is_dataframe_column_method(method: &str) -> bool {
     )
 }
 
+/// The two data shapes column inference models: a dict-of-columns or list-of-dict rows.
+#[derive(Clone, Copy)]
+enum PolarsData<'b> {
+    Dict(&'b ExprDict),
+    Records(&'b ExprList),
+}
+
 /// A DataFrame constructor call reduced to the pieces column inference needs.
 /// `data` is `None` when absent or empty; `schema` is the ordered `schema=` column set, each
 /// column pinned to a dtype or `None` to defer to data inference.
 pub struct PolarsConstruct<'b> {
-    data: Option<&'b ExprDict>,
+    data: Option<PolarsData<'b>>,
     schema: Option<Vec<(Name, Option<PolarsDType>)>>,
     overrides: SmallMap<Name, PolarsDType>,
     strict: bool,
@@ -126,6 +133,22 @@ fn dataframe_data_map(dict: &ExprDict) -> Option<SmallMap<Name, &Expr>> {
         }
     }
     Some(map)
+}
+
+/// A list-of-dicts as an ordered column-to-per-row-values map (first-appearance order), or `None`
+/// if not a record literal we model. Only the first 100 rows are read, matching Polars'
+/// `infer_schema_length` default, so a key that first appears past row 100 is absent at runtime too.
+fn dataframe_records_map(list: &ExprList) -> Option<SmallMap<Name, Vec<&Expr>>> {
+    let mut columns: SmallMap<Name, Vec<&Expr>> = SmallMap::new();
+    for elt in list.elts.iter().take(100) {
+        let Expr::Dict(dict) = elt else {
+            return None;
+        };
+        for (name, value) in dataframe_data_map(dict)? {
+            columns.entry(name).or_default().push(value);
+        }
+    }
+    (!columns.is_empty()).then_some(columns)
 }
 
 /// A `schema=` dict literal as an ordered column list, each pinned to a `pl.<DType>` or `None`
@@ -177,14 +200,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Vec<(Name, PolarsDType)>> {
         let data = match construct.data {
-            Some(dict) => Some(dataframe_data_map(dict)?),
+            Some(PolarsData::Dict(dict)) => Some(dataframe_data_map(dict)?),
             None => None,
+            // Records fold the supertype over each column's per-row values (as if strict=False), so a
+            // column never errors. Polars-only, and records with a `schema=` are not modeled: fall back.
+            Some(PolarsData::Records(list)) => {
+                if kind != DataFrameKind::Polars || construct.schema.is_some() {
+                    return None;
+                }
+                let columns = dataframe_records_map(list)?
+                    .into_iter()
+                    .map(|(name, values)| {
+                        let element = match construct.overrides.get(&name) {
+                            Some(dtype) => *dtype,
+                            None => self
+                                .dataframe_list_element_type(
+                                    &name,
+                                    values.iter().copied(),
+                                    kind.clone(),
+                                    false,
+                                    errors,
+                                )
+                                .unwrap_or(PolarsDType::Unknown),
+                        };
+                        (name, element)
+                    })
+                    .collect();
+                return Some(columns);
+            }
         };
         // Only list literals have modeled dtypes.
         let element_from_data = |name: &Name, value: &Expr| match value {
-            Expr::List(ExprList { elts, .. }) => {
-                self.dataframe_list_element_type(name, elts, kind.clone(), construct.strict, errors)
-            }
+            Expr::List(ExprList { elts, .. }) => self.dataframe_list_element_type(
+                name,
+                elts.iter(),
+                kind.clone(),
+                construct.strict,
+                errors,
+            ),
             _ => None,
         };
         let Some(schema) = &construct.schema else {
@@ -297,7 +350,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let data = match data_expr {
             None | Some(Expr::NoneLiteral(_)) => None,
             Some(Expr::Dict(dict)) if dict.items.is_empty() => None,
-            Some(Expr::Dict(dict)) => Some(dict),
+            Some(Expr::Dict(dict)) => Some(PolarsData::Dict(dict)),
+            Some(Expr::List(list)) => Some(PolarsData::Records(list)),
             Some(_) => return None,
         };
         let schema = match schema_expr {
@@ -314,19 +368,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Anchors on the first non-null element; only Polars reports later mismatches.
-    fn dataframe_list_element_type(
+    fn dataframe_list_element_type<'e>(
         &self,
         name: &Name,
-        elts: &[Expr],
+        elts: impl Iterator<Item = &'e Expr> + Clone,
         kind: DataFrameKind,
         strict: bool,
         errors: &ErrorCollector,
     ) -> Option<PolarsDType> {
         let scalar = |e: &Expr| match e {
+            // An integer literal that fits in i64 is Int64; past i64 the runtime dtype is data-shape
+            // dependent (UInt64 or Int128), so we degrade rather than claim a wrong Int64.
             Expr::NumberLiteral(ExprNumberLiteral {
-                value: Number::Int(_),
+                value: Number::Int(i),
                 ..
-            }) => Some(PolarsDType::Int64),
+            }) => i.as_i64().map(|_| PolarsDType::Int64),
             Expr::NumberLiteral(ExprNumberLiteral {
                 value: Number::Float(_),
                 ..
@@ -358,18 +414,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             _ => None,
         };
-        let Some((first, rest)) = elts.split_first() else {
+        let mut rest = elts.clone();
+        let Some(first) = rest.next() else {
             return Some(PolarsDType::Unknown);
         };
         if !strict {
             // strict=False widens to the elements' common supertype instead of erroring.
             let mut acc = scalar(first)?;
+            let mut any_rest = false;
             for e in rest {
+                any_rest = true;
                 acc = acc.supertype(scalar(e)?)?;
             }
             // We do not model timezones, so a naive/tz-aware mix (which Polars rejects under
             // strict=False) is indistinguishable here; fall back rather than assert `Datetime`.
-            if acc == PolarsDType::Datetime && !rest.is_empty() {
+            if acc == PolarsDType::Datetime && any_rest {
                 return None;
             }
             return Some(acc);

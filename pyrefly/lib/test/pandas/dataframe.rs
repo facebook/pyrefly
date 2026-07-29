@@ -210,6 +210,18 @@ reveal_type(pd.DataFrame({"a": [None]}))  # E: revealed type: DataFrame
 );
 
 testcase!(
+    test_pandas_records_fall_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+# Record inference is Polars-only; pandas null-fills a missing key with NaN and its coercion rules
+# diverge, so a list-of-dicts falls back to the opaque frame.
+reveal_type(pd.DataFrame([{"a": 1}, {"a": 2}]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
     test_pandas_unknown_column_read_delegates_without_error,
     env_with_pandas_frame_stubs(),
     r#"

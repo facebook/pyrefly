@@ -63,6 +63,7 @@ import polars as pl
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 df_kw = pl.DataFrame(data={"a": [1], "b": ["x"]})
 df_schema = pl.DataFrame(schema={"a": pl.Int64, "b": pl.String})
+df_records = pl.DataFrame([{"a": 1}, {"b": 2}])
 "#,
     );
     env
@@ -613,6 +614,28 @@ import polars as pl
 from typing import reveal_type
 # Polars stores complex values as `Object`.
 reveal_type(pl.DataFrame({"a": [1j]}))  # E: revealed type: DataFrame[a: Unknown]
+"#,
+);
+
+testcase!(
+    test_construct_i64_max_is_int64,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [9223372036854775807]}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_construct_int_above_i64_degrades,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Past i64 the runtime dtype is data-shape dependent (UInt64 or Int128), so we degrade rather than
+# claim Int64.
+reveal_type(pl.DataFrame({"a": [9223372036854775808]}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
@@ -1267,6 +1290,17 @@ from defs import df_schema
 df_schema["a"]
 df_schema["b"]
 df_schema["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_construct_from_records_across_import,
+    env_cross_file(),
+    r#"
+from defs import df_records
+df_records["a"]
+df_records["b"]
+df_records["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
@@ -1962,5 +1996,332 @@ import polars as pl
 def want_int(x: int) -> None: ...
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 want_int(df)  # E: Argument `DataFrame[a: Int64, b: String]` is not assignable to parameter `x` with type `int` in function `want_int`
+"#,
+);
+
+testcase!(
+    test_records_basic_single_key,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1}, {"a": 2}]))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_records_two_keys,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1, "b": 2}, {"a": 3, "b": 4}]))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_records_fold_int_then_float,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Records fold the supertype and never error, unlike the dict path which errors on this mix.
+reveal_type(pl.DataFrame([{"a": 1}, {"a": 2.0}]))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_records_fold_float_then_int,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 2.0}, {"a": 1}]))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_records_fold_bool_then_int,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": True}, {"a": 2}]))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_records_fold_bool_then_float,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": True}, {"a": 1.5}]))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_records_none_then_int,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": None}, {"a": 2}]))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_records_int_then_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1}, {"a": None}]))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_records_all_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": None}, {"a": None}]))  # E: revealed type: DataFrame[a: Null]
+"#,
+);
+
+testcase!(
+    test_records_second_row_adds_key,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1}, {"a": 2, "b": 3}]))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_records_first_row_extra_key,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1, "b": 2}, {"a": 3}]))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_records_disjoint_keys,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1}, {"b": 2}]))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_records_missing_key_takes_present_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A key present in only one row is null-filled elsewhere but takes its present value's dtype.
+reveal_type(pl.DataFrame([{"a": 1}, {"a": 2, "b": 3.0}]))  # E: revealed type: DataFrame[a: Int64, b: Float64]
+"#,
+);
+
+testcase!(
+    test_records_first_appearance_order,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# The column order follows first appearance across rows, not the last row.
+reveal_type(pl.DataFrame([{"b": 1, "a": 2}, {"a": 3, "b": 4}]))  # E: revealed type: DataFrame[b: Int64, a: Int64]
+"#,
+);
+
+testcase!(
+    test_records_no_supertype_int_str_degrades,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Polars widens to String at runtime, but we model no such supertype, so the column degrades and
+# no error is emitted on the record path.
+reveal_type(pl.DataFrame([{"a": 1}, {"a": "x"}]))  # E: revealed type: DataFrame[a: Unknown]
+"#,
+);
+
+testcase!(
+    test_records_no_supertype_str_bytes_degrades,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": "x"}, {"a": b"y"}]))  # E: revealed type: DataFrame[a: Unknown]
+"#,
+);
+
+testcase!(
+    test_records_no_supertype_int_bytes_degrades,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1}, {"a": b"x"}]))  # E: revealed type: DataFrame[a: Unknown]
+"#,
+);
+
+testcase!(
+    test_records_non_literal_degrades_only_its_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def g() -> int: ...
+reveal_type(pl.DataFrame([{"a": 1, "b": g()}, {"a": 2, "b": 3}]))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+"#,
+);
+
+testcase!(
+    test_records_datetime_value_resolves,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": date(2020, 1, 1)}]))  # E: revealed type: DataFrame[a: Date]
+"#,
+);
+
+testcase!(
+    test_records_i64_max_is_int64,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 9223372036854775807}]))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_records_int_above_i64_degrades,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Records give a past-i64 integer the Int128 dtype at runtime, which our i64-bounded model does not
+# carry, so the column degrades rather than claiming Int64.
+reveal_type(pl.DataFrame([{"a": 9223372036854775808}]))  # E: revealed type: DataFrame[a: Unknown]
+"#,
+);
+
+testcase!(
+    test_records_schema_overrides_wins,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1}, {"a": 2.0}], schema_overrides={"a": pl.Int32}))  # E: revealed type: DataFrame[a: Int32]
+"#,
+);
+
+testcase!(
+    test_records_empty_list_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_records_empty_dicts_fall_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{}]))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame([{}, {}]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_records_non_dict_element_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([(1, 2), (3, 4)]))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame([[1, 2], [3, 4]]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_records_mixed_dict_and_non_dict_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1}, (2,)]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_records_duplicate_key_in_row_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1, "a": 2}]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_records_with_schema_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Records combined with an explicit `schema=` are not yet modeled, so we fall back rather than
+# apply the dict-path exact-match rules that records do not obey.
+reveal_type(pl.DataFrame([{"a": 1}], schema={"a": pl.Int64}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_records_read_known_and_unknown_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame([{"a": 1}, {"b": 2}])
+df["a"]
+df["b"]
+df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_records_exactly_100_rows_modeled,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame([{"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}]))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_records_over_100_rows_reads_first_100,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# We read only the first 100 rows like Polars, so the row-101 key `b` is dropped and the column
+# set matches the runtime schema.
+reveal_type(pl.DataFrame([{"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"b": 2}]))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
