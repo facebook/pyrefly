@@ -233,6 +233,46 @@ fn test_incremental_recursive_warning_survives_comment_edit() {
 }
 
 #[test]
+fn test_type_shape_dsl_body_edit_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "foo".to_owned(),
+        "main".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "foo",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return x  # version 1
+"#,
+    );
+    i.set("main", "from foo import identity as identity");
+    i.check(&["main"], &["foo", "main", "shape_extensions"]);
+
+    i.set(
+        "foo",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return (x)  # version 2
+"#,
+    );
+    i.check(&["main"], &["foo", "main"]);
+}
+
+#[test]
 #[should_panic]
 fn test_incremental_inception_errors() {
     let mut i = Incremental::new();
