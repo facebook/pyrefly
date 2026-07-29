@@ -861,6 +861,39 @@ reveal_type(df)  # E: revealed type: DataFrame[a: Int64]
 );
 
 testcase!(
+    test_drop_method_empty_call_unchanged,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
+reveal_type(df.drop())  # E: revealed type: DataFrame[a: Int64, b: String, c: Float64]
+"#,
+);
+
+testcase!(
+    test_drop_method_list_argument_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
+# An iterable argument is not a bare string literal, so we under-report rather than guess.
+reveal_type(df.drop(["a", "b"]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_drop_method_across_import,
+    env_cross_file(),
+    r#"
+from defs import df
+from typing import reveal_type
+reveal_type(df.drop("a"))  # E: revealed type: DataFrame[b: String]
+"#,
+);
+
+testcase!(
     test_rename_maps_keys_preserving_types_and_order,
     env_with_polars_stubs(),
     r#"
