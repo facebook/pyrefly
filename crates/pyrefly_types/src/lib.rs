@@ -37,6 +37,7 @@ pub mod literal;
 pub mod meta_shape_dsl;
 pub mod module;
 pub mod param_spec;
+pub mod polars_dtype;
 pub mod quantified;
 pub mod read_only;
 pub mod sentinel;
