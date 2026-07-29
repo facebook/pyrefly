@@ -360,7 +360,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         for (name, range) in &dropped {
-            if !schema.columns.iter().any(|(c, _)| c == name) {
+            if !schema.has_column(name) {
                 errors
                     .error_builder(
                         *range,
@@ -537,5 +537,73 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.expr_infer(&kw.value, errors);
         }
         Some(base.clone())
+    }
+
+    /// Model `df.cast(...)`, which rewrites column dtypes. A single `pl.<DType>` casts every column;
+    /// a `{name: pl.<DType>}` dict casts the named ones and reports a name absent from the schema.
+    /// An unrecognized dtype falls back with `None` before any error is emitted.
+    pub fn polars_cast(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let schema = column_transform_schema(base, func, "cast", args)?;
+        let [arg] = &args.args[..] else {
+            return None;
+        };
+        // Pandas `astype` casts columns; `cast` is Polars-only.
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        let columns = match arg {
+            Expr::Dict(mapping) => {
+                let mut casts: SmallMap<Name, (TextRange, PolarsDType)> =
+                    SmallMap::with_capacity(mapping.items.len());
+                for item in &mapping.items {
+                    let (Some(Expr::StringLiteral(key)), value) = (&item.key, &item.value) else {
+                        return None;
+                    };
+                    casts.insert(
+                        Name::new(key.value.to_str()),
+                        (key.range(), polars_dtype_from_expr(value)?),
+                    );
+                }
+                for (name, (range, _)) in &casts {
+                    if !schema.has_column(name) {
+                        errors
+                            .error_builder(
+                                *range,
+                                ErrorKind::UnknownColumn,
+                                format!("Column `{name}` is not in the DataFrame schema"),
+                            )
+                            .emit();
+                    }
+                }
+                schema
+                    .columns
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), casts.get(name).map_or(*ty, |(_, d)| *d)))
+                    .collect()
+            }
+            _ => {
+                let dtype = polars_dtype_from_expr(arg)?;
+                schema
+                    .columns
+                    .iter()
+                    .map(|(name, _)| (name.clone(), dtype))
+                    .collect()
+            }
+        };
+        Some(
+            DataFrameSchema {
+                underlying: schema.underlying.clone(),
+                columns,
+                completeness: schema.completeness.clone(),
+                kind: schema.kind.clone(),
+            }
+            .to_type(),
+        )
     }
 }

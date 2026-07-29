@@ -35,6 +35,7 @@ class DataFrame:
     def filter(self, *predicates: object, **constraints: object) -> "DataFrame": ...
     def sort(self, by: object, *more: object, descending: bool = False) -> "DataFrame": ...
     def fill_null(self, value: object = None) -> "DataFrame": ...
+    def cast(self, dtypes: object, *, strict: bool = True) -> "DataFrame": ...
 "#,
     );
     env.add(
@@ -44,6 +45,7 @@ from polars.dataframe.frame import DataFrame as DataFrame, Series as Series
 class Int8: ...
 class Int32: ...
 class Float64: ...
+class String: ...
 "#,
     );
     env
@@ -1110,5 +1112,50 @@ testcase!(
 import polars as pl
 df = pl.DataFrame({"a": [1]})
 df.filter(undefined_name)  # E: Could not find name `undefined_name`
+"#,
+);
+
+testcase!(
+    test_cast_single_dtype_casts_all_columns,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [1.0]})
+reveal_type(df.cast(pl.Float64))  # E: revealed type: DataFrame[a: Float64, b: Float64]
+"#,
+);
+
+testcase!(
+    test_cast_mapping_casts_named_columns,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.cast({"a": pl.String}))  # E: revealed type: DataFrame[a: String, b: String]
+"#,
+);
+
+testcase!(
+    test_cast_unknown_column_is_reported,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.cast({"z": pl.Int32}))  # E: revealed type: DataFrame[a: Int64] # E: Column `z` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_cast_unrecognized_dtype_falls_back_without_column_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# An unrecognized dtype makes the whole cast fall back, so the absent column must not be reported.
+reveal_type(df.cast({"z": pl.Int32, "a": 5}))  # E: revealed type: DataFrame
 "#,
 );
