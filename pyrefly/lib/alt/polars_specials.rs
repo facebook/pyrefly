@@ -57,6 +57,14 @@ pub fn is_pandas_dataframe(cls: &Class) -> bool {
     cls.has_toplevel_qname("pandas.core.frame", "DataFrame")
 }
 
+/// DataFrame methods whose arguments may refer to existing columns.
+pub fn is_dataframe_column_method(method: &str) -> bool {
+    matches!(
+        method,
+        "select" | "drop" | "with_columns" | "filter" | "sort" | "group_by" | "groupby"
+    )
+}
+
 /// Whether a `select`/`drop` string is a `pl.col` selector (`"*"` or `"^regex$"`) rather than an
 /// exact column name.
 fn is_polars_selector_string(arg: &Expr) -> bool {
