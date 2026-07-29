@@ -5,18 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cell::RefCell;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::num::NonZeroU8;
-use std::thread;
-use std::thread::ThreadId;
 
 use dupe::Dupe;
 use pyrefly_util::lock::Condvar;
 use pyrefly_util::lock::Mutex;
 use starlark_map::small_set::SmallSet;
-use starlark_map::smallset;
 
 /// Recursive calculations by the same thread return None, but
 /// if they are different threads they may start calculating.
@@ -34,7 +32,7 @@ use starlark_map::smallset;
 enum Status {
     /// This value has not yet been calculated.
     NotCalculated,
-    /// This value is currently being calculated by `CalcInner::calculating_threads`.
+    /// This value is currently being calculated.
     Calculating,
     /// This value has been calculated.
     Calculated,
@@ -43,9 +41,6 @@ enum Status {
 /// Interior state protected by the mutex.
 #[derive(Clone, Debug)]
 struct CalcInner {
-    // Use a Box so the mutex state stays small. The option is present iff
-    // `status` is `Calculating`.
-    calculating_threads: Option<Box<SmallSet<ThreadId>>>,
     status: Status,
     /// True when an SCC batch commit has locked this cell for writing.
     /// `record_value` blocks while this is set; reads are unaffected.
@@ -58,10 +53,40 @@ struct CalcInner {
 pub enum ProposalResult<T> {
     /// The current thread may proceed with the calculation.
     Calculatable,
-    /// The current thread has encountered a cycle.
-    CycleDetected,
     /// A final result is already available.
     Calculated(T),
+}
+
+thread_local! {
+    /// Calculations entered through `Calculation::calculate` on this thread.
+    static CALCULATING: RefCell<SmallSet<usize>> = const { RefCell::new(SmallSet::new()) };
+}
+
+struct CalculationGuard(usize);
+
+impl CalculationGuard {
+    fn enter<T>(calculation: &Calculation<T>) -> Option<Self> {
+        let key = calculation as *const Calculation<T> as usize;
+        CALCULATING.with(|calculating| {
+            if calculating.borrow_mut().insert(key) {
+                Some(Self(key))
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl Drop for CalculationGuard {
+    fn drop(&mut self) {
+        CALCULATING.with(|calculating| {
+            assert_eq!(
+                calculating.borrow_mut().pop(),
+                Some(self.0),
+                "calculation guards must be dropped in LIFO order"
+            );
+        });
+    }
 }
 
 /// A cached calculation where recursive calculation returns None.
@@ -109,7 +134,6 @@ impl<T> Calculation<T> {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(CalcInner {
-                calculating_threads: None,
                 status: Status::NotCalculated,
                 write_locked: false,
             }),
@@ -153,32 +177,27 @@ impl<T: Dupe> Calculation<T> {
     /// Look up the current status of the calculation as a `ProposalResult`, under
     /// the assumption that the current thread will begin the calculation if
     /// the result is `Calculatable`.
-    /// - If the calculation can proceed (the current thread has not encountered
-    ///   a cycle and no other thread has already computed a result), we will
-    ///   mark the current thread as active and return `Calculatable`.
-    /// - If the current thread encountered a cycle, return `CycleDetected`.
+    /// - If no other thread has already computed a result, return `Calculatable`.
+    ///   Multiple threads may calculate the value concurrently.
     /// - If the calculation has already been completed, return `Calculated(value)`.
     ///
     /// Does not block on write locks — proposal is unaffected.
-    pub fn propose_calculation(&self) -> ProposalResult<T> {
+    ///
+    /// # Safety
+    ///
+    /// The caller must detect same-thread calculation cycles before recursively
+    /// evaluating a `Calculatable` result. A cell that is already `Calculating`
+    /// deliberately returns `Calculatable` so different threads can calculate
+    /// concurrently; without caller-side cycle detection, a cyclic calculation
+    /// will recurse indefinitely.
+    pub unsafe fn propose_calculation(&self) -> ProposalResult<T> {
         let mut lock = self.inner.lock();
-        match &mut lock.status {
+        match lock.status {
             Status::NotCalculated => {
-                lock.calculating_threads = Some(Box::new(smallset! {thread::current().id()}));
                 lock.status = Status::Calculating;
                 ProposalResult::Calculatable
             }
-            Status::Calculating => {
-                let threads = lock
-                    .calculating_threads
-                    .as_mut()
-                    .expect("calculating status without calculating threads");
-                if threads.insert(thread::current().id()) {
-                    ProposalResult::Calculatable
-                } else {
-                    ProposalResult::CycleDetected
-                }
-            }
+            Status::Calculating => ProposalResult::Calculatable,
             Status::Calculated => {
                 drop(lock);
                 // SAFETY: We observed terminal `Status::Calculated` under
@@ -212,7 +231,6 @@ impl<T: Dupe> Calculation<T> {
                 unsafe {
                     (*self.result.get()).write(value);
                 }
-                lock.calculating_threads = None;
                 lock.status = Status::Calculated;
                 drop(lock);
                 // SAFETY: This call just initialized `result` and published
@@ -268,7 +286,6 @@ impl<T: Dupe> Calculation<T> {
                 unsafe {
                     (*self.result.get()).write(value);
                 }
-                lock.calculating_threads = None;
                 lock.status = Status::Calculated;
                 true
             }
@@ -300,20 +317,23 @@ impl<T: Dupe> Calculation<T> {
     ///
     /// Returns `None` if we encounter a cycle.
     pub fn calculate(&self, calculate: impl FnOnce() -> T) -> Option<T> {
-        match self.propose_calculation() {
+        // SAFETY: CalculationGuard::enter rejects same-thread re-entry before
+        // the calculation callback is evaluated.
+        match unsafe { self.propose_calculation() } {
             ProposalResult::Calculatable => {
+                let _guard = CalculationGuard::enter(self)?;
                 let value = calculate();
                 let (value, _did_write) = self.record_value(value);
                 Some(value)
             }
             ProposalResult::Calculated(v) => Some(v.dupe()),
-            ProposalResult::CycleDetected => None,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::mem::size_of;
     use std::sync::Arc;
 
@@ -333,7 +353,8 @@ mod tests {
         let calculation = Calculation::new();
 
         assert!(matches!(
-            calculation.propose_calculation(),
+            // SAFETY: This test publishes a value without recursively calculating.
+            unsafe { calculation.propose_calculation() },
             ProposalResult::Calculatable
         ));
         assert!(calculation.get().is_none());
@@ -347,10 +368,54 @@ mod tests {
         assert!(!did_write);
         assert_eq!(*value, 1);
 
-        match calculation.propose_calculation() {
+        // SAFETY: The calculation is already complete, so no recursion can occur.
+        match unsafe { calculation.propose_calculation() } {
             ProposalResult::Calculated(value) => assert_eq!(*value, 1),
             result => panic!("expected calculated result, got {result:?}"),
         }
+    }
+
+    #[test]
+    fn concurrent_proposals_publish_one_final_result() {
+        let calculation = Calculation::new();
+
+        assert!(matches!(
+            // SAFETY: This test makes a proposal without evaluating dependencies.
+            unsafe { calculation.propose_calculation() },
+            ProposalResult::Calculatable
+        ));
+        assert!(matches!(
+            // SAFETY: This test makes a concurrent proposal without recursing.
+            unsafe { calculation.propose_calculation() },
+            ProposalResult::Calculatable
+        ));
+
+        let (value, did_write) = calculation.record_value(Arc::new(1));
+        assert!(did_write);
+        assert_eq!(*value, 1);
+
+        let (value, did_write) = calculation.record_value(Arc::new(2));
+        assert!(!did_write);
+        assert_eq!(*value, 1);
+        // SAFETY: The calculation is already complete, so no recursion can occur.
+        match unsafe { calculation.propose_calculation() } {
+            ProposalResult::Calculated(value) => assert_eq!(*value, 1),
+            result => panic!("expected calculated result, got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn calculate_detects_recursion() {
+        let calculation: Calculation<Arc<usize>> = Calculation::new();
+        let detected_cycle = Cell::new(false);
+
+        let value = calculation.calculate(|| {
+            detected_cycle.set(calculation.calculate(|| Arc::new(1)).is_none());
+            Arc::new(2)
+        });
+
+        assert!(detected_cycle.get());
+        assert_eq!(*value.unwrap(), 2);
     }
 
     #[test]
@@ -358,7 +423,8 @@ mod tests {
         let calculation = Calculation::new();
 
         assert!(matches!(
-            calculation.propose_calculation(),
+            // SAFETY: This test writes the value directly without recursively calculating.
+            unsafe { calculation.propose_calculation() },
             ProposalResult::Calculatable
         ));
         assert!(calculation.write_lock());

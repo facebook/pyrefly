@@ -259,8 +259,8 @@ impl CalcStack {
     ///
     /// This is purely thread-local: it manages the CalcStack and SCC state
     /// without touching the cross-thread Calculation cell. Cycle detection
-    /// uses the thread-local stack exclusively; propose_calculation() is
-    /// called by the caller (get_idx) before push.
+    /// uses the thread-local stack exclusively; the Calculation proposal is
+    /// made by the caller (get_idx) before push.
     fn push(&self, current: CalcId) -> BindingAction {
         let position = {
             let mut stack = self.stack.borrow_mut();
@@ -2107,16 +2107,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return result;
         }
 
-        // Register this thread's intent to calculate with the Calculation cell.
-        // answers_solver intentionally ignores Calculation's cycle semantics
-        // (CycleDetected vs Calculatable) and uses the thread-local CalcStack
-        // as the sole source of truth for cycle detection.
-        match calculation.propose_calculation() {
+        // CalcStack is the sole source of truth for cycle detection.
+        // SAFETY: CalcStack::push immediately below detects a repeated CalcId
+        // before any recursive calculation is evaluated.
+        match unsafe { calculation.propose_calculation() } {
             ProposalResult::Calculated(v) => return v,
-            ProposalResult::Calculatable | ProposalResult::CycleDetected => {
-                // Both cases proceed into push, which uses thread-local
-                // CalcStack cycle detection exclusively.
-            }
+            ProposalResult::Calculatable => {}
         }
 
         let mut result = match self.stack().push(current.dupe()) {
@@ -3961,9 +3957,9 @@ mod scc_tests {
         let calc_id = CalcId::for_test("m", 0);
         let calculation: Calculation<usize> = Calculation::new();
 
-        // 1. Simulate stale state: propose calculation on this thread.
-        // This sets the thread bit in calculation.
-        match calculation.propose_calculation() {
+        // 1. Simulate stale state by leaving the calculation in progress.
+        // SAFETY: The test does not evaluate dependencies or recurse after proposing.
+        match unsafe { calculation.propose_calculation() } {
             ProposalResult::Calculatable => {}
             _ => panic!("Expected Calculatable"),
         }
