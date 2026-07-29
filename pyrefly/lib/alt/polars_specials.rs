@@ -100,6 +100,59 @@ pub fn is_dataframe_column_method(method: &str) -> bool {
     )
 }
 
+/// A DataFrame constructor call reduced to the pieces column inference needs.
+/// `data` is `None` when absent or empty; `schema` is the ordered `schema=` column set, each
+/// column pinned to a dtype or `None` to defer to data inference.
+pub struct PolarsConstruct<'b> {
+    data: Option<&'b ExprDict>,
+    schema: Option<Vec<(Name, Option<PolarsDType>)>>,
+    overrides: SmallMap<Name, PolarsDType>,
+    strict: bool,
+}
+
+/// A data dict literal as an order-preserving name-to-value map, or `None` if a key is not a
+/// string literal or repeats (Python keeps only the last value for a repeated key).
+fn dataframe_data_map(dict: &ExprDict) -> Option<SmallMap<Name, &Expr>> {
+    let mut map = SmallMap::with_capacity(dict.items.len());
+    for item in &dict.items {
+        let Some(Expr::StringLiteral(key)) = &item.key else {
+            return None;
+        };
+        if map
+            .insert(Name::new(key.value.to_str()), &item.value)
+            .is_some()
+        {
+            return None;
+        }
+    }
+    Some(map)
+}
+
+/// A `schema=` dict literal as an ordered column list, each pinned to a `pl.<DType>` or `None`
+/// to defer to data inference. `None` (fall back) for an empty dict or an unrecognized entry.
+fn schema_dict_entries(dict: &ExprDict) -> Option<Vec<(Name, Option<PolarsDType>)>> {
+    if dict.items.is_empty() {
+        return None;
+    }
+    let mut entries = Vec::with_capacity(dict.items.len());
+    let mut seen = SmallSet::new();
+    for item in &dict.items {
+        let Some(Expr::StringLiteral(key)) = &item.key else {
+            return None;
+        };
+        let name = Name::new(key.value.to_str());
+        if !seen.insert(name.clone()) {
+            return None;
+        }
+        let dtype = match &item.value {
+            Expr::NoneLiteral(_) => None,
+            value => Some(polars_dtype_from_expr(value)?),
+        };
+        entries.push((name, dtype));
+    }
+    Some(entries)
+}
+
 /// Whether a `select`/`drop` string is a `pl.col` selector (`"*"` or `"^regex$"`) rather than an
 /// exact column name.
 fn is_polars_selector_string(arg: &Expr) -> bool {
@@ -111,76 +164,106 @@ fn is_polars_selector_string(arg: &Expr) -> bool {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    /// Infer a column schema from a `pl.DataFrame({...})` dict literal, or `None` to
-    /// fall back to plain construction.
+    /// Infer a column schema for a DataFrame constructor call, or `None` to fall back to plain
+    /// construction. Purely syntactic; never infers the element expressions.
     ///
-    /// Extraction is purely syntactic and never infers the element expressions.
-    /// Duplicate keys yield `None`: Python keeps only the last value for a repeated
-    /// key, so one column per syntactic entry would misdescribe the runtime schema.
-    /// Unresolved Polars columns keep their name as `Unknown`; pandas drops the schema.
+    /// With `schema=` the column set is authoritative and ordered: each column takes its
+    /// `schema_overrides` dtype, else its schema dtype, else defers to data inference. Data must
+    /// name the same columns. Without `schema=`, data order defines the columns.
     pub fn infer_dataframe_schema(
         &self,
-        dict: &ExprDict,
+        construct: &PolarsConstruct,
         kind: DataFrameKind,
-        overrides: &SmallMap<Name, PolarsDType>,
-        strict: bool,
         errors: &ErrorCollector,
     ) -> Option<Vec<(Name, PolarsDType)>> {
-        if dict.items.is_empty() {
+        let data = match construct.data {
+            Some(dict) => Some(dataframe_data_map(dict)?),
+            None => None,
+        };
+        // Only list literals have modeled dtypes.
+        let element_from_data = |name: &Name, value: &Expr| match value {
+            Expr::List(ExprList { elts, .. }) => {
+                self.dataframe_list_element_type(name, elts, kind.clone(), construct.strict, errors)
+            }
+            _ => None,
+        };
+        let Some(schema) = &construct.schema else {
+            let data = data?;
+            let mut columns = Vec::with_capacity(data.len());
+            for (name, value) in &data {
+                let element = if let Some(dtype) = construct.overrides.get(name) {
+                    *dtype
+                } else {
+                    match element_from_data(name, value) {
+                        Some(dtype) => dtype,
+                        None if kind == DataFrameKind::Polars => PolarsDType::Unknown,
+                        None => return None,
+                    }
+                };
+                columns.push((name.clone(), element));
+            }
+            return Some(columns);
+        };
+        if kind != DataFrameKind::Polars {
             return None;
         }
-        let mut columns = Vec::with_capacity(dict.items.len());
-        let mut seen = SmallSet::new();
-        for item in &dict.items {
-            let Some(Expr::StringLiteral(key)) = &item.key else {
-                return None;
-            };
-            let name = Name::new(key.value.to_str());
-            if !seen.insert(name.clone()) {
-                return None;
-            }
-            // Overrides suppress value inference and its mismatch diagnostic.
-            let element = if let Some(dtype) = overrides.get(&name) {
-                *dtype
-            } else {
-                let resolved = match &item.value {
-                    Expr::List(ExprList { elts, .. }) => {
-                        self.dataframe_list_element_type(&name, elts, kind.clone(), strict, errors)
-                    }
-                    _ => None,
-                };
-                match resolved {
-                    Some(dtype) => dtype,
-                    None if kind == DataFrameKind::Polars => PolarsDType::Unknown,
-                    None => return None,
-                }
-            };
-            columns.push((name, element));
+        // Data and schema must name the same columns at runtime.
+        if let Some(data) = &data
+            && (data.len() != schema.len() || schema.iter().any(|(n, _)| !data.contains_key(n)))
+        {
+            return None;
         }
+        let columns = schema
+            .iter()
+            .map(|(name, dtype)| {
+                let element = if let Some(dtype) = construct.overrides.get(name) {
+                    *dtype
+                } else if let Some(dtype) = dtype {
+                    *dtype
+                } else {
+                    match data.as_ref().and_then(|m| m.get(name).copied()) {
+                        Some(value) => {
+                            element_from_data(name, value).unwrap_or(PolarsDType::Unknown)
+                        }
+                        None => PolarsDType::Null,
+                    }
+                };
+                (name.clone(), element)
+            })
+            .collect();
         Some(columns)
     }
 
-    /// The constructing dict, dtype overrides, and strictness from a DataFrame call, or `None`
-    /// to fall back to ordinary call checking for a form we do not model.
-    /// `data` may be the sole positional argument or a `data=` keyword, but not both.
+    /// The single expression for a constructor parameter from its positional and keyword slots.
+    /// Supplying both is a runtime error that ordinary call checking reports on the fallback path,
+    /// so this returns `None` to defer to it rather than emit a second diagnostic.
+    fn positional_or_keyword<'b>(
+        positional: Option<&'b Expr>,
+        keyword: Option<&'b Expr>,
+    ) -> Option<Option<&'b Expr>> {
+        match (positional, keyword) {
+            (Some(_), Some(_)) => None,
+            (e, None) | (None, e) => Some(e),
+        }
+    }
+
+    /// Reduce a DataFrame constructor call to a `PolarsConstruct`, or `None` to fall back to plain
+    /// construction. `data` and `schema` each come from their positional slot or keyword, not both.
     pub fn polars_construct_options<'b>(
         &self,
         arguments: &'b Arguments,
-    ) -> Option<(&'b ExprDict, SmallMap<Name, PolarsDType>, bool)> {
+    ) -> Option<PolarsConstruct<'b>> {
         let mut overrides = SmallMap::new();
         let mut strict = true;
-        let mut data_keyword = None;
+        let mut data_keyword: Option<&Expr> = None;
+        let mut schema_keyword: Option<&Expr> = None;
         for kw in &arguments.keywords {
             let Some(arg) = &kw.arg else {
                 return None;
             };
             match arg.id.as_str() {
-                "data" => {
-                    let Expr::Dict(dict) = &kw.value else {
-                        return None;
-                    };
-                    data_keyword = Some(dict);
-                }
+                "data" => data_keyword = Some(&kw.value),
+                "schema" => schema_keyword = Some(&kw.value),
                 "schema_overrides" => {
                     let Expr::Dict(dict) = &kw.value else {
                         return None;
@@ -203,12 +286,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => return None,
             }
         }
-        let data = match (&arguments.args[..], data_keyword) {
-            ([Expr::Dict(dict)], None) => dict,
-            ([], Some(dict)) => dict,
+        let (data_positional, schema_positional) = match &arguments.args[..] {
+            [] => (None, None),
+            [data] => (Some(data), None),
+            [data, schema] => (Some(data), Some(schema)),
             _ => return None,
         };
-        Some((data, overrides, strict))
+        let data_expr = Self::positional_or_keyword(data_positional, data_keyword)?;
+        let schema_expr = Self::positional_or_keyword(schema_positional, schema_keyword)?;
+        let data = match data_expr {
+            None | Some(Expr::NoneLiteral(_)) => None,
+            Some(Expr::Dict(dict)) if dict.items.is_empty() => None,
+            Some(Expr::Dict(dict)) => Some(dict),
+            Some(_) => return None,
+        };
+        let schema = match schema_expr {
+            None | Some(Expr::NoneLiteral(_)) => None,
+            Some(Expr::Dict(dict)) => Some(schema_dict_entries(dict)?),
+            Some(_) => return None,
+        };
+        Some(PolarsConstruct {
+            data,
+            schema,
+            overrides,
+            strict,
+        })
     }
 
     /// Anchors on the first non-null element; only Polars reports later mismatches.

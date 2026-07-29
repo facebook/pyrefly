@@ -2177,14 +2177,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // its schema Partial. A Polars frame is immutable so its schema is Complete.
         let dataframe_schema = if let Type::ClassDef(cls) = &callee_ty
             && (is_polars_dataframe(cls) || is_pandas_dataframe(cls))
-            && let Some((dict, overrides, strict)) = self.polars_construct_options(&x.arguments)
+            && let Some(construct) = self.polars_construct_options(&x.arguments)
         {
             let (kind, completeness) = if is_polars_dataframe(cls) {
                 (DataFrameKind::Polars, SchemaCompleteness::Complete)
             } else {
                 (DataFrameKind::Pandas, SchemaCompleteness::Partial)
             };
-            self.infer_dataframe_schema(dict, kind.clone(), &overrides, strict, errors)
+            self.infer_dataframe_schema(&construct, kind.clone(), errors)
                 .map(|c| (c, kind, completeness))
         } else {
             None

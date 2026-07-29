@@ -44,6 +44,7 @@ class DataFrame:
 from polars.dataframe.frame import DataFrame as DataFrame, Series as Series
 class Int8: ...
 class Int32: ...
+class Int64: ...
 class Float64: ...
 class String: ...
 "#,
@@ -61,6 +62,7 @@ fn env_cross_file() -> TestEnv {
 import polars as pl
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 df_kw = pl.DataFrame(data={"a": [1], "b": ["x"]})
+df_schema = pl.DataFrame(schema={"a": pl.Int64, "b": pl.String})
 "#,
     );
     env
@@ -778,12 +780,12 @@ reveal_type(pl.DataFrame({"a": [1]}, data={"b": [2]}))  # E: revealed type: Data
 );
 
 testcase!(
-    test_fallback_data_keyword_and_schema_keyword,
+    test_data_keyword_and_schema_keyword,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame(data={"a": [1]}, schema={"a": pl.Int8}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame(data={"a": [1]}, schema={"a": pl.Int8}))  # E: revealed type: DataFrame[a: Int8]
 "#,
 );
 
@@ -819,12 +821,193 @@ reveal_type(pl.DataFrame({"a": [1, 2.0]}, schema_overrides={"a": pl.Float64}))  
 );
 
 testcase!(
-    test_schema_keyword_falls_back,
+    test_schema_keyword_with_matching_data,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int8}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int8}))  # E: revealed type: DataFrame[a: Int8]
+"#,
+);
+
+testcase!(
+    test_schema_keyword_only_no_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(schema={"a": pl.Int64, "b": pl.String}))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_schema_dtype_coerces_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, 2], "b": [3, 4]}, schema={"a": pl.Int64, "b": pl.Float64}))  # E: revealed type: DataFrame[a: Int64, b: Float64]
+"#,
+);
+
+testcase!(
+    test_schema_none_value_defers_to_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, 2, 3]}, schema={"a": None}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_schema_none_value_no_data_is_null,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(schema={"a": None, "b": pl.Int64}))  # E: revealed type: DataFrame[a: Null, b: Int64]
+"#,
+);
+
+testcase!(
+    test_schema_overrides_wins_over_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1], "b": [2]}, schema={"a": pl.Int64, "b": pl.Int64}, schema_overrides={"b": pl.Float64}))  # E: revealed type: DataFrame[a: Int64, b: Float64]
+"#,
+);
+
+testcase!(
+    test_schema_as_second_positional,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, {"a": pl.Float64}))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_schema_dtype_suppresses_mismatch,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# The authoritative schema dtype casts the mixed list, so no strict mismatch is reported.
+reveal_type(pl.DataFrame({"a": [1, 2.0]}, schema={"a": pl.Float64}))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_schema_none_value_still_reports_mismatch,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, "s"]}, schema={"a": None}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Int64`
+"#,
+);
+
+testcase!(
+    test_schema_output_follows_schema_order,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"b": [1], "a": [2]}, schema={"a": pl.Int64, "b": pl.Int64}))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_schema_with_data_none_keyword,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(data=None, schema={"a": pl.Int64, "b": pl.Float64}))  # E: revealed type: DataFrame[a: Int64, b: Float64]
+"#,
+);
+
+testcase!(
+    test_schema_with_empty_data_dict,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({}, schema={"a": pl.Int64}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_schema_positional_with_none_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(None, {"a": pl.Int64, "b": pl.String}))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_schema_none_defers_to_data_inference,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, schema=None))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_fallback_schema_name_mismatch,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"x": [1, 2]}, schema={"a": pl.Int64}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_fallback_schema_subset_of_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1], "b": [2]}, schema={"a": pl.Int64}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_fallback_schema_superset_of_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int64, "b": pl.String}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_fallback_schema_list_form,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, schema=["a"]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_fallback_schema_non_dtype_value,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(schema={"a": 5}))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -1073,6 +1256,17 @@ testcase!(
 from defs import df_kw
 df_kw["a"]
 df_kw["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_construct_from_schema_keyword_across_import,
+    env_cross_file(),
+    r#"
+from defs import df_schema
+df_schema["a"]
+df_schema["b"]
+df_schema["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
