@@ -478,8 +478,12 @@ impl<'a> BindingsBuilder<'a> {
                                 && !Ast::is_synthesized_empty_identifier(name)
                             {
                                 let position = UnpackedPosition::Slice(i, num_patterns - i - 1);
-                                let unpacked_idx = self.insert_binding(
-                                    Key::Anon(p.range),
+                                // Bind the star capture directly to its `UnpackedValue`. Unlike the
+                                // `Forward`-based captures, `UnpackedValue` is its own definition, so
+                                // `follow_to_partial_type` does not collapse a use past it and
+                                // go-to-def resolves to the capture without a `PatternCapture` wrapper.
+                                self.bind_definition(
+                                    name,
                                     Binding::UnpackedValue(
                                         None,
                                         subject_idx,
@@ -487,10 +491,6 @@ impl<'a> BindingsBuilder<'a> {
                                         position,
                                         None,
                                     ),
-                                );
-                                self.bind_definition(
-                                    name,
-                                    Binding::PatternCapture(unpacked_idx),
                                     FlowStyle::Other,
                                 );
                             }
