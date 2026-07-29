@@ -167,6 +167,19 @@ reveal_type(pd.DataFrame({"a": [date(2020, 1, 1)]}))  # E: revealed type: DataFr
 );
 
 testcase!(
+    test_pandas_none_column_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+# `None` inference is Polars-only; pandas coerces an int-with-`None` to `float64` and an all-null
+# column to `object`, neither of which we model, so the column falls back.
+reveal_type(pd.DataFrame({"a": [1, None]}))  # E: revealed type: DataFrame
+reveal_type(pd.DataFrame({"a": [None]}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
     test_pandas_unknown_column_read_delegates_without_error,
     env_with_pandas_frame_stubs(),
     r#"

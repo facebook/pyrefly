@@ -193,13 +193,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some((overrides, strict))
     }
 
-    /// The column's Polars dtype, or `None` to fall back to plain construction. Mirrors
-    /// Polars: the column takes its first element's dtype, and a later element fits only when
-    /// its dtype coerces into that one (`bool` into an int, an int into a wider int or a
-    /// float, never the reverse). An empty list is `Unknown`; a `datetime` constructor call gives
-    /// its temporal dtype in a Polars frame, while any other non-literal element falls back
-    /// silently, as does `complex` since Polars has no complex dtype. Only a Polars frame reports
-    /// the mismatch; pandas coerces such a column, so it falls back silently.
+    /// The column's Polars dtype, or `None` to fall back to plain construction.
+    /// The column anchors to its first non-null element; later elements must coerce into it.
+    /// Polars reports a mismatch; pandas coerces the column, so it falls back.
     fn dataframe_list_element_type(
         &self,
         name: &Name,
@@ -220,6 +216,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::BooleanLiteral(_) => Some(PolarsDType::Boolean),
             Expr::StringLiteral(_) => Some(PolarsDType::String),
             Expr::BytesLiteral(_) => Some(PolarsDType::Binary),
+            // `None` is `Null` in Polars only; pandas coerces it (int-with-`None` → `float64`),
+            // which we do not model, so fall back there.
+            Expr::NoneLiteral(_) if kind == DataFrameKind::Polars => Some(PolarsDType::Null),
             // Resolve the callee class, not the element type: a variable typed `date` may hold a
             // `datetime` subclass at runtime, so only a direct constructor call pins the dtype.
             Expr::Call(call) if kind == DataFrameKind::Polars => {
@@ -244,10 +243,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Some((first, rest)) = elts.split_first() else {
             return Some(PolarsDType::Unknown);
         };
-        let column = scalar(first)?;
         if !strict {
             // strict=False widens to the elements' common supertype instead of erroring.
-            let mut acc = column;
+            let mut acc = scalar(first)?;
             for e in rest {
                 acc = acc.supertype(scalar(e)?)?;
             }
@@ -258,8 +256,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             return Some(acc);
         }
-        for e in rest {
+        // Anchor to the first non-null element; a `None` never anchors and always fits
+        // (`supertype(Null, anchor) == anchor`), so an all-null column stays `Null`.
+        let mut column = PolarsDType::Null;
+        for e in elts {
             let element = scalar(e)?;
+            if column == PolarsDType::Null {
+                column = element;
+                continue;
+            }
             // The element fits only if it coerces into the column dtype without widening it.
             if element.supertype(column) != Some(column) {
                 if kind == DataFrameKind::Polars {
@@ -268,7 +273,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         e.range(),
                         ErrorKind::ColumnTypeMismatch,
                         format!(
-                            "Polars builds column `{name}` with type `{column}` from its first element, so a `{element}` element does not fit. Use one dtype for the column or pass an explicit `schema`.",
+                            "Polars builds column `{name}` with type `{column}` from its first non-null element, so a `{element}` element does not fit. Use one dtype for the column or pass an explicit `schema`.",
                         ),
                     );
                 }

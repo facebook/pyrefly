@@ -346,14 +346,198 @@ reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), datetime(2020, 1, 1)]}, strict
 );
 
 testcase!(
-    test_construct_date_then_none_falls_back,
+    test_construct_date_then_none_keeps_date,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date
 from typing import reveal_type
-# A `None` element is unmodeled, so the column falls back even though Polars keeps it `Date`.
-reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), None]}))  # E: revealed type: DataFrame
+# A `None` contributes `Null`, which takes the other side, so the column stays `Date`.
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), None]}))  # E: revealed type: DataFrame[a: Date]
+"#,
+);
+
+testcase!(
+    test_construct_int_then_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, None]}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_construct_none_then_int,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A leading `None` never anchors the column; the anchor is the first non-null element.
+reveal_type(pl.DataFrame({"a": [None, 1]}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_construct_single_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [None]}))  # E: revealed type: DataFrame[a: Null]
+"#,
+);
+
+testcase!(
+    test_construct_all_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [None, None]}))  # E: revealed type: DataFrame[a: Null]
+"#,
+);
+
+testcase!(
+    test_construct_float_then_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1.0, None]}))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_construct_string_then_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": ["x", None]}))  # E: revealed type: DataFrame[a: String]
+"#,
+);
+
+testcase!(
+    test_construct_bool_then_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [True, None]}))  # E: revealed type: DataFrame[a: Boolean]
+"#,
+);
+
+testcase!(
+    test_construct_none_then_bool,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [None, True]}))  # E: revealed type: DataFrame[a: Boolean]
+"#,
+);
+
+testcase!(
+    test_construct_bytes_then_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [b"x", None]}))  # E: revealed type: DataFrame[a: Binary]
+"#,
+);
+
+testcase!(
+    test_construct_none_then_date,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [None, date(2020, 1, 1)]}))  # E: revealed type: DataFrame[a: Date]
+"#,
+);
+
+testcase!(
+    test_construct_datetime_then_none,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import datetime
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), None]}))  # E: revealed type: DataFrame[a: Datetime]
+"#,
+);
+
+testcase!(
+    test_construct_int_none_float_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, None, 2.0]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+"#,
+);
+
+testcase!(
+    test_construct_leading_none_then_int_float_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# The anchor comes from the first non-null element `1`, so the trailing float still does not fit.
+reveal_type(pl.DataFrame({"a": [None, 1, 2.0]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+"#,
+);
+
+testcase!(
+    test_construct_int_none_string_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, None, "x"]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+"#,
+);
+
+testcase!(
+    test_construct_int_none_float_strict_false_widens,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, None, 2.0]}, strict=False))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_construct_leading_none_int_float_strict_false_widens,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [None, 1, 2.0]}, strict=False))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_construct_single_none_strict_false,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [None]}, strict=False))  # E: revealed type: DataFrame[a: Null]
+"#,
+);
+
+testcase!(
+    test_construct_none_columns_independent,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, None], "b": [None]}))  # E: revealed type: DataFrame[a: Int64, b: Null]
 "#,
 );
 
