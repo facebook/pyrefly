@@ -20,6 +20,8 @@ interface InterpreterProvider {
 
 export class PythonEnvironment {
   private provider: Promise<InterpreterProvider | undefined>;
+  /** `provider` once settled; undefined while resolving, and when none was found. */
+  private resolvedProvider: InterpreterProvider | undefined;
   private listeners: (() => void)[] = [];
   private listenerDisposables: vscode.Disposable[] = [];
   private context: vscode.ExtensionContext;
@@ -30,6 +32,7 @@ export class PythonEnvironment {
       if (!provider) {
         this.showInstallWarning();
       }
+      this.resolvedProvider = provider;
       return provider;
     });
     this.watchExtensionChanges();
@@ -121,6 +124,7 @@ export class PythonEnvironment {
             this.listenerDisposables = [];
 
             this.provider = Promise.resolve(provider);
+            this.resolvedProvider = provider;
 
             if (provider) {
               for (const listener of this.listeners) {
@@ -134,6 +138,11 @@ export class PythonEnvironment {
           .catch(() => {});
       }),
     );
+  }
+
+  /** Like `getInterpreterPath`, but yields `undefined` rather than waiting for activation. */
+  async getInterpreterPathIfResolved(uri?: vscode.Uri): Promise<string | undefined> {
+    return this.resolvedProvider?.getPath(uri);
   }
 
   async getInterpreterPath(uri?: vscode.Uri): Promise<string | undefined> {
