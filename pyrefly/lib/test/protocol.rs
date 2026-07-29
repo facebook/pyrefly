@@ -1856,3 +1856,14 @@ def g(a: Arr[float, str]) -> HasM:
     return a  # E: not assignable to declared return type
 "#,
 );
+
+testcase!(
+    test_nested_function_default_is_checked,
+    r#"
+from typing import Protocol
+class A(Protocol):
+    def f(self):
+        def g(x: int = ...):  # E: not assignable
+            pass
+    "#,
+);
