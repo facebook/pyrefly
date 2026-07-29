@@ -511,6 +511,7 @@ pydantic_testcase!(
     test_pydantic_model_field_init_false_ignored,
     r#"
 from pydantic import BaseModel, Field
+from typing import reveal_type
 
 class Model(BaseModel):
     x: int = Field(init=False, default=0)
