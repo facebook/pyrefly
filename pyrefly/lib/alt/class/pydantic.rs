@@ -275,10 +275,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .has_toplevel_qname(ModuleName::pydantic_settings().as_str(), "BaseSettings")
             });
 
+        // Note: `metadata.is_pydantic_model()` is also true for `DataClass`-kind bases,
+        // but we need to differentiate between pydantic dataclass and BaseModel
         let is_pydantic_model = has_pydantic_base_model_base_class
-            || bases_with_metadata
-                .iter()
-                .any(|(_, metadata)| metadata.is_pydantic_model());
+            || bases_with_metadata.iter().any(|(_, metadata)| {
+                matches!(
+                    metadata.pydantic_model_kind(),
+                    Some(
+                        PydanticModelKind::BaseModel
+                            | PydanticModelKind::RootModel
+                            | PydanticModelKind::BaseSettings
+                    )
+                )
+            });
 
         // If not a pydantic model, check if it's a pydantic dataclass
         if !is_pydantic_model {
