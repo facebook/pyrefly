@@ -32,8 +32,10 @@ pub struct SuppressArgs {
     config_override: ConfigOverrideArgs,
 
     /// Path to a JSON file containing errors to suppress.
-    /// The JSON should be an array of objects with "path", "line", "name", and "message" fields.
-    /// Unused suppression diagnostics must also include a structured "suppression_edit".
+    /// The JSON should be an array of objects with "path", "line", and "name" fields.
+    /// When combined with `--remove-unused`, unused suppression diagnostics must also include a
+    /// structured "suppression_edit" field with "tool", "start", "end", "expected", and
+    /// "replacement" sub-fields.
     #[arg(long)]
     json: Option<PathBuf>,
 
