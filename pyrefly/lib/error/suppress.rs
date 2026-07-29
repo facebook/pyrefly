@@ -43,13 +43,13 @@ use crate::state::errors::sorted_multi_line_string_ranges;
 /// Each consumes all non-`#` characters after its ignore pattern, so removing one
 /// suppression preserves any other pragma later on the same line.
 static PYREFLY_IGNORE_COMMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"#\s*pyrefly:\s*ignore\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*").unwrap()
+    Regex::new(r"#\s*pyrefly:\s*ignore\s*(\[[^\]]*\])?[^#]*").unwrap()
 });
 static TYPE_IGNORE_COMMENT_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"#\s*type:\s*ignore\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*").unwrap());
+    LazyLock::new(|| Regex::new(r"#\s*type:\s*ignore\s*(\[[^\]]*\])?[^#]*").unwrap());
 static PYRE_IGNORE_COMMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"#\s*pyre-(?:fixme|ignore)\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*|#\s*pyre:\s*ignore\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*",
+        r"#\s*pyre-(?:fixme|ignore)\s*(\[[^\]]*\])?[^#]*|#\s*pyre:\s*ignore\s*(\[[^\]]*\])?[^#]*",
     )
     .unwrap()
 });
