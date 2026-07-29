@@ -10,6 +10,8 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::num::NonZeroU8;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 
 use dupe::Dupe;
 use pyrefly_util::lock::Condvar;
@@ -29,6 +31,7 @@ use starlark_map::small_set::SmallSet;
 ///
 /// The type `T` is the final result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 enum Status {
     /// This value has not yet been calculated.
     NotCalculated,
@@ -38,13 +41,60 @@ enum Status {
     Calculated,
 }
 
-/// Interior state protected by the mutex.
-#[derive(Clone, Debug)]
-struct CalcInner {
-    status: Status,
-    /// True when an SCC batch commit has locked this cell for writing.
-    /// `record_value` blocks while this is set; reads are unaffected.
-    write_locked: bool,
+#[derive(Debug)]
+struct AtomicStatus(AtomicU8);
+
+impl AtomicStatus {
+    fn new(status: Status) -> Self {
+        Self(AtomicU8::new(status as u8))
+    }
+
+    /// Acquire-load the status, synchronizing with result publication.
+    fn load(&self) -> Status {
+        Self::decode(self.0.load(Ordering::Acquire))
+    }
+
+    /// Attempt to mark the calculation as started. Returns true if the caller
+    /// may calculate, including when another thread is already calculating — so
+    /// a `true` result does not imply this call is the only one calculating.
+    /// Returns false only if the result is already calculated.
+    fn start_calculating(&self) -> bool {
+        match self.load() {
+            Status::NotCalculated => {
+                // Failure may observe the release-published result, so it must
+                // acquire. Success must be at least as strong as failure.
+                match self.0.compare_exchange(
+                    Status::NotCalculated as u8,
+                    Status::Calculating as u8,
+                    Ordering::Acquire,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => true,
+                    Err(status) => Self::decode(status) != Status::Calculated,
+                }
+            }
+            Status::Calculating => true,
+            Status::Calculated => false,
+        }
+    }
+
+    /// Publish the initialized result to readers.
+    fn store_calculated(&self) {
+        self.0.store(Status::Calculated as u8, Ordering::Release);
+    }
+
+    fn get_mut(&mut self) -> Status {
+        Self::decode(*self.0.get_mut())
+    }
+
+    fn decode(status: u8) -> Status {
+        match status {
+            x if x == Status::NotCalculated as u8 => Status::NotCalculated,
+            x if x == Status::Calculating as u8 => Status::Calculating,
+            x if x == Status::Calculated as u8 => Status::Calculated,
+            _ => unreachable!("invalid calculation status: {status}"),
+        }
+    }
 }
 
 /// The result of proposing a calculation in the current thread. See
@@ -91,33 +141,38 @@ impl Drop for CalculationGuard {
 
 /// A cached calculation where recursive calculation returns None.
 pub struct Calculation<T> {
-    inner: Mutex<CalcInner>,
-    /// The final result is written once before the state becomes `Calculated`;
-    /// the status inside `inner` is the initialization marker for this cell.
+    /// The monotonic status is the initialization marker for `result`.
+    status: AtomicStatus,
+    /// True when an SCC batch commit has locked this cell for writing.
+    /// `record_value` blocks while this is set; reads are unaffected.
+    write_locked: Mutex<bool>,
+    /// The final result is written once before `status` becomes `Calculated`.
     result: UnsafeCell<MaybeUninit<T>>,
     condvar: Condvar,
     /// Keeps `Option<Calculation<T>>` the same size as `Calculation<T>`.
     _niche: NonZeroU8,
 }
 
-// SAFETY: `Calculation` writes `result` exactly once while holding `inner`, then
-// publishes terminal `Status::Calculated`. After that status is visible, the
+// SAFETY: `Calculation` writes `result` exactly once while holding `write_locked`,
+// then publishes terminal `Status::Calculated`. After that status is visible, the
 // result is never mutated again, so concurrent readers only take shared
 // references to initialized data.
 unsafe impl<T: Send + Sync> Sync for Calculation<T> {}
 
 impl<T: fmt::Debug> fmt::Debug for Calculation<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let lock = self.inner.lock();
-        // SAFETY: `result` is initialized iff `Status::Calculated` is published,
-        // which we observe here under `inner`; it is never mutated afterward.
-        let result: &dyn fmt::Debug = if lock.status == Status::Calculated {
+        let status = self.status.load();
+        let write_locked = self.write_locked.lock();
+        // SAFETY: The acquire load observed the release publication of
+        // `Status::Calculated`, after which `result` is never mutated.
+        let result: &dyn fmt::Debug = if status == Status::Calculated {
             unsafe { (*self.result.get()).assume_init_ref() }
         } else {
             &"<uninitialized>"
         };
         f.debug_struct("Calculation")
-            .field("inner", &*lock)
+            .field("status", &status)
+            .field("write_locked", &*write_locked)
             .field("result", result)
             .field("condvar", &self.condvar)
             .finish()
@@ -133,10 +188,8 @@ impl<T> Default for Calculation<T> {
 impl<T> Calculation<T> {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(CalcInner {
-                status: Status::NotCalculated,
-                write_locked: false,
-            }),
+            status: AtomicStatus::new(Status::NotCalculated),
+            write_locked: Mutex::new(false),
             result: UnsafeCell::new(MaybeUninit::uninit()),
             condvar: Condvar::new(),
             _niche: NonZeroU8::MIN,
@@ -146,7 +199,7 @@ impl<T> Calculation<T> {
 
 impl<T> Drop for Calculation<T> {
     fn drop(&mut self) {
-        let initialized = self.inner.get_mut().status == Status::Calculated;
+        let initialized = self.status.get_mut() == Status::Calculated;
         if initialized {
             // SAFETY: `Status::Calculated` is published only after `result` is
             // initialized, and `drop` has exclusive access to the calculation.
@@ -161,13 +214,10 @@ impl<T: Dupe> Calculation<T> {
     /// Get the value if it has been calculated, otherwise `None`.
     /// Does not block on write locks — reads are unaffected.
     pub fn get(&self) -> Option<T> {
-        let lock = self.inner.lock();
-        match &lock.status {
+        match self.status.load() {
             Status::Calculated => {
-                drop(lock);
-                // SAFETY: We observed terminal `Status::Calculated` under
-                // `inner`. The result was written before that status was
-                // published and is never mutated afterward.
+                // SAFETY: The acquire load observed the release publication of
+                // `Status::Calculated`, after which `result` is never mutated.
                 Some(unsafe { (*self.result.get()).assume_init_ref() }.dupe())
             }
             _ => None,
@@ -191,20 +241,13 @@ impl<T: Dupe> Calculation<T> {
     /// concurrently; without caller-side cycle detection, a cyclic calculation
     /// will recurse indefinitely.
     pub unsafe fn propose_calculation(&self) -> ProposalResult<T> {
-        let mut lock = self.inner.lock();
-        match lock.status {
-            Status::NotCalculated => {
-                lock.status = Status::Calculating;
-                ProposalResult::Calculatable
-            }
-            Status::Calculating => ProposalResult::Calculatable,
-            Status::Calculated => {
-                drop(lock);
-                // SAFETY: We observed terminal `Status::Calculated` under
-                // `inner`. The result was written before that status was
-                // published and is never mutated afterward.
-                ProposalResult::Calculated(unsafe { (*self.result.get()).assume_init_ref() }.dupe())
-            }
+        if self.status.start_calculating() {
+            ProposalResult::Calculatable
+        } else {
+            // SAFETY: start_calculating returned false after an acquire operation
+            // observed the release publication of `Status::Calculated`, after
+            // which `result` is never mutated.
+            ProposalResult::Calculated(unsafe { (*self.result.get()).assume_init_ref() }.dupe())
         }
     }
 
@@ -218,23 +261,26 @@ impl<T: Dupe> Calculation<T> {
     /// - `did_write` is `true` if this call was the one that wrote the value,
     ///   `false` if another thread had already written it
     pub fn record_value(&self, value: T) -> (T, bool) {
-        let mut lock = self.inner.lock();
-        lock = self.condvar.wait_while(lock, |inner| inner.write_locked);
-        match &mut lock.status {
+        if let Some(value) = self.get() {
+            return (value, false);
+        }
+        let mut lock = self.write_locked.lock();
+        lock = self.condvar.wait_while(lock, |write_locked| *write_locked);
+        match self.status.load() {
             Status::NotCalculated => {
                 unreachable!("Should not record a result before calculating")
             }
             Status::Calculating => {
-                // SAFETY: We hold `inner`, and `Status::Calculating` means no
+                // SAFETY: We hold `write_locked`, and `Status::Calculating` means no
                 // final result has been written yet. This write happens before
                 // publishing terminal `Status::Calculated`.
                 unsafe {
                     (*self.result.get()).write(value);
                 }
-                lock.status = Status::Calculated;
+                self.status.store_calculated();
                 drop(lock);
-                // SAFETY: This call just initialized `result` and published
-                // terminal `Status::Calculated`; the value will not be mutated.
+                // SAFETY: This call initialized `result` before publishing
+                // `Status::Calculated`; the value will not be mutated.
                 (
                     unsafe { (*self.result.get()).assume_init_ref() }.dupe(),
                     true,
@@ -243,9 +289,8 @@ impl<T: Dupe> Calculation<T> {
             Status::Calculated => {
                 // The first thread to write a value wins
                 drop(lock);
-                // SAFETY: We observed terminal `Status::Calculated` under
-                // `inner`. The result was written before that status was
-                // published and is never mutated afterward.
+                // SAFETY: The acquire load observed the release publication of
+                // `Status::Calculated`, after which `result` is never mutated.
                 (
                     unsafe { (*self.result.get()).assume_init_ref() }.dupe(),
                     false,
@@ -258,12 +303,15 @@ impl<T: Dupe> Calculation<T> {
     /// already holds the lock. Returns false (no lock acquired) if the cell
     /// is already `Calculated`, since `record_value` would be a no-op anyway.
     pub fn write_lock(&self) -> bool {
-        let mut lock = self.inner.lock();
-        lock = self.condvar.wait_while(lock, |inner| inner.write_locked);
-        if matches!(&lock.status, Status::Calculated) {
+        if self.status.load() == Status::Calculated {
+            return false;
+        }
+        let mut lock = self.write_locked.lock();
+        lock = self.condvar.wait_while(lock, |write_locked| *write_locked);
+        if self.status.load() == Status::Calculated {
             false
         } else {
-            lock.write_locked = true;
+            *lock = true;
             true
         }
     }
@@ -271,26 +319,28 @@ impl<T: Dupe> Calculation<T> {
     /// Write a value to a write-locked cell and release the lock.
     /// Panics if the cell is not write-locked.
     pub fn write_unlock(&self, value: T) -> (T, bool) {
-        let mut lock = self.inner.lock();
-        assert!(lock.write_locked, "write_unlock called on non-locked cell");
-        lock.write_locked = false;
-        let result = match &mut lock.status {
+        let mut lock = self.write_locked.lock();
+        assert!(*lock, "write_unlock called on non-locked cell");
+        *lock = false;
+        let result = match self.status.load() {
             Status::NotCalculated => {
                 unreachable!("write_unlock called before calculating")
             }
             Status::Calculating => {
-                // SAFETY: We hold `inner` and the SCC write lock, and
-                // `Status::Calculating` means no final result has been written
+                // SAFETY: We hold the `write_locked` mutex and the SCC write
+                // lock, and `Status::Calculating` means no final result has been written
                 // yet. This write happens before publishing terminal
                 // `Status::Calculated`.
                 unsafe {
                     (*self.result.get()).write(value);
                 }
-                lock.status = Status::Calculated;
+                self.status.store_calculated();
                 true
             }
             Status::Calculated => false,
         };
+        // The predicate change and notification happen under the mutex used by
+        // wait_while, so a waiter cannot observe the old value and miss this wakeup.
         self.condvar.notify_all();
         drop(lock);
         // SAFETY: Either this call wrote `result` and published terminal
@@ -305,9 +355,11 @@ impl<T: Dupe> Calculation<T> {
     /// Release the write lock without writing a value.
     /// Used by the RAII guard for panic cleanup.
     pub fn write_unlock_empty(&self) {
-        let mut lock = self.inner.lock();
-        if lock.write_locked {
-            lock.write_locked = false;
+        let mut lock = self.write_locked.lock();
+        if *lock {
+            *lock = false;
+            // Keep the predicate change and notification under the wait mutex
+            // to avoid a lost wakeup.
             self.condvar.notify_all();
         }
     }
