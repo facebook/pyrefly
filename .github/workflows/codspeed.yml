@@ -31,7 +31,7 @@ jobs:
     - name: build benchmarks
       run: cargo codspeed build -p pyrefly --bench micro
     - name: run benchmarks
-      uses: CodSpeedHQ/action@v4
+      uses: CodSpeedHQ/action@v5.0.1
       with:
         mode: simulation
         run: cargo codspeed run -p pyrefly --bench micro
@@ -61,7 +61,7 @@ jobs:
     - name: build benchmarks
       run: cargo codspeed build -m walltime -p pyrefly --bench pytorch
     - name: run benchmarks
-      uses: CodSpeedHQ/action@v4
+      uses: CodSpeedHQ/action@v5.0.1
       with:
         mode: walltime
         run: cargo codspeed run -p pyrefly --bench pytorch
