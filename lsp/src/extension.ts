@@ -58,6 +58,10 @@ function requireSetting<T>(path: string): T {
  * - VSCode returns a configuration of {setting: 'value'} from settings.json
  * - This function will add pythonPath: '/usr/bin/python3' from the Python extension to the configuration
  * - {setting: 'value', pythonPath: '/usr/bin/python3'} is returned
+ *
+ * Only added if the Python extension has already activated: blocking on it would delay the whole
+ * response past the requests the server handles at startup (#4332). An absent pythonPath leaves
+ * the server's value untouched; `activate` re-pulls it later.
  */
 async function overridePythonPath(
   pythonEnv: PythonEnvironment,
@@ -73,7 +77,7 @@ async function overridePythonPath(
         return item;
       }
       const scopeUri = configurationItems[index].scopeUri;
-      const pythonPath = await pythonEnv.getInterpreterPath(
+      const pythonPath = await pythonEnv.getInterpreterPathIfResolved(
         scopeUri === undefined ? undefined : vscode.Uri.parse(scopeUri),
       );
       if (pythonPath === undefined) {
@@ -274,6 +278,18 @@ export async function activate(context: ExtensionContext) {
 
   // Start the client. This will also launch the server
   await client.start();
+
+  // The middleware responds before the interpreter resolves, so re-pull once it does;
+  // `onDidChangeInterpreter` can't cover this, as it only fires on a later change.
+  pythonEnv
+    .getInterpreterPath()
+    .then(() => {
+      client.sendNotification(DidChangeConfigurationNotification.type, {
+        settings: {},
+      });
+    })
+    // Best effort: the client may have stopped by now.
+    .catch(() => {});
 
   await updateStatusBar(client);
   const statusBarItem = getStatusBarItem();
