@@ -2180,14 +2180,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && x.arguments.args.len() == 1
             && let Expr::Dict(dict) = &x.arguments.args[0]
             && (is_polars_dataframe(cls) || is_pandas_dataframe(cls))
-            && let Some(overrides) = self.polars_schema_overrides(&x.arguments.keywords)
+            && let Some((overrides, strict)) = self.polars_construct_options(&x.arguments.keywords)
         {
             let (kind, completeness) = if is_polars_dataframe(cls) {
                 (DataFrameKind::Polars, SchemaCompleteness::Complete)
             } else {
                 (DataFrameKind::Pandas, SchemaCompleteness::Partial)
             };
-            self.infer_dataframe_schema(dict, kind.clone(), &overrides, errors)
+            self.infer_dataframe_schema(dict, kind.clone(), &overrides, strict, errors)
                 .map(|c| (c, kind, completeness))
         } else {
             None

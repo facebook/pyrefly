@@ -20,7 +20,7 @@ from typing import Iterator, overload
 class Series: ...
 class DataFrame:
     columns: list[str]
-    def __init__(self, data: object = None, schema: object = None, schema_overrides: object = None) -> None: ...
+    def __init__(self, data: object = None, schema: object = None, schema_overrides: object = None, strict: bool = True) -> None: ...
     @overload
     def __getitem__(self, key: str) -> Series: ...
     @overload
@@ -349,6 +349,39 @@ testcase!(
 import pandas as pd
 from typing import reveal_type
 reveal_type(pd.DataFrame({"a": [1]}, columns=["a"]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_strict_false_coerces_to_supertype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, 2.0]}, strict=False))  # E: revealed type: DataFrame[a: Float64]
+reveal_type(pl.DataFrame({"a": [True, 1]}, strict=False))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_strict_false_incompatible_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# int and str have no numeric supertype, so we fall back rather than model Polars'
+# runtime String coercion; strict=False is never an error.
+reveal_type(pl.DataFrame({"a": [1, "s"]}, strict=False))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_strict_true_still_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, 2.0]}, strict=True))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
 "#,
 );
 

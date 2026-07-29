@@ -123,6 +123,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         dict: &ExprDict,
         kind: DataFrameKind,
         overrides: &SmallMap<Name, PolarsDType>,
+        strict: bool,
         errors: &ErrorCollector,
     ) -> Option<Vec<(Name, PolarsDType)>> {
         if dict.items.is_empty() {
@@ -145,43 +146,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // it regardless of the element values.
             let element = match overrides.get(&name) {
                 Some(dtype) => *dtype,
-                None => self.dataframe_list_element_type(&name, elts, kind.clone(), errors)?,
+                None => {
+                    self.dataframe_list_element_type(&name, elts, kind.clone(), strict, errors)?
+                }
             };
             columns.push((name, element));
         }
         Some(columns)
     }
 
-    /// The dtype overrides declared by a `schema_overrides` keyword, or `None` to fall back to
-    /// plain construction. Only a `schema_overrides` dict of string columns to `pl.<DType>` is
-    /// understood, and any other keyword, a spread, or an unrecognized dtype falls back so we
-    /// never mis-model the call.
-    pub fn polars_schema_overrides(
+    /// The dtype overrides and strictness requested by a DataFrame call, or `None` to fall back
+    /// to ordinary call checking for a form we do not model.
+    pub fn polars_construct_options(
         &self,
         keywords: &[Keyword],
-    ) -> Option<SmallMap<Name, PolarsDType>> {
+    ) -> Option<(SmallMap<Name, PolarsDType>, bool)> {
         let mut overrides = SmallMap::new();
+        let mut strict = true;
         for kw in keywords {
             let Some(arg) = &kw.arg else {
                 return None;
             };
-            if arg.id.as_str() != "schema_overrides" {
-                return None;
-            }
-            let Expr::Dict(dict) = &kw.value else {
-                return None;
-            };
-            for item in &dict.items {
-                let (Some(Expr::StringLiteral(key)), value) = (&item.key, &item.value) else {
-                    return None;
-                };
-                overrides.insert(
-                    Name::new(key.value.to_str()),
-                    polars_dtype_from_expr(value)?,
-                );
+            match arg.id.as_str() {
+                "schema_overrides" => {
+                    let Expr::Dict(dict) = &kw.value else {
+                        return None;
+                    };
+                    for item in &dict.items {
+                        let (Some(Expr::StringLiteral(key)), value) = (&item.key, &item.value)
+                        else {
+                            return None;
+                        };
+                        overrides.insert(
+                            Name::new(key.value.to_str()),
+                            polars_dtype_from_expr(value)?,
+                        );
+                    }
+                }
+                "strict" => match &kw.value {
+                    Expr::BooleanLiteral(b) => strict = b.value,
+                    _ => return None,
+                },
+                _ => return None,
             }
         }
-        Some(overrides)
+        Some((overrides, strict))
     }
 
     /// The column's Polars dtype, or `None` to fall back to plain construction. Mirrors
@@ -195,6 +204,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         elts: &[Expr],
         kind: DataFrameKind,
+        strict: bool,
         errors: &ErrorCollector,
     ) -> Option<PolarsDType> {
         let scalar = |e: &Expr| match e {
@@ -215,6 +225,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Some(PolarsDType::Unknown);
         };
         let column = scalar(first)?;
+        if !strict {
+            // strict=False widens to the elements' common supertype instead of erroring.
+            let mut acc = column;
+            for e in rest {
+                acc = acc.supertype(scalar(e)?)?;
+            }
+            return Some(acc);
+        }
         for e in rest {
             let element = scalar(e)?;
             // The element fits only if it coerces into the column dtype without widening it.
