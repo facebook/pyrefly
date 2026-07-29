@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use lsp_types::SemanticToken;
 use lsp_types::SemanticTokenModifier;
@@ -20,6 +21,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
+use regex::Regex;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
@@ -29,7 +31,9 @@ use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
+use ruff_python_ast::StringFlags as _;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::token::Token;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::token::Tokens;
 use ruff_text_size::Ranged;
@@ -40,6 +44,42 @@ use crate::binding::binding::Key;
 use crate::state::lsp::attribute_symbol_kind_from_type;
 
 const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
+const BYTE_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("byteString");
+const ESCAPE_SEQUENCE_MODIFIER: SemanticTokenModifier =
+    SemanticTokenModifier::new("escapeSequence");
+const FORMAT_PLACEHOLDER_MODIFIER: SemanticTokenModifier =
+    SemanticTokenModifier::new("formatPlaceholder");
+const FORMAT_SPECIFIER_MODIFIER: SemanticTokenModifier =
+    SemanticTokenModifier::new("formatSpecifier");
+const FORMAT_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("formatString");
+const RAW_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("rawString");
+const STRING_PREFIX_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("stringPrefix");
+const TEMPLATE_STRING_MODIFIER: SemanticTokenModifier =
+    SemanticTokenModifier::new("templateString");
+
+static STRING_SPECIAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?x)
+        \\(?:
+            \r?\n
+            | x[0-9A-Fa-f]{2}
+            | u[0-9A-Fa-f]{4}
+            | U[0-9A-Fa-f]{8}
+            | N\{[\w\s]+?\}
+            | [0-7]{1,3}
+            | [\\"'abfnrtv]
+        )
+        |
+        %(?:\([\w\s]*\))?
+            [-+\#0\x20]*
+            (?:\d+|\*)?
+            (?:\.(?:\d+|\*))?
+            [hlL]?
+            [diouxXeEfFgGcrsab%]
+        "#,
+    )
+    .expect("string syntax highlighting regex must be valid")
+});
 
 /// Adds the DEFAULT_LIBRARY modifier if the module is a standard library module
 /// (builtins, typing, typing_extensions).
@@ -103,6 +143,14 @@ impl SemanticTokensLegends {
                 SemanticTokenModifier::DOCUMENTATION,
                 SemanticTokenModifier::DEFAULT_LIBRARY,
                 SELF_PARAMETER_MODIFIER.clone(),
+                BYTE_STRING_MODIFIER.clone(),
+                ESCAPE_SEQUENCE_MODIFIER.clone(),
+                FORMAT_PLACEHOLDER_MODIFIER.clone(),
+                FORMAT_SPECIFIER_MODIFIER.clone(),
+                FORMAT_STRING_MODIFIER.clone(),
+                RAW_STRING_MODIFIER.clone(),
+                STRING_PREFIX_MODIFIER.clone(),
+                TEMPLATE_STRING_MODIFIER.clone(),
             ],
         }
     }
@@ -223,6 +271,28 @@ impl SemanticTokensLegends {
     }
 }
 
+/// Return modifiers that let clients style each Python string kind independently.
+fn string_modifiers(token: &Token) -> Vec<SemanticTokenModifier> {
+    let flags = token.unwrap_string_flags();
+    let mut modifiers = Vec::new();
+    if flags.is_byte_string() {
+        modifiers.push(BYTE_STRING_MODIFIER.clone());
+    }
+    if flags.is_raw_string() {
+        modifiers.push(RAW_STRING_MODIFIER.clone());
+    }
+    match token.kind() {
+        TokenKind::FStringStart | TokenKind::FStringMiddle | TokenKind::FStringEnd => {
+            modifiers.push(FORMAT_STRING_MODIFIER.clone());
+        }
+        TokenKind::TStringStart | TokenKind::TStringMiddle | TokenKind::TStringEnd => {
+            modifiers.push(TEMPLATE_STRING_MODIFIER.clone());
+        }
+        _ => {}
+    }
+    modifiers
+}
+
 fn syntax_token_type(kind: TokenKind) -> Option<SemanticTokenType> {
     if kind.is_keyword() {
         Some(SemanticTokenType::KEYWORD)
@@ -231,13 +301,6 @@ fn syntax_token_type(kind: TokenKind) -> Option<SemanticTokenType> {
     } else {
         match kind {
             TokenKind::Comment => Some(SemanticTokenType::COMMENT),
-            TokenKind::String
-            | TokenKind::FStringStart
-            | TokenKind::FStringMiddle
-            | TokenKind::FStringEnd
-            | TokenKind::TStringStart
-            | TokenKind::TStringMiddle
-            | TokenKind::TStringEnd => Some(SemanticTokenType::STRING),
             TokenKind::Int | TokenKind::Float | TokenKind::Complex => {
                 Some(SemanticTokenType::NUMBER)
             }
@@ -330,10 +393,157 @@ impl SemanticTokenBuilder {
             .any(|disabled| disabled.contains_range(range))
     }
 
-    pub fn process_syntax_tokens(&mut self, tokens: &Tokens) {
-        for token in tokens.iter() {
-            if let Some(token_type) = syntax_token_type(token.kind()) {
-                self.push_if_in_range(token.range(), token_type, Vec::new());
+    /// Split string text so escapes and format placeholders can receive distinct modifiers.
+    fn push_string_range(
+        &mut self,
+        range: TextRange,
+        source: &str,
+        modifiers: Vec<SemanticTokenModifier>,
+        raw: bool,
+        allow_unicode_escapes: bool,
+    ) {
+        let text = &source[range.start().to_usize()..range.end().to_usize()];
+        let bytes = text.as_bytes();
+        let mut segment_start = 0;
+        for special in STRING_SPECIAL.find_iter(text) {
+            let is_escape = bytes[special.start()] == b'\\';
+            if is_escape
+                && (raw
+                    || (!allow_unicode_escapes
+                        && matches!(bytes[special.start() + 1], b'u' | b'U' | b'N')))
+            {
+                continue;
+            }
+            let offset =
+                |x| TextSize::try_from(x).expect("string token offset must fit in TextSize");
+            self.push_if_in_range(
+                TextRange::new(
+                    range.start() + offset(segment_start),
+                    range.start() + offset(special.start()),
+                ),
+                SemanticTokenType::STRING,
+                modifiers.clone(),
+            );
+            let mut special_modifiers = modifiers.clone();
+            special_modifiers.push(if is_escape {
+                ESCAPE_SEQUENCE_MODIFIER.clone()
+            } else {
+                FORMAT_PLACEHOLDER_MODIFIER.clone()
+            });
+            self.push_if_in_range(
+                TextRange::new(
+                    range.start() + offset(special.start()),
+                    range.start() + offset(special.end()),
+                ),
+                SemanticTokenType::STRING,
+                special_modifiers,
+            );
+            segment_start = special.end();
+        }
+        self.push_if_in_range(
+            TextRange::new(
+                range.start()
+                    + TextSize::try_from(segment_start)
+                        .expect("string token offset must fit in TextSize"),
+                range.end(),
+            ),
+            SemanticTokenType::STRING,
+            modifiers,
+        );
+    }
+
+    /// Add syntax-level semantic tokens, refining Python string tokens where possible.
+    pub fn process_syntax_tokens(&mut self, tokens: &Tokens, source: &str) {
+        let mut tokens = tokens.iter().peekable();
+        let mut interpolated_strings: Vec<Vec<SemanticTokenModifier>> = Vec::new();
+        while let Some(token) = tokens.next() {
+            let kind = token.kind();
+            if kind == TokenKind::Colon
+                && let Some(modifiers) = interpolated_strings.last()
+                && let Some(next) = tokens.peek()
+                && matches!(
+                    next.kind(),
+                    TokenKind::FStringMiddle | TokenKind::TStringMiddle
+                )
+            {
+                let mut modifiers = modifiers.clone();
+                modifiers.push(FORMAT_SPECIFIER_MODIFIER.clone());
+                let next = tokens.next().expect("peeked format specifier must exist");
+                self.push_if_in_range(
+                    TextRange::new(token.start(), next.end()),
+                    SemanticTokenType::STRING,
+                    modifiers,
+                );
+                continue;
+            }
+            if kind == TokenKind::Exclamation
+                && let Some(modifiers) = interpolated_strings.last()
+                && let Some(next) = tokens.peek()
+                && next.kind() == TokenKind::Name
+                && matches!(
+                    &source[next.start().to_usize()..next.end().to_usize()],
+                    "r" | "s" | "a"
+                )
+            {
+                let mut modifiers = modifiers.clone();
+                modifiers.push(FORMAT_SPECIFIER_MODIFIER.clone());
+                let next = tokens
+                    .next()
+                    .expect("peeked conversion specifier must exist");
+                self.push_if_in_range(
+                    TextRange::new(token.start(), next.end()),
+                    SemanticTokenType::STRING,
+                    modifiers,
+                );
+                continue;
+            }
+            match kind {
+                TokenKind::String
+                | TokenKind::FStringStart
+                | TokenKind::FStringMiddle
+                | TokenKind::FStringEnd
+                | TokenKind::TStringStart
+                | TokenKind::TStringMiddle
+                | TokenKind::TStringEnd => {
+                    let modifiers = string_modifiers(token);
+                    let flags = token.unwrap_string_flags();
+                    let prefix_len = if matches!(
+                        kind,
+                        TokenKind::String | TokenKind::FStringStart | TokenKind::TStringStart
+                    ) {
+                        flags.prefix().text_len()
+                    } else {
+                        TextSize::default()
+                    };
+                    if prefix_len > TextSize::default() {
+                        let mut prefix_modifiers = modifiers.clone();
+                        prefix_modifiers.push(STRING_PREFIX_MODIFIER.clone());
+                        self.push_if_in_range(
+                            TextRange::at(token.start(), prefix_len),
+                            SemanticTokenType::STRING,
+                            prefix_modifiers,
+                        );
+                    }
+                    self.push_string_range(
+                        TextRange::new(token.start() + prefix_len, token.end()),
+                        source,
+                        modifiers.clone(),
+                        flags.is_raw_string(),
+                        !flags.is_byte_string(),
+                    );
+                    if matches!(kind, TokenKind::FStringStart | TokenKind::TStringStart) {
+                        interpolated_strings.push(modifiers);
+                    } else if matches!(kind, TokenKind::FStringEnd | TokenKind::TStringEnd) {
+                        interpolated_strings
+                            .pop()
+                            .expect("interpolated string end must have a matching start");
+                    }
+                }
+                _ => {
+                    if let Some(token_type) = syntax_token_type(kind) {
+                        self.push_if_in_range(token.range(), token_type, Vec::new());
+                    }
+                }
             }
         }
     }

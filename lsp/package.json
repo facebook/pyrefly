@@ -89,6 +89,36 @@
             {
                 "language": "python",
                 "scopes": {
+                    "string.byteString": [
+                        "string.quoted.binary.single.python",
+                        "string.quoted.binary.multi.python"
+                    ],
+                    "string.byteString.rawString": [
+                        "string.quoted.raw.binary.single.python",
+                        "string.quoted.raw.binary.multi.python"
+                    ],
+                    "string.escapeSequence": [
+                        "constant.character.escape.python"
+                    ],
+                    "string.formatPlaceholder": [
+                        "constant.character.format.placeholder.other.python"
+                    ],
+                    "string.formatSpecifier": [
+                        "storage.type.format.python"
+                    ],
+                    "string.formatString": [
+                        "string.interpolated.python"
+                    ],
+                    "string.rawString": [
+                        "string.quoted.raw.single.python",
+                        "string.quoted.raw.multi.python"
+                    ],
+                    "string.stringPrefix": [
+                        "storage.type.string.python"
+                    ],
+                    "string.templateString": [
+                        "string.interpolated.python"
+                    ],
                     "variable.readonly": [
                         "variable.other.constant.python"
                     ]

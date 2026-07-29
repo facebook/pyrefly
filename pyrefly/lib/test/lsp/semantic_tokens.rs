@@ -203,6 +203,130 @@ token-type: string
 }
 
 #[test]
+fn string_syntax_tokens_test() {
+    let code = r#"b"bytes\t\x50"
+"\n\t\\\"\120\x50\N{LATIN CAPITAL LETTER P}\u1234\U0001F600"
+r"raw\n"
+f"value:{1!r:>10.2f}:{{}}:\n"
+"printf:%s:%08.2f:%%"
+"#;
+    assert_full_semantic_tokens_with_syntax(
+        &[("main", code)],
+        true,
+        r#"
+# main.py
+line: 0, column: 0, length: 1, text: b
+token-type: string, token-modifiers: [byteStringstringPrefix]
+
+line: 0, column: 1, length: 6, text: "bytes
+token-type: string, token-modifiers: [byteString]
+
+line: 0, column: 7, length: 2, text: \t
+token-type: string, token-modifiers: [byteStringescapeSequence]
+
+line: 0, column: 9, length: 4, text: \x50
+token-type: string, token-modifiers: [byteStringescapeSequence]
+
+line: 0, column: 13, length: 1, text: "
+token-type: string, token-modifiers: [byteString]
+
+line: 1, column: 0, length: 1, text: "
+token-type: string
+
+line: 1, column: 1, length: 2, text: \n
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 1, column: 3, length: 2, text: \t
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 1, column: 5, length: 2, text: \\
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 1, column: 7, length: 2, text: \"
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 1, column: 9, length: 4, text: \120
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 1, column: 13, length: 4, text: \x50
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 1, column: 17, length: 26, text: \N{LATIN CAPITAL LETTER P}
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 1, column: 43, length: 6, text: \u1234
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 1, column: 49, length: 10, text: \U0001F600
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 1, column: 59, length: 1, text: "
+token-type: string
+
+line: 2, column: 0, length: 1, text: r
+token-type: string, token-modifiers: [rawStringstringPrefix]
+
+line: 2, column: 1, length: 7, text: "raw\n"
+token-type: string, token-modifiers: [rawString]
+
+line: 3, column: 0, length: 1, text: f
+token-type: string, token-modifiers: [formatStringstringPrefix]
+
+line: 3, column: 1, length: 1, text: "
+token-type: string, token-modifiers: [formatString]
+
+line: 3, column: 2, length: 6, text: value:
+token-type: string, token-modifiers: [formatString]
+
+line: 3, column: 8, length: 1, text: {
+token-type: operator
+
+line: 3, column: 9, length: 1, text: 1
+token-type: number
+
+line: 3, column: 10, length: 2, text: !r
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 3, column: 12, length: 7, text: :>10.2f
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 3, column: 19, length: 1, text: }
+token-type: operator
+
+line: 3, column: 20, length: 6, text: :{{}}:
+token-type: string, token-modifiers: [formatString]
+
+line: 3, column: 26, length: 2, text: \n
+token-type: string, token-modifiers: [escapeSequenceformatString]
+
+line: 3, column: 28, length: 1, text: "
+token-type: string, token-modifiers: [formatString]
+
+line: 4, column: 0, length: 8, text: "printf:
+token-type: string
+
+line: 4, column: 8, length: 2, text: %s
+token-type: string, token-modifiers: [formatPlaceholder]
+
+line: 4, column: 10, length: 1, text: :
+token-type: string
+
+line: 4, column: 11, length: 6, text: %08.2f
+token-type: string, token-modifiers: [formatPlaceholder]
+
+line: 4, column: 17, length: 1, text: :
+token-type: string
+
+line: 4, column: 18, length: 2, text: %%
+token-type: string, token-modifiers: [formatPlaceholder]
+
+line: 4, column: 20, length: 1, text: "
+token-type: string
+"#,
+    );
+}
+
+#[test]
 fn soft_keyword_syntax_tokens_test() {
     let code = r#"match = 1
 case = match
