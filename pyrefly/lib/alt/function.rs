@@ -363,9 +363,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         // Overloads in .pyi should not have an implementation.
         let skip_implementation = self.module().path().style() == ModuleStyle::Interface
-            || def
-                .defining_cls()
-                .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol())
+            || def.metadata().flags.is_in_protocol_class
             || def.metadata().flags.is_abstract_method;
         let mut ty = if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
@@ -492,8 +490,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         if def.is_stub()
             && self.module().path().style() != ModuleStyle::Interface
-            && let Some(cls) = def.defining_cls()
-            && self.get_metadata_for_class(cls).is_protocol()
+            && def.metadata().flags.is_in_protocol_class
         {
             ty.transform_toplevel_func_metadata(|meta| {
                 meta.flags.is_abstract_method = true;
@@ -631,6 +628,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         };
 
+        flags.is_in_protocol_class = defining_cls
+            .as_ref()
+            .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol());
         if stub_or_impl == FunctionStubOrImpl::Stub {
             flags.lacks_implementation = true;
         }
@@ -799,10 +799,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && !def.metadata.flags.defined_in_stub_file
             && !def.metadata.flags.is_overload
             && !def.metadata.flags.is_abstract_method
-            && !def
-                .defining_cls
-                .as_ref()
-                .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol())
+            && !def.metadata.flags.is_in_protocol_class
             && !if stmt.is_async {
                 self.unwrap_coroutine(&ret)
                     .is_some_and(|(_, _, return_ty)| {

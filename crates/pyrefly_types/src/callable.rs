@@ -744,6 +744,8 @@ pub struct FuncFlags {
     pub shape_transform: Option<Arc<ShapeTransform>>,
     /// A function decorated with `@defines_assert_shape`.
     pub is_assert_shape: bool,
+    /// A method directly inside a `Protocol` class.
+    pub is_in_protocol_class: bool,
 }
 
 impl FuncFlags {
