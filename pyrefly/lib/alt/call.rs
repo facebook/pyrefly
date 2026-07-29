@@ -1781,16 +1781,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
+        let retry_input = hint.map(|_| (callable.clone(), self_obj.clone()));
         // First try the call without the hint to see if it succeeds.
         let mut ctor_targs_no_hint = ctor_targs.as_ref().map(|x| (**x).clone());
         let arg_errors_no_hint = self.error_collector();
         let call_errors_no_hint = self.error_collector();
         let res_no_hint = self.callable_infer(
-            callable.clone(),
+            callable,
             callable_name,
             shape_transform,
             tparams,
-            self_obj.clone(),
+            self_obj,
             args,
             keywords,
             arguments_range,
@@ -1802,7 +1803,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         // If the call succeeds, attempt contextual typing with the hint.
         let (chosen_ctor_targs, chosen_call_errors, chosen_arg_errors, chosen_res) =
-            if !call_errors_no_hint.has_hard() && hint.is_some() {
+            if !call_errors_no_hint.has_hard()
+                && let Some((callable, self_obj)) = retry_input
+            {
                 let mut ctor_targs_with_hint = ctor_targs.as_ref().map(|x| (**x).clone());
                 let arg_errors_with_hint = self.error_collector();
                 let call_errors_with_hint = self.error_collector();
