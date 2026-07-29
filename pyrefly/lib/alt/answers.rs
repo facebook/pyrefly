@@ -16,6 +16,7 @@ use dupe::Dupe;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::index::Idx;
 use pyrefly_graph::index_map::IndexMap;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWith;
@@ -86,6 +87,8 @@ pub struct Index {
     /// A map from (attribute definition module) to a list of pairs of
     /// (range of attribute definition in the definition, range of reference in the current module).
     pub externally_defined_attribute_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
+    /// A map from local constructor method definitions to references resolved through them.
+    pub locally_defined_constructor_references: SmallMap<TextRange, Vec<TextRange>>,
     /// A map from (child method range) to a list of parent method definitions (ModulePath, parent method range).
     /// This is used to find reimplementations when doing find-references on parent methods.
     pub parent_methods_map: SmallMap<TextRange, Vec<(ModulePath, TextRange)>>,
@@ -1177,7 +1180,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn record_external_attribute_definition_index(
+    pub fn record_attribute_definition_index(
         &self,
         base: &Type,
         attribute_name: &Name,
@@ -1198,7 +1201,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                         docstring_range: _,
                     } => {
-                        if cls.module_path() != self.bindings().module().path() {
+                        if cls.module_path() == self.bindings().module().path() {
+                            if attribute_name == &dunder::INIT
+                                || attribute_name == &dunder::NEW
+                                || attribute_name == &dunder::CALL
+                            {
+                                index
+                                    .lock()
+                                    .locally_defined_constructor_references
+                                    .entry(range)
+                                    .or_default()
+                                    .push(attribute_reference_range);
+                            }
+                        } else {
                             index
                                 .lock()
                                 .externally_defined_attribute_references

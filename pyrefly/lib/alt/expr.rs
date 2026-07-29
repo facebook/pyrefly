@@ -2130,7 +2130,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         base: &TypeInfo,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        self.record_external_attribute_definition_index(base.ty(), x.attr.id(), x.attr.range);
+        self.record_attribute_definition_index(base.ty(), x.attr.id(), x.attr.range);
         let attr_type = self.attr_infer(base, &x.attr.id, x.range, errors, None);
         if base.ty().is_literal_string() {
             match attr_type.ty() {

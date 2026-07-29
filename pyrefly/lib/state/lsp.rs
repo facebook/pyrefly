@@ -3834,6 +3834,16 @@ impl<'a> Transaction<'a> {
         ) {
             references.extend(pytest_references);
         }
+        if let Some(index) = self
+            .get_solutions(handle)
+            .and_then(|solutions| solutions.get_index())
+            && let Some(constructor_references) = index
+                .lock()
+                .locally_defined_constructor_references
+                .get(&definition_range)
+        {
+            references.extend(constructor_references);
+        }
         if include_declaration {
             references.push(definition_range);
         }

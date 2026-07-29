@@ -999,7 +999,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(callee_range) = callee_range
                     && let Some(metaclass) = class_metadata.custom_metaclass()
                 {
-                    self.record_external_attribute_definition_index(
+                    self.record_attribute_definition_index(
                         &self.heap.mk_class_type(metaclass.clone()),
                         &dunder::CALL,
                         callee_range,
@@ -1072,7 +1072,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let has_errors = !dunder_new_errors.is_empty();
                 errors.extend(dunder_new_errors);
                 if let Some(callee_range) = callee_range {
-                    self.record_external_attribute_definition_index(
+                    self.record_attribute_definition_index(
                         &self.heap.mk_class_type(cls.clone()),
                         &dunder::NEW,
                         callee_range,
@@ -1136,7 +1136,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors.extend(dunder_init_errors);
             }
             if let Some(callee_range) = callee_range {
-                self.record_external_attribute_definition_index(
+                self.record_attribute_definition_index(
                     &self.heap.mk_class_type(cls.clone()),
                     &dunder::INIT,
                     callee_range,
