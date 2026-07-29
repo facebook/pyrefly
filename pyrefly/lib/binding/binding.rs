@@ -2345,9 +2345,8 @@ pub enum Binding {
         /// An optional reference to any previous function in the same flow by the same name;
         /// this is needed to fold `@overload` decorated defs into a single type.
         pred_idx: Option<Idx<Key>>,
-        /// An optional reference to class metadata, which will be non-None when the function
-        /// is defined within a class scope.
-        class_meta_idx: Option<Idx<KeyClassMetadata>>,
+        /// Whether the function is defined within a class scope.
+        in_class: bool,
     },
     /// An import statement, typically with `Self::Import`.
     Import(Box<ImportBinding>),
@@ -2765,8 +2764,8 @@ impl Binding {
             | Binding::TypeParameter(_)
             | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
-            Binding::Function { class_meta_idx, .. } => {
-                if class_meta_idx.is_some() {
+            Binding::Function { in_class, .. } => {
+                if *in_class {
                     Some(SymbolKind::Method)
                 } else {
                     Some(SymbolKind::Function)
