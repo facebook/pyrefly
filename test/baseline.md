@@ -49,3 +49,33 @@ $ mkdir -p $TMPDIR/baseline_relative/subdir && \
  INFO 0 errors
 [0]
 ```
+
+## Updating a baseline records unused `# type: ignore` errors
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_unused_type_ignore_update && \
+> echo "# type: ignore" > $TMPDIR/baseline_unused_type_ignore_update/bad.py && \
+> touch $TMPDIR/baseline_unused_type_ignore_update/pyrefly.toml && \
+> cd $TMPDIR/baseline_unused_type_ignore_update && \
+> $PYREFLY check --error=unused-type-ignore --baseline=baseline.json --update-baseline --output-format=min-text
+ERROR *bad.py* ?unused-type-ignore? (glob)
+[1]
+```
+
+```scrut {output_stream: stdout}
+$ grep '"name": "unused-type-ignore"' $TMPDIR/baseline_unused_type_ignore_update/baseline.json
+      "name": "unused-type-ignore",
+[0]
+```
+
+## A baselined unused `# type: ignore` error is suppressed
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_unused_type_ignore_check && \
+> echo "# type: ignore" > $TMPDIR/baseline_unused_type_ignore_check/bad.py && \
+> echo '{"errors": [{"line": 1, "column": 1, "stop_line": 1, "stop_column": 2, "path": "bad.py", "code": -2, "name": "unused-type-ignore", "description": "test", "concise_description": "test"}]}' > $TMPDIR/baseline_unused_type_ignore_check/baseline.json && \
+> touch $TMPDIR/baseline_unused_type_ignore_check/pyrefly.toml && \
+> cd $TMPDIR/baseline_unused_type_ignore_check && \
+> $PYREFLY check --error=unused-type-ignore --baseline=baseline.json --output-format=min-text
+[0]
+```

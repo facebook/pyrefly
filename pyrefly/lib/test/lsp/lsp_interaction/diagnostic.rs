@@ -221,6 +221,44 @@ fn test_baseline_diagnostic_is_hint() {
     interaction.shutdown().unwrap();
 }
 
+#[test]
+fn test_baselined_unused_type_ignore_is_hint() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_unused_type_ignore");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("bad.py");
+
+    interaction
+        .client
+        .diagnostic("bad.py")
+        .expect_response_with(|response| {
+            let DocumentDiagnosticReportResult::Report(report) = response else {
+                return false;
+            };
+            let lsp_types::DocumentDiagnosticReport::Full(full) = report else {
+                return false;
+            };
+            let items = &full.full_document_diagnostic_report.items;
+            items.len() == 1
+                && items[0].code
+                    == Some(lsp_types::NumberOrString::String(
+                        "unused-type-ignore".to_owned(),
+                    ))
+                && items[0].severity == Some(lsp_types::DiagnosticSeverity::HINT)
+        })
+        .expect("Failed to receive baselined unused-type-ignore diagnostic");
+
+    interaction.shutdown().unwrap();
+}
+
 /// Push diagnostics (`publishDiagnostics`) is the primary user-facing path and
 /// has the same HINT-downgrade logic as the pull path exercised above, so assert
 /// the published notification downgrades only the baselined error.
