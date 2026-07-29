@@ -8,6 +8,7 @@
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::MaybeUninit;
+use std::num::NonZeroU8;
 use std::thread;
 use std::thread::ThreadId;
 
@@ -70,6 +71,8 @@ pub struct Calculation<T> {
     /// the status inside `inner` is the initialization marker for this cell.
     result: UnsafeCell<MaybeUninit<T>>,
     condvar: Condvar,
+    /// Keeps `Option<Calculation<T>>` the same size as `Calculation<T>`.
+    _niche: NonZeroU8,
 }
 
 // SAFETY: `Calculation` writes `result` exactly once while holding `inner`, then
@@ -112,6 +115,7 @@ impl<T> Calculation<T> {
             }),
             result: UnsafeCell::new(MaybeUninit::uninit()),
             condvar: Condvar::new(),
+            _niche: NonZeroU8::MIN,
         }
     }
 }
@@ -310,9 +314,19 @@ impl<T: Dupe> Calculation<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of;
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn option_has_no_size_overhead() {
+        assert_eq!(
+            size_of::<Calculation<Arc<usize>>>(),
+            size_of::<Option<Calculation<Arc<usize>>>>(),
+            "the explicit niche should make Option storage free",
+        );
+    }
 
     #[test]
     fn record_value_publishes_one_final_result() {
