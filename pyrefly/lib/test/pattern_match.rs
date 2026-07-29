@@ -20,6 +20,23 @@ print(y)  # E: `y` may be uninitialized
 );
 
 testcase!(
+    test_capture_narrowing,
+    r#"
+from typing import assert_type
+def f(o: object) -> None:
+    match o:
+        case y:
+            if isinstance(y, int):
+                assert_type(y, int)
+def g(xs: list[int | str]) -> None:
+    match xs:
+        case [head, *tail]:
+            assert_type(head, int | str)
+            assert_type(tail, list[int | str])
+"#,
+);
+
+testcase!(
     test_guard_narrowing_in_match,
     r#"
 from typing import assert_type

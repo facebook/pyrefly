@@ -43,6 +43,33 @@ fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> Strin
 }
 
 #[test]
+fn pattern_capture_hint_not_insertable() {
+    // A capture pattern cannot be annotated inline, so its inferred-type hint is
+    // shown but must be marked non-insertable.
+    let code = r#"
+def f(xs: list[int]) -> None:
+    match xs:
+        case [head]:
+            print(head)
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
+    let handle = handles.get("main").unwrap();
+    let hints = state
+        .transaction()
+        .inlay_hints(handle, InlayHintConfig::default())
+        .unwrap();
+    let head_hint = hints
+        .iter()
+        .find(|h| h.label_parts.iter().any(|(text, _)| text.contains("int")))
+        .expect("expected an inferred-type hint for the `head` capture");
+    assert!(
+        !head_hint.insertable,
+        "capture inlay hints must not be insertable"
+    );
+}
+
+#[test]
 fn basic_test() {
     let code = r#"from typing import Literal
 

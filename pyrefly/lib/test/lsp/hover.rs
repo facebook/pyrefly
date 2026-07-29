@@ -654,6 +654,62 @@ def f(x: int | str | None) -> None:
 }
 
 #[test]
+fn hover_type_source_match_capture_then_narrow() {
+    let code = r#"
+def f(subject: object) -> None:
+    match subject:
+        case y:
+            if isinstance(y, int):
+                y
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("**Type source**"),
+        "Expected type source section in hover, got: {report}"
+    );
+    assert!(
+        report.contains("isinstance(y, int)"),
+        "Expected the capture's own narrow attributed to it, got: {report}"
+    );
+}
+
+#[test]
+fn hover_bare_capture_does_not_show_subject_narrow() {
+    // A `PatternCapture` is a definition boundary: hovering the capture must not
+    // attribute the matched *subject's* narrow to the capture name.
+    let code = r#"
+def f(x: int | None) -> None:
+    if x is not None:
+        match x:
+            case y:
+                y
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        !report.contains("Narrowed by condition"),
+        "Bare capture must not inherit the subject's narrow, got: {report}"
+    );
+}
+
+#[test]
 fn hover_type_source_attribute_narrow() {
     let code = r#"
 class C:

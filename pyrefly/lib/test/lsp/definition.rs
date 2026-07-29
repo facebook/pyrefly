@@ -555,6 +555,47 @@ Definition Result:
 }
 
 #[test]
+fn pattern_capture_bare_and_mapping_reference_test() {
+    let code = r#"
+def bare(o: object):
+  match o:
+    case y:
+      return y
+#            ^
+def mapping(o: object):
+  match o:
+    case {"k": v, **rest}:
+      return v, rest
+#            ^  ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 |       return y
+                 ^
+Definition Result:
+4 |     case y:
+             ^
+
+10 |       return v, rest
+                  ^
+Definition Result:
+9 |     case {"k": v, **rest}:
+                   ^
+
+10 |       return v, rest
+                     ^
+Definition Result:
+9 |     case {"k": v, **rest}:
+                        ^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn pattern_capture_reference_test() {
     let code = r#"
 def test(o: object):
