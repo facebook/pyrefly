@@ -17,6 +17,7 @@ use pyrefly_derive::VisitMut;
 use ruff_python_ast::name::Name;
 
 use crate::class::ClassType;
+use crate::polars_dtype::PolarsDType;
 use crate::types::Type;
 
 /// Whether `columns` captures every column of the DataFrame or only a known
@@ -51,8 +52,8 @@ pub struct DataFrameSchema {
     /// The opaque DataFrame class instance (e.g. `pl.DataFrame`). All behavior
     /// delegates here.
     pub underlying: ClassType,
-    /// Columns in definition order.
-    pub columns: Vec<(Name, Type)>,
+    /// Columns in definition order, each with its Polars dtype.
+    pub columns: Vec<(Name, PolarsDType)>,
     pub completeness: SchemaCompleteness,
     pub kind: DataFrameKind,
 }
@@ -90,7 +91,6 @@ mod tests {
     use ruff_python_ast::name::Name;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
-    use starlark_map::small_map::SmallMap;
 
     use super::*;
     use crate::class::Class;
@@ -98,25 +98,18 @@ mod tests {
     use crate::class::ClassType;
     use crate::equality::TypeEq;
     use crate::equality::TypeEqCtx;
-    use crate::quantified::AnchorIndex;
-    use crate::quantified::Quantified;
-    use crate::quantified::QuantifiedIdentity;
-    use crate::quantified::QuantifiedKind;
-    use crate::quantified::QuantifiedOrigin;
-    use crate::type_var::PreInferenceVariance;
-    use crate::type_var::Restriction;
     use crate::types::TArgs;
 
-    fn class_type(module: &str, name: &str) -> ClassType {
+    fn underlying_class() -> ClassType {
         let module = Module::new(
-            ModuleName::from_str(module),
-            ModulePath::filesystem(PathBuf::from(module)),
+            ModuleName::from_str("polars"),
+            ModulePath::filesystem(PathBuf::from("polars")),
             Arc::new("fake module contents".to_owned()),
         );
         ClassType::new(
             Class::new(
                 ClassDefIndex(0),
-                Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
+                Identifier::new(Name::new("DataFrame"), TextRange::empty(TextSize::new(0))),
                 NestingContext::toplevel(),
                 module,
                 None,
@@ -126,34 +119,14 @@ mod tests {
         )
     }
 
-    fn class_ty(module: &str, name: &str) -> Type {
-        Type::ClassType(class_type(module, name))
+    fn col(name: &str, dtype: PolarsDType) -> (Name, PolarsDType) {
+        (Name::new(name), dtype)
     }
 
-    fn underlying_class() -> ClassType {
-        class_type("polars", "DataFrame")
-    }
-
-    fn quantified(name: &str) -> Quantified {
-        Quantified::new(
-            QuantifiedIdentity::new(
-                ModuleName::from_str("__test__"),
-                AnchorIndex::first(TextRange::default()),
-                QuantifiedOrigin::Pep695,
-            ),
-            Name::new(name),
-            QuantifiedKind::TypeVar,
-            None,
-            Restriction::Unrestricted,
-            PreInferenceVariance::Invariant,
-        )
-    }
-
-    fn col(name: &str, ty: Type) -> (Name, Type) {
-        (Name::new(name), ty)
-    }
-
-    fn schema(columns: Vec<(Name, Type)>, completeness: SchemaCompleteness) -> DataFrameSchema {
+    fn schema(
+        columns: Vec<(Name, PolarsDType)>,
+        completeness: SchemaCompleteness,
+    ) -> DataFrameSchema {
         DataFrameSchema {
             underlying: underlying_class(),
             columns,
@@ -171,13 +144,13 @@ mod tests {
     #[test]
     fn partial_schema_display_shows_trailing_marker() {
         let df = schema(
-            vec![col("a", class_ty("builtins", "int"))],
+            vec![col("a", PolarsDType::Int64)],
             SchemaCompleteness::Partial,
         )
         .to_type();
         assert_eq!(
             format!("{df}"),
-            "DataFrame[a: int, ...]",
+            "DataFrame[a: Int64, ...]",
             "a Partial schema shows known columns plus a trailing marker for the unknown rest"
         );
     }
@@ -185,17 +158,11 @@ mod tests {
     #[test]
     fn column_order_is_part_of_identity() {
         let ab = schema(
-            vec![
-                col("a", class_ty("builtins", "int")),
-                col("b", class_ty("builtins", "str")),
-            ],
+            vec![col("a", PolarsDType::Int64), col("b", PolarsDType::String)],
             SchemaCompleteness::Complete,
         );
         let ba = schema(
-            vec![
-                col("b", class_ty("builtins", "str")),
-                col("a", class_ty("builtins", "int")),
-            ],
+            vec![col("b", PolarsDType::String), col("a", PolarsDType::Int64)],
             SchemaCompleteness::Complete,
         );
 
@@ -207,10 +174,7 @@ mod tests {
 
         // Identical columns in the same order are equal under every relation.
         let ab2 = schema(
-            vec![
-                col("a", class_ty("builtins", "int")),
-                col("b", class_ty("builtins", "str")),
-            ],
+            vec![col("a", PolarsDType::Int64), col("b", PolarsDType::String)],
             SchemaCompleteness::Complete,
         );
         assert_eq!(ab, ab2);
@@ -222,11 +186,11 @@ mod tests {
     #[test]
     fn completeness_is_part_of_identity() {
         let complete = schema(
-            vec![col("a", class_ty("builtins", "int"))],
+            vec![col("a", PolarsDType::Int64)],
             SchemaCompleteness::Complete,
         );
         let partial = schema(
-            vec![col("a", class_ty("builtins", "int"))],
+            vec![col("a", PolarsDType::Int64)],
             SchemaCompleteness::Partial,
         );
         assert_ne!(complete, partial);
@@ -235,7 +199,7 @@ mod tests {
 
     #[test]
     fn kind_is_part_of_identity() {
-        let cols = || vec![col("a", class_ty("builtins", "int"))];
+        let cols = || vec![col("a", PolarsDType::Int64)];
         let polars = schema(cols(), SchemaCompleteness::Complete);
         let pandas = DataFrameSchema {
             kind: DataFrameKind::Pandas,
@@ -246,31 +210,17 @@ mod tests {
     }
 
     #[test]
-    fn traversal_reaches_underlying_and_column_types() {
-        let q = quantified("T");
+    fn traversal_preserves_underlying() {
+        // Columns are Polars dtypes, not `Type`s, so type traversal reaches only `underlying`.
         let df = schema(
-            vec![col("a", Type::Quantified(Box::new(q.clone())))],
+            vec![col("a", PolarsDType::Int64)],
             SchemaCompleteness::Complete,
         )
         .to_type();
-
-        // forall: the quantified inside a column type is discoverable.
-        let mut found_quantified = false;
-        df.for_each_quantified(&mut |x| found_quantified |= *x == q);
-        assert!(
-            found_quantified,
-            "for_each_quantified should reach column types"
-        );
-
-        // subst (rides on visit_mut): the column quantified is rewritten, the
-        // underlying class is preserved.
-        let replacement = class_ty("builtins", "int");
-        let mut mp = SmallMap::new();
-        mp.insert(&q, &replacement);
-        let Type::DataFrame(substituted) = df.subst(&mp) else {
-            unreachable!("subst preserves the DataFrame variant")
+        let Type::DataFrame(s) = df else {
+            unreachable!("to_type produces the DataFrame variant")
         };
-        assert_eq!(substituted.columns[0].1, replacement);
-        assert_eq!(substituted.underlying, underlying_class());
+        assert_eq!(s.underlying, underlying_class());
+        assert_eq!(s.columns[0].1, PolarsDType::Int64);
     }
 }

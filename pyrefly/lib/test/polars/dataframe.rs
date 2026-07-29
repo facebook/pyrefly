@@ -64,7 +64,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1, 2], "b": ["x", "y"]}))  # E: revealed type: DataFrame[a: int, b: str]
+reveal_type(pl.DataFrame({"a": [1, 2], "b": ["x", "y"]}))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
@@ -74,7 +74,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"b": ["x"], "a": [1]}))  # E: revealed type: DataFrame[b: str, a: int]
+reveal_type(pl.DataFrame({"b": ["x"], "a": [1]}))  # E: revealed type: DataFrame[b: String, a: Int64]
 "#,
 );
 
@@ -128,7 +128,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1, "s"]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `int`
+reveal_type(pl.DataFrame({"a": [1, "s"]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
 "#,
 );
 
@@ -138,7 +138,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1, 2.0]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `int`
+reveal_type(pl.DataFrame({"a": [1, 2.0]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
 "#,
 );
 
@@ -148,7 +148,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [2.0, 1]}))  # E: revealed type: DataFrame[a: float]
+reveal_type(pl.DataFrame({"a": [2.0, 1]}))  # E: revealed type: DataFrame[a: Float64]
 "#,
 );
 
@@ -158,7 +158,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1.0, 2.0]}))  # E: revealed type: DataFrame[a: float]
+reveal_type(pl.DataFrame({"a": [1.0, 2.0]}))  # E: revealed type: DataFrame[a: Float64]
 "#,
 );
 
@@ -168,7 +168,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [True, False]}))  # E: revealed type: DataFrame[a: bool]
+reveal_type(pl.DataFrame({"a": [True, False]}))  # E: revealed type: DataFrame[a: Boolean]
 "#,
 );
 
@@ -178,7 +178,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [b"x", b"y"]}))  # E: revealed type: DataFrame[a: bytes]
+reveal_type(pl.DataFrame({"a": [b"x", b"y"]}))  # E: revealed type: DataFrame[a: Binary]
 "#,
 );
 
@@ -198,7 +198,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1, True]}))  # E: revealed type: DataFrame[a: int]
+reveal_type(pl.DataFrame({"a": [1, True]}))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
@@ -208,7 +208,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [True, 1]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `bool`
+reveal_type(pl.DataFrame({"a": [True, 1]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Boolean`
 "#,
 );
 
@@ -228,7 +228,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1], "b": [], "c": [2.0, 1]}))  # E: revealed type: DataFrame[a: int, b: Unknown, c: float]
+reveal_type(pl.DataFrame({"a": [1], "b": [], "c": [2.0, 1]}))  # E: revealed type: DataFrame[a: Int64, b: Unknown, c: Float64]
 "#,
 );
 
@@ -448,7 +448,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
-reveal_type(df[["c", "a"]])  # E: revealed type: DataFrame[c: float, a: int]
+reveal_type(df[["c", "a"]])  # E: revealed type: DataFrame[c: Float64, a: Int64]
 "#,
 );
 
@@ -459,7 +459,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df[["a", "missing"]])  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[a: int]
+reveal_type(df[["a", "missing"]])  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
@@ -515,7 +515,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
-reveal_type(df.select("c", "a"))  # E: revealed type: DataFrame[c: float, a: int]
+reveal_type(df.select("c", "a"))  # E: revealed type: DataFrame[c: Float64, a: Int64]
 "#,
 );
 
@@ -527,7 +527,7 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 df.select("a")
-reveal_type(df)  # E: revealed type: DataFrame[a: int, b: str]
+reveal_type(df)  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
@@ -551,7 +551,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.select("a", "missing"))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[a: int]
+reveal_type(df.select("a", "missing"))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
@@ -618,7 +618,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.select("*"))  # E: revealed type: DataFrame[a: int, b: str]
+reveal_type(df.select("*"))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
@@ -673,7 +673,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
-reveal_type(df.drop("b"))  # E: revealed type: DataFrame[a: int, c: float]
+reveal_type(df.drop("b"))  # E: revealed type: DataFrame[a: Int64, c: Float64]
 "#,
 );
 
@@ -684,7 +684,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
-reveal_type(df.drop("a", "c"))  # E: revealed type: DataFrame[b: str]
+reveal_type(df.drop("a", "c"))  # E: revealed type: DataFrame[b: String]
 "#,
 );
 
@@ -721,7 +721,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.drop("a", "a"))  # E: revealed type: DataFrame[b: str]
+reveal_type(df.drop("a", "a"))  # E: revealed type: DataFrame[b: String]
 "#,
 );
 
@@ -732,7 +732,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.drop("missing"))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[a: int]
+reveal_type(df.drop("missing"))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
@@ -744,7 +744,7 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 reveal_type(df.drop("missing", strict=False))  # E: revealed type: DataFrame
-reveal_type(df)  # E: revealed type: DataFrame[a: int]
+reveal_type(df)  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
@@ -755,7 +755,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
-reveal_type(df.rename({"b": "z"}))  # E: revealed type: DataFrame[a: int, z: str, c: float]
+reveal_type(df.rename({"b": "z"}))  # E: revealed type: DataFrame[a: Int64, z: String, c: Float64]
 "#,
 );
 
@@ -766,7 +766,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.rename({"a": "b", "b": "a"}))  # E: revealed type: DataFrame[b: int, a: str]
+reveal_type(df.rename({"a": "b", "b": "a"}))  # E: revealed type: DataFrame[b: Int64, a: String]
 "#,
 );
 
@@ -777,7 +777,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.rename({}))  # E: revealed type: DataFrame[a: int, b: str]
+reveal_type(df.rename({}))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
@@ -788,7 +788,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.rename({"a": "a"}))  # E: revealed type: DataFrame[a: int, b: str]
+reveal_type(df.rename({"a": "a"}))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
@@ -800,7 +800,7 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 df.rename({"a": "z"})
-reveal_type(df)  # E: revealed type: DataFrame[a: int, b: str]
+reveal_type(df)  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
@@ -811,7 +811,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.rename({"missing": "z"}))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[a: int]
+reveal_type(df.rename({"missing": "z"}))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
@@ -878,7 +878,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.with_columns(b="x"))  # E: revealed type: DataFrame[a: int, b: Unknown]
+reveal_type(df.with_columns(b="x"))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
 "#,
 );
 
@@ -889,7 +889,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.with_columns(a="y"))  # E: revealed type: DataFrame[a: Unknown, b: str]
+reveal_type(df.with_columns(a="y"))  # E: revealed type: DataFrame[a: Unknown, b: String]
 "#,
 );
 
@@ -900,7 +900,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.with_columns(a="y", c="z"))  # E: revealed type: DataFrame[a: Unknown, b: str, c: Unknown]
+reveal_type(df.with_columns(a="y", c="z"))  # E: revealed type: DataFrame[a: Unknown, b: String, c: Unknown]
 "#,
 );
 
@@ -956,7 +956,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.filter(df["a"]))  # E: revealed type: DataFrame[a: int, b: str]
+reveal_type(df.filter(df["a"]))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
@@ -967,7 +967,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.sort("a"))  # E: revealed type: DataFrame[a: int, b: str]
+reveal_type(df.sort("a"))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
@@ -978,7 +978,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.fill_null(0))  # E: revealed type: DataFrame[a: int, b: str]
+reveal_type(df.fill_null(0))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 

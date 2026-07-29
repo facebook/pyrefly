@@ -759,13 +759,13 @@ impl<'a> TypeDisplayContext<'a> {
             Type::DataFrame(schema) => {
                 self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
                 output.write_str("[")?;
-                for (i, (name, ty)) in schema.columns.iter().enumerate() {
+                for (i, (name, dtype)) in schema.columns.iter().enumerate() {
                     if i > 0 {
                         output.write_str(", ")?;
                     }
                     output.write_str(name.as_str())?;
                     output.write_str(": ")?;
-                    self.fmt_helper_generic(ty, false, output)?;
+                    output.write_str(dtype.name())?;
                 }
                 // A Partial schema carries unknown extra columns, shown as a trailing "...".
                 if schema.completeness == SchemaCompleteness::Partial {

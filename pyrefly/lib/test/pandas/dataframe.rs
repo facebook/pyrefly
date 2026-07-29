@@ -128,7 +128,7 @@ testcase!(
     r#"
 import pandas as pd
 from typing import reveal_type
-reveal_type(pd.DataFrame({"a": [1], "b": ["x"]}))  # E: revealed type: DataFrame[a: int, b: str, ...]
+reveal_type(pd.DataFrame({"a": [1], "b": ["x"]}))  # E: revealed type: DataFrame[a: Int64, b: String, ...]
 "#,
 );
 
@@ -138,7 +138,7 @@ testcase!(
     r#"
 import pandas as pd
 from typing import reveal_type
-reveal_type(pd.DataFrame({"a": [2.0, 1]}))  # E: revealed type: DataFrame[a: float, ...]
+reveal_type(pd.DataFrame({"a": [2.0, 1]}))  # E: revealed type: DataFrame[a: Float64, ...]
 "#,
 );
 

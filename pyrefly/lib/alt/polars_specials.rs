@@ -13,6 +13,7 @@
 
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
+use pyrefly_types::polars_dtype::PolarsDType;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
@@ -78,7 +79,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         dict: &ExprDict,
         kind: DataFrameKind,
         errors: &ErrorCollector,
-    ) -> Option<Vec<(Name, Type)>> {
+    ) -> Option<Vec<(Name, PolarsDType)>> {
         if dict.items.is_empty() {
             return None;
         }
@@ -101,49 +102,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(columns)
     }
 
-    /// The column's modeled element type, or `None` to fall back to plain construction.
-    /// Mirrors Polars: the column takes its first element's dtype, and a later element that
-    /// does not fit is a runtime error. An empty list is `Unknown`; a non-literal element
-    /// falls back silently, as does `complex` since Polars has no complex dtype. Only a
-    /// Polars frame reports the mismatch; pandas coerces such a column, so it falls back
-    /// silently.
+    /// The column's Polars dtype, or `None` to fall back to plain construction. Mirrors
+    /// Polars: the column takes its first element's dtype, and a later element fits only when
+    /// its dtype coerces into that one (`bool` into an int, an int into a wider int or a
+    /// float, never the reverse). An empty list is `Unknown`; a non-literal element falls back
+    /// silently, as does `complex` since Polars has no complex dtype. Only a Polars frame
+    /// reports the mismatch; pandas coerces such a column, so it falls back silently.
     fn dataframe_list_element_type(
         &self,
         name: &Name,
         elts: &[Expr],
         kind: DataFrameKind,
         errors: &ErrorCollector,
-    ) -> Option<Type> {
+    ) -> Option<PolarsDType> {
         let scalar = |e: &Expr| match e {
             Expr::NumberLiteral(ExprNumberLiteral {
                 value: Number::Int(_),
                 ..
-            }) => Some(self.stdlib.int()),
+            }) => Some(PolarsDType::Int64),
             Expr::NumberLiteral(ExprNumberLiteral {
                 value: Number::Float(_),
                 ..
-            }) => Some(self.stdlib.float()),
-            Expr::BooleanLiteral(_) => Some(self.stdlib.bool()),
-            Expr::StringLiteral(_) => Some(self.stdlib.str()),
-            Expr::BytesLiteral(_) => Some(self.stdlib.bytes()),
+            }) => Some(PolarsDType::Float64),
+            Expr::BooleanLiteral(_) => Some(PolarsDType::Boolean),
+            Expr::StringLiteral(_) => Some(PolarsDType::String),
+            Expr::BytesLiteral(_) => Some(PolarsDType::Binary),
             _ => None,
         };
         let Some((first, rest)) = elts.split_first() else {
-            return Some(self.heap.mk_any_implicit());
+            return Some(PolarsDType::Unknown);
         };
-        let column = self.heap.mk_class_type(scalar(first)?.clone());
+        let column = scalar(first)?;
         for e in rest {
-            let element = self.heap.mk_class_type(scalar(e)?.clone());
-            if !self.is_subset_eq(&element, &column) {
+            let element = scalar(e)?;
+            // The element fits only if it coerces into the column dtype without widening it.
+            if element.supertype(column) != Some(column) {
                 if kind == DataFrameKind::Polars {
                     self.error(
                         errors,
                         e.range(),
                         ErrorKind::ColumnTypeMismatch,
                         format!(
-                            "Polars builds column `{name}` with type `{}` from its first element, so a `{}` element does not fit. Use one dtype for the column or pass an explicit `schema`.",
-                            self.for_display(column.clone()),
-                            self.for_display(element.clone()),
+                            "Polars builds column `{name}` with type `{column}` from its first element, so a `{element}` element does not fit. Use one dtype for the column or pass an explicit `schema`.",
                         ),
                     );
                 }
@@ -179,7 +179,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .into_iter()
             .filter_map(
                 |(name, range)| match schema.columns.iter().find(|(c, _)| *c == name) {
-                    Some((_, ty)) => Some((name, ty.clone())),
+                    Some((_, ty)) => Some((name, *ty)),
                     None => {
                         errors
                             .error_builder(
@@ -346,7 +346,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let columns = schema
             .columns
             .iter()
-            .map(|(name, ty)| (target(name), ty.clone()))
+            .map(|(name, ty)| (target(name), *ty))
             .collect();
         Some(
             DataFrameSchema {
@@ -392,7 +392,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (name, value) in named {
             // Infer the value to surface type errors inside it; its type is unused.
             self.expr_infer(value, errors);
-            let unknown = self.heap.mk_any_implicit();
+            let unknown = PolarsDType::Unknown;
             match columns.iter_mut().find(|(c, _)| *c == name) {
                 Some((_, ty)) => *ty = unknown,
                 None => columns.push((name, unknown)),
