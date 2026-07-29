@@ -60,6 +60,7 @@ fn env_cross_file() -> TestEnv {
         r#"
 import polars as pl
 df = pl.DataFrame({"a": [1], "b": ["x"]})
+df_kw = pl.DataFrame(data={"a": [1], "b": ["x"]})
 "#,
     );
     env
@@ -677,12 +678,112 @@ reveal_type(pl.DataFrame({}))  # E: revealed type: DataFrame
 );
 
 testcase!(
-    test_fallback_keyword_argument,
+    test_construct_from_data_keyword,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame(data={"a": [1]}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame(data={"a": [1]}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_data_keyword_two_columns,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(data={"a": [1, 2], "b": ["x", "y"]}))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_data_keyword_source_order,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(data={"b": ["x"], "a": [1]}))  # E: revealed type: DataFrame[b: String, a: Int64]
+"#,
+);
+
+testcase!(
+    test_data_keyword_with_schema_overrides,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(data={"a": [1, 2], "b": [3, 4]}, schema_overrides={"a": pl.Int32}))  # E: revealed type: DataFrame[a: Int32, b: Int64]
+"#,
+);
+
+testcase!(
+    test_data_keyword_with_strict_false,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(data={"a": [1, 2.0]}, strict=False))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_schema_overrides_before_data_keyword,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(schema_overrides={"a": pl.Int32}, data={"a": [1, 2]}))  # E: revealed type: DataFrame[a: Int32]
+"#,
+);
+
+testcase!(
+    test_data_keyword_strict_mismatch_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(data={"a": [1, "s"]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Int64`
+"#,
+);
+
+testcase!(
+    test_fallback_data_keyword_empty_dict,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(data={}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_fallback_data_keyword_list,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(data=[1, 2]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_fallback_positional_and_data_keyword,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, data={"b": [2]}))  # E: revealed type: DataFrame # E: Multiple values for argument `data`
+"#,
+);
+
+testcase!(
+    test_fallback_data_keyword_and_schema_keyword,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(data={"a": [1]}, schema={"a": pl.Int8}))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -950,8 +1051,28 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-df = pl.DataFrame(data={"a": [1]})
+df = pl.DataFrame({})
 reveal_type(df["missing"])  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_data_keyword_unknown_column_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame(data={"a": [1]})
+df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_construct_from_data_keyword_across_import,
+    env_cross_file(),
+    r#"
+from defs import df_kw
+df_kw["a"]
+df_kw["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 

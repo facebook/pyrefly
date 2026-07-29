@@ -21,7 +21,6 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
-use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -161,19 +160,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(columns)
     }
 
-    /// The dtype overrides and strictness requested by a DataFrame call, or `None` to fall back
-    /// to ordinary call checking for a form we do not model.
-    pub fn polars_construct_options(
+    /// The constructing dict, dtype overrides, and strictness from a DataFrame call, or `None`
+    /// to fall back to ordinary call checking for a form we do not model.
+    /// `data` may be the sole positional argument or a `data=` keyword, but not both.
+    pub fn polars_construct_options<'b>(
         &self,
-        keywords: &[Keyword],
-    ) -> Option<(SmallMap<Name, PolarsDType>, bool)> {
+        arguments: &'b Arguments,
+    ) -> Option<(&'b ExprDict, SmallMap<Name, PolarsDType>, bool)> {
         let mut overrides = SmallMap::new();
         let mut strict = true;
-        for kw in keywords {
+        let mut data_keyword = None;
+        for kw in &arguments.keywords {
             let Some(arg) = &kw.arg else {
                 return None;
             };
             match arg.id.as_str() {
+                "data" => {
+                    let Expr::Dict(dict) = &kw.value else {
+                        return None;
+                    };
+                    data_keyword = Some(dict);
+                }
                 "schema_overrides" => {
                     let Expr::Dict(dict) = &kw.value else {
                         return None;
@@ -196,7 +203,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => return None,
             }
         }
-        Some((overrides, strict))
+        let data = match (&arguments.args[..], data_keyword) {
+            ([Expr::Dict(dict)], None) => dict,
+            ([], Some(dict)) => dict,
+            _ => return None,
+        };
+        Some((data, overrides, strict))
     }
 
     /// Anchors on the first non-null element; only Polars reports later mismatches.

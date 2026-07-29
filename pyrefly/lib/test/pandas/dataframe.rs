@@ -108,7 +108,7 @@ fn env_with_pandas_frame_stubs() -> TestEnv {
 class Series: ...
 class DataFrame:
     columns: list[str]
-    def __init__(self, data: object = None) -> None: ...
+    def __init__(self, data: object = None, columns: object = None, dtype: object = None) -> None: ...
     def __getitem__(self, key: object) -> Series: ...
     def drop(self, labels: object = None, *, axis: int = 0) -> "DataFrame": ...
     def rename(self, mapping: object = None, *, axis: int = 0) -> "DataFrame": ...
@@ -139,6 +139,36 @@ testcase!(
 import pandas as pd
 from typing import reveal_type
 reveal_type(pd.DataFrame({"a": [2.0, 1]}))  # E: revealed type: DataFrame[a: Float64, ...]
+"#,
+);
+
+testcase!(
+    test_pandas_construct_from_data_keyword,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame(data={"a": [1], "b": ["x"]}))  # E: revealed type: DataFrame[a: Int64, b: String, ...]
+"#,
+);
+
+testcase!(
+    test_pandas_fallback_data_keyword_and_columns,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame(data={"a": [1]}, columns=["a"]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_fallback_data_keyword_and_dtype,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame(data={"a": [1]}, dtype="int64"))  # E: revealed type: DataFrame
 "#,
 );
 
