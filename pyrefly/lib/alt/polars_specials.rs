@@ -882,9 +882,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        // Infer the arguments so type errors inside them surface; the schema is unchanged.
+        // Infer the arguments so type errors inside them surface; the schema is unchanged. A `*args`
+        // spread is an `Expr::Starred`; infer its inner value, since `expr_infer` treats a bare
+        // starred expression as a type-form and would wrongly report the iterable as not-a-type.
         for arg in args.args.iter() {
-            self.expr_infer(arg, errors);
+            let value = match arg {
+                Expr::Starred(starred) => &starred.value,
+                _ => arg,
+            };
+            self.expr_infer(value, errors);
         }
         for kw in args.keywords.iter() {
             self.expr_infer(&kw.value, errors);

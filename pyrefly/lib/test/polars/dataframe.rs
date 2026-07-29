@@ -1000,6 +1000,32 @@ reveal_type(pl.DataFrame({"a": [1]}, schema=None))  # E: revealed type: DataFram
 );
 
 testcase!(
+    test_row_transform_starred_arg_no_spurious_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+extra = [1]
+# A `*` spread argument must not be treated as a type-form.
+reveal_type(df.filter(*extra))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_sort_starred_arg_no_spurious_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+frame = pl.DataFrame({"a": [2, 1], "b": [1, 2]})
+columns: list[str] = ["a", "b"]
+# A `*` spread of column names into `sort` must not be treated as a type-form.
+reveal_type(frame.sort(*columns))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
     test_fallback_schema_name_mismatch,
     env_with_polars_stubs(),
     r#"
