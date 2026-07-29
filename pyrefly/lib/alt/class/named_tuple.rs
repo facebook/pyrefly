@@ -34,6 +34,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Some(class_fields) = self.get_class_fields(cls) else {
             return SmallSet::new();
         };
+        // Names NamedTuple reserves for its own machinery. Overriding any of them in
+        // the class body is a runtime error
+        const RESERVED: &[&str] = &[
+            "__getnewargs__",
+            "_asdict",
+            "_field_defaults",
+            "_fields",
+            "_make",
+            "_replace",
+            "_source",
+        ];
+        for name in class_fields.class_body_fields() {
+            if RESERVED.contains(&name.as_str())
+                && let Some(range) = class_fields.field_decl_range(name)
+            {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadClassDefinition,
+                    format!("Cannot override NamedTuple reserved attribute `{name}`"),
+                );
+            }
+        }
         let mut elements = Vec::with_capacity(class_fields.len());
         for name in class_fields.names() {
             if !class_fields.is_field_annotated(name) {

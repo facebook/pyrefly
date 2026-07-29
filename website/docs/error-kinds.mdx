@@ -496,6 +496,20 @@ y = 10 // 0  # error: division by zero
 z = 10 % 0   # error: division by zero
 ```
 
+## empty-body
+
+Default severity: `ignore`
+
+A function body consists only of `...` even though the function declares a
+return type that `None` is not assignable to.
+
+Empty ellipsis bodies are allowed in stub files, protocol methods, abstract
+methods, overload declarations, and `if TYPE_CHECKING` blocks.
+
+```python
+def f() -> int: ...  # error: empty body
+```
+
 ## explicit-any
 
 Default severity: `ignore`
@@ -662,6 +676,34 @@ urllib.request.urlopen(...)
 
 ```
 
+## implicit-reexport
+
+Default severity: `ignore`
+
+This error is emitted when you import a name from a module that only made it
+available through a plain `import` or `from ... import ...` statement. Per the
+[typing spec](https://typing.python.org/en/latest/spec/distributing.html#import-conventions),
+such a name is not part of the module's public interface, so relying on it is
+fragile: the intermediate module may stop importing it at any time.
+
+A module explicitly re-exports a name when it is redundantly aliased
+(`from x import y as y` or `import x as x`), listed in `__all__`, or brought in
+via a wildcard (`from x import *`).
+
+```python
+# foo.py
+a = 1
+
+# bar.py
+from foo import a  # `a` is not re-exported from `bar`
+
+# baz.py
+from bar import a  # error: `a` is not exported from module `bar`
+
+# Fix in bar.py:
+from foo import a as a  # or add `a` to `__all__`
+```
+
 ## implicitly-defined-attribute
 
 Default severity: `ignore`
@@ -765,6 +807,22 @@ def f(x: bool = False) -> int | None:
 ## internal-error
 
 Ideally you'll never see this one. If you do, please consider [filing a bug](https://github.com/facebook/pyrefly/issues).
+
+## invalid-abstract-method
+
+Default severity: `ignore`
+
+Pyrefly emits this error when a class that is not abstract (does not inherit from `abc.ABC`, use `abc.ABCMeta`, have any transitive abstract base, or define a `Protocol` or `NewType`) defines a method decorated with `@abstractmethod`. Such a class is directly instantiable at runtime, yet contains an unimplemented method — a likely programming mistake.
+
+```python
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod  # Error: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+    def fn(self) -> int: ...
+```
+
+To fix the issue, either inherit from `abc.ABC` to make the class abstract, define a `Protocol` if the class is an interface, or remove the `@abstractmethod` decorator and provide a concrete implementation.
 
 ## invalid-annotation
 
@@ -980,6 +1038,16 @@ x = 2
 Bad: TypeAlias = x
 ```
 
+## invalid-type-checking-constant
+
+A module-level `TYPE_CHECKING` constant that is not typed as `bool`. Type checkers treat
+`TYPE_CHECKING` as `True`, while at runtime it is `False`, so a user-defined one must be a `bool`
+(conventionally `TYPE_CHECKING = False`).
+
+```python
+TYPE_CHECKING: str = ""  # error: not a bool
+```
+
 ## invalid-type-var
 
 An error caused by incorrect usage or definition of a TypeVar. A few examples:
@@ -1165,6 +1233,29 @@ happen if you install the `types-requests` package but forget to install `reques
 ## missing-source-for-stubs
 
 Pyrefly has bundled stubs for a package, but no corresponding source package was found.
+
+## missing-super-call
+
+Default severity: `ignore`
+
+A constructor-like method overrides a parent class method but does not call `super()`.
+
+```python
+class Base:
+    def __init__(self) -> None:
+        self.value: int = 1
+
+class Child(Base):
+    def __init__(self) -> None:  # missing-super-call
+        pass
+```
+
+To enable this check, set the severity to `error` in your configuration:
+
+```toml
+[tool.pyrefly]
+errors = { missing-super-call = "error" }
+```
 
 ## name-mismatch
 
@@ -1722,6 +1813,21 @@ reveal_type(1)  # error
 assert_type(1, int)  # error
 ```
 
+## unknown-argument-type
+
+Default severity: `ignore`
+
+A call argument whose type is an implicit `Any` (unknown) is passed without the type checker being able to verify it against the parameter, hiding potential bugs. This is a sub-kind of [implicit-any](#implicit-any), so suppressing `implicit-any` also suppresses it. This mirrors pyright's `reportUnknownArgumentType`.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))  # the argument's type is unknown [unknown-argument-type]
+```
+
 ## unknown-attribute-type
 
 Default severity: `ignore`
@@ -1743,6 +1849,7 @@ class C:
 ## unknown-column
 
 Accessing a DataFrame column that does not exist in the inferred schema.
+
 
 ## unknown-name
 
@@ -1958,6 +2065,24 @@ Default severity: `warn`
 Type information for some third-party libraries is shipped in a stubs package separate from the
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
+
+## unused-call-result
+
+Default severity: `ignore`
+
+This rule is disabled by default and must be explicitly enabled. Once enabled, it reports when the
+result of a call expression is discarded and the result type is informative (not `None`, `Any`, or
+`Never`). This is often a sign of a mistake, such as forgetting to use the return value.
+
+```python
+def combine(a: list[int], b: list[int]) -> list[int]:
+    return a + b
+
+items = [1, 2, 3]
+combine(items, [4, 5])  # warning: result is discarded
+print(items)  # ok: print returns None
+x = combine(items, [4, 5])  # ok: result is used
+```
 
 ## unused-coroutine
 

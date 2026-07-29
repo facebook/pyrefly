@@ -404,9 +404,7 @@ fn filter_module_report_to_public(report: &mut ModuleReport, public_fqns: &HashS
     report
         .symbol_reports
         .retain(|sym| is_public_fqn(sym.name(), &module_prefix, public_fqns));
-    report
-        .names
-        .retain(|n| is_public_fqn(n, &module_prefix, public_fqns));
+    report.names = symbol_names(&report.symbol_reports);
 
     // type ignores attach to the module, not symbols, so filtering leaves them untouched
     report.slots = report
@@ -993,8 +991,7 @@ fn parse_functions(
 
 fn return_annotation_range(bindings: &Bindings, return_idx: Idx<Key>) -> Option<TextRange> {
     if let Binding::ReturnType(ret) = bindings.get(return_idx)
-        && let ReturnTypeKind::ShouldValidateAnnotation { range, .. }
-        | ReturnTypeKind::ShouldTrustAnnotation { range, .. } = &ret.kind
+        && let ReturnTypeKind::ShouldTrustAnnotation { range, .. } = &ret.kind
     {
         Some(*range)
     } else {
@@ -1345,7 +1342,7 @@ impl ModuleSymbols {
             &tco_classes,
         );
         merge_overloads(&mut functions);
-        let classes = parse_classes(&module, &bindings, &answers, &tco_classes);
+        let mut classes = parse_classes(&module, &bindings, &answers, &tco_classes);
         let mut variables = parse_variables(
             &module,
             &bindings,
@@ -1363,6 +1360,24 @@ impl ModuleSymbols {
             handle,
             &tco_classes,
         ));
+
+        // A private name hides its whole subtree, unless exported via `__all__` (issue #3578).
+        let prefix = module_prefix(&module);
+        let is_visible = |name: &str| {
+            let relative = name
+                .strip_prefix(&prefix)
+                .expect("symbol FQNs start with the module prefix");
+            let mut components = relative.split('.');
+            let top = components
+                .next()
+                .expect("split yields at least one component");
+            (is_public_name(top) || dunder_all.iter().any(|n| n == top))
+                && components.all(is_public_name)
+        };
+        functions.retain(|f| is_visible(&f.name));
+        classes.retain(|c| is_visible(&c.name));
+        variables.retain(|v| is_visible(&v.name));
+
         let suppressions = parse_suppressions(&module);
         let stub_merge = for_stub_merge.then(|| StubMergeData {
             class_members: collect_class_members(
@@ -1462,6 +1477,12 @@ impl ModuleSymbols {
     }
 }
 
+/// The symbol names in report order, deduped (e.g. conditional redefinitions repeat names).
+fn symbol_names(symbol_reports: &[SymbolReport]) -> Vec<String> {
+    let unique: SmallSet<&str> = symbol_reports.iter().map(SymbolReport::name).collect();
+    unique.iter().copied().map(str::to_owned).collect()
+}
+
 fn build_module_report(
     name: String,
     path: String,
@@ -1474,11 +1495,9 @@ fn build_module_report(
 ) -> ModuleReport {
     let mut symbol_reports = Vec::new();
     let mut total_slots = SlotCounts::default();
-    let mut names = Vec::new();
 
     for var in variables {
         total_slots = total_slots.merge(var.slots);
-        names.push(var.name.clone());
         symbol_reports.push(SymbolReport::Attr {
             name: var.name.clone(),
             slots: var.slots,
@@ -1497,7 +1516,6 @@ fn build_module_report(
             }
         } else {
             total_slots = total_slots.merge(func.slots);
-            names.push(func.name.clone());
             symbol_reports.push(SymbolReport::Function {
                 name: func.name.clone(),
                 slots: func.slots,
@@ -1508,7 +1526,6 @@ fn build_module_report(
     }
     for (name, slots, location) in &property_map {
         total_slots = total_slots.merge(*slots);
-        names.push(name.clone());
         symbol_reports.push(SymbolReport::Property {
             name: name.clone(),
             slots: *slots,
@@ -1517,17 +1534,12 @@ fn build_module_report(
     }
 
     for cls in classes {
-        names.push(cls.name.clone());
         symbol_reports.push(SymbolReport::Class {
             name: cls.name.clone(),
             slots: SlotCounts::default(),
             location: cls.location,
         });
     }
-
-    // Overloads and property accessors produce duplicate names.
-    let mut seen = SmallSet::new();
-    names.retain(|n| seen.insert(n.clone()));
 
     // Match prefixes against the derived (file-based) name: symbol names are
     // built from it and only rewritten to the override name later.
@@ -1539,23 +1551,18 @@ fn build_module_report(
 
     // A `--module` override renames the module, so rewrite symbol prefixes to match.
     if name != derived_name {
-        let rewrite = |s: &mut String| {
+        for sym in &mut symbol_reports {
+            let s = sym.name_mut();
             if let Some(rest) = s.strip_prefix(&module_prefix) {
                 *s = format!("{name}.{rest}");
             }
-        };
-        for n in &mut names {
-            rewrite(n);
-        }
-        for sym in &mut symbol_reports {
-            rewrite(sym.name_mut());
         }
     }
 
     ModuleReport {
         name,
         path,
-        names,
+        names: symbol_names(&symbol_reports),
         line_count,
         symbol_reports,
         type_ignores: suppressions,
@@ -2864,7 +2871,8 @@ def g(x: int) -> int:
             .collect();
         filter_module_report_to_public(&mut report, &public_fqns);
 
-        assert_eq!(report.names, vec!["pkg.Foo", "pkg.bar"]);
+        // `names` is rebuilt from the retained symbols, not filtered from the input.
+        assert_eq!(report.names, vec!["pkg.Foo", "pkg.Foo.method", "pkg.bar"]);
         assert_eq!(report.symbol_reports.len(), 3); // Foo, Foo.method, bar
         assert_eq!(report.symbols.n_functions, 1);
         assert_eq!(report.symbols.n_methods, 1);

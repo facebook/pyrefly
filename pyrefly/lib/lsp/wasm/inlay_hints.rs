@@ -92,6 +92,28 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
 }
 
 impl<'a> Transaction<'a> {
+    /// NewType values are callable aliases, not class objects, so `type[N]` is
+    /// not a valid annotation. If `ty` is a NewType, returns its constructor
+    /// signature to display in place of `type[N]`; callers should then avoid
+    /// offering it as an insertable annotation. Returns `None` otherwise.
+    fn new_type_constructor_signature(&self, handle: &Handle, ty: &Type) -> Option<Type> {
+        let Type::ClassDef(cls) = ty else {
+            return None;
+        };
+        self.ad_hoc_solve(handle, "inlay_hint_new_type", |solver| {
+            if !solver.get_metadata_for_class(cls).is_new_type() {
+                return None;
+            }
+            let cls = solver.promote_nontypeddict_silently_to_classtype(cls);
+            let new = solver.get_dunder_new(&cls, false)?;
+            let constructor = solver
+                .bind_dunder_new(&new, cls)
+                .expect("NewType __new__ method can be bound");
+            Some(solver.for_display(constructor))
+        })
+        .flatten()
+    }
+
     pub fn inlay_hints(
         &self,
         handle: &Handle,
@@ -188,8 +210,13 @@ impl<'a> Transaction<'a> {
                 }
                 key @ Key::Definition(_)
                     if inlay_hint_config.variable_types
-                        && let Some(ty) = self.get_type_for_display(handle, key) =>
+                        && let Some(mut ty) = self.get_type_for_display(handle, key) =>
                 {
+                    let mut insertable = true;
+                    if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
+                        ty = constructor;
+                        insertable = false;
+                    }
                     // For unpacked values, extract the element expression if available
                     let (e, is_unpacked) = match bindings.get(idx) {
                         // Pinned assignments (explicit annotation or
@@ -230,7 +257,12 @@ impl<'a> Transaction<'a> {
                         is_unpacked && !ty.is_any()
                     };
                     if should_show {
-                        res.push(make_type_hint(": ", key.range().end(), &ty, !is_unpacked));
+                        res.push(make_type_hint(
+                            ": ",
+                            key.range().end(),
+                            &ty,
+                            insertable && !is_unpacked,
+                        ));
                     }
                 }
                 _ => {}
@@ -252,7 +284,12 @@ impl<'a> Transaction<'a> {
                     let Some(class_field) = answers.get_idx::<KeyClassField>(field_idx) else {
                         continue;
                     };
-                    let ty = answers.solver().for_display(class_field.ty());
+                    let mut ty = answers.solver().for_display(class_field.ty());
+                    let mut insertable = true;
+                    if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
+                        ty = constructor;
+                        insertable = false;
+                    }
                     let expr = match values
                         .first()
                         .expect("DefinedInMethod must have at least one value")
@@ -279,7 +316,7 @@ impl<'a> Transaction<'a> {
                         None => !ty.is_any(),
                     };
                     if should_show {
-                        res.push(make_type_hint(": ", field.range.end(), &ty, true));
+                        res.push(make_type_hint(": ", field.range.end(), &ty, insertable));
                     }
                 }
             }
@@ -328,8 +365,8 @@ impl<'a> Transaction<'a> {
         // Extract the element at the given position
         // This mirrors the logic in solve.rs for Binding::UnpackedValue
         match pos {
-            UnpackedPosition::Index(i) => elts.get(i),
-            UnpackedPosition::ReverseIndex(i) => {
+            UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => elts.get(i),
+            UnpackedPosition::ReverseIndex(i, _) => {
                 elts.len().checked_sub(i).and_then(|idx| elts.get(idx))
             }
             // For slices (starred unpacking), we can't return a single element

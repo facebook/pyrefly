@@ -172,7 +172,6 @@ def main1(f: Callable[[int, str], int]) -> None:
 );
 
 functools_testcase!(
-    bug = "partial of a callback protocol does not check the remaining positional against __call__'s signature",
     test_partial_callable_protocol,
     r#"
 import functools
@@ -181,7 +180,25 @@ class CallbackProto:
 def main2(f: CallbackProto) -> None:
     p = functools.partial(f, b="a")
     p(1)
-    p("a")  # WANT: Argument 1 to "__call__" of "CallbackProto" has incompatible type "str"; expected "int"
+    p("a")  # E: Argument `Literal['a']` is not assignable to parameter `a` with type `int`
+"#,
+);
+
+// Cross-module: a callback protocol imported across the module boundary still resolves its
+// `__call__`, so the residual is argument-checked.
+testcase!(
+    test_partial_callback_protocol_cross_module,
+    TestEnv::one(
+        "cbmod",
+        "class Cb:\n    def __call__(self, a: int, b: str) -> int: ...\n",
+    ),
+    r#"
+import functools
+from cbmod import Cb
+def m(f: Cb) -> None:
+    p = functools.partial(f, b="a")
+    p(1)
+    p("a")  # E: Argument `Literal['a']` is not assignable to parameter `a` with type `int`
 "#,
 );
 
@@ -280,7 +297,6 @@ def foo(cls3: Type[B[T]]) -> None:
 // ===== Union targets =====
 
 functools_testcase!(
-    bug = "partial over a union that contains a non-callable (str) misses the \"str not callable\" error",
     test_partial_union_with_noncallable,
     r#"
 import functools
@@ -296,8 +312,7 @@ def f(
     reveal_type(functools.partial(cls2, 2)())  # E: revealed type: Any
     reveal_type(functools.partial(fn1, 2)())  # E: revealed type: int
     reveal_type(functools.partial(fn2, 2)())  # E: revealed type: int | str
-    # WANT: also emit `"str" not callable`
-    reveal_type(functools.partial(fn3, 2)())  # E: revealed type: int # E: Argument `((int) -> int) | str` is not assignable to parameter `func` with type `(...) -> int` in function `functools.partial.__new__`
+    reveal_type(functools.partial(fn3, 2)())  # E: revealed type: int # E: Expected a callable, got `str` # E: Argument `((int) -> int) | str` is not assignable to parameter `func` with type `(...) -> int` in function `functools.partial.__new__`
 "#,
 );
 
@@ -322,8 +337,9 @@ def f2(t: Union[Type[FooBar], FooBarFunc]) -> None:
 
 // ===== TypedDict Unpack **kwargs =====
 
+// Binding a `**` splat of an `Unpack[TypedDict]` consumes exactly the TypedDict's declared fields,
+// so the residual drops those parameters and the remaining ones are checked on the later call.
 functools_testcase!(
-    bug = "partial with TypedDict-Unpack **kwargs does not validate later call kwargs: bad type and unexpected key are missed",
     test_partial_typeddict_fn1_positional,
     r#"
 from typing import TypedDict
@@ -336,13 +352,12 @@ def main1(**d1: Unpack[D1]) -> None:
     partial(fn1, **d1)()
     partial(fn1, **d1)(**d1)
     partial(fn1, **d1)(a1=1)
-    partial(fn1, **d1)(a1="asdf")  # WANT: Argument "a1" to "fn1" has incompatible type "str"; expected "int"
-    partial(fn1, **d1)(oops=1)  # WANT: Unexpected keyword argument "oops" for "fn1"
+    partial(fn1, **d1)(a1="asdf")  # E: Argument `Literal['asdf']` is not assignable to parameter `a1` with type `int`
+    partial(fn1, **d1)(oops=1)  # E: Unexpected keyword argument `oops`
 "#,
 );
 
 functools_testcase!(
-    bug = "partial of a function whose **kwargs is a TypedDict Unpack does not validate later call kwargs",
     test_partial_typeddict_fn2_kwargs,
     r#"
 from typing import TypedDict
@@ -355,13 +370,12 @@ def main2(**d1: Unpack[D1]) -> None:
     partial(fn2, **d1)()
     partial(fn2, **d1)(**d1)
     partial(fn2, **d1)(a1=1)
-    partial(fn2, **d1)(a1="asdf")  # WANT: Argument "a1" to "fn2" has incompatible type "str"; expected "int"
-    partial(fn2, **d1)(oops=1)  # WANT: Unexpected keyword argument "oops" for "fn2"
+    partial(fn2, **d1)(a1="asdf")  # E: Argument `Literal['asdf']` is not assignable to parameter `a1` with type `int`
+    partial(fn2, **d1)(oops=1)  # E: Unexpected keyword argument `oops`
 "#,
 );
 
 functools_testcase!(
-    bug = "partial with a partial TypedDict Unpack prefix does not validate the remaining required/typed kwargs",
     test_partial_typeddict_fn3_mixed,
     r#"
 from typing import TypedDict
@@ -379,15 +393,14 @@ def main3(a2good: A2Good, a2bad: A2Bad, **d2: Unpack[D2]) -> None:
     partial(fn3, **d2)()
     partial(fn3, **d2)(a1=1, a2="asdf")
     partial(fn3, **d2)(**d2)
-    partial(fn3, **d2)(a1="asdf")  # WANT: Argument "a1" to "fn3" has incompatible type "str"; expected "int"
-    partial(fn3, **d2)(a1=1, a2="asdf", oops=1)  # WANT: Unexpected keyword argument "oops" for "fn3"
+    partial(fn3, **d2)(a1="asdf")  # E: Argument `Literal['asdf']` is not assignable to parameter `a1` with type `int`
+    partial(fn3, **d2)(a1=1, a2="asdf", oops=1)  # E: Unexpected keyword argument `oops`
     partial(fn3, **d2)(**a2good)
-    partial(fn3, **d2)(**a2bad)  # WANT: Argument "a2" to "fn3" has incompatible type "int"; expected "str"
+    partial(fn3, **d2)(**a2bad)  # E: Argument `int` is not assignable to parameter `a2` with type `str`
 "#,
 );
 
 functools_testcase!(
-    bug = "partial of a **kwargs-Unpack function does not validate the remaining kwargs supplied at call time",
     test_partial_typeddict_fn4_kwargs_mixed,
     r#"
 from typing import TypedDict
@@ -406,15 +419,14 @@ def main4(a2good: A2Good, a2bad: A2Bad, **d2: Unpack[D2]) -> None:
     partial(fn4, **d2)()
     partial(fn4, **d2)(a1=1, a2="asdf")
     partial(fn4, **d2)(**d2)
-    partial(fn4, **d2)(a1="asdf")  # WANT: Argument "a1" to "fn4" has incompatible type "str"; expected "int"
-    partial(fn4, **d2)(a1=1, a2="asdf", oops=1)  # WANT: Unexpected keyword argument "oops" for "fn4"
+    partial(fn4, **d2)(a1="asdf")  # E: Argument `Literal['asdf']` is not assignable to parameter `a1` with type `int`
+    partial(fn4, **d2)(a1=1, a2="asdf", oops=1)  # E: Unexpected keyword argument `oops`
     partial(fn3, **d2)(**a2good)
-    partial(fn3, **d2)(**a2bad)  # WANT: Argument "a2" to "fn3" has incompatible type "int"; expected "str"
+    partial(fn3, **d2)(**a2bad)  # E: Argument `int` is not assignable to parameter `a2` with type `str`
 "#,
 );
 
 functools_testcase!(
-    bug = "partial does not flag a TypedDict-Unpack prefix that supplies a key a **kwargs-Unpack target does not accept (fn2)",
     test_partial_typeddict_extra_key,
     r#"
 from typing import TypedDict
@@ -429,12 +441,12 @@ def fn1(a1: int) -> None: ...
 def fn2(**kwargs: Unpack[D1]) -> None: ...
 def main5(**d2: Unpack[D2]) -> None:
     partial(fn1, **d2)()  # E: Unexpected keyword argument `a2` in function `fn1`
-    partial(fn2, **d2)()  # WANT: Extra argument `a2` from **args for `fn2`
+    partial(fn2, **d2)()  # E: Unexpected keyword argument `a2` in function `fn2`
 "#,
 );
 
 functools_testcase!(
-    bug = "partial with a too-narrow TypedDict-Unpack prefix does not report the missing/too-many/bad positionals at call time",
+    bug = "an optional TypedDict-Unpack prefix key is treated as always-bound, so a missing/positional diagnostic names the wrong parameter compared to mypy",
     test_partial_typeddict_missing,
     r#"
 from typing import TypedDict
@@ -449,16 +461,59 @@ class A2Bad(TypedDict, total=False):
 def fn3(a1: int, a2: str) -> None: ...
 def fn4(**kwargs) -> None: ...
 def main6(a2good: A2Good, a2bad: A2Bad, **d1: Unpack[D1]) -> None:
-    partial(fn3, **d1)()  # WANT: Missing positional argument "a1" in call to "fn3"
-    partial(fn3, **d1)("asdf")  # WANT: Too many positional arguments / Too few arguments / Argument 1 incompatible
+    # `a1` is bound optionally from `**d1`, but `a2` is never bound, so `a2` is the parameter
+    # flagged as missing (mypy also flags the still-optional `a1`).
+    partial(fn3, **d1)()  # E: Missing argument `a2`
+    partial(fn3, **d1)("asdf")  # E: Expected argument `a2` to be passed by name
     partial(fn3, **d1)(a2="asdf")
     partial(fn3, **d1)(**a2good)
-    partial(fn3, **d1)(**a2bad)  # WANT: Argument "a2" to "fn3" has incompatible type "int"; expected "str"
+    partial(fn3, **d1)(**a2bad)  # E: Argument `int` is not assignable to parameter `a2` with type `str`
     partial(fn4, **d1)()
-    partial(fn4, **d1)("asdf")
+    partial(fn4, **d1)("asdf")  # E: Expected 0 positional arguments, got 1
     partial(fn4, **d1)(a2="asdf")
     partial(fn4, **d1)(**a2good)
     partial(fn4, **d1)(**a2bad)
+"#,
+);
+
+// Expansion covers inherited TypedDict fields, so binding a subclass splat consumes the base-class
+// key and the residual validates it on the later call.
+functools_testcase!(
+    test_partial_typeddict_inherited_field,
+    r#"
+from typing import TypedDict
+from typing_extensions import Unpack
+from functools import partial
+class Base(TypedDict):
+    a: int
+class Sub(Base, total=False):
+    b: str
+def fn(a: int, b: str) -> None: ...
+def main(**d: Unpack[Sub]) -> None:
+    partial(fn, **d)(a=1, b="x")
+    partial(fn, **d)(a="no")  # E: Argument `Literal['no']` is not assignable to parameter `a` with type `int`
+    partial(fn, **d)(oops=1)  # E: Unexpected keyword argument `oops`
+"#,
+);
+
+// Binding a required field of a `**kwargs: Unpack[TypedDict]` target satisfies it: the later call
+// need not re-supply it, but an unbound required field is still enforced.
+functools_testcase!(
+    test_partial_typeddict_required_field_bound,
+    r#"
+from typing import TypedDict
+from typing_extensions import Unpack
+from functools import partial
+class D(TypedDict):
+    a1: int
+    a2: str
+def fn(**kwargs: Unpack[D]) -> None: ...
+partial(fn)
+partial(fn)()  # E: Missing argument `a1` # E: Missing argument `a2`
+partial(fn, a1=1)
+partial(fn, a1=1)()  # E: Missing argument `a2`
+partial(fn, a1=1, a2="x")()
+partial(fn, a1="no")  # E: Argument `Literal['no']` is not assignable to parameter `a1` with type `int` in function `fn`
 "#,
 );
 
@@ -656,8 +711,9 @@ partial(C, field=1, other="x")
 "#,
 );
 
+// A bare abstract class is flagged at partial construction, where the problem originates; a
+// `type[A]` value can still be a concrete subclass, so it is not flagged.
 functools_testcase!(
-    bug = "partial wrapping an abstract class is not flagged: partial(A) and the resulting call should both error, but only the direct A() is caught",
     test_partial_abstract_class,
     r#"
 from abc import ABC, abstractmethod
@@ -672,8 +728,28 @@ def f1(cls: type[A]) -> None:
     partial_cls()
 def f2() -> None:
     A()  # E: Cannot instantiate `A` because the following members are abstract: `method`
-    partial_cls = partial(A)  # WANT: Cannot instantiate abstract class "A" with abstract attribute "method"
-    partial_cls()  # WANT: Cannot instantiate abstract class "A" with abstract attribute "method"
+    partial_cls = partial(A)  # E: Cannot instantiate `A` because the following members are abstract: `method`
+    partial_cls()
+"#,
+);
+
+// A bare protocol is flagged at partial construction with the protocol-specific message, matching
+// a direct `P()` call; a `type[P]` value can still be a concrete subclass, so it is not flagged.
+functools_testcase!(
+    test_partial_protocol_class,
+    r#"
+from functools import partial
+from typing import Protocol
+class P(Protocol):
+    def method(self) -> None: ...
+def f1(cls: type[P]) -> None:
+    cls()
+    partial_cls = partial(cls)
+    partial_cls()
+def f2() -> None:
+    P()  # E: Cannot instantiate `P` because it is a protocol
+    partial_cls = partial(P)  # E: Cannot instantiate `P` because it is a protocol
+    partial_cls()
 "#,
 );
 

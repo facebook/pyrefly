@@ -38,6 +38,15 @@ live in **one file**, `crates/pyrefly_types/src/meta_shape_dsl.rs` (the binop
 arithmetic is `eval_binop`); the symbolic dim algebra it calls
 (`SizeExpr::add/sub/mul/floor_div`) is in `crates/pyrefly_types/src/dimension.rs`.
 
+### Preserve tensor types in numeric formulas
+
+Integer/float arithmetic overloads can sometimes cause a tensor expression to
+lose type information during overload selection. In tensor code, make formulas
+explicitly floating-point when the result is intended to remain a tensor. For
+example, multiply an exponent by `1.0`, or use a floating-point base such as
+`2.0` instead of `2`. These equivalent forms steer overload selection toward
+floating-point tensor arithmetic.
+
 ## You MUST unit-test the DSL logic, not just an example
 
 An end-to-end example (`tensor-shapes/pyrefly-torch-stubs/examples`) exercises an op but does

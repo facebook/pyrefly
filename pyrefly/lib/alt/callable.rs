@@ -11,6 +11,7 @@ use std::mem;
 use itertools::Itertools;
 use pyrefly_python::dunder;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
@@ -58,6 +59,7 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
+use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -198,6 +200,17 @@ pub enum CallArg<'a> {
     Star(TypeOrExpr<'a>, TextRange),
 }
 
+/// An error discovered while resolving or finalizing a call candidate's return type.
+///
+/// These errors do not make an otherwise valid candidate ineligible during overload or
+/// contextual-hint selection. Each candidate carries its own errors through selection, and only
+/// the selected candidate's errors are reported. Type-level DSL evaluation is currently the only
+/// fallible return-type operation, but other fallible return finalization belongs in this channel.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ReturnTypeResolutionError {
+    TypeLevelDsl(ShapeError),
+}
+
 impl Ranged for CallArg<'_> {
     fn range(&self) -> TextRange {
         match self {
@@ -290,6 +303,7 @@ impl<'a> CallArg<'a> {
                     }
                 }
                 let ty = e.infer(solver, arg_errors);
+                solver.maybe_error_unknown_argument_type(&ty, *_range, arg_errors);
                 let iterables = solver.iterate(&ty, *_range, arg_errors, None);
                 // If we have a union of iterables, use a fixed length only if every iterable is
                 // fixed and has the same length. Otherwise, use star.
@@ -391,6 +405,7 @@ impl CallArgPreEval<'_> {
                     range,
                     TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                 );
+                solver.maybe_error_unknown_argument_type(ty, range, arg_errors);
                 Some((*ty).clone())
             }
             Self::Expr(x, done) => {
@@ -407,6 +422,7 @@ impl CallArgPreEval<'_> {
                         call_context,
                     )
                 {
+                    solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
                     return Some(ty);
                 }
                 if matches!(
@@ -422,22 +438,17 @@ impl CallArgPreEval<'_> {
                         range,
                         TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                     );
+                    solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
                     return Some(ty);
                 }
-                Some(
-                    solver
-                        .expr_with_options(
-                            x,
-                            ExprOptions::check(
-                                hint,
-                                arg_errors,
-                                call_errors,
-                                tcc,
-                                Some(call_context),
-                            ),
-                        )
-                        .into_ty(),
-                )
+                let ty = solver
+                    .expr_with_options(
+                        x,
+                        ExprOptions::check(hint, arg_errors, call_errors, tcc, Some(call_context)),
+                    )
+                    .into_ty();
+                solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                Some(ty)
             }
             Self::Star(ty, done) => {
                 *done = vararg;
@@ -458,6 +469,7 @@ impl CallArgPreEval<'_> {
                     TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                 );
                 *i += 1;
+                solver.maybe_error_unknown_argument_type(&arg_ty, range, arg_errors);
                 Some(arg_ty)
             }
         }
@@ -592,6 +604,25 @@ enum NameOrigin<'a> {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Flag a call argument whose type is an implicit `Any` (unknown). Emitted into
+    /// `arg_errors` (not `call_errors`), which is not used to decide overload/hint
+    /// matches.
+    fn maybe_error_unknown_argument_type(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        arg_errors: &ErrorCollector,
+    ) {
+        if matches!(ty, Type::Any(AnyStyle::Implicit)) {
+            self.error(
+                arg_errors,
+                range,
+                ErrorKind::UnknownArgumentType,
+                "The type of this argument is unknown".to_owned(),
+            );
+        }
+    }
+
     fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
         match x {
             CallArg::Star(x, _) => {
@@ -1131,6 +1162,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match kw.arg {
                 None => {
                     let ty = kw.value.infer(self, arg_errors);
+                    self.maybe_error_unknown_argument_type(&ty, kw.range, arg_errors);
                     if let Type::TypedDict(typed_dict) = ty {
                         for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
                             let name = name_owner.push(name);
@@ -1310,6 +1342,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             (*x).clone()
                         }
                     };
+                    self.maybe_error_unknown_argument_type(&arg_ty, kw.range, arg_errors);
                     record(bound_args, &id.id, unhinted_arg_ty.unwrap_or(arg_ty));
                 }
             }
@@ -1488,17 +1521,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     // Call a function with the given arguments. The arguments are contextually typed, if possible.
-    // We pass two error collectors into this function and return specialization errors separately:
+    // We pass two error collectors into this function and return late resolution errors separately:
     // * arg_errors is used to infer the types of arguments, before passing them to the function.
     // * call_errors is used for (1) call signature matching, e.g. arity issues and (2) checking the
     //   types of arguments against the types of parameters.
-    // * We often use call_errors to check whether a call succeeded, which specialization errors
-    //   should not affect, so we return them separately. The caller must add them to the appropriate
-    //   error collector.
+    // * Type variable specialization errors reject an overload candidate but are returned separately
+    //   because they are produced after argument matching.
+    // * Return type resolution errors do not affect candidate selection and are reported only for
+    //   the selected candidate.
     // Callers can pass the same error collector for both, and most callers do. We use two collectors
     // for overload matching.
     //
-    // Returns: (return_type, specialization_errors, argmap) where argmap maps each
+    // Returns: (return_type, specialization_errors, return_type_errors, argmap) where argmap maps each
     // argument's source range to the parameter it was matched against.
     pub fn callable_infer(
         &self,
@@ -1515,7 +1549,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         mut ctor_targs: Option<&mut TArgs>,
-    ) -> (Type, Vec<TypeVarSpecializationError>, ArgMap) {
+    ) -> (
+        Type,
+        Vec<TypeVarSpecializationError>,
+        Vec<ReturnTypeResolutionError>,
+        ArgMap,
+    ) {
         self.callable_infer_with_hint(
             hint,
             call_errors,
@@ -1555,7 +1594,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<&Type>,
         ctor_targs: &mut Option<&mut TArgs>,
-    ) -> (Type, Vec<TypeVarSpecializationError>, ArgMap) {
+    ) -> (
+        Type,
+        Vec<TypeVarSpecializationError>,
+        Vec<ReturnTypeResolutionError>,
+        ArgMap,
+    ) {
         let call_context = CallContext::outside()
             .with_argument_side(ArgumentSide::Got)
             .require_boundary_consumption();
@@ -1777,9 +1821,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             callable.ret.clone()
         };
 
+        let (ret, type_level_dsl_errors) = self
+            .solver()
+            .for_return_boundary_with_type_level_dsl_errors(ret);
+        let return_type_errors = type_level_dsl_errors
+            .into_iter()
+            .map(ReturnTypeResolutionError::TypeLevelDsl)
+            .collect();
+
         (
-            self.reproject_tuple_carrier_shape(self.solver().for_return_boundary(ret)),
+            self.reproject_tuple_carrier_shape(ret),
             errors,
+            return_type_errors,
             argmap,
         )
     }

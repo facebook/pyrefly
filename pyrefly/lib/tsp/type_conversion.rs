@@ -206,6 +206,7 @@ fn test_class(module_name: ModuleName, name: &str) -> PyreflyClassType {
         NestingContext::toplevel(),
         module,
         None,
+        false,
     );
     PyreflyClassType::new(class, TArgs::default())
 }
@@ -480,6 +481,9 @@ impl TypeConverter<'_> {
             // --- Materialization is a solver artifact ---
             PyreflyType::Materialization => builtin("unknown"),
 
+            // --- Type-level DSL calls are forced at function-call return boundaries ---
+            PyreflyType::TypeLevelDslCall(_) => builtin("unknown"),
+
             // --- Sentinel → a `ClassType` carrying a `SentinelLiteral` ---
             // The protocol has a dedicated sentinel literal (class name plus its
             // defining location), so emit that rather than an off-spec
@@ -584,7 +588,7 @@ impl TypeConverter<'_> {
 
     /// Convert a pyrefly function to a TSP `FunctionType` with declaration info.
     ///
-    /// For `FunctionKind::Def`, produces a `RegularDeclaration` pointing to the
+    /// For a source-defined function, produces a `RegularDeclaration` pointing to the
     /// module where the function is defined. The source range is resolved via
     /// the `resolve_func_range` callback when available; otherwise a zero range
     /// is used.
@@ -687,16 +691,16 @@ impl TypeConverter<'_> {
     /// Build a declaration for a function described by `kind`.
     ///
     /// Resolution order:
-    ///  1. A `Def` whose `FuncId` carries a `def_index`: use the binding-table
+    ///  1. A source definition whose `FuncId` carries a `def_index`: use the binding-table
     ///     range via `resolve_func_range`.
     ///  2. Otherwise, resolve the function by `(module, name)` through the
     ///     export-location resolver. This covers imported user functions whose
     ///     `FuncId` lacks a `def_index`, and special functions that are not
-    ///     `Def` at all (e.g. `typing.overload`).
+    ///     source definitions at all (e.g. `typing.overload`).
     ///  3. Fall back to a zero range pointing at the defining module (for
-    ///     `Def`), or a synthesized declaration when even the module is unknown.
+    ///     source definition), or a synthesized declaration when even the module is unknown.
     fn function_declaration(&self, kind: &FunctionKind) -> Declaration {
-        if let FunctionKind::Def(func_id) = kind
+        if let Some(func_id) = kind.definition_id()
             && let Some(range) = self.resolve_func_range.and_then(|resolve| resolve(func_id))
         {
             let lsp_range = func_id.module.to_lsp_range(range);
@@ -727,7 +731,7 @@ impl TypeConverter<'_> {
             });
         }
 
-        if let FunctionKind::Def(func_id) = kind {
+        if let Some(func_id) = kind.definition_id() {
             return Declaration::Regular(RegularDeclaration {
                 category: DeclarationCategory::Function,
                 kind: DeclarationKind::Regular,

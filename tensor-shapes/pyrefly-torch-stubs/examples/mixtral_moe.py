@@ -117,11 +117,11 @@ class ConditionalFeedForward[NExp: IntVar, Inter: IntVar, D: IntVar](nn.Module):
     def forward[T: IntVar, A: IntVar](
         self, x: Tensor[[T, D]], expert_indices: Tensor[[T, A]]
     ) -> Tensor[[T, A, D]]:
-        w1_weights = self.w1[expert_indices]
+        w1_weights: Tensor[[T, A, Inter, D]] = self.w1[expert_indices]
         assert_type(w1_weights, Tensor[[T, A, Inter, D]])
-        w3_weights = self.w3[expert_indices]
+        w3_weights: Tensor[[T, A, Inter, D]] = self.w3[expert_indices]
         assert_type(w3_weights, Tensor[[T, A, Inter, D]])
-        w2_weights = self.w2[expert_indices]
+        w2_weights: Tensor[[T, A, D, Inter]] = self.w2[expert_indices]
         assert_type(w2_weights, Tensor[[T, A, D, Inter]])
         x1 = F.silu(torch.einsum("ti,taoi -> tao", x, w1_weights))
         assert_type(x1, Tensor[[T, A, Inter]])

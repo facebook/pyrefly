@@ -47,6 +47,7 @@ pub mod stdlib;
 pub mod tuple;
 pub mod type_alias;
 pub mod type_info;
+pub mod type_level_dsl;
 pub mod type_output;
 pub mod type_var;
 pub mod type_var_tuple;

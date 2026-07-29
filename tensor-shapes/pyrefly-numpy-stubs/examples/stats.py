@@ -150,7 +150,9 @@ def test_cross_entropy_loss() -> None:
     shifted = logits - logits.max(axis=1, keepdims=True)
     normalizers = np.exp(shifted).sum(axis=1, keepdims=True)
     log_probs = shifted - np.log(normalizers)
-    target_log_probs = log_probs[np.arange(len(targets)), targets]
+    target_log_probs: np.ndarray[[5], np.dtype[np.float64]] = log_probs[
+        np.arange(len(targets)), targets
+    ]
     loss = cross_entropy_loss(logits, targets)
 
     assert_shape(logits, (5, 3))

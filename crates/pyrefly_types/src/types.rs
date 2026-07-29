@@ -68,6 +68,7 @@ use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
+use crate::type_level_dsl::TypeLevelDslCall;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
@@ -236,7 +237,7 @@ pub struct TArgs(Arc<(Arc<TParams>, Box<[Type]>)>);
 
 impl Visit<Type> for TArgs {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
-        self.0.0.visit(f);
+        // TParams describe the declaration; only applied arguments are contained types.
         self.0.1.visit(f);
     }
 }
@@ -610,7 +611,7 @@ pub enum SuperObj {
     Class(ClassType),
 }
 
-#[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq)]
 pub struct Union {
     pub members: Vec<Type>,
     pub display_name: Option<(ModuleName, Name)>,
@@ -625,6 +626,24 @@ impl PartialEq for Union {
 impl Hash for Union {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.members.hash(state)
+    }
+}
+
+impl PartialOrd for Union {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Union {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.members.cmp(&other.members)
+    }
+}
+
+impl TypeEq for Union {
+    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
+        self.members.type_eq(&other.members, ctx)
     }
 }
 
@@ -751,6 +770,9 @@ pub enum Type {
     /// of the argument, so that we can resonstruct the same generic/overload structure if it
     /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
     CallableResidual(Box<CallableResidual>),
+    /// A type-level shape DSL application that is valid inside callable return annotations.
+    /// Call return-boundary processing forces this to a result-schema projection.
+    TypeLevelDslCall(Box<TypeLevelDslCall>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
     Function(Box<Function>),
@@ -897,6 +919,7 @@ impl Visit for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit(f),
             Type::CallableResidual(x) => x.visit(f),
+            Type::TypeLevelDslCall(x) => x.visit(f),
             Type::Function(x) => x.visit(f),
             Type::BoundMethod(x) => x.visit(f),
             Type::Overload(x) => x.visit(f),
@@ -955,6 +978,7 @@ impl VisitMut for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit_mut(f),
             Type::CallableResidual(x) => x.visit_mut(f),
+            Type::TypeLevelDslCall(x) => x.visit_mut(f),
             Type::Function(x) => x.visit_mut(f),
             Type::BoundMethod(x) => x.visit_mut(f),
             Type::Overload(x) => x.visit_mut(f),
@@ -1464,6 +1488,72 @@ impl Type {
     pub fn subst(mut self, mp: &SmallMap<&Quantified, &Type>) -> Self {
         self.subst_mut(mp);
         self
+    }
+
+    pub fn finalize_type_level_dsl_at_boundary(&mut self) -> Vec<dimension::ShapeError> {
+        let mut errors = Vec::new();
+
+        // Nested applications are dependencies of the public application being forced here:
+        // propagate the first invalid dependency upward so fallback is applied only at that
+        // public result-schema boundary.
+        fn force_nested(ty: &mut Type) -> Result<(), dimension::ShapeError> {
+            let Type::TypeLevelDslCall(call) = ty else {
+                match ty {
+                    Type::Callable(_)
+                    | Type::Function(_)
+                    | Type::BoundMethod(_)
+                    | Type::Overload(_)
+                    | Type::Forall(_) => return Ok(()),
+                    _ => {
+                        let mut error = None;
+                        ty.recurse_mut(&mut |ty| {
+                            if error.is_none() {
+                                error = force_nested(ty).err();
+                            }
+                        });
+                        return match error {
+                            Some(error) => Err(error),
+                            None => Ok(()),
+                        };
+                    }
+                }
+            };
+            for arg in &mut call.args {
+                if let Err(error) = force_nested(arg) {
+                    *ty = call.fallback();
+                    return Err(error);
+                }
+            }
+            match call.evaluate() {
+                Ok(result) => {
+                    *ty = result;
+                    Ok(())
+                }
+                Err(error) => {
+                    *ty = call.fallback();
+                    Err(error)
+                }
+            }
+        }
+
+        fn collect_errors(ty: &mut Type, errors: &mut Vec<dimension::ShapeError>) {
+            if matches!(ty, Type::TypeLevelDslCall(_)) {
+                if let Err(error) = force_nested(ty) {
+                    errors.push(error);
+                }
+                return;
+            }
+            match ty {
+                Type::Callable(_)
+                | Type::Function(_)
+                | Type::BoundMethod(_)
+                | Type::Overload(_)
+                | Type::Forall(_) => {}
+                _ => ty.recurse_mut(&mut |ty| collect_errors(ty, errors)),
+            }
+        }
+        collect_errors(self, &mut errors);
+        errors
     }
 
     pub fn subst_self_special_form_mut(&mut self, self_type: &Type) {
@@ -2003,6 +2093,18 @@ impl Type {
         ty.transform_types_in_type_variable_positions(&mut |ty| {
             if ty.is_any() {
                 *ty = Type::Materialization;
+            } else {
+                // Gradual shape dimensions are the shape analog of `Any`, but they
+                // are stored as `Int` rather than `Type`, so the traversal above
+                // never reaches them directly. Materialize them at each carrier so
+                // `is_equivalent` does not treat a gradual size as equivalent to a
+                // concrete one.
+                match ty {
+                    Type::Int(dim) => dim.materialize(),
+                    Type::IntTuple(tuple) => tuple.materialize(),
+                    Type::ShapedArray(shaped) => shaped.materialize_inline_shape(),
+                    _ => {}
+                }
             }
             ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
                 if matches!(callable.params, Params::Ellipsis) {
@@ -2061,9 +2163,70 @@ impl<'a> TypeVariable<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+    use std::sync::Arc;
+
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_util::visit::Visit;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+
+    use crate::equality::TypeEq;
+    use crate::equality::TypeEqCtx;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
+    use crate::quantified::AnchorIndex;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
+    use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::Restriction;
+    use crate::types::TArgs;
+    use crate::types::TParams;
     use crate::types::Type;
+    use crate::types::Union;
+
+    #[test]
+    fn test_targs_visit_only_visits_applied_arguments() {
+        let tparam = Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("test"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static("T"),
+            QuantifiedKind::TypeVar,
+            Some(Type::None),
+            Restriction::Bound(Type::LiteralString(LitStyle::Implicit)),
+            PreInferenceVariance::Undefined,
+        );
+        let targs = TArgs::new(Arc::new(TParams::new(vec![tparam])), vec![Type::Ellipsis]);
+        let mut visited = Vec::new();
+
+        targs.visit(&mut |ty| visited.push(ty.clone()));
+
+        assert_eq!(visited, vec![Type::Ellipsis]);
+    }
+
+    /// `display_name` is presentation-only, so two unions with identical members
+    /// but different names must agree across `Eq`, `Ord`, and `TypeEq`.
+    #[test]
+    fn test_union_display_name_ignored_by_comparisons() {
+        let members = vec![Type::None, Type::LiteralString(LitStyle::Implicit)];
+        let named = Union {
+            members: members.clone(),
+            display_name: Some((ModuleName::builtins(), Name::new_static("TA"))),
+        };
+        let anonymous = Union {
+            members,
+            display_name: None,
+        };
+
+        assert_eq!(named, anonymous);
+        assert_eq!(named.cmp(&anonymous), Ordering::Equal);
+        assert!(named.type_eq(&anonymous, &mut TypeEqCtx::default()));
+    }
 
     #[test]
     fn test_as_bool() {

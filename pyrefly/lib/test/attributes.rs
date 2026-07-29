@@ -2402,7 +2402,7 @@ testcase!(
     r#"
 # Partial union failure with 3 types: attribute exists on 1, missing on 2
 def f(x: str | int | None):
-    return x.split()  # E: Object of class `NoneType` has no attribute `split`\nObject of class `int` has no attribute `split` # !E: Did you mean
+    return x.split()  # E: Object of type `int | str | None` has no attribute `split` # !E: Did you mean
 "#,
 );
 
@@ -2434,7 +2434,7 @@ class A:
 class B:
     value: str
 def f(x: A | B):
-    return x.vaule  # E: Object of class `A` has no attribute `vaule`\nObject of class `B` has no attribute `vaule`\n  Did you mean `value`?
+    return x.vaule  # E: Object of type `A | B` has no attribute `vaule`\n  Object of class `A` has no attribute `vaule`\n  Object of class `B` has no attribute `vaule`\n  Did you mean `value`?
 "#,
 );
 
@@ -2949,18 +2949,16 @@ def f(a: A):
 );
 
 testcase!(
-    test_self_referential_attribute_collapses_to_any,
+    test_self_referential_attribute,
     r#"
 from typing import Any, assert_type
 class C:
     def m(self) -> None:
         # `self.x = [self.x]` is self-referential and never converges (each fixpoint
-        # iteration nests another `list[...]`). Rather than commit the degenerate
-        # unrolled type, a non-convergent inferred attribute collapses to `Any`
-        # (the non-convergence is still reported).
+        # iteration nests another `list[...]`).
         self.x = [self.x]  # E: Fixpoint iteration did not converge
 def f(c: C):
-    assert_type(c.x, Any)
+    assert_type(c.x, list[list[list[list[list[Any]]]]])
     "#,
 );
 
@@ -3053,5 +3051,18 @@ def untyped(x):
 # guard prevents a double report). Exactly one error must fire here.
 class C:
     x = untyped(1)  # E: implicitly inferred to be `Any`
+"#,
+);
+
+testcase!(
+    test_bound_method_no_arbitrary_attr_set,
+    r#"
+class Foo:
+    def real_method(self) -> None: ...
+f: Foo = Foo()
+f.real_method.test = None  # E: has no attribute `test`
+del f.real_method.test  # E: has no attribute `test`
+# Known method attributes are still accessible.
+name: str = f.real_method.__name__
 "#,
 );

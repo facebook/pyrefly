@@ -32,6 +32,9 @@ class DataFrame:
     def drop(self, *columns: object, strict: bool = True) -> "DataFrame": ...
     def rename(self, mapping: object, *, strict: bool = True) -> "DataFrame": ...
     def with_columns(self, *exprs: object, **named_exprs: object) -> "DataFrame": ...
+    def filter(self, *predicates: object, **constraints: object) -> "DataFrame": ...
+    def sort(self, by: object, *more: object, descending: bool = False) -> "DataFrame": ...
+    def fill_null(self, value: object = None) -> "DataFrame": ...
 "#,
     );
     env.add(
@@ -609,6 +612,50 @@ def f(n: NotAFrame) -> None:
 );
 
 testcase!(
+    test_select_wildcard_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select("*"))  # E: revealed type: DataFrame[a: int, b: str]
+"#,
+);
+
+testcase!(
+    test_select_wildcard_with_other_arg_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select("*", "a"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_regex_selector_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select("^a.*$"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_drop_wildcard_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.drop("*"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
     test_select_method_keyword_falls_back,
     env_with_polars_stubs(),
     r#"
@@ -899,5 +946,59 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 reveal_type(df.with_columns(a="y", **{"c": "z"}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_filter_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.filter(df["a"]))  # E: revealed type: DataFrame[a: int, b: str]
+"#,
+);
+
+testcase!(
+    test_sort_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.sort("a"))  # E: revealed type: DataFrame[a: int, b: str]
+"#,
+);
+
+testcase!(
+    test_fill_null_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.fill_null(0))  # E: revealed type: DataFrame[a: int, b: str]
+"#,
+);
+
+testcase!(
+    test_row_transform_preserves_complete_schema_for_reads,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.sort("a")["missing"])  # E: revealed type: Series # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_row_transform_reports_error_in_argument,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.filter(undefined_name)  # E: Could not find name `undefined_name`
 "#,
 );

@@ -89,6 +89,7 @@ mod typing_self;
 mod unnecessary_comparison;
 mod unnecessary_type_conversion;
 mod untyped_def_behaviors;
+mod unused_call_result;
 pub mod util;
 mod var_resolution;
 mod variance_inference;

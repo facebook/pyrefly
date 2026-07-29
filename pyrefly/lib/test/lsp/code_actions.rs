@@ -3684,12 +3684,13 @@ A = 1
 
 #[test]
 fn convert_star_import_multiline() {
-    // Multi-line star imports with parentheses should be handled correctly.
+    // A star import whose statement spans multiple lines should have its full
+    // range replaced. `*` can't be parenthesized, so a backslash continuation is
+    // the only valid multi-line star import.
     let code_main = r#"
 # MULTILINE-START
-from foo import (
-    *,
-)
+from foo import \
+    *
 # MULTILINE-END
 x = A
 "#;

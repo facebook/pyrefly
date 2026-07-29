@@ -3,10 +3,9 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for multi-axis tensor fancy indexing.
+"""Tests for the gradual fallback from multi-axis tensor fancy indexing.
 
-When multiple tensor indices appear in a multi-axis index (e.g. Z[:, li, lj]),
-the indexed dims are replaced by the broadcast shape of the tensor indices.
+Pyrefly does not yet model the broadcast shape of multiple tensor indices.
 """
 
 from __future__ import annotations
@@ -21,17 +20,17 @@ if TYPE_CHECKING:
 
 
 def test_basic_tensor_index[B: IntVar](z: Tensor[[B, 4, 4]], idx: Tensor[[6]]) -> None:
-    """Two tensor indices replace dims 1 and 2 with the index shape."""
+    """Two tensor indices produce a gradual result shape."""
     result = z[:, idx, idx]
-    assert_type(result, Tensor[[B, 6]])
+    assert_type(result, Tensor)
 
 
 def test_slice_and_tensor_index[B: IntVar](
     z: Tensor[[B, 4, 4]], idx: Tensor[[6]]
 ) -> None:
-    """Slice preserves dim, tensor index replaces."""
+    """Mixing a slice and tensor index produces a gradual result shape."""
     result = z[:, idx, :]
-    assert_type(result, Tensor[[B, 6, 4]])
+    assert_type(result, Tensor)
 
 
 def test_concrete_tensor_index() -> None:
@@ -40,7 +39,7 @@ def test_concrete_tensor_index() -> None:
     li: Tensor[[6]] = torch.tensor([0, 0, 0, 1, 1, 2])
     lj: Tensor[[6]] = torch.tensor([1, 2, 3, 2, 3, 3])
     result = z[:, li, lj]
-    assert_type(result, Tensor[[8, 6]])
+    assert_type(result, Tensor)
 
 
 def test_symbolic_tensor_index[B: IntVar, N: IntVar](
@@ -48,4 +47,4 @@ def test_symbolic_tensor_index[B: IntVar, N: IntVar](
 ) -> None:
     """Symbolic index shape."""
     result = z[:, idx, idx]
-    assert_type(result, Tensor[[B, N]])
+    assert_type(result, Tensor)

@@ -190,6 +190,16 @@ impl ShapedArrayType {
     pub fn is_shapeless(&self) -> bool {
         is_shapeless(&self.shape())
     }
+
+    /// Materialize gradual dimensions of an inline shape (see `Int::materialize`).
+    /// `TupleCarrier` shapes store their dimensions as `Type` arguments on
+    /// `base_class`, so they are materialized by the generic `Type::materialize`
+    /// traversal instead.
+    pub fn materialize_inline_shape(&mut self) {
+        if let ShapedArrayShapeStorage::Inline(shape) = &mut self.shape {
+            shape.materialize();
+        }
+    }
 }
 
 impl Display for ShapedArrayType {
@@ -258,6 +268,26 @@ pub enum IntTupleView<'a> {
 impl IntTuple {
     pub fn new(dims: Vec<Int>) -> Self {
         Self::from_ints(dims)
+    }
+
+    /// Materialize gradual dimensions and rank in place (see `Int::materialize`).
+    /// The `Unpacked` middle is a `Type` and is materialized by the generic
+    /// `Type::materialize` traversal that recurses into it.
+    pub fn materialize(&mut self) {
+        match &mut self.0 {
+            IntTupleRepr::Concrete(dims) => dims.iter_mut().for_each(Int::materialize),
+            gradual @ IntTupleRepr::Gradual => {
+                *gradual = IntTupleRepr::Unpacked {
+                    prefix: Vec::new(),
+                    middle: Box::new(Type::Materialization),
+                    suffix: Vec::new(),
+                };
+            }
+            IntTupleRepr::Unpacked { prefix, suffix, .. } => {
+                prefix.iter_mut().for_each(Int::materialize);
+                suffix.iter_mut().for_each(Int::materialize);
+            }
+        }
     }
 
     /// Create a concrete shape from dimension types, recovering invalid dimensions to `int`.
@@ -869,9 +899,12 @@ pub fn is_tuple_carrier_shape_middle(ty: &Type) -> bool {
 
 fn is_unresolved_shape_middle(ty: &Type) -> bool {
     // Tuple-carrier shape variables are scalar TypeVars syntactically, but in an
-    // unpacked shape middle they stand for an unresolved shape tuple.
-    matches!(ty, Type::Var(_) | Type::TypeVarTuple(_))
-        || matches!(ty, Type::Quantified(q) if q.kind == QuantifiedKind::TypeVarTuple)
+    // unpacked shape middle they stand for an unresolved shape tuple. A
+    // materialization marker similarly stands for all possible gradual ranks.
+    matches!(
+        ty,
+        Type::Var(_) | Type::TypeVarTuple(_) | Type::Materialization
+    ) || matches!(ty, Type::Quantified(q) if q.kind == QuantifiedKind::TypeVarTuple)
         || is_tuple_carrier_shape_middle(ty)
 }
 
@@ -1848,6 +1881,7 @@ mod tests {
                 NestingContext::toplevel(),
                 module,
                 None,
+                false,
             ),
             TArgs::default(),
         )

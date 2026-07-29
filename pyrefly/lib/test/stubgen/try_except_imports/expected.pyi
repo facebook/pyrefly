@@ -1,7 +1,7 @@
 # @generated
 import os
 from typing import ClassVar
-from pkg._impl import Extra, obj1
+from pkg._impl import obj1
 
 
 class Feature:

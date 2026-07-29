@@ -29,8 +29,11 @@
         "lint"
     ],
     "engines": {
-        "vscode": "^1.94.0"
+        "vscode": "^1.103.0"
     },
+    "enabledApiProposals": [
+        "editorHoverVerbosityLevel"
+    ],
     "main": "./dist/extension",
     "activationEvents": [
         "onLanguage:python",

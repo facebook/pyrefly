@@ -6,9 +6,9 @@ import os
 from typing import ClassVar
 
 try:
-    from pkg._impl import Extra, obj1
+    from pkg._impl import obj1
 except ImportError:
-    from pkg._fallback_impl import Extra, obj2
+    from pkg._fallback_impl import obj2
 
 
 class Feature:

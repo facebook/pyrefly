@@ -7,11 +7,15 @@
 
 use lsp_types::Hover;
 use lsp_types::HoverContents;
+use lsp_types::Position;
+use lsp_types::Range;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
+use crate::lsp::wasm::hover::HoverOptions;
 use crate::lsp::wasm::hover::get_hover;
+use crate::lsp::wasm::hover::get_hover_with_verbosity;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
@@ -27,6 +31,105 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         }) => markup.value,
         _ => "None".to_owned(),
     }
+}
+
+fn get_test_report_at_verbosity(
+    state: &State,
+    handle: &Handle,
+    position: TextSize,
+    verbosity_level: usize,
+) -> (String, bool) {
+    match get_hover_with_verbosity(
+        &state.transaction(),
+        handle,
+        position,
+        HoverOptions {
+            show_go_to_links: true,
+            verbosity_level,
+        },
+    ) {
+        Some(result) => match result.hover {
+            Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            } => (markup.value, result.can_increase_verbosity),
+            _ => ("None".to_owned(), false),
+        },
+        _ => ("None".to_owned(), false),
+    }
+}
+
+#[test]
+fn hover_verbosity_expands_named_unions() {
+    let code = r#"
+type A = int | str
+x: list[A] = []
+#^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let position = extract_cursors_for_test(code)[0];
+
+    let (compact, compact_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 0);
+    let (expanded, expanded_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 1);
+
+    assert!(compact.contains("x: list[A]"), "got: {compact}");
+    assert!(compact_can_increase);
+    assert!(expanded.contains("x: list[int | str]"), "got: {expanded}");
+    assert!(!expanded_can_increase);
+}
+
+#[test]
+fn hover_verbosity_expands_named_unions_in_constructor() {
+    // The named union appears only in the constructor signature, not the bare
+    // class type, so expandability must be computed on the rendered constructor.
+    let code = r#"
+type A = int | str
+class C:
+    def __init__(self, x: A) -> None: ...
+value = C
+#       ^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let position = extract_cursors_for_test(code)[0];
+
+    let (compact, compact_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 0);
+    let (expanded, expanded_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 1);
+
+    assert!(compact.contains("x: A"), "got: {compact}");
+    assert!(compact_can_increase);
+    assert!(expanded.contains("x: int | str"), "got: {expanded}");
+    assert!(!expanded_can_increase);
+}
+
+#[test]
+fn hover_verbosity_hides_plus_without_named_union() {
+    // No named union to reveal, so compact and expanded renders are identical and
+    // the "+" affordance must not be offered.
+    let code = r#"
+x: int = 0
+#^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let position = extract_cursors_for_test(code)[0];
+
+    let (compact, compact_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 0);
+
+    assert!(compact.contains("x: int"), "got: {compact}");
+    assert!(!compact_can_increase);
 }
 
 fn assert_sphinx_resolved_as_link(report: &str, role: &str, target: &str) {
@@ -296,6 +399,31 @@ takes(foo=1, bar="x", baz=None)
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn hover_wraps_nested_callable_params() {
+    let code = r#"
+from typing import Callable, Concatenate, ParamSpec, TypeVar
+
+T = TypeVar("T")
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def drop_str(func: Callable[Concatenate[T, str, P], R]) -> Callable[Concatenate[T, P], R]: ...
+
+drop_str
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("func: (\n    T,\n    str,\n    ParamSpec(P)\n) -> R"),
+        "Expected wrapped input callable in hover, got: {report}"
+    );
+    assert!(
+        report.contains(") -> (\n    T,\n    ParamSpec(P)\n) -> R"),
+        "Expected wrapped return callable in hover, got: {report}"
     );
 }
 
@@ -655,6 +783,25 @@ foo(x=1, y=2)
     assert!(report.contains("documentation for x"));
     assert!(report.contains("**Parameter `y`**"));
     assert!(report.contains("documentation for y"));
+}
+
+#[test]
+fn hover_shows_type_for_imported_keyword_argument() {
+    let lib = r#"
+def foo(x: int, y: str) -> None: ...
+"#;
+    let code = r#"
+from lib import foo
+
+foo(x=1, y="hello")
+#        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert!(
+        report.contains("y: str"),
+        "Expected keyword argument hover to show imported parameter type, got: {report}"
+    );
 }
 
 #[test]
@@ -1579,6 +1726,85 @@ def supported_language(lang):
             && report.contains("self: list[str]")
             && report.contains(") -> bool"),
         "Expected hover to show list.__contains__ method signature, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_bool_operator_highlights_bool_expression() {
+    let code = r#"
+x = 1 and 2
+#     ^
+y = 1 or 2
+#     ^
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let handle = handle("main");
+    let ranges = extract_cursors_for_test(code)
+        .into_iter()
+        .map(
+            |position| match get_hover(&state.transaction(), &handle, position, false) {
+                Some(hover) => hover.range,
+                None => panic!("Expected hover result for boolean operator"),
+            },
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranges,
+        vec![
+            Some(Range {
+                start: Position::new(1, 4),
+                end: Position::new(1, 11),
+            }),
+            Some(Range {
+                start: Position::new(3, 4),
+                end: Position::new(3, 10),
+            }),
+        ]
+    );
+}
+
+#[test]
+fn hover_over_bool_operator_chain_highlights_whole_chain() {
+    // `a and b and c` is a single flat BoolOp, so hovering any operator in the
+    // chain highlights the entire boolean expression, not just the adjacent
+    // operands. The carets sit on the *second* operator to prove that.
+    let code = r#"
+x = 1 and 2 and 3
+#           ^
+y = 1 or 2 or 3
+#          ^
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let handle = handle("main");
+    let ranges = extract_cursors_for_test(code)
+        .into_iter()
+        .map(
+            |position| match get_hover(&state.transaction(), &handle, position, false) {
+                Some(hover) => hover.range,
+                None => panic!("Expected hover result for boolean operator"),
+            },
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranges,
+        vec![
+            Some(Range {
+                start: Position::new(1, 4),
+                end: Position::new(1, 17),
+            }),
+            Some(Range {
+                start: Position::new(3, 4),
+                end: Position::new(3, 15),
+            }),
+        ]
     );
 }
 

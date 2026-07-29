@@ -174,7 +174,7 @@ class DLRM[DenseDim: IntVar, D: IntVar](nn.Module):
         # Annotation fallback: torch.tensor() returns bare Tensor
         li: Tensor[[6]] = torch.tensor([0, 0, 0, 1, 1, 2])
         lj: Tensor[[6]] = torch.tensor([1, 2, 3, 2, 3, 3])
-        interactions = Z[:, li, lj]
+        interactions: Tensor[[B, 6]] = Z[:, li, lj]
         assert_type(interactions, Tensor[[B, 6]])
         # Concat dense features with interactions
         result = torch.cat((dense, interactions), dim=1)

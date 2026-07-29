@@ -30,6 +30,16 @@ pub enum SchemaCompleteness {
     Partial,
 }
 
+/// Which library produced the DataFrame. Only Polars frames get the column transforms,
+/// since pandas `drop` and `rename` act on rows rather than columns.
+#[derive(
+    Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
+)]
+pub enum DataFrameKind {
+    Polars,
+    Pandas,
+}
+
 /// A DataFrame instance with an inferred column schema.
 ///
 /// `columns` is an order-sensitive `Vec` and every trait is derived, so column
@@ -44,6 +54,7 @@ pub struct DataFrameSchema {
     /// Columns in definition order.
     pub columns: Vec<(Name, Type)>,
     pub completeness: SchemaCompleteness,
+    pub kind: DataFrameKind,
 }
 
 impl DataFrameSchema {
@@ -109,6 +120,7 @@ mod tests {
                 NestingContext::toplevel(),
                 module,
                 None,
+                false,
             ),
             TArgs::default(),
         )
@@ -146,6 +158,7 @@ mod tests {
             underlying: underlying_class(),
             columns,
             completeness,
+            kind: DataFrameKind::Polars,
         }
     }
 
@@ -156,16 +169,16 @@ mod tests {
     }
 
     #[test]
-    fn partial_schema_display_delegates_to_underlying() {
+    fn partial_schema_display_shows_trailing_marker() {
         let df = schema(
             vec![col("a", class_ty("builtins", "int"))],
             SchemaCompleteness::Partial,
         )
         .to_type();
-        let shown = format!("{df}");
-        assert!(
-            !shown.contains('['),
-            "a Partial DataFrame renders as its underlying instance with no column list, got `{shown}`"
+        assert_eq!(
+            format!("{df}"),
+            "DataFrame[a: int, ...]",
+            "a Partial schema shows known columns plus a trailing marker for the unknown rest"
         );
     }
 
@@ -218,6 +231,18 @@ mod tests {
         );
         assert_ne!(complete, partial);
         assert!(!complete.type_eq(&partial, &mut TypeEqCtx::default()));
+    }
+
+    #[test]
+    fn kind_is_part_of_identity() {
+        let cols = || vec![col("a", class_ty("builtins", "int"))];
+        let polars = schema(cols(), SchemaCompleteness::Complete);
+        let pandas = DataFrameSchema {
+            kind: DataFrameKind::Pandas,
+            ..schema(cols(), SchemaCompleteness::Complete)
+        };
+        assert_ne!(polars, pandas);
+        assert!(!polars.type_eq(&pandas, &mut TypeEqCtx::default()));
     }
 
     #[test]

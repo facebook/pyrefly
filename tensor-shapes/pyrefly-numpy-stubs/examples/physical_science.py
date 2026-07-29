@@ -139,7 +139,9 @@ def test_gravitational_forces() -> None:
 
 
 def test_particle_in_box() -> None:
-    n_points = 5
+    # TODO: Remove this annotation once literal arithmetic preserves its result
+    # or contextual typing lets `np.full` retain the off-diagonal length.
+    n_points: Int[5] = 5
     dx = 1.0 / (n_points + 1)
     diagonal = np.full(n_points, 2.0 / dx**2)
     off_diagonal = np.full(n_points - 1, -1.0 / dx**2)

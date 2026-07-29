@@ -187,7 +187,7 @@ mod tests {
     use super::*;
 
     fn solver_with_answer(answer: Type) -> (Solver, Var) {
-        let solver = Solver::new(false, true, false, false, false);
+        let solver = Solver::new(false, true, false, false, false, false);
         let uniques = UniqueFactory::new();
         let var = Var::new(&uniques);
         solver
@@ -195,6 +195,29 @@ mod tests {
             .lock()
             .insert_fresh(var, Variable::Answer(answer));
         (solver, var)
+    }
+
+    #[test]
+    fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
+        let solver = Solver::new(false, true, false, false, false, false);
+        let uniques = UniqueFactory::new();
+        let range = TextRange::new(TextSize::new(1), TextSize::new(3));
+        let partial = solver.fresh_partial_contained(&uniques, range);
+        let outer = Var::new(&uniques);
+        solver
+            .variables
+            .lock()
+            .insert_fresh(outer, Variable::Answer(Type::Var(partial)));
+        let ty = Type::Var(outer);
+
+        let errors = solver.sanitize_type_vars(&ty, true);
+
+        assert!(matches!(
+            errors.as_slice(),
+            [PinError::ImplicitPartialContained(error_range)] if *error_range == range
+        ));
+        assert!(solver.force_var(partial).is_any());
+        assert_eq!(ty, Type::Var(outer));
     }
 
     fn quantified(kind: QuantifiedKind, index: u32) -> Quantified {
@@ -239,6 +262,7 @@ mod tests {
                 NestingContext::toplevel(),
                 module,
                 None,
+                false,
             ),
             targs,
         )
@@ -638,7 +662,7 @@ mod tests {
         ];
         for (index, (v1_quantified, k1, r1, v2_quantified, k2, r2)) in cases.into_iter().enumerate()
         {
-            let solver = Solver::new(false, true, false, false, false);
+            let solver = Solver::new(false, true, false, false, false, false);
             let uniques = UniqueFactory::new();
             let v1 = Var::new(&uniques);
             let v2 = Var::new(&uniques);
@@ -1041,6 +1065,7 @@ pub struct Solver {
     pub strict_callable_subtyping: bool,
     pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
+    pub legacy_overload_expansion: bool,
 }
 
 impl Display for Solver {
@@ -1099,6 +1124,7 @@ impl Solver {
         strict_callable_subtyping: bool,
         strict_partial_subtyping: bool,
         spec_compliant_overloads: bool,
+        legacy_overload_expansion: bool,
     ) -> Self {
         Self {
             variables: Default::default(),
@@ -1111,6 +1137,7 @@ impl Solver {
             strict_callable_subtyping,
             strict_partial_subtyping,
             spec_compliant_overloads,
+            legacy_overload_expansion,
         }
     }
 
@@ -1193,6 +1220,29 @@ impl Solver {
                 None
             }
         }
+    }
+
+    /// Resolve every solver variable reachable from `ty` without rewriting the type itself.
+    ///
+    /// Answers may retain `Type::Var` indirections, but after this returns every reachable
+    /// variable has a stable answer and can be read safely from another calculation.
+    pub fn sanitize_type_vars(&self, ty: &Type, pin_partial_types: bool) -> Vec<PinError> {
+        self.sanitize_vars(ty.collect_all_vars(), pin_partial_types)
+    }
+
+    pub fn sanitize_vars(&self, mut pending: Vec<Var>, pin_partial_types: bool) -> Vec<PinError> {
+        let mut seen = SmallSet::new();
+        let mut errors = Vec::new();
+        while let Some(var) = pending.pop() {
+            if !seen.insert(var) {
+                continue;
+            }
+            if let Some(error) = self.pin_placeholder_type(var, pin_partial_types) {
+                errors.push(error);
+            }
+            pending.extend(self.force_var(var).collect_all_vars());
+        }
+        errors
     }
 
     /// Check whether a Var represents a partial/placeholder type that would be
@@ -1366,12 +1416,20 @@ impl Solver {
     /// Finish the type returned from a function call. This entails expanding solved variables,
     /// erasing unsolved variables without defaults from unions, and canonicalizing dimension
     /// expressions so that all-literal `Int` trees fold to single literals.
-    pub fn for_return_boundary(&self, mut t: Type) -> Type {
+    pub fn for_return_boundary(&self, t: Type) -> Type {
+        self.for_return_boundary_with_type_level_dsl_errors(t).0
+    }
+
+    pub fn for_return_boundary_with_type_level_dsl_errors(
+        &self,
+        mut t: Type,
+    ) -> (Type, Vec<ShapeError>) {
         self.resolve_vars(&mut t, VarExpansionPolicy::Expand, &VarRecurser::new());
         t = t.finalize_callable_residuals_at_boundary(&self.heap, true);
+        let type_level_dsl_errors = t.finalize_type_level_dsl_at_boundary();
         self.erase_unsolved_variables(&mut t);
         self.simplify_mut(&mut t);
-        t
+        (t, type_level_dsl_errors)
     }
 
     /// Expand a type. All variables that have been bound will be replaced with non-Var types,

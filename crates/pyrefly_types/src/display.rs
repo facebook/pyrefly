@@ -620,6 +620,44 @@ impl<'a> TypeDisplayContext<'a> {
         self.fmt_helper_generic(&value_type, false, output)
     }
 
+    fn fmt_hover_type<O: TypeOutput>(
+        &self,
+        t: &Type,
+        is_toplevel: bool,
+        output: &mut O,
+        indent: usize,
+    ) -> fmt::Result {
+        if self.lsp_display_mode != LspDisplayMode::Hover {
+            return self.fmt_helper_generic(t, is_toplevel, output);
+        }
+        match t {
+            Type::Callable(c) => c.fmt_with_type_with_newlines(
+                output,
+                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                indent,
+            ),
+            Type::Forall(forall) => {
+                let Forall { tparams, body } = &**forall;
+                let Forallable::Callable(c) = body else {
+                    return self.fmt_helper_generic(t, is_toplevel, output);
+                };
+                output.write_str("[")?;
+                write!(
+                    output,
+                    "{}",
+                    commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                )?;
+                output.write_str("]")?;
+                c.fmt_with_type_with_newlines(
+                    output,
+                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                    indent,
+                )
+            }
+            _ => self.fmt_helper_generic(t, is_toplevel, output),
+        }
+    }
+
     /// Core formatting logic for types that works with any `TypeOutput` implementation.
     ///
     /// The method uses the `TypeOutput` trait abstraction to write output in various ways.
@@ -720,20 +758,23 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::DataFrame(schema) => {
                 self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
-                // Only a Complete schema renders its columns; a Partial one is
-                // indistinguishable from the plain underlying instance.
-                if schema.completeness == SchemaCompleteness::Complete {
-                    output.write_str("[")?;
-                    for (i, (name, ty)) in schema.columns.iter().enumerate() {
-                        if i > 0 {
-                            output.write_str(", ")?;
-                        }
-                        output.write_str(name.as_str())?;
-                        output.write_str(": ")?;
-                        self.fmt_helper_generic(ty, false, output)?;
+                output.write_str("[")?;
+                for (i, (name, ty)) in schema.columns.iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
                     }
-                    output.write_str("]")?;
+                    output.write_str(name.as_str())?;
+                    output.write_str(": ")?;
+                    self.fmt_helper_generic(ty, false, output)?;
                 }
+                // A Partial schema carries unknown extra columns, shown as a trailing "...".
+                if schema.completeness == SchemaCompleteness::Partial {
+                    if !schema.columns.is_empty() {
+                        output.write_str(", ")?;
+                    }
+                    output.write_str("...")?;
+                }
+                output.write_str("]")?;
                 Ok(())
             }
             Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
@@ -790,9 +831,11 @@ impl<'a> TypeDisplayContext<'a> {
                 // Hover output should be readable even when callables appear inside unions
                 // (e.g. constructor display that unions __new__ and __init__).
                 if self.lsp_display_mode == LspDisplayMode::Hover {
-                    c.fmt_with_type_with_newlines(output, &|t, o| {
-                        self.fmt_helper_generic(t, false, o)
-                    })
+                    c.fmt_with_type_with_newlines(
+                        output,
+                        &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                        0,
+                    )
                 } else {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
@@ -813,6 +856,17 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::TypeLevelDslCall(call) => {
+                output.write_str(call.function.name)?;
+                output.write_str("(")?;
+                for (i, arg) in call.args.iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
+                    }
+                    self.fmt_helper_generic(arg, false, output)?;
+                }
+                output.write_str(")")
+            }
             Type::Function(func) => {
                 let Function {
                     signature,
@@ -844,9 +898,11 @@ impl<'a> TypeDisplayContext<'a> {
                         self.write_func_fqn(output, &func_name, &metadata.kind)?;
                         match self.lsp_display_mode {
                             LspDisplayMode::Hover => {
-                                signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                    self.fmt_helper_generic(t, false, o)
-                                })?;
+                                signature.fmt_with_type_with_newlines(
+                                    output,
+                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                    0,
+                                )?;
                             }
                             _ => {
                                 signature.fmt_with_type(output, &|t, o| {
@@ -862,9 +918,11 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     _ => {
                         if self.lsp_display_mode == LspDisplayMode::Hover {
-                            signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })
+                            signature.fmt_with_type_with_newlines(
+                                output,
+                                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                0,
+                            )
                         } else {
                             signature
                                 .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
@@ -953,10 +1011,13 @@ impl<'a> TypeDisplayContext<'a> {
                                 };
                                 match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
-                                        effective_sig
-                                            .fmt_with_type_with_newlines(output, &|t, o| {
-                                                self.fmt_helper_generic(t, false, o)
-                                            })?;
+                                        effective_sig.fmt_with_type_with_newlines(
+                                            output,
+                                            &|t, o, indent| {
+                                                self.fmt_hover_type(t, false, o, indent)
+                                            },
+                                            0,
+                                        )?;
                                     }
                                     _ => {
                                         effective_sig.fmt_with_type(output, &|t, o| {
@@ -1001,9 +1062,13 @@ impl<'a> TypeDisplayContext<'a> {
                                 let _scope = self.push_forall_scope(tparams.iter());
                                 let result = match self.lsp_display_mode {
                                     LspDisplayMode::Hover => effective_sig
-                                        .fmt_with_type_with_newlines(output, &|t, o| {
-                                            self.fmt_helper_generic(t, false, o)
-                                        }),
+                                        .fmt_with_type_with_newlines(
+                                            output,
+                                            &|t, o, indent| {
+                                                self.fmt_hover_type(t, false, o, indent)
+                                            },
+                                            0,
+                                        ),
                                     _ => effective_sig.fmt_with_type(output, &|t, o| {
                                         self.fmt_helper_generic(t, false, o)
                                     }),
@@ -1189,9 +1254,11 @@ impl<'a> TypeDisplayContext<'a> {
                                 commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
                             )?;
                             output.write_str("]")?;
-                            c.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })
+                            c.fmt_with_type_with_newlines(
+                                output,
+                                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                0,
+                            )
                         } else {
                             output.write_str("[")?;
                             write!(
@@ -1226,10 +1293,11 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                             let _scope = self.push_forall_scope(tparams.iter());
                             match self.lsp_display_mode {
-                                LspDisplayMode::Hover => signature
-                                    .fmt_with_type_with_newlines(output, &|t, o| {
-                                        self.fmt_helper_generic(t, false, o)
-                                    }),
+                                LspDisplayMode::Hover => signature.fmt_with_type_with_newlines(
+                                    output,
+                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                    0,
+                                ),
                                 _ => signature.fmt_with_type(output, &|t, o| {
                                     self.fmt_helper_generic(t, false, o)
                                 }),
@@ -1517,8 +1585,23 @@ impl Type {
         fallback_name: Option<&str>,
         mode: LspDisplayMode,
     ) -> String {
+        self.as_lsp_string_with_fallback_name_and_expanded_unions(fallback_name, mode, false)
+    }
+
+    /// Render the type for LSP display. When `expand_unions` is true, named
+    /// nested unions are shown by their members instead of their alias name —
+    /// this backs the hover panel's "+" verbosity control.
+    pub fn as_lsp_string_with_fallback_name_and_expanded_unions(
+        &self,
+        fallback_name: Option<&str>,
+        mode: LspDisplayMode,
+        expand_unions: bool,
+    ) -> String {
         let mut c = TypeDisplayContext::new(&[self]);
         c.set_lsp_display_mode(mode);
+        if expand_unions {
+            c.always_display_expanded_unions();
+        }
         let rendered = c.display(self).to_string();
         if let Some(name) = fallback_name
             && self.is_toplevel_callable()
@@ -1585,6 +1668,7 @@ pub mod tests {
     use crate::callable::Param;
     use crate::callable::ParamList;
     use crate::callable::Params;
+    use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::class::Class;
     use crate::class::ClassDefIndex;
@@ -1627,6 +1711,7 @@ pub mod tests {
             NestingContext::toplevel(),
             mi,
             None,
+            false,
         )
     }
 
@@ -1705,6 +1790,22 @@ pub mod tests {
 
         assert_eq!(shaped.to_string(), "Array[2]");
         assert_eq!(shapeless.to_string(), "Array");
+    }
+
+    #[test]
+    fn test_display_ignores_tparam_qnames_for_disambiguation() {
+        let hidden = Type::ClassType(ClassType::new(
+            fake_class("C", "hidden", 0),
+            TArgs::default(),
+        ));
+        let tparam = fake_tparam(0, "T", QuantifiedKind::TypeVar)
+            .with_restriction(Restriction::Bound(hidden));
+        let visible = Type::ClassType(ClassType::new(
+            fake_class("C", "visible", 0),
+            TArgs::new(fake_tparams(vec![tparam]), vec![Type::None]),
+        ));
+
+        assert_eq!(visible.to_string(), "C[None]");
     }
 
     #[test]
@@ -2145,6 +2246,61 @@ pub mod tests {
     *,
     world: None
 ) -> None"#
+        );
+    }
+
+    #[test]
+    fn test_display_nested_callable_param_spec_hover() {
+        let t = fake_tparam(0, "T", QuantifiedKind::TypeVar);
+        let p = fake_tparam(1, "P", QuantifiedKind::ParamSpec);
+        let r = fake_tparam(2, "R", QuantifiedKind::TypeVar);
+        let t_type = Type::Quantified(Box::new(t.clone()));
+        let p_type = Type::Quantified(Box::new(p.clone()));
+        let r_type = Type::Quantified(Box::new(r.clone()));
+        let str_type = Type::ClassType(ClassType::new(
+            fake_class("str", "builtins", 0),
+            TArgs::default(),
+        ));
+        let wrapped = Type::Callable(Box::new(Callable::concatenate(
+            Box::new([
+                PrefixParam::new(t_type.clone(), Required::Required),
+                PrefixParam::new(str_type, Required::Required),
+            ]),
+            p_type.clone(),
+            r_type.clone(),
+        )));
+        let unwrapped = Type::Callable(Box::new(Callable::concatenate(
+            Box::new([PrefixParam::new(t_type, Required::Required)]),
+            p_type,
+            r_type,
+        )));
+        let callable_type = Type::Forall(Box::new(Forall {
+            tparams: fake_tparams(vec![t, p, r]),
+            body: Forallable::Callable(Callable::list(
+                ParamList::new(vec![Param::Pos(
+                    Name::new_static("func"),
+                    wrapped,
+                    Required::Required,
+                )]),
+                unwrapped,
+            )),
+        }));
+        let mut ctx = TypeDisplayContext::new(&[&callable_type]);
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            "[T, **P, R](func: (T, str, ParamSpec(P)) -> R) -> (T, ParamSpec(P)) -> R"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            r#"[T, **P, R](func: (
+    T,
+    str,
+    ParamSpec(P)
+) -> R) -> (
+    T,
+    ParamSpec(P)
+) -> R"#
         );
     }
 

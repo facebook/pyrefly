@@ -114,6 +114,9 @@ use lsp_types::RenameFilesParams;
 use lsp_types::RenameOptions;
 use lsp_types::RenameParams;
 use lsp_types::SaveOptions;
+use lsp_types::SelectionRange;
+use lsp_types::SelectionRangeParams;
+use lsp_types::SelectionRangeProviderCapability;
 use lsp_types::SemanticTokens;
 use lsp_types::SemanticTokensFullOptions;
 use lsp_types::SemanticTokensOptions;
@@ -194,6 +197,7 @@ use lsp_types::request::RegisterCapability;
 use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
 use lsp_types::request::ResolveCompletionItem;
+use lsp_types::request::SelectionRangeRequest;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SemanticTokensRefresh;
@@ -250,6 +254,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -321,11 +326,14 @@ use crate::lsp::non_wasm::unsaved_file_tracker::UnsavedFileTracker;
 use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::DiagnosticMode;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
+use crate::lsp::non_wasm::workspace::ServerMode;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::completion::CompletionOptions as CompletionRequestOptions;
 use crate::lsp::wasm::completion::supports_snippet_completions;
-use crate::lsp::wasm::hover::get_hover;
+use crate::lsp::wasm::hover::HoverOptions;
+use crate::lsp::wasm::hover::HoverResult;
+use crate::lsp::wasm::hover::get_hover_with_verbosity;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
@@ -367,6 +375,17 @@ impl From<Cancelled> for RequestError {
     fn from(Cancelled: Cancelled) -> Self {
         RequestError::Cancelled
     }
+}
+
+/// Bundled parameters for finding references, grouped to keep function signatures small.
+struct FindReferencesRequest {
+    request_id: RequestId,
+    handle: Handle,
+    uri: Url,
+    position: Position,
+    find_preference: FindPreference,
+    include_declaration: bool,
+    activity_key: Option<ActivityKey>,
 }
 
 pub struct InitializeInfo {
@@ -778,8 +797,11 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use lsp_types::CodeActionKind;
+    use lsp_types::InitializeParams;
+    use serde_json::json;
 
     use super::SOURCE_FIX_ALL_PYREFLY;
+    use super::client_uses_custom_hover_provider;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
 
@@ -842,6 +864,16 @@ mod tests {
         assert!(!matches_fix_all_kind(&CodeActionKind::QUICKFIX));
         assert!(!matches_fix_all_kind(&CodeActionKind::REFACTOR_EXTRACT));
     }
+
+    #[test]
+    fn test_custom_hover_provider_requires_explicit_opt_in() {
+        let mut params = InitializeParams::default();
+        assert!(!client_uses_custom_hover_provider(&params));
+        params.initialization_options = Some(json!({
+            "pyrefly": {"customHoverProvider": true}
+        }));
+        assert!(client_uses_custom_hover_provider(&params));
+    }
 }
 
 pub struct Server {
@@ -858,6 +890,11 @@ pub struct Server {
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
+    /// Whether Pyrefly is its own language server or another editor's backing
+    /// type server. In [`ServerMode::TypeServer`] the forwarded `pyrefly.*`
+    /// client settings are ignored — see
+    /// [`Workspaces::apply_client_configuration`].
+    server_mode: ServerMode,
     state: State,
     /// This is a mapping from open notebook cells to the paths of the notebooks they belong to,
     /// which can be used to look up the notebook contents in `open_files`.
@@ -1046,6 +1083,31 @@ pub struct ServerCapabilitiesWithTypeHierarchy {
     base: ServerCapabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     type_hierarchy_provider: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HoverParamsWithVerbosity {
+    #[serde(flatten)]
+    params: HoverParams,
+    #[serde(default)]
+    verbosity_level: usize,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HoverWithVerbosity {
+    #[serde(flatten)]
+    hover: Hover,
+    can_increase_verbosity: bool,
+}
+
+enum HoverRequestWithVerbosity {}
+
+impl lsp_types::request::Request for HoverRequestWithVerbosity {
+    type Params = HoverParamsWithVerbosity;
+    type Result = Option<HoverWithVerbosity>;
+    const METHOD: &'static str = HoverRequest::METHOD;
 }
 
 impl ServerCapabilitiesWithTypeHierarchy {
@@ -1237,6 +1299,16 @@ fn client_augments_syntax_tokens(initialization_params: &InitializeParams) -> bo
         .unwrap_or(false)
 }
 
+fn client_uses_custom_hover_provider(initialization_params: &InitializeParams) -> bool {
+    initialization_params
+        .initialization_options
+        .as_ref()
+        .and_then(|opts| opts.get("pyrefly"))
+        .and_then(|pyrefly| pyrefly.get("customHoverProvider"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub fn capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
@@ -1315,11 +1387,15 @@ pub fn capabilities(
             trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
             ..Default::default()
         }),
-        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        // The extension registers its richer provider only when VS Code grants the proposed API.
+        hover_provider: Some(HoverProviderCapability::Simple(
+            !client_uses_custom_hover_provider(initialization_params),
+        )),
         inlay_hint_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         // Call hierarchy needs indexing to find cross-file callers/callees
         call_hierarchy_provider: match indexing_mode {
             IndexingMode::None => None,
@@ -1439,6 +1515,7 @@ pub fn lsp_loop(
         indexing_mode,
         workspace_indexing_limit,
         build_system_blocking,
+        ServerMode::LanguageServer,
         from,
         agent_session_id,
         agent_invocation_id,
@@ -2242,17 +2319,24 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<HoverRequest>(&x) {
+                } else if let Some(params) = as_request::<HoverRequestWithVerbosity>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<HoverRequest>(params, &x.id)
+                        .extract_request_params_or_send_err_response::<HoverRequestWithVerbosity>(
+                            params, &x.id,
+                        )
                     {
-                        let response = match self.hover(&transaction, params) {
-                            Ok(response) => response,
-                            Err(reason) => {
-                                telemetry_event.set_empty_response_reason(reason);
-                                None
+                        let response =
+                            match self.hover(&transaction, params.params, params.verbosity_level) {
+                                Ok(response) => response,
+                                Err(reason) => {
+                                    telemetry_event.set_empty_response_reason(reason);
+                                    None
+                                }
                             }
-                        };
+                            .map(|result| HoverWithVerbosity {
+                                hover: result.hover,
+                                can_increase_verbosity: result.can_increase_verbosity,
+                            });
                         self.send_response(new_response(x.id, Ok(response)));
                     }
                 } else if let Some(params) = as_request::<InlayHintRequest>(&x) {
@@ -2414,6 +2498,21 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(result)));
                     }
+                } else if let Some(params) = as_request::<SelectionRangeRequest>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<SelectionRangeRequest>(
+                            params, &x.id,
+                        )
+                    {
+                        let response = match self.selection_ranges(&transaction, params) {
+                            Ok(response) => response,
+                            Err(reason) => {
+                                telemetry_event.set_empty_response_reason(reason);
+                                None
+                            }
+                        };
+                        self.send_response(new_response(x.id, Ok(response)));
+                    }
                 } else if let Some(params) = as_request::<CallHierarchyPrepare>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<CallHierarchyPrepare>(
@@ -2564,6 +2663,7 @@ impl Server {
         indexing_mode: IndexingMode,
         workspace_indexing_limit: usize,
         build_system_blocking: bool,
+        server_mode: ServerMode,
         surface: Option<String>,
         agent_session_id: Option<String>,
         agent_invocation_id: Option<String>,
@@ -2619,6 +2719,7 @@ impl Server {
             indexing_mode,
             workspace_indexing_limit,
             build_system_blocking,
+            server_mode,
             state: State::new(config_finder, thread_count),
             open_notebook_cells: RwLock::new(HashMap::new()),
             open_files: RwLock::new(HashMap::new()),
@@ -2660,14 +2761,19 @@ impl Server {
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
             let mut modified = false;
-            s.workspaces
-                .apply_client_configuration(&mut modified, &None, init_options.clone());
+            s.workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                init_options.clone(),
+                server_mode,
+            );
             if let Some(workspace_folders) = &s.initialize_params.workspace_folders {
                 for folder in workspace_folders {
                     s.workspaces.apply_client_configuration(
                         &mut modified,
                         &Some(folder.uri.clone()),
                         init_options.clone(),
+                        server_mode,
                     );
                 }
             }
@@ -4055,8 +4161,12 @@ impl Server {
 
         let mut modified = false;
         if let Some(python) = params.settings.get(PYTHON_SECTION) {
-            self.workspaces
-                .apply_client_configuration(&mut modified, &None, python.clone());
+            self.workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                python.clone(),
+                self.server_mode,
+            );
         }
 
         if modified {
@@ -4082,6 +4192,7 @@ impl Server {
                     &mut modified,
                     &id.scope_uri,
                     value.clone(),
+                    self.server_mode,
                 );
                 info!(
                     "Client configuration applied to workspace: {:?}",
@@ -4327,7 +4438,6 @@ impl Server {
                     metadata: _,
                     definition_range,
                     module,
-                    docstring_range: _,
                     ..
                 } = definition;
                 // find_global_implementations_from_definition returns Vec<TextRangeWithModule>
@@ -4847,15 +4957,19 @@ impl Server {
     /// the common case of finding references, including external references.
     fn async_find_references_helper<'a, V: serde::Serialize>(
         &'a self,
-        request_id: RequestId,
         transaction: &Transaction<'a>,
-        handle: Handle,
-        uri: &Url,
-        position: Position,
-        include_declaration: bool,
-        activity_key: Option<ActivityKey>,
+        request: FindReferencesRequest,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) -> Result<(), EmptyResponseReason> {
+        let FindReferencesRequest {
+            request_id,
+            handle,
+            uri,
+            position,
+            find_preference,
+            include_declaration,
+            activity_key,
+        } = request;
         let path_remapper = self.path_remapper.clone();
         let external_references = self.external_references.clone();
         let source_uri = uri.clone();
@@ -4865,12 +4979,9 @@ impl Server {
             request_id,
             transaction,
             handle,
-            uri,
+            &uri,
             position,
-            FindPreference {
-                import_behavior: ImportBehavior::StopAtRenamedImports,
-                ..Default::default()
-            },
+            find_preference,
             activity_key,
             move |transaction, handle, definition, telemetry, telemetry_event| {
                 let qualified_name =
@@ -4880,7 +4991,6 @@ impl Server {
                     metadata,
                     definition_range,
                     module,
-                    docstring_range: _,
                     ..
                 } = definition;
 
@@ -4965,13 +5075,19 @@ impl Server {
         let uri = &params.text_document_position.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(References::METHOD))?;
         self.async_find_references_helper(
-            request_id,
             transaction,
-            handle,
-            uri,
-            params.text_document_position.position,
-            params.context.include_declaration,
-            activity_key,
+            FindReferencesRequest {
+                request_id,
+                handle,
+                uri: uri.clone(),
+                position: params.text_document_position.position,
+                find_preference: FindPreference {
+                    import_behavior: ImportBehavior::StopAtRenamedImports,
+                    ..Default::default()
+                },
+                include_declaration: params.context.include_declaration,
+                activity_key,
+            },
             move |results| {
                 let mut locations = Vec::new();
                 for (uri, ranges) in results {
@@ -4996,14 +5112,22 @@ impl Server {
     ) -> Result<(), EmptyResponseReason> {
         let uri = &params.text_document_position.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
+        let new_name = params.new_name.clone();
         self.async_find_references_helper(
-            request_id,
             transaction,
-            handle,
-            uri,
-            params.text_document_position.position,
-            true,
-            activity_key,
+            FindReferencesRequest {
+                request_id,
+                handle,
+                uri: uri.clone(),
+                position: params.text_document_position.position,
+                find_preference: FindPreference {
+                    import_behavior: ImportBehavior::StopAtRenamedImports,
+                    resolve_call_dunders: false,
+                    ..Default::default()
+                },
+                include_declaration: true,
+                activity_key,
+            },
             move |results| {
                 let mut changes = HashMap::new();
                 for (uri, ranges) in results {
@@ -5011,7 +5135,7 @@ impl Server {
                         uri,
                         ranges.into_map(|range| TextEdit {
                             range,
-                            new_text: params.new_name.clone(),
+                            new_text: new_name.clone(),
                         }),
                     );
                 }
@@ -5058,7 +5182,8 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         params: HoverParams,
-    ) -> Result<Option<Hover>, EmptyResponseReason> {
+        verbosity_level: usize,
+    ) -> Result<Option<HoverResult>, EmptyResponseReason> {
         let uri = &params.text_document_position_params.text_document.uri;
         let (handle, lsp_config) =
             self.make_handle_with_lsp_analysis_config_if_enabled(uri, Some(HoverRequest::METHOD))?;
@@ -5070,7 +5195,15 @@ impl Server {
         let show_go_to_links = lsp_config
             .and_then(|c| c.show_hover_go_to_links)
             .unwrap_or(true);
-        Ok(get_hover(transaction, &handle, position, show_go_to_links))
+        Ok(get_hover_with_verbosity(
+            transaction,
+            &handle,
+            position,
+            HoverOptions {
+                show_go_to_links,
+                verbosity_level,
+            },
+        ))
     }
 
     /// How long an inlay hint request should be deferred to debounce it, or
@@ -5553,6 +5686,60 @@ impl Server {
                         kind,
                         collapsed_text: None,
                     })
+                })
+                .collect(),
+        ))
+    }
+
+    fn selection_ranges(
+        &self,
+        transaction: &Transaction<'_>,
+        params: SelectionRangeParams,
+    ) -> Result<Option<Vec<SelectionRange>>, EmptyResponseReason> {
+        let uri = &params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, Some(SelectionRangeRequest::METHOD))?;
+        let module = transaction
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        let ast = transaction
+            .get_ast(&handle)
+            .ok_or(EmptyResponseReason::AstNotFound)?;
+        let notebook_cell = self.maybe_get_code_cell_index(uri);
+        let document_range = if let Some(cell) = notebook_cell {
+            module
+                .notebook()
+                .expect("a notebook cell URI should map to a notebook module")
+                .cell_offsets()
+                .content_ranges()
+                .nth(cell)
+                .expect("a notebook cell URI should have a matching code cell")
+        } else {
+            TextRange::up_to(TextSize::of(module.lined_buffer().contents().as_str()))
+        };
+
+        Ok(Some(
+            params
+                .positions
+                .into_iter()
+                .map(|position| {
+                    let position = self.from_lsp_position(uri, &module, position);
+                    let mut selection = SelectionRange {
+                        range: module.to_lsp_range(document_range),
+                        parent: None,
+                    };
+                    let mut last_range = Some(document_range);
+                    for node in Ast::locate_node(&ast, position).into_iter().rev() {
+                        let range = node.range();
+                        if !document_range.contains_range(range) || last_range == Some(range) {
+                            continue;
+                        }
+                        selection = SelectionRange {
+                            range: module.to_lsp_range(range),
+                            parent: Some(Box::new(selection)),
+                        };
+                        last_range = Some(range);
+                    }
+                    selection
                 })
                 .collect(),
         ))
@@ -6328,6 +6515,44 @@ impl Server {
         )
     }
 
+    /// Build a read transaction and the handle the type checker analyzes `path`
+    /// under, so `(uri, range)` queries resolve for any analyzable file rather
+    /// than only open documents.
+    ///
+    /// Open files are served from their in-memory overlay (already committed by
+    /// the recheck that ran on `didOpen`). For anything else we reuse the handle
+    /// the file was already analyzed under — an imported dependency's filesystem
+    /// handle, or a bundled stdlib stub's `BundledTypeshed` handle whose
+    /// `SysInfo` we can't reconstruct here, hence the by-path lookup — and force
+    /// a full solve (`Require::Everything` is the only level that retains
+    /// bindings/answers, which the type lookup reads) so narrowed/computed types
+    /// are available. A file that isn't analyzed yet falls back to a fresh
+    /// filesystem handle read from disk.
+    fn query_transaction_and_handle<'a>(&'a self, path: &Path) -> (Transaction<'a>, Handle) {
+        if self.open_files.read().contains_key(path) {
+            return (
+                self.state.transaction(),
+                make_open_handle(&self.state, path),
+            );
+        }
+        let mut transaction = self.state.transaction();
+        // Imported dependencies live under a filesystem handle we can rebuild
+        // directly; only scan when that misses (bundled stubs, unusual SysInfo).
+        let fs_handle =
+            handle_from_module_path(&self.state, ModulePath::filesystem(path.to_owned()));
+        let handle = if transaction.get_module_info(&fs_handle).is_some() {
+            fs_handle
+        } else {
+            transaction
+                .handles()
+                .into_iter()
+                .find(|h| !h.path().is_memory() && to_real_path(h.path()).as_deref() == Some(path))
+                .unwrap_or(fs_handle)
+        };
+        transaction.run(&[handle.dupe()], Require::Everything, None);
+        (transaction, handle)
+    }
+
     /// Open `uri` at `(line, character)`: resolve the path, build a handle, and
     /// start a transaction, returning it alongside the handle and the resolved
     /// in-file position.
@@ -6343,8 +6568,7 @@ impl Server {
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
+        let (transaction, handle) = self.query_transaction_and_handle(&path);
         let module_info = transaction.get_module_info(&handle)?;
         let position =
             module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
@@ -6571,8 +6795,7 @@ impl TspInterface for Server {
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
+        let (transaction, handle) = self.query_transaction_and_handle(&path);
         let module_info = transaction.get_module_info(&handle)?;
         let start = module_info.from_lsp_position(
             lsp_types::Position {

@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_config"
-version = "1.2.0-dev.2"
+version = "1.2.0-dev.3"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"

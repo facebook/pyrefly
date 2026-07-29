@@ -153,10 +153,20 @@
           "default": []
         },
         "python-platform": {
-          "description": "The value used with conditions based on type checking against sys.platform values. Common values include 'linux', 'darwin', 'win32', but any valid sys.platform string is accepted.",
-          "type": "string",
+          "description": "The value used with conditions based on type checking against sys.platform values. Common values include 'linux', 'darwin', 'win32', but any valid sys.platform string is accepted. Use 'all' or a list of values to type check against multiple platforms.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
           "default": "linux",
-          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix"]
+          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix", "all", ["linux", "darwin"]]
         },
         "python-version": {
           "description": "The Python version to use for type checking. Format: <major>[.<minor>[.<micro>]]",

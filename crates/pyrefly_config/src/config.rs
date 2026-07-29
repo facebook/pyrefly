@@ -53,6 +53,7 @@ use pyrefly_util::telemetry::TelemetrySourceDbRebuildStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_with::skip_serializing_none;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -204,6 +205,8 @@ pub enum OutputFormat {
     Github,
     /// Emit JUnit XML
     JunitXml,
+    /// Emit CodeClimate issues in a JSON array (e.g. for GitLab Code Quality reports)
+    CodeClimate,
     /// Only show error count, omitting individual errors
     OmitErrors,
 }
@@ -414,7 +417,7 @@ impl FallbackSearchPath {
 
     pub fn repr_for_directory(&self, directory: Option<&Path>) -> String {
         match (self, directory) {
-            (Self::Explicit(paths), _) => format!("{:?}", &**paths),
+            (Self::Explicit(paths), _) => format!("{:?}", **paths),
             (Self::DirectoryRelative(c), Some(start)) => format!("{:?}", &**c.get_ancestors(start)),
             (Self::DirectoryRelative(c), None) => format!(
                 "<paths from parent directory of all files up to {:?}>",
@@ -507,6 +510,7 @@ impl ImportLookupPathPart<'_> {
     }
 }
 
+#[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize, Clone, Derivative)]
 #[serde(rename_all = "kebab-case")]
 #[derivative(PartialEq, Eq)]
@@ -567,7 +571,7 @@ pub struct ConfigFile {
     /// Not exposed to the user. When we aren't able to determine the root of a
     /// project, we guess some fallback search paths that are checked after
     /// typeshed (so we don't clobber the stdlib) and before site_package_path.
-    #[serde(default, skip)]
+    #[serde(skip)]
     pub fallback_search_path: FallbackSearchPath,
 
     /// Disable Pyrefly default heuristics, specifically those around
@@ -585,16 +589,13 @@ pub struct ConfigFile {
     pub enable_fallback_search_path: bool,
 
     /// Override the bundled typeshed with a custom path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typeshed_path: Option<PathBuf>,
 
     /// Path to baseline file for comparing type errors.
     /// Errors matching the baseline are suppressed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<PathBuf>,
 
     /// Default error output format for CLI checks when `--output-format` is not set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_format: Option<OutputFormat>,
 
     /// Pyrefly's configurations around interpreter querying/finding.
@@ -610,11 +611,10 @@ pub struct ConfigFile {
 
     /// Named preset that provides default error severities and behavior settings.
     /// User-specified settings override the preset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<Preset>,
 
     /// The `ConfigBase` values for the whole project.
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub root: ConfigBase,
 
     /// Sub-configs that can override specific `ConfigBase` settings
@@ -641,19 +641,17 @@ pub struct ConfigFile {
     pub use_ignore_files: bool,
 
     /// Should this config use a build system? If so, which one?
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_system: Option<BuildSystem>,
 
     /// Database understanding the mapping between source files and import paths,
     /// especially within the context of a build system. This is used for getting handles
     /// for a path and doing module finding.
-    #[serde(skip, default)]
+    #[serde(skip)]
     #[derivative(PartialEq = "ignore")]
     pub source_db: Option<ArcId<Box<dyn SourceDatabase>>>,
 
     /// Minimum severity level for errors to be displayed.
     /// Errors below this severity will not be shown. Defaults to "error".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_severity: Option<Severity>,
 
     /// Should we let Pyrefly try to index the project's files? Disabling this
@@ -1058,6 +1056,14 @@ impl ConfigFile {
                  self.root.spec_compliant_overloads.unwrap())
     }
 
+    pub fn legacy_overload_expansion(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_legacy_overload_expansion, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.legacy_overload_expansion.unwrap())
+    }
+
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
         self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
             .unwrap_or_else(||
@@ -1389,6 +1395,7 @@ impl ConfigFile {
             apply_preset_default!(strict_callable_subtyping);
             apply_preset_default!(strict_partial_subtyping);
             apply_preset_default!(spec_compliant_overloads);
+            apply_preset_default!(legacy_overload_expansion);
             apply_preset_default!(ignore_errors_in_generated_code);
             apply_preset_default!(permissive_ignores);
         }
@@ -1453,6 +1460,10 @@ impl ConfigFile {
 
         if self.root.spec_compliant_overloads.is_none() {
             self.root.spec_compliant_overloads = Some(false);
+        }
+
+        if self.root.legacy_overload_expansion.is_none() {
+            self.root.legacy_overload_expansion = Some(false);
         }
 
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
@@ -1677,18 +1688,122 @@ impl ConfigFile {
         (config, errors)
     }
 
-    fn parse_config(config_str: &str) -> anyhow::Result<ConfigFile> {
-        toml::from_str::<ConfigFile>(config_str).map_err(|err| anyhow::Error::msg(err.to_string()))
+    pub fn parse_config(config_str: &str) -> anyhow::Result<ConfigFile> {
+        parse_toml_document::<ConfigFile>(config_str)
     }
 
     /// Parse a pyproject.toml file. Returns a tuple of:
     /// - `Option<ConfigFile>`: the pyrefly config, if `[tool.pyrefly]` was present
     /// - `bool`: whether Python tool sections like `[tool.ruff]` were detected
     fn parse_pyproject_toml(config_str: &str) -> anyhow::Result<(Option<ConfigFile>, bool)> {
-        let pyproject = toml::from_str::<PyProject>(config_str)
-            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        let pyproject = parse_toml_document::<PyProject>(config_str)?;
         let has_python_tools = pyproject.has_python_tools();
         Ok((pyproject.pyrefly(), has_python_tools))
+    }
+}
+
+fn parse_toml_document<T: DeserializeOwned>(config_str: &str) -> anyhow::Result<T> {
+    toml_edit::de::from_str::<T>(config_str).map_err(anyhow::Error::new)
+}
+
+/// The source span of the value responsible for a failed TOML parse of `T`, if
+/// we can determine it.
+///
+/// `toml_edit` attaches a span to syntax errors and to type errors on plain
+/// top-level fields, but drops it for values nested inside `#[serde(flatten)]`
+/// structs -- which is where nearly every pyrefly setting lives (see
+/// [`ConfigBase`]). Rather than hand-write a check for each setting, we recover
+/// the span generically by treating the real parser as the source of truth:
+/// re-run it with one leaf value removed at a time, and blame the value whose
+/// removal makes parsing succeed. This stays correct as settings are added or
+/// renamed, and only runs once parsing has already failed on a (tiny) config,
+/// so the repeated re-parses are negligible. If probing can't pin down a value
+/// (e.g. a syntax error means the document doesn't even parse), we fall back to
+/// whatever span the parser reported directly.
+pub fn toml_error_span<T: DeserializeOwned>(
+    config_str: &str,
+    err: &anyhow::Error,
+) -> Option<std::ops::Range<usize>> {
+    probe_toml_error_span::<T>(config_str).or_else(|| {
+        err.downcast_ref::<toml_edit::de::Error>()
+            .and_then(toml_edit::de::Error::span)
+    })
+}
+
+/// A path to a leaf value within a TOML document: table keys interleaved with
+/// array-of-tables indices (e.g. `sub-config` -> `0` -> `pytorch-efficiency-lints`).
+#[derive(Clone)]
+enum TomlPathSeg {
+    Key(String),
+    Index(usize),
+}
+
+fn probe_toml_error_span<T: DeserializeOwned>(config_str: &str) -> Option<std::ops::Range<usize>> {
+    // The immutable document carries the source spans; a mutable clone is what
+    // we edit while probing (editing discards spans, so paths bridge the two).
+    let document = toml_edit::Document::parse(config_str.to_owned()).ok()?;
+    let mut leaves = Vec::new();
+    collect_toml_leaves(document.as_table(), &mut Vec::new(), &mut leaves);
+    // A valid value's removal can never fix a failure elsewhere, so the first
+    // leaf whose removal makes parsing succeed is the culprit. Removing a bad
+    // required setting instead surfaces a "missing field" error, so we never
+    // wrongly blame it.
+    leaves.into_iter().find_map(|(path, span)| {
+        let mut probe = document.clone().into_mut();
+        let removed = remove_toml_leaf(probe.as_table_mut(), &path);
+        (removed && toml_edit::de::from_str::<T>(&probe.to_string()).is_ok()).then_some(span)
+    })
+}
+
+fn collect_toml_leaves(
+    table: &dyn toml_edit::TableLike,
+    prefix: &mut Vec<TomlPathSeg>,
+    out: &mut Vec<(Vec<TomlPathSeg>, std::ops::Range<usize>)>,
+) {
+    for (key, item) in table.iter() {
+        prefix.push(TomlPathSeg::Key(key.to_owned()));
+        if let Some(sub_table) = item.as_table_like() {
+            collect_toml_leaves(sub_table, prefix, out);
+        } else if let Some(array) = item.as_array_of_tables() {
+            for (index, sub_table) in array.iter().enumerate() {
+                prefix.push(TomlPathSeg::Index(index));
+                collect_toml_leaves(sub_table, prefix, out);
+                prefix.pop();
+            }
+        } else if let Some(span) = item.span() {
+            out.push((prefix.clone(), span));
+        }
+        prefix.pop();
+    }
+}
+
+fn remove_toml_leaf(table: &mut dyn toml_edit::TableLike, path: &[TomlPathSeg]) -> bool {
+    match path {
+        [TomlPathSeg::Key(key)] => table.remove(key).is_some(),
+        [TomlPathSeg::Key(key), rest @ ..] => match table.get_mut(key) {
+            Some(item) => remove_toml_leaf_from_item(item, rest),
+            None => false,
+        },
+        _ => false,
+    }
+}
+
+fn remove_toml_leaf_from_item(item: &mut toml_edit::Item, path: &[TomlPathSeg]) -> bool {
+    match path.first() {
+        Some(TomlPathSeg::Index(index)) => {
+            match item
+                .as_array_of_tables_mut()
+                .and_then(|a| a.get_mut(*index))
+            {
+                Some(sub_table) => remove_toml_leaf(sub_table, &path[1..]),
+                None => false,
+            }
+        }
+        Some(TomlPathSeg::Key(_)) => match item.as_table_like_mut() {
+            Some(sub_table) => remove_toml_leaf(sub_table, path),
+            None => false,
+        },
+        None => false,
     }
 }
 
@@ -1855,6 +1970,7 @@ mod tests {
                     recursion_depth_limit: None,
                     recursion_overflow_handler: None,
                     spec_compliant_overloads: None,
+                    legacy_overload_expansion: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -1881,6 +1997,7 @@ mod tests {
                         recursion_depth_limit: None,
                         recursion_overflow_handler: None,
                         spec_compliant_overloads: None,
+                        legacy_overload_expansion: None,
                     }
                 }],
                 coverage: CoverageConfig {
@@ -1897,6 +2014,67 @@ mod tests {
                 extra_file_extensions: Vec::new(),
                 synthesized_preset_reason: None,
             }
+        );
+    }
+
+    #[test]
+    fn deserialize_python_platform_list() {
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = ["linux", "win32"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::new_many(vec![
+                "linux".to_owned(),
+                "win32".to_owned()
+            ]))
+        );
+
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = "linux"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::linux())
+        );
+
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = "all"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::All)
+        );
+
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = ["all", "linux"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::All)
+        );
+
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = []
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::new_many(Vec::new()))
         );
     }
 
@@ -2247,6 +2425,58 @@ mod tests {
     }
 
     #[test]
+    fn test_toml_parse_error_recovers_value_span() {
+        // The offending value lives in a `#[serde(flatten)]`ed field, so
+        // `toml_edit` drops its span; `toml_error_span` recovers it by probing.
+        let config_str = "preset = \"strict\"\npytorch-efficiency-lints = \"true\"\n";
+        let err = ConfigFile::parse_config(config_str).unwrap_err();
+        let value_start = config_str.find("\"true\"").unwrap();
+        assert_eq!(
+            toml_error_span::<ConfigFile>(config_str, &err),
+            Some(value_start..value_start + "\"true\"".len())
+        );
+    }
+
+    #[test]
+    fn test_toml_parse_error_span_is_not_setting_specific() {
+        // Recovery is generic: any setting's bad value is located, not just the
+        // hand-picked `pytorch-efficiency-lints`.
+        let config_str = "check-unannotated-defs = \"yes\"\n";
+        let err = ConfigFile::parse_config(config_str).unwrap_err();
+        let value_start = config_str.find("\"yes\"").unwrap();
+        assert_eq!(
+            toml_error_span::<ConfigFile>(config_str, &err),
+            Some(value_start..value_start + "\"yes\"".len())
+        );
+    }
+
+    #[test]
+    fn test_toml_parse_error_span_in_sub_config() {
+        // Probing descends into `[[sub-config]]` array-of-tables entries.
+        let config_str = "[[sub-config]]\nmatches = \"foo\"\npytorch-efficiency-lints = \"true\"\n";
+        let err = ConfigFile::parse_config(config_str).unwrap_err();
+        let value_start = config_str.find("\"true\"").unwrap();
+        assert_eq!(
+            toml_error_span::<ConfigFile>(config_str, &err),
+            Some(value_start..value_start + "\"true\"".len())
+        );
+    }
+
+    #[test]
+    fn test_pyproject_toml_parse_error_recovers_value_span() {
+        // For pyproject configs the value sits inside `[tool.pyrefly]`; probing
+        // points at the value there rather than the whole file.
+        let config_str =
+            "[tool.pyrefly]\npreset = \"strict\"\npytorch-efficiency-lints = \"true\"\n";
+        let err = ConfigFile::parse_pyproject_toml(config_str).unwrap_err();
+        let value_start = config_str.find("\"true\"").unwrap();
+        assert_eq!(
+            toml_error_span::<PyProject>(config_str, &err),
+            Some(value_start..value_start + "\"true\"".len())
+        );
+    }
+
+    #[test]
     fn test_deserializing_sub_config_missing_matches() {
         let config_str = r#"
              [[sub_config]]
@@ -2346,6 +2576,7 @@ output-format = "omit-errors"
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
                 spec_compliant_overloads: None,
+                legacy_overload_expansion: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -3210,6 +3441,7 @@ output-format = "omit-errors"
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
                 spec_compliant_overloads: None,
+                legacy_overload_expansion: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -3250,6 +3482,7 @@ output-format = "omit-errors"
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
                 spec_compliant_overloads: None,
+                legacy_overload_expansion: None,
             },
             sub_configs: vec![],
             ..Default::default()

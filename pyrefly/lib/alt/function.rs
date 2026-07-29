@@ -29,6 +29,8 @@ use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::meta_shape_dsl::validate_shape_dsl_functions;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
+use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
+use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::BoundMethod;
@@ -147,6 +149,14 @@ struct FunctionParamsResult {
     paramspec: Option<Quantified>,
     /// Maps parameter names to their resolved types for unannotated parameters.
     resolved_param_types: SmallMap<Name, Type>,
+}
+
+fn type_shape_dsl_domain(ty: &Type) -> Option<TypeShapeDslDomain> {
+    match ty {
+        Type::Int(_) => Some(TypeShapeDslDomain::Int),
+        Type::IntTuple(_) => Some(TypeShapeDslDomain::IntTuple),
+        _ => None,
+    }
 }
 
 struct ParentParamHints {
@@ -268,6 +278,82 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .and_then(|param_ty| param_ty.callable_signatures().into_iter().next().cloned())
                 .and_then(DecoratorParamHints::from_callable)
         })
+    }
+
+    /// Validates resolved DSL annotations, emitting diagnostics and metadata only on success.
+    fn validate_type_shape_dsl_declaration(
+        &self,
+        dsl: &Arc<ValidatedTypeShapeDslFunction>,
+        params: &[Param],
+        return_type: &Type,
+        function_kind: &FunctionKind,
+        function_range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<FunctionKind> {
+        let parameter_domain = if dsl.has_parameter_annotation() {
+            params
+                .first()
+                .and_then(|param| type_shape_dsl_domain(param.as_type()))
+        } else {
+            None
+        };
+        let return_domain = if dsl.has_return_annotation() {
+            type_shape_dsl_domain(return_type)
+        } else {
+            None
+        };
+        match (parameter_domain, return_domain) {
+            (Some(parameter), Some(result)) if parameter == result => {
+                if let FunctionKind::Def(func_id) = function_kind {
+                    Some(FunctionKind::TypeShapeDsl(
+                        func_id.clone(),
+                        parameter,
+                        dsl.clone(),
+                    ))
+                } else {
+                    self.error(
+                        errors,
+                        function_range,
+                        ErrorKind::InvalidArgument,
+                        "`@type_shape_dsl_function` must be applied to an ordinary function definition"
+                            .to_owned(),
+                    );
+                    None
+                }
+            }
+            (None, _) => {
+                self.error(
+                    errors,
+                    dsl.parameter_annotation_range(),
+                    ErrorKind::InvalidArgument,
+                    format!(
+                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int` or `IntTuple`",
+                        dsl.parameter_name()
+                    ),
+                );
+                None
+            }
+            (_, None) => {
+                self.error(
+                    errors,
+                    dsl.return_annotation_range(),
+                    ErrorKind::InvalidArgument,
+                    "`@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`"
+                        .to_owned(),
+                );
+                None
+            }
+            (Some(_), Some(_)) => {
+                self.error(
+                    errors,
+                    dsl.return_annotation_range(),
+                    ErrorKind::InvalidArgument,
+                    "`@type_shape_dsl_function` parameter and return annotations must use the same domain"
+                        .to_owned(),
+                );
+                None
+            }
+        }
     }
 
     pub fn solve_function_binding(
@@ -437,14 +523,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &FunctionDefData,
         def_index: FuncDefIndex,
         stub_or_impl: FunctionStubOrImpl,
+        has_ellipsis_body: bool,
         placeholder_body_kind: Option<PlaceholderBodyKind>,
         is_return_inferred: bool,
+        calls_super_method: bool,
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
         module_style: ModuleStyle,
         outer_funcs: Option<Name>,
         shape_dsl_def: Option<Arc<ShapeDslFunction>>,
+        type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
         uses_shape_dsl_ir_name: Option<ShortIdentifier>,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
@@ -467,6 +556,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_async: def.is_async,
             placeholder_body_kind,
             is_return_inferred,
+            calls_super_method,
             ..Default::default()
         };
         let mut found_class_property = false;
@@ -678,7 +768,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params,
             paramspec,
             stub_or_impl,
+            has_ellipsis_body,
             defining_cls,
+            type_shape_dsl_def,
             resolved_param_types,
         })
     }
@@ -700,6 +792,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 stmt.name.range(),
                 ErrorKind::UnannotatedReturn,
                 format!("`{}` is missing a return annotation", stmt.name),
+            );
+        }
+        if def.has_ellipsis_body
+            && has_return_annotation
+            && !def.metadata.flags.defined_in_stub_file
+            && !def.metadata.flags.is_overload
+            && !def.metadata.flags.is_abstract_method
+            && !def
+                .defining_cls
+                .as_ref()
+                .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol())
+            && !if stmt.is_async {
+                self.unwrap_coroutine(&ret)
+                    .is_some_and(|(_, _, return_ty)| {
+                        self.is_subset_eq(&self.heap.mk_none(), &return_ty)
+                    })
+            } else {
+                self.is_subset_eq(&self.heap.mk_none(), &ret)
+            }
+        {
+            self.error(
+                errors,
+                stmt.name.range(),
+                ErrorKind::EmptyBody,
+                "Function body cannot consist only of `...` when the return type is not `None`"
+                    .to_owned(),
             );
         }
         // The first parameter of a non-static method is the implicit self/cls
@@ -855,9 +973,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams =
             self.collect_jaxtyping_tparams(&callable, &def.tparams, stmt.name.range, errors);
 
+        let mut metadata = def.metadata.clone();
+        if let Some(dsl) = &def.type_shape_dsl_def
+            && let Some(kind) = self.validate_type_shape_dsl_declaration(
+                dsl,
+                &def.params,
+                &callable.ret,
+                &metadata.kind,
+                stmt.name.range(),
+                errors,
+            )
+        {
+            metadata.kind = kind;
+        }
+
         let mut ty = Forallable::Function(Function {
             signature: callable,
-            metadata: def.metadata.clone(),
+            metadata,
         })
         .forall(tparams);
         ty = self.move_return_tparams_of_type(ty);

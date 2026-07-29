@@ -14,20 +14,20 @@ use lsp_types::Location;
 use lsp_types::Position;
 use lsp_types::Range;
 use lsp_types::Url;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::commands::lsp::LspArgs;
-use pyrefly::lsp::non_wasm::protocol::Message;
-use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::Request;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 use tempfile::TempDir;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspInteractionArgs;
-use crate::util::bundled_typeshed_path;
-use crate::util::expect_definition_points_to_symbol;
-use crate::util::get_test_files_root;
-use crate::util::line_at_location;
+use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
+use crate::test::lsp::lsp_interaction::util::expect_definition_points_to_symbol;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::line_at_location;
 
 fn test_go_to_def(
     root: PathBuf,

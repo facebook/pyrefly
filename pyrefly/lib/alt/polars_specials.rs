@@ -11,6 +11,7 @@
 //! `Type::DataFrame` carrying an inferred column schema when a DataFrame is built
 //! from a dict literal. This is the entry point for column-aware checking.
 
+use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Arguments;
@@ -51,6 +52,20 @@ fn column_transform_schema<'b>(
     (func.attr.id.as_str() == method && args.keywords.is_empty()).then_some(&**schema)
 }
 
+pub fn is_pandas_dataframe(cls: &Class) -> bool {
+    cls.has_toplevel_qname("pandas.core.frame", "DataFrame")
+}
+
+/// Whether a `select`/`drop` string is a `pl.col` selector (`"*"` or `"^regex$"`) rather than an
+/// exact column name.
+fn is_polars_selector_string(arg: &Expr) -> bool {
+    let Expr::StringLiteral(s) = arg else {
+        return false;
+    };
+    let value = s.value.to_str();
+    value == "*" || (value.starts_with('^') && value.ends_with('$'))
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Infer a column schema from a `pl.DataFrame({...})` dict literal, or `None` to
     /// fall back to plain construction.
@@ -58,9 +73,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Extraction is purely syntactic and never infers the element expressions.
     /// Duplicate keys yield `None`: Python keeps only the last value for a repeated
     /// key, so one column per syntactic entry would misdescribe the runtime schema.
-    pub fn infer_polars_schema(
+    pub fn infer_dataframe_schema(
         &self,
         dict: &ExprDict,
+        kind: DataFrameKind,
         errors: &ErrorCollector,
     ) -> Option<Vec<(Name, Type)>> {
         if dict.items.is_empty() {
@@ -79,7 +95,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let Expr::List(ExprList { elts, .. }) = &item.value else {
                 return None;
             };
-            let element = self.polars_list_element_type(&name, elts, errors)?;
+            let element = self.dataframe_list_element_type(&name, elts, kind.clone(), errors)?;
             columns.push((name, element));
         }
         Some(columns)
@@ -87,13 +103,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// The column's modeled element type, or `None` to fall back to plain construction.
     /// Mirrors Polars: the column takes its first element's dtype, and a later element that
-    /// does not fit is a runtime error we report before falling back. An empty list is
-    /// `Unknown`; a non-literal element falls back silently, as does `complex` since Polars
-    /// has no complex dtype.
-    fn polars_list_element_type(
+    /// does not fit is a runtime error. An empty list is `Unknown`; a non-literal element
+    /// falls back silently, as does `complex` since Polars has no complex dtype. Only a
+    /// Polars frame reports the mismatch; pandas coerces such a column, so it falls back
+    /// silently.
+    fn dataframe_list_element_type(
         &self,
         name: &Name,
         elts: &[Expr],
+        kind: DataFrameKind,
         errors: &ErrorCollector,
     ) -> Option<Type> {
         let scalar = |e: &Expr| match e {
@@ -117,16 +135,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for e in rest {
             let element = self.heap.mk_class_type(scalar(e)?.clone());
             if !self.is_subset_eq(&element, &column) {
-                self.error(
-                    errors,
-                    e.range(),
-                    ErrorKind::ColumnTypeMismatch,
-                    format!(
-                        "Polars builds column `{name}` with type `{}` from its first element, so a `{}` element does not fit. Use one dtype for the column or pass an explicit `schema`.",
-                        self.for_display(column.clone()),
-                        self.for_display(element.clone()),
-                    ),
-                );
+                if kind == DataFrameKind::Polars {
+                    self.error(
+                        errors,
+                        e.range(),
+                        ErrorKind::ColumnTypeMismatch,
+                        format!(
+                            "Polars builds column `{name}` with type `{}` from its first element, so a `{}` element does not fit. Use one dtype for the column or pass an explicit `schema`.",
+                            self.for_display(column.clone()),
+                            self.for_display(element.clone()),
+                        ),
+                    );
+                }
                 return None;
             }
         }
@@ -178,15 +198,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 underlying: schema.underlying.clone(),
                 columns,
                 completeness: schema.completeness.clone(),
+                kind: schema.kind.clone(),
             }
             .to_type(),
         )
     }
 
-    /// Model `df.select("a", "b")` as a new schema with the named columns in argument order.
-    /// The caller passes the already-inferred receiver type, so the receiver is never inferred
-    /// twice. Falls back with `None` unless the receiver carries a schema, the method is
-    /// `select`, and every argument is a positional string literal.
+    /// Model `df.select("a", "b")` as a new schema with the named columns in argument order. A lone
+    /// `"*"` keeps the schema unchanged since it selects every column. Falls back with `None` unless
+    /// every argument is a positional string literal.
     pub fn polars_select(
         &self,
         base: &Type,
@@ -195,6 +215,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         let schema = column_transform_schema(base, func, "select", args)?;
+        // Column selection is Polars-only; pandas has no `select` method and uses `[]`.
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        if let [Expr::StringLiteral(s)] = &args.args[..]
+            && s.value.to_str() == "*"
+        {
+            return Some(base.clone());
+        }
+        if args.args.iter().any(is_polars_selector_string) {
+            return None;
+        }
         self.polars_select_columns(schema, &args.args, errors)
     }
 
@@ -209,6 +241,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         let schema = column_transform_schema(base, func, "drop", args)?;
+        // Column drop is Polars-only; pandas `drop` defaults to the index axis.
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        if args.args.iter().any(is_polars_selector_string) {
+            return None;
+        }
         let mut dropped: Vec<(Name, TextRange)> = Vec::with_capacity(args.args.len());
         let mut seen = SmallSet::new();
         for arg in &args.args {
@@ -242,6 +281,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 underlying: schema.underlying.clone(),
                 columns,
                 completeness: schema.completeness.clone(),
+                kind: schema.kind.clone(),
             }
             .to_type(),
         )
@@ -261,6 +301,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let [Expr::Dict(mapping)] = &args.args[..] else {
             return None;
         };
+        // Column rename is Polars-only; pandas `rename` defaults to the index axis.
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
         let mut renames: SmallMap<Name, (Name, TextRange)> =
             SmallMap::with_capacity(mapping.items.len());
         for item in &mapping.items {
@@ -309,6 +353,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 underlying: schema.underlying.clone(),
                 columns,
                 completeness: schema.completeness.clone(),
+                kind: schema.kind.clone(),
             }
             .to_type(),
         )
@@ -328,6 +373,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         };
         if func.attr.id.as_str() != "with_columns" || !args.args.is_empty() {
+            return None;
+        }
+        // Adding columns this way is Polars-only; pandas uses `assign`, not `with_columns`.
+        if schema.kind != DataFrameKind::Polars {
             return None;
         }
         // Validate syntactically before inferring anything: a `**mapping` spread bails here, so the
@@ -354,8 +403,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 underlying: schema.underlying.clone(),
                 columns,
                 completeness: schema.completeness.clone(),
+                kind: schema.kind.clone(),
             }
             .to_type(),
         )
+    }
+
+    /// Model row-only transforms (`filter`, `sort`, `fill_null`) as returning the receiver's
+    /// schema unchanged, since they reorder rows or replace values without touching the column
+    /// set or its types. Falls back with `None` for a receiver that carries no schema.
+    pub fn polars_row_transform(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if !matches!(func.attr.id.as_str(), "filter" | "sort" | "fill_null") {
+            return None;
+        }
+        // Pandas `filter` selects columns and has no `sort`/`fill_null`, so this is Polars-only.
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        // Infer the arguments so type errors inside them surface; the schema is unchanged.
+        for arg in args.args.iter() {
+            self.expr_infer(arg, errors);
+        }
+        for kw in args.keywords.iter() {
+            self.expr_infer(&kw.value, errors);
+        }
+        Some(base.clone())
     }
 }

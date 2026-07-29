@@ -328,6 +328,18 @@ impl DisabledLanguageServices {
     }
 }
 
+/// How Pyrefly's LSP server is being driven.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServerMode {
+    /// Pyrefly is its own language server (the standalone Pyrefly VS Code
+    /// extension, or any direct LSP client).
+    LanguageServer,
+    /// Pyrefly is another editor's backing type server, driven over TSP
+    /// (Type Server Protocol) — e.g. Pylance. Forwarded `pyrefly.*` client
+    /// settings are ignored because the host owns that behavior.
+    TypeServer,
+}
+
 /// https://code.visualstudio.com/docs/python/settings-reference#_pylance-language-server
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -507,12 +519,20 @@ impl Workspaces {
     /// Applies the LSP client configuration to the `scope_uri` (workspace) given.
     ///
     /// The `modified` flag is changed to `true` when the configuration gets applied to the
-    /// `scope_uri` matching a valid workspace
+    /// `scope_uri` matching a valid workspace.
+    ///
+    /// In [`ServerMode::TypeServer`] the whole `pyrefly.*` settings block is
+    /// ignored. The host (e.g. Pylance) still forwards it over LSP, but those
+    /// settings configure the standalone Pyrefly extension, which the host now
+    /// owns. Ignoring them also stops a stale setting (e.g. `disableTypeErrors`
+    /// left over from running the extension) from silently suppressing the
+    /// diagnostics the host asked us to compute.
     pub fn apply_client_configuration(
         &self,
         modified: &mut bool,
         scope_uri: &Option<Url>,
         config: Value,
+        mode: ServerMode,
     ) {
         let config = match serde_json::from_value::<LspConfig>(config.clone()) {
             Err(e) => {
@@ -528,7 +548,9 @@ impl Workspaces {
             self.update_pythonpath(modified, scope_uri, &python_path);
         }
 
-        if let Some(pyrefly) = config.pyrefly {
+        if let Some(pyrefly) = config.pyrefly
+            && mode == ServerMode::LanguageServer
+        {
             if let Some(extra_paths) = pyrefly.extra_paths {
                 self.update_search_paths(modified, scope_uri, extra_paths);
             }
@@ -1216,7 +1238,12 @@ mod tests {
         fn empty_payload_does_not_flag_modified() {
             let workspaces = Workspaces::new(Workspace::new(), &[]);
             let mut modified = false;
-            workspaces.apply_client_configuration(&mut modified, &None, json!({}));
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({}),
+                ServerMode::LanguageServer,
+            );
             assert!(!modified);
         }
 
@@ -1232,6 +1259,7 @@ mod tests {
                 &mut modified,
                 &None,
                 json!({ "pyrefly": { "disableLanguageServices": true } }),
+                ServerMode::LanguageServer,
             );
             assert!(!modified);
             assert!(!workspaces.default.read().disable_type_errors);
@@ -1247,9 +1275,33 @@ mod tests {
                 &mut modified,
                 &None,
                 json!({ "pyrefly": { "disableTypeErrors": true } }),
+                ServerMode::LanguageServer,
             );
             assert!(modified);
             assert!(workspaces.default.read().disable_type_errors);
+        }
+
+        /// In [`ServerMode::TypeServer`] the whole `pyrefly.*` client-settings
+        /// block is ignored: the host owns this behavior, and a stale setting
+        /// forwarded over LSP must not take effect. Nothing is applied, so
+        /// `modified` stays false too.
+        #[test]
+        fn type_server_mode_ignores_pyrefly_settings() {
+            let workspaces = Workspaces::new(Workspace::new(), &[]);
+            let mut modified = false;
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": {
+                    "disableTypeErrors": true,
+                    "displayTypeErrors": "force-off",
+                    "disableLanguageServices": true,
+                } }),
+                ServerMode::TypeServer,
+            );
+            assert!(!modified);
+            assert!(!workspaces.default.read().disable_type_errors);
+            assert!(!workspaces.default.read().disable_language_services);
         }
 
         /// A user removing `displayTypeErrors` from settings must clear
@@ -1260,7 +1312,12 @@ mod tests {
             let workspaces = Workspaces::new(Workspace::new(), &[]);
             workspaces.default.write().display_type_errors = Some(DisplayTypeErrors::ForceOn);
             let mut modified = false;
-            workspaces.apply_client_configuration(&mut modified, &None, json!({ "pyrefly": {} }));
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": {} }),
+                ServerMode::LanguageServer,
+            );
             assert!(modified);
             assert_eq!(workspaces.default.read().display_type_errors, None);
         }
@@ -1272,7 +1329,12 @@ mod tests {
             let workspaces = Workspaces::new(Workspace::new(), &[]);
             workspaces.default.write().type_checking_mode = Some(TypeCheckingMode::Strict);
             let mut modified = false;
-            workspaces.apply_client_configuration(&mut modified, &None, json!({ "pyrefly": {} }));
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": {} }),
+                ServerMode::LanguageServer,
+            );
             assert!(modified);
             assert_eq!(workspaces.default.read().type_checking_mode, None);
         }
@@ -1289,6 +1351,7 @@ mod tests {
                 &mut modified,
                 &None,
                 json!({ "pyrefly": { "typeCheckingMode": "strict" } }),
+                ServerMode::LanguageServer,
             );
             assert!(!modified);
         }

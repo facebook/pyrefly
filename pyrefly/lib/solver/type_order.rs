@@ -87,7 +87,7 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
     }
 
     pub fn is_protocol(self, cls: &Class) -> bool {
-        self.0.get_metadata_for_class(cls).is_protocol()
+        cls.is_protocol()
     }
 
     pub fn is_final(self, cls: &Class) -> bool {

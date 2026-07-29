@@ -12,8 +12,8 @@ N = IntVar("N")
 
 
 def square_svd_components(
-    x: np.ndarray[tuple[Int[N], Int[N]]],
-) -> np.ndarray[tuple[Int[N], Int[N]]]:
+    x: np.ndarray[[N, N]],
+) -> np.ndarray[[N, N]]:
     _u, _s, vt = np.linalg.svd(x, full_matrices=False)
     return vt
 
@@ -73,7 +73,7 @@ def test_eigh_square_matrix() -> None:
 
 def particle_in_box_shape_path(
     n_points: Int[N],
-) -> tuple[np.ndarray[tuple[Int[N]]], np.ndarray[tuple[Int[N], Int[N]]]]:
+) -> tuple[np.ndarray[[N]], np.ndarray[[N, N]]]:
     dx = 1.0 / (n_points + 1)
     diagonal = np.full(n_points, 2.0 / dx**2)
     off_diagonal = np.full(n_points - 1, -1.0 / dx**2)
@@ -98,9 +98,9 @@ def test_norm_3d_axis_keepdims_for_nbody() -> None:
 
 
 def gravitational_force_shape_path(
-    pos: np.ndarray[tuple[Int[N], Int[3]]],
-    mass: np.ndarray[tuple[Int[N]]],
-) -> np.ndarray[tuple[Int[N], Int[3]]]:
+    pos: np.ndarray[[N, 3]],
+    mass: np.ndarray[[N]],
+) -> np.ndarray[[N, 3]]:
     diff = pos[None, :, :] - pos[:, None, :]
     dist = np.linalg.norm(diff, axis=-1, keepdims=True)
     np.fill_diagonal(dist[:, :, 0], 1.0)
@@ -157,8 +157,10 @@ def test_matmul_operator_rejects_mismatched_inner_dimension() -> None:
     # shape" invariant.
     assert_shape(np.ones((3, 4)) @ np.ones((4, 5)), (3, 5))
     try:
-        # E: `@` is not supported
-        assert_shape(a @ b, (3, 4))
+        # `a @ b` is rejected statically (mismatched inner dims) and raises at
+        # runtime; the well-formed anchor above satisfies the shape-assertion
+        # invariant, so this line only needs to exercise the rejection.
+        a @ b  # E: `@` is not supported
     except ValueError:
         pass
     else:

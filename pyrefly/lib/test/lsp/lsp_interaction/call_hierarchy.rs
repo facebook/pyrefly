@@ -12,13 +12,13 @@ use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::request::CallHierarchyIncomingCalls;
 use lsp_types::request::CallHierarchyOutgoingCalls;
 use lsp_types::request::CallHierarchyPrepare;
-use pyrefly::lsp::non_wasm::protocol::Message;
-use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::Request;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 /// Tests that prepareCallHierarchy returns a valid CallHierarchyItem for a function definition
 #[test]

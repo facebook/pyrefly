@@ -67,10 +67,7 @@ def test_binary_ufuncs_reject_incompatible_broadcast() -> None:
 
     assert_shape(np.minimum(a, np.ones((3, 4))), (3, 4))
     try:
-        assert_shape(
-            np.minimum(a, b),  # E: operands could not be broadcast together
-            (3, 4),
-        )
+        np.minimum(a, b)  # E: operands could not be broadcast together
     except ValueError:
         pass
     else:

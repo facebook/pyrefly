@@ -57,10 +57,10 @@ x: int = "x"
 "#,
 );
 
+// A typed file-level directive is only honored in the preamble; placed after code
+// it is inert (the error on the following line is still reported) and additionally
+// flagged with a `misplaced-ignore` warning on the directive line.
 testcase!(
-    // A typed file-level directive is only honored in the preamble; placed after code
-    // it is inert (the error on the following line is still reported) and additionally
-    // flagged with a `misplaced-ignore` warning on the directive line.
     test_pyrefly_top_level_ignore_typed_not_at_top,
     r#"
 x: int = "x"  # E:
@@ -69,8 +69,8 @@ y: int = "y"  # E:
 "#,
 );
 
+// A blanket file-level directive after code is inert and flagged as misplaced.
 testcase!(
-    // A blanket file-level directive after code is inert and flagged as misplaced.
     test_pyrefly_misplaced_ignore_errors_blanket,
     r#"
 x: int = "x"  # E:
@@ -79,9 +79,9 @@ y: int = "y"  # E:
 "#,
 );
 
+// A correctly-placed top-of-file directive suppresses everything and produces
+// no `misplaced-ignore` warning.
 testcase!(
-    // A correctly-placed top-of-file directive suppresses everything and produces
-    // no `misplaced-ignore` warning.
     test_pyrefly_misplaced_ignore_errors_top_of_file_ok,
     r#"
 # pyrefly: ignore-errors

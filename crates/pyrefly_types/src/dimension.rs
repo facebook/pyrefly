@@ -79,6 +79,19 @@ impl Int {
         matches!(self, Self::Literal(_))
     }
 
+    /// Replace a gradual size leaf with a materialization marker, mirroring how
+    /// `Type::materialize` rewrites `Any` to `Type::Materialization`. A gradual
+    /// dimension is the shape analog of `Any`, so materializing it keeps
+    /// `is_equivalent` (and thus `assert_type`) from treating a gradual size as
+    /// equivalent to a concrete one, while still leaving it consistent (via the
+    /// `Type::Materialization` subset arm) with any concrete size. Canonical
+    /// gradual dimensions are always the bare `Int::Int` leaf.
+    pub fn materialize(&mut self) {
+        if matches!(self, Self::Int) {
+            *self = Self::Symbolic(Box::new(Type::Materialization));
+        }
+    }
+
     /// Helper constructors for expressions.
     /// Take Type arguments to support type variables in expressions.
     pub fn add(left: Type, right: Type) -> Self {
@@ -1153,7 +1166,7 @@ impl TypeEq for Int {}
 // ============================================================================
 
 /// Errors that can occur during shape/dimension checking
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShapeError {
     /// Tensor ranks don't match
     RankMismatch { got: usize, want: usize },
@@ -1327,6 +1340,23 @@ mod tests {
 
         let gradual_int = Type::Int(Int::add(gradual_size(), int_literal(1)));
         assert_eq!(canonicalize(gradual_int), gradual_size());
+    }
+
+    #[test]
+    fn materialize_gradual_compound_expression_collapses_to_marker() {
+        // A compound dimension containing a gradual leaf (here `int + 1`)
+        // canonicalizes to the bare `Int::Int` leaf, and every shape stores
+        // canonicalized dimensions. `materialize` therefore only ever sees the
+        // bare leaf, yet still rewrites it to the materialization marker — so a
+        // compound gradual dimension cannot slip past `materialize` and be
+        // mistaken by `assert_type` for a concrete one.
+        let Type::Int(mut dim) = canonicalize(Type::Int(Int::add(gradual_size(), int_literal(1))))
+        else {
+            unreachable!("canonicalizing a gradual dimension produces a Int");
+        };
+        assert_eq!(dim, Int::Int);
+        dim.materialize();
+        assert_eq!(dim, Int::Symbolic(Box::new(Type::Materialization)));
     }
 
     #[test]

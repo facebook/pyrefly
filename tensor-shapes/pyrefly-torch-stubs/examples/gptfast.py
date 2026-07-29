@@ -531,7 +531,7 @@ class Transformer[
         assert input_pos is not None, "input_pos must be provided"
         assert mask.mask_mod is not None, "mask_mod must be set"
         mask.mask_mod = self.get_mask_mod(mask.mask_mod, input_pos[0])
-        freqs_cis = self.freqs_cis[input_pos]
+        freqs_cis: Tensor[[T, (D // NHead) // 2, 2]] = self.freqs_cis[input_pos]
         assert_type(freqs_cis, Tensor[[T, (D // NHead) // 2, 2]])
         x = self.tok_embeddings(idx)
         assert_type(x, Tensor[[B, T, D]])

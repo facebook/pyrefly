@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_types::dimension::Int;
@@ -32,7 +33,6 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Params;
 use crate::types::class::Class;
 use crate::types::quantified::Quantified;
@@ -63,7 +63,7 @@ use crate::types::types::Type;
 // We need to visit the types that we know are required to be visited for variance inference, and appear in the context of a class with type variables.
 // For example, SelfType is intentionally skipped and should not be visited because it should not be included in the variance calculation.
 
-#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default, VisitMut)]
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default, Visit, VisitMut)]
 pub struct VarianceMap(SmallMap<Name, Variance>);
 
 impl Display for VarianceMap {
@@ -796,10 +796,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// falls back to the field range. Current-module only: variance checks a class's own
     /// fields, so `def_index` is always local — we don't resolve cross-module `FuncId`s.
     fn func_def_range(&self, metadata: &FuncMetadata) -> Option<TextRange> {
-        let def_index = match &metadata.kind {
-            FunctionKind::Def(func_id) | FunctionKind::ShapeDsl(func_id, ..) => func_id.def_index?,
-            _ => return None,
-        };
+        let def_index = metadata.kind.definition_id()?.def_index?;
         let idx = self
             .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))?;

@@ -86,8 +86,7 @@ def f(x: X) -> Y:
 );
 
 testcase!(
-    bug =
-        "Iterative fixpoint reports non-convergent-recursion for recursive class attribute aliases",
+    bug = "fixpoint reports non-convergent-recursion for recursive class attribute aliases",
     test_class_attr,
     r#"
 class C:
@@ -196,7 +195,7 @@ type X[K, V] = dict[K, V] | list[X[str, V]]
 
 x1: X = {0: 1}
 x2: X[int, int] = {0: 1}
-x3: X[str, int] = {0: 1}  # E: `dict[int, int]` is not assignable to `dict[str, int] | list[X[str, int]]`
+x3: X[str, int] = {0: 1}  # E: `Literal[0]` is not assignable to dict key type `str`
 
 x4: X = [{'ok': 1}]
 x5: X[int, int] = [{'ok': 1}]
@@ -267,6 +266,19 @@ type T = U  # E: cyclic self-reference in `T`
 type U = T  # E: cyclic self-reference in `U`
 
 x: T = 1
+not x
+    "#,
+);
+
+testcase!(
+    test_cyclic_alias_through_type_parameter_bound,
+    r#"
+# Regression test for #2851: resolving `Y`'s scoped type parameter bound closes
+# a cycle through `X`. Using the alias used to make the solver recurse forever.
+type X = Y  # E: cyclic self-reference in `X`
+type Y[T: X] = X  # E: cyclic self-reference in `Y`
+
+x: X = 1
 not x
     "#,
 );
