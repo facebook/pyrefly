@@ -196,10 +196,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
         let keyword_annotations = keyword_annotations.into_map(|(name, annot)| (name.id, annot));
 
-        let base_metaclasses = bases_with_metadata
+        let protocol_base_name = Name::new_static("Protocol");
+        let mut base_metaclasses = bases_with_metadata
             .iter()
             .filter_map(|(b, metadata)| metadata.custom_metaclass().map(|m| (b.name(), m)))
             .collect::<Vec<_>>();
+        // Typeshed uses protocols to model several special stdlib classes that are not
+        // runtime Protocol classes.
+        let module_name = cls.qname().module_name();
+        let module = module_name.as_str();
+        if protocol_metadata.is_some()
+            && !matches!(
+                module,
+                "builtins" | "_typeshed" | "typing" | "typing_extensions"
+            )
+        {
+            base_metaclasses.push((&protocol_base_name, self.stdlib.protocol_meta()));
+        }
         let mut calculated_metaclass = self.calculate_metaclass(
             cls,
             metaclasses.into_iter().next(),
@@ -1869,7 +1882,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metaclass_type = self.heap.mk_class_type(metaclass.clone());
         for (base_name, m) in base_metaclasses {
             let base_metaclass_type = self.heap.mk_class_type((*m).clone());
-            if !self.is_subset_eq(&metaclass_type, &base_metaclass_type) {
+            let protocol_base_selects_more_specific_metaclass = m.class_object()
+                == self.stdlib.protocol_meta().class_object()
+                && self.is_subset_eq(&base_metaclass_type, &metaclass_type);
+            if !self.is_subset_eq(&metaclass_type, &base_metaclass_type)
+                && !protocol_base_selects_more_specific_metaclass
+            {
                 self.error(errors,
                     cls.range(),
                     ErrorKind::InvalidInheritance,

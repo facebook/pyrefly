@@ -2427,6 +2427,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 ok_or(self.type_order.has_metaclass(got, want), SubsetError::Other)
             }
             (Type::Type(inner), Type::ClassType(want))
+                if matches!(&**inner, Type::SpecialForm(SpecialForm::Protocol)) =>
+            {
+                let want = self.solver.heap.mk_class_type(want.clone());
+                self.is_subset_eq(
+                    &self
+                        .solver
+                        .heap
+                        .mk_class_type(self.type_order.stdlib().protocol_meta().clone()),
+                    &want,
+                )
+            }
+            (Type::Type(inner), Type::ClassType(want))
                 if let Type::ClassType(got_cls) = &**inner =>
             {
                 ok_or(

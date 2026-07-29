@@ -48,6 +48,27 @@ def g(p: P, c1: C1, c2: C2, c3: C3, c4: C4, c5: C5) -> None:
 );
 
 testcase!(
+    test_protocol_metaclass,
+    r#"
+from abc import ABCMeta
+from enum import Enum
+from typing import Protocol, _ProtocolMeta
+
+abc_meta: ABCMeta = Protocol
+protocol_meta: _ProtocolMeta = Protocol
+
+class P(Protocol): ...
+
+class M(type): ...
+
+class BadMeta(P, metaclass=M): ...  # E: Class `BadMeta` has metaclass `M` which is not a subclass of metaclass `_ProtocolMeta` from base class `P`
+
+class BadEnum(Enum, P):  # E: Class `BadEnum` has metaclass `EnumMeta` which is not a subclass of metaclass `_ProtocolMeta` from base class `P`
+    X = 1
+"#,
+);
+
+testcase!(
     test_proxy_method_direct_call_and_attribute_access,
     proxy_method_env(),
     r#"
