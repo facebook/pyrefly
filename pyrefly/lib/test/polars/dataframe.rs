@@ -211,6 +211,219 @@ reveal_type(pl.DataFrame({"a": [b"x", b"y"]}))  # E: revealed type: DataFrame[a:
 );
 
 testcase!(
+    test_construct_date_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1)]}))  # E: revealed type: DataFrame[a: Date]
+"#,
+);
+
+testcase!(
+    test_construct_datetime_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import datetime
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1, 3, 4, 5)]}))  # E: revealed type: DataFrame[a: Datetime]
+"#,
+);
+
+testcase!(
+    test_construct_time_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import time
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [time(1, 2, 3)]}))  # E: revealed type: DataFrame[a: Time]
+"#,
+);
+
+testcase!(
+    test_construct_duration_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import timedelta
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [timedelta(days=1)]}))  # E: revealed type: DataFrame[a: Duration]
+"#,
+);
+
+testcase!(
+    test_construct_datetime_tz_drops_timezone,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import datetime, timezone
+from typing import reveal_type
+# Our model carries no time unit or timezone, so a tz-aware value still records plain `Datetime`.
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1, tzinfo=timezone.utc)]}))  # E: revealed type: DataFrame[a: Datetime]
+"#,
+);
+
+testcase!(
+    test_construct_date_multi_element,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), date(2021, 1, 1)]}))  # E: revealed type: DataFrame[a: Date]
+"#,
+);
+
+testcase!(
+    test_construct_temporal_and_plain_columns,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date
+from typing import reveal_type
+reveal_type(pl.DataFrame({"d": [date(2020, 1, 1)], "n": [1]}))  # E: revealed type: DataFrame[d: Date, n: Int64]
+"#,
+);
+
+testcase!(
+    test_construct_date_then_datetime_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date, datetime
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), datetime(2020, 1, 1)]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Date`
+"#,
+);
+
+testcase!(
+    test_construct_datetime_then_date_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date, datetime
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), date(2020, 1, 1)]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Datetime`
+"#,
+);
+
+testcase!(
+    test_construct_date_then_int_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), 5]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Date`
+"#,
+);
+
+testcase!(
+    test_construct_int_then_date_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [5, date(2020, 1, 1)]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+"#,
+);
+
+testcase!(
+    test_construct_temporal_strict_false_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date, datetime
+from typing import reveal_type
+# We model no temporal supertype, so a mixed-temporal column under strict=False under-reports
+# rather than guessing the runtime `Datetime`.
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), datetime(2020, 1, 1)]}, strict=False))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_construct_date_then_none_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date
+from typing import reveal_type
+# A `None` element is unmodeled, so the column falls back even though Polars keeps it `Date`.
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), None]}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_construct_shadowed_date_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Detection resolves the callee's type, so a shadowed `date` that is not `datetime.date`
+# does not fabricate a temporal schema.
+def date() -> str: ...
+reveal_type(pl.DataFrame({"a": [date()]}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_construct_temporal_variable_not_treated_as_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import date, datetime
+from typing import reveal_type
+# `d` is typed `date` but may hold a `datetime` subclass at runtime, so its static type is only
+# an upper bound; we trust a direct constructor call, not a variable, and fall back here.
+def f(d: date) -> None:
+    reveal_type(pl.DataFrame({"a": [d, datetime(2020, 1, 1)]}))  # E: revealed type: DataFrame # !E: DataFrame[
+"#,
+);
+
+testcase!(
+    test_construct_datetime_tz_mix_strict_true_reports_datetime,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import datetime, timezone
+from typing import reveal_type
+# Under the default strict=True Polars coerces a naive/tz-aware mix into one Datetime column, so
+# reporting `Datetime` matches the runtime even though we do not model the timezone.
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2020, 1, 1, tzinfo=timezone.utc)]}))  # E: revealed type: DataFrame[a: Datetime]
+"#,
+);
+
+testcase!(
+    test_construct_datetime_tz_mix_strict_false_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import datetime, timezone
+from typing import reveal_type
+# A naive/tz-aware datetime mix errors at runtime under strict=False, and we cannot tell the two
+# apart, so we fall back rather than report a `Datetime` schema the runtime may not produce.
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2020, 1, 1, tzinfo=timezone.utc)]}, strict=False))  # E: revealed type: DataFrame # !E: DataFrame[
+"#,
+);
+
+testcase!(
+    test_construct_datetime_multi_strict_false_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from datetime import datetime
+from typing import reveal_type
+# An all-naive datetime column is indistinguishable from a naive/tz-aware mix, so a multi-element
+# datetime column under strict=False conservatively falls back.
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2021, 1, 1)]}, strict=False))  # E: revealed type: DataFrame # !E: DataFrame[
+"#,
+);
+
+testcase!(
     test_fallback_complex_not_modeled,
     env_with_polars_stubs(),
     r#"

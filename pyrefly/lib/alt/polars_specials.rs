@@ -196,9 +196,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// The column's Polars dtype, or `None` to fall back to plain construction. Mirrors
     /// Polars: the column takes its first element's dtype, and a later element fits only when
     /// its dtype coerces into that one (`bool` into an int, an int into a wider int or a
-    /// float, never the reverse). An empty list is `Unknown`; a non-literal element falls back
-    /// silently, as does `complex` since Polars has no complex dtype. Only a Polars frame
-    /// reports the mismatch; pandas coerces such a column, so it falls back silently.
+    /// float, never the reverse). An empty list is `Unknown`; a `datetime` constructor call gives
+    /// its temporal dtype in a Polars frame, while any other non-literal element falls back
+    /// silently, as does `complex` since Polars has no complex dtype. Only a Polars frame reports
+    /// the mismatch; pandas coerces such a column, so it falls back silently.
     fn dataframe_list_element_type(
         &self,
         name: &Name,
@@ -219,6 +220,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::BooleanLiteral(_) => Some(PolarsDType::Boolean),
             Expr::StringLiteral(_) => Some(PolarsDType::String),
             Expr::BytesLiteral(_) => Some(PolarsDType::Binary),
+            // Resolve the callee class, not the element type: a variable typed `date` may hold a
+            // `datetime` subclass at runtime, so only a direct constructor call pins the dtype.
+            Expr::Call(call) if kind == DataFrameKind::Polars => {
+                match self.expr_infer(&call.func, &self.error_swallower()) {
+                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "date") => {
+                        Some(PolarsDType::Date)
+                    }
+                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "datetime") => {
+                        Some(PolarsDType::Datetime)
+                    }
+                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "time") => {
+                        Some(PolarsDType::Time)
+                    }
+                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "timedelta") => {
+                        Some(PolarsDType::Duration)
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         };
         let Some((first, rest)) = elts.split_first() else {
@@ -230,6 +250,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut acc = column;
             for e in rest {
                 acc = acc.supertype(scalar(e)?)?;
+            }
+            // We do not model timezones, so a naive/tz-aware mix (which Polars rejects under
+            // strict=False) is indistinguishable here; fall back rather than assert `Datetime`.
+            if acc == PolarsDType::Datetime && !rest.is_empty() {
+                return None;
             }
             return Some(acc);
         }

@@ -155,6 +155,18 @@ reveal_type(pd.DataFrame({"a": [1, "s"]}))  # E: revealed type: DataFrame
 );
 
 testcase!(
+    test_pandas_temporal_column_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from datetime import date
+from typing import reveal_type
+# Temporal inference is Polars-only; pandas stores python `date` as `object`, which we do not model.
+reveal_type(pd.DataFrame({"a": [date(2020, 1, 1)]}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
     test_pandas_unknown_column_read_delegates_without_error,
     env_with_pandas_frame_stubs(),
     r#"
