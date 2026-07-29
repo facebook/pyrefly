@@ -441,7 +441,7 @@ impl<'a> BindingsBuilder<'a> {
                     );
                     self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 } else if self.scopes.in_class_body()
-                    && let Some((cls, _)) = self.scopes.current_class_and_metadata_keys()
+                    && let Some(cls) = self.scopes.current_class_key()
                 {
                     self.insert_binding(
                         key,

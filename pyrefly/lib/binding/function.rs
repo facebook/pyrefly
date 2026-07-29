@@ -903,10 +903,7 @@ impl<'a> BindingsBuilder<'a> {
         // Get preceding function definition, if any. Used for building an overload type.
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
 
-        let (class_key, _metadata_key) = match self.scopes.current_class_and_metadata_keys() {
-            Some((class_key, metadata_key)) => (Some(class_key), Some(metadata_key)),
-            _ => (None, None),
-        };
+        let class_key = self.scopes.current_class_key();
 
         // Check whether this function is decorated with `@shape_dsl_function`
         // before `decorators()` takes the decorator list.
