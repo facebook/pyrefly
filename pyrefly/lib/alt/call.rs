@@ -2175,20 +2175,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // A pandas frame is mutable so columns can be added after construction, which leaves
         // its schema Partial. A Polars frame is immutable so its schema is Complete.
+        // A `schema_overrides` keyword pins column dtypes, and any other keyword falls back.
         let dataframe_schema = if let Type::ClassDef(cls) = &callee_ty
             && x.arguments.args.len() == 1
-            && x.arguments.keywords.is_empty()
             && let Expr::Dict(dict) = &x.arguments.args[0]
+            && (is_polars_dataframe(cls) || is_pandas_dataframe(cls))
+            && let Some(overrides) = self.polars_schema_overrides(&x.arguments.keywords)
         {
-            if is_polars_dataframe(cls) {
-                self.infer_dataframe_schema(dict, DataFrameKind::Polars, errors)
-                    .map(|c| (c, DataFrameKind::Polars, SchemaCompleteness::Complete))
-            } else if is_pandas_dataframe(cls) {
-                self.infer_dataframe_schema(dict, DataFrameKind::Pandas, errors)
-                    .map(|c| (c, DataFrameKind::Pandas, SchemaCompleteness::Partial))
+            let (kind, completeness) = if is_polars_dataframe(cls) {
+                (DataFrameKind::Polars, SchemaCompleteness::Complete)
             } else {
-                None
-            }
+                (DataFrameKind::Pandas, SchemaCompleteness::Partial)
+            };
+            self.infer_dataframe_schema(dict, kind.clone(), &overrides, errors)
+                .map(|c| (c, kind, completeness))
         } else {
             None
         };

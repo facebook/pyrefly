@@ -21,6 +21,7 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -51,6 +52,41 @@ fn column_transform_schema<'b>(
         return None;
     };
     (func.attr.id.as_str() == method && args.keywords.is_empty()).then_some(&**schema)
+}
+
+/// Map a `pl.<DType>` expression such as `pl.Int8` or `pl.Datetime("us")` to its dtype, or `None`
+/// for anything that is not a recognized dtype so the caller falls back rather than guessing.
+fn polars_dtype_from_expr(e: &Expr) -> Option<PolarsDType> {
+    let name = match e {
+        Expr::Attribute(a) => a.attr.id.as_str(),
+        Expr::Call(c) => match &*c.func {
+            Expr::Attribute(a) => a.attr.id.as_str(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(match name {
+        "Int8" => PolarsDType::Int8,
+        "Int16" => PolarsDType::Int16,
+        "Int32" => PolarsDType::Int32,
+        "Int64" => PolarsDType::Int64,
+        "Int128" => PolarsDType::Int128,
+        "UInt8" => PolarsDType::UInt8,
+        "UInt16" => PolarsDType::UInt16,
+        "UInt32" => PolarsDType::UInt32,
+        "UInt64" => PolarsDType::UInt64,
+        "UInt128" => PolarsDType::UInt128,
+        "Float32" => PolarsDType::Float32,
+        "Float64" => PolarsDType::Float64,
+        "Boolean" => PolarsDType::Boolean,
+        "String" | "Utf8" => PolarsDType::String,
+        "Binary" => PolarsDType::Binary,
+        "Date" => PolarsDType::Date,
+        "Datetime" => PolarsDType::Datetime,
+        "Duration" => PolarsDType::Duration,
+        "Time" => PolarsDType::Time,
+        _ => return None,
+    })
 }
 
 pub fn is_pandas_dataframe(cls: &Class) -> bool {
@@ -86,6 +122,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         dict: &ExprDict,
         kind: DataFrameKind,
+        overrides: &SmallMap<Name, PolarsDType>,
         errors: &ErrorCollector,
     ) -> Option<Vec<(Name, PolarsDType)>> {
         if dict.items.is_empty() {
@@ -104,10 +141,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let Expr::List(ExprList { elts, .. }) = &item.value else {
                 return None;
             };
-            let element = self.dataframe_list_element_type(&name, elts, kind.clone(), errors)?;
+            // An explicit `schema_overrides` dtype is authoritative, so Polars casts the column to
+            // it regardless of the element values.
+            let element = match overrides.get(&name) {
+                Some(dtype) => *dtype,
+                None => self.dataframe_list_element_type(&name, elts, kind.clone(), errors)?,
+            };
             columns.push((name, element));
         }
         Some(columns)
+    }
+
+    /// The dtype overrides declared by a `schema_overrides` keyword, or `None` to fall back to
+    /// plain construction. Only a `schema_overrides` dict of string columns to `pl.<DType>` is
+    /// understood, and any other keyword, a spread, or an unrecognized dtype falls back so we
+    /// never mis-model the call.
+    pub fn polars_schema_overrides(
+        &self,
+        keywords: &[Keyword],
+    ) -> Option<SmallMap<Name, PolarsDType>> {
+        let mut overrides = SmallMap::new();
+        for kw in keywords {
+            let Some(arg) = &kw.arg else {
+                return None;
+            };
+            if arg.id.as_str() != "schema_overrides" {
+                return None;
+            }
+            let Expr::Dict(dict) = &kw.value else {
+                return None;
+            };
+            for item in &dict.items {
+                let (Some(Expr::StringLiteral(key)), value) = (&item.key, &item.value) else {
+                    return None;
+                };
+                overrides.insert(
+                    Name::new(key.value.to_str()),
+                    polars_dtype_from_expr(value)?,
+                );
+            }
+        }
+        Some(overrides)
     }
 
     /// The column's Polars dtype, or `None` to fall back to plain construction. Mirrors

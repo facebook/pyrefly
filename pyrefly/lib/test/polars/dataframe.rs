@@ -20,7 +20,7 @@ from typing import Iterator, overload
 class Series: ...
 class DataFrame:
     columns: list[str]
-    def __init__(self, data: object = None, schema: object = None) -> None: ...
+    def __init__(self, data: object = None, schema: object = None, schema_overrides: object = None) -> None: ...
     @overload
     def __getitem__(self, key: str) -> Series: ...
     @overload
@@ -39,7 +39,12 @@ class DataFrame:
     );
     env.add(
         "polars",
-        "from polars.dataframe.frame import DataFrame as DataFrame, Series as Series",
+        r#"
+from polars.dataframe.frame import DataFrame as DataFrame, Series as Series
+class Int8: ...
+class Int32: ...
+class Float64: ...
+"#,
     );
     env
 }
@@ -53,6 +58,27 @@ fn env_cross_file() -> TestEnv {
         r#"
 import polars as pl
 df = pl.DataFrame({"a": [1], "b": ["x"]})
+"#,
+    );
+    env
+}
+
+/// A minimal pandas stub: `DataFrame` lives in `pandas.core.frame` and is re-exported
+/// from `pandas`. A pandas frame is mutable, so its inferred schema is Partial.
+fn env_with_pandas_stubs() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "pandas.core.frame",
+        "pandas/core/frame.pyi",
+        r#"
+class DataFrame:
+    def __init__(self, data: object = None, index: object = None, columns: object = None) -> None: ...
+"#,
+    );
+    env.add(
+        "pandas",
+        r#"
+from pandas.core.frame import DataFrame as DataFrame
 "#,
     );
     env
@@ -272,6 +298,57 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 reveal_type(pl.DataFrame({"a": [1]}, None))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_schema_overrides_sets_column_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1], "b": ["x"]}, schema_overrides={"a": pl.Int8}))  # E: revealed type: DataFrame[a: Int8, b: String]
+"#,
+);
+
+testcase!(
+    test_schema_overrides_suppresses_mismatch,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# The explicit dtype is authoritative, so an otherwise-incompatible mix coerces and does not error.
+reveal_type(pl.DataFrame({"a": [1, 2.0]}, schema_overrides={"a": pl.Float64}))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_schema_keyword_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int8}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_construct_infers_partial_schema,
+    env_with_pandas_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame({"a": [1], "b": ["x"]}))  # E: revealed type: DataFrame[a: Int64, b: String, ...]
+"#,
+);
+
+testcase!(
+    test_pandas_columns_keyword_falls_back,
+    env_with_pandas_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame({"a": [1]}, columns=["a"]))  # E: revealed type: DataFrame
 "#,
 );
 
