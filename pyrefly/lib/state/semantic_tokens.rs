@@ -24,8 +24,10 @@ use ruff_python_ast::Arguments;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Operator;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
@@ -40,6 +42,7 @@ use crate::binding::binding::Key;
 use crate::state::lsp::attribute_symbol_kind_from_type;
 
 const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
+const FORMAT_SPECIFIER: SemanticTokenType = SemanticTokenType::new("formatSpecifier");
 
 /// Adds the DEFAULT_LIBRARY modifier if the module is a standard library module
 /// (builtins, typing, typing_extensions).
@@ -90,6 +93,7 @@ impl SemanticTokensLegends {
                 SemanticTokenType::REGEXP,
                 SemanticTokenType::OPERATOR,
                 SemanticTokenType::DECORATOR,
+                FORMAT_SPECIFIER,
             ],
             token_modifiers: vec![
                 SemanticTokenModifier::DECLARATION,
@@ -220,6 +224,15 @@ impl SemanticTokensLegends {
         // needed for a deterministic print ordering in tests
         modifiers.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         modifiers
+    }
+}
+
+fn get_expr_tail(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Name(name) => Some(name.id.as_str()),
+        Expr::Attribute(attr) => Some(attr.attr.as_str()),
+        Expr::Call(call) => get_expr_tail(&call.func),
+        _ => None,
     }
 }
 
@@ -391,6 +404,23 @@ impl SemanticTokenBuilder {
             }
             Expr::Call(call) => {
                 self.process_arguments(&call.arguments);
+                // Highlight printf-style format specifiers in the first positional
+                // string argument of any function call, e.g. `f("%s", x)`.
+                if let Some(Expr::StringLiteral(string_lit)) = call.arguments.args.first() {
+                    self.process_format_specifiers(string_lit);
+                }
+                x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
+            }
+            // `"format %s" % args` — the left operand of Python's `%` operator is
+            // unambiguously a printf-style format string; no heuristic required.
+            Expr::BinOp(ExprBinOp {
+                op: Operator::Mod,
+                left,
+                ..
+            }) => {
+                if let Expr::StringLiteral(string_lit) = left.as_ref() {
+                    self.process_format_specifiers(string_lit);
+                }
                 x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
             }
             Expr::Attribute(attr) => {
@@ -607,6 +637,44 @@ impl SemanticTokenBuilder {
                 x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }
             _ => x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind)),
+        }
+    }
+
+    /// Scans each part of a string literal for printf-style format specifiers and
+    /// emits a `formatSpecifier` semantic token for each match.
+    ///
+    /// Each `StringLiteral` part carries its decoded `value` and a `content_range()`
+    /// that gives the source offset of the content (i.e. after the opening quote).
+    /// Because format specifiers like `%s` are plain ASCII with no escape sequences,
+    /// byte offsets in the decoded string map 1-to-1 to source byte offsets within
+    /// the content region.
+    fn process_format_specifiers(&mut self, string_lit: &ruff_python_ast::ExprStringLiteral) {
+        use std::sync::OnceLock;
+
+        use regex::Regex;
+        static RE: OnceLock<Regex> = OnceLock::new();
+        let re = RE.get_or_init(|| {
+            // `%%` must be the first alternative so it is consumed before the engine
+            // can treat the second `%` as the start of a format specifier.  Matches
+            // on `%%` are skipped below; they are not emitted as tokens.
+            Regex::new(r"%%|%[-+#0 ]*(?:\*|\d+)?(?:\.(?:\*|\d+))?[hlL]?[diouxXeEfFgGcrsa]|%\(\w+\)[-+#0 ]*(?:\*|\d+)?(?:\.(?:\*|\d+))?[hlL]?[diouxXeEfFgGcrsa]").unwrap()
+        });
+
+        for part in string_lit.value.iter() {
+            let content_start = part.content_range().start();
+            for m in re.find_iter(part.as_str()) {
+                if m.as_str() == "%%" {
+                    // Escaped literal percent, not a format specifier.
+                    continue;
+                }
+                let start = content_start + TextSize::try_from(m.start()).unwrap();
+                let end = content_start + TextSize::try_from(m.end()).unwrap();
+                self.push_if_in_range(
+                    TextRange::new(start, end),
+                    FORMAT_SPECIFIER.clone(),
+                    Vec::new(),
+                );
+            }
         }
     }
 
