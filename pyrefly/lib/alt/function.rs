@@ -68,7 +68,6 @@ use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
-use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::config::error_kind::ErrorKind;
@@ -360,12 +359,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         def: DecoratedFunction,
         predecessor: &mut Option<Idx<Key>>,
-        class_metadata: Option<&Idx<KeyClassMetadata>>,
         errors: &ErrorCollector,
     ) -> Type {
         // Overloads in .pyi should not have an implementation.
         let skip_implementation = self.module().path().style() == ModuleStyle::Interface
-            || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol())
+            || def
+                .defining_cls()
+                .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol())
             || def.metadata().flags.is_abstract_method;
         let mut ty = if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
