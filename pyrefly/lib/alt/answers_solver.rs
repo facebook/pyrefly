@@ -244,13 +244,10 @@ impl CalcStack {
     /// These two operations are always paired: every `pop` must be followed by
     /// taking and committing the completed SCC.
     ///
-    /// We pop before taking (not after) for two reasons:
-    /// - Lifecycle correctness: committed answers should correspond to fully
-    ///   unwound computations. Popping first ensures the stack no longer
-    ///   contains the completing frame when results are written to Calculation.
-    /// - `pop()` decrements `top_pos_exclusive` on the top SCC. If we took first,
-    ///   the completed SCC would already be gone from `scc_stack`, and `pop()`
-    ///   could incorrectly decrement a parent SCC's top_pos_exclusive instead.
+    /// We pop before taking (not after) for lifecycle correctness: committed
+    /// answers should correspond to fully unwound computations, so the stack
+    /// must no longer contain the completing frame when results are written to
+    /// Calculation.
     ///
     /// Note that the `+ 1` in `on_calculation_finished`'s completion check
     /// (`stack_len <= bottom_pos_inclusive + 1`) is unrelated to this ordering — it
@@ -314,9 +311,6 @@ impl CalcStack {
                     // takes min across all SCCs regardless of which we pass here.
                     let detected_at = sccs_to_merge.first().detected_at.dupe();
                     let mut merged = Scc::merge_many(sccs_to_merge, detected_at);
-                    // Recompute top_pos_exclusive after merge.
-                    merged.top_pos_exclusive = calc_stack_vec.len();
-
                     // Add free-floating CalcStack nodes (between merged SCCs)
                     // to node_state, mirroring merge_sccs.
                     merged.absorb_calc_stack_members(&calc_stack_vec, merged.bottom_pos_inclusive);
@@ -370,9 +364,6 @@ impl CalcStack {
 
     /// Pop a binding frame from the raw binding-level CalcId stack.
     /// - Update both the direct stack and the `position_of` reverse index.
-    /// - Also check whether the popped frame was part of the top Scc in the
-    ///   Scc stack; if so, decrement the top_pos_exclusive to account for the fact
-    ///   that this frame has completed.
     fn pop(&self) -> Option<CalcId> {
         let popped = self.stack.borrow_mut().pop();
         if let Some(ref calc_id) = popped {
@@ -383,12 +374,6 @@ impl CalcStack {
                     // Vec1 only has one element, so remove the entire entry
                     position_of.remove(calc_id);
                 }
-            }
-            let mut scc_stack = self.scc_stack.borrow_mut();
-            if let Some(top_scc) = scc_stack.last_mut()
-                && top_scc.node_state.contains_key(calc_id)
-            {
-                top_scc.top_pos_exclusive = top_scc.top_pos_exclusive.saturating_sub(1);
             }
         }
         popped
@@ -528,13 +513,7 @@ impl CalcStack {
             let sccs_to_merge = Vec1::from_vec_push(sccs_from_stack, new_scc);
 
             // Use the helper method to merge SCCs
-            let mut merged_scc = Scc::merge_many(sccs_to_merge, detected_at.dupe());
-
-            // After a merge, everything from the merged anchor to the current stack top
-            // is part of this single SCC. Recompute top_pos_exclusive from scratch.
-            merged_scc.top_pos_exclusive = calc_stack_vec.len();
-
-            scc_stack.push(merged_scc);
+            scc_stack.push(Scc::merge_many(sccs_to_merge, detected_at.dupe()));
         } else {
             // No overlap - just push the new SCC
             scc_stack.push(new_scc);
@@ -651,10 +630,6 @@ impl CalcStack {
         let mut merged = Scc::merge_many(sccs_to_merge, detected_at_of_scc.dupe());
         merged.absorb_calc_stack_members(&calc_stack_vec, min_depth);
 
-        // After a merge, everything from the merged anchor to the current stack top
-        // is part of this single SCC. Recompute top_pos_exclusive from scratch.
-        merged.top_pos_exclusive = calc_stack_vec.len();
-
         scc_stack.push(merged);
     }
 
@@ -700,17 +675,10 @@ impl CalcStack {
 
     /// Shared top-SCC member handling for back-edge re-entry paths in `push`.
     ///
-    /// Ensures nonmember re-entry merge runs first, then restores
-    /// top_pos_exclusive symmetry with `pop`, then dispatches using the current
-    /// iteration node state.
+    /// Ensures nonmember re-entry merge runs first, then dispatches using the
+    /// current iteration node state.
     fn binding_action_for_top_scc_member(&self, current: &CalcId) -> BindingAction {
         self.merge_top_scc_on_nonmember_reentry();
-        // Increment top_pos_exclusive because pop() will decrement
-        // top_pos_exclusive for any node in node_state, so push must
-        // balance it with an increment.
-        if let Some(top_scc) = self.scc_stack.borrow_mut().last_mut() {
-            top_scc.top_pos_exclusive += 1;
-        }
         if let Some(kind) = self.get_iteration_node_state(current) {
             return self.binding_action_for_node_state(current, kind);
         }
@@ -1244,10 +1212,6 @@ pub struct Scc {
     /// When the stack length drops to bottom_pos_inclusive, the SCC is complete.
     /// This enables O(1) completion checking instead of iterating all participants.
     bottom_pos_inclusive: usize,
-    /// Exclusive upper bound of this SCC's segment on the calc stack.
-    /// The segment is [bottom_pos_inclusive, top_pos_exclusive).
-    /// Initially set to the stack length when the SCC is created; updated on merge.
-    top_pos_exclusive: usize,
     /// Calculation or iterative driver responsible for committing this SCC.
     /// Merges preserve the oldest owner, which is suspended below newer work.
     owner: SccOwner,
@@ -1295,7 +1259,6 @@ impl Scc {
             node_state,
             detected_at,
             bottom_pos_inclusive,
-            top_pos_exclusive: calc_stack_vec.len(),
             owner,
             iterative: SccIterationState {
                 iteration: 0,
@@ -1392,10 +1355,6 @@ impl Scc {
         if other.owner.id() < self.owner.id() {
             self.owner = other.owner;
         }
-        // Note: top_pos_exclusive is NOT updated here. After a merge, everything from
-        // the merged anchor to the current stack top is part of this single SCC.
-        // The caller must recompute top_pos_exclusive = stack.len().
-
         // Merge iteration state. Node states are already merged via `node_state`
         // above; the iteration state only carries metadata (iteration number,
         // previous answers, flags).
@@ -3574,23 +3533,16 @@ mod scc_tests {
     ///
     /// This bypasses the normal Scc::new constructor to allow direct construction
     /// for testing merge logic.
-    ///
-    /// Note: top_pos_exclusive is set to bottom_pos_inclusive + node_state.len()
-    /// which approximates the segment span. In production, top_pos_exclusive may
-    /// differ from bottom_pos_inclusive + participant count due to duplicate
-    /// CalcIds during cycle breaking.
     #[allow(clippy::mutable_key_type)]
     fn make_test_scc(
         node_state: BTreeMap<CalcId, SccNodeState>,
         detected_at: CalcId,
         bottom_pos_inclusive: usize,
     ) -> Scc {
-        let top_pos_exclusive = bottom_pos_inclusive + node_state.len();
         Scc {
             node_state,
             detected_at,
             bottom_pos_inclusive,
-            top_pos_exclusive,
             owner: SccOwner::Phase0(0),
             iterative: SccIterationState {
                 iteration: 0,
@@ -3943,7 +3895,6 @@ mod scc_tests {
                 node_state,
                 detected_at: a.dupe(),
                 bottom_pos_inclusive: 0,
-                top_pos_exclusive: 2,
                 owner: SccOwner::Driver(0),
                 iterative: SccIterationState {
                     iteration: 2,
@@ -3965,7 +3916,6 @@ mod scc_tests {
                 node_state,
                 detected_at: d.dupe(),
                 bottom_pos_inclusive: 3,
-                top_pos_exclusive: 5,
                 owner: SccOwner::Driver(1),
                 iterative: SccIterationState {
                     iteration: 1,
@@ -4047,12 +3997,11 @@ mod scc_tests {
     }
 
     #[test]
-    fn test_nonmember_caller_is_absorbed_within_scc_stack_bounds() {
+    fn test_nonmember_caller_is_absorbed() {
         let member = CalcId::for_test("m", 0);
         let caller = CalcId::for_test("m", 1);
         let calc_stack = make_calc_stack(&[member.dupe(), caller.dupe()]);
         let mut scc = make_test_scc(fresh_nodes(&[member.dupe()]), member.dupe(), 0);
-        scc.top_pos_exclusive = 3;
         scc.owner = SccOwner::Driver(0);
         scc.iterative.iteration = 1;
         calc_stack.scc_stack.borrow_mut().push(scc);
@@ -4067,7 +4016,7 @@ mod scc_tests {
             calc_stack.borrow_scc_stack()[0]
                 .node_state
                 .contains_key(&caller),
-            "the nonmember caller should be absorbed despite the broad stack bound"
+            "the nonmember caller should be absorbed"
         );
     }
 
