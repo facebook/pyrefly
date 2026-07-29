@@ -2609,3 +2609,106 @@ def f(keys: list[str]) -> None:
     assert_type(gen([k] for k in keys), str)
 "#,
 );
+
+// A generic overload may provide only a provisional contextual type. Do not let that type widen
+// a comprehension whose element type is already known. Regression test for a Zulip primer failure.
+testcase!(
+    test_overload_generic_hint_does_not_widen_comprehension,
+    r#"
+from collections.abc import Collection
+from typing import assert_type
+
+def validated_emails(emails: Collection[str]) -> list[str]:
+    result = list(filter(bool, {email.strip() for email in emails}))
+    assert_type(result, list[str])
+    return result
+"#,
+);
+
+// A comprehension whose element type depends on the generic hint (here a bare lambda whose
+// parameter is typed by the hint) is inferred without context only when a context-free pass would
+// already be fully resolved; otherwise the hint is applied, narrowing it like the list literal.
+// https://github.com/facebook/pyrefly/issues/4167
+testcase!(
+    test_overload_generic_hint_narrows_comprehension_lambda,
+    r#"
+from collections.abc import Callable, Iterable
+from typing import assert_type
+
+def g[T](it: Iterable[Callable[[int], T]]) -> T: ...
+
+def call() -> None:
+    assert_type(g([lambda a: a]), int)
+    assert_type(g([lambda a: a for _ in range(1)]), int)
+"#,
+);
+
+// An ordinary generic function is not an overload, so its comprehension argument must be typed
+// contextually against the parameter, exactly like a list literal. Deferral (and the widening guard
+// it enables) applies only to calls evaluated more than once (overload / union-callee resolution).
+// https://github.com/facebook/pyrefly/pull/4224
+testcase!(
+    test_generic_comprehension_typed_contextually,
+    r#"
+from typing import TypedDict
+class TD(TypedDict):
+    x: int
+def take[T](xs: list[T]) -> list[T]: ...
+def f(ks: list[int]) -> None:
+    a: list[TD] = take([{"x": k} for k in ks])
+    b: list[TD] = take([{"x": 1}])
+"#,
+);
+
+// Keyword comprehension arguments to an overload are checked on a separate path from positional
+// ones, so the widening guard must apply there too: a deferred set comprehension keeps its known
+// element type against a provisional generic hint whether passed positionally or by keyword.
+testcase!(
+    test_overload_generic_hint_does_not_widen_comprehension_keyword,
+    r#"
+from collections.abc import Callable, Iterable, Iterator
+from typing import Any, assert_type, overload
+@overload
+def myfilter[T](function: None, iterable: Iterable[T | None]) -> Iterator[T]: ...
+@overload
+def myfilter[T](function: Callable[[T], Any], iterable: Iterable[T]) -> Iterator[T]: ...
+def myfilter(function, iterable) -> Iterator[Any]: ...
+def f(emails: list[str]) -> None:
+    assert_type(list(myfilter(bool, {e.strip() for e in emails})), list[str])
+    assert_type(list(myfilter(bool, iterable={e.strip() for e in emails})), list[str])
+"#,
+);
+
+// A generator in starred position into an overload is flattened (inferred once) rather than
+// deferred: deferral there buys no contextual narrowing and would re-infer it per candidate.
+testcase!(
+    test_overload_starred_generator,
+    r#"
+from typing import assert_type, overload
+@overload
+def f(x: int, y: int) -> int: ...
+@overload
+def f(x: str, y: str) -> str: ...
+def f(x: int | str, y: int | str) -> int | str: return x
+def g(xs: list[int]) -> None:
+    assert_type(f(*(x for x in xs)), int)
+"#,
+);
+
+// When an earlier argument pins the generic, the deferred comprehension's elements genuinely depend
+// on that binding (the lambda parameter is typed by it), so context-free inference is incomplete and
+// the pinned hint narrows the comprehension. `var_is_quantified` alone would wrongly discard it.
+testcase!(
+    test_overload_generic_hint_pinned_by_earlier_arg,
+    r#"
+from collections.abc import Callable, Iterable
+from typing import Any, assert_type, overload
+@overload
+def g[T](b: T, a: Iterable[Callable[[int], T]]) -> T: ...
+@overload
+def g(b: None, a: None) -> None: ...
+def g(b: Any, a: Any) -> Any: ...
+def call() -> None:
+    assert_type(g(0, [lambda x: x for _ in range(1)]), int)
+"#,
+);

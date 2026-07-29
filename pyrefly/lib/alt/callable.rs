@@ -117,6 +117,7 @@ impl CallWithTypes {
                 | Expr::SetComp(_)
                 | Expr::DictComp(_)
                 | Expr::Generator(_)),
+                _,
             ) if !nests_calls_to_depth(e, MIN_FLATTEN_CALL_DEPTH) => {
                 // Hack: keep mutable builtin containers as expressions, since they often need to be
                 // contextually typed against the function's parameter types, unless nesting depth
@@ -124,9 +125,13 @@ impl CallWithTypes {
                 // Comprehensions and generators are included for the same reason: their
                 // element/key/value types must be inferred against the parameter hint (e.g. to
                 // narrow a literal element) rather than eagerly here.
-                TypeOrExpr::Expr(e)
+                //
+                // Mark the expression as deliberately deferred: this call is evaluated more than
+                // once (overload / union-callee resolution), so argument checking must apply the
+                // guard that keeps a provisional generic hint from widening it.
+                TypeOrExpr::Expr(e, true)
             }
-            TypeOrExpr::Expr(e) => {
+            TypeOrExpr::Expr(e, _) => {
                 let t = solver.expr_infer(e, errors);
                 TypeOrExpr::Type(self.0.push(t), e.range())
             }
@@ -142,7 +147,24 @@ impl CallWithTypes {
     ) -> CallArg<'a> {
         match x {
             CallArg::Arg(x) => CallArg::Arg(self.type_or_expr(*x, solver, errors)),
-            CallArg::Star(x, r) => CallArg::Star(self.type_or_expr(*x, solver, errors), *r),
+            CallArg::Star(x, r) => {
+                // In starred position only container literals benefit from staying an expression
+                // (`pre_eval`'s fixed-length special case). A comprehension or generator cannot be
+                // fixed-length, and `pre_eval` infers non-literal starred args to a type before any
+                // parameter is matched, so deferring one buys no contextual narrowing and only forces
+                // per-candidate re-inference. Infer it to a type up front instead.
+                let flattened = match x {
+                    TypeOrExpr::Expr(
+                        e @ (Expr::ListComp(_)
+                        | Expr::SetComp(_)
+                        | Expr::DictComp(_)
+                        | Expr::Generator(_)),
+                        _,
+                    ) => TypeOrExpr::Type(self.0.push(solver.expr_infer(e, errors)), e.range()),
+                    _ => self.type_or_expr(*x, solver, errors),
+                };
+                CallArg::Star(flattened, *r)
+            }
         }
     }
 
@@ -196,7 +218,7 @@ impl<'a> CallKeyword<'a> {
         Self {
             range: x.range,
             arg: x.arg.as_ref(),
-            value: TypeOrExpr::Expr(&x.value),
+            value: TypeOrExpr::Expr(&x.value, false),
         }
     }
 
@@ -273,7 +295,7 @@ impl<'a> CallArg<'a> {
     }
 
     pub fn expr(x: &'a Expr) -> Self {
-        Self::Arg(TypeOrExpr::Expr(x))
+        Self::Arg(TypeOrExpr::Expr(x, false))
     }
 
     pub fn ty(ty: &'a Type, range: TextRange) -> Self {
@@ -282,7 +304,7 @@ impl<'a> CallArg<'a> {
 
     pub fn expr_maybe_starred(x: &'a Expr) -> Self {
         match x {
-            Expr::Starred(inner) => Self::Star(TypeOrExpr::Expr(&inner.value), x.range()),
+            Expr::Starred(inner) => Self::Star(TypeOrExpr::Expr(&inner.value, false), x.range()),
             _ => Self::expr(x),
         }
     }
@@ -327,11 +349,11 @@ impl<'a> CallArg<'a> {
     ) -> CallArgPreEval<'_> {
         match self {
             Self::Arg(TypeOrExpr::Type(ty, _)) => CallArgPreEval::Type(ty, false),
-            Self::Arg(TypeOrExpr::Expr(e)) => CallArgPreEval::Expr(e, false),
+            Self::Arg(TypeOrExpr::Expr(e, deferred)) => CallArgPreEval::Expr(e, *deferred, false),
             Self::Star(e, _range) => {
                 // Special-case list/set/tuple literals with statically known element count.
                 // Only do this if there are no starred elements inside the literal.
-                if let TypeOrExpr::Expr(expr) = e {
+                if let TypeOrExpr::Expr(expr, _) = e {
                     let literal_elts: Option<&[Expr]> = match expr {
                         Expr::List(list_expr) => Some(&list_expr.elts),
                         Expr::Set(set_expr) => Some(&set_expr.elts),
@@ -405,12 +427,13 @@ impl<'a> CallArg<'a> {
     }
 }
 
-// Pre-evaluated args are iterable. Type/Expr/Star variants iterate once (tracked via bool field),
-// Fixed variant iterates over the vec (tracked via usize field).
+// Pre-evaluated args are iterable. Type/Expr/Star variants iterate once (tracked via the trailing
+// `done` bool), Fixed variant iterates over the vec (tracked via usize field). The `Expr` variant's
+// first bool records whether the expression was deliberately deferred (see `TypeOrExpr::Expr`).
 #[derive(Clone, Debug)]
 enum CallArgPreEval<'a> {
     Type(&'a Type, bool),
-    Expr(&'a Expr, bool),
+    Expr(&'a Expr, bool, bool),
     Star {
         prefix: Vec<Type>,
         middle: Type,
@@ -424,7 +447,7 @@ enum CallArgPreEval<'a> {
 impl CallArgPreEval<'_> {
     fn step(&self) -> bool {
         match self {
-            Self::Type(_, done) | Self::Expr(_, done) | Self::Star { done, .. } => !*done,
+            Self::Type(_, done) | Self::Expr(_, _, done) | Self::Star { done, .. } => !*done,
             Self::Fixed(tys, i) => *i < tys.len(),
         }
     }
@@ -460,7 +483,7 @@ impl CallArgPreEval<'_> {
     ) -> Type {
         match self {
             Self::Type(ty, _) => (*ty).clone(),
-            Self::Expr(expr, _) => solver.expr_infer(expr, arg_errors),
+            Self::Expr(expr, _, _) => solver.expr_infer(expr, arg_errors),
             Self::Star {
                 prefix,
                 middle,
@@ -506,7 +529,7 @@ impl CallArgPreEval<'_> {
                 solver.maybe_error_unknown_argument_type(ty, range, arg_errors);
                 Some((*ty).clone())
             }
-            Self::Expr(x, done) => {
+            Self::Expr(x, deferred, done) => {
                 *done = true;
                 // PEP 747: when the parameter type is TypeForm, evaluate
                 // string literal arguments as forward-reference type forms.
@@ -537,6 +560,21 @@ impl CallArgPreEval<'_> {
                         TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                     );
                     solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                    return Some(ty);
+                }
+                // A deferred comprehension matched against a provisional generic hint keeps its
+                // known element type; only the deferral path (overload / union-callee resolution)
+                // applies this, so ordinary generic calls still type it contextually below.
+                if let Some(ty) = solver.deferred_comprehension_without_widening(
+                    x,
+                    *deferred,
+                    hint,
+                    range,
+                    arg_errors,
+                    call_errors,
+                    tcc,
+                    call_context,
+                ) {
                     return Some(ty);
                 }
                 let ty = solver
@@ -589,7 +627,7 @@ impl CallArgPreEval<'_> {
     // Intended for arguments matched to unpack-annotated *args, which are typechecked separately later
     fn post_skip(&mut self) {
         match self {
-            Self::Type(_, done) | Self::Expr(_, done) | Self::Star { done, .. } => {
+            Self::Type(_, done) | Self::Expr(_, _, done) | Self::Star { done, .. } => {
                 *done = true;
             }
             Self::Fixed(_, i) => {
@@ -601,7 +639,7 @@ impl CallArgPreEval<'_> {
     // Similar to post_skip but it skips to the end of any fixed length arguments.
     fn mark_done(&mut self) {
         match self {
-            Self::Type(_, done) | Self::Expr(_, done) | Self::Star { done, .. } => {
+            Self::Type(_, done) | Self::Expr(_, _, done) | Self::Star { done, .. } => {
                 *done = true;
             }
             Self::Fixed(tys, i) => {
@@ -616,7 +654,7 @@ impl CallArgPreEval<'_> {
         arg_errors: &ErrorCollector,
     ) {
         match self {
-            Self::Expr(x, _) => {
+            Self::Expr(x, _, _) => {
                 solver.expr_infer(x, arg_errors);
             }
             _ => {}
@@ -731,6 +769,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "The type of this argument is unknown".to_owned(),
             );
         }
+    }
+
+    /// For a deliberately deferred comprehension or generator argument matched against a still
+    /// provisional generic parameter `hint`, return its type inferred without context when doing so
+    /// avoids widening; otherwise return `None` so the caller types it contextually.
+    ///
+    /// A generic hint is provisional until every argument has constrained its variables, so typing a
+    /// comprehension against it can widen an already-known element type (for example, `str` to
+    /// `object` in `filter`). Inferring once without context and, when that result is fully resolved
+    /// (no `Any`, no unsolved var), using it to constrain the generic preserves the precise element
+    /// type. When the context-free result is incomplete the hint is load-bearing — it types
+    /// otherwise-unknown elements such as a bare lambda's parameter, including the case where an
+    /// earlier argument already pinned the variable — so we fall back to contextual typing. The
+    /// `deferred` flag scopes this to calls evaluated more than once (overload / union-callee
+    /// resolution); ordinary calls always type the comprehension contextually.
+    fn deferred_comprehension_without_widening(
+        &self,
+        x: &Expr,
+        deferred: bool,
+        hint: &Type,
+        range: TextRange,
+        arg_errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext<'_>,
+    ) -> Option<Type> {
+        if !(deferred
+            && matches!(
+                x,
+                Expr::ListComp(_) | Expr::SetComp(_) | Expr::DictComp(_) | Expr::Generator(_)
+            )
+            && hint
+                .collect_maybe_placeholder_vars()
+                .into_iter()
+                .any(|var| self.solver().var_is_quantified(var)))
+        {
+            return None;
+        }
+        let ty = self.expr_infer(x, arg_errors);
+        if ty.any(|t| t.is_any()) || !ty.collect_maybe_placeholder_vars().is_empty() {
+            return None;
+        }
+        self.check_type_with_options(
+            &ty,
+            hint,
+            range,
+            TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
+        );
+        Some(ty)
     }
 
     fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
@@ -1086,7 +1173,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             suffix.push(ty.clone())
                         }
                     }
-                    CallArgPreEval::Expr(e, _) => {
+                    CallArgPreEval::Expr(e, _, _) => {
                         if middle.is_empty() {
                             prefix.push(self.expr_infer(e, arg_errors))
                         } else {
@@ -1455,21 +1542,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .with_context(context.map(|ctx| ctx()))
                     };
                     let arg_ty = match kw.value {
-                        TypeOrExpr::Expr(x) => self
-                            .expr_with_options(
-                                x,
-                                match hint {
-                                    Some((_, ty)) => ExprOptions::check(
-                                        ty,
-                                        arg_errors,
-                                        call_errors,
-                                        tcc,
-                                        Some(call_context),
-                                    ),
-                                    None => ExprOptions::infer(arg_errors, None),
-                                },
-                            )
-                            .into_ty(),
+                        TypeOrExpr::Expr(x, deferred) => {
+                            // Keyword arguments are checked here rather than through `post_check`, so
+                            // apply the same deferral-scoped guard that keeps a provisional generic
+                            // hint from widening a deferred comprehension.
+                            let resolved = match &hint {
+                                Some((_, ty)) => self.deferred_comprehension_without_widening(
+                                    x,
+                                    deferred,
+                                    ty,
+                                    kw.range,
+                                    arg_errors,
+                                    call_errors,
+                                    tcc,
+                                    call_context,
+                                ),
+                                None => None,
+                            };
+                            match resolved {
+                                Some(ty) => ty,
+                                None => self
+                                    .expr_with_options(
+                                        x,
+                                        match hint {
+                                            Some((_, ty)) => ExprOptions::check(
+                                                ty,
+                                                arg_errors,
+                                                call_errors,
+                                                tcc,
+                                                Some(call_context),
+                                            ),
+                                            None => ExprOptions::infer(arg_errors, None),
+                                        },
+                                    )
+                                    .into_ty(),
+                            }
+                        }
                         TypeOrExpr::Type(x, range) => {
                             if let Some((_, hint)) = &hint
                                 && !hint.is_any()

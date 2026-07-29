@@ -1011,8 +1011,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.get_dunder_new(cls, preserve_self).is_some()
                 && self.get_dunder_init(cls, false).is_some()
         };
-        let is_deeply_nested =
-            |x: &TypeOrExpr| matches!(x, TypeOrExpr::Expr(e) if nests_calls(e, FLATTEN_CALL_DEPTH));
+        let is_deeply_nested = |x: &TypeOrExpr| matches!(x, TypeOrExpr::Expr(e, _) if nests_calls(e, FLATTEN_CALL_DEPTH));
 
         // Infer deeply nested arguments once, up front. Shallower nesting costs only a constant
         // factor, and flattening it would discard the parameter hint for no benefit.
@@ -1345,7 +1344,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let infer_type_or_expr = |toe: TypeOrExpr, errors: &ErrorCollector| -> Type {
             let ty = match toe {
                 TypeOrExpr::Type(ty, _) => ty.clone(),
-                TypeOrExpr::Expr(e) => self.expr_infer(e, errors),
+                TypeOrExpr::Expr(e, _) => self.expr_infer(e, errors),
             };
             // NNModule fields carry captured constructor args (e.g., padding=Literal[1]) that DSL
             // forward functions need as literals to compute output shapes.
