@@ -973,6 +973,9 @@ pub struct Server {
     /// When true, background indexing (populate_project/workspace_files) is deferred
     /// until we receive the config response, avoiding double-indexing at startup.
     awaiting_initial_workspace_config: AtomicBool,
+    /// Requests we received while waiting for the initial workspace/configuration response. These
+    /// are re-enqueued once we receive it, so we never respond based on the default workspace.
+    requests_awaiting_initial_config: Mutex<Vec<Request>>,
     /// Optional callback for remapping paths before converting to URIs.
     path_remapper: Option<PathRemapper>,
     thrift_remapper: Option<ThriftRemapper>,
@@ -2027,6 +2030,11 @@ impl Server {
                             }
                         }
                     }
+                    // Outside the branch above, so a response that fails to parse also stops us
+                    // waiting, and after it, since that branch clears the flag itself.
+                    if request.method == WorkspaceConfiguration::METHOD {
+                        self.release_requests_awaiting_initial_config();
+                    }
                 } else {
                     info!("Response for unknown request: {x:?}");
                 }
@@ -2084,6 +2092,21 @@ impl Server {
                         ErrorCode::RequestCanceled as i32,
                         message,
                     ));
+                    return Ok(ProcessEvent::Continue);
+                }
+
+                // The default workspace has language services enabled and no interpreter, and
+                // clients cache what we send (VSCode caches document symbols per version), so hold
+                // the request until the real settings arrive (#4332).
+                if self
+                    .awaiting_initial_workspace_config
+                    .load(Ordering::Relaxed)
+                {
+                    info!(
+                        "Holding request {} ({}) until the config response arrives",
+                        x.method, &x.id
+                    );
+                    self.requests_awaiting_initial_config.lock().push(x);
                     return Ok(ProcessEvent::Continue);
                 }
 
@@ -2768,6 +2791,7 @@ impl Server {
             do_not_commit_recheck: AtomicBool::new(false),
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
+            requests_awaiting_initial_config: Mutex::new(Vec::new()),
             path_remapper,
             thrift_remapper,
             pending_watched_file_changes: Mutex::new(Vec::new()),
@@ -4188,6 +4212,17 @@ impl Server {
 
         if modified {
             self.invalidate_config_and_validate_in_memory();
+        }
+    }
+
+    /// Clear `awaiting_initial_workspace_config` and re-enqueue every held request. Re-enqueued
+    /// rather than handled here, so they run only after the caller has applied the settings.
+    fn release_requests_awaiting_initial_config(&self) {
+        self.awaiting_initial_workspace_config
+            .store(false, Ordering::Relaxed);
+        for request in self.requests_awaiting_initial_config.lock().drain(..) {
+            // Only fails once the connection is closed, when no response is needed.
+            let _ = self.lsp_queue.send(LspEvent::LspRequest(request));
         }
     }
 
