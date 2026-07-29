@@ -48,6 +48,7 @@ use crate::alt::class::dataclass::ReplaceKind;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::nn_module_specials::is_nn_sequential;
 use crate::alt::polars_specials::is_pandas_dataframe;
+use crate::alt::polars_specials::is_polars_concat;
 use crate::alt::polars_specials::is_polars_dataframe;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
@@ -2186,6 +2187,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             self.infer_dataframe_schema(&construct, kind.clone(), errors)
                 .map(|c| (c, kind, completeness))
+        } else if is_polars_concat(&callee_ty) {
+            // A concat of frames is always a Polars, Complete frame reusing the elements' schemas.
+            self.infer_polars_concat(&x.arguments)
+                .map(|c| (c, DataFrameKind::Polars, SchemaCompleteness::Complete))
         } else {
             None
         };

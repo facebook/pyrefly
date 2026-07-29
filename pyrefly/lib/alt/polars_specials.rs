@@ -14,6 +14,7 @@
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
 use pyrefly_types::polars_dtype::PolarsDType;
+use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
@@ -21,6 +22,7 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -32,7 +34,9 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
+use crate::types::callable::FunctionKind;
 use crate::types::class::Class;
+use crate::types::literal::Lit;
 
 pub fn is_polars_dataframe(cls: &Class) -> bool {
     cls.has_toplevel_qname("polars.dataframe.frame", "DataFrame")
@@ -98,6 +102,25 @@ pub fn is_dataframe_column_method(method: &str) -> bool {
         method,
         "select" | "drop" | "with_columns" | "filter" | "sort" | "group_by" | "groupby"
     )
+}
+
+/// Whether a callee is the module-level `polars.concat`, seen through any `Forall`/`Overload`
+/// wrapper via `callee_kind`.
+pub fn is_polars_concat(callee: &Type) -> bool {
+    matches!(
+        callee.callee_kind(),
+        Some(CalleeKind::Function(FunctionKind::Def(id)))
+            if id.name.as_str() == "concat"
+                && id.module.name().as_str() == "polars.functions.eager"
+    )
+}
+
+/// The two `pl.concat` strategies column inference models. `Vertical` requires identical schemas;
+/// `VerticalRelaxed` requires the same ordered names and folds `supertype()` per column.
+#[derive(Clone, Copy)]
+enum ConcatHow {
+    Vertical,
+    VerticalRelaxed,
 }
 
 /// The two data shapes column inference models: a dict-of-columns or list-of-dict rows.
@@ -365,6 +388,78 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             overrides,
             strict,
         })
+    }
+
+    /// The modeled `how=` value, defaulting to `Vertical` when absent, or `None` for a value we do not
+    /// model or a `**spread` that could carry `how`, so the opaque frame is the safe fallback. The value
+    /// is read from its inferred type, so a `Literal["vertical"]` variable resolves like a bare literal.
+    fn polars_concat_how(&self, keywords: &[Keyword]) -> Option<ConcatHow> {
+        let mut how = ConcatHow::Vertical;
+        for kw in keywords {
+            let arg = kw.arg.as_ref()?;
+            if arg.id.as_str() == "how" {
+                // Swallow errors here, since the fallback call path re-infers this and is the sole reporter.
+                let ty = self.expr_infer(&kw.value, &self.error_swallower());
+                let Type::Literal(lit) = &ty else {
+                    return None;
+                };
+                let Lit::Str(value) = &lit.value else {
+                    return None;
+                };
+                how = match value.as_str() {
+                    "vertical" => ConcatHow::Vertical,
+                    "vertical_relaxed" => ConcatHow::VerticalRelaxed,
+                    _ => return None,
+                };
+            }
+        }
+        Some(how)
+    }
+
+    /// Infers literal vertical concatenations; any schema or supertype mismatch falls back.
+    pub fn infer_polars_concat(&self, arguments: &Arguments) -> Option<Vec<(Name, PolarsDType)>> {
+        let [items] = &arguments.args[..] else {
+            return None;
+        };
+        let elts = match items {
+            Expr::List(list) => &list.elts,
+            Expr::Tuple(tuple) => &tuple.elts,
+            _ => return None,
+        };
+        let how = self.polars_concat_how(&arguments.keywords)?;
+        let schemas = elts
+            .iter()
+            .map(|e| match self.expr_infer(e, &self.error_swallower()) {
+                Type::DataFrame(schema) => Some(schema.columns),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let (first, rest) = schemas.split_first()?;
+        match how {
+            ConcatHow::Vertical => rest
+                .iter()
+                .all(|columns| columns == first)
+                .then(|| first.clone()),
+            ConcatHow::VerticalRelaxed => {
+                let names_match = rest.iter().all(|columns| {
+                    columns.len() == first.len()
+                        && columns.iter().zip(first).all(|((n, _), (m, _))| n == m)
+                });
+                if !names_match {
+                    return None;
+                }
+                first
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, dtype))| {
+                        let folded = rest
+                            .iter()
+                            .try_fold(*dtype, |acc, columns| acc.supertype(columns[i].1))?;
+                        Some((name.clone(), folded))
+                    })
+                    .collect()
+            }
+        }
     }
 
     /// Anchors on the first non-null element; only Polars reports later mismatches.

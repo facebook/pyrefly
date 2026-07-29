@@ -38,13 +38,26 @@ class DataFrame:
     def cast(self, dtypes: object, *, strict: bool = True) -> "DataFrame": ...
 "#,
     );
+    env.add_with_path(
+        "polars.functions.eager",
+        "polars/functions/eager.pyi",
+        r#"
+from typing import Iterable
+from polars.dataframe.frame import DataFrame
+def concat(items: Iterable[DataFrame], *, how: str = "vertical", rechunk: bool = False, parallel: bool = True) -> DataFrame: ...
+"#,
+    );
     env.add(
         "polars",
         r#"
 from polars.dataframe.frame import DataFrame as DataFrame, Series as Series
+from polars.functions.eager import concat as concat
 class Int8: ...
 class Int32: ...
 class Int64: ...
+class Int128: ...
+class UInt64: ...
+class UInt128: ...
 class Float64: ...
 class String: ...
 "#,
@@ -2323,5 +2336,236 @@ from typing import reveal_type
 # We read only the first 100 rows like Polars, so the row-101 key `b` is dropped and the column
 # set matches the runtime schema.
 reveal_type(pl.DataFrame([{"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"b": 2}]))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_concat_vertical_relaxed_supertype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame({"a": [1]}, schema={"a": pl.Int64})
+d2 = pl.DataFrame({"a": [1.0]}, schema={"a": pl.Float64})
+reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_concat_vertical_relaxed_int128_absorbs_wide_unsigned,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Int128 is our widest signed dtype, so Polars keeps a UInt64 or UInt128 partner as Int128
+# rather than promoting the pair to Float64.
+d1 = pl.DataFrame(schema={"a": pl.Int128})
+d2 = pl.DataFrame(schema={"a": pl.UInt64})
+reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: DataFrame[a: Int128]
+"#,
+);
+
+testcase!(
+    test_concat_vertical_relaxed_uint128_widens_to_int128,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Polars caps a UInt128 against any signed at Int128, unlike a UInt64 which promotes to Float64.
+d1 = pl.DataFrame(schema={"a": pl.Int8})
+d2 = pl.DataFrame(schema={"a": pl.UInt128})
+reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: DataFrame[a: Int128]
+"#,
+);
+
+testcase!(
+    test_concat_vertical_relaxed_multi_column_fold,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int32, "b": pl.Int64})
+d2 = pl.DataFrame(schema={"a": pl.Int64, "b": pl.Int8})
+reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_concat_vertical_relaxed_three_frame_fold,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+i = pl.DataFrame(schema={"a": pl.Int64})
+f = pl.DataFrame(schema={"a": pl.Float64})
+reveal_type(pl.concat([i, i, f], how="vertical_relaxed"))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_concat_vertical_relaxed_unmodeled_supertype_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# The runtime supertype of int and string is String, but our `supertype()` models only the numeric
+# tower and returns None here, so we fall back rather than risk a wrong column dtype.
+i = pl.DataFrame(schema={"a": pl.Int64})
+s = pl.DataFrame(schema={"a": pl.String})
+reveal_type(pl.concat([i, s], how="vertical_relaxed"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_concat_vertical_relaxed_name_mismatch_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int64})
+d2 = pl.DataFrame(schema={"b": pl.Int64})
+reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_concat_vertical_relaxed_order_mismatch_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int64, "b": pl.Int64})
+d2 = pl.DataFrame(schema={"b": pl.Int64, "a": pl.Int64})
+reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_concat_vertical_identical_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int64, "b": pl.String})
+d2 = pl.DataFrame(schema={"a": pl.Int64, "b": pl.String})
+reveal_type(pl.concat([d1, d2], how="vertical"))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_concat_default_how_is_vertical,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int64})
+reveal_type(pl.concat([d1, d1]))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_concat_vertical_dtype_mismatch_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# `vertical` requires identical schemas; a differing dtype could be a spurious inferred difference,
+# so we fall back rather than emit an error that risks a false positive.
+d1 = pl.DataFrame(schema={"a": pl.Int64})
+d2 = pl.DataFrame(schema={"a": pl.Float64})
+reveal_type(pl.concat([d1, d2], how="vertical"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_concat_single_frame,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int64})
+reveal_type(pl.concat([d1], how="vertical"))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_concat_tuple_items,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int64})
+reveal_type(pl.concat((d1, d1), how="vertical"))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_concat_non_literal_items_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int64})
+frames = [d1, d1]
+reveal_type(pl.concat(frames, how="vertical"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_concat_how_literal_variable,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int64})
+how = "vertical"
+reveal_type(pl.concat([d1, d1], how=how))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_concat_non_literal_how_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(how: str) -> None:
+    d1 = pl.DataFrame(schema={"a": pl.Int64})
+    reveal_type(pl.concat([d1, d1], how=how))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_concat_unmodeled_how_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# `diagonal` unions the columns; it is a deliberate non-goal, so we fall back.
+d1 = pl.DataFrame(schema={"a": pl.Int64})
+reveal_type(pl.concat([d1, d1], how="diagonal"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_concat_element_without_schema_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"a": pl.Int64})
+opaque = pl.DataFrame(schema={1: pl.Int64})
+reveal_type(pl.concat([d1, opaque], how="vertical"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_concat_cross_file_schema,
+    env_cross_file(),
+    r#"
+import polars as pl
+from defs import df
+from typing import reveal_type
+reveal_type(pl.concat([df, df], how="vertical"))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
