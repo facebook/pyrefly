@@ -128,25 +128,25 @@ reveal_type(pl.DataFrame({1: [1]}))  # E: revealed type: DataFrame
 );
 
 testcase!(
-    test_fallback_value_not_list,
+    test_degrade_scalar_value,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": 1}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"a": 1}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
 testcase!(
-    test_fallback_non_literal_element,
+    test_degrade_non_literal_element,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 x: int = 1
-reveal_type(pl.DataFrame({"a": [x]}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"a": [x]}))  # E: revealed type: DataFrame[a: Unknown]
 def g() -> int: ...
-reveal_type(pl.DataFrame({"b": [g()]}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"b": [g()]}))  # E: revealed type: DataFrame[b: Unknown]
 "#,
 );
 
@@ -156,7 +156,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1, "s"]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+reveal_type(pl.DataFrame({"a": [1, "s"]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Int64`
 "#,
 );
 
@@ -166,7 +166,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1, 2.0]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+reveal_type(pl.DataFrame({"a": [1, 2.0]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Int64`
 "#,
 );
 
@@ -295,7 +295,7 @@ testcase!(
 import polars as pl
 from datetime import date, datetime
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), datetime(2020, 1, 1)]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Date`
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), datetime(2020, 1, 1)]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Date`
 "#,
 );
 
@@ -306,7 +306,7 @@ testcase!(
 import polars as pl
 from datetime import date, datetime
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), date(2020, 1, 1)]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Datetime`
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), date(2020, 1, 1)]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Datetime`
 "#,
 );
 
@@ -317,7 +317,7 @@ testcase!(
 import polars as pl
 from datetime import date
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), 5]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Date`
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), 5]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Date`
 "#,
 );
 
@@ -328,20 +328,19 @@ testcase!(
 import polars as pl
 from datetime import date
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [5, date(2020, 1, 1)]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+reveal_type(pl.DataFrame({"a": [5, date(2020, 1, 1)]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Int64`
 "#,
 );
 
 testcase!(
-    test_construct_temporal_strict_false_falls_back,
+    test_construct_temporal_strict_false_degrades,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date, datetime
 from typing import reveal_type
-# We model no temporal supertype, so a mixed-temporal column under strict=False under-reports
-# rather than guessing the runtime `Datetime`.
-reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), datetime(2020, 1, 1)]}, strict=False))  # E: revealed type: DataFrame
+# Mixed temporal supertypes are not modeled, so we do not guess the runtime `Datetime`.
+reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), datetime(2020, 1, 1)]}, strict=False))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
@@ -476,7 +475,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1, None, 2.0]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+reveal_type(pl.DataFrame({"a": [1, None, 2.0]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Int64`
 "#,
 );
 
@@ -487,7 +486,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 # The anchor comes from the first non-null element `1`, so the trailing float still does not fit.
-reveal_type(pl.DataFrame({"a": [None, 1, 2.0]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+reveal_type(pl.DataFrame({"a": [None, 1, 2.0]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Int64`
 "#,
 );
 
@@ -497,7 +496,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1, None, "x"]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+reveal_type(pl.DataFrame({"a": [1, None, "x"]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Int64`
 "#,
 );
 
@@ -542,29 +541,27 @@ reveal_type(pl.DataFrame({"a": [1, None], "b": [None]}))  # E: revealed type: Da
 );
 
 testcase!(
-    test_construct_shadowed_date_falls_back,
+    test_construct_shadowed_date_degrades,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-# Detection resolves the callee's type, so a shadowed `date` that is not `datetime.date`
-# does not fabricate a temporal schema.
+# A shadowed `date` must not fabricate a temporal dtype.
 def date() -> str: ...
-reveal_type(pl.DataFrame({"a": [date()]}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"a": [date()]}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
 testcase!(
-    test_construct_temporal_variable_not_treated_as_dtype,
+    test_construct_temporal_variable_degrades,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date, datetime
 from typing import reveal_type
-# `d` is typed `date` but may hold a `datetime` subclass at runtime, so its static type is only
-# an upper bound; we trust a direct constructor call, not a variable, and fall back here.
+# A `date` variable may hold a `datetime` subclass, so only direct constructors are trusted.
 def f(d: date) -> None:
-    reveal_type(pl.DataFrame({"a": [d, datetime(2020, 1, 1)]}))  # E: revealed type: DataFrame # !E: DataFrame[
+    reveal_type(pl.DataFrame({"a": [d, datetime(2020, 1, 1)]}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
@@ -582,38 +579,37 @@ reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2020, 1, 1, tzinf
 );
 
 testcase!(
-    test_construct_datetime_tz_mix_strict_false_falls_back,
+    test_construct_datetime_tz_mix_strict_false_degrades,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import datetime, timezone
 from typing import reveal_type
-# A naive/tz-aware datetime mix errors at runtime under strict=False, and we cannot tell the two
-# apart, so we fall back rather than report a `Datetime` schema the runtime may not produce.
-reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2020, 1, 1, tzinfo=timezone.utc)]}, strict=False))  # E: revealed type: DataFrame # !E: DataFrame[
+# Static types do not distinguish naive and timezone-aware datetimes.
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2020, 1, 1, tzinfo=timezone.utc)]}, strict=False))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
 testcase!(
-    test_construct_datetime_multi_strict_false_falls_back,
+    test_construct_datetime_multi_strict_false_degrades,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import datetime
 from typing import reveal_type
-# An all-naive datetime column is indistinguishable from a naive/tz-aware mix, so a multi-element
-# datetime column under strict=False conservatively falls back.
-reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2021, 1, 1)]}, strict=False))  # E: revealed type: DataFrame # !E: DataFrame[
+# Static types cannot prove that every datetime shares a timezone.
+reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2021, 1, 1)]}, strict=False))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
 testcase!(
-    test_fallback_complex_not_modeled,
+    test_degrade_complex_not_modeled,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1j]}))  # E: revealed type: DataFrame
+# Polars stores complex values as `Object`.
+reveal_type(pl.DataFrame({"a": [1j]}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
@@ -633,7 +629,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [True, 1]}))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Boolean`
+reveal_type(pl.DataFrame({"a": [True, 1]}))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Boolean`
 "#,
 );
 
@@ -658,15 +654,15 @@ reveal_type(pl.DataFrame({"a": [1], "b": [], "c": [2.0, 1]}))  # E: revealed typ
 );
 
 testcase!(
-    test_fallback_mixed_literal_and_non_literal,
+    test_degrade_mixed_literal_and_non_literal,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 x: int = 1
-reveal_type(pl.DataFrame({"a": [1, x]}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"a": [1, x]}))  # E: revealed type: DataFrame[a: Unknown]
 def g() -> int: ...
-reveal_type(pl.DataFrame({"b": [2, g()]}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"b": [2, g()]}))  # E: revealed type: DataFrame[b: Unknown]
 "#,
 );
 
@@ -763,14 +759,13 @@ reveal_type(pl.DataFrame({"a": [True, 1]}, strict=False))  # E: revealed type: D
 );
 
 testcase!(
-    test_strict_false_incompatible_falls_back,
+    test_strict_false_incompatible_degrades,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-# int and str have no numeric supertype, so we fall back rather than model Polars'
-# runtime String coercion; strict=False is never an error.
-reveal_type(pl.DataFrame({"a": [1, "s"]}, strict=False))  # E: revealed type: DataFrame
+# Int64 and String have no modeled supertype; Polars coerces them only under strict=False.
+reveal_type(pl.DataFrame({"a": [1, "s"]}, strict=False))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
@@ -780,17 +775,71 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1, 2.0]}, strict=True))  # E: revealed type: DataFrame # E: Polars builds column `a` with type `Int64`
+reveal_type(pl.DataFrame({"a": [1, 2.0]}, strict=True))  # E: revealed type: DataFrame[a: Unknown] # E: Polars builds column `a` with type `Int64`
 "#,
 );
 
 testcase!(
-    test_fallback_one_bad_column_pins_whole_dict,
+    test_degrade_non_list_value_keeps_good_column,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1], "b": 2}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"a": [1], "b": 2}))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+"#,
+);
+
+testcase!(
+    test_degrade_series_value_keeps_good_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, 2], "b": pl.Series()}))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+"#,
+);
+
+testcase!(
+    test_degrade_range_value_keeps_good_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1, 2], "b": range(2)}))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+"#,
+);
+
+testcase!(
+    test_degrade_per_column_order_preserved,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1], "b": [1j], "c": ["x"]}))  # E: revealed type: DataFrame[a: Int64, b: Unknown, c: String]
+"#,
+);
+
+testcase!(
+    test_degrade_column_read_consistency,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": 2})
+reveal_type(df["b"])  # E: revealed type: Series
+df["z"]  # E: Column `z` is not in the DataFrame schema
+df.select("z")  # E: Column `z` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_spread_key_still_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A spread makes the column name set unknown, so per-column degradation is unsafe.
+reveal_type(pl.DataFrame({"a": [1], **{"b": [2]}}))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -901,7 +950,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-df = pl.DataFrame({"a": 1})
+df = pl.DataFrame(data={"a": [1]})
 reveal_type(df["missing"])  # E: revealed type: Series
 "#,
 );

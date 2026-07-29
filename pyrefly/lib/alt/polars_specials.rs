@@ -118,6 +118,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Extraction is purely syntactic and never infers the element expressions.
     /// Duplicate keys yield `None`: Python keeps only the last value for a repeated
     /// key, so one column per syntactic entry would misdescribe the runtime schema.
+    /// Unresolved Polars columns keep their name as `Unknown`; pandas drops the schema.
     pub fn infer_dataframe_schema(
         &self,
         dict: &ExprDict,
@@ -139,15 +140,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if !seen.insert(name.clone()) {
                 return None;
             }
-            let Expr::List(ExprList { elts, .. }) = &item.value else {
-                return None;
-            };
-            // An explicit `schema_overrides` dtype is authoritative, so Polars casts the column to
-            // it regardless of the element values.
-            let element = match overrides.get(&name) {
-                Some(dtype) => *dtype,
-                None => {
-                    self.dataframe_list_element_type(&name, elts, kind.clone(), strict, errors)?
+            // Overrides suppress value inference and its mismatch diagnostic.
+            let element = if let Some(dtype) = overrides.get(&name) {
+                *dtype
+            } else {
+                let resolved = match &item.value {
+                    Expr::List(ExprList { elts, .. }) => {
+                        self.dataframe_list_element_type(&name, elts, kind.clone(), strict, errors)
+                    }
+                    _ => None,
+                };
+                match resolved {
+                    Some(dtype) => dtype,
+                    None if kind == DataFrameKind::Polars => PolarsDType::Unknown,
+                    None => return None,
                 }
             };
             columns.push((name, element));
@@ -193,9 +199,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some((overrides, strict))
     }
 
-    /// The column's Polars dtype, or `None` to fall back to plain construction.
-    /// The column anchors to its first non-null element; later elements must coerce into it.
-    /// Polars reports a mismatch; pandas coerces the column, so it falls back.
+    /// Anchors on the first non-null element; only Polars reports later mismatches.
     fn dataframe_list_element_type(
         &self,
         name: &Name,
