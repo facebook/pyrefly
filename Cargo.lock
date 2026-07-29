@@ -397,6 +397,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "char_str"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "576ba56f6ca18ebb069d0d07260407171712aff4dfe15ee3f8982dc16a455bcf"
+dependencies = [
+ "castaway",
+ "get-size2",
+ "itoa 1.0.18",
+ "ryu 1.0.23",
+ "serde_core",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -568,6 +581,20 @@ dependencies = [
  "ryu 1.0.23",
  "serde",
  "static_assertions",
+]
+
+[[package]]
+name = "compact_str"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79fcda08c33bb58b97008b2cdada6622500e949e060f5913361763121abd2416"
+dependencies = [
+ "castaway",
+ "cfg-if",
+ "itoa 1.0.18",
+ "serde",
+ "static_assertions",
+ "zmij",
 ]
 
 [[package]]
@@ -809,6 +836,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "drop_bomb"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bda8e21c04aca2ae33ffc2fd8c23134f3cac46db123ba97bd9d3f3b8a4a85e1"
 
 [[package]]
 name = "dupe"
@@ -1077,9 +1110,9 @@ dependencies = [
 
 [[package]]
 name = "get-size-derive2"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33ce01473d0fed9913c71114f0384807cdf584673424d093c102263645bf2a31"
+checksum = "c736d226c32e496b8377813b52269e11ad3a48d8373b68862d0364f04fd1229d"
 dependencies = [
  "attribute-derive",
  "quote",
@@ -1088,11 +1121,11 @@ dependencies = [
 
 [[package]]
 name = "get-size2"
-version = "0.10.1"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "823645bc6404ae2915707777061a47d3a031a9ee0bff51b34ec973df3d8d2990"
+checksum = "b411f34418305908ab15a82ff78958c2a9aee9a272b2a2e663836b20a4e4b9d3"
 dependencies = [
- "compact_str",
+ "compact_str 0.10.0",
  "get-size-derive2",
  "hashbrown 0.17.1",
  "ordermap",
@@ -2350,7 +2383,7 @@ dependencies = [
 name = "pyrefly_types"
 version = "1.2.0-dev.3"
 dependencies = [
- "compact_str",
+ "compact_str 0.9.1",
  "dupe",
  "itertools 0.15.0",
  "num-bigint",
@@ -2374,7 +2407,7 @@ dependencies = [
  "anyhow",
  "append-only-vec",
  "argfile",
- "compact_str",
+ "compact_str 0.9.1",
  "dupe",
  "equivalent",
  "fxhash",
@@ -2608,9 +2641,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "ruff_annotate_snippets"
-version = "0.0.4"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "deafe621728d41f23ac9e2dc0ae984b03260e6d73d66993420aea70ad3d86919"
+checksum = "233546ed5185e6d3d249f37584623fc81f106b70feda09c05b9384ed14175f6b"
 dependencies = [
  "anstyle",
  "memchr",
@@ -2619,10 +2652,11 @@ dependencies = [
 
 [[package]]
 name = "ruff_cache"
-version = "0.0.4"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ceee2c4a6c805f7264a63d9eefe00d2c1e810e83f34b9b95d00d6495519d4f8e"
+checksum = "821e84f8b47bbbd33b7c7764ddd03e18f1597467f05774953173622856f53548"
 dependencies = [
+ "char_str",
  "filetime",
  "glob",
  "globset",
@@ -2633,9 +2667,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_diagnostics"
-version = "0.0.4"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54d71d4103bc0ac2091afb1950bff3c667f5f3c8aacb73335894f166142e378b"
+checksum = "e5c3ed481c569aeebcedc2ca0e8c2daf4beb2ef9c616e0b284898d52666cc7ae"
 dependencies = [
  "get-size2",
  "is-macro",
@@ -2644,12 +2678,11 @@ dependencies = [
 
 [[package]]
 name = "ruff_notebook"
-version = "0.0.4"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f798d3786173a5a7763ec78fb750de63052a9a08d0ef840d1e7073239125a62"
+checksum = "df607d538e2fcefd4d7d6eb03cc96c5998cf0f69e19f8aac83ea03a11dbf1bd0"
 dependencies = [
  "anyhow",
- "itertools 0.15.0",
  "rand 0.10.2",
  "ruff_diagnostics",
  "ruff_source_file",
@@ -2662,14 +2695,15 @@ dependencies = [
 
 [[package]]
 name = "ruff_python_ast"
-version = "0.0.4"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a12d40253033e38020db1bdb91a2cf5d0bee1e755c1938a26d43fa3c73d2b426"
+checksum = "4e0ce4236c995d8be126c4736fd357134bd15432147bdfb660dfae32c12da68d"
 dependencies = [
  "aho-corasick",
  "arrayvec",
  "bitflags 2.13.1",
- "compact_str",
+ "char_str",
+ "compact_str 0.10.0",
  "get-size2",
  "is-macro",
  "memchr",
@@ -2685,13 +2719,13 @@ dependencies = [
 
 [[package]]
 name = "ruff_python_parser"
-version = "0.0.4"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "154345bd168f768a36f620180eabc9a5bae844d8c853182b1a24bb1a984c9b00"
+checksum = "1a07fb4fe774ed9058841de36e85838d2b3bb3600cf6db8277873b36ec94954b"
 dependencies = [
  "bitflags 2.13.1",
  "bstr",
- "compact_str",
+ "drop_bomb",
  "get-size2",
  "memchr",
  "ruff_python_ast",
@@ -2707,9 +2741,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_python_trivia"
-version = "0.0.4"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dc22c8e07f58267a6c517ab87df57f503ef92927cd0fc46c8445ff318a39e54"
+checksum = "10411b077e16999eeefac27cb75a24c65b0827f4015a0d855da9ebf09fc151f3"
 dependencies = [
  "itertools 0.15.0",
  "ruff_source_file",
@@ -2720,9 +2754,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_source_file"
-version = "0.0.4"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a7f467940ad19aead60f1a0d7ddbb08aa69f3bbfa49ab271886fb0d98459952"
+checksum = "fab3b46aac647fd93f2a7647fa3da3e443fbcfb4c8b6adb479ef73509b09c77c"
 dependencies = [
  "memchr",
  "ruff_text_size",
@@ -2731,9 +2765,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_text_size"
-version = "0.0.4"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dca33c148ef1d49a0dd430cdc05125e9c63a3c93028a2cbe7f6ffb3e5bbc4c7"
+checksum = "447fa35e0f44c86ff0947a5a14f11319c607b83628e1da0c543c964608d5c50c"
 dependencies = [
  "get-size2",
  "serde",

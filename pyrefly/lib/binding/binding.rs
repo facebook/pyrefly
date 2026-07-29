@@ -100,11 +100,11 @@ use crate::types::types::Type;
 assert_words!(Key, 2);
 assert_bytes!(KeyExpect, 12);
 assert_bytes!(KeyTypeAlias, 4);
-assert_words!(KeyExport, 3);
+assert_words!(KeyExport, 2);
 assert_words!(KeyClass, 1);
 assert_bytes!(KeyTParams, 4);
 assert_bytes!(KeyClassBaseType, 4);
-assert_words!(KeyClassField, 4);
+assert_words!(KeyClassField, 3);
 assert_bytes!(KeyClassSynthesizedFields, 4);
 assert_bytes!(KeyClassChecks, 4);
 assert_bytes!(KeyAnnotation, 12);
@@ -121,11 +121,11 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 6);
-assert_words!(BindingExpect, 15);
-assert_words!(BindingTypeAlias, 7);
-assert_words!(BindingAnnotation, 14);
-assert_words!(BindingClass, 11);
-assert_words!(BindingTParams, 10);
+assert_words!(BindingExpect, 14);
+assert_words!(BindingTypeAlias, 6);
+assert_words!(BindingAnnotation, 13);
+assert_words!(BindingClass, 10);
+assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 14);
 assert_bytes!(BindingClassMro, 4);
@@ -133,14 +133,14 @@ assert_bytes!(BindingClassChecks, 4);
 assert_bytes!(BindingClassDisjointBase, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_bytes!(BindingClassSubscriptSymmetry, 4);
-assert_words!(BindingClassField, 13);
+assert_words!(BindingClassField, 11);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 12);
+assert_words!(BindingDecorator, 11);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 22);
+assert_words!(BindingUndecoratedFunction, 20);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
