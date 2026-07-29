@@ -68,3 +68,20 @@ def f(x: str) -> None:
     y = str(x)
 [0]
 ```
+
+## `--suppress-errors` should not suppress an unused `# type: ignore`
+
+```scrut
+$ mkdir $TMPDIR/suppress_unused_type_ignore && \
+> printf 'x = 1  # type: ignore\n' > $TMPDIR/suppress_unused_type_ignore/main.py && \
+> : > $TMPDIR/suppress_unused_type_ignore/pyrefly.toml && \
+> $PYREFLY check $TMPDIR/suppress_unused_type_ignore/main.py \
+>     --config $TMPDIR/suppress_unused_type_ignore/pyrefly.toml \
+>     --error=unused-type-ignore \
+>     --suppress-errors \
+>     --summary=none \
+>     >/dev/null 2>/dev/null; \
+> cat $TMPDIR/suppress_unused_type_ignore/main.py
+x = 1  # type: ignore
+[0]
+```

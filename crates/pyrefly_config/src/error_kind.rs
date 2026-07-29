@@ -591,6 +591,16 @@ impl ErrorKind {
         matches!(self, ErrorKind::RevealType)
     }
 
+    /// Returns whether `--suppress-errors` may write a suppression comment for
+    /// this kind. Unused-ignore diagnostics are excluded because suppressing one
+    /// would only leave behind another unused ignore.
+    pub fn is_suppressable(self) -> bool {
+        match self {
+            ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore => false,
+            _ => true,
+        }
+    }
+
     /// A soft error is a warning that should not influence overload selection
     /// or other type-inference decisions. The type check itself passed, but the
     /// code pattern is suspicious.

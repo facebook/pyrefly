@@ -1383,8 +1383,8 @@ impl CheckArgs {
             // TODO: Deprecate this in favor of `pyrefly suppress`
             let serialized_errors: Vec<SerializedError> = ordinary_errors
                 .iter()
+                .filter(|e| e.error_kind().is_suppressable())
                 .filter_map(SerializedError::from_error)
-                .filter(|e| !e.is_unused_ignore())
                 .collect();
             suppress::suppress_errors(serialized_errors, CommentLocation::LineBefore);
         }
