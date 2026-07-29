@@ -2609,3 +2609,36 @@ def f(keys: list[str]) -> None:
     assert_type(gen([k] for k in keys), str)
 "#,
 );
+
+// A generic overload may provide only a provisional contextual type. Do not let that type widen
+// a comprehension whose element type is already known. Regression test for a Zulip primer failure.
+testcase!(
+    test_overload_generic_hint_does_not_widen_comprehension,
+    r#"
+from collections.abc import Collection
+from typing import assert_type
+
+def validated_emails(emails: Collection[str]) -> list[str]:
+    result = list(filter(bool, {email.strip() for email in emails}))
+    assert_type(result, list[str])
+    return result
+"#,
+);
+
+// A comprehension argument to a generic parameter is inferred without context, unlike the
+// equivalent list literal, so hint-dependent elements (here a lambda) are not narrowed.
+// https://github.com/facebook/pyrefly/issues/4167
+testcase!(
+    bug = "comprehension is not contextually typed against a generic parameter hint",
+    test_overload_generic_hint_does_not_narrow_comprehension_lambda,
+    r#"
+from collections.abc import Callable, Iterable
+from typing import assert_type
+
+def g[T](it: Iterable[Callable[[int], T]]) -> T: ...
+
+def call() -> None:
+    assert_type(g([lambda a: a]), int)
+    assert_type(g([lambda a: a for _ in range(1)]), int)  # E: assert_type(Unknown, int) failed
+"#,
+);

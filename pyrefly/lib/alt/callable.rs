@@ -460,6 +460,28 @@ impl CallArgPreEval<'_> {
                     solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
                     return Some(ty);
                 }
+                if matches!(
+                    x,
+                    Expr::ListComp(_) | Expr::SetComp(_) | Expr::DictComp(_) | Expr::Generator(_)
+                ) && hint
+                    .collect_maybe_placeholder_vars()
+                    .into_iter()
+                    .any(|var| solver.solver().var_is_quantified(var))
+                {
+                    // A generic parameter hint is provisional until all arguments have
+                    // constrained its variables. Inferring a comprehension from that hint can
+                    // widen a known element type (for example, `str` to `object` in `filter`).
+                    // Infer it once without context, then use the result to constrain the generic.
+                    let ty = solver.expr_infer(x, arg_errors);
+                    solver.check_type_with_options(
+                        &ty,
+                        hint,
+                        range,
+                        TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
+                    );
+                    solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                    return Some(ty);
+                }
                 let ty = solver
                     .expr_with_options(
                         x,
