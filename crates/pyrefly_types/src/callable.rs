@@ -644,24 +644,36 @@ pub enum PropertyRole {
     DeleterDecorator,
 }
 
-/// Shape of a function body that consists of a single placeholder statement.
-/// The two variants share the surface form of "trivial body" but have very
-/// different semantics: `RaiseNotImplementedError` is an "abstract-ish"
-/// placeholder that never returns at runtime, while `ReturnNotImplemented`
-/// returns the singleton `NotImplemented` value (a real runtime value used by
-/// the dunder protocol). The type checker keeps them separate so it can relax
-/// override-consistency only for the abstract-style form, without conflating
-/// it with the dunder-protocol form.
+/// Shape of a function body.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
 )]
-pub enum PlaceholderBodyKind {
+pub enum BodyKind {
     /// Body is exactly `raise NotImplementedError(...)`. This is the canonical
     /// "abstract-ish" placeholder; concrete subclasses override it.
     RaiseNotImplementedError,
     /// Body is exactly `return NotImplemented`. This is the dunder-protocol
     /// signal to defer to the other operand and is not an override placeholder.
     ReturnNotImplemented,
+    /// Body is exactly `...`. This is the canonical placeholder for an elided
+    /// function body in a stub-like context.
+    Ellipsis,
+    /// Body is `pass` or a docstring.
+    Trivial,
+    #[default]
+    Other,
+}
+
+impl BodyKind {
+    pub fn is_placeholder_or_trivial(&self) -> bool {
+        matches!(
+            self,
+            Self::RaiseNotImplementedError
+                | Self::ReturnNotImplemented
+                | Self::Ellipsis
+                | Self::Trivial
+        )
+    }
 }
 
 #[derive(
@@ -720,11 +732,9 @@ pub struct FuncFlags {
     /// annotated to return a coroutine, which look identical at the type level
     /// once the async-wrapping into `Coroutine[Any, Any, T]` has happened.
     pub is_async: bool,
-    /// Set when the function body is a single placeholder statement (see
-    /// `PlaceholderBodyKind`), ignoring a leading docstring. `None` for
-    /// ordinary function bodies, and also for trivial bodies (`pass`, `...`,
-    /// or empty) — those are tracked separately as stubs, not placeholders.
-    pub placeholder_body_kind: Option<PlaceholderBodyKind>,
+    /// Tracks special function body shapes such as placeholder statements
+    /// and trivial bodies (see `BodyKind`).
+    pub body_kind: BodyKind,
     /// Set when the function's return type has no user-supplied annotation and
     /// was inferred from the body (corresponds to
     /// `ReturnTypeKind::ShouldInferType`). Used to distinguish a return type

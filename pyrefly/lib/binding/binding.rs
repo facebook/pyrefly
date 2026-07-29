@@ -22,7 +22,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
-use pyrefly_types::callable::PlaceholderBodyKind;
+use pyrefly_types::callable::BodyKind;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::special_form::SpecialForm;
@@ -1905,9 +1905,8 @@ pub struct BindingUndecoratedFunction {
     pub def: FunctionDefData,
     pub stub_or_impl: FunctionStubOrImpl,
     pub has_ellipsis_body: bool,
-    /// `Some` if the function body is a single placeholder statement
-    /// (`raise NotImplementedError(...)` or `return NotImplemented`); `None` otherwise.
-    pub placeholder_body_kind: Option<PlaceholderBodyKind>,
+    /// The shape of the function body.
+    pub body_kind: BodyKind,
     /// `true` when the return type has no user-supplied annotation and will be
     /// inferred from the body (i.e. the corresponding `ReturnType` binding will
     /// use `ReturnTypeKind::ShouldInferType`).

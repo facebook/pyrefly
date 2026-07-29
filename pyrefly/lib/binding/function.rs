@@ -16,7 +16,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::PlaceholderBodyKind;
+use pyrefly_types::callable::BodyKind;
 use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
 use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_util::prelude::VecExt;
@@ -704,7 +704,7 @@ impl<'a> BindingsBuilder<'a> {
     ) -> (
         FunctionStubOrImpl,
         bool,
-        Option<PlaceholderBodyKind>,
+        BodyKind,
         bool,
         Option<SelfAssignments>,
     ) {
@@ -716,17 +716,7 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             body.as_slice()
         };
-        let body_is_ellipse = match body_no_docstring {
-            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
-            _ => false,
-        };
-        let body_is_trivial = body_is_ellipse
-            || (match body_no_docstring {
-                [] => true,
-                [Stmt::Pass(_)] => true,
-                _ => false,
-            });
-        let placeholder_body_kind = match body_no_docstring {
+        let body_kind = match body_no_docstring {
             // raise NotImplementedError(...)
             [Stmt::Raise(StmtRaise { exc: Some(exc), .. })]
                 if self.as_special_export(match &**exc {
@@ -734,7 +724,7 @@ impl<'a> BindingsBuilder<'a> {
                     other => other,
                 }) == Some(SpecialExport::NotImplementedError) =>
             {
-                Some(PlaceholderBodyKind::RaiseNotImplementedError)
+                BodyKind::RaiseNotImplementedError
             }
             // return NotImplemented
             [
@@ -742,11 +732,16 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(val), ..
                 }),
             ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => {
-                Some(PlaceholderBodyKind::ReturnNotImplemented)
+                BodyKind::ReturnNotImplemented
             }
-            _ => None,
+            // ...
+            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => {
+                BodyKind::Ellipsis
+            }
+            [] | [Stmt::Pass(_)] => BodyKind::Trivial,
+            _ => BodyKind::Other,
         };
-        if decorators.is_overload && !body_is_trivial && placeholder_body_kind.is_none() {
+        if decorators.is_overload && !body_kind.is_placeholder_or_trivial() {
             self.error(
                 func_name.range(),
                 ErrorKind::UselessOverloadBody,
@@ -755,19 +750,18 @@ impl<'a> BindingsBuilder<'a> {
         }
         // A `...` body is always interpreted as a stub function.
         // Functions with other trivial bodies are interpreted as stubs in some contexts.
-        let stub_or_impl = if body_is_ellipse
+        let stub_or_impl = if body_kind == BodyKind::Ellipsis
             || ((self.scopes.is_in_protocol_class()
                 || decorators.is_abstract_method
                 || decorators.is_overload)
-                && body_is_trivial)
+                && body_kind == BodyKind::Trivial)
         {
             FunctionStubOrImpl::Stub
         } else {
             FunctionStubOrImpl::Impl
         };
         let should_report_unused_parameters = stub_or_impl == FunctionStubOrImpl::Impl
-            && !body_is_trivial
-            && placeholder_body_kind.is_none()
+            && !body_kind.is_placeholder_or_trivial()
             && !decorators.is_overload
             && !decorators.is_override
             && !decorators.is_abstract_method;
@@ -873,8 +867,8 @@ impl<'a> BindingsBuilder<'a> {
 
         (
             stub_or_impl,
-            body_is_ellipse,
-            placeholder_body_kind,
+            body_kind == BodyKind::Ellipsis,
+            body_kind,
             is_return_inferred,
             self_assignments,
         )
@@ -1016,24 +1010,19 @@ impl<'a> BindingsBuilder<'a> {
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let calls_super_method = SuperMethodCallFinder::find(&func_name.id, &x.body);
-        let (
-            stub_or_impl,
-            has_ellipsis_body,
-            placeholder_body_kind,
-            is_return_inferred,
-            self_assignments,
-        ) = self.function_body(
-            &mut x.parameters,
-            mem::take(&mut x.body),
-            &decorators,
-            x.range,
-            x.is_async,
-            return_ann_with_range,
-            &func_name,
-            parent,
-            undecorated_idx,
-            class_key,
-        );
+        let (stub_or_impl, has_ellipsis_body, body_kind, is_return_inferred, self_assignments) =
+            self.function_body(
+                &mut x.parameters,
+                mem::take(&mut x.body),
+                &decorators,
+                x.range,
+                x.is_async,
+                return_ann_with_range,
+                &func_name,
+                parent,
+                undecorated_idx,
+                class_key,
+            );
 
         // Pop the annotation scope to get back to the parent scope, and handle this
         // case where we need to track assignments to `self` from methods.
@@ -1048,7 +1037,7 @@ impl<'a> BindingsBuilder<'a> {
                 def: FunctionDefData::new(x),
                 stub_or_impl,
                 has_ellipsis_body: has_ellipsis_body && self.type_checking_depth == 0,
-                placeholder_body_kind,
+                body_kind,
                 is_return_inferred,
                 calls_super_method,
                 class_key,

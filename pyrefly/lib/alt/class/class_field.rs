@@ -18,12 +18,12 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::callable::BodyKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::read_only::IsFinalVariableInitialized;
@@ -3975,13 +3975,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let (placeholder_kind, is_async, is_return_inferred) = ty
                         .visit_toplevel_func_metadata(&|meta| {
                             (
-                                meta.flags.placeholder_body_kind,
+                                meta.flags.body_kind,
                                 meta.flags.is_async,
                                 meta.flags.is_return_inferred,
                             )
                         });
-                    if placeholder_kind != Some(PlaceholderBodyKind::RaiseNotImplementedError)
-                        || !is_return_inferred
+                    if placeholder_kind != BodyKind::RaiseNotImplementedError || !is_return_inferred
                     {
                         return;
                     }

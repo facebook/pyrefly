@@ -16,10 +16,10 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::BodyKind;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::IdentityIgnored;
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::Int;
@@ -521,7 +521,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def_index: FuncDefIndex,
         stub_or_impl: FunctionStubOrImpl,
         has_ellipsis_body: bool,
-        placeholder_body_kind: Option<PlaceholderBodyKind>,
+        body_kind: BodyKind,
         is_return_inferred: bool,
         calls_super_method: bool,
         class_key: Option<&Idx<KeyClass>>,
@@ -551,7 +551,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_staticmethod: is_dunder_new,
             is_classmethod: is_dunder_init_subclass,
             is_async: def.is_async,
-            placeholder_body_kind,
+            body_kind,
             is_return_inferred,
             calls_super_method,
             ..Default::default()
