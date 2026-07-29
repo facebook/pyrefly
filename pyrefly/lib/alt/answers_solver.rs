@@ -685,26 +685,22 @@ impl CalcStack {
         None
     }
 
-    /// Merge from the top SCC anchor when a back-edge re-enters from outside
-    /// the top SCC segment.
+    /// Merge from the top SCC anchor when a nonmember caller requests a member.
     ///
     /// A plain top-SCC absorb only handles free-floating nodes and can miss
     /// full SCC merge semantics when SCC fragments are involved. Using
     /// `merge_sccs` here ensures all phase-0 and phase-1+ re-entry paths share
     /// the same merge+absorb behavior and consistent demotion signaling
     /// (`merge_happened`).
-    fn merge_top_scc_on_outside_reentry(&self) {
+    fn merge_top_scc_on_nonmember_reentry(&self) {
         let detected_at = {
-            let stack_len = self.stack.borrow().len();
+            let stack = self.stack.borrow();
             let scc_stack = self.scc_stack.borrow();
-            if let Some(top_scc) = scc_stack.last() {
-                if stack_len > top_scc.top_pos_exclusive {
+            match (scc_stack.last(), stack.iter().rev().nth(1)) {
+                (Some(top_scc), Some(caller)) if !top_scc.node_state.contains_key(caller) => {
                     Some(top_scc.detected_at.dupe())
-                } else {
-                    None
                 }
-            } else {
-                None
+                _ => None,
             }
         };
         if let Some(detected_at) = detected_at {
@@ -714,11 +710,11 @@ impl CalcStack {
 
     /// Shared top-SCC member handling for back-edge re-entry paths in `push`.
     ///
-    /// Ensures outside-segment re-entry merge runs first, then restores
+    /// Ensures nonmember re-entry merge runs first, then restores
     /// top_pos_exclusive symmetry with `pop`, then dispatches using the current
     /// iteration node state.
     fn binding_action_for_top_scc_member(&self, current: &CalcId) -> BindingAction {
-        self.merge_top_scc_on_outside_reentry();
+        self.merge_top_scc_on_nonmember_reentry();
         // Increment top_pos_exclusive because pop() will decrement
         // top_pos_exclusive for any node in node_state, so push must
         // balance it with an increment.
@@ -4123,6 +4119,31 @@ mod scc_tests {
         assert!(
             matches!(action, BindingAction::Calculate),
             "push should return Calculate for a Fresh member after merge"
+        );
+    }
+
+    #[test]
+    fn test_nonmember_caller_is_absorbed_within_scc_stack_bounds() {
+        let member = CalcId::for_test("m", 0);
+        let caller = CalcId::for_test("m", 1);
+        let calc_stack = make_calc_stack(&[member.dupe(), caller.dupe()]);
+        let mut scc = make_test_scc(fresh_nodes(&[member.dupe()]), member.dupe(), 0);
+        scc.top_pos_exclusive = 3;
+        scc.owner = SccOwner::Driver(0);
+        scc.iterative.iteration = 1;
+        calc_stack.scc_stack.borrow_mut().push(scc);
+
+        let action = calc_stack.push(member);
+
+        assert!(
+            matches!(action, BindingAction::Calculate),
+            "the absorbed caller should leave the requested member Fresh"
+        );
+        assert!(
+            calc_stack.borrow_scc_stack()[0]
+                .node_state
+                .contains_key(&caller),
+            "the nonmember caller should be absorbed despite the broad stack bound"
         );
     }
 
