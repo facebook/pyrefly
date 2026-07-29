@@ -182,12 +182,13 @@ impl<'a> Transaction<'a> {
             match bindings.idx_to_key(idx) {
                 key @ Key::ReturnType(id) if inlay_hint_config.function_return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                        Binding::Function(x, _pred, _class_meta) => {
+                        Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(mut ty) = self.get_type_for_display(handle, key)
                                 && !ty.is_any()
                             {
-                                let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                                let fun =
+                                    bindings.get(bindings.get(*decorated_idx).undecorated_idx);
                                 if fun.def.is_async
                                     && let Some(Some((_, _, return_ty))) = self.ad_hoc_solve(
                                         handle,
@@ -625,9 +626,9 @@ impl<'a> Transaction<'a> {
                 .flat_map(|idx| {
                     let binding = bindings.get(idx);
                     // Check if this binding is a function
-                    if let Binding::Function(key_function, _, _) = binding {
+                    if let Binding::Function { decorated_idx, .. } = binding {
                         let binding_func =
-                            bindings.get(bindings.get(*key_function).undecorated_idx);
+                            bindings.get(bindings.get(*decorated_idx).undecorated_idx);
                         let args = binding_func.def.parameters.args.clone();
                         let func_args: Vec<ParameterAnnotation> = args
                             .into_iter()
@@ -673,12 +674,13 @@ impl<'a> Transaction<'a> {
                 // Return Annotation
                 key @ Key::ReturnType(id) if return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                        Binding::Function(x, _pred, _class_meta) => {
+                        Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(ty) = self.get_type_for_display(handle, key)
                                 && is_interesting_type(&ty)
                             {
-                                let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                                let fun =
+                                    bindings.get(bindings.get(*decorated_idx).undecorated_idx);
                                 res.push((
                                     fun.def.parameters.range.end(),
                                     ty,

@@ -177,8 +177,8 @@ fn create_intermediate_definition_from(
                     matches!(def_key, Key::Definition(..)),
                 ));
             }
-            Binding::Function(idx, ..) => {
-                let func = bindings.get(*idx);
+            Binding::Function { decorated_idx, .. } => {
+                let func = bindings.get(*decorated_idx);
                 let undecorated = bindings.get(func.undecorated_idx);
                 let symbol_kind = if undecorated.class_key.is_some() {
                     SymbolKind::Method

@@ -1831,7 +1831,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let binding = Binding::Forward(*definition);
                 let value_ty =
                     Arc::unwrap_or_clone(self.solve_binding(&binding, range, errors)).into_ty();
-                if let Binding::Function(decorated_idx, _, _) = self.bindings().get(*definition) {
+                if let Binding::Function { decorated_idx, .. } = self.bindings().get(*definition) {
                     descriptor_is_override = self
                         .get_decorated_function(*decorated_idx)
                         .undecorated

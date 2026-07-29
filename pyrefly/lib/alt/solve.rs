@@ -5866,9 +5866,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     receiver.as_deref(),
                     errors,
                 ),
-            &Binding::Function(idx, mut pred, _) => {
-                let def = self.get_decorated_function(idx);
-                self.solve_function_binding(def, &mut pred, errors)
+            &Binding::Function {
+                decorated_idx,
+                mut pred_idx,
+                ..
+            } => {
+                let def = self.get_decorated_function(decorated_idx);
+                self.solve_function_binding(def, &mut pred_idx, errors)
             }
             Binding::Import(x) => self.solve_import(x, errors),
             Binding::ClassDef(x, decorators) => match &self.get_idx(*x).0 {

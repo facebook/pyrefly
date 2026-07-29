@@ -2080,9 +2080,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             b = self.bindings().get(*k);
         }
-        if let Binding::Function(idx, pred_, _) = b {
-            *pred = *pred_;
-            Some(self.get_decorated_function(*idx))
+        if let Binding::Function {
+            decorated_idx,
+            pred_idx,
+            ..
+        } = b
+        {
+            *pred = *pred_idx;
+            Some(self.get_decorated_function(*decorated_idx))
         } else {
             None
         }

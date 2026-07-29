@@ -1077,7 +1077,11 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_current_as(
             &func_name,
             def_idx,
-            Binding::Function(function_idx, pred_idx, metadata_key),
+            Binding::Function {
+                decorated_idx: function_idx,
+                pred_idx,
+                class_meta_idx: metadata_key,
+            },
             FlowStyle::FunctionDef {
                 function_idx,
                 has_return_annotation: return_ann_with_range.is_some(),

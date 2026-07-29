@@ -548,12 +548,12 @@ fn parse_variables(
                     | Binding::TypeAliasRef(_) => (None, SlotCounts::default()),
                     // Functions and classes are handled by parse_functions/parse_classes;
                     // skip them here even when excluded (e.g. @type_check_only).
-                    Binding::Function(..) | Binding::ClassDef(..) => continue,
+                    Binding::Function { .. } | Binding::ClassDef(..) => continue,
                     // IMPLICIT: non-call assignments have 0 slots;
                     // call assignments are untyped (1 slot)
                     Binding::NameAssign(na) => (None, untyped_if_call(na.expr.as_ref())),
                     Binding::MultiTargetAssign(_, rhs_idx, _, _) => match bindings.get(*rhs_idx) {
-                        Binding::Function(..) | Binding::ClassDef(..) => continue,
+                        Binding::Function { .. } | Binding::ClassDef(..) => continue,
                         Binding::Expr(_, expr) => (None, untyped_if_call(expr.as_ref())),
                         _ => {
                             unreachable!(
@@ -758,9 +758,13 @@ fn parse_functions(
 
     for idx in bindings.keys::<Key>() {
         if let Key::Definition(id) = bindings.idx_to_key(idx)
-            && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
+            && let Binding::Function {
+                decorated_idx,
+                pred_idx,
+                ..
+            } = bindings.get(idx)
         {
-            let decorated = bindings.get(*x);
+            let decorated = bindings.get(*decorated_idx);
             let fun = bindings.get(decorated.undecorated_idx);
             // Skip functions nested inside other functions, even when the name collides with an
             // exported module-level function (gh-4018).
@@ -782,11 +786,14 @@ fn parse_functions(
             }
             // Skip overload implementation signatures — only @overload
             // decorated signatures are part of the public API.
-            if let Some(pred) = _pred
-                && let Binding::Function(pred_x, _, _) = bindings.get(*pred)
+            if let Some(pred) = pred_idx
+                && let Binding::Function {
+                    decorated_idx: decorated_pred_idx,
+                    ..
+                } = bindings.get(*pred)
             {
                 let pred_is_overload = answers
-                    .get_idx(bindings.get(*pred_x).undecorated_idx)
+                    .get_idx(bindings.get(*decorated_pred_idx).undecorated_idx)
                     .is_some_and(|u| u.metadata.flags.is_overload);
                 let this_is_overload = answers
                     .get_idx(decorated.undecorated_idx)

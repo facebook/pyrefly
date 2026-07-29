@@ -2338,17 +2338,17 @@ pub enum Binding {
     Global(ImplicitGlobal),
     /// A type parameter.
     TypeParameter(Box<TypeParameter>),
-    /// The type of a function. The fields are:
-    /// - A reference to the KeyDecoratedFunction that point to the def
-    /// - An optional reference to any previous function in the same flow by the same name;
-    ///   this is needed to fold `@overload` decorated defs into a single type.
-    /// - An optional reference to class metadata, which will be non-None when the function
-    ///   is defined within a class scope.
-    Function(
-        Idx<KeyDecoratedFunction>,
-        Option<Idx<Key>>,
-        Option<Idx<KeyClassMetadata>>,
-    ),
+    /// The type of a function.
+    Function {
+        /// A reference to the KeyDecoratedFunction that points to the def.
+        decorated_idx: Idx<KeyDecoratedFunction>,
+        /// An optional reference to any previous function in the same flow by the same name;
+        /// this is needed to fold `@overload` decorated defs into a single type.
+        pred_idx: Option<Idx<Key>>,
+        /// An optional reference to class metadata, which will be non-None when the function
+        /// is defined within a class scope.
+        class_meta_idx: Option<Idx<KeyClassMetadata>>,
+    },
     /// An import statement, typically with `Self::Import`.
     Import(Box<ImportBinding>),
     /// A class definition, points to a BindingClass and any decorators.
@@ -2550,7 +2550,9 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, ")")
             }
-            Self::Function(x, _pred, _class) => write!(f, "Function({})", ctx.display(*x)),
+            Self::Function { decorated_idx, .. } => {
+                write!(f, "Function({})", ctx.display(*decorated_idx))
+            }
             Self::Import(x) => {
                 write!(
                     f,
@@ -2763,8 +2765,8 @@ impl Binding {
             | Binding::TypeParameter(_)
             | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
-            Binding::Function(_, _, class_metadata) => {
-                if class_metadata.is_some() {
+            Binding::Function { class_meta_idx, .. } => {
+                if class_meta_idx.is_some() {
                     Some(SymbolKind::Method)
                 } else {
                     Some(SymbolKind::Function)

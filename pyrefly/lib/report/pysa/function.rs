@@ -609,9 +609,9 @@ impl FunctionNode {
                 ..
             }) => {
                 let binding = context.bindings.get(*definition);
-                if let Binding::Function(key_decorated_function, _, _) = binding {
+                if let Binding::Function { decorated_idx, .. } = binding {
                     let exported_function = get_exported_decorated_function(
-                        *key_decorated_function,
+                        *decorated_idx,
                         /* skip_property_getter */ false,
                         context,
                     );
