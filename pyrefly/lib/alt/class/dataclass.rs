@@ -1232,11 +1232,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             self.class_self_param(cls, false)
         };
+        // Pydantic models (BaseModel/RootModel/BaseSettings) do not honor `Field(init=False)`:
+        // the field still appears in the validator-driven `__init__`.
+        // Pydantic dataclasses and stdlib/attrs dataclasses follow the behavior of built-in dataclasses.
+        let init_arg_should_be_ignored = matches!(
+            self.get_metadata_for_class(cls).pydantic_model_kind(),
+            Some(
+                PydanticModelKind::BaseModel
+                    | PydanticModelKind::RootModel
+                    | PydanticModelKind::BaseSettings
+            )
+        );
         let mut params = vec![self_param];
         let mut has_seen_default = false;
         for (name, field, field_flags) in self.iter_fields(cls, dataclass, true, kw_only_by_class) {
             let strict = field_flags.strict.unwrap_or(strict_default);
-            if field_flags.init {
+            if field_flags.init || init_arg_should_be_ignored {
                 let has_default = force_optional
                     || field_flags.default.is_some()
                     || (field_flags.init_by_name && field_flags.init_by_alias.is_some());
