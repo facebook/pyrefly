@@ -205,6 +205,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Some(result_ty)
     }
 
+    /// Operands must be distributed over unions before calling this method, so only a union
+    /// member whose result is entirely `NotImplementedType` advances to the reflected dunder.
     fn try_binop_calls(
         &self,
         calls: &[(&Name, &Type, &Type)],
@@ -213,7 +215,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context: &dyn Fn() -> ErrorContext,
     ) -> Type {
         let mut first_call = None;
-        let mut successful_ret = self.heap.mk_never();
         let not_implemented_type = self.stdlib.not_implemented_type();
         for (dunder, target, arg) in calls {
             let method_type_dunder = self.type_of_magic_dunder_attr(
@@ -254,18 +255,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     continue;
                 }
                 errors.extend(callee_errors);
-                if ret_without_not_implemented != ret {
-                    successful_ret = self.union(successful_ret, ret_without_not_implemented);
-                    continue;
-                }
-                return self.union(successful_ret, ret_without_not_implemented);
+                return ret_without_not_implemented;
             } else if first_call.is_none() {
                 first_call = Some((callee_errors, call_errors, ret));
             }
         }
-        if !successful_ret.is_never() {
-            successful_ret
-        } else if let Some((callee_errors, call_errors, ret)) = first_call {
+        if let Some((callee_errors, call_errors, ret)) = first_call {
             errors.extend(callee_errors);
             errors.extend(call_errors);
             ret
