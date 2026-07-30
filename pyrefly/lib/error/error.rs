@@ -16,6 +16,7 @@ use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticTag;
 use lsp_types::Url;
+use pyrefly_python::ignore::SuppressionEdit;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
@@ -47,6 +48,13 @@ pub struct SecondaryAnnotation {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorQuickFix {
     ReplaceWithEnumMember { replacement: String },
+    RemoveUnusedSuppression(SuppressionEdit),
+}
+
+impl From<SuppressionEdit> for ErrorQuickFix {
+    fn from(edit: SuppressionEdit) -> Self {
+        Self::RemoveUnusedSuppression(edit)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -63,7 +71,7 @@ pub struct Error {
     msg_details: Option<Box<str>>,
     /// Additional labeled spans in the same file for richer diagnostics.
     secondary_annotations: Vec<SecondaryAnnotation>,
-    /// Structured fixes that can be exposed by editor integrations.
+    /// Structured fixes used by editor and command integrations.
     quick_fixes: Vec<ErrorQuickFix>,
 }
 

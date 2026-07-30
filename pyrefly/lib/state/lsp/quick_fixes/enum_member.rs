@@ -33,7 +33,9 @@ pub(crate) fn replace_with_enum_member_code_action(
 }
 
 fn enum_member_replacement(error: &Error) -> Option<&str> {
-    let ErrorQuickFix::ReplaceWithEnumMember { replacement } = error.quick_fixes().first()?;
+    let ErrorQuickFix::ReplaceWithEnumMember { replacement } = error.quick_fixes().first()? else {
+        return None;
+    };
     Some(replacement.as_str())
 }
 
