@@ -1014,10 +1014,9 @@ impl<'a> BindingsBuilder<'a> {
                     NarrowUseLocation::Span(guard.range()),
                     &Usage::NonPinningValue(None),
                 );
-                self.insert_binding(
-                    Key::Anon(guard.range()),
-                    Binding::Expr(None, Box::new(*guard)),
-                );
+                // Route the guard through `BindingExpect::Bool` (like `if`/`while`) so it
+                // receives the same condition checks, e.g. `implicit-bool`.
+                self.insert_binding(KeyExpect::Bool(guard.range()), BindingExpect::Bool(*guard));
                 new_narrow_ops.and_all(PatternNarrowOps::from_scope(guard_narrow_ops))
             }
             // Only accumulate narrows for the match subject. Alias names

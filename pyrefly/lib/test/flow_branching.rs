@@ -1102,17 +1102,15 @@ def f(a: A, b: A, c: A) -> None:
     "#,
 );
 
-// Match-case guards are bound as a plain expression, bypassing the `BindingExpect::Bool`
-// path that `if`/`while`/`assert` use, so no condition checks (including `implicit-bool`)
-// fire on them yet.
+// Match-case guards are truth-tested like `if`/`while` conditions, so a non-`bool` guard
+// is flagged.
 testcase!(
-    bug = "match guards are not checked for implicit bool",
     test_implicit_bool_match_guard,
     implicit_bool_env(),
     r#"
 def f(x: int, items: list[int]) -> None:
     match x:
-        case _ if items:
+        case _ if items:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
             ...
     "#,
 );
