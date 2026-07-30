@@ -245,7 +245,7 @@ testcase!(
     test_removed_stdlib_module_respects_python_version,
     TestEnv::new_with_version(PythonVersion::new(3, 12, 0)),
     r#"
-import distutils  # E: Cannot find module `distutils`
+import distutils  # E: Stubs for `distutils` are bundled with Pyrefly
 "#,
 );
 

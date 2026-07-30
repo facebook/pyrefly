@@ -444,14 +444,6 @@ pub fn find_import_internal(
     let bundled_typeshed_origin =
         origin.is_some_and(|path| matches!(path.details(), ModulePathDetails::BundledTypeshed(_)));
     let origin = origin.map(|p| p.as_path());
-    // If a stdlib module exists in bundled typeshed but is unavailable for the active
-    // Python version, do not fall through to third-party bundled stubs with the same
-    // top-level name. That would turn a removed stdlib import like `distutils` on 3.12
-    // into a misleading third-party stub result from `setuptools`.
-    let unavailable_stdlib_module = matches!(style_filter, Some(ModuleStyle::Interface) | None)
-        && typeshed().is_ok_and(|ts| {
-            ts.is_known_but_unavailable_for_python_version(module, config.python_version())
-        });
     let from_real_config_file = config.from_real_config_file();
 
     if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
@@ -543,11 +535,7 @@ pub fn find_import_internal(
         config.site_package_path(),
         &mut namespaces_found,
         style_filter,
-        if unavailable_stdlib_module {
-            None
-        } else {
-            find_third_party_stub(module, style_filter)
-        },
+        find_third_party_stub(module, style_filter),
         from_real_config_file,
         phantom_paths,
         dir_cache,
@@ -626,12 +614,6 @@ pub fn find_import_filtered(
 
 /// Find all legitimate imports that start with `module`
 pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<ModuleName> {
-    let is_shadowed_removed_stdlib = |candidate: ModuleName| {
-        typeshed().is_ok_and(|ts| {
-            ts.has_module(candidate)
-                && !ts.is_available_for_python_version(candidate, config.python_version())
-        })
-    };
     let mut results = find_module_prefixes(
         module,
         config.search_path().chain(config.site_package_path()),
@@ -652,8 +634,7 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
         let module_str = module.as_str();
         let typeshed_modules = typeshed_third_party
             .modules()
-            .filter(|m| module_str.is_empty() || m.as_str().starts_with(module_str))
-            .filter(|m| !is_shadowed_removed_stdlib(*m));
+            .filter(|m| module_str.is_empty() || m.as_str().starts_with(module_str));
 
         results.extend(typeshed_modules);
     }
@@ -2928,34 +2909,26 @@ mod tests {
     #[test]
     fn test_find_import_prefixes_respects_stdlib_versions() {
         let mut config = get_config(ConfigSource::Synthetic);
-        config.python_environment.python_version = Some(PythonVersion::new(3, 11, 0));
-        config.configure();
-        let prefixes = find_import_prefixes(&config, ModuleName::from_str("dist"));
-        assert!(
-            prefixes
-                .iter()
-                .any(|m| m == &ModuleName::from_str("distutils"))
-        );
-
         config.python_environment.python_version = Some(PythonVersion::new(3, 12, 0));
         config.configure();
-        let prefixes = find_import_prefixes(&config, ModuleName::from_str("dist"));
-        assert!(
-            !prefixes
-                .iter()
-                .any(|m| m == &ModuleName::from_str("distutils"))
-        );
+        let prefixes = find_import_prefixes(&config, ModuleName::from_str("chu"));
+        assert!(prefixes.iter().any(|m| m == &ModuleName::from_str("chunk")));
+
+        config.python_environment.python_version = Some(PythonVersion::new(3, 13, 0));
+        config.configure();
+        let prefixes = find_import_prefixes(&config, ModuleName::from_str("chu"));
+        assert!(!prefixes.iter().any(|m| m == &ModuleName::from_str("chunk")));
     }
 
     #[test]
     fn test_find_import_respects_stdlib_versions() {
         let mut config = get_config(ConfigSource::Synthetic);
         let dir_cache = DirEntryCache::new();
-        config.python_environment.python_version = Some(PythonVersion::new(3, 11, 9));
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 9));
         config.configure();
         let result = find_import_filtered(
             &config,
-            ModuleName::from_str("distutils"),
+            ModuleName::from_str("chunk"),
             None,
             None,
             &dir_cache,
@@ -2963,11 +2936,11 @@ mod tests {
         );
         assert!(matches!(result, FindingOrError::Finding(_)));
 
-        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 1));
+        config.python_environment.python_version = Some(PythonVersion::new(3, 13, 1));
         config.configure();
         let result = find_import_filtered(
             &config,
-            ModuleName::from_str("distutils"),
+            ModuleName::from_str("chunk"),
             None,
             None,
             &dir_cache,
@@ -2977,6 +2950,41 @@ mod tests {
             result,
             FindingOrError::Error(FindError::MissingImport(_, _))
         ));
+    }
+
+    #[test]
+    fn test_removed_stdlib_name_can_resolve_to_third_party() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "distutils",
+                vec![TestPath::file("__init__.py")],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::Synthetic);
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 0));
+        config.python_environment.site_package_path = Some(vec![root.to_path_buf()]);
+        config.configure();
+
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("distutils"),
+            None,
+            None,
+            &DirEntryCache::new(),
+            None,
+        );
+        let FindingOrError::Finding(finding) = result else {
+            panic!("Expected installed third-party distutils to resolve, got: {result:?}");
+        };
+        assert!(matches!(
+            finding.finding.details(),
+            ModulePathDetails::BundledTypeshedThirdParty(_)
+        ));
+        assert!(finding.error.is_none());
     }
 
     #[test]

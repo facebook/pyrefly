@@ -170,14 +170,6 @@ impl BundledTypeshedStdlib {
         self.bundle.find(module).is_some()
     }
 
-    pub fn is_known_but_unavailable_for_python_version(
-        &self,
-        module: ModuleName,
-        version: PythonVersion,
-    ) -> bool {
-        self.has_module(module) && !self.is_available_for_python_version(module, version)
-    }
-
     pub fn is_available_for_python_version(
         &self,
         module: ModuleName,
