@@ -11,7 +11,8 @@
 //! Each case builds a synthetic Python snippet that stresses one part of the
 //! checker (enum member resolution, exhaustiveness, protocol structural matching,
 //! narrowing, gradual-typing calls, type-variable joins, inferred typed dicts,
-//! overload resolution) and times a single in-memory check of it. `SHARED_STATE`
+//! overload resolution, nested generic construction) and times a single in-memory
+//! check of it. `SHARED_STATE`
 //! pre-initializes the stdlib once, so only the snippet's check is measured, and
 //! each case asserts its expected error count up front so a scenario that stops
 //! exercising the intended path fails loudly instead of silently measuring
@@ -38,6 +39,8 @@ use pyrefly::state::require::Require;
 use pyrefly::state::state::State;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::config::ConfigFile;
+use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_config::error_kind::Severity;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -64,6 +67,10 @@ static SHARED_STATE: LazyLock<State> = LazyLock::new(|| {
         // probe site-packages. The snippets only use stdlib from bundled typeshed.
         c.interpreters.skip_interpreter_query = true;
         c.python_environment.site_package_path = Some(Vec::new());
+        c.root
+            .errors
+            .get_or_insert_default()
+            .set_error_severity(ErrorKind::ImplicitAnyLambda, Severity::Error);
         c.configure();
         ArcId::new(c)
     };
@@ -267,6 +274,32 @@ fn overload_resolution(overloads: usize, calls: usize) -> String {
     src
 }
 
+/// Each layer pushes `Base[object]` inward. Treating the leaf's soft diagnostic as
+/// a failed contextual attempt makes every layer retry, producing exponential work.
+fn nested_generic_constructor_soft_error(depth: usize) -> String {
+    let mut expression = "Leaf(lambda x: 0)".to_owned();
+    for _ in 0..depth {
+        expression = format!("Box({expression})");
+    }
+    format!(
+        r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T", covariant=True)
+
+class Base(Generic[T]): ...
+
+class Box(Base[T], Generic[T]):
+    def __init__(self, value: Base[T]) -> None: ...
+
+class Leaf(Base[T], Generic[T]):
+    def __init__(self, value: T) -> None: ...
+
+result: Base[object] = {expression}
+"#
+    )
+}
+
 /// Type-check `source` once to assert it produces `expected_errors`, then
 /// register a criterion benchmark that repeats the check. The up-front assertion
 /// guards against a scenario silently drifting to a different error count (and
@@ -333,6 +366,15 @@ fn overloads(c: &mut Criterion) {
     );
 }
 
+fn nested_generic_constructor(c: &mut Criterion) {
+    measure(
+        c,
+        "nested_generic_constructor_soft_error_12",
+        nested_generic_constructor_soft_error(12),
+        1,
+    );
+}
+
 criterion_group!(
     benches,
     smoke,
@@ -345,5 +387,6 @@ criterion_group!(
     typevar_mapping,
     anon_typed_dict,
     overloads,
+    nested_generic_constructor,
 );
 criterion_main!(benches);

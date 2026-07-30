@@ -902,7 +902,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut ret_no_match_hint = None;
             for member_hint in hints.iter() {
                 let ret = construct(Some(member_hint));
-                if !ret.errors.is_empty() {
+                if ret.errors.has_hard() {
                     continue;
                 }
                 if ret.matched_hint && ret.specialization_errors.is_none() {
