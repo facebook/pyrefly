@@ -632,9 +632,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .as_ref()
             .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol());
         flags.is_in_type_checking_block = is_in_type_checking_block;
-        if stub_or_impl == FunctionStubOrImpl::Stub {
-            flags.lacks_implementation = true;
-        }
         if module_style == ModuleStyle::Interface {
             flags.defined_in_stub_file = true;
         }

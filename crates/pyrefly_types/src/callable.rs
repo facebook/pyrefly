@@ -722,8 +722,6 @@ pub struct FuncFlags {
     pub is_abstract_method: bool,
     /// A function decorated with `@typing.no_type_check` or `@typing_extensions.no_type_check`
     pub has_no_type_check: bool,
-    /// Function body is treated as a stub (e.g. body is `...` or absent in a stub file)
-    pub lacks_implementation: bool,
     /// Is the function definition in a `.pyi` file
     pub defined_in_stub_file: bool,
     /// Set when the function was declared with `async def` (NOT when a regular
@@ -764,7 +762,8 @@ impl FuncFlags {
     /// This indicates a method that cannot actually be called at runtime (e.g. an abstract
     /// method or protocol method with a `...` or `pass` body in a `.py` file).
     pub fn lacks_runtime_implementation(&self) -> bool {
-        self.lacks_implementation && !self.defined_in_stub_file
+        matches!(self.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
+            && !self.defined_in_stub_file
     }
 }
 
