@@ -192,10 +192,11 @@ impl ClassAttribute {
     }
 
     /// Returns true if this attribute represents a data descriptor
-    /// (has both `__get__` and `__set__`), including properties with setters.
+    /// (has both `__get__` and `__set__`), including properties.
     pub fn is_data_descriptor(&self) -> bool {
         match self {
-            ClassAttribute::Property(_, Some(_), _)
+            // All properties are data descriptors: https://docs.python.org/3/howto/descriptor.html#properties.
+            ClassAttribute::Property(..)
             | ClassAttribute::Descriptor(
                 Descriptor {
                     getter: true,
