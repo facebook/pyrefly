@@ -784,7 +784,7 @@ f(untyped(1))  # E: The type of this argument is unknown
 );
 
 testcase!(
-    test_unknown_argument_type_suppressed_by_implicit_any,
+    test_unknown_argument_type_not_suppressed_by_implicit_any,
     TestEnv::new().enable_unknown_argument_type_error(),
     r#"
 def untyped(x):
@@ -792,7 +792,8 @@ def untyped(x):
 
 def f(n: int) -> None: ...
 
-f(untyped(1))  # pyrefly: ignore[implicit-any]
+# pyrefly: ignore[implicit-any]
+f(untyped(1))  # E: The type of this argument is unknown
 "#,
 );
 

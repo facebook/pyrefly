@@ -1862,7 +1862,7 @@ assert_type(1, int)  # error
 
 Default severity: `ignore`
 
-A call argument whose type is an implicit `Any` (unknown) is passed without the type checker being able to verify it against the parameter, hiding potential bugs. This is a sub-kind of [implicit-any](#implicit-any), so suppressing `implicit-any` also suppresses it. This mirrors pyright's `reportUnknownArgumentType`.
+A call argument whose type is an implicit `Any` (unknown) is passed without the type checker being able to verify it against the parameter, hiding potential bugs. This mirrors pyright's `reportUnknownArgumentType`.
 
 ```python
 def untyped(x):  # unannotated: returns an implicit `Any`

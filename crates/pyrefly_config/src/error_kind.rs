@@ -385,7 +385,6 @@ pub enum ErrorKind {
     UnimportedDirective,
     /// A call argument whose type is an implicit `Any` (unknown), because the value
     /// passed has an unknown type.
-    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     UnknownArgumentType,
     /// An unannotated attribute assigned a value with unknown type.
     UnknownAttributeType,
@@ -495,8 +494,7 @@ impl ErrorKind {
             | ErrorKind::ImplicitAnyEmptyContainer
             | ErrorKind::ImplicitAnyLambda
             | ErrorKind::ImplicitAnyParameter
-            | ErrorKind::ImplicitAnyTypeArgument
-            | ErrorKind::UnknownArgumentType => Some(ErrorKind::ImplicitAny),
+            | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
             ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
                 Some(ErrorKind::NoAnyReturn)
             }
