@@ -138,6 +138,7 @@ pub struct TestEnv {
     implicit_any_lambda_error: bool,
     invalid_abstract_method_error: bool,
     empty_body_error: bool,
+    method_assign_error: bool,
     unknown_argument_type_error: bool,
     unknown_variable_type_error: bool,
     implicit_reexport_error: bool,
@@ -192,6 +193,7 @@ impl TestEnv {
             implicit_any_lambda_error: false,
             invalid_abstract_method_error: false,
             empty_body_error: false,
+            method_assign_error: false,
             unknown_argument_type_error: false,
             unknown_variable_type_error: false,
             implicit_reexport_error: false,
@@ -447,6 +449,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_method_assign_error(mut self) -> Self {
+        self.method_assign_error = true;
+        self
+    }
+
     pub fn enable_unknown_argument_type_error(mut self) -> Self {
         self.unknown_argument_type_error = true;
         self
@@ -646,6 +653,9 @@ impl TestEnv {
         }
         if self.empty_body_error {
             errors.set_error_severity(ErrorKind::EmptyBody, Severity::Error);
+        }
+        if self.method_assign_error {
+            errors.set_error_severity(ErrorKind::MethodAssign, Severity::Error);
         }
         if self.unknown_variable_type_error {
             errors.set_error_severity(ErrorKind::UnknownVariableType, Severity::Error);

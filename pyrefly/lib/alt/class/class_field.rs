@@ -116,7 +116,9 @@ use crate::types::types::Type;
 #[derive(Debug, Clone)]
 pub enum ClassAttribute {
     /// A read-write attribute with a closed form type for both get and set actions.
-    ReadWrite(Type),
+    /// The flag is `true` when the attribute originated as a method
+    /// (`ClassFieldInner::Method`), used to flag method-rebinding assignments.
+    ReadWrite(Type, bool),
     /// A read-only attribute with a closed form type for get actions.
     ReadOnly(Type, ReadOnlyReason),
     /// A `NoAccess` attribute indicates that the attribute is well-defined, but does
@@ -132,7 +134,13 @@ pub enum ClassAttribute {
 
 impl ClassAttribute {
     pub fn read_write(ty: Type) -> Self {
-        Self::ReadWrite(ty)
+        Self::ReadWrite(ty, false)
+    }
+
+    /// Like [`read_write`](Self::read_write) but marks the attribute as having
+    /// originated as a method (`ClassFieldInner::Method`).
+    pub fn read_write_method(ty: Type) -> Self {
+        Self::ReadWrite(ty, true)
     }
 
     pub fn read_only(ty: Type, reason: ReadOnlyReason) -> Self {
@@ -153,7 +161,7 @@ impl ClassAttribute {
 
     pub fn read_only_equivalent(self, reason: ReadOnlyReason) -> Self {
         match self {
-            Self::ReadWrite(ty) => Self::ReadOnly(ty, reason),
+            Self::ReadWrite(ty, _) => Self::ReadOnly(ty, reason),
             Self::Property(getter, _, cls) => Self::Property(getter, None, cls),
             Self::Descriptor(descriptor, base) => Self::Descriptor(
                 Descriptor {
@@ -174,7 +182,7 @@ impl ClassAttribute {
         match self {
             // TODO(stroxler): ReadWrite attributes are not actually methods but limiting access to
             // ReadOnly breaks unit tests; we should investigate callsites to understand this better.
-            ClassAttribute::ReadWrite(ty) | ClassAttribute::ReadOnly(ty, _) => Some(ty),
+            ClassAttribute::ReadWrite(ty, _) | ClassAttribute::ReadOnly(ty, _) => Some(ty),
             ClassAttribute::NoAccess(..)
             | ClassAttribute::Property(..)
             | ClassAttribute::Descriptor(..) => None,
@@ -1247,10 +1255,13 @@ fn bind_class_attribute(
     cls: &ClassBase,
     attr: Type,
     read_only_reason: Option<ReadOnlyReason>,
+    is_method: bool,
 ) -> ClassAttribute {
     let ty = make_bound_classmethod(heap, cls, attr).into_inner();
     if let Some(reason) = read_only_reason {
         ClassAttribute::read_only(ty, reason)
+    } else if is_method {
+        ClassAttribute::read_write_method(ty)
     } else {
         ClassAttribute::read_write(ty)
     }
@@ -3353,12 +3364,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(quantified) = self_quantified {
                     ty = self.wrap_with_quantified(ty, quantified);
                 }
-                ClassAttribute::read_write(
-                    make_bound_method(self.heap, instance, ty).unwrap_or_else(|ty| {
-                        make_bound_classmethod(self.heap, &instance.to_class_base(), ty)
-                            .into_inner()
-                    }),
-                )
+                // Exclude `@staticmethod`: it is stored as `ClassFieldInner::Method`
+                // (see `is_method`) but must not be flagged as a method rebind (B2).
+                let is_method = !ty.is_staticmethod();
+                let bound = make_bound_method(self.heap, instance, ty).unwrap_or_else(|ty| {
+                    make_bound_classmethod(self.heap, &instance.to_class_base(), ty).into_inner()
+                });
+                if is_method {
+                    ClassAttribute::read_write_method(bound)
+                } else {
+                    ClassAttribute::read_write(bound)
+                }
             }
             ClassFieldInner::ProxyMethod { target, .. } => {
                 match self.get_class_member(instance.class, &target) {
@@ -3444,7 +3460,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ClassFieldInner::Property { mut ty, .. } => {
                 // When accessing a property on a class (not instance), you get the property object itself
                 ty = self.normalize_attr_ty(ty);
-                bind_class_attribute(self.heap, cls, ty, None)
+                bind_class_attribute(self.heap, cls, ty, None, false)
             }
             ClassFieldInner::Descriptor { descriptor, .. } => {
                 ClassAttribute::descriptor(descriptor, DescriptorBase::ClassDef(cls.clone()))
@@ -3467,7 +3483,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(quantified) = self_quantified {
                     ty = self.wrap_with_quantified(ty, quantified);
                 }
-                bind_class_attribute(self.heap, cls, ty, None)
+                // Exclude `@staticmethod` (see the instance-attribute arm).
+                let is_method = !ty.is_staticmethod();
+                bind_class_attribute(self.heap, cls, ty, None, is_method)
             }
             ClassFieldInner::ProxyMethod { .. } => ClassAttribute::no_access(
                 NoAccessReason::ProxyMethodClassAccess(cls.class_object().dupe()),
@@ -3480,6 +3498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     cls,
                     ty,
                     Some(ReadOnlyReason::ClassObjectInitializedOnBody),
+                    false,
                 )
             }
             ClassFieldInner::ClassAttribute {
@@ -3499,7 +3518,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         cls.class_object().dupe(),
                     ))
                 } else {
-                    bind_class_attribute(self.heap, cls, ty, read_only_reason)
+                    bind_class_attribute(self.heap, cls, ty, read_only_reason, false)
                 }
             }
             ClassFieldInner::InstanceAttribute { .. } => {
@@ -3987,7 +4006,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     });
                 };
                 match &mut attr {
-                    ClassAttribute::ReadOnly(ty, _) | ClassAttribute::ReadWrite(ty)
+                    ClassAttribute::ReadOnly(ty, _) | ClassAttribute::ReadWrite(ty, _)
                         if ty.has_toplevel_func_metadata() =>
                     {
                         relax_ty(ty);
@@ -5032,7 +5051,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     *should_narrow = false;
                 }
             }
-            ClassAttribute::ReadWrite(attr_ty) => {
+            ClassAttribute::ReadWrite(attr_ty, is_method) => {
+                // The attribute originated as a method (`ClassFieldInner::Method`),
+                // so rebinding it via assignment is a method-rebinding. Emit before
+                // the type-compat check below so an incompatible rebind yields BOTH
+                // `method-assign` and `BadAssignment`, and before any narrowing
+                // decision so narrowing behavior is unaffected.
+                if is_method {
+                    errors
+                        .error_builder(
+                            range,
+                            ErrorKind::MethodAssign,
+                            "Cannot assign to a method".to_owned(),
+                        )
+                        .emit();
+                }
                 // If the attribute has a converter, then `want` should be the type expected by the converter.
                 let attr_ty = match instance_class {
                     Some(cls) => match self.get_dataclass_member(cls.class_object(), attr_name) {
@@ -5226,7 +5259,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         match attr {
-            ClassAttribute::ReadWrite(ty) => Some(ClassAttribute::ReadWrite(filter_type(ty)?)),
+            ClassAttribute::ReadWrite(ty, is_method) => {
+                Some(ClassAttribute::ReadWrite(filter_type(ty)?, is_method))
+            }
             ClassAttribute::ReadOnly(ty, reason) => {
                 Some(ClassAttribute::ReadOnly(filter_type(ty)?, reason))
             }
@@ -5273,13 +5308,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ) => Err(Box::new(AttrSubsetError::Property)),
             (
                 ClassAttribute::ReadOnly(..),
-                ClassAttribute::Property(_, Some(_), _) | ClassAttribute::ReadWrite(_),
+                ClassAttribute::Property(_, Some(_), _) | ClassAttribute::ReadWrite(..),
             ) => Err(Box::new(AttrSubsetError::ReadOnly)),
             (
                 // TODO(stroxler): Investigate this case more: methods should be ReadOnly, but
                 // in some cases for unknown reasons they wind up being ReadWrite.
-                ClassAttribute::ReadWrite(got),
-                ClassAttribute::ReadWrite(want),
+                ClassAttribute::ReadWrite(got, _),
+                ClassAttribute::ReadWrite(want, _),
             ) if got.has_toplevel_func_metadata() && want.has_toplevel_func_metadata() => {
                 is_subset(got, want).map_err(|subset_error| {
                     Box::new(AttrSubsetError::Covariant {
@@ -5291,7 +5326,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                 })
             }
-            (ClassAttribute::ReadWrite(got), ClassAttribute::ReadWrite(want)) => {
+            (ClassAttribute::ReadWrite(got, _), ClassAttribute::ReadWrite(want, _)) => {
                 let subset_error = is_subset(got, want)
                     .map_or_else(Some, |_| is_subset(want, got).map_or_else(Some, |_| None));
                 if let Some(subset_error) = subset_error {
@@ -5305,7 +5340,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             (
-                ClassAttribute::ReadWrite(got) | ClassAttribute::ReadOnly(got, ..),
+                ClassAttribute::ReadWrite(got, _) | ClassAttribute::ReadOnly(got, ..),
                 ClassAttribute::ReadOnly(want, _),
             ) => is_subset(got, want).map_err(|subset_error| {
                 Box::new(AttrSubsetError::Covariant {
@@ -5332,7 +5367,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                 })
             }
-            (ClassAttribute::ReadWrite(got), ClassAttribute::Property(want, want_setter, _)) => {
+            (ClassAttribute::ReadWrite(got, _), ClassAttribute::Property(want, want_setter, _)) => {
                 is_subset(
                     // Synthesize a getter method
                     &self.heap.mk_callable_ellipsis(got.clone()),
@@ -5433,7 +5468,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Result<Type, NoAccessReason> {
         match class_attr {
             ClassAttribute::NoAccess(reason) => Err(reason),
-            ClassAttribute::ReadWrite(ty) | ClassAttribute::ReadOnly(ty, _) => Ok(ty),
+            ClassAttribute::ReadWrite(ty, _) | ClassAttribute::ReadOnly(ty, _) => Ok(ty),
             ClassAttribute::Property(getter, ..) => {
                 self.record_property_getter(range, &getter);
                 Ok(self.call_property_getter(getter, range, errors, context))

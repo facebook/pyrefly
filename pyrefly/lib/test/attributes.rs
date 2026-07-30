@@ -319,6 +319,79 @@ def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
     "#,
 );
 
+// `method-assign` (issue #4161): rebinding a method via direct assignment is
+// flagged when the kind is enabled. Method-ness keys off `ClassFieldInner::Method`
+// (instance methods + classmethods); `@staticmethod`, plain data attributes, and
+// `Callable`-typed attributes are NOT methods and stay clean. Instance rebinds
+// additionally keep their existing `bad-assignment` signal (I7 coexistence); the
+// final group makes that coexistence explicit with a type-incompatible value.
+testcase!(
+    test_method_assign_diagnostic,
+    TestEnv::new().enable_method_assign_error(),
+    r#"
+from typing import Callable
+
+class A:
+    def f(self) -> int:
+        return 1
+    @classmethod
+    def cm(cls) -> int:
+        return 2
+    @staticmethod
+    def sm() -> int:
+        return 3
+    data: int
+    cb: Callable[[], int]
+
+class B(A):
+    pass
+
+a = A()
+b = B()
+
+def inst_method(self: A) -> int: ...
+def cls_method(cls: type[A]) -> int: ...
+def free_fn() -> int: ...
+def free_callable() -> int: ...
+
+# Flagged: rebinding instance methods (class + instance), classmethods, inherited.
+A.f = inst_method  # E: Cannot assign to a method
+a.f = inst_method  # E: Cannot assign to a method  # E: `(self: A) -> int` is not assignable to attribute `f` with type `(self: A) -> int`
+A.cm = cls_method  # E: Cannot assign to a method  # E: `(cls: type[A]) -> int` is not assignable to attribute `cm` with type `(cls: type[A]) -> int`
+a.cm = cls_method  # E: Cannot assign to a method  # E: `(cls: type[A]) -> int` is not assignable to attribute `cm` with type `(cls: type[A]) -> int`
+B.f = inst_method  # E: Cannot assign to a method
+b.f = inst_method  # E: Cannot assign to a method  # E: `(self: A) -> int` is not assignable to attribute `f` with type `(self: B) -> int`
+
+# NOT flagged: staticmethod, plain data attr, Callable-typed attr.
+A.sm = free_fn
+a.sm = free_fn
+A.data = 1
+a.data = 1
+A.cb = free_callable
+a.cb = free_callable
+
+# setattr bypasses the attribute-set check path entirely (matches mypy).
+setattr(A, "f", inst_method)
+setattr(a, "f", inst_method)
+
+# A type-INCOMPATIBLE method rebind yields BOTH method-assign and BadAssignment.
+A.f = ""  # E: Cannot assign to a method  # E: `Literal['']` is not assignable to attribute `f` with type `(self: A) -> int`
+    "#,
+);
+
+// `method-assign` is off by default (I3): a method rebind that WOULD be flagged
+// in strict mode emits nothing under the default configuration.
+testcase!(
+    test_method_assign_off_by_default,
+    r#"
+class A:
+    def f(self) -> int:
+        return 1
+def g(self: A) -> int: ...
+A.f = g  # no method-assign under default config
+    "#,
+);
+
 testcase!(
     test_bound_classmethod_explicit_targs,
     r#"

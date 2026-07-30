@@ -1168,6 +1168,28 @@ def bad_yield_from() -> Generator[int, None, None]:
   yield from 1
 ```
 
+## method-assign
+
+Default severity: `ignore`
+
+Rebinding a method by direct assignment — to the class object or to an instance
+(a.k.a. monkey-patching) — is ambiguous: the method's bound signature no longer
+matches what the class declares. Pyrefly flags such assignments when this kind
+is enabled (it is on in strict mode).
+
+```python
+class A:
+    def f(self) -> int: ...
+A.f = lambda self: 2  # Cannot assign to a method [method-assign]
+a = A()
+a.f = lambda self: 2  # Cannot assign to a method [method-assign]
+```
+
+Direct assignment that rebinds an instance method or a `classmethod` is flagged.
+`@staticmethod`, properties, plain data attributes, and `Callable`-typed
+attributes are not methods and are not flagged. Rebinding via `setattr` is out
+of scope.
+
 ## misplaced-ignore
 
 Default severity: `warn`
