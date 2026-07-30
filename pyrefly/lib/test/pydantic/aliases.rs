@@ -205,6 +205,28 @@ Model(**{"some-property": "foo"}) # E: Missing argument `some_property` in funct
 );
 
 pydantic_testcase!(
+    bug = "`populate_by_name` is ignored",
+    test_populate_by_name_with_inherited_alias_generator,
+    r#"
+import pydantic
+from pydantic import alias_generators
+
+class GoogleStyleBase(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(
+        alias_generator=alias_generators.to_camel,
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+class Request(GoogleStyleBase):
+    response_mime_type: str | None = pydantic.Field(default=None)
+
+Request(response_mime_type="application/json")  # E: Unexpected keyword argument `response_mime_type` in function `Request.__init__`
+Request(responseMimeType="application/json")
+    "#,
+);
+
+pydantic_testcase!(
     test_validation_inheritance,
     r#"
 from pydantic import BaseModel, ConfigDict, Field
