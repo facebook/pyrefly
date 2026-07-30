@@ -757,16 +757,6 @@ pub struct FuncFlags {
     pub is_in_type_checking_block: bool,
 }
 
-impl FuncFlags {
-    /// Whether the function lacks a runtime implementation and is not defined in a stub file.
-    /// This indicates a method that cannot actually be called at runtime (e.g. an abstract
-    /// method or protocol method with a `...` or `pass` body in a `.py` file).
-    pub fn lacks_runtime_implementation(&self) -> bool {
-        matches!(self.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
-            && !self.defined_in_stub_file
-    }
-}
-
 /// The index of a function definition (`def ..():` statement) within the module,
 /// used as a reference to data associated with the function.
 #[derive(Debug, Clone, Dupe, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]

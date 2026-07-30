@@ -4743,7 +4743,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .value
             .ty()
             .visit_toplevel_func_metadata::<bool>(&|meta| {
-                meta.flags.lacks_runtime_implementation()
+                matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
+                    && !meta.flags.defined_in_stub_file
             });
         if (member.value.is_abstract()
             || self
