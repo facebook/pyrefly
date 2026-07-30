@@ -251,3 +251,38 @@ class Cls:
 reveal_type(Cls.IN_CLASS)  # E: Cls.IN_CLASS
     "#,
 );
+
+testcase!(
+    test_nonliteral_sentinel_name_ok,
+    r#"
+from typing import reveal_type
+from typing_extensions import Sentinel
+def name() -> str: ...
+X = Sentinel(name())
+reveal_type(X)  # E: X
+    "#,
+);
+
+testcase!(
+    test_nonstring_sentinel_name_errors,
+    r#"
+from typing import reveal_type
+from typing_extensions import Sentinel
+def id() -> int: ...
+X = Sentinel(id())  # E: `int` is not assignable to parameter `name` with type `str`
+reveal_type(X)  # E: X
+    "#,
+);
+
+testcase!(
+    test_literal_name,
+    r#"
+from typing import Literal, reveal_type
+from typing_extensions import Sentinel
+def name() -> Literal["MyAwesomeSentinel"]: ...
+X = Sentinel(name())
+Y = Sentinel("JustAsAwesomeSentinel")
+reveal_type(X)  # E: MyAwesomeSentinel
+reveal_type(Y)  # E: JustAsAwesomeSentinel
+    "#,
+);

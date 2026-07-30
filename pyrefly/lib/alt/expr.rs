@@ -26,6 +26,7 @@ use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::dimension::int_type_is_provably_negative;
 use pyrefly_types::literal::LitStyle;
+use pyrefly_types::literal::Literal;
 use pyrefly_types::shaped_array::IndexOp;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::shaped_array::IntTupleView;
@@ -2302,15 +2303,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut sentinel_name = assignment_name;
         let mut iargs = x.arguments.args.iter();
         if let Some(arg) = iargs.next() {
-            if let Expr::StringLiteral(lit) = arg {
-                sentinel_name = Identifier::new(lit.value.to_str(), lit.range());
-            } else {
-                self.error(
-                    errors,
-                    arg.range(),
-                    ErrorKind::InvalidSentinel,
-                    "Expected first argument of sentinel to be a string literal".to_owned(),
-                );
+            let expected_ty = self.stdlib.str().clone().to_type();
+            let arg_ty = self.expr_check(
+                arg,
+                Some((&expected_ty, &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                        Some(Name::new_static("name")),
+                        None,
+                    ))
+                })),
+                errors,
+            );
+            if let Type::Literal(lit) = arg_ty
+                && let Literal {
+                    value: Lit::Str(s), ..
+                } = *lit
+            {
+                sentinel_name = Identifier::new(s.to_string(), arg.range());
             }
         } else {
             self.error(
