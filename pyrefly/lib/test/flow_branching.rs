@@ -1068,6 +1068,55 @@ while 0:  # E: Integer literal used as condition. It's equivalent to `False`
     "#,
 );
 
+// A statically-falsy literal (`0`, `[]`) makes the guarded block unreachable, so no
+// diagnostic is reported on its condition; a truthy literal (`1`, `[1]`) keeps the block
+// reachable and therefore does report `implicit-bool`.
+testcase!(
+    test_implicit_bool_literal_conditions,
+    implicit_bool_env(),
+    r#"
+if 0:
+    ...
+if 1:  # E: Implicit conversion of `Literal[1]` to `bool` is not allowed # E: Integer literal used as condition
+    ...
+if []:
+    ...
+if [1]:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+    ...
+    "#,
+);
+
+// A chained comparison's overall type reflects the comparison operators' return types, so a
+// non-`bool` result (here `list[int]` from `__lt__`) is flagged when used as a condition.
+testcase!(
+    test_implicit_bool_chained_comparison,
+    implicit_bool_env(),
+    r#"
+class A:
+    def __lt__(self, other: "A") -> list[int]:
+        return []
+
+def f(a: A, b: A, c: A) -> None:
+    if a < b < c:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+        ...
+    "#,
+);
+
+// Match-case guards are bound as a plain expression, bypassing the `BindingExpect::Bool`
+// path that `if`/`while`/`assert` use, so no condition checks (including `implicit-bool`)
+// fire on them yet.
+testcase!(
+    bug = "match guards are not checked for implicit bool",
+    test_implicit_bool_match_guard,
+    implicit_bool_env(),
+    r#"
+def f(x: int, items: list[int]) -> None:
+    match x:
+        case _ if items:
+            ...
+    "#,
+);
+
 testcase!(
     test_redundant_condition_str_bytes,
     r#"
