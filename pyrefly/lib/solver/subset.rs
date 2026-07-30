@@ -724,7 +724,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             if matches!(
                 got,
-                Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)
+                Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_) | Type::Overload(_)
             ) && name == dunder::CALL
                 && let Some(want) = self.type_order.instance_as_dunder_call(&protocol)
             {
@@ -2061,6 +2061,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         None => Err(SubsetError::Other),
                     }
                 }
+            }
+            // Route an overloaded candidate against a protocol through structural matching so its
+            // overloaded `__call__` target is compared overload-vs-overload. The general `Overload`
+            // arm below peels the source with `any` up front; reaching it with an overloaded
+            // `__call__` target would invert the quantifier to `∃source ∀target` instead of the
+            // correct `∀target ∃source`.
+            (Type::Overload(_), Type::ClassType(want))
+                if self.type_order.is_protocol(want.class_object()) =>
+            {
+                self.is_subset_protocol(got.clone(), want.clone())
             }
             (Type::Overload(overload), want) => self.is_subset_overload(overload, want),
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))

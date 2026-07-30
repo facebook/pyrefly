@@ -560,6 +560,57 @@ f(b"")  # E: No matching overload found for function `f`
 );
 
 testcase!(
+    test_overload_assignable_to_overloaded_callback_protocol,
+    r#"
+from typing import Protocol, overload
+
+class Decorator(Protocol):
+    @overload
+    def __call__(self, fn: int) -> int: ...
+    @overload
+    def __call__(self, fn: str) -> str: ...
+
+def good() -> Decorator:
+    @overload
+    def decorator(fn: int) -> int: ...
+    @overload
+    def decorator(fn: str) -> str: ...
+    def decorator(fn: int | str) -> int | str:
+        return fn
+    return decorator
+
+def bad() -> Decorator:
+    @overload
+    def decorator(fn: int) -> int: ...
+    @overload
+    def decorator(fn: bytes) -> bytes: ...
+    def decorator(fn: int | bytes) -> int | bytes:
+        return fn
+    return decorator  # E: not assignable
+
+def takes(p: Decorator) -> None: ...
+
+def use_good() -> None:
+    @overload
+    def decorator(fn: int) -> int: ...
+    @overload
+    def decorator(fn: str) -> str: ...
+    def decorator(fn: int | str) -> int | str:
+        return fn
+    takes(decorator)
+
+def use_bad() -> None:
+    @overload
+    def decorator(fn: int) -> int: ...
+    @overload
+    def decorator(fn: bytes) -> bytes: ...
+    def decorator(fn: int | bytes) -> int | bytes:
+        return fn
+    takes(decorator)  # E: not assignable
+    "#,
+);
+
+testcase!(
     test_overload_assignable_to_callable_union,
     r#"
 from typing import Callable, overload
