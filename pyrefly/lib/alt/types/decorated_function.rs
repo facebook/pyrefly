@@ -173,14 +173,6 @@ impl DecoratedFunction {
         self.undecorated.defining_cls.as_ref()
     }
 
-    pub fn is_stub(&self) -> bool {
-        self.undecorated.stub_or_impl == FunctionStubOrImpl::Stub
-    }
-
-    pub fn is_impl(&self) -> bool {
-        self.undecorated.stub_or_impl == FunctionStubOrImpl::Impl
-    }
-
     pub fn is_overload(&self) -> bool {
         self.undecorated.metadata.flags.is_overload
     }

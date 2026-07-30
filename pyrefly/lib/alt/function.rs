@@ -370,7 +370,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let successor = self.get_function_successor(&def);
             if successor.is_none() {
                 // This is the last definition in the chain. We should produce an overload type.
-                let is_impl = def.is_impl();
+                let is_impl = !matches!(
+                    def.metadata().flags.body_kind,
+                    BodyKind::Ellipsis | BodyKind::Trivial
+                );
                 let mut acc =
                     Vec1::new((def.id_range(), (*def.ty).clone(), def.metadata().clone()));
                 let mut impl_before_overload_range = None;
@@ -488,8 +491,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
         }
 
-        if def.is_stub()
-            && self.module().path().style() != ModuleStyle::Interface
+        if matches!(
+            def.metadata().flags.body_kind,
+            BodyKind::Ellipsis | BodyKind::Trivial
+        ) && self.module().path().style() != ModuleStyle::Interface
             && def.metadata().flags.is_in_protocol_class
         {
             ty.transform_toplevel_func_metadata(|meta| {
