@@ -154,6 +154,7 @@ impl<W: Write> ErrorRenderer<W> {
     }
 
     fn write_concise(&mut self, error: &Error, origin: &str) -> io::Result<()> {
+        let header = error.msg_header.lines().map(str::trim).join(" ");
         match self.mode {
             ErrorRenderMode::Plain => writeln!(
                 self.writer,
@@ -161,7 +162,7 @@ impl<W: Write> ErrorRenderer<W> {
                 error.severity.label(),
                 origin,
                 error.display_range,
-                error.msg_header,
+                header,
                 error.error_kind.to_name(),
             ),
             ErrorRenderMode::Color => writeln!(
@@ -170,7 +171,7 @@ impl<W: Write> ErrorRenderer<W> {
                 error.severity.painted(),
                 Paint::blue(origin),
                 Paint::dim(error.display_range()),
-                Paint::new(&*error.msg_header),
+                Paint::new(&header),
                 Paint::dim(format!("[{}]", error.error_kind().to_name()).as_str()),
             ),
         }
@@ -183,7 +184,7 @@ impl<W: Write> ErrorRenderer<W> {
 
 impl Error {
     /// Return the path with a cell fragment if the error is in a notebook cell.
-    fn path_string_with_fragment(&self, project_root: &Path) -> String {
+    pub fn path_string_with_fragment(&self, project_root: &Path) -> String {
         let path = self.path().as_path();
         let path = path.strip_prefix(project_root).unwrap_or(path);
         if let Some(cell) = self.display_range.start.cell() {
@@ -334,7 +335,7 @@ impl Error {
                 Severity::Ignore => lsp_types::DiagnosticSeverity::INFORMATION,
             }),
             source: Some("Pyrefly".to_owned()),
-            message: self.msg().to_owned(),
+            message: self.msg().to_owned().into(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
             tags: if self.error_kind() == ErrorKind::Deprecated {
@@ -356,15 +357,21 @@ impl Error {
 }
 
 #[cfg(test)]
-pub fn print_errors(project_root: &Path, errors: &[Error]) -> io::Result<()> {
-    let stdout = anstream::stdout();
-    let color_choice = stdout.current_choice();
-    let mut renderer = ErrorRenderer::new(stdout.lock(), color_choice);
-    for err in errors {
-        renderer.write(err, project_root, true)?;
-        renderer.flush()?;
+pub fn print_errors(project_root: &Path, errors: &[Error]) {
+    let mut buf = Vec::new();
+    {
+        let mut renderer = ErrorRenderer::new(&mut buf, anstream::stdout().current_choice());
+        for err in errors {
+            renderer.write(err, project_root, true).unwrap();
+        }
+        renderer.flush().unwrap();
     }
-    Ok(())
+    // Use print! so Rust's test runner captures the output and shows it
+    // on test failure. Direct writes to stdout (e.g. via ErrorRenderer +
+    // stdout.lock()) bypass test capture and are invisible in test output.
+    if !buf.is_empty() {
+        print!("{}", String::from_utf8_lossy(&buf));
+    }
 }
 
 fn count_error_kinds(errors: &[Error]) -> Vec<(ErrorKind, usize)> {
@@ -514,6 +521,29 @@ mod tests {
             renderer.write(error, root, verbose).unwrap();
         }
         str::from_utf8(&output).unwrap().to_owned()
+    }
+
+    #[test]
+    fn test_multiline_header_is_flattened_only_in_concise_output() {
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test.py")),
+            Arc::new("x".to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(0), TextSize::new(1)),
+            "revealed type: Overload[\n  (x: int) -> str\n]".to_owned(),
+            Vec::new(),
+            ErrorKind::RevealType,
+        );
+
+        let concise = render_error(&error, Path::new(""), false);
+        assert_eq!(concise.lines().count(), 1);
+        assert!(concise.contains("revealed type: Overload[ (x: int) -> str ]"));
+
+        let verbose = render_error(&error, Path::new(""), true);
+        assert!(verbose.contains("revealed type: Overload[\n  (x: int) -> str\n]"));
     }
 
     #[test]

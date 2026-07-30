@@ -7,6 +7,8 @@
 
 use std::slice::Iter;
 
+use pyrefly_derive::TypeEq;
+use pyrefly_derive::VisitMut;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
@@ -34,6 +36,117 @@ pub const FROZEN: Name = Name::new_static("frozen");
 pub const FROZEN_DEFAULT: bool = false;
 pub const EXTRA: Name = Name::new_static("extra");
 pub const FIELD_VALIDATOR: Name = Name::new_static("field_validator");
+pub const ALIAS_GENERATOR: Name = Name::new_static("alias_generator");
+
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, VisitMut)]
+pub enum PydanticAliasGenerator {
+    ToCamel,
+    ToPascal,
+    ToSnake,
+}
+
+impl PydanticAliasGenerator {
+    pub fn from_special_export(export: SpecialExport) -> Option<Self> {
+        match export {
+            SpecialExport::PydanticToCamel => Some(Self::ToCamel),
+            SpecialExport::PydanticToPascal => Some(Self::ToPascal),
+            SpecialExport::PydanticToSnake => Some(Self::ToSnake),
+            _ => None,
+        }
+    }
+
+    pub fn generate(&self, field_name: &str) -> String {
+        match self {
+            Self::ToCamel => Self::to_camel(field_name),
+            Self::ToPascal => Self::to_pascal(field_name),
+            Self::ToSnake => Self::to_snake(field_name),
+        }
+    }
+
+    fn to_pascal(field_name: &str) -> String {
+        let mut title = String::with_capacity(field_name.len());
+        let mut previous_is_cased = false;
+        for ch in field_name.chars() {
+            if ch.is_alphabetic() {
+                if previous_is_cased {
+                    title.extend(ch.to_lowercase());
+                } else {
+                    title.extend(ch.to_uppercase());
+                }
+                previous_is_cased = true;
+            } else {
+                title.push(ch);
+                previous_is_cased = false;
+            }
+        }
+        let title_chars: Vec<_> = title.chars().collect();
+        let mut pascal = String::with_capacity(title.len());
+        for (i, ch) in title_chars.iter().enumerate() {
+            if *ch == '_'
+                && i > 0
+                && title_chars[i - 1].is_ascii_alphanumeric()
+                && title_chars
+                    .get(i + 1)
+                    .is_some_and(|next| next.is_ascii_digit() || next.is_ascii_uppercase())
+            {
+                continue;
+            }
+            pascal.push(*ch);
+        }
+        pascal
+    }
+
+    fn to_camel(field_name: &str) -> String {
+        let pascal = Self::to_pascal(field_name);
+        let mut camel = String::with_capacity(pascal.len());
+        let mut lowercased = false;
+        for ch in pascal.chars() {
+            if !lowercased && ch != '_' {
+                camel.extend(ch.to_lowercase());
+                lowercased = true;
+            } else {
+                camel.push(ch);
+            }
+        }
+        camel
+    }
+
+    fn to_snake(field_name: &str) -> String {
+        // Mirror Pydantic's `pydantic.alias_generators.to_snake`, which applies these
+        // underscore-insertions between adjacent characters, then replaces `-` with `_`
+        // and lowercases everything:
+        //   1. within a run of uppercase letters followed by `Upper+lower`, split before
+        //      the trailing uppercase (`HTTPResponse` -> `http_response`)
+        //   2. between a lowercase letter and an uppercase letter (`fooBar` -> `foo_bar`)
+        //   3. between a digit and an uppercase letter (`foo2Bar` -> `foo_2_bar`)
+        //   4. between a letter and a digit (`foo2bar` -> `foo_2bar`)
+        // The insertions depend only on the original characters, so a single pass over
+        // adjacent pairs reproduces the sequential regex substitutions.
+        let chars: Vec<char> = field_name.chars().collect();
+        let mut snake = String::with_capacity(field_name.len() + 4);
+        for (i, &ch) in chars.iter().enumerate() {
+            if i > 0 {
+                let prev = chars[i - 1];
+                let next = chars.get(i + 1).copied();
+                let insert_underscore = (prev.is_ascii_uppercase()
+                    && ch.is_ascii_uppercase()
+                    && next.is_some_and(|n| n.is_ascii_lowercase()))
+                    || (prev.is_ascii_lowercase() && ch.is_ascii_uppercase())
+                    || (prev.is_ascii_digit() && ch.is_ascii_uppercase())
+                    || (prev.is_ascii_alphabetic() && ch.is_ascii_digit());
+                if insert_underscore {
+                    snake.push('_');
+                }
+            }
+            if ch == '-' {
+                snake.push('_');
+            } else {
+                snake.extend(ch.to_lowercase());
+            }
+        }
+        snake
+    }
+}
 
 // An abstraction to iterate over configuration values, whether `ConfigDict()` or a dict display
 // is used.
@@ -86,6 +199,7 @@ pub struct PydanticConfigDict {
     pub strict: Option<bool>,
     pub validate_by_name: Option<bool>,
     pub validate_by_alias: Option<bool>,
+    pub alias_generator: Option<PydanticAliasGenerator>,
 }
 
 impl<'a> BindingsBuilder<'a> {
@@ -146,6 +260,10 @@ impl<'a> BindingsBuilder<'a> {
             .collect()
     }
 
+    fn extract_alias_generator(&self, value: &Expr) -> Option<PydanticAliasGenerator> {
+        PydanticAliasGenerator::from_special_export(self.as_special_export(value)?)
+    }
+
     // The goal of this function is to extract pydantic metadata (https://docs.pydantic.dev/latest/concepts/models/) from expressions.
     // TODO: Consider propagating the entire expression instead of the value
     // in case it is aliased.
@@ -186,6 +304,8 @@ impl<'a> BindingsBuilder<'a> {
                     && let Expr::BooleanLiteral(bl) = value
                 {
                     pydantic_config_dict.validate_by_alias = Some(bl.value);
+                } else if name == ALIAS_GENERATOR {
+                    pydantic_config_dict.alias_generator = self.extract_alias_generator(value);
                 }
             }
         }

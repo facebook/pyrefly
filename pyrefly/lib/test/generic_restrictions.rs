@@ -112,7 +112,7 @@ def test[T: (B, C)](x: T) -> None:
     c: C = x  # E: `T` is not assignable to `C`
     d: B | C = x  # OK
 
-test(A())  # E: `A` is not assignable to upper bound `B | C` of type variable `T`
+test(A())  # E: `A` is not assignable to any of constraints `B`, `C` of type variable `T`
 test(B())
 test(C())
 test(D())
@@ -592,7 +592,7 @@ class X: ...
 def f[T: (int, str)](x: T) -> T: ...
 
 # X is not assignable to int or str, so this should error.
-f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `T`
+f(X())  # E: `X` is not assignable to any of constraints `int`, `str` of type variable `T`
     "#,
 );
 
@@ -1167,8 +1167,7 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug =
-        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
+    bug = "conformance: Should error on unbound TypeVars in class bases, TypeAlias, expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1479,5 +1478,68 @@ class A[T]: ...
 def f[T](x: A[T] = A()) -> T: ...
 # T is left unsolved
 reveal_type(f())  # E: revealed type: @_
+    "#,
+);
+
+testcase!(
+    test_union_of_constraints_does_not_match_constrained_typevar,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    return x
+def g(x: int | str):
+    f(x)  # E: `int | str` is not assignable to any of constraints `int`, `str` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_constrained_identity_function_preserves_typevar,
+    r#"
+from typing import reveal_type
+def f[T: (bool, int)](x: T) -> T:
+    return x
+def g[T: bool](x: T) -> T:
+    return f(x)
+def h[S: str](x: S) -> S:
+    return f(x)  # E: `S` is not assignable to any of constraints `bool`, `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_cannot_return_union_of_constraints_for_constrained_typevar,
+    r#"
+def f() -> int | str: ...
+def g[T: (int, str)](x: T) -> T:
+    return f()  # E: `int | str` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    bug = "Return type T is narrowed to int, so returning 0 should be allowed",
+    test_return_concrete_type_after_typevar_narrow,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    if isinstance(x, int):
+        return 0  # E: `Literal[0]` is not assignable to declared return type `T`
+    else:
+        return x
+    "#,
+);
+
+testcase!(
+    test_binop_on_two_typevars_after_narrow_one,
+    r#"
+from typing import reveal_type
+def f[T: (str, bytes)](x: T, y: T):
+    if isinstance(x, str):
+        return reveal_type(x + y)  # E: revealed type: str & T
+    "#,
+);
+
+testcase!(
+    test_binop_on_typevar_with_union_bound,
+    r#"
+def f[T: bytes | str](x: T):
+    if isinstance(x, str):
+        y: str = 2 * x
     "#,
 );

@@ -232,7 +232,7 @@ fn build_module_member_consumer_import_updates(
         let Some(ast) = transaction.get_ast(&rdep_handle) else {
             continue;
         };
-        let (_, _, new_module_text) = insert_import_edit(
+        let import_edit = insert_import_edit(
             ast.as_ref(),
             transaction.config_finder(),
             rdep_handle.dupe(),
@@ -240,6 +240,7 @@ fn build_module_member_consumer_import_updates(
             member_name,
             import_format,
         );
+        let new_module_text = import_edit.module_name;
         let mut import_collector = ImportFromCollector::default();
         import_collector.visit_body(&ast.body);
         for import_from in import_collector.imports {
@@ -538,13 +539,7 @@ fn build_removal_and_import_edits(
         String::new()
     };
     let removal_edit = (module_info.dupe(), removal_range, removal_text);
-    let import_edit = import_edit.and_then(|edit| {
-        if edit.1.start() == removal_range.start() {
-            None
-        } else {
-            Some(edit)
-        }
-    });
+    let import_edit = import_edit.filter(|edit| edit.1.start() != removal_range.start());
     Some((removal_edit, import_edit))
 }
 
@@ -560,7 +555,7 @@ fn build_import_edit(
     if has_existing_from_import(ast, target_handle.module().as_str(), member_name) {
         return None;
     }
-    let (position, insert_text, _) = insert_import_edit(
+    let import_edit = insert_import_edit(
         ast,
         transaction.config_finder(),
         handle.dupe(),
@@ -568,8 +563,11 @@ fn build_import_edit(
         member_name,
         import_format,
     );
-    let range = TextRange::at(position, TextSize::new(0));
-    Some((module_info.dupe(), range, insert_text))
+    Some((
+        module_info.dupe(),
+        import_edit.range,
+        import_edit.insert_text,
+    ))
 }
 
 #[derive(Default)]

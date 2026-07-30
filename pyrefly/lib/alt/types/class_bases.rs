@@ -8,6 +8,7 @@
 use std::fmt;
 
 use dupe::Dupe;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -44,7 +45,7 @@ use crate::types::types::Type;
 ///
 /// The reason this is tracked separately from `ClassMetadata` is to avoid the possibility of
 /// cycles when type arguments of the base classes may depend on the class itself.
-#[derive(Debug, Clone, PartialEq, Eq, VisitMut, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Visit, VisitMut, Default)]
 pub struct ClassBases {
     /// The direct base types in the base class list
     base_types: Box<[ClassType]>,
