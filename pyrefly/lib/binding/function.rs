@@ -823,8 +823,8 @@ impl<'a> BindingsBuilder<'a> {
                 );
             if !ignore_unused_parameters {
                 self.record_unused_parameters(unused_parameters);
-                self.record_unused_variables(unused_variables);
             }
+            self.record_unused_variables(unused_variables);
             let should_infer = match self.infer_return_types {
                 InferReturnTypes::Checked => true,
                 InferReturnTypes::Annotated => is_annotated(&return_ann_with_range, parameters),
