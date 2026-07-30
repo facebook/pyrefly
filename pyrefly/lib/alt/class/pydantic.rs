@@ -375,6 +375,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             merged_validate_by_alias = Some(true);
         }
 
+        // Pydantic enables name validation when alias validation is disabled and name
+        // validation is otherwise unset. This runs after `populate_by_name` normalization.
+        if merged_validate_by_alias == Some(false) && merged_validate_by_name.is_none() {
+            merged_validate_by_name = Some(true);
+        }
+
         let validation_flags = PydanticValidationFlags {
             validate_by_name: merged_validate_by_name,
             validate_by_alias: merged_validate_by_alias,

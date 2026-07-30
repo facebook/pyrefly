@@ -291,6 +291,33 @@ Child(y=0)
 );
 
 pydantic_testcase!(
+    test_validate_by_alias_false_enables_validate_by_name,
+    r#"
+from pydantic import BaseModel, ConfigDict, Field
+class Model(BaseModel):
+    model_config = ConfigDict(validate_by_alias=False, extra="forbid")
+    x: int = Field(alias="y")
+Model(x=0)
+Model(y=0) # E: Missing argument `x` in function `Model.__init__` # E: Unexpected keyword argument `y` in function `Model.__init__`
+    "#,
+);
+
+pydantic_testcase!(
+    test_populate_by_name_blocked_by_inherited_validate_by_alias_false,
+    r#"
+from pydantic import BaseModel, ConfigDict, Field
+class Base(BaseModel):
+    model_config = ConfigDict(validate_by_alias=False)
+
+class Child(Base):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    x: int = Field(alias="y")
+Child(x=0)
+Child(y=0) # E: Missing argument `x` in function `Child.__init__` # E: Unexpected keyword argument `y` in function `Child.__init__`
+    "#,
+);
+
+pydantic_testcase!(
     test_validation_inheritance,
     r#"
 from pydantic import BaseModel, ConfigDict, Field
