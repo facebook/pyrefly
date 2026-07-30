@@ -749,11 +749,10 @@ impl<'a> BindingsBuilder<'a> {
             is_overload: decorators.is_overload,
             is_in_type_checking_block: self.type_checking_depth > 0,
         };
-        let should_report_unused_parameters = !facts.is_stub()
-            && !body_kind.is_placeholder_or_trivial()
-            && !decorators.is_overload
-            && !decorators.is_override
-            && !decorators.is_abstract_method;
+        let ignore_unused_parameters = body_kind.is_placeholder_or_trivial()
+            || decorators.is_overload
+            || decorators.is_override
+            || decorators.is_abstract_method;
         let method_self_kind = if class_key.is_some()
             && (decorators.is_classmethod
                 || func_name.id == dunder::INIT_SUBCLASS
@@ -822,7 +821,7 @@ impl<'a> BindingsBuilder<'a> {
                     is_async,
                     method_self_kind,
                 );
-            if should_report_unused_parameters {
+            if !ignore_unused_parameters {
                 self.record_unused_parameters(unused_parameters);
                 self.record_unused_variables(unused_variables);
             }
