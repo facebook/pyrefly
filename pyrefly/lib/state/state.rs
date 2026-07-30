@@ -1952,8 +1952,14 @@ impl<'a> Transaction<'a> {
                 .flatten();
             // Load the stdlib from the user-provided typeshed if one is set; otherwise
             // use the bundled typeshed.
-            let stdlib_config = typeshed_path
+            let base_stdlib_config = typeshed_path
                 .map_or_else(BundledTypeshedStdlib::config, custom_typeshed_stdlib_config);
+            // Import availability in typeshed is version-dependent, so the loader used to
+            // initialize this Stdlib must resolve modules for the same SysInfo version.
+            let mut stdlib_config = base_stdlib_config.as_ref().clone();
+            stdlib_config.python_environment.python_version = Some(k.version());
+            stdlib_config.configure();
+            let stdlib_config = ArcId::new(stdlib_config);
             let loader = self.get_cached_loader(&stdlib_config);
             self.data
                 .stdlib
