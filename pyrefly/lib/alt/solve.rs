@@ -6073,7 +6073,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             x.class_key.as_ref(),
             &x.decorators,
             &x.legacy_tparams,
-            x.module_style,
             x.outer_funcs.clone(),
             x.shape_dsl_def.clone(),
             x.type_shape_dsl_def.clone(),

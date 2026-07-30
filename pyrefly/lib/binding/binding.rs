@@ -18,7 +18,6 @@ use pyrefly_derive::VisitMut;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
@@ -1917,7 +1916,6 @@ pub struct BindingUndecoratedFunction {
     pub class_key: Option<Idx<KeyClass>>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[Idx<KeyDecorator>]>,
-    pub module_style: ModuleStyle,
     /// Dot-separated path of enclosing function names (e.g. `"f1"` for `f2` defined inside `f1`,
     /// or `"f1.g1"` for two levels deep). `None` for top-level or class-method functions.
     pub outer_funcs: Option<Name>,

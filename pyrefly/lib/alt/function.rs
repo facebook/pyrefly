@@ -532,7 +532,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
-        module_style: ModuleStyle,
         outer_funcs: Option<Name>,
         shape_dsl_def: Option<Arc<ShapeDslFunction>>,
         type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
@@ -637,9 +636,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .as_ref()
             .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol());
         flags.is_in_type_checking_block = is_in_type_checking_block;
-        if module_style == ModuleStyle::Interface {
-            flags.defined_in_stub_file = true;
-        }
+        flags.module_style = self.module().path().style();
 
         // Look for a @classmethod or @staticmethod decorator and change the "self" type
         // accordingly. This is not totally correct, since it doesn't account for chaining
@@ -799,7 +796,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if def.metadata.flags.body_kind == BodyKind::Ellipsis
             && !def.metadata.flags.is_in_type_checking_block
             && has_return_annotation
-            && !def.metadata.flags.defined_in_stub_file
+            && def.metadata.flags.module_style == ModuleStyle::Executable
             && !def.metadata.flags.is_overload
             && !def.metadata.flags.is_abstract_method
             && !def.metadata.flags.is_in_protocol_class

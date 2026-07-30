@@ -18,6 +18,7 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_types::callable::BodyKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncFlags;
@@ -4744,7 +4745,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .ty()
             .visit_toplevel_func_metadata::<bool>(&|meta| {
                 matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
-                    && !meta.flags.defined_in_stub_file
+                    && meta.flags.module_style == ModuleStyle::Executable
             });
         if (member.value.is_abstract()
             || self

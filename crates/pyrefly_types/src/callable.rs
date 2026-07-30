@@ -24,6 +24,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::VecExt;
@@ -722,8 +723,8 @@ pub struct FuncFlags {
     pub is_abstract_method: bool,
     /// A function decorated with `@typing.no_type_check` or `@typing_extensions.no_type_check`
     pub has_no_type_check: bool,
-    /// Is the function definition in a `.pyi` file
-    pub defined_in_stub_file: bool,
+    /// Style of the module the function is defined in
+    pub module_style: ModuleStyle,
     /// Set when the function was declared with `async def` (NOT when a regular
     /// `def` happens to return a `Coroutine[...]`-typed value). Used to
     /// distinguish async-def placeholders from sync functions explicitly

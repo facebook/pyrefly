@@ -1035,7 +1035,6 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
-                module_style: self.module_info.path().style(),
                 outer_funcs,
                 shape_dsl_def,
                 type_shape_dsl_def,

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_types::callable::BodyKind;
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
@@ -1464,7 +1465,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(meta) = metadata
             && meta.flags.is_abstract_method
             && matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
-            && !meta.flags.defined_in_stub_file
+            && meta.flags.module_style == ModuleStyle::Executable
             && self.should_error_for_abstract_call(&call_target)
         {
             let method_name = meta.kind.format(self.module().name());
