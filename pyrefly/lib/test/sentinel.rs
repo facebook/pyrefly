@@ -188,6 +188,35 @@ A = sentinel("A")  # E: Could not find name `sentinel`
 );
 
 testcase!(
+    // typing_extensions backports the lowercase `sentinel` for pre-3.15, so
+    // importing it must behave exactly like the uppercase `Sentinel` and the
+    // builtin lowercase form, not fall back to the function's return type.
+    test_sentinel_lowercase_from_typing_extensions,
+    r#"
+from typing import Literal, assert_type
+from typing_extensions import sentinel
+
+A = sentinel("A")
+def foo(a: A | Literal[False]):
+    if a:
+        assert_type(a, A)
+    else:
+        assert_type(a, Literal[False])
+    "#,
+);
+
+testcase!(
+    test_sentinel_lowercase_from_typing_extensions_reveal,
+    r#"
+from typing import reveal_type
+from typing_extensions import sentinel
+
+Lower = sentinel("Lower")
+reveal_type(Lower)  # E: Lower
+    "#,
+);
+
+testcase!(
     test_sentinel_in_class_body,
     r#"
 from typing import assert_type
