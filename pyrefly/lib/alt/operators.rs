@@ -1030,11 +1030,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
 
             // ClassDef vs ClassType - disjoint unless the class object is assignable to ClassType.
-            (Type::ClassDef(cdef), ctype @ Type::ClassType(_))
-            | (ctype @ Type::ClassType(_), Type::ClassDef(cdef))
-                if !self.is_subset_eq(&Type::ClassDef(cdef.clone()), ctype) =>
+            (cdef @ Type::ClassDef(cdef_inner), ctype @ Type::ClassType(_))
+            | (ctype @ Type::ClassType(_), cdef @ Type::ClassDef(cdef_inner))
+                if !self.is_subset_eq(cdef, ctype) =>
             {
-                emit_instance_is_class_warning(&ctype.to_string(), cdef.name().as_str(), is_op);
+                emit_instance_is_class_warning(
+                    &ctype.to_string(),
+                    cdef_inner.name().as_str(),
+                    is_op,
+                );
             }
 
             // All other combinations: no warning
