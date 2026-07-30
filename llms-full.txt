@@ -4064,6 +4064,27 @@ def f(xs: list[int]) -> tuple[int, ...]:
     return tuple(xs)
 ```
 
+## implicit-bool
+
+Default severity: `ignore`
+
+This error is emitted when a non-`bool` value is used in a boolean context. Enable it to require
+explicit checks for values whose truthiness could conflate distinct cases, such as `None` and zero
+or `None` and an empty container. An explicit `bool(...)` conversion is allowed.
+
+```python
+def get_temperature() -> int | None:
+    return 0
+
+temperature = get_temperature()
+if not temperature:  # implicit-bool
+    raise RuntimeError("Temperature sensor unavailable")
+
+# Fix:
+if temperature is None:
+    raise RuntimeError("Temperature sensor unavailable")
+```
+
 ## implicit-import
 
 Default severity: `warn`
@@ -4267,6 +4288,30 @@ Mismatch = NewType("Wrong Name", int)
 UserId = NewType("UserId", int)
 if isinstance(1, UserId):
   ...
+```
+
+## invalid-cast
+
+Default severity: `ignore`
+
+This warning is raised when `typing.cast` or `typing_extensions.cast` converts
+between types that Pyrefly can prove have disjoint runtime classes. The check
+applies to class instances and objects, literals, `None`, tuples, `TypedDict`,
+and unions containing only supported types. Literals and structural containers
+are compared using their nominal runtime classes. This means that a
+`TypedDict` overlaps with `dict`, and tuple element types do not by themselves
+make two tuples disjoint. Generic arguments similarly do not make two class
+instances disjoint, so casting `list[int]` to `list[str]` does not produce this
+warning. Type variables, protocols, `Never`, callables, and other types without
+a sufficiently precise nominal runtime class are not reported. Two open nominal
+classes are not considered disjoint unless their disjoint-base representatives
+conflict, because a multiple-inheritance subclass could satisfy both.
+
+```python
+from typing import cast
+
+x: int = 1
+cast(str, x)  # Cast from `int` to `str` is invalid because the types are disjoint [invalid-cast]
 ```
 
 ## invalid-decorator
@@ -5427,6 +5472,21 @@ This error occurs when attempting to `del` something that cannot be deleted.
 
 Besides obvious things like built-in values (you can't `del True`!), some object attributes are protected from deletion.
 For example, read-only and required `TypedDict` fields cannot be deleted.
+
+## unsupported-dynamic-base
+
+Default severity: `ignore`
+
+This error is raised for dynamic class definitions created with `type()` when
+the base classes are not statically known class literals.
+
+```python
+class Base: ...
+
+def factory(base: type[Base]) -> type:
+    return type("Dynamic", (base,), {})
+    # Base class `type[Base]` in `type()` call is not a statically known class [unsupported-dynamic-base]
+```
 
 ## unsupported-operation
 
