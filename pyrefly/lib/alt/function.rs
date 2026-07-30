@@ -790,7 +790,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         if def.metadata.flags.body_kind == BodyKind::Ellipsis
-            && !def.metadata.flags.is_in_type_checking_block
             && has_return_annotation
             && def.metadata.flags.module_style == ModuleStyle::Executable
             && !def.metadata.flags.facts().is_in_interface_like_context()

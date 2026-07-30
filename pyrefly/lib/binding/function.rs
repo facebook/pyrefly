@@ -747,6 +747,7 @@ impl<'a> BindingsBuilder<'a> {
             is_in_protocol_class: self.scopes.is_in_protocol_class(),
             is_abstract_method: decorators.is_abstract_method,
             is_overload: decorators.is_overload,
+            is_in_type_checking_block: self.type_checking_depth > 0,
         };
         let should_report_unused_parameters = !facts.is_stub()
             && !body_kind.is_placeholder_or_trivial()

@@ -1720,3 +1720,13 @@ f: Callable[[str | None], str | None] = lambda x="hi": x
 assert_type(f, Callable[[str | None], str | None])
 "#,
 );
+
+testcase!(
+    test_ellipsis_default_is_valid_in_type_checking_block,
+    r#"
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    def f(x: int = ...):
+        pass
+    "#,
+);

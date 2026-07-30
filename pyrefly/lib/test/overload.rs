@@ -2507,3 +2507,15 @@ def f[T: (A, B)](x: T) -> None:
     g(x)  # E: No matching overload found for function `g`
 "#,
 );
+
+testcase!(
+    test_overloaded_function_does_not_need_impl_in_type_checking_block,
+    r#"
+from typing import TYPE_CHECKING, overload
+if TYPE_CHECKING:
+    @overload
+    def f(a: int): ...
+    @overload
+    def f(a: str): ...
+    "#,
+);

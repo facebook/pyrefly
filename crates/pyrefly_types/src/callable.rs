@@ -682,13 +682,14 @@ impl BodyKind {
 pub struct FuncFacts {
     pub body_kind: BodyKind,
     pub is_in_protocol_class: bool,
+    pub is_in_type_checking_block: bool,
     pub is_abstract_method: bool,
     pub is_overload: bool,
 }
 
 impl FuncFacts {
     pub fn allows_missing_implementation(&self) -> bool {
-        self.is_in_protocol_class || self.is_abstract_method
+        self.is_in_protocol_class || self.is_in_type_checking_block || self.is_abstract_method
     }
 
     /// Is this function defined in an interface (i.e., .pyi) -like context?
@@ -790,6 +791,7 @@ impl FuncFlags {
         FuncFacts {
             body_kind: self.body_kind,
             is_in_protocol_class: self.is_in_protocol_class,
+            is_in_type_checking_block: self.is_in_type_checking_block,
             is_abstract_method: self.is_abstract_method,
             is_overload: self.is_overload,
         }
