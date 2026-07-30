@@ -1615,7 +1615,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             let cur_errors = self.error_collector();
             let ret = inner(cur_hint, &cur_errors);
-            if cur_errors.is_empty()
+            if !cur_errors.has_hard()
                 && cur_hint.is_none_or(|hint| {
                     let snapshot = self
                         .solver()

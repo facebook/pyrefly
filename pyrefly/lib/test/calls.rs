@@ -713,6 +713,18 @@ def f() -> list[object]:
 );
 
 testcase!(
+    test_return_hint_not_preferred_over_implicit_any_lambda,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from collections.abc import Callable
+
+def apply[T](f: Callable[[T], T]) -> T: ...
+
+result: str = apply(lambda x: x + 1)  # E: Type of lambda parameter `x` is unknown  # E: Return type of lambda is unknown
+"#,
+);
+
+testcase!(
     test_unknown_argument_type,
     TestEnv::new().enable_unknown_argument_type_error(),
     r#"

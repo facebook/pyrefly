@@ -614,7 +614,9 @@ impl ErrorKind {
     pub fn is_soft(self) -> bool {
         matches!(
             self,
-            ErrorKind::StringAsIterable | ErrorKind::UnknownArgumentType
+            ErrorKind::ImplicitAnyLambda
+                | ErrorKind::StringAsIterable
+                | ErrorKind::UnknownArgumentType
         )
     }
 
