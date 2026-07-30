@@ -360,18 +360,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         predecessor: &mut Option<Idx<Key>>,
         errors: &ErrorCollector,
     ) -> Type {
-        // Overloads in .pyi should not have an implementation.
-        let skip_implementation = self.module().path().style() == ModuleStyle::Interface
-            || def.metadata().flags.facts().allows_missing_implementation();
         let mut ty = if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.get_function_successor(&def);
             if successor.is_none() {
                 // This is the last definition in the chain. We should produce an overload type.
-                let is_impl = !matches!(
-                    def.metadata().flags.body_kind,
-                    BodyKind::Ellipsis | BodyKind::Trivial
-                );
                 let mut acc =
                     Vec1::new((def.id_range(), (*def.ty).clone(), def.metadata().clone()));
                 let mut impl_before_overload_range = None;
@@ -385,8 +378,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 let first_range = acc.last().0;
                 let last_range = acc.first().0;
-                if !skip_implementation {
+                if self.module().path().style() == ModuleStyle::Executable
+                    && !def.metadata().flags.facts().allows_missing_implementation()
+                {
+                    // The last definition in the chain is decorated with `@overload`, and we're in
+                    // a context in which an overloaded function must end with an implementation.
+                    // Guess at what kind of mistake the user has made.
                     if let Some(range) = impl_before_overload_range {
+                        // A non-`@overload` definition appeared earlier in the chain, so the
+                        // mistake was likely putting the implementation out-of-order.
                         self.error(
                             errors,
                             range,
@@ -394,7 +394,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             "@overload declarations must come before function implementation"
                                 .to_owned(),
                         );
-                    } else if is_impl {
+                    } else if !matches!(
+                        def.metadata().flags.body_kind,
+                        BodyKind::Ellipsis | BodyKind::Trivial
+                    ) {
+                        // This definition has a non-trivial body, so the mistake was likely
+                        // decorating the implementation with `@overload`.
                         self.error(
                             errors,
                             last_range,
@@ -403,6 +408,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .to_owned(),
                         );
                     } else {
+                        // Fall back to assuming that the implementation is missing.
                         self.error(
                             errors,
                             first_range,
