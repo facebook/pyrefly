@@ -211,7 +211,8 @@ impl<'a> Transaction<'a> {
         let stdlib = self.get_stdlib(handle);
         let ast_arc = self.get_ast(handle);
         let ast_ref = ast_arc.as_deref();
-        let import_tracker = ast_ref.map(ImportTracker::from_ast);
+        let import_tracker = ast_ref
+            .map(|ast| ImportTracker::from_ast(ast, handle.module(), handle.path().is_init()));
         let make_type_hint =
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
                 let type_parts = Self::label_parts_for_display(ty, &stdlib);

@@ -7,13 +7,12 @@
 
 //! Resolve structured annotation references against imports in a module.
 
-use std::cmp::Reverse;
-
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::type_output::AnnotationPart;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -27,7 +26,7 @@ pub struct ImportTracker {
 
 impl ImportTracker {
     /// Build an import tracker from the top-level imports in a module.
-    pub fn from_ast(ast: &ModModule) -> Self {
+    pub fn from_ast(ast: &ModModule, current_module: ModuleName, is_init: bool) -> Self {
         let mut tracker = Self::default();
         for stmt in &ast.body {
             if let Stmt::Import(stmt_import) = stmt {
@@ -40,13 +39,29 @@ impl ImportTracker {
                     }
                 }
             } else if let Stmt::ImportFrom(stmt_import_from) = stmt {
-                let Some(module) = &stmt_import_from.module else {
-                    continue;
+                let module = if stmt_import_from.level == 0 {
+                    ModuleName::from_str(
+                        stmt_import_from
+                            .module
+                            .as_ref()
+                            .expect("absolute import-from must name a module")
+                            .as_str(),
+                    )
+                } else {
+                    let suffix = stmt_import_from
+                        .module
+                        .as_ref()
+                        .map(|module| Name::new(module.as_str()));
+                    let Some(module) = current_module.new_maybe_relative(
+                        is_init,
+                        stmt_import_from.level,
+                        suffix.as_ref(),
+                    ) else {
+                        continue;
+                    };
+                    module
                 };
-                let names = tracker
-                    .imported_names
-                    .entry(ModuleName::from_str(module.as_str()))
-                    .or_default();
+                let names = tracker.imported_names.entry(module).or_default();
                 for alias in &stmt_import_from.names {
                     let name = alias.name.as_str();
                     if name != "*" {
@@ -62,9 +77,6 @@ impl ImportTracker {
                 }
             }
         }
-        tracker
-            .alias_modules
-            .sort_by_key(|(module, _)| Reverse(module.as_str().len()));
         tracker
     }
 
@@ -107,7 +119,7 @@ impl ImportTracker {
                         text.push_str(suffix);
                     }
                 } else if let Some(alias) = self.alias_for(module.dupe()) {
-                    text.push_str(&alias);
+                    text.push_str(alias);
                     text.push('.');
                     text.push_str(name);
                 } else {
@@ -123,36 +135,14 @@ impl ImportTracker {
         (text, missing)
     }
 
-    fn alias_for(&self, module: ModuleName) -> Option<String> {
-        let target = module.as_str();
-        for (alias_module, alias_name) in &self.alias_modules {
-            let alias_module_str = alias_module.as_str();
-            if alias_module_str.is_empty() {
-                continue;
-            }
-            if target == alias_module_str {
-                return Some(alias_name.clone());
-            }
-            if target.len() > alias_module_str.len()
-                && target.starts_with(alias_module_str)
-                && target.as_bytes()[alias_module_str.len()] == b'.'
-            {
-                let remainder = &target[alias_module_str.len()..];
-                return Some(format!("{alias_name}{remainder}"));
-            }
-        }
-        None
+    fn alias_for(&self, module: ModuleName) -> Option<&str> {
+        self.alias_modules
+            .iter()
+            .find_map(|(imported, alias)| (*imported == module).then_some(alias.as_str()))
     }
 
     fn has_canonical(&self, module: ModuleName) -> bool {
-        let target = module.as_str();
-        self.canonical_modules.iter().any(|imported| {
-            let imported_str = imported.as_str();
-            imported_str == target
-                || (target.len() > imported_str.len()
-                    && target.starts_with(imported_str)
-                    && target.as_bytes()[imported_str.len()] == b'.')
-        })
+        self.canonical_modules.contains(&module)
     }
 }
 
@@ -177,7 +167,7 @@ mod tests {
             PySourceType::Python,
         )
         .0;
-        let tracker = ImportTracker::from_ast(&ast);
+        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("current"), false);
         let parts = vec![
             reference("typing", "Literal"),
             AnnotationPart::Text("['é'] | ".to_owned()),
@@ -194,7 +184,7 @@ mod tests {
     #[test]
     fn tracks_missing_modules_per_reference() {
         let ast = Ast::parse("from foo import Other\n", PySourceType::Python).0;
-        let tracker = ImportTracker::from_ast(&ast);
+        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("current"), false);
         let parts = vec![
             reference("foo", "Foo"),
             AnnotationPart::Text(" | ".to_owned()),
@@ -208,5 +198,60 @@ mod tests {
         assert_eq!(missing.len(), 2);
         assert!(missing.contains(&ModuleName::from_str("foo")));
         assert!(missing.contains(&ModuleName::from_str("bar")));
+    }
+
+    #[test]
+    fn parent_module_imports_do_not_resolve_descendants() {
+        let ast = Ast::parse("import foo as f\nimport bar\n", PySourceType::Python).0;
+        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("current"), false);
+        let parts = vec![
+            reference("foo.child", "C"),
+            AnnotationPart::Text(" | ".to_owned()),
+            reference("bar.child", "D"),
+        ];
+
+        let (text, missing) = tracker.resolve_annotation(&parts, ModuleName::from_str("current"));
+        assert_eq!(text, "foo.child.C | bar.child.D");
+        assert_eq!(missing.len(), 2);
+        assert!(missing.contains(&ModuleName::from_str("foo.child")));
+        assert!(missing.contains(&ModuleName::from_str("bar.child")));
+    }
+
+    #[test]
+    fn resolves_relative_imports_against_current_module() {
+        let ast = Ast::parse(
+            "from .types import Local as L\n\
+             from ..shared import Shared\n\
+             from absolute import Absolute\n",
+            PySourceType::Python,
+        )
+        .0;
+        let tracker =
+            ImportTracker::from_ast(&ast, ModuleName::from_str("package.sub.current"), false);
+        let parts = vec![
+            reference("package.sub.types", "Local"),
+            AnnotationPart::Text(" | ".to_owned()),
+            reference("package.shared", "Shared"),
+            AnnotationPart::Text(" | ".to_owned()),
+            reference("absolute", "Absolute"),
+        ];
+
+        let (text, missing) =
+            tracker.resolve_annotation(&parts, ModuleName::from_str("package.sub.current"));
+        assert_eq!(text, "L | Shared | Absolute");
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn relative_import_does_not_resolve_same_named_absolute_module() {
+        let ast = Ast::parse("from .foo import Bar\n", PySourceType::Python).0;
+        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("package.current"), false);
+
+        let (text, missing) = tracker.resolve_annotation(
+            &[reference("foo", "Bar")],
+            ModuleName::from_str("package.current"),
+        );
+        assert_eq!(text, "foo.Bar");
+        assert!(missing.contains(&ModuleName::from_str("foo")));
     }
 }
