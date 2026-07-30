@@ -90,7 +90,6 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
-use crate::binding::binding::LambdaParamId;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::int_from_slice;
 use crate::config::error_kind::ErrorKind;
@@ -121,7 +120,6 @@ use crate::types::type_var::TypeVar;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
-use crate::types::types::Var;
 
 #[derive(Debug, Clone, Copy)]
 pub enum TypeOrExpr<'a> {
@@ -565,12 +563,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let param_ids = if let Some(parameters) = &lambda.parameters {
                     parameters
                         .iter_non_variadic_params()
-                        .map(|x| (&x.name().id, self.bindings().get_lambda_param_id(x.name())))
+                        .map(|x| (x.name(), self.bindings().get_lambda_param_id(x.name())))
                         .collect()
                 } else {
                     Vec::new()
                 };
-                let param_names = param_ids.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+                let param_names = param_ids
+                    .iter()
+                    .map(|(name, _)| &name.id)
+                    .collect::<Vec<_>>();
                 let param_default_tys: Vec<Option<Type>> = match &lambda.parameters {
                     Some(parameters) => parameters
                         .iter_non_variadic_params()
@@ -586,36 +587,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             || (vec![None; param_names.len()], None),
                             |hint| self.decompose_lambda(hint, &param_names),
                         );
-                        let param_vars = self.allocate_lambda_param_vars(&param_ids);
-
-                        for (((_, var), param_hint), default_ty) in
-                            param_vars.iter().zip(param_hints).zip(&param_default_tys)
-                        {
-                            if let Some(param_hint) = param_hint {
-                                let _ = self.is_subset_eq(&param_hint, &var.to_type(self.heap));
-                            } else if let Some(default_ty) = default_ty {
-                                let mut resolved = default_ty.clone();
-                                self.solver().expand_with_bounds(&mut resolved);
-                                let promoted = resolved
-                                    .with_literal_style(LitStyle::Implicit)
-                                    .promote_implicit_literals(self.stdlib);
-                                // A `None` default almost always denotes an optional value,
-                                // so infer `Any | None` to keep the parameter permissive
-                                // rather than strictly `None`.
-                                let inferred = if promoted.is_none() {
-                                    self.union(self.heap.mk_any_implicit(), promoted)
-                                } else {
-                                    promoted
-                                };
-                                let _ = self.is_subset_eq(&inferred, &var.to_type(self.heap));
-                            }
-                        }
-
-                        let mut params: Vec<Param> = param_vars
-                            .into_iter()
+                        let mut params: Vec<Param> = param_ids
+                            .iter()
+                            .copied()
+                            .zip(param_hints)
                             .zip(&param_default_tys)
-                            .map(|((name, var), default_ty)| {
-                                let ty = self.solver().force_var(var);
+                            .map(|(((name, id), param_hint), default_ty)| {
+                                let ty = if let Some(param_hint) = param_hint {
+                                    param_hint
+                                } else if let Some(default_ty) = default_ty {
+                                    let mut resolved = default_ty.clone();
+                                    self.solver().expand_with_bounds(&mut resolved);
+                                    let promoted = resolved
+                                        .with_literal_style(LitStyle::Implicit)
+                                        .promote_implicit_literals(self.stdlib);
+                                    // A `None` default almost always denotes an optional value,
+                                    // so infer `Any | None` to keep the parameter permissive
+                                    // rather than strictly `None`.
+                                    if promoted.is_none() {
+                                        self.union(self.heap.mk_any_implicit(), promoted)
+                                    } else {
+                                        promoted
+                                    }
+                                } else {
+                                    self.heap.mk_any_implicit()
+                                };
+                                self.set_lambda_param_type(id, ty.clone());
                                 let required = match default_ty {
                                     Some(default_ty) => {
                                         Required::Optional(Some(DefaultValue::new(
@@ -626,28 +623,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     }
                                     None => Required::Required,
                                 };
-                                Param::Pos(name.clone(), ty, required)
+                                Param::Pos(name.id.clone(), ty, required)
                             })
                             .collect();
                         if let Some(parameters) = &lambda.parameters {
                             params.extend(parameters.vararg.iter().map(|x| {
-                                let var = self.solver().fresh_unwrap(self.uniques);
-                                self.set_lambda_param_var(
+                                let ty = self.heap.mk_any_implicit();
+                                self.set_lambda_param_type(
                                     self.bindings().get_lambda_param_id(&x.name),
-                                    var,
+                                    ty.clone(),
                                 );
-                                Param::Varargs(
-                                    Some(x.name.id.clone()),
-                                    self.solver().force_var(var),
-                                )
+                                Param::Varargs(Some(x.name.id.clone()), ty)
                             }));
                             params.extend(parameters.kwarg.iter().map(|x| {
-                                let var = self.solver().fresh_unwrap(self.uniques);
-                                self.set_lambda_param_var(
+                                let ty = self.heap.mk_any_implicit();
+                                self.set_lambda_param_type(
                                     self.bindings().get_lambda_param_id(&x.name),
-                                    var,
+                                    ty.clone(),
                                 );
-                                Param::Kwargs(Some(x.name.id.clone()), self.solver().force_var(var))
+                                Param::Kwargs(Some(x.name.id.clone()), ty)
                             }));
                         }
                         let params = Params::List(ParamList::new(params));
@@ -4655,21 +4649,5 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
-    }
-}
-
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn allocate_lambda_param_vars<'b>(
-        &self,
-        param_ids: &[(&'b Name, LambdaParamId)],
-    ) -> Vec<(&'b Name, Var)> {
-        param_ids
-            .iter()
-            .map(|(name, id)| {
-                let var = self.solver().fresh_unwrap(self.uniques);
-                self.set_lambda_param_var(*id, var);
-                (*name, var)
-            })
-            .collect()
     }
 }

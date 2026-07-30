@@ -1525,12 +1525,12 @@ pub struct ThreadState {
     /// as the NameAssign's solve_binding can see the partial answer (offset 0 in get_idx,
     /// which checks before pushing its own frame).
     partial_answers: RefCell<FxHashMap<(Idx<Key>, usize), Arc<TypeInfo>>>,
-    /// Solve-time mapping from per-module lambda parameter IDs to the
-    /// thread-local Var that represents that parameter in the current solve.
+    /// Solve-time mapping from per-module lambda parameter IDs to their
+    /// contextually inferred types in the current solve.
     ///
     /// The `ModulePath` is needed to distinguish the in-memory and on-disk
     /// versions of the same module, which can coexist in the IDE (issue #3789).
-    lambda_param_vars: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Var>>,
+    lambda_param_types: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Type>>,
     /// Active trace side-effect sink for the current calculation.
     /// Set before `K::solve`, taken after. `None` when tracing is disabled
     /// or between calculations. Saved sinks form a stack to handle recursive
@@ -1554,7 +1554,7 @@ impl ThreadState {
             debug: RefCell::new(false),
             recursion_limit_config,
             partial_answers: RefCell::new(FxHashMap::default()),
-            lambda_param_vars: RefCell::new(FxHashMap::default()),
+            lambda_param_types: RefCell::new(FxHashMap::default()),
             trace_sink: RefCell::new(None),
             trace_sink_stack: RefCell::new(Vec::new()),
             overload_self_filter_stack: RefCell::new(FxHashSet::default()),
@@ -1851,45 +1851,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.answers.get_class_fields(cls)
     }
 
-    pub(crate) fn set_lambda_param_var(&self, id: LambdaParamId, var: Var) {
+    pub(crate) fn set_lambda_param_type(&self, id: LambdaParamId, ty: Type) {
         self.thread_state
-            .lambda_param_vars
+            .lambda_param_types
             .borrow_mut()
-            .insert((self.module().name(), self.module().path().dupe(), id), var);
+            .insert((self.module().name(), self.module().path().dupe(), id), ty);
     }
 
-    fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
+    fn get_lambda_param_type(&self, id: LambdaParamId) -> Option<Type> {
         self.thread_state
-            .lambda_param_vars
+            .lambda_param_types
             .borrow()
             .get(&(self.module().name(), self.module().path().dupe(), id))
-            .copied()
+            .cloned()
     }
 
-    fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
-        if let Some(var) = self.get_lambda_param_var(id) {
-            var
-        } else {
-            let var = self.solver().fresh_unwrap(self.uniques);
-            self.set_lambda_param_var(id, var);
-            var
-        }
-    }
-
-    /// Resolve a lambda parameter Var from thread-local state.
+    /// Resolve a lambda parameter type from thread-local state.
     ///
     /// If owner exists, force owner evaluation first so this binding
     /// participates in the same SCC/fixpoint dynamics as the containing
     /// lambda expression.
-    pub(crate) fn resolve_lambda_param_var(
+    pub(crate) fn resolve_lambda_param_type(
         &self,
         id: LambdaParamId,
         owner: Option<Idx<Key>>,
-    ) -> Var {
+    ) -> Type {
         if let Some(owner_idx) = owner {
             let _ = self.get_idx(owner_idx);
         }
-        self.get_or_create_lambda_param_var(id)
+        self.get_lambda_param_type(id).unwrap_or_else(|| {
+            // Lambda parameter bindings may be solved independently before their lambda
+            // expression has installed a contextual type in this thread state.
+            self.heap.mk_any_implicit()
+        })
     }
 
     pub fn stack(&self) -> &CalcStack {
