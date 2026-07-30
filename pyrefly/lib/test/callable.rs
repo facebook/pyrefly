@@ -1659,6 +1659,113 @@ f: Callable[[int], int] = lambda x: x
 );
 
 testcase!(
+    test_implicit_any_lambda_partial_context,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable
+
+f: Callable[[int], None] = lambda x, y: None  # E: Type of lambda parameter `y` is unknown  # E: `(x: int, y: Unknown) -> None` is not assignable to `(int) -> None`
+"#,
+);
+
+testcase!(
+    test_implicit_any_lambda_explicit_any_context,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Any, Callable, assert_type
+
+f: Callable[[Any], Any] = lambda x: x
+g: Callable[[Any, int], int] = lambda x, y: y
+h: Any = lambda x: None  # E: Type of lambda parameter `x` is unknown
+assert_type(f, Callable[[Any], Any])
+assert_type(g, Callable[[Any, int], int])
+"#,
+);
+
+testcase!(
+    test_implicit_any_lambda_generic_context,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable
+
+def unconstrained[T](f: Callable[[T], None]) -> None: ...
+def constrained_first[T](x: T, f: Callable[[T], None]) -> None: ...
+
+unconstrained(lambda x: None)  # E: Type of lambda parameter `x` is unknown
+constrained_first(0, lambda x: None)
+"#,
+);
+
+// Lambda arguments are inferred before later arguments can constrain the generic parameter.
+testcase!(
+    bug = "Lambda context ignores later generic constraints",
+    test_implicit_any_lambda_late_generic_context,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable
+
+def constrained_later[T](f: Callable[[T], None], x: T) -> None: ...
+
+constrained_later(lambda x: None, 0)  # E: Type of lambda parameter `x` is unknown
+"#,
+);
+
+testcase!(
+    test_implicit_any_lambda_variadic_context,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable
+
+uncontextualized = lambda *args, **kwargs: None  # E: Type of lambda parameter `args` is unknown  # E: Type of lambda parameter `kwargs` is unknown
+ellipsis_positional: Callable[..., None] = lambda x: None  # E: Type of lambda parameter `x` is unknown
+ellipsis: Callable[..., None] = lambda *args, **kwargs: None  # E: Type of lambda parameter `args` is unknown  # E: Type of lambda parameter `kwargs` is unknown
+"#,
+);
+
+// Variadic lambda parameters do not currently participate in contextual decomposition.
+testcase!(
+    bug = "ParamSpec does not contextually type lambda variadics",
+    test_implicit_any_lambda_paramspec_variadics,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable
+
+def apply[**P](f: Callable[P, None], g: Callable[P, None]) -> None: ...
+def varargs(x: int, *args: str) -> None: ...
+def kwargs(x: int, **kwargs: str) -> None: ...
+
+apply(varargs, lambda x, *args: None)  # E: Type of lambda parameter `args` is unknown
+apply(kwargs, lambda x, **kwargs: None)  # E: Type of lambda parameter `kwargs` is unknown
+"#,
+);
+
+testcase!(
+    test_implicit_any_lambda_paramspec_partial_context,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable
+
+def apply[**P](f: Callable[P, None], g: Callable[P, None]) -> None: ...
+def infer[**P](f: Callable[P, None]) -> None: ...
+def source(x: int, y: str) -> None: ...
+
+apply(source, lambda x, y: None)
+apply(source, lambda x, z: None)  # E: Type of lambda parameter `z` is unknown  # E: Argument `(x: int, z: Unknown) -> None` is not assignable to parameter `g` with type `(x: int, y: str) -> None`
+infer(lambda x: None)  # E: Type of lambda parameter `x` is unknown
+"#,
+);
+
+testcase!(
+    test_implicit_any_lambda_partial_context_with_default,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable
+
+f: Callable[[int], None] = lambda x, y=0: None
+"#,
+);
+
+testcase!(
     test_lambda_no_params_known_return_no_error,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
