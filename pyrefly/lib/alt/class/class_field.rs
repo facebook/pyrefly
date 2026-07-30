@@ -192,19 +192,19 @@ impl ClassAttribute {
     }
 
     /// Returns true if this attribute represents a data descriptor
-    /// (has both `__get__` and `__set__`), including properties.
+    /// (has either `__set__` or `__delete__`), including properties.
     pub fn is_data_descriptor(&self) -> bool {
         match self {
             // All properties are data descriptors: https://docs.python.org/3/howto/descriptor.html#properties.
-            ClassAttribute::Property(..)
-            | ClassAttribute::Descriptor(
+            ClassAttribute::Property(..) => true,
+            // A data descriptor is one that defines `__set__` or `__delete__`:
+            // https://docs.python.org/3/reference/datamodel.html#invoking-descriptors
+            ClassAttribute::Descriptor(
                 Descriptor {
-                    getter: true,
-                    setter: true,
-                    ..
+                    setter, deleter, ..
                 },
                 _,
-            ) => true,
+            ) => *setter || *deleter,
             _ => false,
         }
     }
@@ -218,12 +218,14 @@ pub struct Descriptor {
     /// This is the descriptor class, which is needed both for attribute subtyping
     /// checks in structural types and in the case where there is no getter method.
     cls: ClassType,
-    /// Does `__get__` exists on the descriptor?  It is typically a `BoundMethod` although
+    /// Does `__get__` exist on the descriptor?  It is typically a `BoundMethod` although
     /// it is possible for a user to erroneously define a `__get__` with any type, including a
     /// non-callable one.
     getter: bool,
-    /// Does `__set__` exists on the descriptor? Similar considerations to `getter` apply.
+    /// Does `__set__` exist on the descriptor? Similar considerations to `getter` apply.
     setter: bool,
+    /// Does `__delete__` exist on the descriptor?
+    deleter: bool,
     /// How the descriptor field was initialized. Used to distinguish class-body
     /// descriptors (which have an actual object on the class) from annotation-only
     /// descriptors (which rely on metaclass or other runtime machinery).
@@ -1135,6 +1137,7 @@ impl ClassField {
         match &self.0 {
             ClassFieldInner::Descriptor { descriptor, .. }
                 if !descriptor.setter
+                    && !descriptor.deleter
                     && matches!(
                         descriptor.initialization,
                         ClassFieldInitialization::ClassBody(_)
@@ -1974,12 +1977,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let setter = self
                         .get_class_member(cls.class_object(), &dunder::SET)
                         .is_some();
-                    if getter || setter {
+                    let deleter = self
+                        .get_class_member(cls.class_object(), &dunder::DELETE)
+                        .is_some();
+                    if getter || setter || deleter {
                         descriptor = Some(Descriptor {
                             range,
                             cls: cls.clone(),
                             getter,
                             setter,
+                            deleter,
                             initialization: initialization.clone(),
                             is_override: descriptor_is_override,
                         })

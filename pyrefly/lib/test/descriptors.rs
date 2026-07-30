@@ -1065,3 +1065,23 @@ def get_unit(dtype: DType | type[DType]):
         return dtype.time_unit
     "#,
 );
+
+testcase!(
+    test_delete_only_data_descriptor_on_metaclass,
+    r#"
+from typing import assert_type
+
+class DeleteOnlyDescriptor:
+    def __delete__(self, instance: object) -> None: ...
+
+class Meta(type):
+    value = DeleteOnlyDescriptor()
+
+class C(metaclass=Meta):
+    __slots__ = ("value",)
+    def __init__(self) -> None:
+        self.value: int = 0
+
+assert_type(C.value, DeleteOnlyDescriptor)
+    "#,
+);

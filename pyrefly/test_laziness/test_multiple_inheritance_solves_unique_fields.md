@@ -48,7 +48,7 @@ a: Solutions
 b: Answers
 c: Answers
 
-(84 builtin demands hidden)
+(96 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> c::Exports(is_special_export)
 a -> b::Load(module_exists)
