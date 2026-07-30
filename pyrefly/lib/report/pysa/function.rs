@@ -33,7 +33,6 @@ use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::ClassFieldDefinition;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::report::pysa::ModuleContext;
@@ -730,9 +729,7 @@ impl FunctionNode {
 
     fn is_stub(&self) -> bool {
         match self {
-            FunctionNode::DecoratedFunction(function) => {
-                function.undecorated.stub_or_impl == FunctionStubOrImpl::Stub
-            }
+            FunctionNode::DecoratedFunction(function) => function.undecorated.is_stub,
             FunctionNode::ClassField { .. } => false,
         }
     }

@@ -65,7 +65,6 @@ use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Binding;
 use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionParameter;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecorator;
@@ -524,7 +523,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         def: &FunctionDefData,
         def_index: FuncDefIndex,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
         is_in_type_checking_block: bool,
         body_kind: BodyKind,
         is_return_inferred: bool,
@@ -679,7 +678,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             resolved_param_types,
         } = self.get_params_and_paramspec(
             def,
-            stub_or_impl,
+            is_stub,
             &mut self_type,
             &mut decorator_param_hints,
             &mut parent_param_hints,
@@ -767,7 +766,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             tparams,
             params,
             paramspec,
-            stub_or_impl,
+            is_stub,
             defining_cls,
             type_shape_dsl_def,
             resolved_param_types,
@@ -1174,13 +1173,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         default: Option<&Expr>,
         check: Option<(&Type, &dyn Fn() -> TypeCheckContext)>,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
         errors: &ErrorCollector,
     ) -> Required {
         match default {
             Some(default)
-                if (stub_or_impl == FunctionStubOrImpl::Stub
-                    || self.module().path().style() == ModuleStyle::Interface)
+                if (is_stub || self.module().path().style() == ModuleStyle::Interface)
                     && matches!(default, Expr::EllipsisLiteral(_)) =>
             {
                 Required::Optional(None)
@@ -1239,7 +1237,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         name: &Identifier,
         default: Option<&Expr>,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
         self_type: &mut Option<Type>,
         hint: Option<Type>,
         errors: &ErrorCollector,
@@ -1273,11 +1271,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     Some((&param_ty, &make_context))
                 };
-                let required = self.get_requiredness(default, check, stub_or_impl, errors);
+                let required = self.get_requiredness(default, check, is_stub, errors);
                 (param_ty, required, false)
             }
             FunctionParameter::Unannotated(_, _, _) => {
-                let required = self.get_requiredness(default, None, stub_or_impl, errors);
+                let required = self.get_requiredness(default, None, is_stub, errors);
                 // If this is the first parameter and there is a self type, resolve to `Self`.
                 // We only try to resolve the first param for now. Other unannotated params
                 // resolve to Any. If a default value of type T is provided, it will resolve to Any | T.
@@ -1314,7 +1312,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_params_and_paramspec(
         &self,
         def: &FunctionDefData,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
         self_type: &mut Option<Type>,
         decorator_param_hints: &mut Option<DecoratorParamHints>,
         parent_param_hints: &mut Option<ParentParamHints>,
@@ -1342,7 +1340,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
-                stub_or_impl,
+                is_stub,
                 self_type,
                 decorator_hint.or(parent_hint),
                 errors,
@@ -1376,7 +1374,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
-                stub_or_impl,
+                is_stub,
                 self_type,
                 decorator_hint.or(parent_hint),
                 errors,
@@ -1420,7 +1418,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
-                stub_or_impl,
+                is_stub,
                 &mut None,
                 parent_hint,
                 errors,
@@ -1457,7 +1455,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
-                stub_or_impl,
+                is_stub,
                 self_type,
                 parent_hint,
                 errors,
@@ -1476,7 +1474,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
-                stub_or_impl,
+                is_stub,
                 self_type,
                 parent_hint,
                 errors,

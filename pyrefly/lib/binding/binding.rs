@@ -1823,15 +1823,6 @@ pub enum FunctionParameter {
     Unannotated(Idx<KeyUndecoratedFunction>, AnnotationTarget, Name),
 }
 
-/// Is the body of this function stubbed out (contains nothing but `...`)?
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TypeEq, Visit, VisitMut)]
-pub enum FunctionStubOrImpl {
-    /// The function body is `...`.
-    Stub,
-    /// The function body is not `...`.
-    Impl,
-}
-
 #[derive(Clone, Debug)]
 pub struct BindingDecorator {
     pub expr: Expr,
@@ -1902,7 +1893,7 @@ impl DisplayWith<Bindings> for BindingDecoratedFunction {
 pub struct BindingUndecoratedFunction {
     pub def_index: FuncDefIndex,
     pub def: FunctionDefData,
-    pub stub_or_impl: FunctionStubOrImpl,
+    pub is_stub: bool,
     /// Whether the function is defined in an `if TYPE_CHECKING:` block.
     pub is_in_type_checking_block: bool,
     /// The shape of the function body.

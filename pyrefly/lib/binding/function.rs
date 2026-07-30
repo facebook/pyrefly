@@ -53,7 +53,6 @@ use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FunctionDefData;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
@@ -508,7 +507,7 @@ impl<'a> BindingsBuilder<'a> {
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
         implicit_return: Option<Idx<Key>>,
         should_infer_return_type: bool,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
     ) {
         let is_generator = yields_and_returns.is_generator;
         let return_ann = return_ann_with_range.as_ref().map(|(_, key)| *key);
@@ -566,8 +565,8 @@ impl<'a> BindingsBuilder<'a> {
             .into_boxed_slice();
 
         let return_type_binding = {
-            let kind = match (return_ann_with_range, implicit_return, stub_or_impl) {
-                (Some((range, annotation)), Some(implicit_return), FunctionStubOrImpl::Impl) => {
+            let kind = match (return_ann_with_range, implicit_return, is_stub) {
+                (Some((range, annotation)), Some(implicit_return), false) => {
                     self.insert_binding(
                         KeyExpect::ValidateImplicitReturn(range),
                         BindingExpect::ValidateImplicitReturn {
@@ -585,7 +584,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
                 // We have an explicit return annotation on a stub function, so we just trust it, ignoring the implicit return.
-                (Some((range, annotation)), Some(_), FunctionStubOrImpl::Stub)
+                (Some((range, annotation)), Some(_), true)
                 // We have an explicit return annotation and no implicit return.
                 | (Some((range, annotation)), None, _) => {
                     ReturnTypeKind::ShouldTrustAnnotation {
@@ -701,7 +700,7 @@ impl<'a> BindingsBuilder<'a> {
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
-    ) -> (FunctionStubOrImpl, BodyKind, bool, Option<SelfAssignments>) {
+    ) -> (bool, BodyKind, bool, Option<SelfAssignments>) {
         // If the first statement in the body is a docstring, remove it
         let body_no_docstring = if let Some(s) = body.first()
             && is_docstring(s)
@@ -744,17 +743,12 @@ impl<'a> BindingsBuilder<'a> {
         }
         // A `...` body is always interpreted as a stub function.
         // Functions with other trivial bodies are interpreted as stubs in some contexts.
-        let stub_or_impl = if body_kind == BodyKind::Ellipsis
+        let is_stub = body_kind == BodyKind::Ellipsis
             || ((self.scopes.is_in_protocol_class()
                 || decorators.is_abstract_method
                 || decorators.is_overload)
-                && body_kind == BodyKind::Trivial)
-        {
-            FunctionStubOrImpl::Stub
-        } else {
-            FunctionStubOrImpl::Impl
-        };
-        let should_report_unused_parameters = stub_or_impl == FunctionStubOrImpl::Impl
+                && body_kind == BodyKind::Trivial);
+        let should_report_unused_parameters = !is_stub
             && !body_kind.is_placeholder_or_trivial()
             && !decorators.is_overload
             && !decorators.is_override
@@ -808,7 +802,7 @@ impl<'a> BindingsBuilder<'a> {
                 return_ann_with_range,
                 implicit_return,
                 false,
-                stub_or_impl,
+                is_stub,
             );
             (false, self_assignments)
         } else {
@@ -844,7 +838,7 @@ impl<'a> BindingsBuilder<'a> {
                 return_ann_with_range,
                 implicit_return,
                 should_infer,
-                stub_or_impl,
+                is_stub,
             );
             // Mirror the `ReturnTypeKind::ShouldInferType` arm in `analyze_return_type`:
             // we infer iff there's no return annotation and inference was requested.
@@ -859,12 +853,7 @@ impl<'a> BindingsBuilder<'a> {
             (is_return_inferred, self_assignments)
         };
 
-        (
-            stub_or_impl,
-            body_kind,
-            is_return_inferred,
-            self_assignments,
-        )
+        (is_stub, body_kind, is_return_inferred, self_assignments)
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
@@ -1003,7 +992,7 @@ impl<'a> BindingsBuilder<'a> {
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let calls_super_method = SuperMethodCallFinder::find(&func_name.id, &x.body);
-        let (stub_or_impl, body_kind, is_return_inferred, self_assignments) = self.function_body(
+        let (is_stub, body_kind, is_return_inferred, self_assignments) = self.function_body(
             &mut x.parameters,
             mem::take(&mut x.body),
             &decorators,
@@ -1027,7 +1016,7 @@ impl<'a> BindingsBuilder<'a> {
             BindingUndecoratedFunction {
                 def_index: func_def_index,
                 def: FunctionDefData::new(x),
-                stub_or_impl,
+                is_stub,
                 is_in_type_checking_block: self.type_checking_depth > 0,
                 body_kind,
                 is_return_inferred,

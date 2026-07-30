@@ -36,7 +36,6 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::types::callable::FuncMetadata;
@@ -53,7 +52,7 @@ pub struct UndecoratedFunction {
     pub tparams: Arc<TParams>,
     pub params: Vec<Param>,
     pub paramspec: Option<Quantified>,
-    pub stub_or_impl: FunctionStubOrImpl,
+    pub is_stub: bool,
     pub defining_cls: Option<Class>,
     pub type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
     /// Maps parameter names to their resolved types - used to connect
@@ -127,7 +126,7 @@ impl UndecoratedFunction {
             tparams: Arc::new(TParams::default()),
             params: Vec::new(),
             paramspec: None,
-            stub_or_impl: FunctionStubOrImpl::Stub,
+            is_stub: true,
             defining_cls: None,
             type_shape_dsl_def: None,
             resolved_param_types: SmallMap::new(),

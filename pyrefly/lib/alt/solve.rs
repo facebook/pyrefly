@@ -6065,7 +6065,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.undecorated_function(
             &x.def,
             x.def_index,
-            x.stub_or_impl,
+            x.is_stub,
             x.is_in_type_checking_block,
             x.body_kind,
             x.is_return_inferred,
