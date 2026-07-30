@@ -2885,6 +2885,64 @@ def f(s: Int, s3: Int[3]) -> None:
 );
 
 testcase!(
+    test_tensor_shapes_recanonicalizes_expanded_dimension_roots,
+    shaped_array_env(),
+    r#"
+from collections.abc import Callable
+from shape_extensions import Int, IntVar
+
+def take_product[X: IntVar, Y: IntVar](
+    left: Int[X],
+    right: Int[Y],
+    value: Int[X * Y],
+) -> None: ...
+
+def make_product[X: IntVar, Y: IntVar](left: Int[X], right: Int[Y]) -> Int[X * Y]: ...
+
+def f[A: IntVar, B: IntVar, C: IntVar, D: IntVar](
+    left: Int[A + B],
+    right: Int[C + D],
+    expanded: Int[A * C + A * D + B * C + B * D],
+) -> None:
+    # The want root needs another pass after X and Y expand to sums.
+    take_product(left, right, expanded)
+    # Callable parameter matching solves X and Y before comparing the return type.
+    check: Callable[
+        [Int[A + B], Int[C + D]],
+        Int[A * C + A * D + B * C + B * D],
+    ] = make_product
+"#,
+);
+
+testcase!(
+    test_tensor_shapes_recanonicalizes_mixed_dimension_roots,
+    shaped_array_env(),
+    r#"
+from collections.abc import Callable
+from shape_extensions import Int, IntVar
+
+class Box[N: IntVar]:
+    def get(self) -> Int[N]: ...
+
+def take_box[X: IntVar, Y: IntVar](
+    left: Int[X],
+    right: Int[Y],
+    value: Box[X * Y],
+) -> None: ...
+
+def make_box[X: IntVar, Y: IntVar](left: Int[X], right: Int[Y]) -> Box[X * Y]: ...
+
+def f[A: IntVar, B: IntVar, C: IntVar, D: IntVar, Q: IntVar](
+    left: Int[A + B],
+    right: Int[C + D],
+    box: Box[Q],
+) -> None:
+    quantified_want: Callable[[Int[A + B], Int[C + D]], Box[Q]] = make_box  # E: Shape dimension mismatch: expected Int[Q], got Int[((((A * C) + (A * D)) + (B * C)) + (B * D))]
+    take_box(left, right, box)  # E: Shape dimension mismatch: expected Int[((((A * C) + (A * D)) + (B * C)) + (B * D))], got Int[Q]
+"#,
+);
+
+testcase!(
     test_tensor_shapes_size_int_is_canonical_when_inferred,
     shaped_array_env(),
     r#"
