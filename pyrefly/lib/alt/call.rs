@@ -64,7 +64,6 @@ use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::TypeVarSpecializationError;
-use crate::state::loader::FindingOrError;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -2527,27 +2526,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn unittest_mock_patch_target_expr<'b>(arguments: &'b Arguments) -> Option<&'b Expr> {
+    fn unittest_mock_patch_target_expr(arguments: &Arguments) -> Option<&Expr> {
         match arguments.args.first() {
-            Some(Expr::Starred(_)) | None => {}
-            Some(arg) => return Some(arg),
+            Some(Expr::Starred(_)) | None => arguments.find_keyword("target").map(|kw| &kw.value),
+            Some(arg) => Some(arg),
         }
-        for kw in &arguments.keywords {
-            let Some(arg) = kw.arg.as_ref().map(|id| id.as_str()) else {
-                continue;
-            };
-            if arg == "target" {
-                return Some(&kw.value);
-            }
-        }
-        None
     }
 
     fn unittest_mock_patch_creates_target(arguments: &Arguments) -> bool {
-        arguments.keywords.iter().any(|kw| {
-            kw.arg.as_ref().is_some_and(|id| id.as_str() == "create")
-                && matches!(&kw.value, Expr::BooleanLiteral(lit) if lit.value)
-        })
+        arguments
+            .find_keyword("create")
+            .is_some_and(|kw| matches!(&kw.value, Expr::BooleanLiteral(lit) if lit.value))
     }
 
     fn check_unittest_mock_patch_target_expr(&self, target_expr: &Expr, errors: &ErrorCollector) {
@@ -2563,26 +2552,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Follow unittest.mock's import behavior loosely: find the longest importable module prefix,
         // then resolve the remaining components as attributes.
-        let mut module = None;
-        let mut module_prefix_len = 0;
-        for i in (1..parts.len()).rev() {
+        let Some((module_prefix_len, module)) = (1..parts.len()).rev().find_map(|i| {
             let candidate = ModuleName::from_str(&parts[..i].join("."));
-            if candidate == self.module().name() {
-                module = Some(candidate);
-                module_prefix_len = i;
-                break;
-            }
-            match self.exports.module_exists(candidate) {
-                FindingOrError::Finding(_) => {
-                    module = Some(candidate);
-                    module_prefix_len = i;
-                    break;
-                }
-                FindingOrError::Error(_) => {}
-            }
-        }
-
-        let Some(module) = module else {
+            (candidate == self.module().name()
+                || self.exports.module_exists(candidate).finding().is_some())
+            .then_some((i, candidate))
+        }) else {
             // If we can't resolve the module (or it is present but untyped/ignored), skip patch
             // validation to avoid spurious failures when patching third-party libraries.
             return;
@@ -2590,41 +2565,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut base_ty = ModuleType::new_as(module).to_type(self.heap);
         for attr in &parts[module_prefix_len..] {
-            let attr_name = Name::new(*attr);
-            if let Type::Module(module_type) = &base_ty {
-                let module_name = ModuleName::from_parts(module_type.parts());
-                if attr_name.as_str().starts_with('_')
-                    || self
-                        .exports
-                        .export_exists(ModuleName::builtins(), &attr_name)
-                {
-                    return;
-                }
-                let module_attr_exists = self.exports.export_exists(module_name, &attr_name)
-                    || self.exports.export_exists(module_name, &dunder::GETATTR);
-                if !module_attr_exists {
-                    errors
-                        .error_builder(
-                            range,
-                            ErrorKind::MissingAttribute,
-                            format!("No attribute `{attr_name}` in module `{module_name}`"),
-                        )
-                        .emit();
-                    return;
-                }
-            }
-            let swallower = self.error_swallower();
             base_ty = self.type_of_attr_get(
                 &base_ty,
-                &attr_name,
+                &Name::new(*attr),
                 range,
-                &swallower,
+                errors,
                 None,
                 "unittest.mock.patch target",
             );
-            if !swallower.is_empty() {
-                return;
-            }
         }
     }
 
