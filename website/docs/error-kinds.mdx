@@ -655,6 +655,27 @@ def f(xs: list[int]) -> tuple[int, ...]:
     return tuple(xs)
 ```
 
+## implicit-bool
+
+Default severity: `ignore`
+
+This error is emitted when a non-`bool` value is used in a boolean context. Enable it to require
+explicit checks for values whose truthiness could conflate distinct cases, such as `None` and zero
+or `None` and an empty container. An explicit `bool(...)` conversion is allowed.
+
+```python
+def get_temperature() -> int | None:
+    return 0
+
+temperature = get_temperature()
+if not temperature:  # implicit-bool
+    raise RuntimeError("Temperature sensor unavailable")
+
+# Fix:
+if temperature is None:
+    raise RuntimeError("Temperature sensor unavailable")
+```
+
 ## implicit-import
 
 Default severity: `warn`

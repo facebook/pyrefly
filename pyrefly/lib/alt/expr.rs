@@ -538,6 +538,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let condition_type = self.expr_infer(&x.test, errors);
                 self.check_dunder_bool_is_callable(&condition_type, x.range(), errors);
                 self.check_redundant_condition(&condition_type, x.range(), errors);
+                self.check_implicit_bool(&condition_type, x.test.range(), errors);
                 match self
                     .bindings()
                     .sys_info()
@@ -2045,6 +2046,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // result; both operations require us to force `Var` first or they become unpredictable.
             if i < last_index {
                 t = self.force_for_narrowing(&t, value.range(), errors);
+                self.check_implicit_bool(&t, value.range(), errors);
             }
             if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
@@ -2077,6 +2079,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for if_clause in comp.ifs.iter() {
                 let ty = self.expr_infer(if_clause, errors);
                 self.check_redundant_condition(&ty, if_clause.range(), errors);
+                self.check_implicit_bool(&ty, if_clause.range(), errors);
             }
         }
     }
@@ -4616,6 +4619,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 ErrorKind::RedundantCondition,
                 format!("{reason}"),
+            );
+        }
+    }
+
+    /// Report a non-`bool` type used where Python implicitly tests truthiness.
+    pub fn check_implicit_bool(
+        &self,
+        condition_type: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if !condition_type.is_any()
+            && !condition_type.is_never()
+            && !self.is_subset_eq(
+                condition_type,
+                &self.heap.mk_class_type(self.stdlib.bool().clone()),
+            )
+        {
+            self.error(
+                errors,
+                range,
+                ErrorKind::ImplicitBool,
+                format!(
+                    "Implicit conversion of `{}` to `bool` is not allowed",
+                    self.for_display(condition_type.clone())
+                ),
             );
         }
     }
