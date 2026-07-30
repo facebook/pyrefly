@@ -60,6 +60,50 @@ fn test_document_symbols_underscore_prefix() {
     interaction.shutdown().unwrap();
 }
 
+/// An empty `disabledLanguageServices` object (which VS Code materializes from
+/// its `{}` default and returns whenever the server pulls config) currently
+/// disables document symbols entirely, even though nothing is actually disabled.
+/// This documents that undesired behavior; it is fixed in a following change.
+#[test]
+fn test_document_symbols_with_empty_disabled_services() {
+    let root = get_test_files_root();
+    let test_root = root.path().join("prefixed_with_underscore");
+    let scope_uri = Url::from_file_path(test_root.clone()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_root.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
+        .send_configuration_response(json!([{"pyrefly": {"disabledLanguageServices": {}}}]));
+
+    interaction.client.did_open("normal.py");
+
+    let path = test_root.join("normal.py");
+    let uri = Url::from_file_path(&path).unwrap();
+
+    interaction
+        .client
+        .send_request::<DocumentSymbolRequest>(json!({
+            "textDocument": {
+                "uri": uri.to_string()
+            },
+        }))
+        .expect_response(json!(null))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_document_symbols_normal_file() {
     let root = get_test_files_root();
