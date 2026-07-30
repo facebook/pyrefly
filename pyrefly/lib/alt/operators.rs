@@ -942,8 +942,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Checks for unnecessary identity comparisons.
     ///
-    /// Only emits warnings for identity comparisons (`is` or `is not`) between literals
-    /// whose comparison result is statically known.
+    /// Only emits warnings for identity comparisons (`is` or `is not`) whose result is
+    /// statically known.
     /// Returns early without warnings for other comparison operators.
     fn check_unnecessary_comparison(
         &self,
@@ -1026,20 +1026,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
 
-            // ClassDef vs ClassType - disjoint unless ClassType is `type`, `object`,
-            // or another metaclass (subclass of type)
-            (Type::ClassDef(cdef), ctype @ Type::ClassType(cls))
-            | (ctype @ Type::ClassType(cls), Type::ClassDef(cdef)) => {
-                // A class object is an instance of `type` (or a metaclass), so it's only
-                // compatible with ClassType if that ClassType is `type`, `object`, or a metaclass
-                let is_metaclass_or_object = cls.is_builtin("object")
-                    || self.has_superclass(
-                        cls.class_object(),
-                        self.stdlib.builtins_type().class_object(),
-                    );
-                if !is_metaclass_or_object {
-                    emit_instance_is_class_warning(&ctype.to_string(), cdef.name().as_str(), is_op);
-                }
+            // ClassDef vs ClassType - disjoint unless the class object is assignable to ClassType.
+            (Type::ClassDef(cdef), ctype @ Type::ClassType(_))
+            | (ctype @ Type::ClassType(_), Type::ClassDef(cdef))
+                if !self.is_subset_eq(&Type::ClassDef(cdef.clone()), ctype) =>
+            {
+                emit_instance_is_class_warning(&ctype.to_string(), cdef.name().as_str(), is_op);
             }
 
             // All other combinations: no warning
