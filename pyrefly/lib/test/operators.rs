@@ -908,6 +908,27 @@ True & ThisClassDoesNotWork(False)
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3876
+testcase!(
+    test_reflected_dunder_subclass_priority,
+    r#"
+from enum import IntFlag
+from typing import assert_type
+
+class Color(IntFlag):
+    RED = 1
+    GREEN = 2
+
+def f(x: int, c: Color) -> None:
+    # `int & Color` invokes `Color.__rand__` at runtime because `Color` is a
+    # proper subclass of `int` that overrides the reflected dunder, so the result
+    # keeps the flag type instead of widening to `int`.
+    assert_type(x & c, Color)
+    assert_type(x | c, Color)
+    assert_type(x ^ c, Color)
+"#,
+);
+
 testcase!(
     test_type_of_typevar_equality,
     r#"
