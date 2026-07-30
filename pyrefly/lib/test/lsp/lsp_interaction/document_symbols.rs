@@ -61,9 +61,8 @@ fn test_document_symbols_underscore_prefix() {
 }
 
 /// An empty `disabledLanguageServices` object (which VS Code materializes from
-/// its `{}` default and returns whenever the server pulls config) currently
-/// disables document symbols entirely, even though nothing is actually disabled.
-/// This documents that undesired behavior; it is fixed in a following change.
+/// its `{}` default and returns whenever the server pulls config) must not
+/// disable document symbols, since nothing is actually disabled.
 #[test]
 fn test_document_symbols_with_empty_disabled_services() {
     let root = get_test_files_root();
@@ -98,8 +97,16 @@ fn test_document_symbols_with_empty_disabled_services() {
                 "uri": uri.to_string()
             },
         }))
-        .expect_response(json!(null))
-        .expect("Failed to receive expected response");
+        .expect_response_with(|response: Option<DocumentSymbolResponse>| {
+            let symbols = match response {
+                Some(DocumentSymbolResponse::Nested(s)) => s,
+                _ => return false,
+            };
+            symbols
+                .iter()
+                .any(|s| s.name == "normal_function" && s.kind == lsp_types::SymbolKind::FUNCTION)
+        })
+        .unwrap();
 
     interaction.shutdown().unwrap();
 }

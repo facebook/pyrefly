@@ -5390,14 +5390,6 @@ impl Server {
     ) -> Result<Option<DocumentSymbolResponse>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
-        let path = self
-            .path_for_uri_or_notebook_cell(uri)
-            .ok_or(EmptyResponseReason::NoFilePath)?;
-        if self.workspaces.get_with(path, |(_, workspace)| {
-            workspace.disabled_language_services.is_some()
-        }) {
-            return Err(EmptyResponseReason::LanguageServicesDisabled);
-        }
 
         // Avoid creating a handle when the client doesn't support document symbols
         let document_symbols_caps = self
