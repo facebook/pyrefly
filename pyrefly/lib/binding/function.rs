@@ -17,6 +17,7 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::BodyKind;
+use pyrefly_types::callable::FuncFacts;
 use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
 use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_util::prelude::VecExt;
@@ -700,7 +701,7 @@ impl<'a> BindingsBuilder<'a> {
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
-    ) -> (bool, BodyKind, bool, Option<SelfAssignments>) {
+    ) -> (BodyKind, bool, Option<SelfAssignments>) {
         // If the first statement in the body is a docstring, remove it
         let body_no_docstring = if let Some(s) = body.first()
             && is_docstring(s)
@@ -741,14 +742,13 @@ impl<'a> BindingsBuilder<'a> {
                 "`@overload` bodies should not contain executable logic".to_owned(),
             );
         }
-        // A `...` body is always interpreted as a stub function.
-        // Functions with other trivial bodies are interpreted as stubs in some contexts.
-        let is_stub = body_kind == BodyKind::Ellipsis
-            || ((self.scopes.is_in_protocol_class()
-                || decorators.is_abstract_method
-                || decorators.is_overload)
-                && body_kind == BodyKind::Trivial);
-        let should_report_unused_parameters = !is_stub
+        let facts = FuncFacts {
+            body_kind,
+            is_in_protocol_class: self.scopes.is_in_protocol_class(),
+            is_abstract_method: decorators.is_abstract_method,
+            is_overload: decorators.is_overload,
+        };
+        let should_report_unused_parameters = !facts.is_stub()
             && !body_kind.is_placeholder_or_trivial()
             && !decorators.is_overload
             && !decorators.is_override
@@ -802,7 +802,7 @@ impl<'a> BindingsBuilder<'a> {
                 return_ann_with_range,
                 implicit_return,
                 false,
-                is_stub,
+                facts.is_stub(),
             );
             (false, self_assignments)
         } else {
@@ -838,7 +838,7 @@ impl<'a> BindingsBuilder<'a> {
                 return_ann_with_range,
                 implicit_return,
                 should_infer,
-                is_stub,
+                facts.is_stub(),
             );
             // Mirror the `ReturnTypeKind::ShouldInferType` arm in `analyze_return_type`:
             // we infer iff there's no return annotation and inference was requested.
@@ -853,7 +853,7 @@ impl<'a> BindingsBuilder<'a> {
             (is_return_inferred, self_assignments)
         };
 
-        (is_stub, body_kind, is_return_inferred, self_assignments)
+        (body_kind, is_return_inferred, self_assignments)
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
@@ -992,7 +992,7 @@ impl<'a> BindingsBuilder<'a> {
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let calls_super_method = SuperMethodCallFinder::find(&func_name.id, &x.body);
-        let (is_stub, body_kind, is_return_inferred, self_assignments) = self.function_body(
+        let (body_kind, is_return_inferred, self_assignments) = self.function_body(
             &mut x.parameters,
             mem::take(&mut x.body),
             &decorators,
@@ -1016,7 +1016,6 @@ impl<'a> BindingsBuilder<'a> {
             BindingUndecoratedFunction {
                 def_index: func_def_index,
                 def: FunctionDefData::new(x),
-                is_stub,
                 is_in_type_checking_block: self.type_checking_depth > 0,
                 body_kind,
                 is_return_inferred,

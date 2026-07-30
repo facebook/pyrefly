@@ -139,7 +139,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 11);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 20);
+assert_words!(BindingUndecoratedFunction, 19);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1893,7 +1893,6 @@ impl DisplayWith<Bindings> for BindingDecoratedFunction {
 pub struct BindingUndecoratedFunction {
     pub def_index: FuncDefIndex,
     pub def: FunctionDefData,
-    pub is_stub: bool,
     /// Whether the function is defined in an `if TYPE_CHECKING:` block.
     pub is_in_type_checking_block: bool,
     /// The shape of the function body.

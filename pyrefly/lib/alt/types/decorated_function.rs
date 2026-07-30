@@ -52,7 +52,6 @@ pub struct UndecoratedFunction {
     pub tparams: Arc<TParams>,
     pub params: Vec<Param>,
     pub paramspec: Option<Quantified>,
-    pub is_stub: bool,
     pub defining_cls: Option<Class>,
     pub type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
     /// Maps parameter names to their resolved types - used to connect
@@ -126,7 +125,6 @@ impl UndecoratedFunction {
             tparams: Arc::new(TParams::default()),
             params: Vec::new(),
             paramspec: None,
-            is_stub: true,
             defining_cls: None,
             type_shape_dsl_def: None,
             resolved_param_types: SmallMap::new(),

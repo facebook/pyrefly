@@ -677,6 +677,33 @@ impl BodyKind {
     }
 }
 
+/// Ephemeral struct for computing facts about a function definition.
+#[derive(Debug)]
+pub struct FuncFacts {
+    pub body_kind: BodyKind,
+    pub is_in_protocol_class: bool,
+    pub is_abstract_method: bool,
+    pub is_overload: bool,
+}
+
+impl FuncFacts {
+    pub fn allows_missing_implementation(&self) -> bool {
+        self.is_in_protocol_class || self.is_abstract_method
+    }
+
+    /// Is this function defined in an interface (i.e., .pyi) -like context?
+    pub fn is_in_interface_like_context(&self) -> bool {
+        self.allows_missing_implementation() || self.is_overload
+    }
+
+    pub fn is_stub(&self) -> bool {
+        // A `...` body is always interpreted as a stub function.
+        // Functions with other trivial bodies are interpreted as stubs in some contexts.
+        self.body_kind == BodyKind::Ellipsis
+            || (self.is_in_interface_like_context() && self.body_kind == BodyKind::Trivial)
+    }
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
 )]
@@ -756,6 +783,17 @@ pub struct FuncFlags {
     /// A method directly inside a `Protocol` class.
     pub is_in_protocol_class: bool,
     pub is_in_type_checking_block: bool,
+}
+
+impl FuncFlags {
+    pub fn facts(&self) -> FuncFacts {
+        FuncFacts {
+            body_kind: self.body_kind,
+            is_in_protocol_class: self.is_in_protocol_class,
+            is_abstract_method: self.is_abstract_method,
+            is_overload: self.is_overload,
+        }
+    }
 }
 
 /// The index of a function definition (`def ..():` statement) within the module,

@@ -729,7 +729,9 @@ impl FunctionNode {
 
     fn is_stub(&self) -> bool {
         match self {
-            FunctionNode::DecoratedFunction(function) => function.undecorated.is_stub,
+            FunctionNode::DecoratedFunction(function) => {
+                function.metadata().flags.facts().is_stub()
+            }
             FunctionNode::ClassField { .. } => false,
         }
     }

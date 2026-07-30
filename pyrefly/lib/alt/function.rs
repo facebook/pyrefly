@@ -362,8 +362,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         // Overloads in .pyi should not have an implementation.
         let skip_implementation = self.module().path().style() == ModuleStyle::Interface
-            || def.metadata().flags.is_in_protocol_class
-            || def.metadata().flags.is_abstract_method;
+            || def.metadata().flags.facts().allows_missing_implementation();
         let mut ty = if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.get_function_successor(&def);
@@ -523,7 +522,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         def: &FunctionDefData,
         def_index: FuncDefIndex,
-        is_stub: bool,
         is_in_type_checking_block: bool,
         body_kind: BodyKind,
         is_return_inferred: bool,
@@ -678,7 +676,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             resolved_param_types,
         } = self.get_params_and_paramspec(
             def,
-            is_stub,
+            flags.facts().is_stub(),
             &mut self_type,
             &mut decorator_param_hints,
             &mut parent_param_hints,
@@ -766,7 +764,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             tparams,
             params,
             paramspec,
-            is_stub,
             defining_cls,
             type_shape_dsl_def,
             resolved_param_types,
@@ -796,9 +793,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && !def.metadata.flags.is_in_type_checking_block
             && has_return_annotation
             && def.metadata.flags.module_style == ModuleStyle::Executable
-            && !def.metadata.flags.is_overload
-            && !def.metadata.flags.is_abstract_method
-            && !def.metadata.flags.is_in_protocol_class
+            && !def.metadata.flags.facts().is_in_interface_like_context()
             && !if stmt.is_async {
                 self.unwrap_coroutine(&ret)
                     .is_some_and(|(_, _, return_ty)| {
