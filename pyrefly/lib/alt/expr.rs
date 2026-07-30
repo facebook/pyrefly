@@ -570,6 +570,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     Vec::new()
                 };
+                let param_names = param_ids.iter().map(|(name, _)| *name).collect::<Vec<_>>();
                 let param_default_tys: Vec<Option<Type>> = match &lambda.parameters {
                     Some(parameters) => parameters
                         .iter_non_variadic_params()
@@ -581,20 +582,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     hint,
                     errors,
                     |cur_hint, callable_errors| {
+                        let (param_hints, return_hint) = cur_hint.map_or_else(
+                            || (vec![None; param_names.len()], None),
+                            |hint| self.decompose_lambda(hint, &param_names),
+                        );
                         let param_vars = self.allocate_lambda_param_vars(&param_ids);
 
-                        // Pass any contextual information to the parameter bindings used in the lambda body as a side
-                        // effect, by setting an answer for the vars created at binding time.
-                        let return_hint =
-                            cur_hint.and_then(|hint| self.decompose_lambda(hint, &param_vars));
-
-                        // For each parameter that has a default value but whose Var is not
-                        // constrained by a contextual hint, constrain the Var to the
-                        // (promoted) type of the default.
-                        for ((_, var), default_ty) in param_vars.iter().zip(&param_default_tys) {
-                            if let Some(default_ty) = default_ty
-                                && matches!(self.solver().expand_unwrap(*var), Type::Var(_))
-                            {
+                        for (((_, var), param_hint), default_ty) in
+                            param_vars.iter().zip(param_hints).zip(&param_default_tys)
+                        {
+                            if let Some(param_hint) = param_hint {
+                                let _ = self.is_subset_eq(&param_hint, &var.to_type(self.heap));
+                            } else if let Some(default_ty) = default_ty {
                                 let mut resolved = default_ty.clone();
                                 self.solver().expand_with_bounds(&mut resolved);
                                 let promoted = resolved

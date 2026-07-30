@@ -317,23 +317,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn decompose_lambda(&self, hint: &Type, param_vars: &[(&Name, Var)]) -> Option<Type> {
-        let return_ty = self.fresh_var();
-        let params = param_vars
+    /// Extract resolved parameter and return types from a callable hint.
+    pub(crate) fn decompose_lambda(
+        &self,
+        hint: &Type,
+        param_names: &[&Name],
+    ) -> (Vec<Option<Type>>, Option<Type>) {
+        let param_vars = param_names
             .iter()
+            .map(|_| self.fresh_var())
+            .collect::<Vec<_>>();
+        let return_ty = self.fresh_var();
+        let params = param_names
+            .iter()
+            .zip(&param_vars)
             .map(|(name, var)| {
-                Param::Pos((*name).clone(), var.to_type(self.heap), Required::Required)
+                Param::Pos((**name).clone(), var.to_type(self.heap), Required::Required)
             })
             .collect::<Vec<_>>();
         let callable_ty = self
             .heap
             .mk_callable_from_vec(params, return_ty.to_type(self.heap));
 
-        if self.is_subset_eq(&callable_ty, hint) {
+        let matched = self.is_subset_eq(&callable_ty, hint);
+        // Parameter matching may constrain a prefix before the full callable comparison fails.
+        let param_hints = param_vars
+            .into_iter()
+            .map(|var| self.resolve_var_opt(hint, var))
+            .collect();
+        let return_hint = if matched {
             self.resolve_var_opt(hint, return_ty)
         } else {
             None
-        }
+        };
+        (param_hints, return_hint)
     }
 
     pub fn decompose_generator(&self, ty: &Type) -> Option<(Type, Type, Type)> {
