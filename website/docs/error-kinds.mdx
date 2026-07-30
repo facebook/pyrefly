@@ -612,7 +612,7 @@ x = [1, 2, 3]
 
 Default severity: `ignore`
 
-A lambda whose parameter or return type cannot be inferred is treated as an implicit `Any`, hiding type errors in its body and at its call sites.
+A lambda parameter whose type cannot be inferred is treated as an implicit `Any`, hiding type errors in the lambda body and at its call sites.
 
 When the lambda is used in a typed context (e.g. assigned to a `Callable` or passed to a function that expects one), the parameters are inferred from that context and no error is reported.
 

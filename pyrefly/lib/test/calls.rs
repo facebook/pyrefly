@@ -720,7 +720,7 @@ from collections.abc import Callable
 
 def apply[T](f: Callable[[T], T]) -> T: ...
 
-result: str = apply(lambda x: x + 1)  # E: Type of lambda parameter `x` is unknown  # E: Return type of lambda is unknown
+result: str = apply(lambda x: x + 1)  # E: Type of lambda parameter `x` is unknown
 "#,
 );
 

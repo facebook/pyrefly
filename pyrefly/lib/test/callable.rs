@@ -1618,7 +1618,7 @@ testcase!(
     test_implicit_any_lambda,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
-f = lambda x: x  # E: Type of lambda parameter `x` is unknown  # E: Return type of lambda is unknown
+f = lambda x: x  # E: Type of lambda parameter `x` is unknown
 "#,
 );
 
@@ -1634,18 +1634,18 @@ testcase!(
     test_implicit_any_lambda_multiple_params,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
-f = lambda x, y: x + y  # E: Type of lambda parameter `x` is unknown  # E: Type of lambda parameter `y` is unknown  # E: Return type of lambda is unknown
+f = lambda x, y: x + y  # E: Type of lambda parameter `x` is unknown  # E: Type of lambda parameter `y` is unknown
 "#,
 );
 
 testcase!(
-    test_implicit_any_lambda_return_only,
+    test_lambda_implicit_any_body_no_error,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
 def untyped(x):
     return x
 
-f = lambda: untyped(1)  # E: Return type of lambda is unknown
+f = lambda: untyped(1)
 "#,
 );
 
@@ -1786,7 +1786,7 @@ testcase!(
     test_implicit_any_lambda_in_generic_call,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
-xs = sorted([3, 1, 2], key=lambda x: x)  # E: Type of lambda parameter `x` is unknown  # E: Return type of lambda is unknown
+xs = sorted([3, 1, 2], key=lambda x: x)  # E: Type of lambda parameter `x` is unknown
 "#,
 );
 

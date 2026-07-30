@@ -1625,6 +1625,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     res
                 })
             {
+                errors.extend(cur_errors);
                 return ret;
             } else if ret_with_error.is_none() {
                 ret_with_error = Some((ret, cur_errors));

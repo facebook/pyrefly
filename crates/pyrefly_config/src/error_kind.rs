@@ -179,8 +179,7 @@ pub enum ErrorKind {
     /// be inferred from context and is pinned to a container of `Any`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyEmptyContainer,
-    /// An implicit `Any` introduced when a lambda parameter or return type cannot
-    /// be inferred from context.
+    /// An implicit `Any` introduced when a lambda parameter cannot be inferred from context.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyLambda,
     /// An implicit `Any` introduced because a function parameter has no
