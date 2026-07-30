@@ -60,6 +60,7 @@ use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
 use crate::types::types::AnyStyle;
+use crate::types::types::BoundMethodType;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -198,6 +199,14 @@ impl<'a> CallKeyword<'a> {
 pub enum CallArg<'a> {
     Arg(TypeOrExpr<'a>),
     Star(TypeOrExpr<'a>, TextRange),
+}
+
+struct ForwardedOverloadCall<'a, 'b> {
+    params: &'a Params,
+    has_self: bool,
+    args: &'a [CallArg<'b>],
+    keywords: &'a [CallKeyword<'b>],
+    arguments_range: TextRange,
 }
 
 /// An error discovered while resolving or finalizing a call candidate's return type.
@@ -1471,6 +1480,112 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         argmap
     }
 
+    // Resolve an overloaded callback first when a wrapper forwards its arguments unchanged.
+    // This gives normal generic inference the return type selected by those arguments.
+    fn constrain_forwarded_overload_return(&self, call: ForwardedOverloadCall) {
+        let ForwardedOverloadCall {
+            params,
+            has_self,
+            args,
+            keywords,
+            arguments_range,
+        } = call;
+        let Some((callback_arg, forwarded_args)) = args.split_first() else {
+            return;
+        };
+        if !matches!(callback_arg, CallArg::Arg(_)) {
+            return;
+        }
+
+        let self_offset = usize::from(has_self);
+        let (expected_return, forward_keywords) = match params {
+            Params::ParamSpec(prefix, outer_paramspec)
+                if prefix.len() == self_offset + 1
+                    && let Type::Callable(callback) = prefix[self_offset].ty()
+                    && let Params::ParamSpec(callback_prefix, callback_paramspec) =
+                        &callback.params
+                    && callback_prefix.is_empty()
+                    && callback_paramspec == outer_paramspec =>
+            {
+                (callback.ret.clone(), true)
+            }
+            Params::List(params) => {
+                let items = params.items();
+                let Some(callback_param) = items.get(self_offset) else {
+                    return;
+                };
+                let Some(Param::Varargs(_, outer_varargs)) = items.get(self_offset + 1) else {
+                    return;
+                };
+                if !items[self_offset + 2..]
+                    .iter()
+                    .all(|param| matches!(param, Param::KwOnly(..) | Param::Kwargs(..)))
+                {
+                    return;
+                }
+                let callback_ty = match callback_param {
+                    Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => ty,
+                    _ => return,
+                };
+                let Type::Callable(callback) = callback_ty else {
+                    return;
+                };
+                let Params::List(callback_params) = &callback.params else {
+                    return;
+                };
+                let [Param::Varargs(_, callback_varargs)] = callback_params.items() else {
+                    return;
+                };
+                let outer_vars = outer_varargs.collect_maybe_placeholder_vars();
+                let callback_vars = callback_varargs.collect_maybe_placeholder_vars();
+                if outer_vars.len() != 1 || outer_vars != callback_vars {
+                    return;
+                }
+                (callback.ret.clone(), false)
+            }
+            _ => return,
+        };
+
+        let probe_errors = self.error_collector();
+        let callback_ty = callback_arg
+            .pre_eval(self, &probe_errors)
+            .inferred_type(self, &probe_errors);
+        let is_overloaded = match &callback_ty {
+            Type::Overload(_) => true,
+            Type::BoundMethod(method) => {
+                matches!(&method.func, BoundMethodType::Overload(_))
+            }
+            _ => false,
+        };
+        if !is_overloaded {
+            return;
+        }
+        let no_keywords = [];
+        let forwarded_keywords = if forward_keywords {
+            keywords
+        } else {
+            &no_keywords
+        };
+        let actual_return = self.freeform_call_infer(
+            callback_ty,
+            forwarded_args,
+            forwarded_keywords,
+            callback_arg.range(),
+            arguments_range,
+            None,
+            &probe_errors,
+        );
+        if !probe_errors.is_empty() {
+            return;
+        }
+
+        let vars = expected_return.collect_maybe_placeholder_vars();
+        let snapshot = self.solver().snapshot_vars(&vars);
+        if !self.is_subset_eq(&actual_return, &expected_return) {
+            self.solver().restore_vars(snapshot);
+        }
+    }
+
     /// Helper used by `callable_infer` and Expr::Lambda inference to distribute over hints.
     pub fn callable_infer_with_hint<R>(
         &self,
@@ -1664,6 +1779,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             QuantifiedHandle::empty()
         };
+        self.constrain_forwarded_overload_return(ForwardedOverloadCall {
+            params: &callable.params,
+            has_self: self_obj.is_some(),
+            args,
+            keywords,
+            arguments_range,
+        });
         let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, arguments_range));
         let argmap = match callable.params {
             Params::List(params) | Params::Partial(params) => self.callable_infer_params(

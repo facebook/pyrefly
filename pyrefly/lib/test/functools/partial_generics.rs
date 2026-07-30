@@ -225,6 +225,22 @@ def outer_c(arg: Tc) -> None:
 
 // ===== Overloaded targets =====
 
+functools_testcase!(
+    test_partial_overloaded_constructor_through_awaitable,
+    r#"
+import asyncio
+from csv import DictReader
+from functools import partial
+from io import StringIO
+
+async def read_rows() -> list[dict[str, str | None]]:
+    loop = asyncio.get_running_loop()
+    stream = StringIO("name\nvalue\n")
+    documents = await loop.run_in_executor(None, partial(DictReader, stream))
+    return list(documents)
+"#,
+);
+
 // `partial(foo)` with nothing bound forwards the overload unchanged, so overload resolution still
 // happens at the call site: each shape resolves to its own overload and mismatches are flagged.
 functools_testcase!(

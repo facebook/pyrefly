@@ -139,7 +139,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .heap
             .mk_class_type(self.stdlib.awaitable(var.to_type(self.heap)));
         if self.is_subset_eq(ty, &awaitable_ty) {
-            Some(self.resolve_var(ty, var))
+            // Await must resolve a deferred overload result before returning it.
+            // Results inside an object stay deferred because a later method call can resolve them.
+            Some(
+                self.resolve_var(ty, var)
+                    .finalize_callable_residuals_at_boundary(self.heap, true),
+            )
         } else {
             None
         }

@@ -791,6 +791,73 @@ assert_type(result("ok"), int)
 "#,
 );
 
+testcase!(
+    test_await_preserves_overload_residual_in_callback_protocol,
+    r#"
+import asyncio
+from functools import partial
+from typing import Callable, Protocol, assert_type, overload
+
+class Callback[A, R](Protocol):
+    def __call__(self, x: A) -> R: ...
+
+def lift[A, R](f: Callable[[A], R]) -> Callback[A, R]: ...
+
+@overload
+def f(x: int) -> str: ...
+@overload
+def f(x: str) -> int: ...
+def f(x: int | str) -> int | str: ...
+
+async def test() -> None:
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(lift, f))
+    assert_type(result(1), str)
+    assert_type(result("ok"), int)
+"#,
+);
+
+testcase!(
+    test_await_resolves_overload_forwarded_through_paramspec,
+    r#"
+import asyncio
+import subprocess
+from typing import assert_type
+
+async def test() -> None:
+    result = await asyncio.to_thread(
+        subprocess.run,
+        ["printf", "ok"],
+        capture_output=True,
+        text=True,
+    )
+    assert_type(result, subprocess.CompletedProcess[str])
+    assert_type(result.stdout + result.stderr, str)
+"#,
+);
+
+testcase!(
+    test_await_resolves_overload_forwarded_through_typevartuple,
+    r#"
+from collections.abc import Callable, Iterator
+from typing import TypeVar, TypeVarTuple, Unpack, assert_type
+
+Args = TypeVarTuple("Args")
+R = TypeVar("R")
+
+async def run_sync(
+    func: Callable[[Unpack[Args]], R],
+    *args: Unpack[Args],
+) -> R: ...
+
+async def test(iterator: Iterator[str]) -> None:
+    value = await run_sync(next, iterator, None)
+    assert_type(value, str | None)
+    if value is not None:
+        assert_type(value, str)
+"#,
+);
+
 // Regression tests for https://github.com/facebook/pyrefly/issues/2105
 // Overloaded callable protocol passed to higher-order function with ParamSpec.
 // The solver commits to one overload branch too early and rejects valid calls.
