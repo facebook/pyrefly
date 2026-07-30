@@ -1263,7 +1263,8 @@ impl<'a> BindingsBuilder<'a> {
                             Some(true)
                         }
                         Some(x) => {
-                            let result = self.sys_info.evaluate_bool(x);
+                            let result =
+                                self.scopes.evaluate_bool_for_control_flow(self.sys_info, x);
                             if result.is_some() {
                                 contains_static_test_with_no_else = true;
                             }
