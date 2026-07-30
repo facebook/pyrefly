@@ -43,6 +43,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::FROZEN;
 use crate::binding::pydantic::FROZEN_DEFAULT;
+use crate::binding::pydantic::POPULATE_BY_NAME;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::pydantic::ROOT;
 use crate::binding::pydantic::STRICT;
@@ -338,30 +339,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             strict,
             validate_by_name,
             validate_by_alias,
+            populate_by_name,
             alias_generator,
         } = pydantic_config_dict;
 
         // Note: class keywords take precedence over ConfigDict keywords.
         // But another design choice is to error if there is a conflict. We can consider this design for v2.
 
-        let default_flags = PydanticValidationFlags::default();
+        // Keep explicitness because `populate_by_name` only applies when name validation is unset.
+        let mut merged_validate_by_name = self.resolve_bool_config_value(
+            &VALIDATE_BY_NAME,
+            keywords,
+            *validate_by_name,
+            bases_with_metadata,
+            |dm| dm.init_defaults.pydantic_validation_flags.validate_by_name,
+        );
+        let mut merged_validate_by_alias = self.resolve_bool_config_value(
+            &VALIDATE_BY_ALIAS,
+            keywords,
+            *validate_by_alias,
+            bases_with_metadata,
+            |dm| dm.init_defaults.pydantic_validation_flags.validate_by_alias,
+        );
+        // Inherited `populate_by_name` is already reflected in the normalized validation flags.
+        let merged_populate_by_name = self
+            .extract_bool_flag(keywords, &POPULATE_BY_NAME)
+            .or(*populate_by_name);
+
+        // When name validation is unset, Pydantic maps `populate_by_name` to
+        // `validate_by_name` and forces alias validation on.
+        if merged_validate_by_name.is_none()
+            && let Some(populate_by_name) = merged_populate_by_name
+        {
+            merged_validate_by_name = Some(populate_by_name);
+            merged_validate_by_alias = Some(true);
+        }
+
         let validation_flags = PydanticValidationFlags {
-            validate_by_name: self.get_bool_config_value(
-                &VALIDATE_BY_NAME,
-                keywords,
-                *validate_by_name,
-                bases_with_metadata,
-                |dm| dm.init_defaults.init_by_name,
-                default_flags.validate_by_name,
-            ),
-            validate_by_alias: self.get_bool_config_value(
-                &VALIDATE_BY_ALIAS,
-                keywords,
-                *validate_by_alias,
-                bases_with_metadata,
-                |dm| dm.init_defaults.init_by_alias,
-                default_flags.validate_by_alias,
-            ),
+            validate_by_name: merged_validate_by_name,
+            validate_by_alias: merged_validate_by_alias,
         };
         let validation_alias_generator = alias_generator.clone().or_else(|| {
             self.find_inherited_keyword_value(bases_with_metadata, |dm| {
@@ -449,12 +465,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         extract_from_metadata: impl Fn(&DataclassMetadata) -> bool,
         default: bool,
     ) -> bool {
-        // explicit keyword > explicit ConfigDict value > inherited > default
+        self.resolve_bool_config_value(
+            name,
+            keywords,
+            value_from_config_dict,
+            bases_with_metadata,
+            |dm| Some(extract_from_metadata(dm)),
+        )
+        .unwrap_or(default)
+    }
+
+    /// Resolve class keyword, ConfigDict, then inherited configuration without applying defaults.
+    fn resolve_bool_config_value(
+        &self,
+        name: &Name,
+        keywords: &[(Name, Annotation)],
+        value_from_config_dict: Option<bool>,
+        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        extract_from_metadata: impl Fn(&DataclassMetadata) -> Option<bool>,
+    ) -> Option<bool> {
         self.extract_bool_flag(keywords, name)
-            .unwrap_or(value_from_config_dict.unwrap_or_else(|| {
-                self.find_inherited_keyword_value(bases_with_metadata, extract_from_metadata)
-                    .unwrap_or(default)
-            }))
+            .or(value_from_config_dict)
+            .or_else(|| {
+                bases_with_metadata
+                    .iter()
+                    .filter(|(_, metadata)| metadata.is_pydantic_model())
+                    .find_map(|(_, metadata)| {
+                        metadata
+                            .dataclass_metadata()
+                            .and_then(&extract_from_metadata)
+                    })
+            })
     }
 
     fn extract_bool_flag(&self, keywords: &[(Name, Annotation)], key: &Name) -> Option<bool> {

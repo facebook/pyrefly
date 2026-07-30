@@ -25,6 +25,7 @@ use crate::export::special::SpecialExport;
 pub const VALIDATION_ALIAS: Name = Name::new_static("validation_alias");
 pub const VALIDATE_BY_NAME: Name = Name::new_static("validate_by_name");
 pub const VALIDATE_BY_ALIAS: Name = Name::new_static("validate_by_alias");
+pub const POPULATE_BY_NAME: Name = Name::new_static("populate_by_name");
 pub const GT: Name = Name::new_static("gt");
 pub const LT: Name = Name::new_static("lt");
 pub const GE: Name = Name::new_static("ge");
@@ -199,6 +200,8 @@ pub struct PydanticConfigDict {
     pub strict: Option<bool>,
     pub validate_by_name: Option<bool>,
     pub validate_by_alias: Option<bool>,
+    /// Deprecated compatibility option normalized during class metadata construction.
+    pub populate_by_name: Option<bool>,
     pub alias_generator: Option<PydanticAliasGenerator>,
 }
 
@@ -304,6 +307,10 @@ impl<'a> BindingsBuilder<'a> {
                     && let Expr::BooleanLiteral(bl) = value
                 {
                     pydantic_config_dict.validate_by_alias = Some(bl.value);
+                } else if name == POPULATE_BY_NAME
+                    && let Expr::BooleanLiteral(bl) = value
+                {
+                    pydantic_config_dict.populate_by_name = Some(bl.value);
                 } else if name == ALIAS_GENERATOR {
                     pydantic_config_dict.alias_generator = self.extract_alias_generator(value);
                 }

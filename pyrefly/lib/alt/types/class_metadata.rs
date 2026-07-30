@@ -30,6 +30,7 @@ use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::pydantic::PydanticModelKind;
+use crate::alt::types::pydantic::PydanticValidationFlags;
 use crate::binding::pydantic::PydanticAliasGenerator;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -620,13 +621,15 @@ pub struct NamedTupleMetadata {
     pub directly_extends_named_tuple: bool,
 }
 
-/// Defaults for `init_by_name` and `init_by_default`, per-field flags that control the name of
-/// a field's corresponding `__init__` parameter. See DataclassFieldKeywords for more information.
+/// Defaults for per-field flags that control `__init__` parameter names.
+/// Pydantic validation options retain `None` so subclasses can distinguish defaults from
+/// inherited configuration.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct InitDefaults {
     pub init_by_name: bool,
     pub init_by_alias: bool,
     pub alias_generator: Option<PydanticAliasGenerator>,
+    pub pydantic_validation_flags: PydanticValidationFlags,
 }
 
 impl Default for InitDefaults {
@@ -635,6 +638,7 @@ impl Default for InitDefaults {
             init_by_name: false,
             init_by_alias: true,
             alias_generator: None,
+            pydantic_validation_flags: PydanticValidationFlags::default(),
         }
     }
 }

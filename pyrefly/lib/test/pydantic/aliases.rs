@@ -205,7 +205,6 @@ Model(**{"some-property": "foo"}) # E: Missing argument `some_property` in funct
 );
 
 pydantic_testcase!(
-    bug = "`populate_by_name` is ignored",
     test_populate_by_name_with_inherited_alias_generator,
     r#"
 import pydantic
@@ -221,8 +220,73 @@ class GoogleStyleBase(pydantic.BaseModel):
 class Request(GoogleStyleBase):
     response_mime_type: str | None = pydantic.Field(default=None)
 
-Request(response_mime_type="application/json")  # E: Unexpected keyword argument `response_mime_type` in function `Request.__init__`
+Request(response_mime_type="application/json")
 Request(responseMimeType="application/json")
+    "#,
+);
+
+pydantic_testcase!(
+    test_class_keyword_populate_by_name,
+    r#"
+from pydantic import BaseModel, Field
+class Model(BaseModel, populate_by_name=True):
+    x: int = Field(alias="y")
+Model(x=0)
+Model(y=0)
+    "#,
+);
+
+pydantic_testcase!(
+    test_populate_by_name_loses_to_explicit_validate_by_name,
+    r#"
+from pydantic import BaseModel, ConfigDict, Field
+class Model(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, validate_by_name=False)
+    x: int = Field(alias="y")
+Model(x=0) # E: Missing argument `y` in function `Model.__init__`
+Model(y=0)
+    "#,
+);
+
+pydantic_testcase!(
+    test_populate_by_name_clobbers_explicit_validate_by_alias_false,
+    r#"
+from pydantic import BaseModel, ConfigDict, Field
+class Model(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, validate_by_alias=False)
+    x: int = Field(alias="y")
+Model(x=0)
+Model(y=0)
+    "#,
+);
+
+pydantic_testcase!(
+    test_populate_by_name_blocked_by_inherited_validate_by_name_false,
+    r#"
+from pydantic import BaseModel, ConfigDict, Field
+class Base(BaseModel):
+    model_config = ConfigDict(validate_by_name=False)
+
+class Child(Base):
+    model_config = ConfigDict(populate_by_name=True)
+    x: int = Field(alias="y")
+Child(x=0) # E: Missing argument `y` in function `Child.__init__`
+Child(y=0)
+    "#,
+);
+
+pydantic_testcase!(
+    test_populate_by_name_false_on_parent_blocks_true_on_child,
+    r#"
+from pydantic import BaseModel, ConfigDict, Field
+class Base(BaseModel):
+    model_config = ConfigDict(populate_by_name=False)
+
+class Child(Base):
+    model_config = ConfigDict(populate_by_name=True)
+    x: int = Field(alias="y")
+Child(x=0) # E: Missing argument `y` in function `Child.__init__`
+Child(y=0)
     "#,
 );
 
