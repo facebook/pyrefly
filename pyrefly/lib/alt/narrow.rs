@@ -304,6 +304,62 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Whether two types have no possible runtime value in common for the `invalid-cast` check.
+    ///
+    /// This is intentionally incomplete: uncertain type forms return `false` to avoid noisy
+    /// diagnostics.
+    pub fn is_provably_disjoint(&self, left: &Type, right: &Type) -> bool {
+        // Normalize types with a precise nominal runtime class, where disjointness is high signal.
+        // Return `None` for structural and gradual forms to avoid noisy invalid-cast diagnostics.
+        let runtime_type = |ty: &Type| match ty {
+            Type::ClassType(cls) if !cls.class_object().is_protocol() => {
+                let mut cls = cls.clone();
+                for arg in cls.targs_mut().as_mut() {
+                    *arg = self.heap.mk_any_implicit();
+                }
+                Some(self.heap.mk_class_type(cls))
+            }
+            Type::ClassDef(cls) => Some(
+                self.heap.mk_class_type(
+                    self.get_metadata_for_class(cls)
+                        .metaclass(self.stdlib)
+                        .clone(),
+                ),
+            ),
+            Type::Literal(lit) => Some(
+                self.heap
+                    .mk_class_type(lit.value.general_class_type(self.stdlib).clone()),
+            ),
+            Type::LiteralString(_) => Some(self.heap.mk_class_type(self.stdlib.str().clone())),
+            Type::None => Some(self.heap.mk_class_type(self.stdlib.none_type().clone())),
+            Type::Tuple(_) => Some(
+                self.heap
+                    .mk_class_type(self.stdlib.tuple(self.heap.mk_any_implicit())),
+            ),
+            Type::TypedDict(_) | Type::PartialTypedDict(_) => Some(
+                self.heap.mk_class_type(
+                    self.stdlib
+                        .dict(self.heap.mk_any_implicit(), self.heap.mk_any_implicit()),
+                ),
+            ),
+            _ => None,
+        };
+        let normalize = |ty: &Type| match ty {
+            Type::Union(union) => union
+                .members
+                .iter()
+                .map(&runtime_type)
+                .collect::<Option<Vec<_>>>()
+                .map(|members| self.unions(members)),
+            _ => runtime_type(ty),
+        };
+        let [Some(left), Some(right)] = [left, right].map(normalize) else {
+            return false;
+        };
+        self.intersect_with_fallback(&left, &right, IntersectFallback::Right)
+            .is_never()
+    }
+
     fn subtract(&self, left: &Type, right: &Type) -> Type {
         self.distribute_over_union(left, |left| {
             if !left.is_any() && !right.is_any() && left.is_typed_dict() && !right.is_typed_dict() {

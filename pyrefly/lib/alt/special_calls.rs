@@ -403,6 +403,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ret.clone().deterministic_printing()
                     ),
                 );
+            } else if self.is_provably_disjoint(&val_type, &ret) {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidCast,
+                    format!(
+                        "Cast from `{}` to `{}` is invalid because the types are disjoint",
+                        val_type.deterministic_printing(),
+                        ret.clone().deterministic_printing()
+                    ),
+                );
             }
         }
         ret
