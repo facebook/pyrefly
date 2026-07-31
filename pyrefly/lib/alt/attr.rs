@@ -2684,6 +2684,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .clone();
                     acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(metaclass)))
                 }
+                Type::Union(u) => {
+                    for member in u.members {
+                        self.as_attribute_base1_of_type(member, acc);
+                    }
+                }
                 _ => {}
             },
             Type::TypeVar(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(

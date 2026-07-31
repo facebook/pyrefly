@@ -1789,6 +1789,22 @@ def g(x: type[A]):
 );
 
 testcase!(
+    test_attribute_access_on_metaclass_union,
+    r#"
+from typing import assert_type
+class M1(type):
+    x: int
+class M2(type):
+    x: str
+class A(metaclass=M1): ...
+class B(metaclass=M2): ...
+def f(x: type[A | B]):
+    cls = x.__class__
+    assert_type(cls.x, int | str)
+    "#,
+);
+
+testcase!(
     test_attribute_access_on_classdef_metaclass,
     r#"
 class Meta(type):
