@@ -733,6 +733,33 @@ def f2() -> None:
 "#,
 );
 
+testcase!(
+    test_partial_direct_abc_opt_in,
+    TestEnv::new().enable_direct_abstract_base_instantiation_error(),
+    r#"
+from abc import ABC
+from functools import partial
+
+class A(ABC):
+    pass
+
+partial(A)  # E: Cannot instantiate `A` because it directly extends `ABC` or uses `ABCMeta`
+"#,
+);
+
+functools_testcase!(
+    test_partial_direct_abc_default_off,
+    r#"
+from abc import ABC
+from functools import partial
+
+class A(ABC):
+    pass
+
+partial(A)
+"#,
+);
+
 // A bare protocol is flagged at partial construction with the protocol-specific message, matching
 // a direct `P()` call; a `type[P]` value can still be a concrete subclass, so it is not flagged.
 functools_testcase!(

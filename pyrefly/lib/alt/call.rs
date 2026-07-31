@@ -1544,7 +1544,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error_with_context(
                             errors,
                             arguments_range,
-                            ErrorKind::BadInstantiation,
+                            ErrorKind::DirectAbstractBaseInstantiation,
                             format!(
                                 "Cannot instantiate `{}` because it directly extends `ABC` or uses `ABCMeta`",
                                 cls.name()

@@ -157,6 +157,9 @@ pub enum ErrorKind {
     CoveragePartial,
     /// Calling a function marked with `@deprecated`
     Deprecated,
+    /// Instantiating a class that directly extends `ABC` or directly uses `ABCMeta`, even though
+    /// it has no abstract methods.
+    DirectAbstractBaseInstantiation,
     /// Division, floor division, or modulo by a literal zero value.
     DivisionByZero,
     /// A function has an empty body despite declaring a non-None return type.
@@ -486,6 +489,7 @@ impl ErrorKind {
     /// Suppressing the parent kind also suppresses this kind.
     pub fn parent_kind(self) -> Option<ErrorKind> {
         match self {
+            ErrorKind::DirectAbstractBaseInstantiation => Some(ErrorKind::BadInstantiation),
             ErrorKind::BadOverrideMutableAttribute | ErrorKind::BadOverrideParamName => {
                 Some(ErrorKind::BadOverride)
             }
@@ -526,6 +530,9 @@ impl ErrorKind {
             ErrorKind::CoverageMissing => Severity::Warn,
             ErrorKind::CoveragePartial => Severity::Warn,
             ErrorKind::Deprecated => Severity::Warn,
+            // TODO: Investigate ecosystem impact before enabling this check by default. Some
+            // libraries inherit from ABC without intending to prohibit direct instantiation.
+            ErrorKind::DirectAbstractBaseInstantiation => Severity::Ignore,
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
