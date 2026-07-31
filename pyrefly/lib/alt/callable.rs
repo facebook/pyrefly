@@ -1906,11 +1906,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let mut errors = self
             .solver()
-            .finish_quantified(
+            .finish_call_boundary(
                 remaining_callable_qs,
                 self.solver().infer_with_first_use,
                 self.type_order(),
-                Some(&call_context),
+                call_boundary,
             )
             .map_or_else(|e| e.to_vec(), |_| Vec::new());
         if let Err(e) = self.finish_quantified(ctor_qs, self.solver().infer_with_first_use) {

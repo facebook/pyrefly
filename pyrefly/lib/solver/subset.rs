@@ -1657,7 +1657,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     got.handle,
                     self.solver.infer_with_first_use,
                     self.type_order,
-                    None,
                 )
                 .map_err(SubsetError::TypeVarSpecialization);
             match result {
