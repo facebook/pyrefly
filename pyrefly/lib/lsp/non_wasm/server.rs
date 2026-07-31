@@ -5318,6 +5318,42 @@ impl Server {
             .map(|range| PrepareRenameResponse::Range(info.to_lsp_range(range))))
     }
 
+    fn linked_editing_range(
+        &self,
+        transaction: &Transaction<'_>,
+        params: LinkedEditingRangeParams,
+    ) -> Option<LinkedEditingRanges> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self
+            .make_handle_if_enabled(uri, Some(Rename::METHOD))
+            .ok()?;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            return None;
+        }
+        let info = transaction.get_module_info(&handle)?;
+        let position =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
+        transaction.prepare_rename(&handle, position)?;
+        let identifier = transaction.identifier_at(&handle, position)?;
+        let mut ranges = transaction.find_local_references(&handle, position, true);
+        let rename_config = self.workspaces.rename_config(handle.path().as_path());
+        if rename_config.comments_and_strings {
+            ranges.extend(transaction.text_occurrences_in_comments_and_strings(
+                &info,
+                identifier.identifier.id.as_str(),
+            ));
+        }
+        ranges.sort_by_key(|range| (range.start(), range.end()));
+        ranges.dedup();
+        Some(LinkedEditingRanges {
+            ranges: ranges
+                .into_iter()
+                .map(|range| info.to_lsp_range(range))
+                .collect(),
+            word_pattern: None,
+        })
+    }
+
     fn signature_help(
         &self,
         transaction: &Transaction<'_>,
