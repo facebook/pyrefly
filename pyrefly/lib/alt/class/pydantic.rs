@@ -276,10 +276,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .has_toplevel_qname(ModuleName::pydantic_settings().as_str(), "BaseSettings")
             });
 
+        // A pydantic *dataclass* is not a pydantic *model*, so an inherited `DataClass`
+        // kind must not route a subclass into the model classification below (which would
+        // default it to `BaseModel`). Keep it in the dataclass branch instead.
+        let has_pydantic_dataclass_base = bases_with_metadata.iter().any(|(_, metadata)| {
+            matches!(
+                metadata.pydantic_model_kind(),
+                Some(PydanticModelKind::DataClass)
+            )
+        });
+
         let is_pydantic_model = has_pydantic_base_model_base_class
-            || bases_with_metadata
-                .iter()
-                .any(|(_, metadata)| metadata.is_pydantic_model());
+            || bases_with_metadata.iter().any(|(_, metadata)| {
+                metadata.is_pydantic_model()
+                    && !matches!(
+                        metadata.pydantic_model_kind(),
+                        Some(PydanticModelKind::DataClass)
+                    )
+            });
 
         // If not a pydantic model, check if it's a pydantic dataclass
         if !is_pydantic_model {
@@ -292,7 +306,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // - Should there be two PydanticConfig variants, one for DataClasses and one for the remaining variants?
             // - Finally, should we add decorator plumbing here so we can detect keywords directly instead of through
             // the dataclass plumbing, which also has to then have extra checks to avoid overriding pydantic dataclasses with its own defaults?
-            if is_pydantic_dataclass {
+            if is_pydantic_dataclass || has_pydantic_dataclass_base {
                 return Some(PydanticConfig {
                     frozen: None,
                     validation_flags: PydanticValidationFlags::default(),
