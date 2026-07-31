@@ -48,6 +48,17 @@ def g(p: P, c1: C1, c2: C2, c3: C3, c4: C4, c5: C5) -> None:
 );
 
 testcase!(
+    test_protocol_metaclass_assignability,
+    r#"
+from abc import ABCMeta
+from typing import Protocol, _ProtocolMeta
+
+abc_meta: ABCMeta = Protocol
+protocol_meta: _ProtocolMeta = Protocol
+"#,
+);
+
+testcase!(
     test_proxy_method_direct_call_and_attribute_access,
     proxy_method_env(),
     r#"

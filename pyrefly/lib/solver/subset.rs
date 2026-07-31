@@ -2450,6 +2450,19 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Type::ClassDef(got), Type::ClassType(want)) => {
                 ok_or(self.type_order.has_metaclass(got, want), SubsetError::Other)
             }
+            (Type::Type(inner), want @ Type::ClassType(_))
+                if matches!(&**inner, Type::SpecialForm(SpecialForm::Protocol)) =>
+            {
+                // Protocol is an instance of _ProtocolMeta. We need to hard-code this
+                // relationship because Protocol is marked as a special form in typeshed.
+                self.is_subset_eq(
+                    &self
+                        .solver
+                        .heap
+                        .mk_class_type(self.type_order.stdlib().protocol_meta().clone()),
+                    want,
+                )
+            }
             (Type::Type(inner), Type::ClassType(want))
                 if let Type::ClassType(got_cls) = &**inner =>
             {
