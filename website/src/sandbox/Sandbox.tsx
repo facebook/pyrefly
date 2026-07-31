@@ -43,6 +43,11 @@ import {
     resetPersistedSandboxState,
     SANDBOX_LOCAL_STORAGE_KEY,
 } from './persistedSandboxState';
+import {
+    decodeSandboxProject,
+    encodeSandboxProject,
+    SandboxProject,
+} from './generateSandboxUrl';
 
 // Import type for Pyrefly State
 export interface PyreflyState {
@@ -1010,19 +1015,14 @@ export default function Sandbox({
     );
 }
 
-interface ProjectState {
-    files: Record<string, string>;
-    activeFile: string;
-}
+type ProjectState = SandboxProject;
 
 function updateURL(allFiles: Record<string, string>, activeFile: string): void {
     const projectState: ProjectState = {
         files: allFiles,
         activeFile: activeFile,
     };
-    const compressed = LZString.compressToEncodedURIComponent(
-        JSON.stringify(projectState)
-    );
+    const compressed = encodeSandboxProject(projectState);
     const params = new URLSearchParams();
     params.set('project', compressed);
     const newURL = `${window.location.pathname}?${params.toString()}`;
@@ -1035,13 +1035,7 @@ function getProjectFromURL(): ProjectState | null {
 
     const project = params.get('project');
     if (project) {
-        try {
-            const decompressed =
-                LZString.decompressFromEncodedURIComponent(project);
-            return decompressed ? JSON.parse(decompressed) : null;
-        } catch (e) {
-            console.error('Failed to parse project from URL:', e);
-        }
+        return decodeSandboxProject(project);
     }
 
     const code = params.get('code');
@@ -1399,10 +1393,11 @@ function OpenSandboxButton({
             onClick={async () => {
                 if (model) {
                     const currentCode = model.getValue();
-                    const compressed =
-                        LZString.compressToEncodedURIComponent(currentCode);
-                    // Navigate to the sandbox URL with the compressed code as a query parameter
-                    const sandboxURL = sandboxBaseUrl + `?code=${compressed}`;
+                    const project = encodeSandboxProject({
+                        files: { 'sandbox.py': currentCode },
+                        activeFile: 'sandbox.py',
+                    });
+                    const sandboxURL = sandboxBaseUrl + `?project=${project}`;
                     window.location.href = sandboxURL;
                 }
 
