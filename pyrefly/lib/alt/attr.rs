@@ -2308,12 +2308,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_class_type_unchecked(&cls),
             ))),
             Type::SelfType(class_type) => acc.push(AttributeBase1::SelfType(class_type)),
-            Type::Type(f) if matches!(&*f, Type::SelfType(_)) => {
-                let Type::SelfType(class_type) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                acc.push(AttributeBase1::ClassObject(ClassBase::SelfType(class_type)))
-            }
+            Type::Type(ty) => self.as_attribute_base1_of_type(*ty, acc),
             Type::TypedDict(TypedDict::TypedDict(td))
             | Type::PartialTypedDict(TypedDict::TypedDict(td)) => {
                 acc.push(AttributeBase1::TypedDict(td.clone()))
@@ -2326,10 +2321,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     value_ty,
                 )))
             }
-            Type::Type(f) if matches!(&*f, Type::TypedDict(_) | Type::PartialTypedDict(_)) => acc
-                .push(AttributeBase1::ClassObject(ClassBase::ClassDef(
-                    self.stdlib.typed_dict_fallback().clone(),
-                ))),
             Type::ShapedArray(tensor) => {
                 // Use ShapedArrayInstance to preserve shape information through attribute lookup
                 acc.push(AttributeBase1::ShapedArrayInstance((*tensor).clone()))
@@ -2360,17 +2351,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Literal(f) if matches!(f.value, Lit::Str(_)) => {
                 acc.push(AttributeBase1::LiteralString)
             }
-            Type::Type(f) if let Type::LiteralString(_) = &*f => acc.push(
-                AttributeBase1::ClassObject(ClassBase::ClassType(self.stdlib.str().clone())),
-            ),
-            Type::Type(f) if matches!(&*f, Type::Literal(_)) => {
-                let Type::Literal(lit) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                    lit.value.general_class_type(self.stdlib).clone(),
-                )))
-            }
             Type::Literal(f) if matches!(&f.value, Lit::Enum(_)) => {
                 let Lit::Enum(lit_enum) = f.value else {
                     unreachable!("guarded by matches! above")
@@ -2388,140 +2368,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_attribute_base1(self.get_type_alias(&ta).as_value(self.stdlib), acc)
             }
             Type::UntypedAlias(ta) => self.as_attribute_base1(self.untype_alias(&ta), acc),
-            Type::Type(f) if matches!(&*f, Type::Tuple(_)) => {
-                let Type::Tuple(tuple) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                self.as_attribute_base1(
-                    self.heap
-                        .mk_type_of(self.heap.mk_class_type(self.erase_tuple_type(tuple))),
-                    acc,
-                )
-            }
-            Type::Type(f) if matches!(&*f, Type::ClassType(_)) => {
-                let Type::ClassType(class) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                let class_base = AttributeBase1::ClassObject(ClassBase::ClassType(class.clone()));
-                if !class.targs().is_empty() {
-                    // If the class type has type arguments, at runtime it's also a GenericAlias
-
-                    // FIXME:
-                    // If `C` is a generic class, then the type of the expression `C` is `type[C]`.
-                    // We're relying on this behaviour to give `C[int]` the
-                    // runtime generic alias type, but this is technically
-                    // incorrect as `type[C[int]]` should be instances of `type`
-                    // and not `GenericAlias`.
-                    // Therefore, if we ever have a value of `type[C[int]]`
-                    // (e.g. via inheritance), we should not treat it as a
-                    // `GenericAlias`. However, such cases are rare in practice.
-                    let generic_alias_base =
-                        AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
-                    // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
-                    acc.push(AttributeBase1::Intersect(
-                        vec![generic_alias_base.clone(), class_base],
-                        vec![generic_alias_base],
-                    ));
-                } else {
-                    acc.push(class_base)
-                }
-            }
-            Type::Type(f) if matches!(&*f, Type::ClassDef(_)) => {
-                let Type::ClassDef(class) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                // type[ClassDef(C)] is C.__class__: C's metaclass, viewed as a class object.
-                let metaclass = self
-                    .get_metadata_for_class(&class)
-                    .metaclass(self.stdlib)
-                    .clone();
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(metaclass)))
-            }
             Type::QuantifiedValue(q) => acc.push(AttributeBase1::QuantifiedValue(*q)),
-            Type::Type(f) if matches!(&*f, Type::Quantified(_)) => {
-                let Type::Quantified(quantified) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                match quantified.restriction() {
-                    Restriction::Bound(ty) => {
-                        let mut use_fallback = false;
-                        if let Some(base) = self.as_attribute_base(ty.clone()) {
-                            for base1 in base.0 {
-                                if let Some(cls) = self.quantified_bound_class(base1) {
-                                    acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
-                                        (*quantified).clone(),
-                                        cls,
-                                    )));
-                                } else {
-                                    use_fallback = true;
-                                }
-                            }
-                        }
-                        if use_fallback {
-                            acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
-                                (*quantified).clone(),
-                                self.stdlib.object().clone(),
-                            )));
-                        }
-                    }
-                    Restriction::Constraints(constraints) => {
-                        let mut use_fallback = false;
-                        for ty in constraints {
-                            if let Some(base) = self.as_attribute_base(ty.clone()) {
-                                for base1 in base.0 {
-                                    if let Some(cls) = self.quantified_bound_class(base1) {
-                                        acc.push(AttributeBase1::ClassObject(
-                                            ClassBase::Quantified((*quantified).clone(), cls),
-                                        ));
-                                    } else {
-                                        use_fallback = true;
-                                    }
-                                }
-                            }
-                        }
-                        if use_fallback {
-                            acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
-                                (*quantified).clone(),
-                                self.stdlib.object().clone(),
-                            )));
-                        }
-                    }
-                    Restriction::Unrestricted => acc.push(AttributeBase1::ClassObject(
-                        ClassBase::Quantified((*quantified).clone(), self.stdlib.object().clone()),
-                    )),
-                }
-            }
-            Type::Type(ref f) if let Type::Any(style) = &**f => {
-                acc.push(AttributeBase1::TypeAny(*style))
-            }
-            Type::Type(f) if let Type::Never(_) = &*f => acc.push(AttributeBase1::TypeNever),
-            // At runtime, these special forms are classes. This has been tested with Python
-            // versions 3.11-3.13. Note that other special forms are classes in some versions, but
-            // their representations aren't stable across versions.
-            //
-            // We don't have access to the class definitions, so the best we can do is model these
-            // as type[Any].
-            Type::Type(f)
-                if matches!(
-                    &*f,
-                    Type::SpecialForm(
-                        SpecialForm::Callable
-                            | SpecialForm::Generic
-                            | SpecialForm::Protocol
-                            | SpecialForm::Tuple,
-                    )
-                ) =>
-            {
-                acc.push(AttributeBase1::TypeAny(AnyStyle::Implicit))
-            }
-            Type::Type(f)
-                if matches!(&*f, Type::SpecialForm(SpecialForm::Type))
-                    || matches!(&*f, Type::Type(inner) if inner.is_any()) =>
-            {
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
-                    self.stdlib.builtins_type().clone(),
-                )))
-            }
             Type::Module(module) => acc.push(AttributeBase1::Module(module)),
             Type::TypeVar(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.type_var().clone(),
@@ -2547,67 +2394,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::KwargsValue(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.param_spec_kwargs().clone(),
             )),
-            Type::Type(f) if matches!(&*f, Type::TypeVar(_)) => acc.push(
-                AttributeBase1::ClassObject(ClassBase::ClassType(self.stdlib.type_var().clone())),
-            ),
-            Type::Type(f) if matches!(&*f, Type::ParamSpec(_)) => acc.push(
-                AttributeBase1::ClassObject(ClassBase::ClassType(self.stdlib.param_spec().clone())),
-            ),
-            Type::Type(f) if matches!(&*f, Type::TypeVarTuple(_)) => {
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                    self.stdlib.type_var_tuple().clone(),
-                )))
-            }
-            Type::Type(ref f) if let Type::QuantifiedValue(q) = &**f => {
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                    q.class_type(self.stdlib).clone(),
-                )))
-            }
-            Type::Type(f) if matches!(&*f, Type::Args(_)) => acc.push(AttributeBase1::ClassObject(
-                ClassBase::ClassType(self.stdlib.param_spec_args_as_tuple(self.heap)),
-            )),
-            Type::Type(f) if matches!(&*f, Type::Kwargs(_)) => {
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                    self.stdlib.param_spec_kwargs_as_dict(self.heap),
-                )))
-            }
-            Type::Type(f) if matches!(&*f, Type::ArgsValue(_)) => {
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                    self.stdlib.param_spec_args().clone(),
-                )))
-            }
-            Type::Type(f) if matches!(&*f, Type::KwargsValue(_)) => {
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                    self.stdlib.param_spec_kwargs().clone(),
-                )))
-            }
             Type::None => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.none_type().clone(),
             )),
-            Type::Type(f) if matches!(&*f, Type::None) => acc.push(AttributeBase1::ClassObject(
-                ClassBase::ClassType(self.stdlib.none_type().clone()),
-            )),
-            Type::Type(f)
-                if matches!(
-                    &*f,
-                    Type::Function(_)
-                        | Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Overload(_)
-                ) || matches!(
-                    &*f,
-                    Type::Forall(forall) if matches!(forall.body, Forallable::Function(_) | Forallable::Callable(_))
-                ) =>
-            {
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                    self.stdlib.function_type().clone(),
-                )))
-            }
-            Type::Type(f) if matches!(&*f, Type::BoundMethod(_)) => {
-                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                    self.stdlib.method_type().clone(),
-                )))
-            }
             Type::Never(_) => acc.push(AttributeBase1::Never),
             _ if ty.is_property_getter() => {
                 let deleter = ty
@@ -2667,14 +2456,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Var(v) => {
                 self.force_var_for_attribute_base(v, |ty| self.as_attribute_base1(ty, acc))
             }
-            Type::Type(f) if matches!(&*f, Type::Var(_)) => {
-                let Type::Var(v) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                self.force_var_for_attribute_base(v, |ty| {
-                    self.as_attribute_base1(self.heap.mk_type_of(ty), acc)
-                })
-            }
             Type::SuperInstance(f) => {
                 let (cls, obj) = *f;
                 acc.push(AttributeBase1::SuperInstance(cls, obj))
@@ -2683,22 +2464,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for ty in f.members {
                     self.as_attribute_base1(ty, acc)
                 }
-            }
-            Type::Type(f) if matches!(&*f, Type::Union(_)) => {
-                let Type::Union(u) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                for ty in u.members {
-                    self.as_attribute_base1(self.heap.mk_type_of(ty), acc)
-                }
-            }
-            Type::Type(f) if matches!(&*f, Type::Intersect(_)) => {
-                // TODO(rechen): implement attribute access on `type[A & B]`
-                let Type::Intersect(intersect) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                let (_, fallback) = *intersect;
-                self.as_attribute_base1(self.heap.mk_type_of(fallback), acc)
             }
             Type::Quantified(quantified) => match quantified.restriction() {
                 Restriction::Bound(ty) => {
@@ -2775,13 +2540,199 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )),
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
-            | Type::Type(_)
             | Type::TypeForm(_)
             | Type::TypeLevelDslCall(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)
             | Type::Materialization => {}
+        }
+    }
+
+    /// `as_attribute_base1` helper for `Type::Type(ty)`.
+    fn as_attribute_base1_of_type(&self, ty: Type, acc: &mut Vec<AttributeBase1>) {
+        match ty {
+            Type::SelfType(class_type) => {
+                acc.push(AttributeBase1::ClassObject(ClassBase::SelfType(class_type)))
+            }
+            Type::TypedDict(_) | Type::PartialTypedDict(_) => {
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
+                    self.stdlib.typed_dict_fallback().clone(),
+                )))
+            }
+            Type::LiteralString(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.str().clone(),
+            ))),
+            Type::Literal(lit) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                lit.value.general_class_type(self.stdlib).clone(),
+            ))),
+            Type::Tuple(tuple) => self.as_attribute_base1(
+                self.heap
+                    .mk_type_of(self.heap.mk_class_type(self.erase_tuple_type(tuple))),
+                acc,
+            ),
+            Type::ClassType(class) => {
+                let class_base = AttributeBase1::ClassObject(ClassBase::ClassType(class.clone()));
+                if !class.targs().is_empty() {
+                    // If the class type has type arguments, at runtime it's also a GenericAlias
+
+                    // FIXME:
+                    // If `C` is a generic class, then the type of the expression `C` is `type[C]`.
+                    // We're relying on this behaviour to give `C[int]` the
+                    // runtime generic alias type, but this is technically
+                    // incorrect as `type[C[int]]` should be instances of `type`
+                    // and not `GenericAlias`.
+                    // Therefore, if we ever have a value of `type[C[int]]`
+                    // (e.g. via inheritance), we should not treat it as a
+                    // `GenericAlias`. However, such cases are rare in practice.
+                    let generic_alias_base =
+                        AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
+                    // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
+                    acc.push(AttributeBase1::Intersect(
+                        vec![generic_alias_base.clone(), class_base],
+                        vec![generic_alias_base],
+                    ));
+                } else {
+                    acc.push(class_base)
+                }
+            }
+            Type::ClassDef(class) => {
+                // type[ClassDef(C)] is C.__class__: C's metaclass, viewed as a class object.
+                let metaclass = self
+                    .get_metadata_for_class(&class)
+                    .metaclass(self.stdlib)
+                    .clone();
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(metaclass)))
+            }
+            Type::Quantified(quantified) => match quantified.restriction() {
+                Restriction::Bound(ty) => {
+                    let mut use_fallback = false;
+                    if let Some(base) = self.as_attribute_base(ty.clone()) {
+                        for base1 in base.0 {
+                            if let Some(cls) = self.quantified_bound_class(base1) {
+                                acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
+                                    (*quantified).clone(),
+                                    cls,
+                                )));
+                            } else {
+                                use_fallback = true;
+                            }
+                        }
+                    }
+                    if use_fallback {
+                        acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
+                            (*quantified).clone(),
+                            self.stdlib.object().clone(),
+                        )));
+                    }
+                }
+                Restriction::Constraints(constraints) => {
+                    let mut use_fallback = false;
+                    for ty in constraints {
+                        if let Some(base) = self.as_attribute_base(ty.clone()) {
+                            for base1 in base.0 {
+                                if let Some(cls) = self.quantified_bound_class(base1) {
+                                    acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
+                                        (*quantified).clone(),
+                                        cls,
+                                    )));
+                                } else {
+                                    use_fallback = true;
+                                }
+                            }
+                        }
+                    }
+                    if use_fallback {
+                        acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
+                            (*quantified).clone(),
+                            self.stdlib.object().clone(),
+                        )));
+                    }
+                }
+                Restriction::Unrestricted => acc.push(AttributeBase1::ClassObject(
+                    ClassBase::Quantified((*quantified).clone(), self.stdlib.object().clone()),
+                )),
+            },
+            Type::Any(style) => acc.push(AttributeBase1::TypeAny(style)),
+            Type::Never(_) => acc.push(AttributeBase1::TypeNever),
+            // At runtime, these special forms are classes. This has been tested with Python
+            // versions 3.11-3.13. Note that other special forms are classes in some versions, but
+            // their representations aren't stable across versions.
+            //
+            // We don't have access to the class definitions, so the best we can do is model these
+            // as type[Any].
+            Type::SpecialForm(
+                SpecialForm::Callable
+                | SpecialForm::Generic
+                | SpecialForm::Protocol
+                | SpecialForm::Tuple,
+            ) => acc.push(AttributeBase1::TypeAny(AnyStyle::Implicit)),
+            Type::SpecialForm(SpecialForm::Type) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassDef(self.stdlib.builtins_type().clone()),
+            )),
+            Type::Type(inner) if inner.is_any() => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassDef(self.stdlib.builtins_type().clone()),
+            )),
+            Type::TypeVar(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.type_var().clone(),
+            ))),
+            Type::ParamSpec(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.param_spec().clone(),
+            ))),
+            Type::TypeVarTuple(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.type_var_tuple().clone(),
+            ))),
+            Type::QuantifiedValue(q) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(q.class_type(self.stdlib).clone()),
+            )),
+            Type::Args(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.param_spec_args_as_tuple(self.heap),
+            ))),
+            Type::Kwargs(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.param_spec_kwargs_as_dict(self.heap),
+            ))),
+            Type::ArgsValue(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.param_spec_args().clone(),
+            ))),
+            Type::KwargsValue(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.param_spec_kwargs().clone(),
+            ))),
+            Type::None => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.none_type().clone(),
+            ))),
+            Type::Function(_)
+            | Type::Callable(_)
+            | Type::CallableResidual(_)
+            | Type::Overload(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.function_type().clone(),
+            ))),
+            Type::Forall(forall)
+                if matches!(
+                    forall.body,
+                    Forallable::Function(_) | Forallable::Callable(_)
+                ) =>
+            {
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                    self.stdlib.function_type().clone(),
+                )))
+            }
+            Type::BoundMethod(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.method_type().clone(),
+            ))),
+            Type::Var(v) => self.force_var_for_attribute_base(v, |ty| {
+                self.as_attribute_base1(self.heap.mk_type_of(ty), acc)
+            }),
+            Type::Union(u) => {
+                for ty in u.members {
+                    self.as_attribute_base1(self.heap.mk_type_of(ty), acc)
+                }
+            }
+            Type::Intersect(intersect) => {
+                // TODO(rechen): implement attribute access on `type[A & B]`
+                let (_, fallback) = *intersect;
+                self.as_attribute_base1(self.heap.mk_type_of(fallback), acc)
+            }
+            _ => {}
         }
     }
 
