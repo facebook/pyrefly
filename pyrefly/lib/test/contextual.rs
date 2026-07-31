@@ -433,6 +433,8 @@ def g1(x: int, *args: int): ...
 def g2(x: int, **kwargs: str): ...
 x1 = f(g1, lambda x, *args: assert_type(args, tuple[int, ...]))
 x2 = f(g2, lambda x, **kwargs: assert_type(kwargs, dict[str, str]))
+assert_type(x1(0), None | tuple[int, ...])
+assert_type(x2(0), None | dict[str, str])
     "#,
 );
 

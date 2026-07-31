@@ -1835,6 +1835,23 @@ infer(lambda *args, **kwargs: None)  # E: Type of lambda parameter `args` is unk
 );
 
 testcase!(
+    test_lambda_unconstrained_paramspec_not_first_use_inferred,
+    r#"
+from collections.abc import Callable
+
+type Handler[**P] = Callable[P, None]
+
+def channel[**P](handler: Handler[P]) -> Handler[P]:
+    return handler
+
+events: list[tuple[str, int]] = []
+post = channel(lambda name, value: events.append((name, value)))
+post("time-pos", 1)
+post("time-pos", 2)
+"#,
+);
+
+testcase!(
     test_implicit_any_lambda_partial_context_with_default,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"

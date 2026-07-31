@@ -687,12 +687,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             params.push(Param::Kwargs(Some(name.id.clone()), ty));
                         }
                         let params = Params::List(ParamList::new(params));
-                        if let Some(hint) = cur_hint {
-                            // Ensure no param vars are pinned to unfinished Variable::Quantified.
-                            // Since lambda parameters are unannotated, the specialization errors can be ignored.
-                            let _specialization_errors =
-                                self.solver().finish_all_quantified(hint, self.type_order());
-                        }
                         let return_hint = return_hint.as_ref().map(|return_hint| {
                             HintRef::new(
                                 return_hint,

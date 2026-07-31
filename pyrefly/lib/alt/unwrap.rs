@@ -350,19 +350,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .heap
             .mk_callable_from_vec(params, return_ty.to_type(self.heap));
 
+        // Decomposition reads contextual types from the hint; the inferred lambda callable is
+        // responsible for instantiating any generics in the hint.
+        let snapshot = self
+            .solver()
+            .snapshot_vars(&hint.collect_maybe_placeholder_vars());
         let matched = self.is_subset_eq(&callable_ty, hint);
         // Parameter matching may constrain a prefix before the full callable comparison fails.
-        let param_hints = param_vars
-            .into_iter()
-            .map(|var| self.resolve_var_opt(hint, var))
+        let mut param_hints: Vec<Option<Type>> = param_vars
+            .iter()
+            .map(|var| self.resolve_var_opt(hint, *var))
             .collect();
-        let vararg_hint = vararg_var.and_then(|var| self.resolve_var_opt(hint, var));
-        let kwarg_hint = kwarg_var.and_then(|var| self.resolve_var_opt(hint, var));
-        let return_hint = if matched {
+        let mut vararg_hint = vararg_var.and_then(|var| self.resolve_var_opt(hint, var));
+        let mut kwarg_hint = kwarg_var.and_then(|var| self.resolve_var_opt(hint, var));
+        let mut return_hint = if matched {
             self.resolve_var_opt(hint, return_ty)
         } else {
             None
         };
+        for ty in param_hints
+            .iter_mut()
+            .chain([&mut vararg_hint, &mut kwarg_hint, &mut return_hint])
+            .flatten()
+        {
+            self.solver().expand_with_bounds(ty);
+        }
+        self.solver().restore_vars(snapshot);
         (param_hints, vararg_hint, kwarg_hint, return_hint)
     }
 
