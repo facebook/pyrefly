@@ -26,6 +26,7 @@ use vec1::vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
+use crate::alt::expr::ExprOptions;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -70,6 +71,8 @@ const DEFAULT_PARAM: Name = Name::new_static("default");
 const UPDATE_METHOD: Name = Name::new_static("update");
 const ITEMS_METHOD: Name = Name::new_static("items");
 const VALUES_METHOD: Name = Name::new_static("values");
+pub(crate) const REQUIRED_KEYS: Name = Name::new_static("__required_keys__");
+pub(crate) const OPTIONAL_KEYS: Name = Name::new_static("__optional_keys__");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn check_dict_items_against_typed_dict(
@@ -103,23 +106,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         Some(field) => {
-                            self.expr_with_separate_check_errors(
+                            self.expr_with_options(
                                 &x.value,
-                                Some((&field.ty, check_errors, &|| {
-                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(Some(
-                                        key_name.clone(),
-                                    )))
-                                })),
-                                item_errors,
+                                ExprOptions::check(
+                                    &field.ty,
+                                    item_errors,
+                                    check_errors,
+                                    &|| {
+                                        TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
+                                            Some(key_name.clone()),
+                                            false,
+                                        ))
+                                    },
+                                    None,
+                                ),
                             );
                         }
                         None if let ExtraItems::Extra(extra) = &extra_items => {
-                            self.expr_with_separate_check_errors(
+                            self.expr_with_options(
                                 &x.value,
-                                Some((&extra.ty, check_errors, &|| {
-                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(None))
-                                })),
-                                item_errors,
+                                ExprOptions::check(
+                                    &extra.ty,
+                                    item_errors,
+                                    check_errors,
+                                    &|| {
+                                        TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
+                                            None, false,
+                                        ))
+                                    },
+                                    None,
+                                ),
                             );
                         }
                         None => {
@@ -452,6 +468,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    /// Get a (key, default: ValueType) -> ValueType overload.
+    fn get_overload_with_value_default(
+        &self,
+        metadata: &FuncMetadata,
+        self_param: &Param,
+        name: Option<&Name>,
+        ty: Type,
+    ) -> OverloadType {
+        OverloadType::Function(Function {
+            signature: Callable::list(
+                ParamList::new(vec![
+                    self_param.clone(),
+                    self.key_param(name),
+                    Param::PosOnly(Some(DEFAULT_PARAM.clone()), ty.clone(), Required::Required),
+                ]),
+                ty,
+            ),
+            metadata: metadata.clone(),
+        })
+    }
+
     /// Get a (key, default: T) -> ValueType | T overload.
     fn get_overload_with_default(
         &self,
@@ -538,6 +575,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     metadata: metadata.clone(),
                 }));
+                // (self, key: Literal["key"], default: ValueType) -> ValueType
+                literal_signatures.push(self.get_overload_with_value_default(
+                    &metadata,
+                    &self_param,
+                    Some(name),
+                    field.ty.clone(),
+                ));
                 // (self, key: Literal["key"], default: T) -> ValueType | T
                 literal_signatures.push(self.get_overload_with_default(
                     cls,
@@ -620,7 +664,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             metadata: metadata.clone(),
         }));
 
-        // 2) default: (self, key: Literal["field_name"], default: _T) -> FieldType | _T
+        // 2) default: (self, key: Literal["field_name"], default: FieldType) -> FieldType
+        overloads.push(self.get_overload_with_value_default(
+            metadata,
+            self_param,
+            name,
+            ty.clone(),
+        ));
+
+        // 3) default: (self, key: Literal["field_name"], default: _T) -> FieldType | _T
         overloads.push(self.get_overload_with_default(cls, metadata, self_param, name, ty));
     }
 
@@ -873,12 +925,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_typed_dict_synthesized_fields(&self, cls: &Class) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
         let td = metadata.typed_dict_metadata()?;
+        let keys_type = self.heap.mk_class_type(
+            self.stdlib
+                .frozenset(self.heap.mk_class_type(self.stdlib.str().clone())),
+        );
         let mut fields = smallmap! {
             dunder::INIT => self.get_typed_dict_init(cls, &td.fields),
             ITEMS_METHOD => self.get_typed_dict_items(cls, &td.fields),
             GET_METHOD => self.get_typed_dict_get(cls, &td.fields),
             UPDATE_METHOD => self.get_typed_dict_update(cls, &td.fields),
             VALUES_METHOD => self.get_typed_dict_values(cls, &td.fields),
+            REQUIRED_KEYS => ClassSynthesizedField::new_classvar(keys_type.clone()),
+            OPTIONAL_KEYS => ClassSynthesizedField::new_classvar(keys_type),
         };
         if let Some(m) = self.get_typed_dict_clear(cls, &td.fields) {
             fields.insert(CLEAR_METHOD, m);
@@ -956,6 +1014,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("`{q}` may not be used for TypedDict members",),
                 );
             }
+        }
+        if annotation
+            .ty
+            .as_ref()
+            .is_some_and(Self::is_proxy_method_type)
+        {
+            self.error(
+                errors,
+                range,
+                ErrorKind::InvalidAnnotation,
+                "`ProxyMethod` cannot be declared in typed dictionaries or named tuples".to_owned(),
+            );
         }
         if let Some(td) = metadata.typed_dict_metadata()
             && let Some(is_total) = td.fields.get(name)
@@ -1036,7 +1106,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Pin any vars in the type: leaking a var in a class field is particularly
         // likely to lead to data races where downstream uses can pin inconsistently.
-        let ty = self.solver().deep_force(ty);
+        let ty = self.solver().force(ty);
 
         ClassField::typed_dict_field(ty, annotation, read_only_reason)
     }
@@ -1044,4 +1114,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
 fn name_to_literal_type(name: &Name) -> Type {
     Lit::Str(name.as_str().into()).to_implicit_type()
+}
+
+pub trait TypedDictErrorKind {
+    fn key_error_kind(&self) -> ErrorKind;
+}
+
+impl TypedDictErrorKind for pyrefly_types::typed_dict::TypedDict {
+    fn key_error_kind(&self) -> ErrorKind {
+        if self.is_anonymous() {
+            ErrorKind::BadIndex
+        } else {
+            ErrorKind::BadTypedDictKey
+        }
+    }
 }

@@ -130,6 +130,25 @@ take_callable(old_function)  # E: `old_function` is deprecated
 );
 
 testcase!(
+    test_type_call_dynamic_base,
+    TestEnv::new().enable_unsupported_dynamic_base_error(),
+    r#"
+class Base: ...
+
+def factory(base: type[Base]) -> type:
+    return type("Dynamic", (base,), {})  # E: Base class `type[Base]` in `type()` call is not a statically known class
+
+type("Static", (Base,), {})
+
+class Other: ...
+type("MultiStatic", (Base, Other), {})
+
+bases = (Base,)
+type("AlsoDynamic", bases, {})  # E: Base classes in `type()` calls must be a tuple literal of statically known classes
+"#,
+);
+
+testcase!(
     test_deprecated_method_call,
     r#"
 from warnings import deprecated
@@ -139,7 +158,37 @@ class C:
 
 c = C()
 c.old_function()  # E: `C.old_function` is deprecated
-    "#,
+"#,
+);
+
+testcase!(
+    test_any_dynamic_base_should_not_error,
+    TestEnv::new().enable_unsupported_dynamic_base_error(),
+    r#"
+from typing import Any
+
+def factory_any_type(base: type[Any]) -> type:
+    return type("AnyDynamic", (base,), {})
+
+def factory_any(base: Any) -> type:
+    return type("AnyDynamic", (base,), {})
+"#,
+);
+
+testcase!(
+    test_dynamic_base_should_not_cascade_errors,
+    TestEnv::new().enable_unsupported_dynamic_base_error(),
+    r#"
+class Test: ...
+def foo(x: int) -> Test: ...
+
+type("Bar", (foo(),), {})  # E: Argument `tuple[Test]` is not assignable to parameter `bases` with type `tuple[type[Any], ...]` in function `type.__new__` # E: Base class `Test` in `type()` call is not a statically known class # E: Missing argument `x` in function `foo`
+
+type("Baz", (Undefined,), {})  # E: Could not find name `Undefined`
+
+x = 1
+type("Q", (x,), {})  # E: Argument `tuple[Literal[1]]` is not assignable to parameter `bases` with type `tuple[type[Any], ...]` in function `type.__new__` # E: Base class `Literal[1]` in `type()` call is not a statically known class
+"#,
 );
 
 testcase!(
@@ -157,6 +206,48 @@ def f(x: int | str) -> int | str:
     return x
 
 f(0)  # E: `f` is deprecated
+    "#,
+);
+
+fn test_env_string_as_iterable() -> TestEnv {
+    TestEnv::new().enable_string_as_iterable_warning()
+}
+
+testcase!(
+    test_string_as_iterable_warning,
+    test_env_string_as_iterable(),
+    r#"
+from typing import Iterable, Sequence
+
+def takes_iter(xs: Iterable[str]) -> None: ...
+def takes_seq(xs: Sequence[str]) -> None: ...
+def takes_iter_or_str(xs: Iterable[str] | str) -> None: ...
+
+s: str = "hello"
+takes_iter(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+takes_seq(s)  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+takes_iter_or_str(s)
+takes_iter(["hello"])
+
+x: Iterable[str] = s  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+y: Sequence[str] = s  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+
+takes_iter("hello")  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+z: Iterable[str] = "hello"  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+    "#,
+);
+
+testcase!(
+    test_string_as_iterable_warning_does_not_break_overload_matching,
+    test_env_string_as_iterable(),
+    r#"
+from traceback import format_exception
+
+def f(exc: BaseException) -> None:
+    "".join(format_exception(exc))
+
+s: str = "hello"
+"".join(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
     "#,
 );
 
@@ -475,5 +566,271 @@ class Uncallable:
 
 obj = Uncallable()
 obj()  # E: Expected a callable, got `Uncallable`
+"#,
+);
+
+// Verify **kwargs unpacking correctly suppresses missing-argument errors.
+testcase!(
+    test_kwargs_unpacking_provides_required_args,
+    r#"
+class Config:
+    def __init__(self, name: str, value: int) -> None: ...
+
+data = {"name": "test", "value": 42}
+Config(**data)
+
+def make(**kwargs) -> Config:
+    return Config(**kwargs)
+    "#,
+);
+
+// Verify object.__init__(self) is accepted when self is the only argument.
+testcase!(
+    test_object_init_explicit_self,
+    r#"
+class MyClass:
+    def __init__(self) -> None:
+        object.__init__(self)
+
+class MyClass2:
+    def __new__(cls) -> "MyClass2":
+        return object.__new__(cls)
+    "#,
+);
+
+// Verify explicit kwarg + **dict_mapping doesn't falsely report conflicts.
+testcase!(
+    test_explicit_kwarg_with_mapping_kwargs,
+    r#"
+class Config:
+    def __init__(self, name: str, value: int, **kwargs) -> None: ...
+
+extra = {"debug": True}
+Config(name="test", value=42, **extra)
+    "#,
+);
+
+testcase!(
+    test_bad_argument_type_none_hint,
+    r#"
+def takes_str(x: str) -> None: ...
+
+maybe: str | None = "hello"
+takes_str(maybe)  # E: Consider narrowing the value with an `is not None` check  # !E: changing the declared type
+
+takes_str(None)  # E:  # !E: `is not None` check  # !E: changing the declared type
+
+if maybe is not None:
+    takes_str(maybe)  # OK — narrowed
+    "#,
+);
+
+testcase!(
+    test_bad_assignment_none_hint,
+    r#"
+maybe: str | None = "hello"
+x: int | str = maybe  # E: Consider narrowing the value with an `is not None` check or changing the declared type to `int | str | None`
+    "#,
+);
+
+testcase!(
+    test_bad_return_none_hint,
+    r#"
+def foo(x: bool) -> str:
+    if x:
+        y = "hello"
+    else:
+        y = None
+    return y  # E: Consider narrowing the value with an `is not None` check or changing the declared type to `str | None`
+    "#,
+);
+
+testcase!(
+    test_implicit_return_no_none_hint,
+    r#"
+def f() -> str:  # E:  # !E: does not allow `None`
+    pass
+def g(x: str) -> str:  # E:  # !E: does not allow `None`
+    if x:
+        return x
+    "#,
+);
+
+testcase!(
+    test_bad_default_none_hint,
+    r#"
+def default() -> int | None: ...
+def f(x: int = default()):  # E: Consider changing the declared type to `int | None`  # !E: `is not None` check
+    pass
+    "#,
+);
+
+testcase!(
+    test_bare_none_hint,
+    r#"
+x: str = None  # E: Consider changing the declared type to `str | None`  # !E: `is not None` check
+    "#,
+);
+
+testcase!(
+    test_attribute_assignment_none_hint,
+    r#"
+class A:
+    def __init__(self):
+        self.x = 42
+
+def f(a: A, x: int | None):
+    a.x = x  # E: Consider narrowing the value with an `is not None` check  # !E: changing the declared type
+
+def g(a: A):
+    a.x = None  # E:  # !E: `is not None` check  # !E: changing the declared type
+    "#,
+);
+
+testcase!(
+    test_return_hint_not_used_if_detrimental,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+def first[T](items: list[T], matcher: Callable[[T], bool]) -> T | None: ...
+def foo(items: list[int]) -> int | None:
+    return first(items, lambda i: reveal_type(i) == 3)  # E: revealed type: int
+    "#,
+);
+
+testcase!(
+    test_uses_return_hint_even_if_some_arg_error,
+    r#"
+from collections.abc import Iterable
+from typing import Any
+
+def collect[T](xs: Iterable[T], unrelated: Any) -> list[T]: ...
+
+def f() -> list[object]:
+    return collect(["x"], 1 + "oops")  # E: `+` is not supported between `Literal[1]` and `Literal['oops']`
+    "#,
+);
+
+testcase!(
+    test_return_hint_not_preferred_over_implicit_any_lambda,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from collections.abc import Callable
+
+def apply[T](f: Callable[[T], T]) -> T: ...
+
+result: str = apply(lambda x: x + 1)  # E: Type of lambda parameter `x` is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_known_no_error,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def f(n: int) -> None: ...
+
+f(1)
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_disabled_no_error,
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))
+f(n=untyped(1))
+f(*untyped(1))
+f(**untyped(1))
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_keyword,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(n=untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_overload_no_duplicate,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+from typing import overload
+
+def untyped(x):
+    return x
+
+@overload
+def f(n: int) -> int: ...
+@overload
+def f(n: str) -> str: ...
+def f(n: int | str) -> int | str:
+    return n
+
+f(untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_not_suppressed_by_implicit_any,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+# pyrefly: ignore[implicit-any]
+f(untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_args_unpack,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(*untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_kwargs_unpack,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(**untyped(1))  # E: The type of this argument is unknown
 "#,
 );
