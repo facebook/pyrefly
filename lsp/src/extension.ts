@@ -107,7 +107,14 @@ export async function activate(context: ExtensionContext) {
   }
 
   const lspPath: string = requireSetting('pyrefly.lspPath');
-  const args: [string] = requireSetting('pyrefly.lspArguments');
+  // `pyrefly.lspArguments` resolves to an empty array in some environments
+  // (notably dev containers / remote, where the `machine-overridable` default
+  // of `["lsp"]` is not applied). Spawning the binary with no subcommand makes
+  // pyrefly print its help text and exit, which the client only sees as a
+  // `write EPIPE` when it writes the `initialize` request. Fall back to the
+  // `lsp` subcommand so the server always starts.
+  const configuredArgs: string[] = requireSetting('pyrefly.lspArguments');
+  const args: string[] = configuredArgs.length > 0 ? configuredArgs : ['lsp'];
 
   const bundledPyreflyPath = vscode.Uri.joinPath(
     context.extensionUri,
