@@ -1331,9 +1331,10 @@ fn unused_import_action_after(code: &str, cursor_offset: usize) -> Option<String
             None,
         )
         .unwrap_or_default();
-    let (_, module, range, patch) = actions
+    let (_, edits) = actions
         .into_iter()
-        .find(|(title, _, _, _)| title.starts_with("Remove unused import: `"))?;
+        .find(|(title, _)| title.starts_with("Remove unused import: `"))?;
+    let (module, range, patch) = edits.into_iter().next()?;
     if module.path() != module_info.path() {
         return None;
     }
