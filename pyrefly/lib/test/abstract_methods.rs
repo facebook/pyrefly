@@ -44,7 +44,6 @@ circle = Circle()
 
 testcase!(
     test_direct_abc_without_abstract_methods_instantiation_error,
-    TestEnv::new().enable_direct_abstract_base_instantiation_error(),
     r#"
 from abc import ABC, ABCMeta
 
@@ -64,22 +63,6 @@ direct_abc = DirectABC()  # E: Cannot instantiate `DirectABC`
 indirect_abc = IndirectABC()
 direct_abc_meta = DirectABCMeta()  # E: Cannot instantiate `DirectABCMeta`
 indirect_abc_meta = IndirectABCMeta()
-"#,
-);
-
-testcase!(
-    test_direct_abc_without_abstract_methods_instantiation_default_off,
-    r#"
-from abc import ABC, ABCMeta
-
-class DirectABC(ABC):
-    pass
-
-class DirectABCMeta(metaclass=ABCMeta):
-    pass
-
-direct_abc = DirectABC()
-direct_abc_meta = DirectABCMeta()
 "#,
 );
 
@@ -516,7 +499,6 @@ class D(C):  # E: Class `D` has unimplemented abstract members: `bar`
 
 testcase!(
     test_uninit_classvar_abc,
-    TestEnv::new().enable_direct_abstract_base_instantiation_error(),
     r#"
 # To align with mypy and pyright, we do not consider uninitialized class vars on abstract classes to be abstract
 from abc import ABC

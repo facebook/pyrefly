@@ -530,9 +530,7 @@ impl ErrorKind {
             ErrorKind::CoverageMissing => Severity::Warn,
             ErrorKind::CoveragePartial => Severity::Warn,
             ErrorKind::Deprecated => Severity::Warn,
-            // TODO: Investigate ecosystem impact before enabling this check by default. Some
-            // libraries inherit from ABC without intending to prohibit direct instantiation.
-            ErrorKind::DirectAbstractBaseInstantiation => Severity::Ignore,
+            ErrorKind::DirectAbstractBaseInstantiation => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,

@@ -2820,6 +2820,10 @@ output-format = "omit-errors"
 
         let errors = config.root.errors.as_ref().unwrap();
         assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Error);
+        assert_eq!(
+            errors.severity(ErrorKind::DirectAbstractBaseInstantiation),
+            Severity::Error
+        );
         // Setting `implicit-any` cascades to every sub-kind via parent_kind,
         // so strict mode covers them without listing them individually.
         for kind in [
