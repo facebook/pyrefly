@@ -196,10 +196,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
         let keyword_annotations = keyword_annotations.into_map(|(name, annot)| (name.id, annot));
 
-        let base_metaclasses = bases_with_metadata
+        let protocol_base_name = Name::new_static("Protocol");
+        let mut base_metaclasses = bases_with_metadata
             .iter()
             .filter_map(|(b, metadata)| metadata.custom_metaclass().map(|m| (b.name(), m)))
             .collect::<Vec<_>>();
+        if protocol_metadata.is_some() && !self.module().path().is_interface() {
+            // `Protocol` has metaclass `_ProtocolMeta`. `Protocol` is a special form in typeshed,
+            // so we inject the metaclass here so that metaclass-driven checks work. Stubs often
+            // model things as protocols even when they aren't at runtime, so we can be confident
+            // that the class has `_ProtocolMeta` only when it is defined in a source (.py) file.
+            base_metaclasses.push((&protocol_base_name, self.stdlib.protocol_meta()));
+        }
         let mut calculated_metaclass = self.calculate_metaclass(
             cls,
             metaclasses.into_iter().next(),

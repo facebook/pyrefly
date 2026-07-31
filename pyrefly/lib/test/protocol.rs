@@ -59,6 +59,20 @@ protocol_meta: _ProtocolMeta = Protocol
 );
 
 testcase!(
+    test_protocol_metaclass_invalid_inheritance,
+    r#"
+from enum import Enum
+from typing import Protocol
+
+class M(type): ...
+class P(Protocol): ...
+
+class A(P, metaclass=M): ...  # E: has metaclass `M` which is not a subclass of metaclass `_ProtocolMeta`
+class E(Enum, P): ...  # E: has metaclass `EnumMeta` which is not a subclass of metaclass `_ProtocolMeta`
+    "#,
+);
+
+testcase!(
     test_proxy_method_direct_call_and_attribute_access,
     proxy_method_env(),
     r#"
