@@ -996,8 +996,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Model row-only transforms as returning the receiver's schema unchanged; they reorder or
-    /// replace rows without touching the column set. `None` for a receiver with no schema.
+    /// Model row-only transforms as returning the receiver's schema unchanged; they drop, reorder,
+    /// deduplicate, window, or replace rows without touching the column set. `None` if no schema.
     pub fn polars_row_transform(
         &self,
         base: &Type,
@@ -1008,7 +1008,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Type::DataFrame(schema) = base else {
             return None;
         };
-        if !matches!(func.attr.id.as_str(), "filter" | "sort" | "fill_null") {
+        if !matches!(
+            func.attr.id.as_str(),
+            "filter" | "sort" | "fill_null" | "head" | "slice" | "unique" | "drop_nulls"
+        ) {
             return None;
         }
         // Pandas `filter` selects columns and has no `sort`/`fill_null`, so this is Polars-only.

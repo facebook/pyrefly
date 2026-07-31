@@ -36,6 +36,9 @@ class DataFrame:
     def filter(self, *predicates: object, **constraints: object) -> "DataFrame": ...
     def sort(self, by: object, *more: object, descending: bool = False) -> "DataFrame": ...
     def fill_null(self, value: object = None) -> "DataFrame": ...
+    def slice(self, offset: int, length: int | None = None) -> "DataFrame": ...
+    def unique(self, subset: object = None, *, keep: str = "any", maintain_order: bool = False) -> "DataFrame": ...
+    def drop_nulls(self, subset: object = None) -> "DataFrame": ...
     def cast(self, dtypes: object, *, strict: bool = True) -> "DataFrame": ...
     def join(self, other: "DataFrame", on: object = None, how: str = "inner", *, left_on: object = None, right_on: object = None, suffix: str = "_right", coalesce: object = None) -> "DataFrame": ...
     def hstack(self, columns: object, *, in_place: bool = False) -> "DataFrame": ...
@@ -1266,7 +1269,7 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 reveal_type(df.columns)  # E: revealed type: list[str]
-reveal_type(df.head())  # E: revealed type: DataFrame
+reveal_type(df.head())  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
@@ -1986,6 +1989,62 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 reveal_type(df.fill_null(0))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_head_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.head())  # E: revealed type: DataFrame[a: Int64, b: String]
+reveal_type(df.head(2))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_slice_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.slice(1, 2))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_unique_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.unique(subset="a"))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_drop_nulls_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.drop_nulls())  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_head_preserves_complete_schema_for_reads,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.head()["missing"])  # E: revealed type: Series # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
