@@ -39,10 +39,12 @@ jobs:
   # the full LSP server over all cores against the pinned PyTorch checkout, so they
   # must not run under Valgrind (which serializes threads and inflates the ~GB cold
   # start past any reasonable timeout). Walltime mode tolerates threads, I/O, and
-  # long cold starts.
+  # long cold starts. Walltime needs a bare-metal runner: on shared hosted runners
+  # (`ubuntu-latest`) CodSpeed warns that neighbor noise makes wall-clock data
+  # inconsistent. `codspeed-macro` is CodSpeed's dedicated bare-metal runner.
   walltime:
     name: PyTorch benchmarks (walltime)
-    runs-on: ubuntu-latest
+    runs-on: codspeed-macro
     steps:
     - uses: actions/checkout@v6
     # No submodule checkout: in OSS the benchmark clones the pinned PyTorch itself
