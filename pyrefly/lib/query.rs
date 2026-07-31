@@ -362,6 +362,7 @@ struct CalleesWithLocation<'a> {
     handle: Handle,
     module_info: Module,
     ast: Arc<ModModule>,
+    bindings: Bindings,
     answers: Arc<Answers>,
 }
 
@@ -372,6 +373,7 @@ impl<'a> CalleesWithLocation<'a> {
         handle: Handle,
     ) -> Option<CalleesWithLocation<'a>> {
         let module_info = transaction.get_module_info(&handle)?;
+        let bindings = transaction.get_bindings(&handle)?;
         let answers = transaction.get_answers(&handle)?;
         let ast: Arc<ModModule> = transaction.get_ast(&handle)?;
         Some(Self {
@@ -380,7 +382,27 @@ impl<'a> CalleesWithLocation<'a> {
             handle,
             module_info,
             ast,
+            bindings,
             answers,
+        })
+    }
+
+    fn callee_type(&self, func: &Expr) -> Option<Type> {
+        self.answers.get_type_trace(func.range()).or_else(|| {
+            let Expr::Name(name) = func else {
+                return None;
+            };
+            let bound = Key::BoundName(ShortIdentifier::expr_name(name));
+            let key = if self.bindings.is_valid_key(&bound) {
+                bound
+            } else {
+                Key::Definition(ShortIdentifier::expr_name(name))
+            };
+            self.bindings
+                .is_valid_key(&key)
+                .then(|| self.answers.get_type_at(self.bindings.key_to_idx(&key)))
+                .flatten()
+                .filter(|ty| matches!(ty, Type::ClassDef(_)))
         })
     }
     fn _try_unwrap_lru_cache_wrapper(
@@ -456,8 +478,7 @@ impl<'a> CalleesWithLocation<'a> {
                 (callees, name.range())
             }
             Expr::Call(call) => {
-                let callees = if let Some(func_ty) = self.answers.get_type_trace(call.func.range())
-                {
+                let callees = if let Some(func_ty) = self.callee_type(&call.func) {
                     self._try_unwrap_lru_cache_wrapper(call, &func_ty)
                         .unwrap_or_else(|| {
                             self.callee_from_type(

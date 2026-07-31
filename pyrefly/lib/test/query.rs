@@ -17,6 +17,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
+use crate::config::config::ConfigSource;
 use crate::config::finder::ConfigFinder;
 use crate::query::Query;
 use crate::query::SerializedTypeTableEntry;
@@ -361,5 +362,65 @@ def foo(c: C, k: K) -> None:
     assert!(
         k_v_callees.is_empty(),
         "Expected no callees on the RHS `k.v`, got: {k_v_callees:?}"
+    );
+}
+
+#[test]
+fn test_callees_final_stub_class_constructor_in_gather() {
+    let tdir = TempDir::new().unwrap();
+    let main_path = tdir.path().join("main.py");
+    let dep_path = tdir.path().join("dep.pyi");
+    let main_code = r#"
+import asyncio
+from dep import C
+
+async def use_c(x: C) -> None: ...
+
+async def f(x: bool | None):
+    first, second = await asyncio.gather(use_c(C()), use_c(x or C()))
+"#;
+    let dep_code = r#"
+from typing import final
+
+@final
+class C:
+    def __init__(self) -> None: ...
+    def __call__(self) -> C: ...
+"#;
+    fs_anyhow::write(&main_path, main_code).unwrap();
+    fs_anyhow::write(&dep_path, dep_code).unwrap();
+
+    let mut config = ConfigFile {
+        source: ConfigSource::File(tdir.path().join(ConfigFile::PYREFLY_FILE_NAME)),
+        enable_fallback_search_path: true,
+        ..Default::default()
+    };
+    config.python_environment.set_empty_to_default();
+    config.interpreters.skip_interpreter_query = true;
+    config.configure();
+    let query = Query::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let main_name = ModuleName::from_str("main");
+    let main_module_path = ModulePath::filesystem(main_path);
+    query.add_files(vec![
+        (
+            ModuleName::from_str("dep"),
+            ModulePath::filesystem(dep_path),
+        ),
+        (main_name, main_module_path.clone()),
+    ]);
+
+    let callees = query
+        .get_callees_with_location(main_name, main_module_path, None)
+        .unwrap();
+    assert!(
+        callees
+            .iter()
+            .filter(|(_, callee)| callee.target == "dep.C.__init__")
+            .count()
+            == 2,
+        "Expected two constructor callees for C(), got: {callees:?}"
     );
 }
