@@ -572,6 +572,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .map(|(name, _)| &name.id)
                     .collect::<Vec<_>>();
+                let vararg = lambda.parameters.as_ref().and_then(|parameters| {
+                    parameters
+                        .vararg
+                        .as_ref()
+                        .map(|x| (&x.name, self.bindings().get_lambda_param_id(&x.name)))
+                });
+                let kwarg = lambda.parameters.as_ref().and_then(|parameters| {
+                    parameters
+                        .kwarg
+                        .as_ref()
+                        .map(|x| (&x.name, self.bindings().get_lambda_param_id(&x.name)))
+                });
                 let param_default_tys: Vec<Option<Type>> = match &lambda.parameters {
                     Some(parameters) => parameters
                         .iter_non_variadic_params()
@@ -592,66 +604,86 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                             self.heap.mk_any_implicit()
                         };
-                        let (param_hints, return_hint) = cur_hint.map_or_else(
-                            || (vec![None; param_names.len()], None),
-                            |hint| self.decompose_lambda(hint, &param_names),
+                        let (param_hints, vararg_hint, kwarg_hint, return_hint) = cur_hint
+                            .map_or_else(
+                                || (vec![None; param_names.len()], None, None, None),
+                                |hint| {
+                                    self.decompose_lambda(
+                                        hint,
+                                        &param_names,
+                                        vararg.map(|(name, _)| &name.id),
+                                        kwarg.map(|(name, _)| &name.id),
+                                    )
+                                },
+                            );
+                        let mut params = Vec::with_capacity(
+                            param_ids.len()
+                                + usize::from(vararg.is_some())
+                                + usize::from(kwarg.is_some()),
                         );
-                        let mut params: Vec<Param> = param_ids
-                            .iter()
-                            .copied()
-                            .zip(param_hints)
-                            .zip(&param_default_tys)
-                            .map(|(((name, id), param_hint), default_ty)| {
-                                let ty = if let Some(param_hint) = param_hint {
-                                    param_hint
-                                } else if let Some(default_ty) = default_ty {
-                                    let mut resolved = default_ty.clone();
-                                    self.solver().expand_with_bounds(&mut resolved);
-                                    let promoted = resolved
-                                        .with_literal_style(LitStyle::Implicit)
-                                        .promote_implicit_literals(self.stdlib);
-                                    // A `None` default almost always denotes an optional value,
-                                    // so infer `Any | None` to keep the parameter permissive
-                                    // rather than strictly `None`.
-                                    if promoted.is_none() {
-                                        self.union(self.heap.mk_any_implicit(), promoted)
+                        params.extend(
+                            param_ids
+                                .iter()
+                                .copied()
+                                .zip(param_hints)
+                                .zip(&param_default_tys)
+                                .map(|(((name, id), param_hint), default_ty)| {
+                                    let ty = if let Some(param_hint) = param_hint {
+                                        param_hint
+                                    } else if let Some(default_ty) = default_ty {
+                                        let mut resolved = default_ty.clone();
+                                        self.solver().expand_with_bounds(&mut resolved);
+                                        let promoted = resolved
+                                            .with_literal_style(LitStyle::Implicit)
+                                            .promote_implicit_literals(self.stdlib);
+                                        // A `None` default almost always denotes an optional value,
+                                        // so infer `Any | None` to keep the parameter permissive
+                                        // rather than strictly `None`.
+                                        if promoted.is_none() {
+                                            self.union(self.heap.mk_any_implicit(), promoted)
+                                        } else {
+                                            promoted
+                                        }
                                     } else {
-                                        promoted
-                                    }
-                                } else {
-                                    implicit_any(&name.id, name.range())
-                                };
-                                self.set_lambda_param_type(id, ty.clone());
-                                let required = match default_ty {
-                                    Some(default_ty) => {
-                                        Required::Optional(Some(DefaultValue::new(
-                                            default_ty
-                                                .clone()
-                                                .with_literal_style(LitStyle::Explicit),
-                                        )))
-                                    }
-                                    None => Required::Required,
-                                };
-                                Param::Pos(name.id.clone(), ty, required)
-                            })
-                            .collect();
-                        if let Some(parameters) = &lambda.parameters {
-                            params.extend(parameters.vararg.iter().map(|x| {
-                                let ty = implicit_any(&x.name.id, x.name.range());
-                                self.set_lambda_param_type(
-                                    self.bindings().get_lambda_param_id(&x.name),
-                                    ty.clone(),
-                                );
-                                Param::Varargs(Some(x.name.id.clone()), ty)
-                            }));
-                            params.extend(parameters.kwarg.iter().map(|x| {
-                                let ty = implicit_any(&x.name.id, x.name.range());
-                                self.set_lambda_param_type(
-                                    self.bindings().get_lambda_param_id(&x.name),
-                                    ty.clone(),
-                                );
-                                Param::Kwargs(Some(x.name.id.clone()), ty)
-                            }));
+                                        implicit_any(&name.id, name.range())
+                                    };
+                                    self.set_lambda_param_type(id, ty.clone());
+                                    let required = match default_ty {
+                                        Some(default_ty) => {
+                                            Required::Optional(Some(DefaultValue::new(
+                                                default_ty
+                                                    .clone()
+                                                    .with_literal_style(LitStyle::Explicit),
+                                            )))
+                                        }
+                                        None => Required::Required,
+                                    };
+                                    Param::Pos(name.id.clone(), ty, required)
+                                }),
+                        );
+                        if let Some((name, id)) = vararg {
+                            let ty =
+                                vararg_hint.unwrap_or_else(|| implicit_any(&name.id, name.range()));
+                            let body_ty = match &ty {
+                                Type::Unpack(inner) => (**inner).clone(),
+                                _ => self.heap.mk_unbounded_tuple(ty.clone()),
+                            };
+                            self.set_lambda_param_type(id, body_ty);
+                            params.push(Param::Varargs(Some(name.id.clone()), ty));
+                        }
+                        if let Some((name, id)) = kwarg {
+                            let ty =
+                                kwarg_hint.unwrap_or_else(|| implicit_any(&name.id, name.range()));
+                            let body_ty = match &ty {
+                                Type::Unpack(inner) => (**inner).clone(),
+                                _ => {
+                                    let str_ty = self.heap.mk_class_type(self.stdlib.str().clone());
+                                    self.heap
+                                        .mk_class_type(self.stdlib.dict(str_ty, ty.clone()))
+                                }
+                            };
+                            self.set_lambda_param_type(id, body_ty);
+                            params.push(Param::Kwargs(Some(name.id.clone()), ty));
                         }
                         let params = Params::List(ParamList::new(params));
                         if let Some(hint) = cur_hint {

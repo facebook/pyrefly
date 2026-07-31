@@ -1672,11 +1672,18 @@ testcase!(
     test_implicit_any_lambda_explicit_any_context,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
-from typing import Any, Callable, assert_type
+from typing import Any, Callable, Protocol, assert_type
+
+class VariadicAny(Protocol):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 f: Callable[[Any], Any] = lambda x: x
 g: Callable[[Any, int], int] = lambda x, y: y
 h: Any = lambda x: None  # E: Type of lambda parameter `x` is unknown
+variadic: VariadicAny = lambda *args, **kwargs: (
+    assert_type(args, tuple[Any, ...]),
+    assert_type(kwargs, dict[str, Any]),
+)
 assert_type(f, Callable[[Any], Any])
 assert_type(g, Callable[[Any, int], int])
 "#,
@@ -1722,20 +1729,91 @@ ellipsis: Callable[..., None] = lambda *args, **kwargs: None  # E: Type of lambd
 "#,
 );
 
-// Variadic lambda parameters do not currently participate in contextual decomposition.
 testcase!(
-    bug = "ParamSpec does not contextually type lambda variadics",
     test_implicit_any_lambda_paramspec_variadics,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
-from typing import Callable
+from typing import Callable, reveal_type
 
 def apply[**P](f: Callable[P, None], g: Callable[P, None]) -> None: ...
 def varargs(x: int, *args: str) -> None: ...
 def kwargs(x: int, **kwargs: str) -> None: ...
+def positional(x: int, y: str, /) -> None: ...
+def keyword_only(*, x: int, y: str) -> None: ...
 
-apply(varargs, lambda x, *args: None)  # E: Type of lambda parameter `args` is unknown
-apply(kwargs, lambda x, **kwargs: None)  # E: Type of lambda parameter `kwargs` is unknown
+apply(varargs, lambda x, *args: (reveal_type(args), None)[1])  # E: revealed type: tuple[str, ...]
+apply(kwargs, lambda x, **kwargs: (reveal_type(kwargs), None)[1])  # E: revealed type: dict[str, str]
+apply(positional, lambda *args: (reveal_type(args), None)[1])  # E: revealed type: tuple[int | str, ...]
+apply(keyword_only, lambda **kwargs: (reveal_type(kwargs), None)[1])  # E: revealed type: dict[str, int | str]
+"#,
+);
+
+testcase!(
+    test_lambda_typed_dict_kwargs_context,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Callable, NotRequired, Protocol, TypedDict, Unpack, assert_type
+
+class Options(TypedDict):
+    required: int
+    optional: NotRequired[str]
+
+class SplitOptions(TypedDict):
+    consumed: int
+    remaining: str
+
+class Callback(Protocol):
+    def __call__(self, **kwargs: Unpack[Options]) -> None: ...
+
+class SplitCallback(Protocol):
+    def __call__(self, **kwargs: Unpack[SplitOptions]) -> None: ...
+
+class GenericCallback(Protocol):
+    def __call__(self, **kwargs: Unpack[Options]) -> int | str: ...
+
+def apply[**P](f: Callable[P, None], g: Callable[P, None]) -> None: ...
+def source(**kwargs: Unpack[Options]) -> None: ...
+def split_source(**kwargs: Unpack[SplitOptions]) -> None: ...
+def split_plain(consumed: int, **kwargs: str) -> None:
+    assert_type(kwargs, dict[str, str])
+    assert_type(kwargs["remaining"], str)
+    assert_type(kwargs["consumed"], str)
+def generic[T](**kwargs: T) -> T: ...
+def check_args[*Ts]() -> None:
+    callback: Callable[[*Ts], None] = lambda *args: (
+        assert_type(args, tuple[*Ts]),
+        None,
+    )[1]
+
+callback: Callback = lambda **kwargs: (
+    assert_type(kwargs, Options),
+    assert_type(kwargs["required"], int),
+    assert_type(kwargs.get("optional"), str | None),
+    None,
+)[3]
+split_callback: SplitCallback = lambda consumed, **kwargs: (
+    assert_type(consumed, int),
+    assert_type(kwargs, dict[str, str]),
+    assert_type(kwargs["remaining"], str),
+    assert_type(kwargs["consumed"], str),
+    None,
+)[4]
+generic_callback: GenericCallback = generic
+apply(source, lambda **kwargs: (
+    assert_type(kwargs, Options),
+    assert_type(kwargs["required"], int),
+    assert_type(kwargs.get("optional"), str | None),
+    None,
+)[3])
+apply(split_source, lambda consumed, **kwargs: (
+    assert_type(consumed, int),
+    assert_type(kwargs, dict[str, str]),
+    assert_type(kwargs["remaining"], str),
+    assert_type(kwargs["consumed"], str),
+    None,
+)[4])
+plain_callback: SplitCallback = split_plain
+apply(split_source, split_plain)
 "#,
 );
 
@@ -1752,6 +1830,7 @@ def source(x: int, y: str) -> None: ...
 apply(source, lambda x, y: None)
 apply(source, lambda x, z: None)  # E: Type of lambda parameter `z` is unknown  # E: Argument `(x: int, z: Unknown) -> None` is not assignable to parameter `g` with type `(x: int, y: str) -> None`
 infer(lambda x: None)  # E: Type of lambda parameter `x` is unknown
+infer(lambda *args, **kwargs: None)  # E: Type of lambda parameter `args` is unknown  # E: Type of lambda parameter `kwargs` is unknown
 "#,
 );
 

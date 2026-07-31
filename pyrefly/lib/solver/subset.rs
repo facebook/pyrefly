@@ -423,6 +423,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
+                (
+                    Some(Param::Varargs(_, l @ Type::Var(_))),
+                    Some(Param::Varargs(_, u @ Type::Unpack(_))),
+                ) => {
+                    self.is_subset_eq(u, l)?;
+                    l_arg = l_args.next();
+                    u_arg = u_args.next();
+                }
                 (Some(Param::Varargs(_, l)), Some(Param::Varargs(_, Type::Unpack(u)))) => {
                     self.is_subset_eq(u, &self.solver.heap.mk_unbounded_tuple(l.clone()))?;
                     l_arg = l_args.next();
@@ -473,6 +481,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             .mk_class_type(self.type_order.stdlib().object().clone());
         // Expand typed dict kwargs if necessary, check regular kwargs
         let l_kwargs = match (l_kwargs, u_kwargs) {
+            (Some(l @ Type::Var(_)), Some(ref u @ Type::Unpack(ref u_inner)))
+                if l_keywords.is_empty() && matches!(&**u_inner, Type::TypedDict(_)) =>
+            {
+                self.is_subset_eq(u, &l)?;
+                Some(object_type)
+            }
             (Some(Type::Unpack(l_inner)), Some(Type::Unpack(u_inner)))
                 if matches!(
                     (&*l_inner, &*u_inner),

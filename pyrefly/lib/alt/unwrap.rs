@@ -322,19 +322,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         hint: &Type,
         param_names: &[&Name],
-    ) -> (Vec<Option<Type>>, Option<Type>) {
+        vararg_name: Option<&Name>,
+        kwarg_name: Option<&Name>,
+    ) -> (Vec<Option<Type>>, Option<Type>, Option<Type>, Option<Type>) {
         let param_vars = param_names
             .iter()
             .map(|_| self.fresh_var())
             .collect::<Vec<_>>();
+        let vararg_var = vararg_name.map(|_| self.fresh_var());
+        let kwarg_var = kwarg_name.map(|_| self.fresh_var());
         let return_ty = self.fresh_var();
-        let params = param_names
-            .iter()
-            .zip(&param_vars)
-            .map(|(name, var)| {
-                Param::Pos((**name).clone(), var.to_type(self.heap), Required::Required)
-            })
-            .collect::<Vec<_>>();
+        let mut params = Vec::with_capacity(
+            param_names.len()
+                + usize::from(vararg_name.is_some())
+                + usize::from(kwarg_name.is_some()),
+        );
+        params.extend(param_names.iter().zip(&param_vars).map(|(name, var)| {
+            Param::Pos((**name).clone(), var.to_type(self.heap), Required::Required)
+        }));
+        if let Some((name, var)) = vararg_name.zip(vararg_var) {
+            params.push(Param::Varargs(Some(name.clone()), var.to_type(self.heap)));
+        }
+        if let Some((name, var)) = kwarg_name.zip(kwarg_var) {
+            params.push(Param::Kwargs(Some(name.clone()), var.to_type(self.heap)));
+        }
         let callable_ty = self
             .heap
             .mk_callable_from_vec(params, return_ty.to_type(self.heap));
@@ -345,12 +356,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .into_iter()
             .map(|var| self.resolve_var_opt(hint, var))
             .collect();
+        let vararg_hint = vararg_var.and_then(|var| self.resolve_var_opt(hint, var));
+        let kwarg_hint = kwarg_var.and_then(|var| self.resolve_var_opt(hint, var));
         let return_hint = if matched {
             self.resolve_var_opt(hint, return_ty)
         } else {
             None
         };
-        (param_hints, return_hint)
+        (param_hints, vararg_hint, kwarg_hint, return_hint)
     }
 
     pub fn decompose_generator(&self, ty: &Type) -> Option<(Type, Type, Type)> {
