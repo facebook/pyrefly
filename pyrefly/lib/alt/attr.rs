@@ -2670,9 +2670,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SpecialForm(SpecialForm::Type) => acc.push(AttributeBase1::ClassObject(
                 ClassBase::ClassDef(self.stdlib.builtins_type().clone()),
             )),
-            Type::Type(inner) if inner.is_any() => acc.push(AttributeBase1::ClassObject(
-                ClassBase::ClassDef(self.stdlib.builtins_type().clone()),
-            )),
+            Type::Type(inner) => match *inner {
+                Type::Any(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
+                    self.stdlib.builtins_type().clone(),
+                ))),
+                Type::ClassType(cls) => {
+                    // Technically, type[type[C]] could be a subclass of C's metaclass, but we
+                    // don't have a good way of modeling that, and returning the metaclass is more
+                    // helpful than degrading to `Any`.
+                    let metaclass = self
+                        .get_metadata_for_class(cls.class_object())
+                        .metaclass(self.stdlib)
+                        .clone();
+                    acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(metaclass)))
+                }
+                _ => {}
+            },
             Type::TypeVar(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
                 self.stdlib.type_var().clone(),
             ))),

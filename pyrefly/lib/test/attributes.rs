@@ -1730,7 +1730,6 @@ def test_union(x: A  | B):
 );
 
 testcase!(
-    bug = "type[ClassType(..)] should be type (or the direct metaclass?)",
     test_attribute_access_on_type_class,
     r#"
 # handy hack to get a type[X] for any X
@@ -1740,13 +1739,53 @@ class C:
     @staticmethod
     def m(x: int): ...
 
-class D[T]:
+ty(C).m(0) # E: Class `type` has no class attribute `m`
+"#,
+);
+
+testcase!(
+    bug = "We get the wrong metaclass for a specialized generic",
+    test_attribute_access_on_generic_alias,
+    r#"
+# handy hack to get a type[X] for any X
+def ty[T](x: T) -> type[T]: ...
+
+class C[T]:
     @classmethod
     def m(cls, x: T): ...
 
-ty(C).m(0) # E: Class `type` has no class attribute `m`
-ty(D[int]).m(0) # E: Expr::attr_infer_for_type attribute base undefined
-"#,
+# In Python 3.12, the type of a generic class is either `typing._GenericAlias` or `types.GenericAlias`:
+# https://github.com/python/cpython/blob/9621a7d0170bf1ec48bcfc35825007cdf75265ea/Lib/typing.py#L1373-L1397
+# We don't model this, so Pyrefly mistakenly thinks the metaclass is just `type`.
+# This actually gets us the right behavior in this case (there's no `m` attribute on either generic
+# alias class), but the error message shows the incorrect inference.
+ty(C[int]).m(0)  # E: Class `type` has no class attribute `m`
+    "#,
+);
+
+testcase!(
+    test_attribute_access_on_custom_metaclass,
+    r#"
+class Meta(type):
+    def m(self): ...
+
+class A(metaclass=Meta):
+    def a(self): ...
+
+def f[T](x: T) -> type[T]:
+    return type(x)
+
+def g(x: type[A]):
+    meta1 = f(A)
+    meta2 = x.__class__
+    # Technically, the types allow `meta1` and `meta2` to be subclasses of `Meta` rather than
+    # `Meta` itself, but it's more helpful to use `Meta` here than a conservative fallback.
+    meta1.m(A)
+    meta2.m(A)
+    # Make sure we don't accidentally allow lookup of an attribute of A.
+    meta1.a  # E: `Meta` has no class attribute `a`
+    meta2.a  # E: `Meta` has no class attribute `a`
+    "#,
 );
 
 testcase!(
