@@ -174,10 +174,8 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
                 answers.check_partial_answer(def_idx)
             }
             Binding::LambdaParameter(id, owner) => {
-                let var = answers.resolve_lambda_param_var(*id, *owner);
-                Some(Arc::new(TypeInfo::of_ty(
-                    answers.solver().expand_unwrap(var),
-                )))
+                let ty = answers.resolve_lambda_param_type(*id, *owner);
+                Some(Arc::new(TypeInfo::of_ty(ty)))
             }
             _ => None,
         }

@@ -735,13 +735,13 @@
   "aliases_recursive.py": [
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "`dict[str, complex | int]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
-      "description": "`dict[str, complex | int]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
+      "column": 26,
+      "concise_description": "`complex` is not assignable to dict value type `Json`",
+      "description": "`complex` is not assignable to dict value type `Json`",
       "line": 19,
       "name": "bad-assignment",
       "severity": "error",
-      "stop_column": 29,
+      "stop_column": 28,
       "stop_line": 19
     },
     {
@@ -779,35 +779,35 @@
     },
     {
       "code": -2,
-      "column": 24,
-      "concise_description": "`dict[str, list[int]]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
-      "description": "`dict[str, list[int]]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "column": 30,
+      "concise_description": "`list[int]` is not assignable to dict value type `RecursiveMapping`",
+      "description": "`list[int]` is not assignable to dict value type `RecursiveMapping`",
       "line": 50,
       "name": "bad-assignment",
       "severity": "error",
-      "stop_column": 34,
+      "stop_column": 33,
       "stop_line": 50
     },
     {
       "code": -2,
-      "column": 24,
-      "concise_description": "`dict[str, int | list[int] | str]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
-      "description": "`dict[str, int | list[int] | str]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "column": 48,
+      "concise_description": "`list[int]` is not assignable to dict value type `RecursiveMapping`",
+      "description": "`list[int]` is not assignable to dict value type `RecursiveMapping`",
       "line": 51,
       "name": "bad-assignment",
       "severity": "error",
-      "stop_column": 55,
+      "stop_column": 54,
       "stop_line": 51
     },
     {
       "code": -2,
-      "column": 24,
-      "concise_description": "`dict[str, dict[str, int | list[int] | str] | int | str]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
-      "description": "`dict[str, dict[str, int | list[int] | str] | int | str]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "column": 72,
+      "concise_description": "`list[int]` is not assignable to dict value type `RecursiveMapping`",
+      "description": "`list[int]` is not assignable to dict value type `RecursiveMapping`",
       "line": 52,
       "name": "bad-assignment",
       "severity": "error",
-      "stop_column": 83,
+      "stop_column": 81,
       "stop_line": 52
     },
     {

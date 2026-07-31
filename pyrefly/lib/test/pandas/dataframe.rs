@@ -97,6 +97,242 @@ fn add_pandas_init(env: &mut TestEnv) {
     );
 }
 
+/// A pandas stub whose `DataFrame` lives at the real qname `pandas.core.frame` and
+/// whose column-access methods return opaque types, so col-infer can pin that a pandas
+/// frame carries a Partial schema yet falls back to these stubs for every transform.
+fn env_with_pandas_frame_stubs() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "pandas.core.frame",
+        r#"
+class Series: ...
+class DataFrame:
+    columns: list[str]
+    def __init__(self, data: object = None, columns: object = None, dtype: object = None) -> None: ...
+    def __getitem__(self, key: object) -> Series: ...
+    def drop(self, labels: object = None, *, axis: int = 0) -> "DataFrame": ...
+    def rename(self, mapping: object = None, *, axis: int = 0) -> "DataFrame": ...
+    def filter(self, items: object = None, *, axis: int = 0) -> "DataFrame": ...
+"#,
+    );
+    env.add(
+        "pandas",
+        "from pandas.core.frame import DataFrame as DataFrame, Series as Series",
+    );
+    env
+}
+
+testcase!(
+    test_pandas_construct_partial_schema_with_trailing_marker,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame({"a": [1], "b": ["x"]}))  # E: revealed type: DataFrame[a: Int64, b: String, ...]
+"#,
+);
+
+testcase!(
+    test_pandas_widening_column,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame({"a": [2.0, 1]}))  # E: revealed type: DataFrame[a: Float64, ...]
+"#,
+);
+
+testcase!(
+    test_pandas_construct_from_data_keyword,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame(data={"a": [1], "b": ["x"]}))  # E: revealed type: DataFrame[a: Int64, b: String, ...]
+"#,
+);
+
+testcase!(
+    test_pandas_fallback_data_keyword_and_columns,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame(data={"a": [1]}, columns=["a"]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_fallback_data_keyword_and_dtype,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame(data={"a": [1]}, dtype="int64"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_mixed_column_falls_back_without_error,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+# Pandas coerces a mixed column instead of raising, so we drop the schema without the Polars error.
+reveal_type(pd.DataFrame({"a": [1, 2.0]}))  # E: revealed type: DataFrame
+reveal_type(pd.DataFrame({"a": [1, "s"]}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_temporal_column_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from datetime import date
+from typing import reveal_type
+# Temporal inference is Polars-only; pandas stores python `date` as `object`, which we do not model.
+reveal_type(pd.DataFrame({"a": [date(2020, 1, 1)]}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_none_column_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+# `None` inference is Polars-only; pandas coerces an int-with-`None` to `float64` and an all-null
+# column to `object`, neither of which we model, so the column falls back.
+reveal_type(pd.DataFrame({"a": [1, None]}))  # E: revealed type: DataFrame
+reveal_type(pd.DataFrame({"a": [None]}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_records_fall_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+# Record inference is Polars-only; pandas null-fills a missing key with NaN and its coercion rules
+# diverge, so a list-of-dicts falls back to the opaque frame.
+reveal_type(pd.DataFrame([{"a": 1}, {"a": 2}]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_unknown_column_read_delegates_without_error,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+df = pd.DataFrame({"a": [1]})
+reveal_type(df["missing"])  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_pandas_known_column_read_delegates,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+df = pd.DataFrame({"a": [1]})
+reveal_type(df["a"])  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_pandas_dynamic_key_unaffected,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+df = pd.DataFrame({"a": [1]})
+k = "missing"
+reveal_type(df[k])  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_pandas_list_subscript_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+df = pd.DataFrame({"a": [1]})
+reveal_type(df[["a", "missing"]])  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_pandas_filter_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+# Pandas `filter` selects columns, unlike Polars, so the row-transform must not fire here.
+df = pd.DataFrame({"a": [1]})
+reveal_type(df.filter(items=["a"]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_vstack_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+# Pandas has no `vstack`, so the row-transform must not fire and swallow the real error.
+df = pd.DataFrame({"a": [1]})
+df.vstack(df)  # E: Object of class `DataFrame` has no attribute `vstack`
+"#,
+);
+
+testcase!(
+    test_pandas_hstack_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+# Pandas has no `hstack`, so the column append must not fire and swallow the real error.
+df = pd.DataFrame({"a": [1]})
+df.hstack(df)  # E: Object of class `DataFrame` has no attribute `hstack`
+"#,
+);
+
+testcase!(
+    test_pandas_drop_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+df = pd.DataFrame({"a": [1]})
+reveal_type(df.drop("missing"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_rename_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+df = pd.DataFrame({"a": [1]})
+reveal_type(df.rename({"missing": "z"}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_subclass_falls_back,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+class MyFrame(pd.DataFrame): ...
+reveal_type(MyFrame({"a": [1]}))  # E: revealed type: MyFrame
+"#,
+);
+
 testcase!(
     test_dataframe_list_str_columns,
     env_with_fixed_pandas_stubs(),

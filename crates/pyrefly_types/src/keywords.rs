@@ -158,6 +158,8 @@ pub struct DataclassFieldKeywords {
     pub le: Option<Type>,
     /// Whether we should strictly evaluate the type of the field
     pub strict: Option<bool>,
+    /// Whether this individual field is frozen.
+    pub frozen: Option<bool>,
     /// If a converter callable is passed in, its first positional parameter
     pub converter_param: Option<Type>,
     /// Per-field attrs `on_setattr`, which overrides the class-level default. `None` = not set,
@@ -173,6 +175,7 @@ impl DataclassFieldKeywords {
     pub const FACTORY: Name = Name::new_static("factory");
     pub const KW_ONLY: Name = Name::new_static("kw_only");
     pub const ALIAS: Name = Name::new_static("alias");
+    pub const FROZEN: Name = Name::new_static("frozen");
     /// We extract and store only the first positional parameter to the converter callable.
     pub const CONVERTER: Name = Name::new_static("converter");
     /// attrs hook controlling assignment; `setters.frozen` makes the attribute read-only.
@@ -191,6 +194,7 @@ impl DataclassFieldKeywords {
             le: None,
             converter_param: None,
             strict: None,
+            frozen: None,
             attrs_setattr_frozen: None,
         }
     }

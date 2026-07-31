@@ -33,7 +33,6 @@ use crate::alt::class::enums::VALUE_PROP;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
-use crate::binding::binding::KeyExport;
 use crate::types::simplify::unions;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
@@ -215,15 +214,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     // Get ManyRelatedManager class from django stubs
     fn get_manager_type(&self, target_model_type: Type) -> Option<Type> {
-        let django_related_module = ModuleName::django_models_fields_related_descriptors();
-        if !self
-            .exports
-            .export_exists(django_related_module, &MANYRELATEDMANAGER)
-        {
-            return None;
-        }
-        let manager_class_type =
-            self.get_from_export(django_related_module, None, &KeyExport(MANYRELATEDMANAGER));
+        let manager_class_type = self.try_get_from_export(
+            ModuleName::django_models_fields_related_descriptors(),
+            MANYRELATEDMANAGER,
+        )?;
 
         // Extract the Class from ClassDef
         let manager_class = match manager_class_type.as_ref() {
@@ -232,8 +226,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         // Get Model class for the through parameter
-        let model_class =
-            self.get_from_export(ModuleName::django_models(), None, &KeyExport(MODEL));
+        let model_class = self.try_get_from_export(ModuleName::django_models(), MODEL)?;
 
         let model_instance_type = self.class_def_to_instance_type(&model_class);
 
@@ -253,8 +246,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn resolve_target(&self, to_expr: &Expr, class: &Class) -> Option<Type> {
         match to_expr {
-            // Use expr_infer to resolve the name in the current scope
-            Expr::Name(_) => {
+            // Use expr_infer to resolve the model in the current scope.
+            Expr::Name(_) | Expr::Attribute(_) => {
                 let model_type = self.expr_infer(to_expr, &self.error_swallower());
                 Some(self.class_def_to_instance_type(&model_type))
             }
@@ -262,18 +255,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if value.to_str() == "self" {
                     Some(self.instantiate(class))
                 } else {
-                    // Handle forward reference - look up the model by name in the current module
-                    // This requires that the model class is imported or defined in the current module
-                    let class_name = Name::new(value.to_str());
+                    // Django string references may include an app label, but the imported model is
+                    // still looked up by its class name in the current module.
+                    let target = value.to_str();
+                    let class_name = Name::new(
+                        target
+                            .rsplit_once('.')
+                            .map_or(target, |(_, model_name)| model_name),
+                    );
                     let module_name = class.module_name();
 
-                    if self.exports.export_exists(module_name, &class_name) {
-                        let model_type =
-                            self.get_from_export(module_name, None, &KeyExport(class_name));
-                        Some(self.class_def_to_instance_type(&model_type))
-                    } else {
-                        None
-                    }
+                    self.try_get_from_export(module_name, class_name)
+                        .map(|model_type| self.class_def_to_instance_type(&model_type))
                 }
             }
             // we may have to extend this function to handle different kinds of fields in the future
@@ -439,9 +432,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some((pk_type, true))
         } else {
             // No custom pk, use default AutoField type
-            let auto_field_export = KeyExport(AUTO_FIELD);
             let auto_field_type =
-                self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
+                self.try_get_from_export(ModuleName::django_models_fields(), AUTO_FIELD)?;
             self.get_django_field_type(&auto_field_type, model, None, None)
                 .map(|ty| (ty, false))
         }

@@ -25,6 +25,7 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::class::Class;
 use pyrefly_types::keywords::TypeMap;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::types::TParams;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
@@ -35,7 +36,6 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::types::callable::FuncMetadata;
@@ -52,8 +52,8 @@ pub struct UndecoratedFunction {
     pub tparams: Arc<TParams>,
     pub params: Vec<Param>,
     pub paramspec: Option<Quantified>,
-    pub stub_or_impl: FunctionStubOrImpl,
     pub defining_cls: Option<Class>,
+    pub type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
     /// Maps parameter names to their resolved types - used to connect
     /// FunctionParameter and KeyUndecoratedFunction.
     pub resolved_param_types: SmallMap<Name, Type>,
@@ -125,8 +125,8 @@ impl UndecoratedFunction {
             tparams: Arc::new(TParams::default()),
             params: Vec::new(),
             paramspec: None,
-            stub_or_impl: FunctionStubOrImpl::Stub,
             defining_cls: None,
+            type_shape_dsl_def: None,
             resolved_param_types: SmallMap::new(),
         }
     }
@@ -168,14 +168,6 @@ impl DecoratedFunction {
 
     pub fn defining_cls(&self) -> Option<&Class> {
         self.undecorated.defining_cls.as_ref()
-    }
-
-    pub fn is_stub(&self) -> bool {
-        self.undecorated.stub_or_impl == FunctionStubOrImpl::Stub
-    }
-
-    pub fn is_impl(&self) -> bool {
-        self.undecorated.stub_or_impl == FunctionStubOrImpl::Impl
     }
 
     pub fn is_overload(&self) -> bool {

@@ -13,6 +13,7 @@ use compact_str::CompactString;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::qname::QName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::uniques::Unique;
@@ -189,6 +190,7 @@ impl<T> TypeEq for PhantomData<T> {}
 impl TypeEq for Name {}
 impl TypeEq for ModuleName {}
 impl TypeEq for ModulePath {}
+impl TypeEq for ModuleStyle {}
 impl TypeEq for TextRange {}
 impl TypeEq for ShortIdentifier {}
 

@@ -11,6 +11,7 @@ use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::InlayHintConfig;
 use crate::state::require::Require;
 use crate::test::util::code_frame_of_source_at_position;
+use crate::test::util::mk_multi_file_state;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> String {
@@ -39,6 +40,33 @@ fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> Strin
         report.push('\n');
     }
     report
+}
+
+#[test]
+fn pattern_capture_hint_not_insertable() {
+    // A capture pattern cannot be annotated inline, so its inferred-type hint is
+    // shown but must be marked non-insertable.
+    let code = r#"
+def f(xs: list[int]) -> None:
+    match xs:
+        case [head]:
+            print(head)
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
+    let handle = handles.get("main").unwrap();
+    let hints = state
+        .transaction()
+        .inlay_hints(handle, InlayHintConfig::default())
+        .unwrap();
+    let head_hint = hints
+        .iter()
+        .find(|h| h.label_parts.iter().any(|(text, _)| text.contains("int")))
+        .expect("expected an inferred-type hint for the `head` capture");
+    assert!(
+        !head_hint.insertable,
+        "capture inlay hints must not be insertable"
+    );
 }
 
 #[test]
@@ -88,6 +116,52 @@ y = list([1, 2, 3])
         .trim(),
         generate_inlay_hint_report(code, Default::default()).trim()
     );
+}
+
+#[test]
+fn test_new_type_inlay_hint() {
+    let code = r#"from typing import NewType
+
+N = NewType("N", int)
+x = N
+"#;
+    assert_eq!(
+        r#"
+# main.py
+4 | x = N
+     ^ inlay-hint: `: (_x: int) -> N`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
+    let handle = handles.get("main").unwrap();
+    let hints = state
+        .transaction()
+        .inlay_hints(handle, Default::default())
+        .unwrap();
+    assert_eq!(hints.len(), 1);
+    assert!(!hints[0].insertable);
+}
+
+/// Test that we handle invalid `NewType`s gracefully when generating inlay hints.
+#[test]
+fn test_invalid_new_type_inlay_hint() {
+    let code = r#"from typing import NewType
+
+Bad = NewType("Bad", int | str)
+x = Bad
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let hints = state
+        .transaction()
+        .inlay_hints(handle, Default::default())
+        .unwrap();
+    assert_eq!(hints.len(), 1);
 }
 
 #[test]
@@ -678,4 +752,37 @@ class MyClass:
         .trim(),
         generate_inlay_hint_report(code, Default::default()).trim()
     );
+}
+
+#[test]
+fn test_class_attribute_new_type_inlay_hint() {
+    let code = r#"from typing import NewType
+
+N = NewType("N", int)
+
+class MyClass:
+    def __init__(self) -> None:
+        self.x = N
+"#;
+    // NewType attributes show the constructor signature, not the invalid `type[N]`.
+    assert_eq!(
+        r#"
+# main.py
+7 |         self.x = N
+                  ^ inlay-hint: `: (_x: int) -> N`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
+    let handle = handles.get("main").unwrap();
+    let hints = state
+        .transaction()
+        .inlay_hints(handle, Default::default())
+        .unwrap();
+    assert_eq!(hints.len(), 1);
+    // NewType is a callable alias, so `type[N]` is not a valid annotation to insert.
+    assert!(!hints[0].insertable);
 }
