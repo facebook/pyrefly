@@ -72,6 +72,7 @@ use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::pattern::pattern_is_irrefutable_for_subject;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
@@ -1164,7 +1165,10 @@ fn function_last_expressions<'a>(
                 let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
                     f(sys_info, &case.body, res)?;
-                    if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
+                    // Must match the binding step's exhaustiveness judgment in
+                    // `stmt_match`; otherwise the `Key::Exhaustive(Match, ...)` promised
+                    // below is never inserted and solve time panics.
+                    if pattern_is_irrefutable_for_subject(&case.pattern, &x.subject) {
                         syntactically_exhaustive = true;
                         break;
                     }

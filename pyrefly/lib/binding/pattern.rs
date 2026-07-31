@@ -223,32 +223,6 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    /// Whether `pattern` always matches `match_subject`. Beyond ruff's syntactic
-    /// `is_irrefutable`, a sequence pattern over a fixed-arity tuple subject (e.g.
-    /// `case _, _` for `match x, y`) is irrefutable when its arity matches and every
-    /// element is irrefutable: the subject is always a tuple of exactly that length, so
-    /// the pattern is a catch-all.
-    fn pattern_is_irrefutable_for_subject(pattern: &Pattern, match_subject: &MatchSubject) -> bool {
-        if pattern.is_wildcard() || pattern.is_irrefutable() {
-            return true;
-        }
-        if let (Pattern::MatchSequence(seq), MatchSubject::Tuple(subjects)) =
-            (pattern, match_subject)
-        {
-            let has_star = seq
-                .patterns
-                .iter()
-                .any(|p| matches!(p, Pattern::MatchStar(_)));
-            return !has_star
-                && seq.patterns.len() == subjects.len()
-                && seq
-                    .patterns
-                    .iter()
-                    .all(|p| p.is_wildcard() || p.is_irrefutable());
-        }
-        false
-    }
-
     fn accumulate_class_pattern_subpattern(
         &mut self,
         match_subject: &MatchSubject,
@@ -921,8 +895,7 @@ impl<'a> BindingsBuilder<'a> {
                 ..
             } = case;
             self.start_branch();
-            let case_is_irrefutable =
-                Self::pattern_is_irrefutable_for_subject(&pattern, &match_subject);
+            let case_is_irrefutable = pattern_is_irrefutable_for_subject(&pattern, &subject_expr);
             if case_is_irrefutable {
                 exhaustive = true;
             }
@@ -1097,4 +1070,41 @@ impl<'a> BindingsBuilder<'a> {
             self.finish_non_exhaustive_fork(&negated_prev_ops, Some(exhaustive_key));
         }
     }
+}
+
+/// Whether `pattern` always matches a `match` whose subject expression is `subject`.
+/// Beyond ruff's syntactic `is_irrefutable`, a sequence pattern over a fixed-arity
+/// tuple subject (e.g. `case _, _` for `match x, y`) is irrefutable when its arity
+/// matches and every element is irrefutable: the subject is always a tuple of exactly
+/// that length, so the pattern is a catch-all.
+///
+/// This is the single source of truth for match-case irrefutability. It must be used
+/// by every "is this match exhaustive?" judgment (binding-step exhaustive-fork handling
+/// in `stmt_match` and the implicit-return scan in `function.rs`); if the judgments
+/// diverge, one side promises a `Key::Exhaustive(Match, ...)` binding the other never
+/// inserts, panicking at solve time with "key lacking binding".
+pub fn pattern_is_irrefutable_for_subject(pattern: &Pattern, subject: &Expr) -> bool {
+    if pattern.is_wildcard() || pattern.is_irrefutable() {
+        return true;
+    }
+    // A fixed-arity tuple subject `match x, y:` has no starred elements (see the
+    // `MatchSubject::Tuple` construction in `stmt_match`).
+    if let (Pattern::MatchSequence(seq), Expr::Tuple(subject_tuple)) = (pattern, subject)
+        && subject_tuple
+            .elts
+            .iter()
+            .all(|elt| !matches!(elt, Expr::Starred(_)))
+    {
+        let has_star = seq
+            .patterns
+            .iter()
+            .any(|p| matches!(p, Pattern::MatchStar(_)));
+        return !has_star
+            && seq.patterns.len() == subject_tuple.elts.len()
+            && seq
+                .patterns
+                .iter()
+                .all(|p| p.is_wildcard() || p.is_irrefutable());
+    }
+    false
 }

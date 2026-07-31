@@ -1782,6 +1782,27 @@ def f(x: int | None, y: int | None) -> None:
 "#,
 );
 
+// The final `case (begin, end)` is an all-capture sequence over a fixed-arity tuple
+// subject, so it is a catch-all: the match is exhaustive and the function always
+// returns. The binding step and the implicit-return scan must agree on this, or the
+// latter promises a `Key::Exhaustive(Match, ...)` binding the former never inserts,
+// panicking at solve time with "key lacking binding".
+testcase!(
+    test_match_tuple_capture_catch_all_is_exhaustive_return,
+    r#"
+def f(begin: int | None, end: int | None) -> int:
+    match (begin, end):
+        case (None, None):
+            return 0
+        case (None, e):
+            return 1
+        case (b, None):
+            return 2
+        case (b, e):
+            return 3
+"#,
+);
+
 testcase!(
     test_match_starred_tuple_subject_is_not_fixed_arity,
     r#"
