@@ -610,6 +610,19 @@ append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` wit
 );
 
 testcase!(
+    test_legacy_typevar_complex_forward_ref_ranges,
+    TestEnv::one("lib", "from typing import Literal"),
+    r#"
+import lib
+
+class C:
+    def f(self, x: "lib.Literal['\\n']"): ...
+    def g(self, x: "lib.Literal['\\r']"): ...
+    def h(self, x: "tuple[lib.Literal['\\n'], lib.Literal['\\r']]"): ...
+"#,
+);
+
+testcase!(
     test_typevar_default_is_typevar_legacy,
     r#"
 from typing import Generic, TypeVar, assert_type

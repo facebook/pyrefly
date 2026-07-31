@@ -22,13 +22,17 @@ use crate::export::special::SpecialExport;
 use crate::types::class::AttrsFieldSpecifier;
 use crate::types::class::AttrsFieldSpecifierKind;
 
-/// `@<field>.default` / `@<field>.validator` methods found in a class body.
+/// `@<field>.default` / `@<field>.validator` / `@<field>.converter` methods found in a class body.
 #[derive(Default)]
 pub(crate) struct AttrsDecoratorMethods {
     defaults: SmallMap<Name, TextRange>,
     duplicate_defaults: SmallSet<Name>,
+    /// attrs `pipe`s repeated `@<field>.converter` methods, so only the first-defined one's input
+    /// type reaches `__init__`; we keep just that first range per field.
+    converters: SmallMap<Name, TextRange>,
     bad_default_signatures: Vec<BadAttrsMethod>,
     bad_validator_signatures: Vec<BadAttrsMethod>,
+    bad_converter_signatures: Vec<BadAttrsMethod>,
 }
 
 /// Why attrs cannot call a `@<field>.default` / `@<field>.validator` method, given that it
@@ -138,6 +142,28 @@ pub(crate) fn collect_attrs_decorator_methods(body: &[Stmt], out: &mut AttrsDeco
                             };
                             if let Some(reason) = reason {
                                 out.bad_validator_signatures.push(BadAttrsMethod {
+                                    name: name.id.clone(),
+                                    range: func_def.name.range,
+                                    reason,
+                                });
+                            }
+                        }
+                        // attrs invokes the converter as `converter(self, field, value)`.
+                        "converter" => {
+                            out.converters
+                                .entry(name.id.clone())
+                                .or_insert(func_def.name.range);
+                            let reason = if arity.total_positional < 3 && !arity.has_varargs {
+                                Some(AttrsMethodSignatureError::TooFewParameters)
+                            } else if arity.required_positional > 3 {
+                                Some(AttrsMethodSignatureError::TooManyRequiredParameters)
+                            } else if arity.has_required_kwonly {
+                                Some(AttrsMethodSignatureError::RequiredKeywordOnly)
+                            } else {
+                                None
+                            };
+                            if let Some(reason) = reason {
+                                out.bad_converter_signatures.push(BadAttrsMethod {
                                     name: name.id.clone(),
                                     range: func_def.name.range,
                                     reason,
@@ -288,6 +314,24 @@ impl<'a> BindingsBuilder<'a> {
                 ),
             );
         }
+        for BadAttrsMethod {
+            range: method_range,
+            reason,
+            ..
+        } in attrs_decorators
+            .bad_converter_signatures
+            .iter()
+            .filter(|m| &m.name == field_name)
+        {
+            self.error(
+                *method_range,
+                ErrorKind::BadClassDefinition,
+                format!(
+                    "The `@{field_name}.converter` method must accept `(self, field, value)`, but {}",
+                    reason.describe()
+                ),
+            );
+        }
         Some(AttrsFieldSpecifier {
             kind,
             default_is_nothing,
@@ -300,6 +344,7 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 attrs_decorators.defaults.get(field_name).copied()
             },
+            converter_decorator_method_range: attrs_decorators.converters.get(field_name).copied(),
         })
     }
 }

@@ -49,6 +49,17 @@ class C(B, A):
 );
 
 testcase!(
+    test_class_super_with_self_type,
+    r#"
+class Base:
+    def __init_subclass__(cls) -> None:
+        super(cls, cls)
+class Child(Base):
+    pass
+    "#,
+);
+
+testcase!(
     bug = "Demonstration of a limitation of our super() implementation",
     test_inherit_method_with_super,
     r#"
