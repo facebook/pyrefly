@@ -1139,32 +1139,49 @@ if E.A:  # E: Enum literal `E.A` used as condition
 while E.B:  # E: Enum literal `E.B` used as condition
     ...
 [x for x in range(42) if E.C]  # E: Enum literal `E.C` used as condition
+
+def f(e: E):
+    if e:  # E: Instance of `E` used as condition
+        pass
     "#,
 );
 
 testcase!(
     test_redundant_condition_instance_always_truthy,
     r#"
+from typing import final
+
+@final
 class NoBool:
     pass
 
+@final
 class HasBool:
     def __bool__(self) -> bool: ...
 
+@final
 class HasLen:
     def __len__(self) -> int: ...
 
-class InheritsHasBool(HasBool):
+class HasBoolExtendable:
+    def __bool__(self) -> bool: ...
+
+class HasLenExtendable:
+    def __len__(self) -> int: ...
+
+@final
+class InheritsHasBool(HasBoolExtendable):
     pass
 
-class InheritsHasLen(HasLen):
+@final
+class InheritsHasLen(HasLenExtendable):
     pass
 
 def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen) -> None:
     if x:  # E: Instance of `NoBool` used as condition
         ...
     while x:  # E: Instance of `NoBool` used as condition
-        ...
+        break
     [i for i in range(10) if x]  # E: Instance of `NoBool` used as condition
     if y:
         ...
@@ -1180,10 +1197,11 @@ def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen
 testcase!(
     test_redundant_condition_no_false_positives_for_abstract_types,
     r#"
-from typing import Hashable, Iterable
+from typing import Hashable, Iterable, final
 from collections.abc import Sized
 import abc
 
+@final
 class MyABC(abc.ABC):
     pass
 
@@ -1193,10 +1211,15 @@ class MyABC(abc.ABC):
 class MyMixedMeta(abc.ABCMeta):
     pass
 
+@final
 class WithMixedMeta(metaclass=MyMixedMeta):
     pass
 
-class WithMixedMetaSub(WithMixedMeta):
+class WithMixedMetaExtendable(metaclass=MyMixedMeta):
+    pass
+
+@final
+class WithMixedMetaSub(WithMixedMetaExtendable):
     pass
 
 def test(
@@ -1233,16 +1256,21 @@ testcase!(
 from dataclasses import dataclass
 from datetime import datetime
 import asyncio
+from typing import final
 
+@final
 class Descriptor:
     def __get__(self, obj, objtype=None) -> int: ...
 
+@final
 class HasGetattr:
     def __getattr__(self, name: str) -> object: ...
 
+@final
 class HasGetattribute:
     def __getattribute__(self, name: str) -> object: ...
 
+@final
 @dataclass
 class MyData:
     x: int
@@ -1277,6 +1305,18 @@ def test(
         ...
     if lk:
         ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_not_redundant_for_nonfinal_class,
+    r#"
+class A:
+    pass
+def f(a: A):
+    # This condition is not redundant because `a` could be a falsy instance of a subclass of `A`
+    if a:
+        pass
     "#,
 );
 

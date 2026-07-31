@@ -4568,9 +4568,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // containers and `if obj:` is frequently a defensive pattern; the
                 // warning would create excessive noise for little benefit.
                 let is_dataclass = metadata.dataclass_metadata().is_some();
+                // Skip warning for non-final classes. We might have an instance of a subclass,
+                // which could define `__bool__` or `__len__`.
+                let is_final = self.is_final(cls);
                 if !is_abstract
                     && !is_from_stub
                     && !is_dataclass
+                    && is_final
                     && self.class_instances_always_truthy(cls)
                 {
                     Some(ConditionRedundantReason::InstanceAlwaysTruthy(
