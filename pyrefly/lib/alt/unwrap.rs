@@ -339,7 +339,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // An unresolved generic return hint must be inferred from the lambda body. Relating a
         // fresh return variable to it here can prematurely solve the generic before the body has
         // an actual type.
-        let hinted_return = hint.callable_return_type(self.heap);
+        let hinted_return = hint.callable_return_type(self.heap).map(|mut ty| {
+            self.solver().expand_with_bounds(&mut ty);
+            ty
+        });
         let return_var = match &hinted_return {
             Some(ty) if !ty.collect_maybe_placeholder_vars().is_empty() => None,
             _ => Some(self.fresh_var()),
