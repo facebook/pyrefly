@@ -1958,6 +1958,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 return Some(true);
             }
+        } else if let Type::ClassType(cls) = ty {
+            let cls = cls.class_object();
+            if self.is_final(cls) && self.class_instances_always_truthy(cls) {
+                return Some(true);
+            }
         }
         ty.as_bool().or_else(|| {
             // If the object defines `__bool__`, we can check if it returns a statically known value

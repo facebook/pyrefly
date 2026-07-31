@@ -175,7 +175,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn is_final(&self, class: &Class) -> bool {
+    pub fn is_final(&self, class: &Class) -> bool {
         self.get_metadata_for_class(class).is_final()
             || (self.get_enum_from_class(class).is_some()
                 && !self.get_enum_members(class).is_empty())
