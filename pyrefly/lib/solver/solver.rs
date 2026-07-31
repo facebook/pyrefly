@@ -196,6 +196,31 @@ mod tests {
     }
 
     #[test]
+    fn call_context_defers_quantified_only_to_a_real_boundary() {
+        let uniques = UniqueFactory::new();
+        let outside_var = Var::new(&uniques);
+        let outside_handle = CallContext::outside()
+            .with_argument_side(ArgumentSide::Got)
+            .defer_quantified(QuantifiedHandle(vec![outside_var]))
+            .expect_err("an argument side does not own quantified vars");
+
+        let boundary = CallBoundary::new();
+        boundary
+            .context()
+            .defer_quantified(outside_handle)
+            .expect("a context backed by a boundary owns quantified vars");
+        let boundary_var = Var::new(&uniques);
+        boundary.defer_quantified(QuantifiedHandle(vec![boundary_var]));
+
+        let (handles, captures) = boundary.into_parts();
+        assert_eq!(handles.len(), 2);
+        assert_eq!(handles[0].vars(), &[outside_var]);
+        assert_eq!(handles[1].vars(), &[boundary_var]);
+        assert!(captures.overload.is_empty());
+        assert!(captures.generic.is_empty());
+    }
+
+    #[test]
     fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
         let solver = Solver::new(false, true, false, false, false, false);
         let uniques = UniqueFactory::new();
@@ -865,6 +890,8 @@ impl Display for Variable {
     }
 }
 
+/// A linear obligation to finalize these created Var IDs. Handles may contain
+/// Vars that later share union-find roots; they do not exclusively own roots.
 #[derive(Debug)]
 #[must_use = "Quantified vars must be finalized. Pass to finish_quantified."]
 pub struct QuantifiedHandle(Vec<Var>);
@@ -2509,19 +2536,17 @@ impl Solver {
     /// Finish every quantified set registered with a call boundary.
     pub(crate) fn finish_call_boundary<Ans: LookupAnswer>(
         &self,
-        vs: QuantifiedHandle,
         infer_with_first_use: bool,
         type_order: TypeOrder<Ans>,
         boundary: CallBoundary,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        let (tracked_fresh_vars, captures) = boundary.into_parts();
+        let (handles, captures) = boundary.into_parts();
         let overload_capture_vars = captures
             .overload
             .values()
             .flat_map(|branch_captures| branch_captures.iter())
             .flat_map(|capture| capture.values.keys().copied());
-        let mut roots: SmallSet<Var> = vs.0.into_iter().collect();
-        roots.extend(tracked_fresh_vars.0);
+        let mut roots: SmallSet<Var> = handles.into_iter().flat_map(|handle| handle.0).collect();
         // Overload pruning must include solved vars even if they already
         // collapsed to `Answer` before boundary finishing.
         roots.extend(overload_capture_vars);
@@ -3552,7 +3577,7 @@ impl ResidualWitnessContext {
 
 #[derive(Debug, Default)]
 struct CallBoundaryState {
-    deferred_quantified_vars: SmallSet<Var>,
+    quantified_handles: Vec<QuantifiedHandle>,
     witness_captures: WitnessCaptures,
 }
 
@@ -3584,11 +3609,10 @@ impl CallBoundary {
             .expect("a borrowed call boundary cannot have been consumed")
     }
 
-    fn register_fresh_quantified_vars(&self, vars: &[Var]) {
-        self.state()
-            .lock()
-            .deferred_quantified_vars
-            .extend(vars.iter().copied());
+    pub(crate) fn defer_quantified(&self, handle: QuantifiedHandle) {
+        if !handle.0.is_empty() {
+            self.state().lock().quantified_handles.push(handle);
+        }
     }
 
     fn persist_overload_witness_captures(
@@ -3637,16 +3661,13 @@ impl CallBoundary {
             .collect()
     }
 
-    fn into_parts(mut self) -> (QuantifiedHandle, WitnessCaptures) {
+    fn into_parts(mut self) -> (Vec<QuantifiedHandle>, WitnessCaptures) {
         let state = self
             .state
             .take()
             .expect("a call boundary can only be consumed once")
             .into_inner();
-        (
-            QuantifiedHandle(state.deferred_quantified_vars.into_iter().collect()),
-            state.witness_captures,
-        )
+        (state.quantified_handles, state.witness_captures)
     }
 }
 
@@ -3675,9 +3696,15 @@ impl<'subset> CallContext<'subset> {
         Self::default()
     }
 
-    pub(crate) fn register_fresh_quantified_vars(&self, vars: &[Var]) {
+    pub(crate) fn defer_quantified(
+        &self,
+        handle: QuantifiedHandle,
+    ) -> Result<(), QuantifiedHandle> {
         if let Some(boundary) = &self.boundary {
-            boundary.register_fresh_quantified_vars(vars);
+            boundary.defer_quantified(handle);
+            Ok(())
+        } else {
+            Err(handle)
         }
     }
 

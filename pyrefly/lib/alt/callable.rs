@@ -6,7 +6,6 @@
  */
 
 use std::collections::HashMap;
-use std::mem;
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
@@ -725,7 +724,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // See test::paramspec::test_paramspec_twice for an example of this.
         mut paramspec: Option<Var>,
         self_arg: Option<CallArg>,
-        mut self_qs: Option<QuantifiedHandle>,
+        self_qs: &mut Option<QuantifiedHandle>,
         args: &[CallArg],
         keywords: &[CallKeyword],
         arguments_range: TextRange,
@@ -957,7 +956,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Contrast this to how type parameters usually behave:
             //     def f[T](x: T, other: T): ...
             //     f(A(), 0)  # T = A | int
-            if let Some(self_qs) = mem::take(&mut self_qs) {
+            if let Some(self_qs) = self_qs.take() {
                 let specialization_errors =
                     self.finish_quantified(self_qs, self.solver().infer_with_first_use);
                 if let Err(errors) = specialization_errors {
@@ -1748,8 +1747,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             (QuantifiedHandle::empty(), callable)
         };
-        call_context.register_fresh_quantified_vars(callable_qs.vars());
-        let (self_qs, remaining_callable_qs) = if self_obj.is_some()
+        let (mut self_qs, remaining_callable_qs) = if self_obj.is_some()
             && let Some(first_param) = callable.get_first_param()
             // TODO(https://github.com/facebook/pyrefly/issues/105): handle nested vars
             && matches!(first_param, Type::Var(_))
@@ -1762,9 +1760,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             (None, callable_qs)
         };
-        let ctor_qs = if let Some(targs) = ctor_targs.as_mut() {
+        call_boundary.defer_quantified(remaining_callable_qs);
+        if let Some(targs) = ctor_targs.as_mut() {
             let qs = self.solver().freshen_class_targs(targs, self.uniques);
-            call_context.register_fresh_quantified_vars(qs.vars());
             let mp = targs.substitution_map();
             callable.params.visit_mut(&mut |t| t.subst_mut(&mp));
             if let Some(obj) = self_obj.as_mut() {
@@ -1778,10 +1776,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self_obj = Some((*obj).clone().subst(&mp));
                 args = rest;
             }
-            qs
-        } else {
-            QuantifiedHandle::empty()
-        };
+            call_boundary.defer_quantified(qs);
+        }
         self.constrain_forwarded_overload_return(ForwardedOverloadCall {
             params: &callable.params,
             has_self: self_obj.is_some(),
@@ -1796,7 +1792,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &params,
                 None,
                 self_arg,
-                self_qs,
+                &mut self_qs,
                 args,
                 keywords,
                 arguments_range,
@@ -1821,7 +1817,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &params.prepend_types(&concatenate),
                         None,
                         self_arg,
-                        self_qs,
+                        &mut self_qs,
                         args,
                         keywords,
                         arguments_range,
@@ -1845,7 +1841,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                         Some(var),
                         self_arg,
-                        self_qs,
+                        &mut self_qs,
                         args,
                         keywords,
                         arguments_range,
@@ -1871,7 +1867,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &ParamList::new_types(concatenate.into_vec()),
                                 None,
                                 self_arg,
-                                self_qs,
+                                &mut self_qs,
                                 args,
                                 keywords,
                                 arguments_range,
@@ -1900,22 +1896,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         };
+        if let Some(self_qs) = self_qs {
+            call_boundary.defer_quantified(self_qs);
+        }
         if let Some(targs) = ctor_targs {
             let residual_vars = call_context.captured_vars();
             self.solver().generalize_class_targs(targs, &residual_vars);
         }
-        let mut errors = self
+        let errors = self
             .solver()
             .finish_call_boundary(
-                remaining_callable_qs,
                 self.solver().infer_with_first_use,
                 self.type_order(),
                 call_boundary,
             )
             .map_or_else(|e| e.to_vec(), |_| Vec::new());
-        if let Err(e) = self.finish_quantified(ctor_qs, self.solver().infer_with_first_use) {
-            errors.extend(e);
-        }
 
         // Apply meta-shape inference if bound args were collected
         let ret = if let Some(meta_shape_func) = meta_shape_func

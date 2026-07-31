@@ -1617,22 +1617,22 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     }
 
     fn is_subset_forall(&mut self, got: FreshForall, want: &Type) -> Result<(), SubsetError> {
-        self.active_call_context
-            .register_fresh_quantified_vars(got.handle.vars());
+        let FreshForall {
+            handle,
+            ty,
+            witness,
+        } = got;
         let (result, mut maybe_witness) = self.with_active_call_context(
             self.active_call_context
                 .clone()
-                .with_residual_witness(got.witness),
+                .with_residual_witness(witness),
             |me| {
                 (
-                    me.is_subset_eq(&got.ty, want),
+                    me.is_subset_eq(&ty, want),
                     me.active_call_context.take_residual_witness(),
                 )
             },
         );
-        // Either defer finishing to the active
-        // call boundary (when inside call analysis) or finish eagerly
-        // for ad-hoc subset checks outside calls.
         let in_call_analysis = !matches!(
             self.active_call_context.argument_side(),
             ArgumentSide::NotAnalyzingACall
@@ -1646,23 +1646,21 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
             self.active_call_context.record_generic_residuals(witness);
         }
-        if in_call_analysis {
-            result
-        } else {
-            // Even when subset checking fails, finish the fresh vars
-            // to avoid leaking Quantified placeholders in ad-hoc paths.
-            let finish_result = self
-                .solver
-                .finish_quantified(
-                    got.handle,
-                    self.solver.infer_with_first_use,
-                    self.type_order,
-                )
-                .map_err(SubsetError::TypeVarSpecialization);
-            match result {
-                Ok(()) => finish_result,
-                Err(e) => Err(e),
+        let handle = if in_call_analysis {
+            match self.active_call_context.defer_quantified(handle) {
+                Ok(()) => return result,
+                Err(handle) => handle,
             }
+        } else {
+            handle
+        };
+        let finish_result = self
+            .solver
+            .finish_quantified(handle, self.solver.infer_with_first_use, self.type_order)
+            .map_err(SubsetError::TypeVarSpecialization);
+        match result {
+            Ok(()) => finish_result,
+            Err(e) => Err(e),
         }
     }
 
