@@ -175,12 +175,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn is_final(&self, class: &Class) -> bool {
-        self.get_metadata_for_class(class).is_final()
-            || (self.get_enum_from_class(class).is_some()
-                && !self.get_enum_members(class).is_empty())
-    }
-
     fn intersect_impl(&self, left: &Type, right: &Type, fallback: IntersectFallback) -> Type {
         if self.is_subset_eq(right, left) {
             if left.is_toplevel_callable()
@@ -249,12 +243,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             if let Type::ClassType(left_cls) = left
                 && let Type::ClassType(right_cls) = right
-                && (self.is_final(left_cls.class_object())
-                    || self.is_final(right_cls.class_object()))
+                && (!self.is_subclassable(left_cls.class_object())
+                    || !self.is_subclassable(right_cls.class_object()))
             {
                 // The only way for `left & right` to exist is if it is an instance of a class that
                 // multiply inherits from both `left` and `right`'s classes. But at least one of
-                // the classes is final, so such a class does not exist.
+                // the classes cannot be subclassed, so such a class does not exist.
                 self.heap.mk_never()
             } else {
                 let left_base = self.disjoint_base(left);
@@ -812,9 +806,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// because otherwise X could still be a subclass of Y.
     fn narrow_type_not_eq(&self, left: &Type, right_expr: &Expr, errors: &ErrorCollector) -> Type {
         let right = self.expr_infer(right_expr, errors);
-        // Only narrow if the RHS is a final class type (e.g., `type(x) != bool`)
+        // Only narrow if the RHS is a non-subclassable class type (e.g., `type(x) != bool`)
         if let Type::ClassDef(cls) = &right
-            && self.is_final(cls)
+            && !self.is_subclassable(cls)
         {
             self.distribute_over_union(left, |l| {
                 if let Some((tparams, unwrapped)) = self.unwrap_class_info_target(l, &right) {
@@ -864,9 +858,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Type::Type(f) = &t
                         && let Type::ClassType(cls) = &**f
                     {
-                        // If `C` is not final, `type[C]` may be a subclass of `C`,
-                        // making negative narrowing unsafe.
-                        let allows_negative_narrow = me.is_final(cls.class_object());
+                        // If `type[C]` may be a subclass of `C`, negative narrowing is unsafe.
+                        let allows_negative_narrow = !me.is_subclassable(cls.class_object());
                         res.push((t, allows_negative_narrow));
                     } else {
                         for t in me.as_class_info(t) {
@@ -2196,9 +2189,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
         match ty {
             Type::ClassType(cls) => {
-                // Final classes can't have subclasses, so they are exhaustible, with the exception
-                // of Flag enums, whose members can be combined into new members via bitwise ops
-                !self.is_flag_enum(cls) && self.is_final(cls.class_object())
+                // Non-subclassable classes are exhaustible, with the exception of Flag enums,
+                // whose members can be combined into new members via bitwise ops
+                !self.is_flag_enum(cls) && !self.is_subclassable(cls.class_object())
                     // bool is effectively Literal[True] | Literal[False]
                     || cls.is_builtin("bool")
             }

@@ -2165,6 +2165,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         all_getters_match && all_setters_match
     }
 
+    pub fn is_subclassable(&self, class: &Class) -> bool {
+        !self.get_metadata_for_class(class).is_final()
+            && (self.get_enum_from_class(class).is_none()
+                || self.get_enum_members(class).is_empty())
+    }
+
     fn extends_abc(
         &self,
         bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
