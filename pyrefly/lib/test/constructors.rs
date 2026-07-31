@@ -188,6 +188,79 @@ assert_type(C(), C[Any]) # Correct, because invalid metaclass.
 );
 
 testcase!(
+    test_init_subclass_class_keywords,
+    r#"
+class Foo:
+    def __init_subclass__(cls, asdf: int) -> None:
+        pass
+
+class Bar(Foo, asdf=1): ...
+class Baz(Foo, asdf=""): ...  # E: Argument `Literal['']` is not assignable to parameter `asdf` with type `int`
+class Qux(Foo): ...  # E: Missing argument `asdf`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_skips_custom_metaclass_keywords,
+    r#"
+class Meta(type):
+    def __new__(cls, name, bases, namespace, abstract: bool = False):
+        return super().__new__(cls, name, bases, namespace)
+
+class Base(metaclass=Meta): ...
+class Child(Base, abstract=True): ...
+    "#,
+);
+
+testcase!(
+    test_init_subclass_metaclass_without_keywords_still_checked,
+    r#"
+# A custom metaclass only consumes class-header keywords; with no keywords, a
+# required `__init_subclass__` argument still goes unfilled at runtime, so the
+# missing-argument error must fire even in the presence of a metaclass.
+class Meta(type): ...
+
+class Base(metaclass=Meta):
+    def __init_subclass__(cls, x: int) -> None:
+        pass
+
+class Child(Base): ...  # E: Missing argument `x`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_follows_mro_not_first_base,
+    r#"
+class A:
+    def __init_subclass__(cls, kw: str) -> None:
+        pass
+
+class B: ...
+
+# `__init_subclass__` is resolved through C's MRO, so A's requirement applies
+# even though A is not the first base.
+class C(B, A): ...  # E: Missing argument `kw`
+class D(B, A, kw="x"): ...
+class E(B, A, kw=1): ...  # E: Argument `Literal[1]` is not assignable to parameter `kw` with type `str`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_inherited_without_keywords,
+    r#"
+class Grandparent:
+    def __init_subclass__(cls, kw: str) -> None:
+        pass
+
+class Parent(Grandparent, kw="x"): ...
+
+# `Child` inherits `Grandparent.__init_subclass__`, which requires `kw`, so this
+# reports a missing argument even though `Child` passes no keywords.
+class Child(Parent): ...  # E: Missing argument `kw`
+    "#,
+);
+
+testcase!(
     test_metaclass_invalid_generic_legacy_typevar,
     r#"
 from typing import Any, Generic, TypeVar, assert_type
@@ -339,6 +412,56 @@ class C:
         return 0
 x = C()
 assert_type(x, Any)
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_ignores_concrete_new_return,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls) -> C:
+        return object.__new__(cls)
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(), Self)
+        return cls()
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_ignores_bad_new_return,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls) -> int:
+        return 0
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(), Self)
+        return cls()
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_checks_new_params,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls, x: int, y: str) -> "C":
+        return object.__new__(cls)
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(1, "a"), Self)
+        cls(1, 2)  # E: Argument `Literal[2]` is not assignable to parameter `y` with type `str`
+        cls()  # E: Missing argument `x`  # E: Missing argument `y`
+        return cls(1, "a")
     "#,
 );
 
@@ -653,6 +776,22 @@ assert_type(C(False), C[B])
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4192
+testcase!(
+    test_overloaded_init_missing_self,
+    r#"
+from typing import overload
+
+class C:
+    @overload
+    def __init__(): ...  # E: Overloaded function must have an implementation
+    @overload
+    def __init__(): ...
+
+C()  # E: This method has no `self` parameter to receive the implicit instance argument
+    "#,
+);
+
 testcase!(
     test_init_bad_receiver_annotation,
     r#"
@@ -827,10 +966,10 @@ T = TypeVar("T")
 class C(Generic[T]):
     def __init__[V](self: "C[V]", x: V) -> None: pass
 def takes_callable[V](x: Callable[[V], C[V]], y: V) -> C[V]: ...
-out1 = takes_callable(C, 42)  # E: Argument `Literal[42]` is not assignable to parameter `y` with type `GenericResidual@V` in function `takes_callable`
-assert_type(out1, C[int])  # E: assert_type(C[GenericResidual@V], C[int]) failed
-out2 = takes_callable(C, "hello")  # E: Argument `Literal['hello']` is not assignable to parameter `y` with type `GenericResidual@V` in function `takes_callable`
-assert_type(out2, C[str])  # E: assert_type(C[GenericResidual@V], C[str]) failed
+out1 = takes_callable(C, 42)
+assert_type(out1, C[int])
+out2 = takes_callable(C, "hello")
+assert_type(out2, C[str])
     "#,
 );
 
@@ -942,8 +1081,8 @@ class C:
     def __new__(cls) -> "C": ...
 
     def method(self) -> None:
-        # __new__ explicitly returns C, not Self, so type(self)() returns C.
-        reveal_type(type(self)())  # E: revealed type: C
+        # `type[Self]` construction returns Self, even when __new__ returns C.
+        reveal_type(type(self)())  # E: revealed type: Self@C
 
 class D(C): ...
 
@@ -961,8 +1100,8 @@ class C:
     def __new__(cls) -> list[Self]: ...
 
     def method(self) -> None:
-        # __new__ returns list[Self], so type(self)() preserves Self.
-        reveal_type(type(self)())  # E: revealed type: list[Self@C]
+        # `type[Self]` construction returns Self, even when __new__ returns another type.
+        reveal_type(type(self)())  # E: revealed type: Self@C
 
 class D(C): ...
 
@@ -1078,7 +1217,9 @@ def g() -> list[ParentItem] | None:
 
 // Overloaded __new__ where one overload has an explicit return annotation
 // and one doesn't. The unannotated overload should assume Self; the
-// annotated overload should keep its declared return type.
+// annotated overload should keep its declared return type. The explicit-return
+// overload is an inconsistent overload error because `C` is not a subtype of
+// the implementation's `Self@C`.
 testcase!(
     test_overloaded_new_mixed_annotation,
     r#"
@@ -1086,7 +1227,7 @@ from typing import assert_type, overload
 
 class C:
     @overload
-    def __new__(cls, x: int) -> "C": ...
+    def __new__(cls, x: int) -> "C": ...  # E: Overload return type `C` is not assignable to implementation return type `Self@C`
     @overload
     def __new__(cls, x: str): ...
     def __new__(cls, x: int | str):

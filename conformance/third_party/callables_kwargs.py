@@ -48,7 +48,7 @@ def func3() -> None:
 
     td2 = TD2(v1=2, v3="4")
     func1(**td2)  # OK
-    func1(v1=1, v2="", v3="5", v4=5)  # E: v4 is not in TD2
+    func1(v1=1, v2="", v3="5", v4=5)  # E?: v4 is not in TD2, but could be in a  subtype
     func1(1, "", "5")  # E: args not passed by position
 
     # > Passing a dictionary of type dict[str, object] as a **kwargs argument

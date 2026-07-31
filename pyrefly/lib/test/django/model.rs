@@ -43,7 +43,6 @@ class PersonFieldsetTupleAdmin(admin.ModelAdmin[Person]):
             },
         ),
     )
-
 "#,
 );
 
@@ -68,7 +67,6 @@ class PersonFieldsetListAdmin(admin.ModelAdmin[Person]):
             },
         )
     ]
-
 "#,
 );
 
@@ -77,7 +75,6 @@ django_testcase!(
     r#"
 from django.db import models
 
-
 class DateTimeMixin(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
@@ -85,7 +82,6 @@ class DateTimeMixin(models.Model):
 
     class Meta:
         abstract = True
-
 
 class Invoice(DateTimeMixin):
     class Meta:

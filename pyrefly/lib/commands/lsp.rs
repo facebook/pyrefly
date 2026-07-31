@@ -66,10 +66,6 @@ pub struct LspArgs {
     /// an up-to-date source DB. Only useful for benchmarking.
     #[arg(long)]
     pub build_system_blocking: bool,
-
-    /// Enable external references integration for cross-repo go-to-definition.
-    #[arg(long, hide = true)]
-    pub enable_external_references: bool,
 }
 
 /// Drop flags after the `lsp` subcommand that aren't declared on `LspArgs` or
@@ -80,8 +76,11 @@ pub fn filter_unrecognized_lsp_args(args: Vec<OsString>) -> Vec<OsString> {
         return args;
     };
 
-    let mut known_long: HashSet<String> = HashSet::new();
-    let mut known_short: HashSet<char> = HashSet::new();
+    // Seed with the auto-generated `--help`/`-h` flags. clap synthesizes these,
+    // so they are not returned by `get_arguments()`; without this they would be
+    // stripped and `pyrefly lsp --help` would silently start the server.
+    let mut known_long: HashSet<String> = HashSet::from(["help".to_owned()]);
+    let mut known_short: HashSet<char> = HashSet::from(['h']);
     for cmd in [LspArgs::command(), CommonGlobalArgs::command()] {
         for arg in cmd.get_arguments() {
             if let Some(long) = arg.get_long() {
@@ -131,7 +130,7 @@ pub fn run_lsp(
     server_info: Option<ServerInfo>,
     path_remapper: Option<PathRemapper>,
     thrift_remapper: Option<ThriftRemapper>,
-    telemetry: &impl Telemetry,
+    telemetry: &dyn Telemetry,
     external_references: Arc<dyn ExternalProvider>,
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
@@ -184,7 +183,7 @@ impl LspArgs {
         version: &str,
         path_remapper: Option<PathRemapper>,
         thrift_remapper: Option<ThriftRemapper>,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         external_references: Arc<dyn ExternalProvider>,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
@@ -242,7 +241,7 @@ mod tests {
 
     #[test]
     fn filter_preserves_known_lsp_flags() {
-        let args = os(&["pyrefly", "lsp", "--enable-external-references"]);
+        let args = os(&["pyrefly", "lsp", "--build-system-blocking"]);
         let result = filter_unrecognized_lsp_args(args.clone());
         assert_eq!(result, args);
     }
@@ -259,7 +258,7 @@ mod tests {
         let args = os(&[
             "pyrefly",
             "lsp",
-            "--enable-external-references",
+            "--build-system-blocking",
             "--unknown-flag",
             "--indexing-mode",
             "none",
@@ -270,7 +269,7 @@ mod tests {
             os(&[
                 "pyrefly",
                 "lsp",
-                "--enable-external-references",
+                "--build-system-blocking",
                 "--indexing-mode",
                 "none"
             ])
@@ -283,13 +282,10 @@ mod tests {
             "pyrefly",
             "lsp",
             "--unknown=value",
-            "--enable-external-references",
+            "--build-system-blocking",
         ]);
         let result = filter_unrecognized_lsp_args(args);
-        assert_eq!(
-            result,
-            os(&["pyrefly", "lsp", "--enable-external-references"])
-        );
+        assert_eq!(result, os(&["pyrefly", "lsp", "--build-system-blocking"]));
     }
 
     #[test]
@@ -311,6 +307,20 @@ mod tests {
         let args = os(&["pyrefly", "lsp", "-j", "4"]);
         let result = filter_unrecognized_lsp_args(args.clone());
         assert_eq!(result, args);
+    }
+
+    #[test]
+    fn filter_preserves_help_flags() {
+        // `--help`/`-h` are synthesized by clap and not in `get_arguments()`, so
+        // they must be allowlisted explicitly or the server starts instead of
+        // printing help.
+        for help in [
+            os(&["pyrefly", "lsp", "--help"]),
+            os(&["pyrefly", "lsp", "-h"]),
+        ] {
+            let result = filter_unrecognized_lsp_args(help.clone());
+            assert_eq!(result, help);
+        }
     }
 
     #[test]

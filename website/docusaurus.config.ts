@@ -16,6 +16,7 @@ import StylexPlugin from '@stylexjs/webpack-plugin';
 import PyodidePlugin from '@pyodide/webpack-plugin';
 import path from "path";
 import fs from "fs";
+import remarkSandboxPlugin from "./src/sandbox/remarkSandboxPlugin";
 
 const BasePath = 'en/docs';
 
@@ -162,10 +163,52 @@ const config: Config = {
             content: "image/png",
           },
         },
+        // Agent discovery - API Catalog (RFC 9727)
+        // Points agents to machine-readable catalog of available resources
+        {
+          tagName: "link",
+          attributes: {
+            rel: "api-catalog",
+            href: baseUrl + ".well-known/api-catalog",
+            type: "application/linkset+json",
+          },
+        },
+        // Agent discovery - LLM-friendly documentation
+        // Provides alternate representation optimized for AI agents (per https://llmstxt.org/)
+        {
+          tagName: "link",
+          attributes: {
+            rel: "alternate",
+            type: "text/plain",
+            href: baseUrl + "llms.txt",
+            title: "LLM-friendly documentation index",
+          },
+        },
+        {
+          tagName: "link",
+          attributes: {
+            rel: "alternate",
+            type: "text/plain",
+            href: baseUrl + "llms-full.txt",
+            title: "Complete documentation content",
+          },
+        },
+        // Agent discovery - Agent Skills
+        // Points to machine-readable index of agent capabilities (per https://agentskills.io/)
+        {
+          tagName: "link",
+          attributes: {
+            rel: "agent-skills",
+            href: baseUrl + ".well-known/agent-skills/index.json",
+            type: "application/json",
+          },
+        },
       ],
     organizationName: 'facebook', // Usually your GitHub org/user name.
     projectName: 'Pyre', // Usually your repo name.
     trailingSlash: true,
+    // Adds a Cmd+K / Ctrl+K shortcut to focus the (lunr-backed) search bar.
+    clientModules: [require.resolve('./src/js/searchHotkey.ts')],
     markdown: {
         mermaid: true,
     },
@@ -302,6 +345,22 @@ const config: Config = {
                   component: '@site/src/pages/landingPage.tsx',
                   exact: true,
                 });
+                // Short vanity URL surfaced from the VS Code extension's
+                // status-bar tooltip and the CLI upsell. Points users at
+                // the install/onboarding docs.
+                addRoute({
+                  path: '/getting-started',
+                  component: '@site/src/pages/redirect-getting-started.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycon26/challenge',
+                  component: '@site/src/pages/externalRedirect.tsx',
+                  exact: true,
+                  props: {
+                    url: 'https://github.com/migeed-z/pyrefly-type-challenge',
+                  },
+                });
               },
             };
         },
@@ -396,6 +455,11 @@ const config: Config = {
                             'https://www.internalfb.com/code/fbsource/fbcode/pyrefly/website/',
                         external: 'https://github.com/facebook/pyrefly/edit/main/website/',
                     }),
+                    beforeDefaultRemarkPlugins: [
+                        [remarkSandboxPlugin, {
+                            sandboxExamplesDir: path.resolve(__dirname, 'sandbox-examples'),
+                        }],
+                    ],
                 },
                 staticDocsProject: 'Pyrefly',
                 theme: {
@@ -417,6 +481,7 @@ const config: Config = {
         'https://buttons.github.io/buttons.js',
         'https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js',
         '/js/code-block-buttons.js',
+        '/js/gtag-fragment-tracking.js',
     ],
     stylesheets: ['/css/code-block-buttons.css']
 };

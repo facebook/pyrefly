@@ -690,11 +690,6 @@ class MyTypedDict(TypedDict):
                             read_only_reason: None,
                         },
                     )],
-                    value_type: context
-                        .answers_context
-                        .answers
-                        .heap()
-                        .mk_class_type(context.answers_context.stdlib.int().clone()),
                 }))),
             &context,
         ),

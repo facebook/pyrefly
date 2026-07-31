@@ -20,6 +20,7 @@ use ruff_text_size::TextSize;
 
 use super::extract_shared::find_enclosing_statement_range;
 use super::extract_shared::line_indent_and_start;
+use super::extract_shared::type_to_annotation;
 use super::extract_shared::unique_name;
 use crate::state::lsp::Transaction;
 use crate::types::stdlib::Stdlib;
@@ -39,16 +40,6 @@ fn param_name_from_expr(expr: &Expr) -> Option<String> {
         Expr::Attribute(attr) => Some(attr.attr.id.to_string()),
         _ => None,
     }
-}
-
-fn type_to_annotation(ty: Type, stdlib: &Stdlib) -> Option<String> {
-    let ty = ty.promote_implicit_literals(stdlib);
-    if ty.is_any() {
-        return None;
-    }
-    let parts = ty.get_types_with_locations(Some(stdlib));
-    let text: String = parts.into_iter().map(|(part, _)| part).collect();
-    Some(text)
 }
 
 fn infer_annotation(

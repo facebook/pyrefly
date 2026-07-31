@@ -155,6 +155,16 @@ impl GetTypeArg {
             GetTypeArg::Node(n) => n.range.start.clone(),
         }
     }
+
+    /// Extract the end position of the range. Together with `position()` this
+    /// recovers the full requested node range, which `getComputedType` uses to
+    /// distinguish a whole call expression from its callee identifier.
+    pub fn end_position(&self) -> tsp::Position {
+        match self {
+            GetTypeArg::Declaration { node, .. } => node.range.end.clone(),
+            GetTypeArg::Node(n) => n.range.end.clone(),
+        }
+    }
 }
 
 /// Parameters for getComputedType, getDeclaredType, and getExpectedType
@@ -181,6 +191,11 @@ impl GetTypeParams {
     pub fn position(&self) -> tsp::Position {
         self.arg.position()
     }
+
+    /// Convenience: extract the end position from the arg's range.
+    pub fn end_position(&self) -> tsp::Position {
+        self.arg.end_position()
+    }
 }
 
 /// Creates a snapshot outdated error
@@ -195,7 +210,7 @@ pub fn snapshot_outdated_error() -> ResponseError {
 
 /// Creates a common error response for internal errors
 #[allow(dead_code)]
-pub(crate) fn create_internal_error(message: &str) -> ResponseError {
+fn create_internal_error(message: &str) -> ResponseError {
     ResponseError {
         code: ErrorCode::InternalError as i32,
         message: message.to_owned(),
@@ -205,7 +220,7 @@ pub(crate) fn create_internal_error(message: &str) -> ResponseError {
 
 /// Creates a common error response for language services being disabled
 #[allow(dead_code)]
-pub(crate) fn language_services_disabled_error() -> ResponseError {
+fn language_services_disabled_error() -> ResponseError {
     ResponseError {
         code: ErrorCode::RequestFailed as i32,
         message: "Language services disabled".to_owned(),

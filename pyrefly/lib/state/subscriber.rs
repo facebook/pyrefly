@@ -20,6 +20,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::state::load::Load;
 use crate::state::state::Transaction;
+use crate::state::steps::Step;
 
 /// Controls which progress bar style to use during type checking.
 #[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
@@ -66,22 +67,39 @@ pub trait Subscriber: Sync {
         result: &Arc<Load>,
         exports_changed: bool,
     );
+
+    /// Called after each step is computed for a module. Default no-op.
+    fn step_computed(&self, _handle: &Handle, _step: Step) {}
+}
+
+/// Per-module tracking info for TestSubscriber.
+#[derive(Debug, Clone)]
+pub struct TestModuleInfo {
+    pub start_count: usize,
+    pub load: Option<Arc<Load>>,
+    /// The highest step computed for this module.
+    pub last_step: Option<Step>,
 }
 
 /// A subscriber that validates all start/finish are paired and returns the final load states.
 #[derive(Debug, Default, Clone, Dupe)]
-pub struct TestSubscriber(Arc<Mutex<SmallMap<Handle, (usize, Option<Arc<Load>>)>>>);
+pub struct TestSubscriber(Arc<Mutex<SmallMap<Handle, TestModuleInfo>>>);
 
 impl Subscriber for TestSubscriber {
     fn start_work(&self, handle: &Handle) {
         let mut value = self.0.lock();
         match value.entry(handle.dupe()) {
             Entry::Vacant(e) => {
-                e.insert((1, None));
+                e.insert(TestModuleInfo {
+                    start_count: 1,
+                    load: None,
+                    last_step: None,
+                });
             }
             Entry::Occupied(mut e) => {
-                e.get_mut().0 += 1;
-                e.get_mut().1 = None;
+                e.get_mut().start_count += 1;
+                e.get_mut().load = None;
+                e.get_mut().last_step = None;
             }
         }
     }
@@ -91,9 +109,30 @@ impl Subscriber for TestSubscriber {
         match value.entry(handle.dupe()) {
             Entry::Vacant(_) => panic!("Handle finished but never started: {handle:?}"),
             Entry::Occupied(mut e) => {
-                assert!(e.get().1.is_none());
-                e.get_mut().1 = Some(result.dupe());
+                assert!(e.get().load.is_none());
+                e.get_mut().load = Some(result.dupe());
             }
+        }
+    }
+
+    fn step_computed(&self, handle: &Handle, step: Step) {
+        let mut value = self.0.lock();
+        if let Some(info) = value.get_mut(handle) {
+            info.last_step = Some(match info.last_step {
+                Some(prev) if prev > step => prev,
+                _ => step,
+            });
+        }
+        // If the module wasn't started yet (e.g., prefetched), add it.
+        else {
+            value.insert(
+                handle.dupe(),
+                TestModuleInfo {
+                    start_count: 0,
+                    load: None,
+                    last_step: Some(step),
+                },
+            );
         }
     }
 }
@@ -106,6 +145,14 @@ impl TestSubscriber {
     /// For each handle, return a pair of (the number of times each handle started, the final load state).
     /// Panics if any handle was started but not finished.
     pub fn finish(self) -> SmallMap<Handle, (usize, Option<Arc<Load>>)> {
+        mem::take(&mut *self.0.lock())
+            .into_iter()
+            .map(|(h, info)| (h, (info.start_count, info.load)))
+            .collect()
+    }
+
+    /// Return per-module info including step tracking.
+    pub fn finish_detailed(self) -> SmallMap<Handle, TestModuleInfo> {
         mem::take(&mut *self.0.lock())
     }
 }
@@ -290,6 +337,12 @@ impl<'a> Subscriber for CompositeSubscriber<'a> {
     ) {
         for subscriber in &self.subscribers {
             subscriber.finish_work(transaction, handle, result, exports_changed);
+        }
+    }
+
+    fn step_computed(&self, handle: &Handle, step: Step) {
+        for subscriber in &self.subscribers {
+            subscriber.step_computed(handle, step);
         }
     }
 }

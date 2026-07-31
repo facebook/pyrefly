@@ -30,7 +30,6 @@ class Model(BaseModel):
     model_config = ConfigDict(frozen=True)
     x: int = 42
 
-
 m = Model()
 m.x = 10 # E: Cannot set field `x`
 "#,
@@ -75,7 +74,6 @@ class Model:
     model_config = ConfigDict(frozen=True)
     x: int = 42
 
-
 m = Model()
 m.x = 10 
 "#,
@@ -94,7 +92,6 @@ class Model(BaseModel):
 
 m = Model()
 m.x = 10
-
 "#,
 );
 
@@ -181,7 +178,6 @@ class Sub2(Sub):
 Sub(a=1, y=2) # E: Unexpected keyword argument `y` in function `Sub.__init__`
 Sub2(a=1, y=2) # E: Unexpected keyword argument `y` in function `Sub2.__init__`
 
-
 class Base3(BaseModel):
     model_config = ConfigDict(extra='allow')
 
@@ -189,7 +185,6 @@ class Sub3(Base3):
     a: int
     
 Sub3(a=1, y=2) 
-
 "#,
 );
 

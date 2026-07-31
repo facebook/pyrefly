@@ -24,6 +24,7 @@ use lsp_types::request::Request as _;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::telemetry::NoTelemetry;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use serde_json::Value;
 
 use crate::commands::lsp::IndexingMode;
@@ -35,7 +36,6 @@ use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Connection;
-use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 #[derive(Default)]
@@ -182,6 +182,36 @@ impl TestTspServer {
     /// Send a `typeServer/getComputedType` request with a Node arg.
     pub fn get_computed_type(&mut self, uri: &str, line: u32, character: u32, snapshot: i32) {
         self.send_get_type_request("typeServer/getComputedType", uri, line, character, snapshot);
+    }
+
+    /// Send a `typeServer/getComputedType` request whose node arg spans an
+    /// explicit `[start, end)` range rather than a single (empty) position.
+    /// Used to exercise the range-aware call-expression handling.
+    pub fn get_computed_type_range(
+        &mut self,
+        uri: &str,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+        snapshot: i32,
+    ) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "typeServer/getComputedType".to_owned(),
+            params: serde_json::json!({
+                "arg": {
+                    "uri": uri,
+                    "range": {
+                        "start": { "line": start_line, "character": start_character },
+                        "end": { "line": end_line, "character": end_character },
+                    },
+                },
+                "snapshot": snapshot,
+            }),
+            activity_key: None,
+        }));
     }
 
     /// Send a `typeServer/getExpectedType` request with a Node arg.

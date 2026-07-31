@@ -164,7 +164,7 @@ impl InitArgs {
         let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
 
         // Use get to get the filtered globs and config finder
-        let (filtered_globs, config_finder) = FilesArgs::get(
+        let (filtered_globs, config_finder, upsell) = FilesArgs::get(
             Vec::new(),
             config_path,
             ConfigOverrideArgs::default(),
@@ -172,7 +172,7 @@ impl InitArgs {
         )?;
 
         // Run the check directly
-        let res = check_args.run_once(filtered_globs, config_finder, thread_count);
+        let res = check_args.run_once(filtered_globs, config_finder, upsell, thread_count);
         if let Err(e) = &res {
             error!("Failed to run pyrefly check: {}", e);
         }
@@ -203,7 +203,7 @@ impl InitArgs {
             ]);
 
             // Use get to get the filtered globs and config finder
-            let (suppress_globs, suppress_config_finder) = FilesArgs::get(
+            let (suppress_globs, suppress_config_finder, suppress_upsell) = FilesArgs::get(
                 Vec::new(),
                 config_path,
                 ConfigOverrideArgs::default(),
@@ -211,7 +211,12 @@ impl InitArgs {
             )?;
 
             // Run the check with suppress-errors flag
-            match suppress_args.run_once(suppress_globs, suppress_config_finder, thread_count) {
+            match suppress_args.run_once(
+                suppress_globs,
+                suppress_config_finder,
+                suppress_upsell,
+                thread_count,
+            ) {
                 Ok(_) => return Ok(CommandExitStatus::Success),
                 Err(e) => {
                     error!("Failed to run pyrefly check with suppress-errors: {}", e);
@@ -374,11 +379,11 @@ impl InitArgs {
 
 #[cfg(test)]
 mod test {
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use tempfile;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::test::util::TEST_THREAD_COUNT;
 
     // helper function for ConfigFile::from_file
     fn from_file(path: &Path) -> anyhow::Result<()> {

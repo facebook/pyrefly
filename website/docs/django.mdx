@@ -1,6 +1,6 @@
 ---
-title: Experimental Django Support
-description: Pyrefly experimental support for Django ORM.
+title: Django Support
+description: Pyrefly support for Django ORM.
 ---
 
 {/*
@@ -10,11 +10,11 @@ description: Pyrefly experimental support for Django ORM.
  * LICENSE file in the root directory of this source tree.
  */}
 
-# Experimental Django Support
+# Django Support
 
-Pyrefly includes **experimental support** for [Django](https://www.djangoproject.com/), a popular Python web framework. This feature aims to provide improved static type checking for Django's Object-Relational Mapping (ORM) system, which is used to interact with databases.
+Pyrefly includes **built-in support** for [Django](https://www.djangoproject.com/), a popular Python web framework. This feature provides static type checking for Django's Object-Relational Mapping (ORM) system, which is used to interact with databases.
 
-> **Note:** This support is experimental and currently covers a subset of Django's ORM features. The implementation is actively evolving based on feedback and development. We currently support Django models, fields, and basic relationships.
+> **Note:** This support covers a subset of Django's ORM features. The implementation continues to evolve based on feedback and development. We currently support Django models, fields, and basic relationships.
 
 ### Feedback
 
@@ -63,13 +63,14 @@ Pyrefly provides type inference for Django's ORM without requiring any plugins o
 - Understands Django field types (`CharField`, `IntegerField`, `ForeignKey`, etc.)
 - Infers types for auto-generated fields (like `id` and `pk`)
 - Handles relationships between models (`ForeignKey`, `ManyToManyField`)
-- Provides special enum support
+- Provides special support for `choices` fields, including the `Choices`/`IntegerChoices`/`TextChoices` enum classes and Django's auto-generated `get_<fieldname>_display()` method
+- Types Django's class-based generic views and the mixins that compose them — when a view is parameterized by a model, attributes inherited from the framework are typed against that model
 - Provides immediate feedback when the code has type errors
 - Does **not** require a plugin or manual config — support is built-in and automatic
 
 ---
 
-## Supported Features with Examples
+## Some Supported Features with Examples
 
 The following examples showcase which Django features are currently supported by Pyrefly. This is a subset of Django's full feature set, but covers the most common use cases.
 
@@ -89,7 +90,7 @@ class Reporter(models.Model):
     # Django auto-adds: id = models.AutoField(primary_key=True)
 
 reporter = Reporter()
-reveal_type(reporter.id)  # Pyrefly infers: int
+assert_type(reporter.id, int)
 ```
 
 #### Custom Primary Keys
@@ -104,8 +105,8 @@ class Reporter(models.Model):
     full_name = models.CharField(max_length=70)
 
 reporter = Reporter()
-reveal_type(reporter.uuid)  # Pyrefly infers: UUID
-reveal_type(reporter.pk)  # Pyrefly infers: UUID (pk aliases the custom primary key)
+assert_type(reporter.uuid, UUID)
+assert_type(reporter.pk, UUID)  # pk aliases the custom primary key
 ```
 
 #### ForeignKey `_id` Suffix Fields
@@ -118,7 +119,7 @@ class Article(models.Model):
     # Django auto-adds: reporter_id: int
 
 article = Article()
-reveal_type(article.reporter_id)  # Pyrefly infers: int
+assert_type(article.reporter_id, int)
 ```
 
 ### ForeignKey Relationships
@@ -141,7 +142,7 @@ Accessing a `ForeignKey` field returns an instance of the related model:
 
 ```python
 article = Article()
-reveal_type(article.reporter)  # Pyrefly infers: Reporter
+assert_type(article.reporter, Reporter)
 ```
 
 #### Chained Access
@@ -149,7 +150,7 @@ reveal_type(article.reporter)  # Pyrefly infers: Reporter
 You can access fields on the related model:
 
 ```python
-reveal_type(article.reporter.full_name)  # Pyrefly infers: str
+assert_type(article.reporter.full_name, str)
 ```
 
 #### Nullable ForeignKeys
@@ -161,7 +162,7 @@ class Article(models.Model):
     reporter = models.ForeignKey(Reporter, null=True, on_delete=models.CASCADE)
 
 article = Article()
-reveal_type(article.reporter)  # Pyrefly infers: Reporter | None
+assert_type(article.reporter, Reporter | None)
 ```
 
 ### ManyToManyField Relationships
@@ -183,8 +184,8 @@ Accessing a `ManyToManyField` returns a manager object that provides methods to 
 
 ```python
 book = Book()
-reveal_type(book.authors)  # Pyrefly infers: ManyRelatedManager[Author, Model]
-reveal_type(book.authors.all())  # Pyrefly infers: QuerySet[Author, Author]
+assert_type(book.authors, ManyRelatedManager[Author, models.Model])
+assert_type(book.authors.all(), QuerySet[Author, Author])
 ```
 
 The manager provides methods like `.add()`, `.remove()`, `.clear()`, and `.all()` to manage the relationship.
@@ -207,10 +208,10 @@ class Product(models.Model):
     vehicle_type = models.IntegerField(choices=Vehicle.choices)
 
 # Pyrefly correctly infers enum types
-reveal_type(Vehicle.CAR.value)  # Pyrefly infers: int
-reveal_type(Vehicle.CAR.label)  # Pyrefly infers: str
-reveal_type(Vehicle.values)  # Pyrefly infers: list[int]
-reveal_type(Vehicle.choices)  # Pyrefly infers: list[tuple[int, str]]
+assert_type(Vehicle.CAR.value, int)
+assert_type(Vehicle.CAR.label, str)
+assert_type(Vehicle.values, list[int])
+assert_type(Vehicle.choices, list[tuple[int, str]])
 ```
 
 Pyrefly also supports `TextChoices` and the base `Choices` class with various value types including `enum.auto()` for automatic value generation.
@@ -319,7 +320,7 @@ Pyrefly (following stubs):
 
 ## Features Not Yet Supported
 
-These are some of the Django features are **not yet supported** in this experimental release:
+These are some of the Django features that are **not yet supported**:
 
 ### Reverse Relationships
 

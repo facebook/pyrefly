@@ -101,25 +101,6 @@ impl ErrorContext {
     }
 }
 
-/// Info about an error. All errors have a kind; some also have a context (see ErrorContext).
-/// Use ErrorInfo::Context for errors with both a kind and a context (the kind will be looked up
-/// from the context); use ErrorInfo::Kind for errors with a kind but no context.
-pub enum ErrorInfo<'a> {
-    Context(&'a dyn Fn() -> ErrorContext),
-    Kind(ErrorKind),
-}
-
-impl<'a> ErrorInfo<'a> {
-    /// Build ErrorInfo from a kind and context. Note that the kind is used only when the context is None.
-    pub fn new(error_kind: ErrorKind, context: Option<&'a dyn Fn() -> ErrorContext>) -> Self {
-        if let Some(ctx) = context {
-            Self::Context(ctx)
-        } else {
-            Self::Kind(error_kind)
-        }
-    }
-}
-
 /// The context in which a got <: want type check occurs. This differs from ErrorContext in that
 /// TypeCheckContext applies specifically to type mismatches. For example:
 ///   class C:
@@ -188,9 +169,14 @@ pub enum TypeCheckKind {
     CallUnpackKwArg(Name, Option<FunctionKind>),
     /// Check of a parameter's default value against its type annotation.
     FunctionParameterDefault(Name),
+    /// Check against the key type of a dict.
+    DictKey,
+    /// Check against the value type of a dict.
+    DictValue,
     /// Check against type of a TypedDict key. The name may be None if the type comes from
-    /// `extra_items` or some other non-literal-key source.
-    TypedDictKey(Option<Name>),
+    /// `extra_items` or some other non-literal-key source. The bool indicates whether the
+    /// TypedDict was inferred (anonymous) rather than explicitly declared.
+    TypedDictKey(Option<Name>, bool),
     /// Check an unpacked dict against a TypedDict, e.g., `x: MyTypedDict = {**unpacked_dict}`.
     TypedDictUnpacking,
     /// Check unpacking of an open TypedDict into a TypedDict. Used to report instances of
@@ -240,6 +226,7 @@ impl TypeCheckKind {
             | AnnotationTarget::KwargsParam(name) => Self::CallArgument(Some(name.clone()), None),
             AnnotationTarget::Return(_func) => Self::ExplicitFunctionReturn,
             AnnotationTarget::Assign(name, _is_initialized) => Self::AnnotatedName(name.clone()),
+            AnnotationTarget::AttrAssign(name) => Self::Attribute(name.clone()),
             AnnotationTarget::ClassMember(member) => Self::Attribute(member.clone()),
         }
     }
@@ -256,7 +243,7 @@ impl TypeCheckKind {
             Self::CallKwArgs(..) => ErrorKind::BadArgumentType,
             Self::CallUnpackKwArg(..) => ErrorKind::BadArgumentType,
             Self::FunctionParameterDefault(..) => ErrorKind::BadFunctionDefinition,
-            Self::TypedDictKey(..) => ErrorKind::BadTypedDictKey,
+            Self::DictKey | Self::DictValue | Self::TypedDictKey(_, _) => ErrorKind::BadAssignment,
             Self::TypedDictUnpacking => ErrorKind::BadUnpacking,
             Self::TypedDictOpenUnpacking => ErrorKind::OpenUnpacking,
             Self::Attribute(..) => ErrorKind::BadAssignment,

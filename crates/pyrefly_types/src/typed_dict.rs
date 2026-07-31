@@ -17,6 +17,7 @@ use crate::annotation::Qualifier;
 use crate::class::Class;
 use crate::heap::TypeHeap;
 use crate::read_only::ReadOnlyReason;
+use crate::simplify;
 use crate::stdlib::Stdlib;
 use crate::types::Substitution;
 use crate::types::TArgs;
@@ -86,7 +87,16 @@ impl TypedDictInner {
 )]
 pub struct AnonymousTypedDictInner {
     pub fields: Vec<(Name, TypedDictField)>,
-    pub value_type: Type,
+}
+
+impl AnonymousTypedDictInner {
+    /// Compute the union of all field value types. This is derived from `fields`
+    /// rather than stored, to avoid duplicating the type tree at each nesting
+    /// level (which caused 2^N memory growth for nested dict literals).
+    pub fn compute_value_type(&self, heap: &TypeHeap) -> Type {
+        let tys: Vec<Type> = self.fields.iter().map(|(_, f)| f.ty.clone()).collect();
+        simplify::unions(tys, heap)
+    }
 }
 
 #[derive(
@@ -109,6 +119,20 @@ impl TypedDict {
 
     pub fn to_type(self, heap: &TypeHeap) -> Type {
         heap.mk_typed_dict(self)
+    }
+
+    pub fn is_anonymous(&self) -> bool {
+        matches!(self, Self::Anonymous(_))
+    }
+
+    /// Display label for error messages: `"dict"` for anonymous TypedDicts,
+    /// `"TypedDict \`X\`"` for declared ones.
+    pub fn label(&self) -> String {
+        if self.is_anonymous() {
+            "dict".to_owned()
+        } else {
+            format!("TypedDict `{}`", self.name())
+        }
     }
 
     // This is just a placeholder to reduce refactoring for existing code

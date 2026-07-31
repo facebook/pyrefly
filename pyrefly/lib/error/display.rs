@@ -171,16 +171,31 @@ impl TypeCheckKind {
                 param,
                 ctx.display(want),
             ),
-            Self::TypedDictKey(key) => format!(
-                "`{}` is not assignable to TypedDict key{} with type `{}`",
+            Self::DictKey => format!(
+                "`{}` is not assignable to dict key type `{}`",
                 ctx.display(got),
-                if let Some(key) = key {
+                ctx.display(want),
+            ),
+            Self::DictValue => format!(
+                "`{}` is not assignable to dict value type `{}`",
+                ctx.display(got),
+                ctx.display(want),
+            ),
+            Self::TypedDictKey(key, is_anonymous) => {
+                let key_str = if let Some(key) = key {
                     format!(" `{key}`")
                 } else {
                     "".to_owned()
-                },
-                ctx.display(want),
-            ),
+                };
+                let kind = if *is_anonymous { "dict" } else { "TypedDict" };
+                format!(
+                    "`{}` is not assignable to {} key{} with type `{}`",
+                    ctx.display(got),
+                    kind,
+                    key_str,
+                    ctx.display(want),
+                )
+            }
             Self::TypedDictUnpacking | Self::TypedDictOpenUnpacking => format!(
                 "Unpacked `{}` is not assignable to `{}`",
                 ctx.display(got),

@@ -85,7 +85,8 @@ impl Tuple {
                 write_type(ty, output)?;
                 output.write_str(", ...")?;
             }
-            Self::Unpacked(box (prefix, unpacked, suffix)) => {
+            Self::Unpacked(unpacked_box) => {
+                let (prefix, unpacked, suffix) = &**unpacked_box;
                 for (i, ty) in prefix.iter().enumerate() {
                     if i > 0 {
                         output.write_str(", ")?;

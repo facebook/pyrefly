@@ -14,6 +14,7 @@ use ruff_text_size::TextSize;
 use crate::state::state::State;
 use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::get_batched_lsp_operations_report;
+use crate::test::util::get_batched_lsp_operations_report_allow_error;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let transaction = state.transaction();
@@ -22,28 +23,42 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         .find_local_references(handle, position, true)
         .into_iter()
         .map(|range| {
-            let kind = if transaction
-                .identifier_at(handle, range.start())
-                .expect("local references should point at identifiers")
-                .context
-                .is_write()
-            {
-                DocumentHighlightKind::WRITE
-            } else {
-                DocumentHighlightKind::READ
+            let kind = match transaction.identifier_at(handle, range.start()) {
+                Some(id) if id.context.is_write() => DocumentHighlightKind::WRITE,
+                Some(_) => DocumentHighlightKind::READ,
+                None => DocumentHighlightKind::TEXT,
             };
             format!(
                 "{}:\n{}",
-                if kind == DocumentHighlightKind::WRITE {
-                    "DocumentHighlightKind::WRITE"
-                } else {
-                    "DocumentHighlightKind::READ"
+                match kind {
+                    DocumentHighlightKind::WRITE => "DocumentHighlightKind::WRITE",
+                    DocumentHighlightKind::READ => "DocumentHighlightKind::READ",
+                    _ => "DocumentHighlightKind::TEXT",
                 },
                 code_frame_of_source_at_range(module_info.contents(), range)
             )
         })
         .join("\n");
     format!("Highlights:\n{highlights}")
+}
+
+#[test]
+fn document_highlight_no_crash_on_match_without_case() {
+    let code = r#"
+class Reducer:
+    def __init__(self, type: int) -> None:
+        self.type = type
+
+    def fit(self) -> None:
+        match self.type:
+            Reducer
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Highlights:"),
+        "Expected highlights in report, got:\n{report}",
+    );
 }
 
 #[test]

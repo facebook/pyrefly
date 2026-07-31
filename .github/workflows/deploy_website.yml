@@ -40,7 +40,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: [build]
-    if: ${{ !inputs.is_rollback && success() }} || ${{ inputs.is_rollback }}
+    if: ${{ (!inputs.is_rollback && success()) || inputs.is_rollback }}
     steps:
       - name: Get current date
         id: date

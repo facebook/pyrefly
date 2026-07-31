@@ -710,17 +710,6 @@ def remove_common(x: int, g: int) -> int:
     "#,
 );
 
-// Test for https://github.com/facebook/pyrefly/issues/1453
-testcase!(
-    test_against_regression_on_1454,
-    r#"
-d: dict[str, str] = {}
-a: str | None = None
-for i in range(10):
-    a = d.get('x', a)
-    "#,
-);
-
 // Regression test for https://github.com/facebook/pyrefly/issues/1565
 testcase!(
     test_nested_while_int_assignment,

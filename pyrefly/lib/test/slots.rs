@@ -33,6 +33,18 @@ class C:
 );
 
 testcase!(
+    test_slots_manual_dict_rejects_undeclared,
+    r#"
+class C:
+    __slots__ = {"x": "docstring for x"}
+
+    def __init__(self):
+        self.x = 1
+        self.y = 2  # E: not declared in `__slots__`
+"#,
+);
+
+testcase!(
     test_slots_inherited_union,
     r#"
 class Base:
@@ -68,6 +80,18 @@ testcase!(
     r#"
 class C:
     __slots__ = ("x", "__dict__")
+
+    def __init__(self):
+        self.x = 1
+        self.y = 2  # OK: __dict__ in slots allows arbitrary attrs
+"#,
+);
+
+testcase!(
+    test_slots_dict_literal_allows_dynamic,
+    r#"
+class C:
+    __slots__ = {"x": "docstring for x", "__dict__": "instance dict"}
 
     def __init__(self):
         self.x = 1
@@ -279,19 +303,31 @@ c.x = 2  # OK: descriptor __set__ handles this, not instance storage
 "#,
 );
 
+// Both list-literal and single-string-literal extractor shapes promote.
 // https://github.com/facebook/pyrefly/issues/2917
 testcase!(
     test_slots_multiple_inheritance_layout_conflict,
     r#"
 class Left:
-    __slots__ = ("a", "b")
+    __slots__ = ["a", "b"]
 
 class Right:
-    __slots__ = ("c", "d")
+    __slots__ = "c"
 
-# Inheriting from two classes that both define non-empty __slots__
-# causes a TypeError at runtime.
-class Combined(Left, Right): ...  # E: multiple base classes with non-empty `__slots__`
+class Combined(Left, Right): ...  # E: incompatible disjoint bases
+"#,
+);
+
+testcase!(
+    test_slots_dict_layout_conflict,
+    r#"
+class Left:
+    __slots__ = {"x": "docstring for x"}
+
+class Right:
+    __slots__ = ("y",)
+
+class Combined(Left, Right): ...  # E: inherits from incompatible disjoint bases `Left`, `Right`
 "#,
 );
 
@@ -305,11 +341,11 @@ class First:
 class Second:
     __slots__ = ("x",)
 
-# Even though the slot names match, these are different C-level layouts.
-class Both(First, Second): ...  # E: multiple base classes with non-empty `__slots__`
+class Both(First, Second): ...  # E: incompatible disjoint bases
 "#,
 );
 
+// Empty list `__slots__ = []` does not promote.
 testcase!(
     test_slots_layout_conflict_empty_slots_ok,
     r#"
@@ -317,13 +353,13 @@ class A:
     __slots__ = ("x",)
 
 class B:
-    __slots__ = ()
+    __slots__ = []
 
-# One base has non-empty slots, the other has empty slots - this is fine.
 class C(A, B): ...
 "#,
 );
 
+// Empty tuple `__slots__ = ()` does not promote.
 testcase!(
     test_slots_layout_conflict_both_empty_ok,
     r#"
@@ -333,7 +369,6 @@ class A:
 class B:
     __slots__ = ()
 
-# Both bases have empty slots - no conflict.
 class C(A, B): ...
 "#,
 );
@@ -350,7 +385,37 @@ class B:
 class C:
     __slots__ = ("z",)
 
-class D(A, B, C): ...  # E: multiple base classes with non-empty `__slots__`
+class D(A, B, C): ...  # E: incompatible disjoint bases
+"#,
+);
+
+// `Combined(Child, Base)` is OK when `Child(Base)` already covers `Base`'s layout.
+testcase!(
+    test_slots_disjoint_base_subclass_and_ancestor_ok,
+    r#"
+class Base:
+    __slots__ = ("x",)
+
+class Child(Base):
+    __slots__ = ("y",)
+
+class Combined(Child, Base): ...
+"#,
+);
+
+testcase!(
+    test_slots_disjoint_base_propagation_through_unslotted,
+    r#"
+class Left:
+    __slots__ = ("x",)
+
+class LeftChild(Left):
+    pass
+
+class Right:
+    __slots__ = ("y",)
+
+class Bad(LeftChild, Right): ...  # E: incompatible disjoint bases
 "#,
 );
 
@@ -446,5 +511,291 @@ class Foo:
         self.__name__ = "foo_instance"
 
 assert_type(Foo.__name__, str)
+"#,
+);
+
+testcase!(
+    test_slots_dataclass_slots_disjoint_base_conflicts,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Left:
+    x: int
+
+@dataclass(slots=True)
+class Right:
+    y: int
+
+class Bad(Left, Right): ...  # E: inherits from incompatible disjoint bases `Left`, `Right`
+
+class Explicit:
+    __slots__ = ("y",)
+
+class MixedBad(Left, Explicit): ...  # E: inherits from incompatible disjoint bases `Left`, `Explicit`
+"#,
+);
+
+// Empty / pseudo-field-only dataclasses synthesize empty `__slots__`.
+testcase!(
+    test_slots_dataclass_empty_and_pseudo_slots_do_not_promote,
+    r#"
+from dataclasses import KW_ONLY, InitVar, dataclass
+from typing import ClassVar
+
+@dataclass(slots=True)
+class Empty:
+    pass
+
+@dataclass(slots=True)
+class OnlyClassVar:
+    x: ClassVar[int]
+
+@dataclass(slots=True)
+class OnlyInitVar:
+    x: InitVar[int]
+
+@dataclass(slots=True)
+class OnlyKwOnly:
+    _: KW_ONLY
+
+class Slotted:
+    __slots__ = ("y",)
+
+class EmptyOK(Empty, Slotted): ...
+class ClassVarOK(OnlyClassVar, Slotted): ...
+class InitVarOK(OnlyInitVar, Slotted): ...
+class KwOnlyOK(OnlyKwOnly, Slotted): ...
+"#,
+);
+
+// Subclasses without a new non-empty slot tuple propagate the inherited
+// representative; `ChildWithLocalField` becomes its own.
+testcase!(
+    test_slots_dataclass_slots_propagate_through_subclasses,
+    r#"
+from dataclasses import InitVar, dataclass
+from typing import ClassVar
+
+@dataclass(slots=True)
+class Left:
+    x: int
+
+class LeftChild(Left):
+    pass
+
+@dataclass(slots=True)
+class DecoratedLeftChild(Left):
+    pass
+
+@dataclass(slots=True)
+class ChildWithLocalField(Left):
+    child: int
+
+@dataclass(slots=True)
+class ChildWithOnlyPseudoFields(Left):
+    class_var: ClassVar[int]
+    init_var: InitVar[int]
+
+@dataclass(slots=True)
+class Right:
+    y: int
+
+class Bad(LeftChild, Right): ...  # E: inherits from incompatible disjoint bases `Left`, `Right`
+class DecoratedBad(DecoratedLeftChild, Right): ...  # E: inherits from incompatible disjoint bases `Left`, `Right`
+class ChildBad(ChildWithLocalField, Right): ...  # E: inherits from incompatible disjoint bases `ChildWithLocalField`, `Right`
+class PseudoChildBad(ChildWithOnlyPseudoFields, Right): ...  # E: inherits from incompatible disjoint bases `Left`, `Right`
+"#,
+);
+
+testcase!(
+    test_slots_empty_dataclass_slot_base_with_nonempty_dataclass_slot_base_ok,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Empty:
+    pass
+
+@dataclass(slots=True)
+class NonEmpty:
+    x: int
+
+class OK(Empty, NonEmpty): ...
+"#,
+);
+
+// All three `dataclass_transform` entry points (base, metaclass, decorator).
+testcase!(
+    test_slots_dataclass_transform_slots_disjoint_base_conflict,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class ModelBase: ...
+
+class BaseLeft(ModelBase, slots=True):
+    x: int
+
+@dataclass_transform()
+class ModelMeta(type): ...
+
+class MetaLeft(metaclass=ModelMeta, slots=True):
+    x: int
+
+@dataclass_transform()
+def transform(**kwargs): ...
+
+@transform(slots=True)
+class DecoratedLeft:
+    x: int
+
+class Right:
+    __slots__ = ("y",)
+
+class BaseBad(BaseLeft, Right): ...  # E: inherits from incompatible disjoint bases `BaseLeft`, `Right`
+class MetaBad(MetaLeft, Right): ...  # E: inherits from incompatible disjoint bases `MetaLeft`, `Right`
+class DecoratedBad(DecoratedLeft, Right): ...  # E: inherits from incompatible disjoint bases `DecoratedLeft`, `Right`
+"#,
+);
+
+// `fields(cls)` includes inherited dataclass fields, so an unslotted
+// dataclass ancestor still materializes a non-empty `__slots__` in a
+// slotted subclass.
+testcase!(
+    test_slots_dataclass_slots_promotes_via_inherited_fields,
+    r#"
+from dataclasses import dataclass
+
+@dataclass
+class UnslottedBase:
+    x: int
+
+@dataclass(slots=True)
+class Promoted(UnslottedBase):
+    pass
+
+class Right:
+    __slots__ = ("y",)
+
+class Bad(Promoted, Right): ...  # E: inherits from incompatible disjoint bases `Promoted`, `Right`
+"#,
+);
+
+// CPython dedups child slots against transitive ancestor slots, so the
+// representative reported here must be `A`, not `C`.
+testcase!(
+    test_slots_dataclass_slots_dedup_through_unslotted_middle,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class A:
+    x: int
+
+@dataclass
+class B(A):
+    pass
+
+@dataclass(slots=True)
+class C(B):
+    pass
+
+@dataclass(slots=True)
+class Right:
+    y: int
+
+# The diagnostic must name `A`, not `C`: `C`'s generated `__slots__` is
+# empty because `x` is already covered by `A`, so `C` inherits `A`'s
+# representative through the MRO rather than introducing its own.
+class Bad(C, Right): ...  # E: inherits from incompatible disjoint bases `A`, `Right`
+"#,
+);
+
+// Inherited pseudo-fields must not count as storage for slot synthesis.
+testcase!(
+    test_slots_dataclass_slots_ignores_inherited_pseudo_fields,
+    r#"
+from dataclasses import dataclass
+from typing import ClassVar
+
+@dataclass
+class PseudoOnlyBase:
+    x: ClassVar[int] = 0
+
+@dataclass(slots=True)
+class Child(PseudoOnlyBase):
+    pass
+
+class Right:
+    __slots__ = ("y",)
+
+class OK(Child, Right): ...  # no conflict: Child's slots are empty
+"#,
+);
+
+// A local pseudo-field annotation overrides the inherited dataclass entry,
+// dropping it from `fields(cls)` and the synthesized slots.
+testcase!(
+    test_slots_dataclass_slots_local_pseudo_override_drops_inherited_storage,
+    r#"
+from dataclasses import InitVar, dataclass
+from typing import ClassVar
+
+@dataclass
+class Base:
+    x: int
+    y: int
+
+@dataclass(slots=True)
+class Child(Base):
+    x: ClassVar[int] = 0  # E: ClassVar `Child.x` overrides instance variable of the same name in parent class `Base`
+    y: InitVar[int] = 0
+
+class Right:
+    __slots__ = ("z",)
+
+class OK(Child, Right): ...  # no conflict: x, y were pseudo-overridden
+"#,
+);
+
+// `@dataclass(slots=True)` + explicit `__slots__` errors at synthesis;
+// the disjoint-base gate must also suppress promotion.
+testcase!(
+    test_slots_dataclass_slots_explicit_slots_conflict_does_not_promote,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class C:  # E: Cannot specify both `slots=True` and `__slots__`
+    __slots__ = ()
+    x: int
+
+class Right:
+    __slots__ = ("y",)
+
+class OK(C, Right): ...  # no conflict
+"#,
+);
+
+// Like the prior test but with dynamic explicit `__slots__`: slot names are
+// unknown, but the class-body `__slots__` presence still blocks synthesis.
+testcase!(
+    test_slots_dataclass_slots_dynamic_explicit_slots_does_not_promote,
+    r#"
+from dataclasses import dataclass
+from typing import Sequence
+
+def get_slots() -> Sequence[str]: ...
+
+@dataclass(slots=True)
+class C:  # E: Cannot specify both `slots=True` and `__slots__`
+    __slots__ = get_slots()
+    x: int
+
+class Right:
+    __slots__ = ("y",)
+
+class OK(C, Right): ...  # no conflict
 "#,
 );

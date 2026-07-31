@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use dupe::Dupe;
+use pyrefly_python::dunder;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
@@ -30,9 +30,9 @@ const CREATE_BATCH: Name = Name::new_static("create_batch");
 const BUILD_BATCH: Name = Name::new_static("build_batch");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    /// Synthesize `create`, `build`, `create_batch`, and `build_batch` on
-    /// factory-boy `DjangoModelFactory` subclasses, returning the model type
-    /// from `class Meta: model = X`.
+    /// Synthesize `create`, `build`, `create_batch`, `build_batch`, and
+    /// `__new__` on factory-boy `DjangoModelFactory` subclasses, returning the
+    /// model type from `class Meta: model = X`.
     pub fn get_factory_boy_synthesized_fields(
         &self,
         cls: &Class,
@@ -49,11 +49,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut fields = SmallMap::new();
         fields.insert(
             CREATE,
-            self.factory_classmethod(cls, &CREATE, vec![], model_type.clone()),
+            self.factory_method(cls, &CREATE, vec![], model_type.clone()),
         );
         fields.insert(
             BUILD,
-            self.factory_classmethod(cls, &BUILD, vec![], model_type),
+            self.factory_method(cls, &BUILD, vec![], model_type.clone()),
+        );
+        fields.insert(
+            dunder::NEW,
+            self.factory_method(
+                cls,
+                &dunder::NEW,
+                vec![Param::Pos(
+                    Name::new_static("cls"),
+                    self.heap.mk_type_of(self.instantiate(cls)),
+                    Required::Required,
+                )],
+                model_type,
+            ),
         );
         let size_param = Param::Pos(
             Name::new_static("size"),
@@ -62,7 +75,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         fields.insert(
             CREATE_BATCH,
-            self.factory_classmethod(
+            self.factory_method(
                 cls,
                 &CREATE_BATCH,
                 vec![size_param.clone()],
@@ -71,14 +84,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         fields.insert(
             BUILD_BATCH,
-            self.factory_classmethod(cls, &BUILD_BATCH, vec![size_param], list_model_type),
+            self.factory_method(cls, &BUILD_BATCH, vec![size_param], list_model_type),
         );
+
         Some(ClassSynthesizedFields::new(fields))
     }
 
-    /// Extract the model type from `class Meta: model = X`.
+    /// Extract the model type from `class Meta: model = X` defined directly on this class.
     fn get_factory_model_type(&self, cls: &Class) -> Option<Type> {
-        let meta_field = self.get_class_member(cls, &META)?;
+        // Factories that inherit `Meta` without overriding it get the parent's
+        // synthesized methods via MRO, so we skip synthesis here.
+        let meta_field = self.get_non_synthesized_field_from_current_class_only(cls, &META)?;
         let meta_class = match meta_field.ty() {
             Type::ClassDef(cls) => cls,
             _ => return None,
@@ -92,8 +108,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Synthesize a classmethod with the given leading params, plus `**kwargs: Any`.
-    fn factory_classmethod(
+    /// Synthesize a factory method (`create`/`build`/... classmethods or the
+    /// static `__new__`) with the given leading params, plus `**kwargs: Any`.
+    fn factory_method(
         &self,
         cls: &Class,
         name: &Name,
@@ -103,7 +120,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         params.push(Param::Kwargs(None, self.heap.mk_any_implicit()));
         ClassSynthesizedField::new_classvar(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret_type),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), name.clone(), None),
+            metadata: FuncMetadata::method(cls, name.clone()),
         }))
     }
 }

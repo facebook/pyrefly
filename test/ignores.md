@@ -43,7 +43,7 @@ ERROR */foo.py:2* (glob)
 ## We can set `--enabled-ignores` on the command line
 
 ```scrut
-$ rm -f $TMPDIR/enabled_ignores/pyrefly.toml && \
+$ : > $TMPDIR/enabled_ignores/pyrefly.toml && \
 > $PYREFLY check $TMPDIR/enabled_ignores/foo.py --enabled-ignores=pyright --output-format=min-text
 ERROR */foo.py:1* (glob)
 ERROR */foo.py:2* (glob)

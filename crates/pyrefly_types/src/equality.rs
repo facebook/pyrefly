@@ -13,6 +13,7 @@ use compact_str::CompactString;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::qname::QName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::uniques::Unique;
@@ -28,6 +29,7 @@ use vec1::Vec1;
 
 use crate::param_spec::ParamSpec;
 use crate::quantified::QuantifiedIdentity;
+use crate::sentinel::Sentinel;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
 
@@ -47,6 +49,7 @@ pub struct TypeEqCtx {
     param_spec: SmallMap<ParamSpec, ParamSpec>,
     type_var: SmallMap<TypeVar, TypeVar>,
     type_var_tuple: SmallMap<TypeVarTuple, TypeVarTuple>,
+    sentinel: SmallMap<Sentinel, Sentinel>,
     /// Alpha-equivalence mapping for Quantified binders: LHS identity → RHS identity.
     /// First pairing wins; subsequent occurrences must match.
     quantified_identity: SmallMap<QuantifiedIdentity, QuantifiedIdentity>,
@@ -144,6 +147,18 @@ impl TypeEq for TypeVarTuple {
     }
 }
 
+impl TypeEq for Sentinel {
+    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
+        type_eq_identity(
+            self,
+            other,
+            ctx,
+            |ctx| &mut ctx.sentinel,
+            |ctx| self.type_eq_inner(other, ctx),
+        )
+    }
+}
+
 pub trait TypeEq: Eq {
     fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
         let _ = ctx;
@@ -175,6 +190,7 @@ impl<T> TypeEq for PhantomData<T> {}
 impl TypeEq for Name {}
 impl TypeEq for ModuleName {}
 impl TypeEq for ModulePath {}
+impl TypeEq for ModuleStyle {}
 impl TypeEq for TextRange {}
 impl TypeEq for ShortIdentifier {}
 

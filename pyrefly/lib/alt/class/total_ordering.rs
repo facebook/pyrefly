@@ -16,7 +16,6 @@ use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::binding::binding::KeyClassField;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 
 // https://github.com/python/cpython/blob/a8ec511900d0d84cffbb4ee6419c9a790d131129/Lib/functools.py#L173
@@ -74,7 +73,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 total_ordering_metadata.location,
-                ErrorInfo::Kind(ErrorKind::MissingAttribute),
+                ErrorKind::MissingAttribute,
                 format!(
                     "Class `{}` must define at least one of the rich comparison methods.",
                     cls.name()

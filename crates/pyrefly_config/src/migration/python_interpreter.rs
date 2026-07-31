@@ -12,6 +12,7 @@ use configparser::ini::Ini;
 
 use crate::config::ConfigFile;
 use crate::migration::config_option_migrater::ConfigOptionMigrater;
+use crate::migration::mypy::util;
 use crate::migration::pyright::PyrightConfig;
 use crate::util::ConfigOrigin;
 
@@ -31,7 +32,7 @@ impl ConfigOptionMigrater for PythonInterpreter {
         };
 
         pyrefly_cfg.interpreters.python_interpreter_path =
-            PathBuf::from_str(&python_interpreter_path)
+            PathBuf::from_str(&util::expand_config_file_dir(&python_interpreter_path))
                 .ok()
                 .map(ConfigOrigin::config);
         Ok(())
@@ -70,6 +71,28 @@ mod tests {
         assert_eq!(
             pyrefly_cfg.interpreters.python_interpreter_path,
             Some(ConfigOrigin::config(PathBuf::from("/usr/bin/python3")))
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_expands_config_file_dir() {
+        // A `python_executable` written relative to the config file via
+        // `$MYPY_CONFIG_FILE_DIR` migrates to a portable relative path.
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set(
+            "mypy",
+            "python_executable",
+            Some("$MYPY_CONFIG_FILE_DIR/.venv/bin/python".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let python_interpreter_path = PythonInterpreter;
+        let _ = python_interpreter_path.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        assert_eq!(
+            pyrefly_cfg.interpreters.python_interpreter_path,
+            Some(ConfigOrigin::config(PathBuf::from(".venv/bin/python")))
         );
     }
 

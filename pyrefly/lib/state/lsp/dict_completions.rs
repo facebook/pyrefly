@@ -6,6 +6,7 @@
  */
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
@@ -13,7 +14,6 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::facet::FacetKind;
-use pyrefly_types::types::Union;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
@@ -25,6 +25,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::alt::polars_specials::is_dataframe_column_method;
 use crate::binding::binding::Key;
 use crate::binding::narrow::int_from_slice;
 use crate::lsp::wasm::completion::RankedCompletion;
@@ -39,36 +40,40 @@ enum DictKeyLiteralContext {
         base_expr: Expr,
         literal: ExprStringLiteral,
     },
+    /// A string literal in a call containing a DataFrame expression.
+    /// Examples: `df.select("na|")`, `df.select(col("na|"))`.
+    CallArgument {
+        source_expr: Expr,
+        literal: ExprStringLiteral,
+    },
     /// A key literal inside a dict literal being constructed.
     /// Example: `{"na|": 1}`.
     DictLiteral {
         dict: ExprDict,
         literal: ExprStringLiteral,
     },
+    /// An empty subscript slot, before any key string has been typed.
+    /// Example: `cfg[|]`. Completions insert a quoted key since there is no
+    /// surrounding string.
+    BareSubscript { base_expr: Expr },
 }
 
 impl DictKeyLiteralContext {
-    fn literal_range(&self) -> TextRange {
+    /// The range of the key string literal, when the cursor is already inside one.
+    /// `None` for `BareSubscript`, where there is no string to bound the cursor to.
+    fn literal_range(&self) -> Option<TextRange> {
         match self {
-            Self::KeyAccess { literal, .. } | Self::DictLiteral { literal, .. } => literal.range(),
+            Self::KeyAccess { literal, .. }
+            | Self::CallArgument { literal, .. }
+            | Self::DictLiteral { literal, .. } => Some(literal.range()),
+            Self::BareSubscript { .. } => None,
         }
     }
 
-    fn base_range(&self) -> TextRange {
-        // For key access, we want the container expression's type.
-        // For dict literals, we want the literal's contextual type (e.g. a TypedDict in
-        // `cfg: Config = {"na|": 1}`), which is attached to the literal's range.
-        match self {
-            Self::KeyAccess { base_expr, .. } => base_expr.range(),
-            Self::DictLiteral { dict, .. } => dict.range(),
-        }
-    }
-
-    fn base_expr(&self) -> Option<&Expr> {
-        match self {
-            Self::KeyAccess { base_expr, .. } => Some(base_expr),
-            Self::DictLiteral { .. } => None,
-        }
+    /// Whether inserted keys need surrounding quotes (true only when the cursor is
+    /// not already inside a string literal).
+    fn needs_quotes(&self) -> bool {
+        matches!(self, Self::BareSubscript { .. })
     }
 }
 
@@ -76,8 +81,20 @@ impl<'a> Transaction<'a> {
     fn type_contains_typed_dict(ty: &Type) -> bool {
         match ty {
             Type::TypedDict(_) | Type::PartialTypedDict(_) => true,
-            Type::Union(box Union { members, .. }) => {
-                members.iter().any(Self::type_contains_typed_dict)
+            Type::Union(u) => u.members.iter().any(Self::type_contains_typed_dict),
+            _ => false,
+        }
+    }
+
+    fn type_is_dataframe(ty: &Type) -> bool {
+        match ty {
+            Type::DataFrame(_) => true,
+            Type::Union(u) => {
+                let (first, rest) = u
+                    .members
+                    .split_first()
+                    .expect("a union must contain at least one member");
+                Self::type_is_dataframe(first) && rest.iter().all(Self::type_is_dataframe)
             }
             _ => false,
         }
@@ -87,6 +104,11 @@ impl<'a> Transaction<'a> {
         self.get_type_trace(handle, expr.range())
             .map(|ty| Self::type_contains_typed_dict(&ty))
             .unwrap_or(false)
+    }
+
+    fn expr_has_dataframe_type(&self, handle: &Handle, expr: &Expr) -> bool {
+        self.get_type_trace(handle, expr.range())
+            .is_some_and(|ty| Self::type_is_dataframe(&ty))
     }
 
     /// Extracts typed dict access from `.get()` method calls.
@@ -136,11 +158,18 @@ impl<'a> Transaction<'a> {
         for node in nodes {
             let candidate = match node {
                 AnyNodeRef::ExprSubscript(sub) => {
-                    if let Expr::StringLiteral(lit) = sub.slice.as_ref() {
-                        Some((sub.value.as_ref().clone(), lit.clone()))
-                    } else {
-                        None
-                    }
+                    // A complete `d["k"]` parses the slice as a string literal directly.
+                    // A half-typed `d["` recovers as a slice whose lower bound is the
+                    // (unclosed) string, so accept that form too.
+                    let literal = match sub.slice.as_ref() {
+                        Expr::StringLiteral(lit) => Some(lit),
+                        Expr::Slice(slice) => match slice.lower.as_deref() {
+                            Some(Expr::StringLiteral(lit)) => Some(lit),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    literal.map(|lit| (sub.value.as_ref().clone(), lit.clone()))
                 }
                 AnyNodeRef::ExprCall(call) => self.typed_dict_get_string_literal(handle, call),
                 _ => None,
@@ -182,15 +211,69 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<DictKeyLiteralContext> {
         // Prefer direct key access (`d["k"]` / `d.get("k")`) so we can reuse the base
-        // expression for facet-based completions. Fall back to dict literal keys.
+        // expression for facet-based completions, then dict literal keys, surrounding
+        // calls, and finally an empty subscript slot (`d[|]`) with no key string typed yet.
         if let Some((base_expr, literal)) =
             self.dict_key_string_literal_at(handle, module, position)
         {
             Some(DictKeyLiteralContext::KeyAccess { base_expr, literal })
+        } else if let Some((dict, literal)) = Self::dict_literal_string_literal_at(module, position)
+        {
+            Some(DictKeyLiteralContext::DictLiteral { dict, literal })
+        } else if let Some((source_expr, literal)) =
+            self.dataframe_call_argument_string_literal_at(handle, module, position)
+        {
+            Some(DictKeyLiteralContext::CallArgument {
+                source_expr,
+                literal,
+            })
         } else {
-            Self::dict_literal_string_literal_at(module, position)
-                .map(|(dict, literal)| DictKeyLiteralContext::DictLiteral { dict, literal })
+            Self::bare_subscript_base_at(module, position)
+                .map(|base_expr| DictKeyLiteralContext::BareSubscript { base_expr })
         }
+    }
+
+    fn dataframe_call_argument_string_literal_at(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
+    ) -> Option<(Expr, ExprStringLiteral)> {
+        let nodes = Ast::locate_node(module, position);
+        let literal = nodes.iter().find_map(|node| match node {
+            AnyNodeRef::ExprStringLiteral(literal) => Some((*literal).clone()),
+            _ => None,
+        })?;
+        let literal_range = literal.range();
+        let mut best: Option<(TextSize, Expr)> = None;
+
+        for node in nodes {
+            let AnyNodeRef::ExprCall(call) = node else {
+                continue;
+            };
+            if !(call.range().start() <= literal_range.start()
+                && literal_range.end() <= call.range().end())
+            {
+                continue;
+            }
+            let Expr::Attribute(attr) = call.func.as_ref() else {
+                continue;
+            };
+            if !is_dataframe_column_method(attr.attr.id.as_str())
+                || !self.expr_has_dataframe_type(handle, attr.value.as_ref())
+            {
+                continue;
+            }
+            let call_len = call.range().len();
+            if best
+                .as_ref()
+                .is_none_or(|(best_len, _)| call_len < *best_len)
+            {
+                best = Some((call_len, attr.value.as_ref().clone()));
+            }
+        }
+
+        best.map(|(_, source_expr)| (source_expr, literal))
     }
 
     fn dict_literal_string_literal_at(
@@ -288,8 +371,8 @@ impl<'a> Transaction<'a> {
                                 .or_insert_with(|| field.ty.clone());
                         }
                     }
-                    Type::Union(box Union { members, .. }) => {
-                        stack.extend(members.into_iter());
+                    Type::Union(u) => {
+                        stack.extend(u.members);
                     }
                     _ => {}
                 }
@@ -298,10 +381,36 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    /// Adds dict key completions for the given position. Returns `true` if this function
-    /// claimed the position (i.e., we are inside a dict/TypedDict key string literal), in
-    /// which case the caller should skip overload-based literal completions to avoid showing
-    /// redundant entries.
+    fn collect_dataframe_columns(ty: &Type) -> Option<BTreeSet<String>> {
+        match ty {
+            Type::DataFrame(schema) => Some(
+                schema
+                    .columns
+                    .iter()
+                    .map(|(name, _)| name.to_string())
+                    .collect(),
+            ),
+            Type::Union(u) => {
+                let (first, rest) = u
+                    .members
+                    .split_first()
+                    .expect("a union must contain at least one member");
+                let mut columns = Self::collect_dataframe_columns(first)?;
+                for member in rest {
+                    let member_columns = Self::collect_dataframe_columns(member)?;
+                    columns.retain(|name| member_columns.contains(name));
+                }
+                Some(columns)
+            }
+            _ => None,
+        }
+    }
+
+    /// Adds dict key completions for the given position. Handles a key string being
+    /// typed (`d["k|"]`, `{"k|": …}`) as well as an empty subscript slot (`d[|]`),
+    /// where the inserted key is quoted. Returns `true` if this function claimed the
+    /// position, in which case the caller should skip overload-based literal completions
+    /// to avoid showing redundant entries.
     pub(crate) fn add_dict_key_completions(
         &self,
         handle: &Handle,
@@ -312,25 +421,75 @@ impl<'a> Transaction<'a> {
         let Some(context) = self.dict_key_literal_context(handle, module, position) else {
             return false;
         };
-        let literal_range = context.literal_range();
-        // Allow the cursor to sit a few characters before the literal (e.g. between nested
-        // subscripts) so completion requests fired just before the quotes still succeed.
-        let allowance = TextSize::from(4);
-        let lower_bound = literal_range
-            .start()
-            .checked_sub(allowance)
-            .unwrap_or_else(|| TextSize::new(0));
-        if position < lower_bound || position > literal_range.end() {
+        if let Some(literal_range) = context.literal_range() {
+            // Allow the cursor to sit a few characters before the literal (e.g. between
+            // nested subscripts) so completion requests fired just before the quotes
+            // still succeed.
+            let allowance = TextSize::from(4);
+            let lower_bound = literal_range
+                .start()
+                .checked_sub(allowance)
+                .unwrap_or_else(|| TextSize::new(0));
+            if position < lower_bound || position > literal_range.end() {
+                return false;
+            }
+        }
+        let mut suggestions = BTreeMap::new();
+        match &context {
+            DictKeyLiteralContext::KeyAccess { base_expr, .. }
+            | DictKeyLiteralContext::BareSubscript { base_expr } => self
+                .extend_dict_key_suggestions(
+                    handle,
+                    Some(base_expr),
+                    base_expr.range(),
+                    &mut suggestions,
+                ),
+            DictKeyLiteralContext::CallArgument { source_expr, .. } => self
+                .extend_dict_key_suggestions(
+                    handle,
+                    Some(source_expr),
+                    source_expr.range(),
+                    &mut suggestions,
+                ),
+            DictKeyLiteralContext::DictLiteral { dict, .. } => {
+                self.extend_dict_key_suggestions(handle, None, dict.range(), &mut suggestions)
+            }
+        }
+        if suggestions.is_empty() {
             return false;
         }
-        let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
+        Self::push_dict_key_completions(suggestions, completions, context.needs_quotes());
+        true
+    }
 
-        if let Some(base_expr) = context.base_expr()
+    /// If `position` is inside a subscript's slice (`d[|...]`, after the base), returns
+    /// the base expression `d`. Used to offer dict-key completions before a key is typed.
+    fn bare_subscript_base_at(module: &ModModule, position: TextSize) -> Option<Expr> {
+        for node in Ast::locate_node(module, position) {
+            if let AnyNodeRef::ExprSubscript(sub) = node
+                && position >= sub.value.range().end()
+            {
+                return Some(sub.value.as_ref().clone());
+            }
+        }
+        None
+    }
+
+    /// Adds known string keys for a dict-like base: explicit keys recorded as facets,
+    /// TypedDict fields, and DataFrame columns that are safe across every union member.
+    fn extend_dict_key_suggestions(
+        &self,
+        handle: &Handle,
+        base_expr: Option<&Expr>,
+        base_range: TextRange,
+        suggestions: &mut BTreeMap<String, Option<Type>>,
+    ) {
+        if let Some(base_expr) = base_expr
             && let Some(bindings) = self.get_bindings(handle)
         {
             let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
                 Some((identifier, facets))
-            } else if let Expr::Name(name) = &base_expr {
+            } else if let Expr::Name(name) = base_expr {
                 Some((Ast::expr_name_identifier(name.clone()), Vec::new()))
             } else {
                 None
@@ -368,30 +527,38 @@ impl<'a> Transaction<'a> {
 
         // For key access we query the container expression; for literals we query the
         // literal itself to pick up contextual TypedDict typing from assignments.
-        if let Some(base_type) = self.get_type_trace(handle, context.base_range())
-            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
-        {
-            for (key, ty) in typed_keys {
-                let entry = suggestions.entry(key).or_insert(None);
-                if entry.is_none() {
-                    *entry = Some(ty);
+        if let Some(base_type) = self.get_type_trace(handle, base_range) {
+            if let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type.clone()) {
+                for (key, ty) in typed_keys {
+                    let entry = suggestions.entry(key).or_insert(None);
+                    if entry.is_none() {
+                        *entry = Some(ty);
+                    }
+                }
+            }
+            if let Some(columns) = Self::collect_dataframe_columns(&base_type) {
+                for column in columns {
+                    suggestions.entry(column).or_insert(None);
                 }
             }
         }
+    }
 
-        if suggestions.is_empty() {
-            return false;
-        }
-
+    fn push_dict_key_completions(
+        suggestions: BTreeMap<String, Option<Type>>,
+        completions: &mut Vec<RankedCompletion>,
+        quote: bool,
+    ) {
         for (label, ty_opt) in suggestions {
             let detail = ty_opt.as_ref().map(|ty| ty.to_string());
+            let insert_text = quote.then(|| format!("\"{label}\""));
             completions.push(RankedCompletion::new(CompletionItem {
                 label,
                 detail,
                 kind: Some(CompletionItemKind::FIELD),
+                insert_text,
                 ..Default::default()
             }));
         }
-        true
     }
 }

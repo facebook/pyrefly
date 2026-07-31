@@ -208,7 +208,6 @@ class CM:
   def __exit__(self, *args) -> bool:
     return False
 
-
 def f() -> int:  # E: missing an explicit `return`
   with CM():
     return 1
@@ -226,7 +225,6 @@ class CM:
 
   def __exit__(self, *args) -> Literal[True]:
     return True
-
 
 def f() -> int:  # E: missing an explicit `return`
   with CM():
@@ -247,7 +245,6 @@ class CM:
 
   def __exit__(self, *args) -> Literal[False]:
     return False
-
 
 def f() -> int:
   with CM():

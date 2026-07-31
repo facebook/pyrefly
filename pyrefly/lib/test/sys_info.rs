@@ -51,6 +51,18 @@ if sys.version_info[1] >= 6:
 else:
     C = int
 assert_type(C(), str)
+
+if sys.version_info.minor >= 6:
+    D = str
+else:
+    D = int
+assert_type(D(), str)
+
+if sys.version_info.major == 3:
+    E = str
+else:
+    E = int
+assert_type(E(), str)
 "#,
 );
 
@@ -177,6 +189,65 @@ elif sys.platform.startswith("lin"):
 else:
     Y = None
 assert_type(Y(), int)
+"#,
+);
+
+testcase!(
+    test_platform_ternary_linux,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+import subprocess
+import sys
+
+value: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+inverted: int = 0 if sys.platform != "win32" else subprocess.CREATE_NO_WINDOW
+
+def condition() -> bool:
+    return False
+
+subprocess.CREATE_NO_WINDOW if condition() else 0  # E: No attribute `CREATE_NO_WINDOW` in module `subprocess`
+"#,
+);
+
+testcase!(
+    test_platform_ternary_windows,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+import subprocess
+import sys
+
+value: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else "not windows"
+inverted: int = "not windows" if sys.platform != "win32" else subprocess.CREATE_NO_WINDOW
+"#,
+);
+
+testcase!(
+    test_platform_ternary_yield_in_skipped_orelse,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+from typing import Generator, assert_type
+import sys
+
+def gen() -> Generator[int, None, None]:
+    x = 1 if sys.platform == "win32" else (yield 2)
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+"#,
+);
+
+testcase!(
+    test_platform_ternary_yield_in_skipped_body,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+from typing import Generator, assert_type
+import sys
+
+def gen() -> Generator[int, None, None]:
+    x = (yield 2) if sys.platform == "win32" else 1
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
 "#,
 );
 
@@ -312,6 +383,64 @@ def f(**kwargs: Unpack[Kwargs]) -> None:
 );
 
 testcase!(
+    test_version_guard_and_short_circuit,
+    r#"
+if False:
+    A = 3
+
+if False:
+    B = 3
+
+if False:
+    C = 3
+
+
+def test_and_basic() -> None:
+    # `and` short-circuits on False: A in the condition and body are unreachable.
+    if False and A:
+        _ = A
+
+def test_and_longer_chain() -> None:
+    # Both B and C are gated: the guard short-circuits before reaching them.
+    if False and B and C:
+        _ = B
+        _ = C
+
+def test_and_three_guards() -> None:
+    # Three consecutive False guards in a single and-chain.
+    if False and A and B and C:
+        _ = A
+        _ = B
+        _ = C
+
+def test_or_basic() -> None:
+    # `or` short-circuits when the left side is *true*. False on the left
+    # means the right side IS evaluated — the name is unknown.
+    if False or A:  # E: Could not find name `A`
+        pass
+
+def test_or_always_true_guard() -> None:
+    # True → right side is unreachable.
+    if True or A:
+        pass
+
+def test_or_longer_chain() -> None:
+    # Chain: first element is always-true, so B and C are never evaluated.
+    if True or B or C:
+        pass
+
+def test_and_body_unreachable() -> None:
+    # An `if False` body is also unreachable; accessing A inside it is fine.
+    if False:
+        _ = A
+
+def test_no_guard_produces_error() -> None:
+    # Baseline: without any guard, accessing A must produce an error.
+    A  # E: Could not find name `A`
+"#,
+);
+
+testcase!(
     test_typechecking_unpack_alias,
     r#"
 import typing
@@ -398,4 +527,93 @@ testcase!(
     test_python_3_7,
     TestEnv::new_with_version(PythonVersion::new(3, 7, 0)),
     "",
+);
+
+// https://github.com/facebook/pyrefly/issues/3756: a module-level `TYPE_CHECKING` constant is
+// treated as `True` by type checkers and `False` at runtime, so it must have type `bool`.
+testcase!(
+    test_type_checking_constant_bad_annotation,
+    r#"
+TYPE_CHECKING: str = ""  # E: TYPE_CHECKING
+"#,
+);
+
+testcase!(
+    test_type_checking_constant_bad_value,
+    r#"
+TYPE_CHECKING = 1  # E: `TYPE_CHECKING` must have type `bool`
+"#,
+);
+
+// The canonical `from typing import TYPE_CHECKING` is an import, not an assignment, so it is fine.
+testcase!(
+    test_type_checking_constant_import_ok,
+    r#"
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    x: int = 1
+"#,
+);
+
+testcase!(
+    test_type_checking_constant_define_ok,
+    r#"
+TYPE_CHECKING = False
+TYPE_CHECKING_WITH_PYREFLY: bool = False
+"#,
+);
+
+// A local variable that merely shares the name is not the module-level constant, so don't flag it.
+testcase!(
+    test_type_checking_constant_local_ok,
+    r#"
+def f() -> None:
+    TYPE_CHECKING: str = ""
+"#,
+);
+
+// We check the type is `bool`; we do not additionally require the value to be `False`, so a
+// `True` value (a runtime bug) is currently accepted.
+testcase!(
+    bug = "TYPE_CHECKING = True is a runtime bug but is not flagged (we only check the type)",
+    test_type_checking_constant_true_not_flagged,
+    r#"
+TYPE_CHECKING = True
+"#,
+);
+
+// A class attribute that merely shares the name is not the module-level sentinel.
+testcase!(
+    test_type_checking_constant_class_attr_ok,
+    r#"
+class C:
+    TYPE_CHECKING: str = ""
+"#,
+);
+
+// `TYPE_CHECKING_WITH_PYREFLY` is also recognized, so a bad definition is flagged too.
+testcase!(
+    test_type_checking_with_pyrefly_bad,
+    r#"
+TYPE_CHECKING_WITH_PYREFLY = 1  # E: must have type `bool`
+"#,
+);
+
+// Annotation-only declarations route through a different binding, so we don't check them yet.
+testcase!(
+    bug = "annotation-only `TYPE_CHECKING: str` (no value) is not yet flagged",
+    test_type_checking_constant_annotation_only_not_flagged,
+    r#"
+TYPE_CHECKING: str
+"#,
+);
+
+// Stub (`.pyi`) files have no runtime and conventionally initialize typing constants to placeholder
+// values (e.g. `TYPE_CHECKING = 1` in mypy's test fixtures), so the check is skipped there.
+testcase!(
+    test_type_checking_constant_stub_ok,
+    TestEnv::one_with_path("foo", "foo.pyi", "TYPE_CHECKING = 1"),
+    r#"
+import foo
+"#,
 );

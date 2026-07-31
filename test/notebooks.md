@@ -32,6 +32,60 @@ $ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"o
 [0]
 ```
 
+## Notebook Top Level Async With
+
+```scrut
+$ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["import asyncio\\nasync with asyncio.timeout(1):\\n    await asyncio.sleep(0.5)"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
+> $PYREFLY check $TMPDIR/notebook.ipynb
+[0]
+```
+
+## Notebook Top Level Async For
+
+```scrut
+$ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["async def arange(n):\\n    for i in range(n):\\n        yield i\\nasync for x in arange(5):\\n    pass"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
+> $PYREFLY check $TMPDIR/notebook.ipynb
+[0]
+```
+
+## Shebang Notebook Top Level Await
+
+```scrut
+$ echo -e '#!/usr/bin/env -S notebookrunner --kernel default\nimport asyncio\nawait asyncio.sleep(1)' > $TMPDIR/notebook.py && \
+> $PYREFLY check $TMPDIR/notebook.py
+[0]
+```
+
+## Shebang Notebook Top Level Async With
+
+```scrut
+$ echo -e '#!/usr/bin/env -S notebookrunner --kernel default\nimport asyncio\nasync with asyncio.timeout(1):\n    await asyncio.sleep(0.5)' > $TMPDIR/notebook.py && \
+> $PYREFLY check $TMPDIR/notebook.py
+[0]
+```
+
+## Shebang Notebook Top Level Async For
+
+```scrut
+$ echo -e '#!/usr/bin/env -S notebookrunner --kernel default\nasync def arange(n):\n    for i in range(n):\n        yield i\nasync for x in arange(5):\n    pass' > $TMPDIR/notebook.py && \
+> $PYREFLY check $TMPDIR/notebook.py
+[0]
+```
+
+## Non-Notebook Python Top Level Await Rejected
+
+```scrut
+$ echo -e 'import asyncio\nawait asyncio.sleep(1)' > $TMPDIR/regular.py && \
+> $PYREFLY check $TMPDIR/regular.py
+ERROR `await` can only be used inside an async function [invalid-syntax]
+ --> */regular.py:2:1 (glob)
+  |
+* (glob)
+* (glob)
+  |
+[1]
+```
+
 ## Notebook Directive
 
 ```scrut
@@ -43,7 +97,8 @@ $ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"o
 ## Notebook Error
 
 ```scrut
-$ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = 5"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = 5"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
 > $PYREFLY check $TMPDIR/notebook.ipynb
 ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
  --> */notebook.ipynb#1:1:11 (glob)
@@ -59,7 +114,8 @@ ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
 ## Notebook Error Second Cell
 
 ```scrut
-$ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = True"]},{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = 5"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = True"]},{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = 5"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
 > $PYREFLY check $TMPDIR/notebook.ipynb
 ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
  --> */notebook.ipynb#2:1:11 (glob)

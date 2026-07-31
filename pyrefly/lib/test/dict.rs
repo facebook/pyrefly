@@ -15,6 +15,48 @@ dict(x = 1, y = "test")
 );
 
 testcase!(
+    test_dict_literal_bad_value_range,
+    r#"
+mp: dict[int, int] = {
+    1: 2,
+    3: "test",  # E: `Literal['test']` is not assignable to dict value type `int`
+}
+    "#,
+);
+
+testcase!(
+    test_dict_literal_bad_key_range,
+    r#"
+mp: dict[int, int] = {
+    1: 2,
+    "test": 3,  # E: `Literal['test']` is not assignable to dict key type `int`
+}
+    "#,
+);
+
+testcase!(
+    test_dict_literal_nested_alias_mapping_or_iterable,
+    r#"
+from typing import Generic, Iterable, Mapping, TypeAlias, TypeVar
+
+class Var: ...
+
+JsonScalar: TypeAlias = "Json | Mapping[str, object] | Var"
+JsonList: TypeAlias = JsonScalar | Iterable[JsonScalar]
+
+PythonTypes = TypeVar("PythonTypes")
+AcceptedTypes = TypeVar("AcceptedTypes")
+
+class Base(Generic[PythonTypes, AcceptedTypes]):
+    def __init__(self, value: AcceptedTypes | None = None) -> None: ...
+
+class Json(Base[Mapping[str, object], JsonList]): ...
+
+Json({"featureQuery": {"id": 1}})
+    "#,
+);
+
+testcase!(
     test_anonymous_typed_dict_union_promotion,
     r#"
 from typing import assert_type
@@ -106,6 +148,56 @@ for topic, token in items:
 );
 
 testcase!(
+    test_loop_assigned_heterogeneous_inner_dict,
+    r#"
+import datetime
+
+def bin_tasks(dates: list[datetime.date]) -> None:
+    bins = {}
+    for d in dates:
+        bins[d] = {"start": d, "tasks": []}
+
+    for val in bins.values():
+        for task in val["tasks"]:
+            print(task)
+"#,
+);
+
+testcase!(
+    test_loop_assigned_inner_dict_does_not_freeze_first_shape,
+    r#"
+from typing import assert_type
+
+d = {}
+d[0] = {"x": 1}
+d[1] = {"y": 1}
+
+assert_type(d[0], dict[str, int])
+assert_type(d[1], dict[str, int])
+"#,
+);
+
+testcase!(
+    test_loop_assigned_inner_dict_union_hint_with_partial_var,
+    r#"
+from typing import reveal_type
+
+def f(flag: bool) -> None:
+    bins = {}
+    if flag:
+        bins = {"a": {"xs": [1]}}
+
+    bins["b"] = {"xs": []}
+
+    # The concrete branch keeps the inner literal on the regular dict path rather than
+    # the lone-bare-partial anonymous TypedDict path, but the empty list is not pinned
+    # through this mixed flow hint.
+    reveal_type(bins["b"])  # E: revealed type: dict[str, list[Unknown]]
+    reveal_type(bins["b"]["xs"])  # E: revealed type: list[Unknown]
+"#,
+);
+
+testcase!(
     test_large_dict_literal_mixed_none,
     r#"
 # Regression test: dict literals with many entries of mixed str | None values
@@ -149,5 +241,37 @@ assert_type(f(d), TD)  # E: assert_type(dict[str, int], TD)
 
 # This `f` call incorrectly fails, and the returned type is wrong.
 assert_type(f({"x": 0}), TD)  # E: `dict[str, int]` is not assignable to upper bound `TD`  # E: assert_type(dict[str, int], TD)
+    "#,
+);
+
+// Regression test: deeply nested dict literals previously caused exponential memory growth
+// because AnonymousTypedDictInner stored the value type both in `fields` and a redundant
+// `value_type` field, doubling the cloned type tree at each nesting level. The fix removed
+// the redundant field and computes the value type on demand from `fields`.
+//
+// Depth 15 is used for CI speed. The fix was verified at depth 25 (239 MB, down from 7.7 GB)
+// and depth 50 (236 MB), confirming linear rather than exponential growth.
+testcase!(
+    test_deeply_nested_dict_literal,
+    r#"
+from typing import assert_type
+
+x = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": {"k": {"l": {"m": {"n": {"o": "deep"}}}}}}}}}}}}}}}
+assert_type(x, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]]]]]]]]]]])
+"#,
+);
+
+testcase!(
+    test_unpack_dict_in_list,
+    r#"
+def same[T](x: T, ys: list[T]) -> None:
+      pass
+
+extra: dict[str, list[str]] = {"name": ["name"]}
+images: list[bytes] = []
+
+d = {"photo": [images[0]], "enabled": ["yes"]}
+
+same(d, [dict(photo=[images[0]], enabled=["yes"], **extra)])
     "#,
 );

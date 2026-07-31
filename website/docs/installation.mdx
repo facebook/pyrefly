@@ -12,6 +12,24 @@ description: How to install Pyrefly
 
 Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new release every Monday. We often release more frequently when shipping new features and bug fixes.
 
+## What you get out of the box
+
+When you first install Pyrefly without a configuration file, it uses the **basic preset** by default. This shows only high-confidence errors that are very likely to indicate real bugs or crashes, like syntax errors and missing imports. Other diagnostics are silenced.
+
+The basic preset is useful immediately, without setup. You don't need to understand Python typing concepts to benefit. Open a file in VS Code with the Pyrefly extension and you'll get inlay hints, go-to-definition, and the curated error set right away. The status bar shows `Pyrefly (Basic)` so you know which preset is active.
+
+If you already have a `mypy.ini`, `pyrightconfig.json`, or a `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml`, Pyrefly automatically migrates that configuration the first time it runs in your project. The status bar will show `Pyrefly (Legacy)` (mypy migration) or `Pyrefly (Default)` (pyright migration) accordingly. Nothing is written to disk during the migration; running `pyrefly init` later will commit the same migration permanently.
+
+To unlock full type checking and pin your configuration, run `pyrefly init`. This writes a `pyrefly.toml` (or updates `pyproject.toml`) and explicitly migrates any existing mypy/pyright settings. After running `pyrefly init`, common knobs to tune include:
+
+- `check-unannotated-defs`: type-check the bodies of unannotated functions.
+- `errors`: per-error-kind severity overrides.
+- `infer-return-types`: when to infer return types for unannotated functions.
+- `project-excludes` and `pyrefly suppress`: incremental rollout on existing
+  codebases.
+
+See the [configuration reference](../configuration) for the full list.
+
 ## Install
 
 You can use `uv`, `poetry`, `pip`, `pixi` or `conda` to install Pyrefly. The following commands show you how to install Pyrefly and run 2 basic commands: `init` and `check`.

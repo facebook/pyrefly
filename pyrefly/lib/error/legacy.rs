@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use pyrefly_config::error_kind::Severity;
+use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::prelude::SliceExt;
 use serde::Deserialize;
 use serde::Serialize;
@@ -63,10 +64,9 @@ impl LegacyError {
             stop_column: error_range.end.column().get() as usize,
             cell: error_range.start.cell().map(|cell| cell.get() as usize),
             path: error_path
-                .strip_prefix(relative_to)
-                .unwrap_or(error_path)
+                .relativize_from(relative_to)
                 .to_string_lossy()
-                .into_owned(),
+                .replace('\\', "/"), // Normalize Windows backslashes so baseline files are consistent across platforms
             // -2 is chosen because it's an unused error code in Pyre1
             code: -2, // TODO: replace this dummy value
             name: error.error_kind().to_name().to_owned(),
@@ -87,5 +87,38 @@ impl LegacyErrors {
         Self {
             errors: errors.map(|e| LegacyError::from_error(relative_to, e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+
+    use super::*;
+    use crate::config::error_kind::ErrorKind;
+
+    #[test]
+    fn test_relativize_when_error_is_not_under_relative_to() {
+        let module = Module::new(
+            ModuleName::from_str("foo"),
+            ModulePath::filesystem(PathBuf::from("/repo/libs/foo.py")),
+            Arc::new("x = 1\n".to_owned()),
+        );
+        let error = Error::new(
+            module,
+            TextRange::new(TextSize::new(0), TextSize::new(1)),
+            "err".to_owned(),
+            Vec::new(),
+            ErrorKind::BadAssignment,
+        );
+        let legacy = LegacyError::from_error(Path::new("/repo/src"), &error);
+        assert_eq!(legacy.path, "../libs/foo.py");
     }
 }

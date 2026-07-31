@@ -17,7 +17,10 @@ import * as vscode from 'vscode';
  *
  * We then change the setting back so we don't end up messing up the users settings.
  */
-export async function triggerMsPythonRefreshLanguageServers() {
+export async function triggerMsPythonRefreshLanguageServersIfInstalled() {
+  if (!vscode.extensions.getExtension('ms-python.python')) {
+    return;
+  }
   const config = vscode.workspace.getConfiguration('python');
   const setting = 'languageServer';
   let previousSetting = config.get(setting);
@@ -33,49 +36,4 @@ export async function triggerMsPythonRefreshLanguageServers() {
     previousSetting,
     vscode.ConfigurationTarget.Global,
   );
-}
-
-/**
- * This function checks if the Windsurf Pyright extension is installed, and if so,
- * disables its language services to avoid conflicts with Pyrefly.
- */
-export async function disableWindsurfPyrightIfInstalled() {
-  const windsurfPyrightExtension = vscode.extensions.getExtension(
-    'codeium.windsurfpyright',
-  );
-  if (windsurfPyrightExtension) {
-    const config = vscode.workspace.getConfiguration('windsurfPyright');
-    const setting = 'disableLanguageServices';
-    await config.update(setting, true, vscode.ConfigurationTarget.Global);
-  }
-}
-
-/**
- * This function checks if the Based Pyright extension is installed, and if so,
- * disables its language services to avoid conflicts with Pyrefly.
- */
-export async function disableBasedPyrightIfInstalled() {
-  const basedPyrightExtension = vscode.extensions.getExtension(
-    'detachhead.basedpyright',
-  );
-  if (basedPyrightExtension) {
-    const config = vscode.workspace.getConfiguration('basedpyright');
-    const setting = 'disableLanguageServices';
-    await config.update(setting, true, vscode.ConfigurationTarget.Global);
-  }
-}
-
-/**
- * This function checks if the Cursor Pyright extension is installed, and if so,
- * disables its language services to avoid conflicts with Pyrefly.
- */
-export async function disableCursorPyrightIfInstalled() {
-  const cursorPyrightExtension = vscode.extensions.getExtension(
-    'anysphere.cursorpyright',
-  );
-  if (cursorPyrightExtension) {
-    const config = vscode.workspace.getConfiguration('cursorpyright');
-    const setting = 'disableLanguageServices';
-    await config.update(setting, true, vscode.ConfigurationTarget.Global);
-  }
 }
