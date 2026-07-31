@@ -262,6 +262,11 @@ fn on_type(
             // they carry no type variables.
             on_type(variance, inj, &schema.underlying_type(), on_edge, on_var);
         }
+        Type::Series(schema) => {
+            // Delegate to the underlying instance; the dtype is a Polars dtype, not a type, so
+            // it carries no type variables.
+            on_type(variance, inj, &schema.underlying_type(), on_edge, on_var);
+        }
         Type::Tuple(t) => {
             handle_tuple_type(t, variance, inj, on_edge, on_var);
         }

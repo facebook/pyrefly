@@ -183,6 +183,9 @@ impl<'a> TypeDisplayContext<'a> {
             if let Type::DataFrame(schema) = t {
                 self.add_qname(schema.underlying.qname());
             }
+            if let Type::Series(schema) = t {
+                self.add_qname(schema.underlying.qname());
+            }
             // A singledispatch dispatcher is displayed as its backing `_SingleDispatchCallable`
             // class, so that class needs a registered qname to display unqualified.
             if let Type::Function(func) = t
@@ -786,6 +789,15 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 output.write_str("]")?;
                 Ok(())
+            }
+            Type::Series(schema) if self.strip_library_schemas => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)
+            }
+            Type::Series(schema) => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
+                output.write_str("[")?;
+                output.write_str(schema.dtype.name())?;
+                output.write_str("]")
             }
             Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
             Type::TypeVar(t) => {

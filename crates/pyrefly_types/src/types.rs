@@ -61,6 +61,7 @@ use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::sentinel::Sentinel;
+use crate::series::SeriesSchema;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::ShapedArrayType;
 use crate::simplify::unions;
@@ -821,6 +822,8 @@ pub enum Type {
     /// Wraps an underlying DataFrame instance type and an ordered column schema;
     /// all behavior delegates to the underlying type.
     DataFrame(Box<DataFrameSchema>),
+    /// A Series instance carrying its element dtype; behavior delegates to the underlying type.
+    Series(Box<SeriesSchema>),
     /// Dimension value type - represents values that satisfy Dim bound
     /// Examples:
     ///   - `Type::Int(Int::Literal(6))` for concrete dimension 6
@@ -933,6 +936,7 @@ impl Visit for Type {
             Type::IntTuple(x) => x.visit(f),
             Type::NNModule(x) => x.visit(f),
             Type::DataFrame(x) => x.visit(f),
+            Type::Series(x) => x.visit(f),
             Type::Int(x) => x.visit(f),
             Type::Tuple(x) => x.visit(f),
             Type::Module(x) => x.visit(f),
@@ -992,6 +996,7 @@ impl VisitMut for Type {
             Type::IntTuple(x) => x.visit_mut(f),
             Type::NNModule(x) => x.visit_mut(f),
             Type::DataFrame(x) => x.visit_mut(f),
+            Type::Series(x) => x.visit_mut(f),
             Type::Int(x) => x.visit_mut(f),
             Type::Tuple(x) => x.visit_mut(f),
             Type::Module(x) => x.visit_mut(f),
@@ -1968,14 +1973,14 @@ impl Type {
         self
     }
 
-    /// Replace every DataFrame schema with its plain underlying class. The
-    /// `DataFrame[a: Int64, ...]` schema form is not valid annotation syntax, so a
-    /// surface that emits a type as a source annotation must strip the schema first.
+    /// Replace every DataFrame and Series schema with its plain underlying class. The schema forms
+    /// (`DataFrame[a: Int64, ...]`, `Series[Int64]`) are not valid annotation syntax, so a surface
+    /// that emits a type as source must strip them first.
     pub fn strip_library_schemas(self) -> Type {
-        self.transform(&mut |t| {
-            if let Type::DataFrame(schema) = t {
-                *t = schema.underlying_type();
-            }
+        self.transform(&mut |t| match t {
+            Type::DataFrame(schema) => *t = schema.underlying_type(),
+            Type::Series(schema) => *t = schema.underlying_type(),
+            _ => {}
         })
     }
 

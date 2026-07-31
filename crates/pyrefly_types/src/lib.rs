@@ -41,6 +41,7 @@ pub mod polars_dtype;
 pub mod quantified;
 pub mod read_only;
 pub mod sentinel;
+pub mod series;
 pub mod shaped_array;
 pub mod simplify;
 pub mod special_form;

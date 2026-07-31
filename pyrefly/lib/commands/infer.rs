@@ -204,9 +204,10 @@ fn format_hints(
             if matches!(sub_type, Type::SelfType(_)) {
                 return;
             }
-            // A DataFrame renders as its underlying class, which `universe` does not visit.
+            // A DataFrame/Series renders as its underlying class, which `universe` does not visit.
             let qname = match sub_type {
                 Type::DataFrame(schema) => Some(schema.underlying.qname()),
+                Type::Series(schema) => Some(schema.underlying.qname()),
                 _ => sub_type.qname(),
             };
             if let Some(qname) = qname {

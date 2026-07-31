@@ -43,6 +43,10 @@ pub fn is_polars_dataframe(cls: &Class) -> bool {
     cls.has_toplevel_qname("polars.dataframe.frame", "DataFrame")
 }
 
+pub fn is_polars_series(cls: &Class) -> bool {
+    cls.has_toplevel_qname("polars.series.series", "Series")
+}
+
 /// The receiver schema for a column transform whose method takes only positional
 /// arguments: `base` must carry a schema and `func` must name `method` with no
 /// keywords. Shared preamble so each transform states only what is unique to it.

@@ -497,6 +497,7 @@ pub(super) fn type_to_indexed_shape(
             )
         }
         Type::DataFrame(schema) => type_to_indexed_shape(context, &schema.underlying_type(), table),
+        Type::Series(schema) => type_to_indexed_shape(context, &schema.underlying_type(), table),
         Type::Int(_) => indexed_named_leaf(table, "Int"),
         Type::TypeLevelDslCall(_) => indexed_named_leaf(table, "type_level_dsl_call"),
         Type::TypeForm(inner) => {

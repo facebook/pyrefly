@@ -26,6 +26,7 @@ use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::dimension::int_type_is_provably_negative;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::literal::Literal;
+use pyrefly_types::series::SeriesSchema;
 use pyrefly_types::shaped_array::IndexOp;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::shaped_array::IntTupleView;
@@ -82,6 +83,7 @@ use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::callable::CallArg;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::nn_module_specials::is_nn_module_dict;
+use crate::alt::polars_specials::is_polars_series;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
@@ -3253,34 +3255,69 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
                 Type::DataFrame(schema) => {
+                    // A list key selects columns and stays a DataFrame, so handle it before the
+                    // single-column read path below.
+                    if let Expr::List(ExprList { elts, .. }) = slice
+                        && schema.kind == DataFrameKind::Polars
+                        && let Some(narrowed) = self.polars_select_columns(&schema, elts, errors)
+                    {
+                        return narrowed;
+                    }
+                    // A string key on a Complete Polars schema reads one column: a known column
+                    // pins the result Series to its dtype, an absent one errors, and every other
+                    // case leaves `column_dtype` unset so the read stays an opaque Series.
+                    let mut column_dtype = None;
                     if let Expr::StringLiteral(key) = slice
                         && schema.is_complete()
                     {
                         let name = key.value.to_str();
-                        if !schema.columns.iter().any(|(c, _)| c.as_str() == name) {
-                            errors
-                                .error_builder(
-                                    slice.range(),
-                                    ErrorKind::UnknownColumn,
-                                    format!("Column `{name}` is not in the DataFrame schema"),
-                                )
-                                .emit();
+                        match schema.columns.iter().find(|(c, _)| c.as_str() == name) {
+                            Some((_, dtype)) if schema.kind == DataFrameKind::Polars => {
+                                column_dtype = Some(*dtype);
+                            }
+                            Some(_) => {}
+                            None => {
+                                errors
+                                    .error_builder(
+                                        slice.range(),
+                                        ErrorKind::UnknownColumn,
+                                        format!("Column `{name}` is not in the DataFrame schema"),
+                                    )
+                                    .emit();
+                            }
                         }
-                    } else if let Expr::List(ExprList { elts, .. }) = slice
-                        && schema.kind == DataFrameKind::Polars
-                        && let Some(narrowed) =
-                            self.polars_select_columns(&schema, elts, errors)
-                    {
-                        return narrowed;
                     }
-                    self.subscript_infer_for_type_with_key_present(
+                    let result = self.subscript_infer_for_type_with_key_present(
                         &schema.underlying_type(),
                         slice,
                         range,
                         errors,
                         key_present,
-                    )
+                    );
+                    // Only wrap when the stub hands back a plain `pl.Series`, keeping that class as
+                    // the single source of truth for the Series `ClassType`.
+                    match (column_dtype, result) {
+                        (Some(dtype), Type::ClassType(cls))
+                            if is_polars_series(cls.class_object()) =>
+                        {
+                            SeriesSchema {
+                                underlying: cls,
+                                dtype,
+                            }
+                            .to_type()
+                        }
+                        (_, result) => result,
+                    }
                 }
+                // Indexing a Series delegates to its opaque class, which resolves the
+                // real `__getitem__`; the element dtype is not carried through.
+                Type::Series(schema) => self.subscript_infer_for_type_with_key_present(
+                    &schema.underlying_type(),
+                    slice,
+                    range,
+                    errors,
+                    key_present,
+                ),
                 Type::Quantified(ref q) if q.is_type_var() && q.restriction().is_restricted() => {
                     match q.restriction() {
                         Restriction::Bound(bound) => self

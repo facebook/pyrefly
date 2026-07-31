@@ -13,12 +13,25 @@ use crate::testcase;
 fn env_with_polars_stubs() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path(
+        "polars.series.series",
+        "polars/series/series.pyi",
+        r#"
+from typing import Any, overload
+class Series:
+    def __init__(self, name: str = "", values: object = None) -> None: ...
+    @overload
+    def __getitem__(self, key: int) -> Any: ...
+    @overload
+    def __getitem__(self, key: slice) -> "Series": ...
+    def __or__(self, other: "Series") -> "Series": ...
+"#,
+    );
+    env.add_with_path(
         "polars.dataframe.frame",
         "polars/dataframe/frame.pyi",
         r#"
 from typing import Iterator, overload
-class Series:
-    def __init__(self, name: str = "", values: object = None) -> None: ...
+from polars.series.series import Series
 class DataFrame:
     columns: list[str]
     def __init__(self, data: object = None, schema: object = None, schema_overrides: object = None, strict: bool = True) -> None: ...
@@ -60,7 +73,8 @@ def concat(items: Iterable[DataFrame], *, how: str = "vertical", rechunk: bool =
     env.add(
         "polars",
         r#"
-from polars.dataframe.frame import DataFrame as DataFrame, Series as Series
+from polars.dataframe.frame import DataFrame as DataFrame
+from polars.series.series import Series as Series
 from polars.functions.eager import concat as concat
 class Int8: ...
 class Int32: ...
@@ -122,9 +136,11 @@ fn env_with_polars_and_pandas_stubs() -> TestEnv {
         "pandas.core.frame",
         "pandas/core/frame.pyi",
         r#"
+class Series: ...
 class DataFrame:
     columns: list[str]
     def __init__(self, data: object = None, columns: object = None, dtype: object = None) -> None: ...
+    def __getitem__(self, key: str) -> Series: ...
 "#,
     );
     env.add(
@@ -1280,7 +1296,33 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df["a"])  # E: revealed type: Series
+reveal_type(df["a"])  # E: revealed type: Series[Int64]
+"#,
+);
+
+testcase!(
+    test_typed_series_is_subscriptable,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+s = df["a"]
+reveal_type(s[0])  # E: revealed type: Any
+reveal_type(s[0:2])  # E: revealed type: Series
+reveal_type(df["a"][0])  # E: revealed type: Any
+"#,
+);
+
+testcase!(
+    test_typed_series_bitor_resolves_operator,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+# `|` on Series values must resolve `__or__`, not be read as a PEP 604 type union.
+reveal_type(df["a"] | df["b"])  # E: revealed type: Series
 "#,
 );
 
@@ -1290,9 +1332,58 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-df = pl.DataFrame({"a": [1], "b": ["x"]})
+df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
+reveal_type(df["a"])  # E: revealed type: Series[Int64]
+reveal_type(df["b"])  # E: revealed type: Series[String]
+reveal_type(df["c"])  # E: revealed type: Series[Float64]
+"#,
+);
+
+testcase!(
+    test_column_read_unknown_dtype_is_typed_series,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A scalar column has no resolvable dtype, so it reads as Series[Unknown] rather than falling back.
+df = pl.DataFrame({"a": 1})
+reveal_type(df["a"])  # E: revealed type: Series[Unknown]
+"#,
+);
+
+testcase!(
+    test_partial_schema_column_read_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# `insert_column` degrades the frame to Partial, so a known column can no longer prove its dtype.
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
 reveal_type(df["a"])  # E: revealed type: Series
-reveal_type(df["b"])  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_list_key_stays_dataframe,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df[["a"]])  # E: revealed type: DataFrame[a: Int64]
+reveal_type(df[["a", "b"]])  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_typed_column_read_across_import,
+    env_cross_file(),
+    r#"
+from defs import df
+from typing import reveal_type
+reveal_type(df["a"])  # E: revealed type: Series[Int64]
+reveal_type(df["b"])  # E: revealed type: Series[String]
 "#,
 );
 
@@ -3272,6 +3363,18 @@ from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 other = pd.DataFrame({"c": [1.0]})
 reveal_type(df.hstack(other))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_pandas_column_read_falls_back,
+    env_with_polars_and_pandas_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+# A pandas frame is Partial and its column dtypes are unmodeled, so a column read stays opaque.
+pdf = pd.DataFrame({"a": [1]})
+reveal_type(pdf["a"])  # E: revealed type: Series
 "#,
 );
 

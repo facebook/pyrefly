@@ -2216,6 +2216,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // both directions.
             (Type::DataFrame(schema), _) => self.is_subset_eq(&schema.underlying_type(), want),
             (_, Type::DataFrame(schema)) => self.is_subset_eq(got, &schema.underlying_type()),
+            // A Series delegates subtyping to its underlying instance type in both directions.
+            (Type::Series(schema), _) => self.is_subset_eq(&schema.underlying_type(), want),
+            (_, Type::Series(schema)) => self.is_subset_eq(got, &schema.underlying_type()),
             // Any Int expression represents an integer dimension value, whether it is a
             // concrete literal (`Int[3]`) or symbolic (`Int[N]`, `Int[N + 1]`).
             (Type::Int(_), Type::ClassType(cls))
