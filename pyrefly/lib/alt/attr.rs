@@ -53,7 +53,6 @@ use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::read_only::ReadOnlyReason;
-use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -61,6 +60,7 @@ use crate::types::types::BoundMethodType;
 use crate::types::types::Overload;
 use crate::types::types::SuperObj;
 use crate::types::types::Type;
+use crate::types::types::regex_metadata_groups;
 
 /// The result of looking up an attribute from a particular base.
 /// If the base type is a union, multiple results can be returned
@@ -119,18 +119,6 @@ pub enum AttrSubsetError {
         want_is_property: bool,
         subset_error: SubsetError,
     },
-}
-
-fn has_regex_metadata(metadata: &[Type]) -> bool {
-    metadata.iter().any(|ty| {
-        let Type::Tuple(Tuple::Concrete(items)) = ty else {
-            return false;
-        };
-        let Some(Type::Literal(tag)) = items.first() else {
-            return false;
-        };
-        matches!(&tag.value, Lit::Str(tag) if tag.as_str() == "__pyrefly_regex_groups__")
-    })
 }
 
 impl AttrSubsetError {
@@ -2781,7 +2769,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ElementOfTypeVarTuple(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
             }
-            Type::Annotated(inner, metadata) if has_regex_metadata(&metadata) => {
+            Type::Annotated(inner, metadata) if regex_metadata_groups(&metadata).is_some() => {
                 self.as_attribute_base1(*inner, acc)
             }
             // At runtime, `Annotated[T, ...]` is an instance of `typing._AnnotatedAlias`,

@@ -59,18 +59,7 @@ use crate::types::NeverStyle;
 use crate::types::SuperObj;
 use crate::types::TArgs;
 use crate::types::Type;
-
-fn has_regex_metadata(metadata: &[Type]) -> bool {
-    metadata.iter().any(|ty| {
-        let Type::Tuple(Tuple::Concrete(items)) = ty else {
-            return false;
-        };
-        let Some(Type::Literal(tag)) = items.first() else {
-            return false;
-        };
-        matches!(&tag.value, Lit::Str(tag) if tag.as_str() == "__pyrefly_regex_groups__")
-    })
-}
+use crate::types::regex_metadata_groups;
 
 /// Scope guard that truncates the forall type-parameter tracking stack on drop,
 /// ensuring cleanup even on early return or panic.
@@ -1412,7 +1401,7 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
-            Type::Annotated(ty, metadata) if has_regex_metadata(metadata) => {
+            Type::Annotated(ty, metadata) if regex_metadata_groups(metadata).is_some() => {
                 self.fmt_helper_generic(ty, is_toplevel, output)
             }
             Type::Annotated(ty, _metadata) => {

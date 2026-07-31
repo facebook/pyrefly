@@ -21,7 +21,7 @@ pub fn parse_groups(value: &str, mut verbose: bool) -> Result<Vec<RegexGroup>, S
     let mut group_required = Vec::new();
     let mut group_names = Vec::new();
     let mut working = Vec::new();
-    let mut depth = 0usize;
+    let mut open_parens = Vec::new();
     let mut escape = false;
     let mut union: Option<usize> = None;
     let mut character_set = 0u8;
@@ -46,6 +46,9 @@ pub fn parse_groups(value: &str, mut verbose: bool) -> Result<Vec<RegexGroup>, S
         }
         if comment_group && char == ')' {
             comment_group = false;
+            open_parens
+                .pop()
+                .expect("a comment group must have an opening parenthesis");
             i += 1;
             continue;
         }
@@ -85,8 +88,8 @@ pub fn parse_groups(value: &str, mut verbose: bool) -> Result<Vec<RegexGroup>, S
             i += 1;
             continue;
         }
-        if char == '|' && union.is_none_or(|u| u > depth) {
-            union = Some(depth);
+        if char == '|' && union.is_none_or(|u| u > open_parens.len()) {
+            union = Some(open_parens.len());
             i += 1;
             continue;
         }
@@ -97,7 +100,7 @@ pub fn parse_groups(value: &str, mut verbose: bool) -> Result<Vec<RegexGroup>, S
         }
         match char {
             '(' => {
-                depth += 1;
+                open_parens.push(i);
                 if bytes.get(i + 1) == Some(&b'?') {
                     if bytes.get(i + 2) == Some(&b'P') && bytes.get(i + 3) == Some(&b'<') {
                         let name_start = i + 4;
@@ -133,10 +136,10 @@ pub fn parse_groups(value: &str, mut verbose: bool) -> Result<Vec<RegexGroup>, S
                 }
             }
             ')' => {
-                if depth == 0 {
+                if open_parens.pop().is_none() {
                     return Err(format!("unbalanced parenthesis at position {i}"));
                 }
-                depth -= 1;
+                let depth = open_parens.len();
                 if matches!(bytes.get(i + 1), Some(b'*' | b'?')) {
                     for item in working.iter_mut().skip(depth) {
                         if let Some((_, required)) = item {
@@ -168,8 +171,10 @@ pub fn parse_groups(value: &str, mut verbose: bool) -> Result<Vec<RegexGroup>, S
         }
         i += 1;
     }
-    if depth != 0 {
-        return Err("missing ), unterminated subpattern at position 0".to_owned());
+    if let Some(i) = open_parens.first() {
+        return Err(format!(
+            "missing ), unterminated subpattern at position {i}"
+        ));
     }
     if union == Some(0) {
         group_required.fill(false);
