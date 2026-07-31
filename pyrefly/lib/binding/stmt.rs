@@ -30,6 +30,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 
+use crate::alt::polars_specials::polars_column_mutation;
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
@@ -54,6 +55,8 @@ use crate::binding::binding::TypeAliasParams;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
@@ -1643,6 +1646,18 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Expr(mut x) => {
                 let mut current = self.declare_current_idx(Key::StmtExpr(x.value.range()));
                 self.ensure_expr(&mut x.value, current.usage());
+                // A Polars in-place mutation on a bare name rebinds it to the degraded schema, so a
+                // discarded return value still degrades the frame.
+                let mutated_receiver = if let Expr::Call(call) = &*x.value
+                    && let Expr::Attribute(func) = &*call.func
+                    && let Expr::Name(receiver) = &*func.value
+                    && let Some(kind) =
+                        polars_column_mutation(func.attr.id.as_str(), &call.arguments)
+                {
+                    Some((receiver.id.clone(), func.attr.range, kind))
+                } else {
+                    None
+                };
                 let special_export = if let Expr::Call(ExprCall { func, .. }) = &*x.value {
                     self.as_special_export(func)
                 } else {
@@ -1652,6 +1667,21 @@ impl<'a> BindingsBuilder<'a> {
                     .insert_binding_current(current, Binding::StmtExpr(x.value, special_export));
                 // Track this StmtExpr as the trailing statement for type-based termination
                 self.scopes.set_last_stmt_expr(Some(key));
+                if let Some((name, range, kind)) = mutated_receiver {
+                    let mut narrow_ops = NarrowOps::new();
+                    narrow_ops.0.insert(
+                        name,
+                        (
+                            NarrowOp::Atomic(None, AtomicNarrowOp::PolarsColumnMutation(kind)),
+                            range,
+                        ),
+                    );
+                    self.bind_narrow_ops(
+                        &narrow_ops,
+                        NarrowUseLocation::Span(range),
+                        &Usage::NonPinningValue(None),
+                    );
+                }
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {

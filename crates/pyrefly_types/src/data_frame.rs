@@ -68,6 +68,10 @@ impl DataFrameSchema {
         Type::ClassType(self.underlying.clone())
     }
 
+    pub fn is_complete(&self) -> bool {
+        self.completeness == SchemaCompleteness::Complete
+    }
+
     /// Whether a column with this name exists in the schema.
     pub fn has_column(&self, name: &Name) -> bool {
         self.columns.iter().any(|(c, _)| c == name)

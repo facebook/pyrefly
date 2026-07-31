@@ -37,6 +37,7 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
+use crate::alt::polars_specials::PolarsMutationKind;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
@@ -112,6 +113,9 @@ pub enum AtomicNarrowOp {
     /// when that name evaluates to a truthy or falsy value.
     IsTruthy,
     IsFalsy,
+    /// A Polars in-place column mutation degraded the name's DataFrame schema. It is bound
+    /// unconditionally at the mutating statement, not as a boolean guard, so its negation is never taken.
+    PolarsColumnMutation(PolarsMutationKind),
     /// An operation that might be true or false, but does not narrow the name
     /// currently under consideration (for example, if we are modeling the
     /// narrowing for name `x` from `x is None or y is None`). We need to
@@ -223,6 +227,9 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             ),
             AtomicNarrowOp::IsTruthy => write!(f, "IsTruthy"),
             AtomicNarrowOp::IsFalsy => write!(f, "IsFalsy"),
+            AtomicNarrowOp::PolarsColumnMutation(kind) => {
+                write!(f, "PolarsColumnMutation({kind:?})")
+            }
             AtomicNarrowOp::Placeholder => write!(f, "Placeholder"),
             AtomicNarrowOp::ClassCoverageGate(ks) => write!(f, "ClassCoverageGate({ks:?})"),
             AtomicNarrowOp::ClassCoverageGateNeg(ks) => write!(f, "ClassCoverageGateNeg({ks:?})"),
@@ -330,6 +337,7 @@ impl AtomicNarrowOp {
             }
             Self::IsTruthy => Some(subject.to_owned()),
             Self::IsFalsy => Some(format!("not {subject}")),
+            Self::PolarsColumnMutation(_) => None,
             Self::TypeGuard(_, arguments) => Some(format!(
                 "TypeGuard{}",
                 snippet(arguments.range()).unwrap_or_default()
@@ -389,6 +397,7 @@ impl AtomicNarrowOp {
             Self::NotCall(f, args) => Self::Call(f.clone(), args.clone()),
             Self::IsTruthy => Self::IsFalsy,
             Self::IsFalsy => Self::IsTruthy,
+            Self::PolarsColumnMutation(kind) => Self::PolarsColumnMutation(kind.clone()),
             Self::Placeholder => Self::Placeholder,
             Self::ClassCoverageGate(ks) => Self::ClassCoverageGateNeg(ks.clone()),
             Self::ClassCoverageGateNeg(ks) => Self::ClassCoverageGate(ks.clone()),

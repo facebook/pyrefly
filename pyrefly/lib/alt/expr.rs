@@ -20,7 +20,6 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::data_frame::DataFrameKind;
-use pyrefly_types::data_frame::SchemaCompleteness;
 use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::dimension::gradual_size;
@@ -999,6 +998,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return PreparedExprCall::Resolved(ty);
             }
             if let Some(ty) = self.polars_hstack(base.ty(), func, &x.arguments, errors) {
+                return PreparedExprCall::Resolved(ty);
+            }
+            if let Some(ty) =
+                self.polars_in_place_column_mutation(base.ty(), func, &x.arguments, errors)
+            {
                 return PreparedExprCall::Resolved(ty);
             }
             let attr = self.attr_access_infer(func, &base, errors);
@@ -3250,7 +3254,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
                 Type::DataFrame(schema) => {
                     if let Expr::StringLiteral(key) = slice
-                        && schema.completeness == SchemaCompleteness::Complete
+                        && schema.is_complete()
                     {
                         let name = key.value.to_str();
                         if !schema.columns.iter().any(|(c, _)| c.as_str() == name) {

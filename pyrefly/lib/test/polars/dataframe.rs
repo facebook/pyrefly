@@ -17,7 +17,8 @@ fn env_with_polars_stubs() -> TestEnv {
         "polars/dataframe/frame.pyi",
         r#"
 from typing import Iterator, overload
-class Series: ...
+class Series:
+    def __init__(self, name: str = "", values: object = None) -> None: ...
 class DataFrame:
     columns: list[str]
     def __init__(self, data: object = None, schema: object = None, schema_overrides: object = None, strict: bool = True) -> None: ...
@@ -40,6 +41,8 @@ class DataFrame:
     def hstack(self, columns: object, *, in_place: bool = False) -> "DataFrame": ...
     def vstack(self, other: "DataFrame", *, in_place: bool = False) -> "DataFrame": ...
     def extend(self, other: "DataFrame") -> "DataFrame": ...
+    def insert_column(self, index: int, column: object) -> "DataFrame": ...
+    def replace_column(self, index: int, column: object) -> "DataFrame": ...
 "#,
     );
     env.add_with_path(
@@ -3210,5 +3213,258 @@ from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 other = pd.DataFrame({"c": [1.0]})
 reveal_type(df.hstack(other))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_insert_column_literal_keeps_known_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A literal index and `pl.Series` name are statically known, so the exact column is inserted in place
+# and the schema stays Complete. Its dtype is Unknown until Series construction inference lands.
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
+reveal_type(df)  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+df["b"]
+df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_insert_column_non_literal_degrades_to_partial,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A non-literal index is not statically known, so the frame degrades to Partial and any read is allowed.
+df = pl.DataFrame({"a": [1]})
+i = 1
+df.insert_column(i, pl.Series("b", [2]))
+reveal_type(df)  # E: revealed type: DataFrame[a: Int64, ...]
+df["anything"]
+"#,
+);
+
+testcase!(
+    test_insert_column_non_series_call_degrades_to_partial,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def make_column(name: str, values: object) -> object: ...
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, make_column("b", [2]))
+reveal_type(df)  # E: revealed type: DataFrame[a: Int64, ...]
+df["anything"]
+"#,
+);
+
+testcase!(
+    test_hstack_in_place_degrades_receiver,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+other = pl.DataFrame({"b": [2.0]})
+df.hstack(other, in_place=True)
+reveal_type(df)  # E: revealed type: DataFrame[a: Int64, ...]
+df["b"]
+"#,
+);
+
+testcase!(
+    test_insert_column_existing_column_still_reads,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
+reveal_type(df["a"])  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_hstack_in_place_false_keeps_complete,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+other = pl.DataFrame({"b": [2.0]})
+# A literal in_place=False returns a new frame and leaves the receiver's complete schema intact.
+df.hstack(other, in_place=False)
+df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_hstack_in_place_non_literal_degrades_receiver,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+other = pl.DataFrame({"b": [2.0]})
+flag = True
+# A non-literal in_place may be True at runtime, so degrade conservatively.
+df.hstack(other, in_place=flag)
+reveal_type(df)  # E: revealed type: DataFrame[a: Int64, ...]
+df["b"]
+"#,
+);
+
+testcase!(
+    test_insert_column_return_value_keeps_known_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+df2 = df.insert_column(1, pl.Series("b", [2]))
+reveal_type(df2)  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+df2["b"]
+"#,
+);
+
+testcase!(
+    test_replace_column_degrades_to_opaque,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# replace_column overwrites a column at an index we cannot map to a name, so the frame falls back to opaque.
+df = pl.DataFrame({"a": [1]})
+df.replace_column(0, pl.Series("z", [9.0]))
+reveal_type(df)  # E: revealed type: DataFrame
+df["z"]
+"#,
+);
+
+testcase!(
+    test_replace_column_removed_column_no_false_positive,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+# The overwritten column may be gone at runtime, so reading it must not error on the opaque frame.
+df = pl.DataFrame({"a": [1]})
+df.replace_column(0, pl.Series("z", [9.0]))
+df["a"]
+"#,
+);
+
+testcase!(
+    test_replace_column_return_value_is_opaque,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+df2 = df.replace_column(0, pl.Series("z", [9.0]))
+reveal_type(df2)  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_replace_column_non_name_receiver_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}).replace_column(0, pl.Series("z", [9.0])))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_insert_column_non_name_receiver_keeps_known_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A non-name receiver has no flow binding to rebind, but the return value still carries the inserted column.
+reveal_type(pl.DataFrame({"a": [1]}).insert_column(1, pl.Series("b", [2])))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+"#,
+);
+
+testcase!(
+    test_degraded_frame_select_no_unknown_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
+df.select("b")
+"#,
+);
+
+testcase!(
+    test_degraded_frame_drop_no_unknown_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
+df.drop("b")
+"#,
+);
+
+testcase!(
+    test_degraded_frame_rename_no_unknown_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
+df.rename({"b": "c"})
+"#,
+);
+
+testcase!(
+    test_degraded_frame_cast_no_unknown_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
+df.cast({"b": pl.Int64})
+"#,
+);
+
+testcase!(
+    test_degraded_frame_join_no_unknown_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
+other = pl.DataFrame({"b": [2], "c": [3]})
+df.join(other, on="b")
+"#,
+);
+
+testcase!(
+    test_vstack_in_place_does_not_degrade,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+other = pl.DataFrame({"a": [2]})
+# vstack appends rows without changing the column set, so the complete schema stays valid.
+df.vstack(other, in_place=True)
+df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_extend_does_not_degrade,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+other = pl.DataFrame({"a": [2]})
+df.extend(other)
+df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );

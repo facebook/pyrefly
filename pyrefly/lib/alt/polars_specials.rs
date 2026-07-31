@@ -13,6 +13,7 @@
 
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
+use pyrefly_types::data_frame::SchemaCompleteness;
 use pyrefly_types::polars_dtype::PolarsDType;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
@@ -102,6 +103,126 @@ pub fn is_dataframe_column_method(method: &str) -> bool {
         method,
         "select" | "drop" | "with_columns" | "filter" | "sort" | "group_by" | "groupby"
     )
+}
+
+/// How an in-place mutation changes a Polars frame's tracked column set.
+#[derive(Clone, Debug)]
+pub enum PolarsMutationKind {
+    /// Adds a column with an unknowable name, so every known column survives but exhaustiveness is lost.
+    Add,
+    /// Overwrites a column at an index we cannot map to a name.
+    Replace,
+    /// May insert a statically-known column name at a known index. The callee is resolved before the
+    /// column set stays exhaustive.
+    Insert(Name, usize, Box<Expr>),
+}
+
+/// The literal name, index, and unresolved callee of an `insert_column` candidate. The callee is kept
+/// so schema application can verify it is `pl.Series`; `None` when the call shape is not static.
+fn insert_column_spec(args: &Arguments) -> Option<(Name, usize, Box<Expr>)> {
+    let [index_expr, column_expr] = &args.args[..] else {
+        return None;
+    };
+    if !args.keywords.is_empty() {
+        return None;
+    }
+    let Expr::NumberLiteral(ExprNumberLiteral {
+        value: Number::Int(i),
+        ..
+    }) = index_expr
+    else {
+        return None;
+    };
+    let (name, callee) = series_literal_name(column_expr)?;
+    Some((name, i.to_string().parse::<usize>().ok()?, callee))
+}
+
+/// The literal `name` and unresolved callee of a possible `pl.Series` call, or `None` when it is not a
+/// call with a string-literal name. The callee is resolved when the mutation is applied.
+fn series_literal_name(expr: &Expr) -> Option<(Name, Box<Expr>)> {
+    let Expr::Call(call) = expr else {
+        return None;
+    };
+    let name = if let Some(kw) = call
+        .arguments
+        .keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().is_some_and(|a| a.id.as_str() == "name"))
+    {
+        match &kw.value {
+            Expr::StringLiteral(s) => Name::new(s.value.to_str()),
+            _ => return None,
+        }
+    } else {
+        match call.arguments.args.first() {
+            Some(Expr::StringLiteral(s)) => Name::new(s.value.to_str()),
+            _ => return None,
+        }
+    };
+    Some((name, call.func.clone()))
+}
+
+/// Classify an in-place column-mutation method, or `None` for anything else. `insert_column` with a
+/// literal index and `pl.Series` name inserts that exact column; otherwise it only adds an unknowable
+/// one. `hstack` counts only when an `in_place` keyword is present and not the literal `False`.
+pub fn polars_column_mutation(method: &str, args: &Arguments) -> Option<PolarsMutationKind> {
+    match method {
+        "insert_column" => Some(match insert_column_spec(args) {
+            Some((name, index, callee)) => PolarsMutationKind::Insert(name, index, callee),
+            None => PolarsMutationKind::Add,
+        }),
+        "replace_column" => Some(PolarsMutationKind::Replace),
+        "hstack"
+            if args.keywords.iter().any(|kw| {
+                kw.arg.as_ref().is_some_and(|a| a.id.as_str() == "in_place")
+                    && !matches!(&kw.value, Expr::BooleanLiteral(b) if !b.value)
+            }) =>
+        {
+            Some(PolarsMutationKind::Add)
+        }
+        _ => None,
+    }
+}
+
+/// Degrade a Polars frame's schema for an in-place column mutation, or identity on any other type.
+/// `Insert` adds the known column and stays exhaustive, `Add` keeps the known columns but drops
+/// exhaustiveness, and `Replace` falls back to opaque.
+pub fn polars_degrade_for_mutation(
+    ty: &Type,
+    kind: &PolarsMutationKind,
+    is_polars_series: impl Fn(&Expr) -> bool,
+) -> Type {
+    let Type::DataFrame(schema) = ty else {
+        return ty.clone();
+    };
+    if schema.kind != DataFrameKind::Polars {
+        return ty.clone();
+    }
+    match kind {
+        PolarsMutationKind::Replace => schema.underlying_type(),
+        PolarsMutationKind::Insert(name, index, callee)
+            if schema.is_complete() && is_polars_series(callee) =>
+        {
+            let mut columns = schema.columns.clone();
+            columns.insert(
+                (*index).min(columns.len()),
+                (name.clone(), PolarsDType::Unknown),
+            );
+            DataFrameSchema {
+                columns,
+                ..(**schema).clone()
+            }
+            .to_type()
+        }
+        PolarsMutationKind::Add | PolarsMutationKind::Insert(..) if schema.is_complete() => {
+            DataFrameSchema {
+                completeness: SchemaCompleteness::Partial,
+                ..(**schema).clone()
+            }
+            .to_type()
+        }
+        PolarsMutationKind::Add | PolarsMutationKind::Insert(..) => ty.clone(),
+    }
 }
 
 /// Whether `ty` is a Polars `DataFrame`, schema-carrying or an opaque class instance.
@@ -643,13 +764,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 |(name, range)| match schema.columns.iter().find(|(c, _)| *c == name) {
                     Some((_, ty)) => Some((name, *ty)),
                     None => {
-                        errors
-                            .error_builder(
-                                range,
-                                ErrorKind::UnknownColumn,
-                                format!("Column `{name}` is not in the DataFrame schema"),
-                            )
-                            .emit();
+                        // Only a Complete schema can prove a column absent, since a Partial one may
+                        // hold it untracked.
+                        if schema.is_complete() {
+                            errors
+                                .error_builder(
+                                    range,
+                                    ErrorKind::UnknownColumn,
+                                    format!("Column `{name}` is not in the DataFrame schema"),
+                                )
+                                .emit();
+                        }
                         None
                     }
                 },
@@ -722,7 +847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         for (name, range) in &dropped {
-            if !schema.has_column(name) {
+            if !schema.has_column(name) && schema.is_complete() {
                 errors
                     .error_builder(
                         *range,
@@ -795,7 +920,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         for (source, (_, range)) in &renames {
-            if !schema.has_column(source) {
+            if !schema.has_column(source) && schema.is_complete() {
                 errors
                     .error_builder(
                         *range,
@@ -969,7 +1094,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 for (name, (range, _)) in &casts {
-                    if !schema.has_column(name) {
+                    if !schema.has_column(name) && schema.is_complete() {
                         errors
                             .error_builder(
                                 *range,
@@ -1052,17 +1177,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Type::DataFrame(other) = self.expr_infer(other_expr, &self.error_swallower()) else {
             return None;
         };
-        // A key absent from either frame makes the join malformed, so report it at its declaration
-        // site and fall back, matching the `drop`/`cast`/`rename` convention.
+        // A key absent from either frame makes the join malformed, so report it and fall back. Only a
+        // Complete side can prove a key absent, since a Partial one may hold it untracked.
         for (name, range) in &keys {
-            if !schema.has_column(name) || !other.has_column(name) {
-                errors
-                    .error_builder(
-                        *range,
-                        ErrorKind::UnknownColumn,
-                        format!("Column `{name}` is not in the DataFrame schema"),
-                    )
-                    .emit();
+            let base_missing = !schema.has_column(name);
+            let other_missing = !other.has_column(name);
+            if base_missing || other_missing {
+                if (base_missing && schema.is_complete()) || (other_missing && other.is_complete())
+                {
+                    errors
+                        .error_builder(
+                            *range,
+                            ErrorKind::UnknownColumn,
+                            format!("Column `{name}` is not in the DataFrame schema"),
+                        )
+                        .emit();
+                }
                 return None;
             }
         }
@@ -1166,6 +1296,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 kind: schema.kind.clone(),
             }
             .to_type(),
+        )
+    }
+
+    /// Model an in-place column mutation as the receiver schema degraded for that mutation. The frame
+    /// is rebound in the binding phase, so a discarded return value still degrades it.
+    pub fn polars_in_place_column_mutation(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        let kind = polars_column_mutation(func.attr.id.as_str(), args)?;
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        // Infer the arguments so type errors inside them surface, though the schema ignores them.
+        for arg in &args.args {
+            self.expr_infer(arg, errors);
+        }
+        for kw in &args.keywords {
+            self.expr_infer(&kw.value, errors);
+        }
+        Some(polars_degrade_for_mutation(base, &kind, |callee| {
+            self.polars_series_constructor(callee)
+        }))
+    }
+
+    pub(crate) fn polars_series_constructor(&self, callee: &Expr) -> bool {
+        matches!(
+            self.expr_infer(callee, &self.error_swallower()),
+            Type::ClassDef(cls)
+                if cls.has_toplevel_qname("polars.series.series", "Series")
+                    || cls.has_toplevel_qname("polars.dataframe.frame", "Series")
         )
     }
 }

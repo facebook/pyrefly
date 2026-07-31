@@ -48,6 +48,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
+use crate::alt::polars_specials::polars_degrade_for_mutation;
 use crate::alt::types::instance::Instance;
 use crate::binding::binding::Key;
 use crate::binding::narrow::AtomicNarrowOp;
@@ -1746,6 +1747,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
 
                     t.clone()
+                })
+            }
+            AtomicNarrowOp::PolarsColumnMutation(kind) => {
+                polars_degrade_for_mutation(ty, kind, |callee| {
+                    self.polars_series_constructor(callee)
                 })
             }
             AtomicNarrowOp::Eq(v) => {
