@@ -23,7 +23,6 @@ import MonacoEditorButton, {
 import RunPythonButton from './RunPythonButton';
 import { PyodideStatus } from './PyodideStatus';
 import Editor from '@monaco-editor/react';
-import * as LZString from 'lz-string';
 import * as stylex from '@stylexjs/stylex';
 import SandboxResults from './SandboxResults';
 import {
@@ -44,7 +43,7 @@ import {
     SANDBOX_LOCAL_STORAGE_KEY,
 } from './persistedSandboxState';
 import {
-    decodeSandboxProject,
+    decodeSandboxUrl,
     encodeSandboxProject,
     SandboxProject,
 } from './generateSandboxUrl';
@@ -1031,25 +1030,7 @@ function updateURL(allFiles: Record<string, string>, activeFile: string): void {
 
 function getProjectFromURL(): ProjectState | null {
     if (typeof window === 'undefined') return null;
-    const params = new URLSearchParams(window.location.search);
-
-    const project = params.get('project');
-    if (project) {
-        return decodeSandboxProject(project);
-    }
-
-    const code = params.get('code');
-    if (code) {
-        const decompressed = LZString.decompressFromEncodedURIComponent(code);
-        if (decompressed) {
-            return {
-                files: { 'sandbox.py': decompressed },
-                activeFile: 'sandbox.py',
-            };
-        }
-    }
-
-    return null;
+    return decodeSandboxUrl(window.location.href);
 }
 
 function saveToLocalStorage(

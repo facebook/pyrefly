@@ -93,7 +93,7 @@ export function encodeSandboxProject(project: SandboxProject): string {
     return DEFLATE_PREFIX + bytesToBase64Url(compressed);
 }
 
-/** Decode current DEFLATE links and legacy LZString links. */
+/** Decode current DEFLATE projects and legacy LZString projects. */
 export function decodeSandboxProject(encoded: string): SandboxProject | null {
     try {
         let serialized: string | null;
@@ -136,13 +136,26 @@ export function generateSandboxUrl(
  * Decode a pyrefly.org/sandbox URL back into its project state.
  */
 export function decodeSandboxUrl(url: string): SandboxProject | null {
-    let project: string | null;
+    let params: URLSearchParams;
     try {
-        project = new URL(url, 'https://pyrefly.org').searchParams.get(
-            'project'
-        );
+        params = new URL(url, 'https://pyrefly.org').searchParams;
     } catch {
         return null;
     }
-    return project ? decodeSandboxProject(project) : null;
+    const project = params.get('project');
+    if (project) {
+        return decodeSandboxProject(project);
+    }
+    // Before project URLs, sandbox links stored one Python file in `code`.
+    const code = params.get('code');
+    if (!code) {
+        return null;
+    }
+    const decompressed = LZString.decompressFromEncodedURIComponent(code);
+    return decompressed
+        ? {
+              files: { 'sandbox.py': decompressed },
+              activeFile: 'sandbox.py',
+          }
+        : null;
 }

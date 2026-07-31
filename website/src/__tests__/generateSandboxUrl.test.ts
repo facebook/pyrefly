@@ -116,7 +116,10 @@ describe('decodeSandboxUrl', () => {
         ).toBeNull();
     });
 
-    test('decodes legacy LZString links', () => {
+    // Preserve both legacy formats: multi-file projects used `project`, while
+    // older single-file links used `code`.
+
+    test('decodes legacy LZString ?project= links', () => {
         const project = {
             files: { 'sandbox.py': 'x = 1\n' },
             activeFile: 'sandbox.py',
@@ -128,5 +131,17 @@ describe('decodeSandboxUrl', () => {
         expect(
             decodeSandboxUrl(`https://pyrefly.org/sandbox/?project=${legacy}`)
         ).toEqual(project);
+    });
+
+    test('decodes legacy LZString ?code= links', () => {
+        const code = 'x = 1\n';
+        const legacy = LZString.compressToEncodedURIComponent(code);
+
+        expect(
+            decodeSandboxUrl(`https://pyrefly.org/sandbox/?code=${legacy}`)
+        ).toEqual({
+            files: { 'sandbox.py': code },
+            activeFile: 'sandbox.py',
+        });
     });
 });
