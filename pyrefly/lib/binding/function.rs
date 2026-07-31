@@ -483,8 +483,10 @@ impl<'a> BindingsBuilder<'a> {
     /// This function must not be called unless the function body statements will be bound;
     /// it relies on that binding to ensure we don't have a dangling `Idx<Key>` (which could lead
     /// to a panic).
-    fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> Idx<Key> {
-        let last_exprs = function_last_expressions(body, self.sys_info).map(|x| {
+    fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> (Idx<Key>, bool) {
+        let last_exprs = function_last_expressions(body, self.sys_info);
+        let has_infinite_loop = last_exprs.as_ref().is_some_and(|x| x.has_infinite_loop);
+        let last_exprs = last_exprs.map(|x| {
             x.clauses
                 .into_map(|clause| {
                     clause
@@ -493,9 +495,12 @@ impl<'a> BindingsBuilder<'a> {
                 })
                 .into_boxed_slice()
         });
-        self.insert_binding(
-            Key::ReturnImplicit(ShortIdentifier::new(func_name)),
-            Binding::ReturnImplicit(ReturnImplicit { last_exprs }),
+        (
+            self.insert_binding(
+                Key::ReturnImplicit(ShortIdentifier::new(func_name)),
+                Binding::ReturnImplicit(ReturnImplicit { last_exprs }),
+            ),
+            has_infinite_loop,
         )
     }
 
@@ -507,7 +512,7 @@ impl<'a> BindingsBuilder<'a> {
         is_async: bool,
         yields_and_returns: YieldsAndReturns,
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
-        implicit_return: Option<Idx<Key>>,
+        implicit_return: Option<(Idx<Key>, bool)>,
         should_infer_return_type: bool,
         is_stub: bool,
     ) {
@@ -519,6 +524,10 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 None
             };
+        let has_reachable_return = yields_and_returns
+            .returns
+            .iter()
+            .any(|(_, _, is_unreachable)| !is_unreachable);
 
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
@@ -568,7 +577,11 @@ impl<'a> BindingsBuilder<'a> {
 
         let return_type_binding = {
             let kind = match (return_ann_with_range, implicit_return, is_stub) {
-                (Some((range, annotation)), Some(implicit_return), false) => {
+                (
+                    Some((range, annotation)),
+                    Some((implicit_return, has_infinite_loop)),
+                    false,
+                ) => {
                     self.insert_binding(
                         KeyExpect::ValidateImplicitReturn(range),
                         BindingExpect::ValidateImplicitReturn {
@@ -576,7 +589,8 @@ impl<'a> BindingsBuilder<'a> {
                             implicit_return,
                             is_async,
                             is_generator,
-                            has_explicit_return: !return_keys.is_empty(),
+                            has_explicit_return: has_reachable_return,
+                            has_infinite_loop,
                         },
                     );
                     ReturnTypeKind::ShouldTrustAnnotation {
@@ -595,7 +609,7 @@ impl<'a> BindingsBuilder<'a> {
                         is_generator,
                     }
                 }
-                (None, Some(implicit_return), _) if should_infer_return_type => {
+                (None, Some((implicit_return, _)), _) if should_infer_return_type => {
                     // We don't have an explicit return annotation, but we want to infer it.
                     ReturnTypeKind::ShouldInferType {
                         returns: return_keys,
@@ -994,6 +1008,8 @@ pub(crate) struct LastExpressions<'a> {
     /// settling an assertion. The answer then holds for that configuration only, which suits
     /// inferring a return type but not reporting code as dead.
     pub decided_by_environment: bool,
+    /// Set when an unconditional loop is one of the terminal paths.
+    pub has_infinite_loop: bool,
 }
 
 fn or_dnf<'a>(
@@ -1045,6 +1061,7 @@ pub(crate) fn function_last_expressions<'a>(
         x: &'a [Stmt],
         guards: &mut Vec<TextRange>,
         environment: &mut bool,
+        has_infinite_loop: &mut bool,
     ) -> Option<Vec<Vec<LastPathExpr<'a>>>> {
         fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
             match statement {
@@ -1078,7 +1095,7 @@ pub(crate) fn function_last_expressions<'a>(
                         guards: guards.as_slice().into(),
                     });
                 }
-                let body = f(sys_info, &x.body, guards, environment)?;
+                let body = f(sys_info, &x.body, guards, environment, has_infinite_loop)?;
                 and_dnf(Some(vec![with_clause]), Some(body))
             }
             Stmt::While(x) => {
@@ -1090,11 +1107,12 @@ pub(crate) fn function_last_expressions<'a>(
                         .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
                 }
                 if test_value == Some(true) && !has_break {
+                    *has_infinite_loop = true;
                     Some(vec![vec![]])
                 } else if has_break || x.orelse.is_empty() {
                     None
                 } else {
-                    f(sys_info, &x.orelse, guards, environment)
+                    f(sys_info, &x.orelse, guards, environment, has_infinite_loop)
                 }
             }
             Stmt::For(x) => {
@@ -1104,7 +1122,7 @@ pub(crate) fn function_last_expressions<'a>(
                 if has_break || x.orelse.is_empty() {
                     None
                 } else {
-                    f(sys_info, &x.orelse, guards, environment)
+                    f(sys_info, &x.orelse, guards, environment, has_infinite_loop)
                 }
             }
             Stmt::If(x) => {
@@ -1127,10 +1145,10 @@ pub(crate) fn function_last_expressions<'a>(
                     // evaluates as false.
                     // Neither can be dead by its test, so it needs no guard.
                     let branch = if index == 0 && test.is_none() {
-                        f(sys_info, body, guards, environment)?
+                        f(sys_info, body, guards, environment, has_infinite_loop)?
                     } else {
                         guards.push(range);
-                        let branch = f(sys_info, body, guards, environment);
+                        let branch = f(sys_info, body, guards, environment, has_infinite_loop);
                         guards.pop();
                         branch.unwrap_or_else(|| {
                             vec![vec![LastPathExpr {
@@ -1169,7 +1187,7 @@ pub(crate) fn function_last_expressions<'a>(
                     } else {
                         &x.orelse
                     };
-                    match f(sys_info, body_suite, guards, environment) {
+                    match f(sys_info, body_suite, guards, environment, has_infinite_loop) {
                         None => body_acc = None,
                         Some(p) => body_acc = and_dnf(body_acc, Some(p)),
                     }
@@ -1177,7 +1195,13 @@ pub(crate) fn function_last_expressions<'a>(
                         for handler in &x.handlers {
                             match handler {
                                 ExceptHandler::ExceptHandler(h) => {
-                                    match f(sys_info, &h.body, guards, environment) {
+                                    match f(
+                                        sys_info,
+                                        &h.body,
+                                        guards,
+                                        environment,
+                                        has_infinite_loop,
+                                    ) {
                                         None => {
                                             body_acc = None;
                                             break;
@@ -1193,7 +1217,13 @@ pub(crate) fn function_last_expressions<'a>(
                 if x.finalbody.is_empty() {
                     body_paths
                 } else {
-                    let finally_paths = f(sys_info, &x.finalbody, guards, environment);
+                    let finally_paths = f(
+                        sys_info,
+                        &x.finalbody,
+                        guards,
+                        environment,
+                        has_infinite_loop,
+                    );
                     or_dnf(finally_paths, body_paths)
                 }
             }
@@ -1201,7 +1231,7 @@ pub(crate) fn function_last_expressions<'a>(
                 let mut syntactically_exhaustive = false;
                 let mut acc: Option<Vec<Vec<LastPathExpr<'a>>>> = Some(vec![vec![]]);
                 for case in x.cases.iter() {
-                    let branch = f(sys_info, &case.body, guards, environment)?;
+                    let branch = f(sys_info, &case.body, guards, environment, has_infinite_loop)?;
                     acc = and_dnf(acc, Some(branch));
                     if match_case_always_matches(&case.pattern, &x.subject, case.guard.as_deref()) {
                         syntactically_exhaustive = true;
@@ -1223,10 +1253,18 @@ pub(crate) fn function_last_expressions<'a>(
     }
 
     let mut environment = false;
-    let clauses = f(sys_info, x, &mut Vec::new(), &mut environment)?;
+    let mut has_infinite_loop = false;
+    let clauses = f(
+        sys_info,
+        x,
+        &mut Vec::new(),
+        &mut environment,
+        &mut has_infinite_loop,
+    )?;
     Some(LastExpressions {
         clauses,
         decided_by_environment: environment,
+        has_infinite_loop,
     })
 }
 
