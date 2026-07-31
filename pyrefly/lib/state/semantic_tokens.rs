@@ -17,15 +17,16 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
@@ -37,6 +38,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Key;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 
 const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
 
@@ -253,6 +255,35 @@ fn range_overlaps(limit_range: Option<TextRange>, range: TextRange) -> bool {
     })
 }
 
+/// Classify an attribute's resolved type into a semantic token kind. For a union,
+/// every member must agree on the same kind; any disagreement (or a member that is
+/// a plain attribute) falls back to `PROPERTY`.
+fn attribute_semantic_token_type(ty: Type) -> SemanticTokenType {
+    match ty {
+        Type::Union(union) => {
+            let mut members = union.members.into_iter();
+            let Some(first) = members.next() else {
+                return SemanticTokenType::PROPERTY;
+            };
+            let kind = attribute_semantic_token_type(first);
+            if kind == SemanticTokenType::PROPERTY {
+                return SemanticTokenType::PROPERTY;
+            }
+            if members.all(|member| attribute_semantic_token_type(member) == kind) {
+                kind
+            } else {
+                SemanticTokenType::PROPERTY
+            }
+        }
+        Type::Literal(lit) if matches!(lit.value, Lit::Enum(_)) => SemanticTokenType::ENUM_MEMBER,
+        _ => {
+            attribute_symbol_kind_from_type(&ty)
+                .to_lsp_semantic_token_type_with_modifiers()
+                .0
+        }
+    }
+}
+
 pub struct SemanticTokenWithFullRange {
     pub range: TextRange,
     pub token_type: SemanticTokenType,
@@ -316,6 +347,28 @@ impl SemanticTokenBuilder {
         }
     }
 
+    fn process_pattern(&mut self, pattern: &Pattern) {
+        Ast::pattern_lvalue(pattern, &mut |name| {
+            if !Ast::is_synthesized_empty_identifier(name) {
+                self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, Vec::new());
+            }
+        });
+    }
+
+    fn process_attribute_expr(
+        &mut self,
+        attr: &ExprAttribute,
+        get_type_of_attribute: &dyn Fn(TextRange) -> Option<Type>,
+        get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
+    ) {
+        let kind = get_type_of_attribute(attr.range())
+            .map(attribute_semantic_token_type)
+            .unwrap_or(SemanticTokenType::PROPERTY);
+        self.push_if_in_range(attr.attr.range(), kind, Vec::new());
+        attr.value
+            .visit(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
+    }
+
     fn process_expr(
         &mut self,
         x: &Expr,
@@ -350,30 +403,7 @@ impl SemanticTokenBuilder {
                 x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
             }
             Expr::Attribute(attr) => {
-                let kind = match get_type_of_attribute(attr.range()) {
-                    Some(Type::Literal(lit)) if matches!(lit.value, Lit::Enum(_)) => {
-                        SemanticTokenType::ENUM_MEMBER
-                    }
-                    Some(ty) if ty.is_toplevel_callable() => {
-                        let is_method = ty.visit_toplevel_func_metadata(&|meta| {
-                            matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_some())
-                        });
-                        if is_method {
-                            SemanticTokenType::METHOD
-                        } else {
-                            SemanticTokenType::FUNCTION
-                        }
-                    }
-                    Some(Type::ClassDef(_) | Type::Type(_)) => SemanticTokenType::CLASS,
-                    Some(Type::TypeAlias(_) | Type::UntypedAlias(_)) => {
-                        SemanticTokenType::INTERFACE
-                    }
-                    Some(Type::Module(_)) => SemanticTokenType::NAMESPACE,
-                    _ => SemanticTokenType::PROPERTY,
-                };
-                self.push_if_in_range(attr.attr.range(), kind, Vec::new());
-                attr.value
-                    .visit(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
+                self.process_attribute_expr(attr, get_type_of_attribute, get_symbol_kind);
             }
             // Comprehensions need special handling because the Visit trait doesn't visit targets
             Expr::ListComp(list_comp) => {
@@ -510,6 +540,12 @@ impl SemanticTokenBuilder {
                     if let Some(name) = &with_item.optional_vars {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
+                }
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
+            }
+            Stmt::Match(stmt_match) => {
+                for case in &stmt_match.cases {
+                    self.process_pattern(&case.pattern);
                 }
                 x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }

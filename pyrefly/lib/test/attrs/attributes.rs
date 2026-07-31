@@ -189,12 +189,10 @@ Sub(a=1, b=2)
 "#,
 );
 
-// GAP: a dunder-leading field `__y` is Python name-mangled to `_C__y` before attrs strips
-// leading underscores, so real attrs names the param `C__y`. Pyrefly does not model
-// name-mangling and yields `y`.
+// A dunder-leading field `__y` is Python name-mangled to `_C__y` before attrs strips leading
+// underscores, so the init param is `C__y`.
 attrs_testcase!(
-    bug = "pyrefly does not model Python name-mangling: `__y` should map to param `C__y`, not `y`",
-    test_attrs_dunder_leading_name_mangling_gap,
+    test_attrs_dunder_leading_name_mangling,
     r#"
 from typing import reveal_type
 import attrs
@@ -203,7 +201,27 @@ import attrs
 class C:
     __y: int
 
-reveal_type(C.__init__)  # E: revealed type: (self: C, y: int) -> None
+reveal_type(C.__init__)  # E: revealed type: (self: C, C__y: int) -> None
+"#,
+);
+
+// Name mangling uses the *defining* class, so an inherited dunder-leading field keeps the base's
+// mangled init name in the subclass: `Base.__y` stays `Base__y`, not `Sub__y`.
+attrs_testcase!(
+    test_attrs_dunder_leading_name_mangling_inherited,
+    r#"
+from typing import reveal_type
+import attrs
+
+@attrs.define
+class Base:
+    __y: int
+
+@attrs.define
+class Sub(Base):
+    __z: int
+
+reveal_type(Sub.__init__)  # E: revealed type: (self: Sub, Base__y: int, Sub__z: int) -> None
 "#,
 );
 
@@ -518,8 +536,8 @@ class C:
 "#,
 );
 
-// The conflict is reported regardless of whether the annotation and `type=` agree. The
-// extra assignment error comes from the general annotated-assignment check, not attrs.
+// Even when the annotation and `type=` disagree, the conflict is reported once: the specifier's
+// widened return is no longer assignment-checked against the annotation.
 attrs_testcase!(
     test_attrs_attrib_type_and_annotation_conflict_mismatch,
     r#"
@@ -527,7 +545,7 @@ import attr
 
 @attr.s
 class C:
-    x: int = attr.ib(type=str)  # E: both a type annotation and a `type` argument # E: `str` is not assignable to `int`
+    x: int = attr.ib(type=str)  # E: both a type annotation and a `type` argument
 "#,
 );
 

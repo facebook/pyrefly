@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use lsp_types::DocumentChangeOperation;
 use lsp_types::DocumentChanges;
-use lsp_types::OneOf;
 use lsp_types::OptionalVersionedTextDocumentIdentifier;
 use lsp_types::RenameFilesParams;
 use lsp_types::TextDocumentEdit;
 use lsp_types::TextEdit;
+use lsp_types::TextEditOrAnnotatedOrSnippet;
 use lsp_types::Url;
 use lsp_types::WorkspaceEdit;
 use pyrefly_python::PYTHON_EXTENSIONS;
@@ -310,7 +310,10 @@ pub fn will_rename_files(
                             uri,
                             version: None, // None means "any version"
                         },
-                        edits: edits.into_iter().map(OneOf::Left).collect(),
+                        edits: edits
+                            .into_iter()
+                            .map(TextEditOrAnnotatedOrSnippet::TextEdit)
+                            .collect(),
                     })
                 })
                 .collect();

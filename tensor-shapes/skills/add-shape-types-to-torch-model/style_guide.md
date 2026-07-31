@@ -2,7 +2,7 @@
 
 A practical guide to adding tensor shape annotations to PyTorch models using
 pyrefly's type system. Patterns and methodology drawn from
-[ported open-source models](tensor-shapes/examples/torch/).
+[ported open-source models](tensor-shapes/pyrefly-torch-stubs/examples/).
 
 ---
 
@@ -29,28 +29,33 @@ pyrefly's type system. Patterns and methodology drawn from
 
 ### Setup
 
-Tensor shape checking requires two things in your `pyrefly.toml`:
+Shape checking has no dedicated flag or config toggle — it is enabled whenever
+the shape-aware `torch-stubs` and `shape_extensions` packages are on Pyrefly's
+search path. Point Pyrefly at the two roots (they are separate directories):
 
-```toml
-tensor-shapes = true
-
-search_path = [
-    "tensor-shapes",
-]
+```bash
+pyrefly check --config /dev/null --python-version 3.13 \
+    --search-path tensor-shapes/pyrefly-torch-stubs \
+    --search-path tensor-shapes/pyrefly-shape-extensions \
+    your_model.py
 ```
 
-**`tensor-shapes = true`** enables shape inference for `Tensor`, including
-subscript syntax (`Tensor[B, C, H, W]`), algebraic dimension arithmetic, and
-shape-aware dispatch for operations like `conv2d`, `view`, and `cat`.
+Once the stubs are on the path, Pyrefly infers shapes for `Tensor`, including
+subscript syntax (`Tensor[[B, C, H, W]]`), algebraic dimension arithmetic, and
+shape-aware dispatch for operations like `conv2d`, `view`, and `cat`. The
+shape-aware `torch-stubs` package replaces the real `torch` library's type stubs
+(which don't carry shape information) — e.g., `nn.Conv2d.__init__` captures
+kernel size, stride, and padding as type-level values, and its `forward`
+computes the output spatial dimensions.
 
-**`search_path`** points to the `tensor-shapes` directory, which contains the
-shape-aware `torch-stubs` package plus the `shape_extensions` runtime package.
-The real `torch` library's type stubs don't carry shape information, so
-`torch-stubs` replaces them for type checking (e.g., `nn.Conv2d.__init__` that
-captures kernel size, stride, and padding as type-level values, and a `forward`
-that computes the output spatial dimensions).
+The PEP 695/696 generics syntax used throughout this guide needs
+`--python-version 3.12` or later; the corpus runs `3.13`. In an fbsource Buck
+checkout you can pass the combined filegroup
+`fbcode//pyrefly/tensor-shapes:torch-stubs-search-path` as a single
+`--search-path` instead of the two roots. See
+`tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py`.
 
-The `shape_extensions` package exports `Dim` — the bridge between runtime
+The `shape_extensions` package exports `Int` — the bridge between runtime
 integer values and type-level symbols. The package also includes utilities to
 support runtime evaluation of types with shapes and decorators such as
 `@uses_shape_dsl(...)` and `@shaped_array(...)`.
@@ -60,7 +65,7 @@ support runtime evaluation of types with shapes and decorators such as
 The simplest annotation is a fully concrete shape — no generics at all:
 
 ```python
-x: Tensor[4, 3, 64, 64] = torch.randn(4, 3, 64, 64)
+x: Tensor[[4, 3, 64, 64]] = torch.randn(4, 3, 64, 64)
 ```
 
 This says `x` is a 4D tensor with batch size 4, 3 channels, height 64, width 64.
@@ -73,7 +78,7 @@ document what shape you expect and catch regressions:
 
 ```python
 h = F.relu(self.fc1(x))
-assert_type(h, Tensor[B, 512])  # checked by pyrefly, zero runtime cost
+assert_type(h, Tensor[[B, 512]])  # checked by pyrefly, zero runtime cost
 ```
 
 In exploratory work, editor inlay hints are useful for seeing inferred shapes.
@@ -100,24 +105,24 @@ dimension gets exactly one type parameter. Two rules:
 
 ```python
 # Bad: too many independent params, hides the relation
-class Attention[D, NHead, HeadDim](nn.Module): ...
+class Attention[D: IntVar, NHead: IntVar, HeadDim: IntVar](nn.Module): ...
 
 # Good: HeadDim is derived
-class Attention[D, NHead](nn.Module):
-    def __init__(self, dim: Dim[D], num_heads: Dim[NHead]) -> None:
-        self.head_dim = dim // num_heads  # Dim[D // NHead]
+class Attention[D: IntVar, NHead: IntVar](nn.Module):
+    def __init__(self, dim: Int[D], num_heads: Int[NHead]) -> None:
+        self.head_dim = dim // num_heads  # Int[D // NHead]
 ```
 
 ### Step 2: Type the constructor
 
-Constructor params that set dimensions become `Dim[...]`. This binds class
-type parameters. Sub-modules constructed with these Dims automatically get
+Constructor params that set dimensions become `Int[...]`. This binds class
+type parameters. Sub-modules constructed with these Int params automatically get
 typed — Conv2d, Linear, LSTM, etc. stubs capture channel/feature dims.
 
 ```python
-class PromptEncoder[D, ES, MIC](nn.Module):
-    def __init__(self, embed_dim: Dim[D], emb_size: Dim[ES],
-                 mask_in_chans: Dim[MIC]) -> None:
+class PromptEncoder[D: IntVar, ES: IntVar, MIC: IntVar](nn.Module):
+    def __init__(self, embed_dim: Int[D], emb_size: Int[ES],
+                 mask_in_chans: Int[MIC]) -> None:
         self.mask_conv1 = nn.Conv2d(1, mask_in_chans // 4, kernel_size=2, stride=2)
         # Conv2d captures MIC//4 as output channels
 ```
@@ -128,12 +133,12 @@ Use class params (fixed at construction) for architecture dims and method
 params (vary per call) for batch/sequence/spatial dims:
 
 ```python
-def forward[B, N, M](
+def forward[B: IntVar, N: IntVar, M: IntVar](
     self,
-    points: tuple[Tensor[B, N, 2], Tensor[B, N]] | None,
-    boxes: Tensor[B, M, 4] | None,
-    masks: Tensor[B, 1, 4 * ES, 4 * ES] | None,
-) -> tuple[Tensor, Tensor[B, D, ES, ES]]:
+    points: tuple[Tensor[[B, N, 2]], Tensor[[B, N]]] | None,
+    boxes: Tensor[[B, M, 4]] | None,
+    masks: Tensor[[B, 1, 4 * ES, 4 * ES]] | None,
+) -> tuple[Tensor, Tensor[[B, D, ES, ES]]]:
 ```
 
 Then verify intermediates with `assert_type` at key checkpoints — after
@@ -141,22 +146,22 @@ reshapes, matmuls, conv chains, and branch joins.
 
 ### Binding order matters
 
-When type vars appear in derived positions (`Tensor[B, QH * QW, KH * KW]`),
-put bare `Dim[X]` params BEFORE tensor params so the checker binds them first:
+When type vars appear in derived positions (`Tensor[[B, QH * QW, KH * KW]]`),
+put bare `Int[X]` params BEFORE tensor params so the checker binds them first:
 
 ```python
 # Good: dims-first, derived expressions in tensors
-def add_decomposed_rel_pos[B, QH, QW, KH, KW, HD](
-    q_h: Dim[QH], q_w: Dim[QW], k_h: Dim[KH], k_w: Dim[KW],
-    attn: Tensor[B, QH * QW, KH * KW],
-    q: Tensor[B, QH * QW, HD],
-    rel_pos_h: Tensor[RPH, HD],
-    rel_pos_w: Tensor[RPW, HD],
-) -> Tensor[B, QH * QW, KH * KW]: ...
+def add_decomposed_rel_pos[B: IntVar, QH: IntVar, QW: IntVar, KH: IntVar, KW: IntVar, HD: IntVar](
+    q_h: Int[QH], q_w: Int[QW], k_h: Int[KH], k_w: Int[KW],
+    attn: Tensor[[B, QH * QW, KH * KW]],
+    q: Tensor[[B, QH * QW, HD]],
+    rel_pos_h: Tensor[[RPH, HD]],
+    rel_pos_w: Tensor[[RPW, HD]],
+) -> Tensor[[B, QH * QW, KH * KW]]: ...
 
 # Bad: checker can't infer QH from QH*QW in a tensor param
-def add_decomposed_rel_pos[B, QH, QW, ...](
-    attn: Tensor[B, QH * QW, KH * KW], ...
+def add_decomposed_rel_pos[B: IntVar, QH: IntVar, QW: IntVar, ...](
+    attn: Tensor[[B, QH * QW, KH * KW]], ...
 ) -> ...: ...
 ```
 
@@ -170,7 +175,7 @@ The type system tracks shapes through nearly all standard PyTorch operations:
 
 - **Identity ops** (stubs with `Self` return): `.float()`, `.contiguous()`,
   `.detach()`, `.clone()`, `.type_as()`, `.to()`
-- **Shape-preserving** (stubs with `Tensor[*S] → Tensor[*S]`): `F.relu`,
+- **Shape-preserving** (stubs with `Tensor[S] → Tensor[S]`, `S: IntTuple`): `F.relu`,
   `F.gelu`, `F.dropout`, `F.softmax`, `nn.LayerNorm`, `nn.BatchNorm`,
   `torch.sigmoid`, `torch.tanh`
 - **Parameterized transforms** (stubs capture constructor args): `nn.Linear`,
@@ -183,8 +188,8 @@ The type system tracks shapes through nearly all standard PyTorch operations:
 
 **If an op appears to lose shapes, it is almost certainly a bug or a missing
 stub — not a fundamental limitation.** Check the shape-aware stubs in
-`tensor-shapes/torch-stubs/`, any `@uses_shape_dsl(...)` decorator and IR
-function in `tensor-shapes/torch-stubs/_shapes.pyi`, and special handlers
+`tensor-shapes/pyrefly-torch-stubs/torch-stubs/`, any `@uses_shape_dsl(...)` decorator and IR
+function in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`, and special handlers
 before concluding anything is untracked.
 
 ### When shapes are lost, trace upstream
@@ -192,9 +197,9 @@ before concluding anything is untracked.
 The op that appears to lose shapes is often not the problem. Trace back to
 find where shape info was actually lost:
 
-- **`int` where `Dim` is needed.** If a function takes `size: int` but the
+- **`int` where `Int` is needed.** If a function takes `size: int` but the
   caller passes a runtime value, shapes enter as unrefined. Fix: change to
-  `size: Dim[S]`. Example: `start_pos: int` → `start_pos: Dim[SP] | None`.
+  `size: Int[S]`. Example: `start_pos: int` → `start_pos: Int[SP] | None`.
 
 - **`list[...]` where `tuple[...]` is needed.** List literals homogenize
   element types. `torch.cat([a, b])` loses per-tensor shapes;
@@ -207,9 +212,9 @@ find where shape info was actually lost:
   ```python
   # Bad: branch join widens keys/values
   if cached:
-      keys = cache[:b, :sp+t]   # Tensor[B, SP+T, ...]
+      keys = cache[:b, :sp+t]   # Tensor[[B, SP+T, ...]]
   else:
-      keys = xk                  # Tensor[B, T, ...]
+      keys = xk                  # Tensor[[B, T, ...]]
   # keys is now Tensor | Tensor[...] — widened
 
   # Good: compute output in each branch independently
@@ -218,7 +223,7 @@ find where shape info was actually lost:
       output = matmul(softmax(xq @ keys.T), values)
   else:
       output = matmul(softmax(xq @ xk.T), xv)
-  # output is Tensor[B, NHead, T, HeadDim] in both branches
+  # output is Tensor[[B, NHead, T, HeadDim]] in both branches
   ```
 
 - **Inlined expressions lose shapes.** `f(g(x))` sometimes loses shapes
@@ -235,11 +240,11 @@ Most things that look data-dependent aren't:
 
 - Boolean masks (`x != 0`) **preserve** shape — the mask has the same shape
   as the input. Operations on it (`.float()`, `*`, `torch.sum`) are tracked.
-- Autoregressive loops have typed **elements** (`Tensor[B, 80]`) even if the
+- Autoregressive loops have typed **elements** (`Tensor[[B, 80]]`) even if the
   list length is unknown. `torch.stack(mel_outputs, dim=2)` tracks.
 - Window partition counts (`B * (H // WS) * (W // WS)`) are **computable**
   from the spatial dims and window size.
-- `Embedding.weight` **is typed** (`Tensor[V, D]`). If shapes are lost
+- `Embedding.weight` **is typed** (`Tensor[[V, D]]`). If shapes are lost
   downstream, the blocker is elsewhere.
 
 Genuinely unknowable shapes (bare `Tensor` with comment):
@@ -253,7 +258,7 @@ Genuinely unknowable shapes (bare `Tensor` with comment):
 - **Annotation fallback**: the checker can't produce the type, but the RHS is
   compatible (e.g., unrefined → typed). No error, no `type: ignore` needed.
   ```python
-  dense: Tensor[B, D, ES, ES] = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(bs, -1, h, w)
+  dense: Tensor[[B, D, ES, ES]] = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(bs, -1, h, w)
   ```
 
 - **`type: ignore`**: the checker produces a WRONG type (algebraic gap). Last
@@ -263,7 +268,7 @@ Genuinely unknowable shapes (bare `Tensor` with comment):
   ```
 
 - **Never use bare `Tensor` when you know the shape.** If you know it's
-  `Tensor[B, D, H, W]`, annotate it. Bare `Tensor` is only for genuinely
+  `Tensor[[B, D, H, W]]`, annotate it. Bare `Tensor` is only for genuinely
   unknowable shapes.
 
 ---
@@ -281,16 +286,30 @@ Floor division loses the remainder, so `N * (X // N)` only equals `X` when
 Note: `(a * b) // b → a` IS simplified (sound for all positive integers).
 Only the reverse direction is unsound.
 
-### Default values for Dim params
+### Default values for Int params
 
-`Literal[0]` is not assignable to `Dim[SP]`. Use `Optional` instead:
+A literal default like `= 1000` is not assignable to a parameter typed
+`Int[NC]` directly. The fix is a PEP 696 default on the *type parameter*
+(alongside its bound), so the dim defaults at the type level:
 
 ```python
-# Won't work:
-def forward[SP](self, start_pos: Dim[SP] = 0): ...
+# Won't type-check on its own — Literal[1000] not assignable to Int[NC]:
+def __init__(self, num_classes: Int[NC] = 1000): ...
 
-# Works:
-def forward[SP](self, start_pos: Dim[SP] | None = None): ...
+# Works — NC defaults to 1000 at the type level:
+class Net[NC: IntVar = 1000, LC: IntVar = 1280](nn.Module):
+    def __init__(self, num_classes: Int[NC] = 1000,
+                 last_channel: Int[LC] = 1280): ...
+```
+
+`Net()` then resolves to `Net[1000, 1280]`. See `examples/mobilenetv2.py`.
+
+Use `Int[X] | None` **only** for a genuinely optional dimension (one that may be
+absent at runtime, narrowed with `if x is not None:`) — not as a stand-in for a
+default value:
+
+```python
+def forward[SP: IntVar](self, start_pos: Int[SP] | None = None): ...
 ```
 
 ### ModuleList erases type params
@@ -303,7 +322,7 @@ layers: list[ViTBlock[D, Any, Any, Any, Any]] = [...]
 for blk in self.blocks:
     h = blk(h)
 # Re-annotate after loop — ModuleList iteration erases type params
-h_out: Tensor[B, PS, PS, D] = h  # type: ignore[bad-assignment]
+h_out: Tensor[[B, PS, PS, D]] = h  # type: ignore[bad-assignment]
 ```
 
 ### `setattr`/`getattr` with dynamic strings
@@ -321,20 +340,20 @@ the checker sees each module's type params and chains them. But returning
 
 ```python
 # BAD: factory function — Sequential type params erased at function boundary
-def _make_block[InC, OutC](in_c: Dim[InC], out_c: Dim[OutC]) -> nn.Sequential:
+def _make_block[InC: IntVar, OutC: IntVar](in_c: Int[InC], out_c: Int[OutC]) -> nn.Sequential:
     return nn.Sequential(nn.Conv2d(in_c, 128, ...), nn.Conv2d(128, out_c, ...))
 self.block = _make_block(185, 38)  # type is Sequential[*tuple[Unknown, ...]]
 self.block(x)  # returns bare Tensor!
 
 # GOOD: class with typed forward — shapes preserved
-class Block[InC, OutC](nn.Module):
-    def __init__(self, in_c: Dim[InC], out_c: Dim[OutC]) -> None:
+class Block[InC: IntVar, OutC: IntVar](nn.Module):
+    def __init__(self, in_c: Int[InC], out_c: Int[OutC]) -> None:
         super().__init__()
         self.net = nn.Sequential(nn.Conv2d(in_c, 128, ...), nn.Conv2d(128, out_c, ...))
-    def forward[B, H, W](self, x: Tensor[B, InC, H, W]) -> Tensor[B, OutC, H, W]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](self, x: Tensor[[B, InC, H, W]]) -> Tensor[[B, OutC, H, W]]:
         return self.net(x)
 self.block = Block(185, 38)  # type is Block[185, 38]
-self.block(x)  # returns Tensor[B, 38, H, W]!
+self.block(x)  # returns Tensor[[B, 38, H, W]]!
 ```
 
 The class's `forward` signature provides the shape contract directly, so the
@@ -352,19 +371,19 @@ be different for different calls at runtime, such as batch size. Declare it as a
 type parameter on the method:
 
 ```python
-def forward[B](self, x: Tensor[B, 3, 64, 64]) -> Tensor[B, 10]:
+def forward[B: IntVar](self, x: Tensor[[B, 3, 64, 64]]) -> Tensor[[B, 10]]:
     ...
 ```
 
-`B` is bound when the method is called. If the caller passes a `Tensor[32, 3, 64, 64]`,
-then `B = 32` and the return type is `Tensor[32, 10]`.
+`B` is bound when the method is called. If the caller passes a `Tensor[[32, 3, 64, 64]]`,
+then `B = 32` and the return type is `Tensor[[32, 10]]`.
 
 ### Multiple dynamic dimensions
 
 When more than one dimension varies across calls, add more type parameters:
 
 ```python
-def forward[B, T](self, x: Tensor[B, T, 512]) -> Tensor[B, T, 512]:
+def forward[B: IntVar, T: IntVar](self, x: Tensor[[B, T, 512]]) -> Tensor[[B, T, 512]]:
     ...
 ```
 
@@ -376,24 +395,24 @@ def forward[B, T](self, x: Tensor[B, T, 512]) -> Tensor[B, T, 512]:
 
 When a module's channel count is chosen at construction time and used in the
 forward signature, make it a class-level type parameter and accept the
-corresponding `Dim[...]` in `__init__`:
+corresponding `Int[...]` in `__init__`:
 
 ```python
-class DoubleConv[InC, OutC](nn.Module):
-    def __init__(self, c_in: Dim[InC], c_out: Dim[OutC]) -> None:
+class DoubleConv[InC: IntVar, OutC: IntVar](nn.Module):
+    def __init__(self, c_in: Int[InC], c_out: Int[OutC]) -> None:
         super().__init__()
         self.conv1 = nn.Conv2d(c_in, c_out, kernel_size=3, padding=1)
         ...
 
-    def forward[B, H, W](self, x: Tensor[B, InC, H, W]) -> Tensor[B, OutC, H, W]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](self, x: Tensor[[B, InC, H, W]]) -> Tensor[[B, OutC, H, W]]:
         ...
 ```
 
-`Dim[InC]` is the key construct from `shape_extensions`: it connects a runtime
+`Int[InC]` is the key construct from `shape_extensions`: it connects a runtime
 integer value to a type-level symbol. When someone writes `DoubleConv(3, 64)`,
-the type checker sees `c_in: Dim[InC]` receiving `3`, binds `InC = 3`, and
+the type checker sees `c_in: Int[InC]` receiving `3`, binds `InC = 3`, and
 infers the module type as `DoubleConv[3, 64]`. From there, the forward
-signature resolves to `Tensor[B, 3, H, W] -> Tensor[B, 64, H, W]`.
+signature resolves to `Tensor[[B, 3, H, W]] -> Tensor[[B, 64, H, W]]`.
 
 ---
 
@@ -404,12 +423,12 @@ signature resolves to `Tensor[B, 3, H, W] -> Tensor[B, 64, H, W]`.
 Annotations can contain arithmetic on type parameters:
 
 ```python
-Tensor[B, 2 * C, H // 2, W // 2]     # downsample
-Tensor[B, C // 2, H * 2, W * 2]       # upsample
-Tensor[B, InC + GR, H, W]             # dense connection (concat)
-Tensor[B, NHead * DK]                 # multi-head reshape
-Tensor[B, T, 3 * NEmbedding]          # Q/K/V projection
-Tensor[B, C * 2 ** I, H // 2 ** I]    # exponential scaling
+Tensor[[B, 2 * C, H // 2, W // 2]]     # downsample
+Tensor[[B, C // 2, H * 2, W * 2]]       # upsample
+Tensor[[B, InC + GR, H, W]]             # dense connection (concat)
+Tensor[[B, NHead * DK]]                 # multi-head reshape
+Tensor[[B, T, 3 * NEmbedding]]          # Q/K/V projection
+Tensor[[B, C * 2 ** I, H // 2 ** I]]    # exponential scaling
 ```
 
 The type checker automatically simplifies expressions: `2 * C // 2` cancels
@@ -439,9 +458,10 @@ and parameters. The type checker tracks these automatically:
 - **Flatten**: `nn.Flatten(1)` collapses dims 1..end into a product.
 - **LSTM**: output shape depends on `hidden_size` and `bidirectional`.
   The DSL computes `nd = 2 if bidirectional else 1` and tracks output
-  as `Tensor[B, T, hidden_size * nd]`.
-- **Distributions**: `Normal`, `TransformedDistribution` are generic over
-  `*EventShape`. `rsample()` and `log_prob()` preserve event shape.
+  as `Tensor[[B, T, hidden_size * nd]]`.
+- **Distributions**: `Normal`, `TransformedDistribution` are generic over a
+  whole-shape `EventShape: IntTuple` (`Distribution[EventShape]`). `rsample()`
+  and `log_prob()` preserve event shape.
 
 When an operation's output shape can't be statically determined, the result
 is an unrefined `Tensor`. But this is rare — see
@@ -456,20 +476,20 @@ Modules called in sequence with known shapes. The simplest architecture pattern.
 ### Example: MLP actor (soft_actor_critic.py)
 
 ```python
-class BaselineActor[S, A](nn.Module):
-    def __init__(self, state_size: Dim[S], action_size: Dim[A]) -> None:
+class BaselineActor[S: IntVar, A: IntVar](nn.Module):
+    def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(state_size, 400)
         self.fc2 = nn.Linear(400, 400)
         self.out = nn.Linear(400, action_size)
 
-    def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+    def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
         h1 = F.relu(self.fc1(state))
-        assert_type(h1, Tensor[B, 400])
+        assert_type(h1, Tensor[[B, 400]])
         h2 = F.relu(self.fc2(h1))
-        assert_type(h2, Tensor[B, 400])
+        assert_type(h2, Tensor[[B, 400]])
         act = torch.tanh(self.out(h2))
-        assert_type(act, Tensor[B, A])
+        assert_type(act, Tensor[[B, A]])
         return act
 ```
 
@@ -479,21 +499,21 @@ A deeper pipeline with reshape and `PixelShuffle`:
 
 ```python
 class FCN(nn.Module):
-    def forward[B](self, x: Tensor[B, 10]) -> Tensor[B, 128, 128]:
+    def forward[B: IntVar](self, x: Tensor[[B, 10]]) -> Tensor[[B, 128, 128]]:
         # MLP: 10 -> 512 -> 1024 -> 2048 -> 4096
         h1 = F.relu(self.fc1(x))
-        assert_type(h1, Tensor[B, 512])
+        assert_type(h1, Tensor[[B, 512]])
         ...
         h4 = F.relu(self.fc4(h3))
-        assert_type(h4, Tensor[B, 4096])
+        assert_type(h4, Tensor[[B, 4096]])
 
         # Reshape to spatial
         spatial = h4.view(x.size(0), 16, 16, 16)
-        assert_type(spatial, Tensor[B, 16, 16, 16])
+        assert_type(spatial, Tensor[[B, 16, 16, 16]])
 
         # Conv + PixelShuffle(2) stages
         s1 = self.pixel_shuffle(self.conv2(F.relu(self.conv1(spatial))))
-        assert_type(s1, Tensor[B, 8, 32, 32])
+        assert_type(s1, Tensor[[B, 8, 32, 32]])
         ...
 ```
 
@@ -508,40 +528,40 @@ checker catches it immediately.
 When every layer has the same type, use `nn.ModuleList[LayerType]` and iterate:
 
 ```python
-class Encoder[NHead, DK, DInner](nn.Module):
-    def __init__(self, n_head: Dim[NHead], d_k: Dim[DK],
-                 d_inner: Dim[DInner], n_layers: int = 6) -> None:
+class Encoder[NHead: IntVar, DK: IntVar, DInner: IntVar](nn.Module):
+    def __init__(self, n_head: Int[NHead], d_k: Int[DK],
+                 d_inner: Int[DInner], n_layers: int = 6) -> None:
         super().__init__()
         self.layer_stack = nn.ModuleList(
             [EncoderLayer(n_head, d_k, d_inner) for _ in range(n_layers)]
         )
 
-    def forward[B, T](
-        self, src_seq: Tensor[B, T, NHead * DK]
-    ) -> Tensor[B, T, NHead * DK]:
+    def forward[B: IntVar, T: IntVar](
+        self, src_seq: Tensor[[B, T, NHead * DK]]
+    ) -> Tensor[[B, T, NHead * DK]]:
         enc_output = src_seq
         for layer in self.layer_stack:
             enc_output, _attn = layer(enc_output)
-            assert_type(enc_output, Tensor[B, T, NHead * DK])
+            assert_type(enc_output, Tensor[[B, T, NHead * DK]])
         return enc_output
 ```
 
-Because each `EncoderLayer` is `Tensor[B, T, D] -> Tensor[B, T, D]`, the
+Because each `EncoderLayer` is `Tensor[[B, T, D]] -> Tensor[[B, T, D]]`, the
 loop preserves the shape invariant and the type checker is satisfied.
 
 ### Shape-preserving activations
 
 Many architectures accept an activation function as a parameter (ReLU, GELU,
-etc.). Since each activation's forward is `Tensor[*S] -> Tensor[*S]`, define a
-type alias:
+etc.). Since each activation's forward is `Tensor[S] -> Tensor[S]` (`S: IntTuple`),
+define a type alias:
 
 ```python
 ShapePreservingActivation = (
     type[nn.ReLU] | type[nn.GELU] | type[nn.SiLU] | type[nn.Tanh]
 )
 
-class ResNetBlock[C](nn.Module):
-    def __init__(self, c: Dim[C], act_fn: ShapePreservingActivation) -> None:
+class ResNetBlock[C: IntVar](nn.Module):
+    def __init__(self, c: Int[C], act_fn: ShapePreservingActivation) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(c, c, kernel_size=3, padding=1, bias=False),
@@ -570,27 +590,27 @@ shape, and decode restores `(B, C, H, W)` via the skip connection. This gives
 a recursive signature:
 
 ```python
-class UNet[NChannels, NClasses](nn.Module):
-    def _encode[B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: int
-    ) -> Tensor[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1]:
+class UNet[NChannels: IntVar, NClasses: IntVar](nn.Module):
+    def _encode[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: int
+    ) -> Tensor[[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1]]:
         idx = len(self.downs) - depth
         down: Down[C, 2 * C] = self.downs[idx]
         return down(x)
 
-    def _decode[B, C, H, W](
+    def _decode[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self,
-        skip: Tensor[B, C, H, W],
-        deep: Tensor[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1],
+        skip: Tensor[[B, C, H, W]],
+        deep: Tensor[[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1]],
         depth: int,
-    ) -> Tensor[B, C, H, W]:
+    ) -> Tensor[[B, C, H, W]]:
         idx = len(self.ups) - depth
         up: Up[2 * C, C] = self.ups[idx]
         return up(deep, skip)
 
-    def recurse[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[I]
-    ) -> Tensor[B, C, H, W]:
+    def recurse[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[I]
+    ) -> Tensor[[B, C, H, W]]:
         if depth == 0:
             return x
         skip = x
@@ -637,34 +657,34 @@ case:
 
 ```python
 class Generator(nn.Module):
-    def _apply_stage[B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: int
-    ) -> Tensor[B, C // 2, (H - 1) * 2 + 2, (W - 1) * 2 + 2]:
+    def _apply_stage[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: int
+    ) -> Tensor[[B, C // 2, (H - 1) * 2 + 2, (W - 1) * 2 + 2]]:
         idx = len(self.up_stages) - depth
         stage: GenUpStage[C] = self.up_stages[idx]
         return stage(x)
 
     @overload
-    def _chain[B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[1]
-    ) -> Tensor[B, C // 2, H * 2, W * 2]: ...
+    def _chain[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[1]
+    ) -> Tensor[[B, C // 2, H * 2, W * 2]]: ...
 
     @overload
-    def _chain[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[I]
-    ) -> Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]: ...
+    def _chain[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[I]
+    ) -> Tensor[[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]]: ...
 
-    def _chain[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[I]
-    ) -> (Tensor[B, C // 2, H * 2, W * 2]
-         | Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]):
+    def _chain[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[I]
+    ) -> (Tensor[[B, C // 2, H * 2, W * 2]]
+         | Tensor[[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]]):
         y = self._apply_stage(x, depth)
         if depth == 1:
             return y
         return self._chain(y, depth - 1)
 ```
 
-The base-case overload (`depth: Dim[1]`) handles the single-stage case where
+The base-case overload (`depth: Int[1]`) handles the single-stage case where
 the formula simplifies concretely. The recursive overload uses `2**I` to
 express the exponential relationship.
 
@@ -680,11 +700,11 @@ and DenseNet:
 The caller invokes `_chain` with a concrete depth:
 
 ```python
-def forward[B](self, input: Tensor[B, 100, 1, 1]) -> Tensor[B, 3, 64, 64]:
+def forward[B: IntVar](self, input: Tensor[[B, 100, 1, 1]]) -> Tensor[[B, 3, 64, 64]]:
     h0 = F.relu(self.project_bn(self.project(input)))
-    assert_type(h0, Tensor[B, 512, 4, 4])
+    assert_type(h0, Tensor[[B, 512, 4, 4]])
     h1 = self._chain(h0, 3)  # 512->64, 4->32
-    assert_type(h1, Tensor[B, 64, 32, 32])
+    assert_type(h1, Tensor[[B, 64, 32, 32]])
     return torch.tanh(self.output(h1))
 ```
 
@@ -698,12 +718,12 @@ For models with many hyperparameters, use a generic `@dataclass`:
 
 ```python
 @dataclass
-class GPTConfig[VocabSize, BlockSize, NEmbedding, NHead, NLayer]:
-    block_size: Dim[BlockSize]
-    vocab_size: Dim[VocabSize]
-    n_layer: Dim[NLayer]
-    n_head: Dim[NHead]
-    n_embd: Dim[NEmbedding]
+class GPTConfig[VocabSize: IntVar, BlockSize: IntVar, NEmbedding: IntVar, NHead: IntVar, NLayer: IntVar]:
+    block_size: Int[BlockSize]
+    vocab_size: Int[VocabSize]
+    n_layer: Int[NLayer]
+    n_head: Int[NHead]
+    n_embd: Int[NEmbedding]
     dropout: float = 0.0
     bias: bool = True
 ```
@@ -711,7 +731,7 @@ class GPTConfig[VocabSize, BlockSize, NEmbedding, NHead, NLayer]:
 Modules extract shape parameters from the config:
 
 ```python
-class MLP[NEmbedding](nn.Module):
+class MLP[NEmbedding: IntVar](nn.Module):
     def __init__(self, config: GPTConfig[Any, Any, NEmbedding, Any, Any]):
         super().__init__()
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
@@ -749,24 +769,24 @@ When a variable's shape changes, use a new name instead of reassigning:
 
 ```python
 # Good: different names for different shapes
-h1 = F.relu(self.fc1(x))          # Tensor[B, 512]
-h2 = F.relu(self.fc2(h1))         # Tensor[B, 1024]
+h1 = F.relu(self.fc1(x))          # Tensor[[B, 512]]
+h2 = F.relu(self.fc2(h1))         # Tensor[[B, 1024]]
 
 # Good: numbered stages
-x1 = self.inc(x)                  # Tensor[B, 64, 256, 256]
-x2 = self.down1(x1)               # Tensor[B, 128, 128, 128]
+x1 = self.inc(x)                  # Tensor[[B, 64, 256, 256]]
+x2 = self.down1(x1)               # Tensor[[B, 128, 128, 128]]
 
 # Avoid: reassignment that changes shape
-x = F.relu(self.fc1(x))           # was Tensor[B, 10], now Tensor[B, 512]
-x = F.relu(self.fc2(x))           # was Tensor[B, 512], now Tensor[B, 1024]
+x = F.relu(self.fc1(x))           # was Tensor[[B, 10]], now Tensor[[B, 512]]
+x = F.relu(self.fc2(x))           # was Tensor[[B, 512]], now Tensor[[B, 1024]]
 ```
 
 Reassignment is fine when the shape doesn't change (e.g., residual connections,
 dropout, layer norm):
 
 ```python
-x = x + self.attn(self.ln_1(x))   # same shape: Tensor[B, T, D]
-x = x + self.mlp(self.ln_2(x))    # same shape: Tensor[B, T, D]
+x = x + self.attn(self.ln_1(x))   # same shape: Tensor[[B, T, D]]
+x = x + self.mlp(self.ln_2(x))    # same shape: Tensor[[B, T, D]]
 ```
 
 ### Concatenation
@@ -774,8 +794,8 @@ x = x + self.mlp(self.ln_2(x))    # same shape: Tensor[B, T, D]
 `torch.cat` along a dimension produces a sum type:
 
 ```python
-sa = torch.cat((state, action), dim=1)  # Tensor[B, S + A]
-skip_cat = torch.cat((x2, x1_up), dim=1)  # Tensor[B, C1 + C2, H, W]
+sa = torch.cat((state, action), dim=1)  # Tensor[[B, S + A]]
+skip_cat = torch.cat((x2, x1_up), dim=1)  # Tensor[[B, C1 + C2, H, W]]
 ```
 
 ### `@overload` for type narrowing
@@ -785,14 +805,14 @@ recursive depth. The `_chain` methods in dcgan and resnet demonstrate this:
 
 ```python
 @overload
-def _chain[B, C, H, W](
-    self, x: Tensor[B, C, H, W], depth: Dim[1]
-) -> Tensor[B, C // 2, H * 2, W * 2]: ...
+def _chain[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+    self, x: Tensor[[B, C, H, W]], depth: Int[1]
+) -> Tensor[[B, C // 2, H * 2, W * 2]]: ...
 
 @overload
-def _chain[I, B, C, H, W](
-    self, x: Tensor[B, C, H, W], depth: Dim[I]
-) -> Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]: ...
+def _chain[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+    self, x: Tensor[[B, C, H, W]], depth: Int[I]
+) -> Tensor[[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]]: ...
 ```
 
 ### `type: ignore` with comment
@@ -830,43 +850,44 @@ When a module's internals use dynamic patterns (`getattr(nn, activation)()`,
 loops over `list[int]` hidden units, `nn.Sequential(*list)`), the forward
 signature can still declare typed shapes. `Module.forward` returns `Any`,
 so a typed return is accepted. This preserves batch dims through downstream
-ops — the difference between `Tensor[B, Unknown]` (batch dim tracked) and
+ops — the difference between `Tensor[[B, Unknown]]` (batch dim tracked) and
 bare `Tensor` (nothing tracked).
 
 ```python
-class MLP[InDim, OutDim](nn.Module):
-    def __init__(self, input_dim: Dim[InDim], output_dim: Dim[OutDim],
+class MLP[InDim: IntVar, OutDim: IntVar](nn.Module):
+    def __init__(self, input_dim: Int[InDim], output_dim: Int[OutDim],
                  hidden_units: list[int], activation: str = "ReLU") -> None:
         # Dynamic internals: getattr, list-based construction
         ...
 
-    def forward[B](self, x: Tensor[B, InDim]) -> Tensor[B, OutDim]:
+    def forward[B: IntVar](self, x: Tensor[[B, InDim]]) -> Tensor[[B, OutDim]]:
         h = x
         for layer in self.layers:
             h = layer(h)  # Module.forward returns Any
-        result: Tensor[B, OutDim] = h  # type: ignore[bad-assignment]
+        result: Tensor[[B, OutDim]] = h  # type: ignore[bad-assignment]
         return result
 ```
 
-The caller sees `self.mlp(flat)` returning `Tensor[B, OutDim]`. Downstream
-`nn.Linear` can match `Tensor[*Bs, OutDim]` → `*Bs = (B,)`, preserving `B`
-through the chain. Without the typed interface, `B` is lost entirely.
+The caller sees `self.mlp(flat)` returning `Tensor[[B, OutDim]]`. Downstream
+`nn.Linear` accepts `Tensor[[*Elements[Bs], OutDim]]` (`Bs: IntTuple`), binding
+`Bs = (B,)` and preserving `B` through the chain. Without the typed interface,
+`B` is lost entirely.
 
 ### Extracting dims from lists
 
 `list[int]` element access returns `int`, losing the concrete value at the
 type level. When a dimension comes from a list (e.g., `hidden_units[-1]`),
-add an explicit `Dim` field to the config:
+add an explicit `Int` field to the config:
 
 ```python
 @dataclass
-class Config[K, MlpOut]:
-    num_output_features: Dim[K]
-    mlp_output_dim: Dim[MlpOut]       # explicit — was hidden_units[-1]
+class Config[K: IntVar, MlpOut: IntVar]:
+    num_output_features: Int[K]
+    mlp_output_dim: Int[MlpOut]       # explicit — was hidden_units[-1]
     mlp_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
 ```
 
-This turns `Tensor[B, Unknown]` into `Tensor[B, MlpOut]` (= `Tensor[B, 256]`
+This turns `Tensor[[B, Unknown]]` into `Tensor[[B, MlpOut]]` (= `Tensor[[B, 256]]`
 at call sites with concrete config values).
 
 ### Typed element lists
@@ -876,15 +897,15 @@ When a loop accumulates uniformly-shaped tensors for `torch.stack` or
 collection size from a dynamic loop, so annotate the result too:
 
 ```python
-terms: list[Tensor[B]] = []
+terms: list[Tensor[[B]]] = []
 for i in range(self.num_heads):
-    terms.append(compute_head(i))  # each Tensor[B]
+    terms.append(compute_head(i))  # each Tensor[[B]]
 
 # Annotate stack result — DSL can't infer NHeads from dynamic list
-stacked: Tensor[B, NHeads] = torch.stack(terms, dim=-1)
-# Now Linear[NHeads, Out] can match *Bs=(B,) and produce Tensor[B, Out]
+stacked: Tensor[[B, NHeads]] = torch.stack(terms, dim=-1)
+# Now Linear[NHeads, Out] binds Bs=(B,) and produces Tensor[[B, Out]]
 result = self.projection(stacked)
-assert_type(result, Tensor[B, Out])
+assert_type(result, Tensor[[B, Out]])
 ```
 
 ### Separating first iteration
@@ -894,15 +915,15 @@ subsequent iterations preserve it, separate the first call to avoid union
 widening:
 
 ```python
-# BAD: x widens to Tensor[B, F, D] | Tensor[B, K, D] → needs type: ignore
+# BAD: x widens to Tensor[[B, F, D]] | Tensor[[B, K, D]] → needs type: ignore
 x = input_embs
 for layer in self.layers:
     x = layer(x)
-out: Tensor[B, K, D] = x  # type: ignore[bad-assignment]
+out: Tensor[[B, K, D]] = x  # type: ignore[bad-assignment]
 
 # GOOD: no union, no type: ignore
 x = self.layers[0](input_embs)       # [B, F, D] -> [B, K, D]
-assert_type(x, Tensor[B, K, D])
+assert_type(x, Tensor[[B, K, D]])
 for i in range(1, len(self.layers)):
     x = self.layers[i](x)            # [B, K, D] -> [B, K, D]
 ```
@@ -914,11 +935,11 @@ on. Instead, trace upstream to find where shapes were actually lost. See
 [Section 3](#3-what-should-work) for the full diagnostic approach. Common
 fixes:
 
-- Change `int` to `Dim[X]` so shapes enter the function typed
+- Change `int` to `Int[X]` so shapes enter the function typed
 - Use `tuple(...)` instead of `list[...]` for `torch.cat` arguments
 - Break inlined expressions into separate assignments
 - Fix the stub if an op returns bare `Tensor` when it shouldn't
-- Add explicit `Dim` fields to configs for values from `list[int]` access
+- Add explicit `Int` fields to configs for values from `list[int]` access
 - Type module interfaces even when internals are dynamic
 
 ---
@@ -932,14 +953,14 @@ concrete dimensions:
 def test_baseline_actor():
     """Test simple MLP actor: state(24) -> action(4)."""
     actor = BaselineActor(24, 4)
-    state: Tensor[8, 24] = torch.randn(8, 24)
+    state: Tensor[[8, 24]] = torch.randn(8, 24)
     act = actor(state)
-    assert_type(act, Tensor[8, 4])
+    assert_type(act, Tensor[[8, 4]])
 ```
 
 ### Guidelines
 
-- **Concrete dims in tests**: use `Tensor[4, 64, 32, 32]`, not generic dims.
+- **Concrete dims in tests**: use `Tensor[[4, 64, 32, 32]]`, not generic dims.
   This lets the type checker verify the full shape calculation.
 - **Test building blocks individually**: verify each module's shape transform
   before testing the full model.
@@ -952,19 +973,19 @@ def test_baseline_actor():
 def test_unet():
     """End-to-end: non-bilinear UNet for 2-class segmentation."""
     model = UNet(3, 2)
-    x: Tensor[1, 3, 256, 256] = torch.randn(1, 3, 256, 256)
+    x: Tensor[[1, 3, 256, 256]] = torch.randn(1, 3, 256, 256)
     out = model(x)
-    assert_type(out, Tensor[1, 2, 256, 256])
+    assert_type(out, Tensor[[1, 2, 256, 256]])
 
 def test_gan_pipeline():
     """End-to-end: generate fake images, then discriminate them."""
     netG = Generator()
     netD = Discriminator()
-    noise: Tensor[16, 100, 1, 1] = torch.randn(16, 100, 1, 1)
+    noise: Tensor[[16, 100, 1, 1]] = torch.randn(16, 100, 1, 1)
     fake = netG(noise)
-    assert_type(fake, Tensor[16, 3, 64, 64])
+    assert_type(fake, Tensor[[16, 3, 64, 64]])
     verdict = netD(fake)
-    assert_type(verdict, Tensor[16, 1, 1, 1])
+    assert_type(verdict, Tensor[[16, 1, 1, 1]])
 ```
 
 ---
@@ -977,7 +998,7 @@ Quick reference for common dynamic patterns that break shape tracking.
 |---------|-------------|-----|
 | `getattr(nn, str)()` | Returns `Any` | Union of typed `nn.Module` subclasses |
 | `nn.Sequential(*list_var)` | Erases module types | Individual attributes, chain in `forward` |
-| `list[int]` element access | Erases concrete value | Add explicit `Dim` field to config |
+| `list[int]` element access | Erases concrete value | Add explicit `Int` field to config |
 | Heterogeneous `ModuleList` loop | Homogenizes type params | Spell out blocks, or typed interface (last resort) |
 
 Typed interfaces (`type: ignore[bad-assignment]` to narrow) are the fallback
@@ -989,21 +1010,21 @@ when none of the above fixes apply — not the first move.
 
 | Pattern | Models | Key concept |
 |---------|--------|-------------|
-| Linear Pipeline | [learning_to_paint](tensor-shapes/examples/torch/learning_to_paint.py), [soft_actor_critic](tensor-shapes/examples/torch/soft_actor_critic.py), [deeprecommender](tensor-shapes/examples/torch/deeprecommender.py) | Sequential layers, `assert_type` checkpoints |
-| Homogeneous Stacking | [nanogpt](tensor-shapes/examples/torch/nanogpt.py), [gptfast](tensor-shapes/examples/torch/gptfast.py), [speech_transformer](tensor-shapes/examples/torch/speech_transformer.py), [llama](tensor-shapes/examples/torch/llama.py) | `ModuleList` iteration, shape-preserving loops |
-| Encoder-Decoder Skip | [unet](tensor-shapes/examples/torch/unet.py), [super_slomo](tensor-shapes/examples/torch/super_slomo.py), [demucs](tensor-shapes/examples/torch/demucs.py), [stargan](tensor-shapes/examples/torch/stargan.py) | Recursive `encode`-`decode`, generic spatial dim `S` |
-| Recursive Exponential | [dcgan](tensor-shapes/examples/torch/dcgan.py), [resnet](tensor-shapes/examples/torch/resnet.py), [densenet](tensor-shapes/examples/torch/densenet.py) | `@overload` base/recursive, `2**I` expressions |
-| Config Classes | [nanogpt](tensor-shapes/examples/torch/nanogpt.py), [gptfast](tensor-shapes/examples/torch/gptfast.py), [dcgan](tensor-shapes/examples/torch/dcgan.py), [llama](tensor-shapes/examples/torch/llama.py) | `@dataclass` type params, `Final` constants |
-| ShapePreservingActivation | [resnet](tensor-shapes/examples/torch/resnet.py) | Union of activation types as callable |
-| Multi-Head Attention | [llama](tensor-shapes/examples/torch/llama.py), [sam](tensor-shapes/examples/torch/sam.py) | Reshape+transpose multi-head, `D // NHead`, RoPE |
-| KV Cache | [llama](tensor-shapes/examples/torch/llama.py) | Optional `start_pos`, typed cache, branch-per-path |
-| Windowed Attention | [sam](tensor-shapes/examples/torch/sam.py) | Window partition/unpartition with `Dim[WS]`, generic `H, W` on attention |
-| Typed Distributions | [drq](tensor-shapes/examples/torch/drq.py) | `Distribution[*EventShape]`, `SquashedNormal` |
-| Variadic Batch | [tacotron2](tensor-shapes/examples/torch/tacotron2.py) | `forward[*Bs]` for any-batch-shape support |
-| Typed Dynamic Interface | [finalmlp](tensor-shapes/examples/torch/finalmlp.py) | Typed forward on dynamic-internal modules, `Module.forward` → `Any` |
-| Config Dim Extraction | [finalmlp](tensor-shapes/examples/torch/finalmlp.py) | Explicit `Dim` fields for values from `list[int]` access |
-| Typed Element Lists | [finalmlp](tensor-shapes/examples/torch/finalmlp.py) | `list[Tensor[B]]` + annotated stack result for `Linear` matching |
-| First-Iteration Split | [finalmlp](tensor-shapes/examples/torch/finalmlp.py) | Separate shape-changing first iteration from shape-preserving rest |
-| Autoregressive Loop | [tacotron2](tensor-shapes/examples/torch/tacotron2.py) | `list[Tensor[B, 80]]` + `torch.stack`, typed elements |
-| Dims-First Params | [sam](tensor-shapes/examples/torch/sam.py) | Bind bare `Dim[X]` before derived `Tensor[..., X*Y, ...]` |
-| Conv Chain Formulas | [sam](tensor-shapes/examples/torch/sam.py), [background_matting](tensor-shapes/examples/torch/background_matting.py), [stargan](tensor-shapes/examples/torch/stargan.py) | `4*ES → 2*ES → ES`, `(S-16)//16+1` through Conv2d/ConvTranspose2d |
+| Linear Pipeline | [learning_to_paint](tensor-shapes/pyrefly-torch-stubs/examples/learning_to_paint.py), [soft_actor_critic](tensor-shapes/pyrefly-torch-stubs/examples/soft_actor_critic.py), [deeprecommender](tensor-shapes/pyrefly-torch-stubs/examples/deeprecommender.py) | Sequential layers, `assert_type` checkpoints |
+| Homogeneous Stacking | [nanogpt](tensor-shapes/pyrefly-torch-stubs/examples/nanogpt.py), [gptfast](tensor-shapes/pyrefly-torch-stubs/examples/gptfast.py), [speech_transformer](tensor-shapes/pyrefly-torch-stubs/examples/speech_transformer.py), [llama](tensor-shapes/pyrefly-torch-stubs/examples/llama.py) | `ModuleList` iteration, shape-preserving loops |
+| Encoder-Decoder Skip | [unet](tensor-shapes/pyrefly-torch-stubs/examples/unet.py), [super_slomo](tensor-shapes/pyrefly-torch-stubs/examples/super_slomo.py), [demucs](tensor-shapes/pyrefly-torch-stubs/examples/demucs.py), [stargan](tensor-shapes/pyrefly-torch-stubs/examples/stargan.py) | Recursive `encode`-`decode`, generic spatial dim `S` |
+| Recursive Exponential | [dcgan](tensor-shapes/pyrefly-torch-stubs/examples/dcgan.py), [resnet](tensor-shapes/pyrefly-torch-stubs/examples/resnet.py), [densenet](tensor-shapes/pyrefly-torch-stubs/examples/densenet.py) | `@overload` base/recursive, `2**I` expressions |
+| Config Classes | [nanogpt](tensor-shapes/pyrefly-torch-stubs/examples/nanogpt.py), [gptfast](tensor-shapes/pyrefly-torch-stubs/examples/gptfast.py), [dcgan](tensor-shapes/pyrefly-torch-stubs/examples/dcgan.py), [llama](tensor-shapes/pyrefly-torch-stubs/examples/llama.py) | `@dataclass` type params, `Final` constants |
+| ShapePreservingActivation | [resnet](tensor-shapes/pyrefly-torch-stubs/examples/resnet.py) | Union of activation types as callable |
+| Multi-Head Attention | [llama](tensor-shapes/pyrefly-torch-stubs/examples/llama.py), [sam](tensor-shapes/pyrefly-torch-stubs/examples/sam.py) | Reshape+transpose multi-head, `D // NHead`, RoPE |
+| KV Cache | [llama](tensor-shapes/pyrefly-torch-stubs/examples/llama.py) | Optional `start_pos`, typed cache, branch-per-path |
+| Windowed Attention | [sam](tensor-shapes/pyrefly-torch-stubs/examples/sam.py) | Window partition/unpartition with `Int[WS]`, generic `H, W` on attention |
+| Typed Distributions | [drq](tensor-shapes/pyrefly-torch-stubs/examples/drq.py) | `Distribution[EventShape]` (`EventShape: IntTuple`), `SquashedNormal` |
+| Variadic Batch | [tacotron2](tensor-shapes/pyrefly-torch-stubs/examples/tacotron2.py) | `forward[Bs: IntTuple]` + `Tensor[[*Elements[Bs], D]]` for any-batch-shape support |
+| Typed Dynamic Interface | [finalmlp](tensor-shapes/pyrefly-torch-stubs/examples/finalmlp.py) | Typed forward on dynamic-internal modules, `Module.forward` → `Any` |
+| Config Int Extraction | [finalmlp](tensor-shapes/pyrefly-torch-stubs/examples/finalmlp.py) | Explicit `Int` fields for values from `list[int]` access |
+| Typed Element Lists | [finalmlp](tensor-shapes/pyrefly-torch-stubs/examples/finalmlp.py) | `list[Tensor[[B]]]` + annotated stack result for `Linear` matching |
+| First-Iteration Split | [finalmlp](tensor-shapes/pyrefly-torch-stubs/examples/finalmlp.py) | Separate shape-changing first iteration from shape-preserving rest |
+| Autoregressive Loop | [tacotron2](tensor-shapes/pyrefly-torch-stubs/examples/tacotron2.py) | `list[Tensor[[B, 80]]]` + `torch.stack`, typed elements |
+| Dimensions-First Params | [sam](tensor-shapes/pyrefly-torch-stubs/examples/sam.py) | Bind bare `Int[X]` before derived `Tensor[[..., X*Y, ...]]` |
+| Conv Chain Formulas | [sam](tensor-shapes/pyrefly-torch-stubs/examples/sam.py), [background_matting](tensor-shapes/pyrefly-torch-stubs/examples/background_matting.py), [stargan](tensor-shapes/pyrefly-torch-stubs/examples/stargan.py) | `4*ES → 2*ES → ES`, `(S-16)//16+1` through Conv2d/ConvTranspose2d |

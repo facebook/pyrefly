@@ -1,10 +1,10 @@
 ---
 name: add-torch-shapes-example
-description: Use when adding a new PyTorch model to Pyrefly's shape-tracking example corpus under tensor-shapes/examples/torch — i.e. importing a model as a tested, corpus-quality reference port. This is maintainer-facing fbsource work. For porting your own model elsewhere, use the porting skill directly; for fixing a wrong/missing shape rule, use modify-shaped-array-dsl.
+description: Use when adding a new PyTorch model to Pyrefly's shape-tracking example corpus under tensor-shapes/pyrefly-torch-stubs/examples — i.e. importing a model as a tested, corpus-quality reference port. This is maintainer-facing fbsource work. For porting your own model elsewhere, use the porting skill directly; for fixing a wrong/missing shape rule, use modify-shaped-array-dsl.
 ---
 
 You are importing a PyTorch model into Pyrefly's example corpus at
-`tensor-shapes/examples/torch/`. This is the **contribution case** the porting
+`tensor-shapes/pyrefly-torch-stubs/examples/`. This is the **contribution case** the porting
 skill describes: these ports are tested reference material that others read to
 learn the patterns, so produce its fuller deliverable — paste every artifact
 (audit table, per-local `reveal_type` dumps, typed-interface receipts, exhaustive
@@ -41,7 +41,7 @@ Produce **all** of its output artifacts; for the corpus they are required.
 
 ## 2. Place the file
 
-Write the port at `tensor-shapes/examples/torch/<model>.py`. Every class,
+Write the port at `tensor-shapes/pyrefly-torch-stubs/examples/<model>.py`. Every class,
 function, and method from the original belongs in the port — the corpus values
 completeness.
 
@@ -53,7 +53,7 @@ shape-aware stubs:
 
 ```bash
 buck build fbcode//pyrefly/tensor-shapes:torch-stubs-search-path
-buck run fbcode//pyrefly:pyrefly -- check --config /dev/null --python-version 3.13 --tensor-shapes true --search-path "$(buck targets --show-output fbcode//pyrefly/tensor-shapes:torch-stubs-search-path | awk '{print $2}')" tensor-shapes/examples/torch/<model>.py
+buck run fbcode//pyrefly:pyrefly -- check --config /dev/null --python-version 3.13 --tensor-shapes true --search-path "$(buck targets --show-output fbcode//pyrefly/tensor-shapes:torch-stubs-search-path | awk '{print $2}')" tensor-shapes/pyrefly-torch-stubs/examples/<model>.py
 ```
 
 The result must be `0 errors`, with no leftover `reveal_type`.
@@ -61,7 +61,7 @@ The result must be `0 errors`, with no leftover `reveal_type`.
 Then run the corpus test target so the new example is covered by CI:
 
 ```bash
-buck test fbcode//pyrefly/tensor-shapes/examples/torch:torch_examples_test
+buck test fbcode//pyrefly/tensor-shapes/pyrefly-torch-stubs/examples:torch_examples_test
 ```
 
 ## If you hit a wrong or missing shape

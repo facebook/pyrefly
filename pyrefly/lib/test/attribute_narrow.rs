@@ -131,7 +131,7 @@ def f(foo: Foo):
         # Why `Foo | object`? Because the lookup on `None` fails, and we fall back to `object`
         # in that branch of the union.
         assert_type(foo.x.x, Foo | object)
-    if isinstance(foo.x.y, Foo) and foo.x.y.x is not None:  # E: Object of class `Foo` has no attribute `y`\nObject of class `NoneType` has no attribute `y`
+    if isinstance(foo.x.y, Foo) and foo.x.y.x is not None:  # E: Object of type `Foo | None` has no attribute `y`
         assert_type(foo.x, Foo | None)
         assert_type(foo.x.y, Foo)
         assert_type(foo.x.y.x, Foo)
@@ -181,8 +181,8 @@ testcase!(
     r#"
 def f(x: int | str):
     if (
-        len(x.missing)  # E: Object of class `int` has no attribute `missing`\nObject of class `str` has no attribute `missing`
-        or x.missing  # E: Object of class `int` has no attribute `missing`\nObject of class `str` has no attribute `missing`
+        len(x.missing)  # E: Object of type `int | str` has no attribute `missing`
+        or x.missing  # E: Object of type `int | str` has no attribute `missing`
     ):
         pass
 "#,
@@ -206,6 +206,23 @@ def test_introduce_narrow_with_assignment(c0: C, c1: C):
     assert_type(c0.x, Literal[42])
     assert_type(c0.y, Literal[43])
     assert_type(c0.z, C)
+"#,
+);
+
+testcase!(
+    test_attr_assignment_optional_augassign,
+    r#"
+from typing import assert_type
+def question() -> bool:
+    return True
+class C:
+    x: int | None
+c = C()
+c.x = abs(int(0))
+assert_type(c.x, int)
+if question():
+    c.x += 2
+    assert_type(c.x, int)
 "#,
 );
 

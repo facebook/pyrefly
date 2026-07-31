@@ -152,6 +152,19 @@ Example(id="123")  # E: Missing argument `attribute_1`
 );
 
 pydantic_testcase!(
+    test_frozen_field_override_covariant,
+    r#"
+from pydantic import BaseModel, Field
+
+class Foo(BaseModel):
+    id: int | None = Field(frozen=True)
+
+class Bar(Foo):
+    id: int = Field(frozen=True)
+"#,
+);
+
+pydantic_testcase!(
     bug = "consider erroring on invalid5 and invalid6",
     test_discriminated_unions,
     r#"
@@ -237,6 +250,22 @@ class Foo(BaseModel):
 
 Foo(a=1)
 Foo()  # E: Missing argument `a`
+    "#,
+);
+
+pydantic_testcase!(
+    test_inherited_fields_are_init_fields,
+    r#"
+from pydantic import BaseModel
+
+class SuperBase(BaseModel, extra="forbid"):
+    x: int
+
+class Derived(SuperBase, extra="forbid"):
+    z: int
+
+Derived(x=1, z=1)
+Derived(z=1)  # E: Missing argument `x`
     "#,
 );
 
@@ -455,5 +484,21 @@ class Right:
     __slots__ = ("y",)
 
 class Conflict(Left, Right): ...  # E: inherits from incompatible disjoint bases `BaseModel`, `Right`
+"#,
+);
+
+// pydantic field named 'self' must not collide with the synthesized '__init__''s implicit 'self' param.
+// same as the stdlib dataclass fix.
+pydantic_testcase!(
+    test_pydantic_field_named_self,
+    r#"
+from pydantic import BaseModel
+from typing import assert_type
+
+class Model(BaseModel):
+    self: str
+
+m = Model(self="test")
+assert_type(m.self, str)
 "#,
 );

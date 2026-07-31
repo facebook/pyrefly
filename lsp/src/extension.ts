@@ -9,6 +9,8 @@
 
 import {ExtensionContext, workspace} from 'vscode';
 import * as vscode from 'vscode';
+import {execFile} from 'child_process';
+import {basename, dirname} from 'path';
 import {
   CancellationToken,
   ConfigurationItem,
@@ -28,6 +30,7 @@ import {
 } from './status-bar';
 import {runDocstringFoldingCommand} from './docstring';
 import {registerCodeLensCommands} from './codeLens';
+import {registerHoverProvider} from './hover';
 import {PythonEnvironment} from './python-environment';
 import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
@@ -36,6 +39,7 @@ import {
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
 let traceOutputChannel: vscode.OutputChannel;
+let inferOutputChannel: vscode.OutputChannel;
 
 /// Get a setting at the path, or throw an error if it's not set.
 function requireSetting<T>(path: string): T {
@@ -98,8 +102,11 @@ export async function activate(context: ExtensionContext) {
       'Pyrefly language server trace',
     );
   }
+  if (!inferOutputChannel) {
+    inferOutputChannel = vscode.window.createOutputChannel('Pyrefly infer');
+  }
 
-  const path: string = requireSetting('pyrefly.lspPath');
+  const lspPath: string = requireSetting('pyrefly.lspPath');
   const args: [string] = requireSetting('pyrefly.lspArguments');
 
   const bundledPyreflyPath = vscode.Uri.joinPath(
@@ -108,12 +115,13 @@ export async function activate(context: ExtensionContext) {
     // process.platform returns win32 on any windows CPU architecture
     process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
   );
+  const pyreflyPath = lspPath === '' ? bundledPyreflyPath.fsPath : lspPath;
 
   const pythonEnv = new PythonEnvironment(context);
 
   // Otherwise to spawn the server
   let serverOptions: ServerOptions = {
-    command: path === '' ? bundledPyreflyPath.fsPath : path,
+    command: pyreflyPath,
     args: args,
   };
   // `getConfiguration` returns a `WorkspaceConfiguration` proxy, not a
@@ -126,6 +134,9 @@ export async function activate(context: ExtensionContext) {
   const rawInitialisationOptions = JSON.parse(
     JSON.stringify(vscode.workspace.getConfiguration('pyrefly') ?? {}),
   );
+  // Proposed APIs are omitted at runtime when the editor has not granted access.
+  // In that case, let vscode-languageclient register the ordinary LSP hover provider.
+  const supportsHoverVerbosity = vscode.VerboseHover !== undefined;
 
   // Opt into the V2 wire shape for the typeErrorDisplayStatus request.
   // An older binary that doesn't know V2 still returns its V1 bare
@@ -138,6 +149,7 @@ export async function activate(context: ExtensionContext) {
     pyrefly: {
       ...((rawInitialisationOptions as any).pyrefly ?? {}),
       typeErrorDisplayStatusVersion: TYPE_ERROR_DISPLAY_STATUS_VERSION,
+      customHoverProvider: supportsHoverVerbosity,
     },
   };
 
@@ -194,6 +206,9 @@ export async function activate(context: ExtensionContext) {
     serverOptions,
     clientOptions,
   );
+  if (supportsHoverVerbosity) {
+    registerHoverProvider(context, () => client);
+  }
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async () => {
@@ -251,6 +266,65 @@ export async function activate(context: ExtensionContext) {
       await runDocstringFoldingCommand(client, outputChannel, 'editor.unfold');
     }),
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyrefly.infer', async () => {
+      const document = vscode.window.activeTextEditor?.document;
+      if (
+        document === undefined ||
+        document.languageId !== 'python' ||
+        document.uri.scheme !== 'file'
+      ) {
+        await vscode.window.showErrorMessage(
+          'Open a saved Python file before running Pyrefly infer.',
+        );
+        return;
+      }
+      if (!(await document.save())) {
+        await vscode.window.showErrorMessage(
+          `Pyrefly could not save ${basename(document.uri.fsPath)} before inferring types.`,
+        );
+        return;
+      }
+
+      const cwd =
+        vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath ??
+        dirname(document.uri.fsPath);
+      inferOutputChannel.clear();
+      try {
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Pyrefly: Inferring types in ${basename(document.uri.fsPath)}`,
+          },
+          async () => {
+            await new Promise<void>((resolve, reject) => {
+              execFile(
+                pyreflyPath,
+                ['infer', document.uri.fsPath],
+                {cwd},
+                (error, stdout, stderr) => {
+                  inferOutputChannel.append(stdout);
+                  inferOutputChannel.append(stderr);
+                  if (error) {
+                    reject(error);
+                  } else {
+                    resolve();
+                  }
+                },
+              );
+            });
+          },
+        );
+      } catch (error) {
+        inferOutputChannel.show(true);
+        const message = error instanceof Error ? error.message : String(error);
+        await vscode.window.showErrorMessage(
+          `Pyrefly could not infer types in ${basename(document.uri.fsPath)}: ${message}`,
+        );
+      }
+    }),
+  );
   registerCodeLensCommands(context, pythonEnv);
 
   // When our extension is activated, make sure ms-python knows
@@ -284,6 +358,9 @@ export function deactivate(): Thenable<void> | undefined {
   }
   if (traceOutputChannel) {
     traceOutputChannel.dispose();
+  }
+  if (inferOutputChannel) {
+    inferOutputChannel.dispose();
   }
   return client.stop();
 }

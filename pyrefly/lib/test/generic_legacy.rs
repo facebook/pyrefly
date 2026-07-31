@@ -220,7 +220,7 @@ from typing import Any, Generic, TypeVar, assert_type
 T = TypeVar('T')
 class A(Generic[T]):
     x: T
-def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A[T]`
     assert_type(a.x, Any)
     "#,
 );
@@ -235,7 +235,7 @@ U = TypeVar('U', default=int)
 class A(Generic[T, U]):
     x: T
     y: U
-def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A[T, U]`
     assert_type(a.x, Any)
     assert_type(a.y, int)
     "#,
@@ -606,6 +606,19 @@ def append(x: C[T], y: T):
     pass
 v: C[int] = C()
 append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
+"#,
+);
+
+testcase!(
+    test_legacy_typevar_complex_forward_ref_ranges,
+    TestEnv::one("lib", "from typing import Literal"),
+    r#"
+import lib
+
+class C:
+    def f(self, x: "lib.Literal['\\n']"): ...
+    def g(self, x: "lib.Literal['\\r']"): ...
+    def h(self, x: "tuple[lib.Literal['\\n'], lib.Literal['\\r']]"): ...
 "#,
 );
 

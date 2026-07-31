@@ -9,10 +9,9 @@ use lsp_types::SemanticTokensResult;
 use lsp_types::Url;
 use lsp_types::request::Completion;
 use lsp_types::request::SemanticTokensFullRequest;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
-
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
 
 #[test]
 fn test_semantic_tokens_for_unsaved_file() {

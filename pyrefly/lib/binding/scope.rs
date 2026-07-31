@@ -1018,10 +1018,10 @@ impl ScopeClass {
     /// Produces triples (hashed_attr_name, MethodThatSetsAttr, attribute) for all assignments
     /// to `self.<attr_name>` in methods.
     ///
-    /// We iterate recognized methods first, which - assuming that the first result is the one
-    /// used in our class logic, which is the case - ensures both that we don't produce
-    /// unnecessary errors about attributes implicitly defined in unrecognized methods
-    /// and that the types inferred from recognized methods take precedence.
+    /// We iterate recognized methods first, which ensures constructor prioritization is
+    /// established before unrecognized helper methods are processed. This ensures both
+    /// that we don't produce unnecessary errors about attributes implicitly defined in
+    /// unrecognized methods, and that constructors take precedence.
     pub fn method_defined_attributes(
         self,
     ) -> impl Iterator<Item = (Hashed<Name>, MethodThatSetsAttr, InstanceAttribute)> {
@@ -1090,7 +1090,7 @@ pub struct YieldsAndReturns {
 
 #[derive(Clone, Debug)]
 pub struct InstanceAttribute(
-    pub ExprOrBinding,
+    pub Vec<ExprOrBinding>,
     pub Option<Idx<KeyAnnotation>>,
     pub TextRange,
     pub MethodSelfKind,
@@ -1387,12 +1387,9 @@ impl Scope {
         }
     }
 
-    fn class_and_metadata_keys(&self) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
+    fn class_key(&self) -> Option<Idx<KeyClass>> {
         match &self.kind {
-            ScopeKind::Class(class_scope) => Some((
-                class_scope.indices.class_idx,
-                class_scope.indices.metadata_idx,
-            )),
+            ScopeKind::Class(class_scope) => Some(class_scope.indices.class_idx),
             _ => None,
         }
     }
@@ -1587,6 +1584,14 @@ impl Scopes {
         }
     }
 
+    /// The `ClassDefIndex` of the current class body, if the innermost scope is one.
+    pub fn current_class_def_index(&self) -> Option<ClassDefIndex> {
+        match &self.current().kind {
+            ScopeKind::Class(c) => Some(c.indices.def_index),
+            _ => None,
+        }
+    }
+
     pub fn in_function_scope(&self) -> bool {
         self.iter_rev()
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
@@ -1677,11 +1682,9 @@ impl Scopes {
             .is_some_and(|l| l.finally_depth == self.current().finally_depth)
     }
 
-    /// Are we currently in a class body. If so, return the keys for the class and its metadata.
-    pub fn current_class_and_metadata_keys(
-        &self,
-    ) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
-        self.current().class_and_metadata_keys()
+    /// Are we currently in a class body. If so, return the key for the class.
+    pub fn current_class_key(&self) -> Option<Idx<KeyClass>> {
+        self.current().class_key()
     }
 
     /// Are we anywhere inside a class? If so, return the class object idx.
@@ -1695,11 +1698,13 @@ impl Scopes {
         None
     }
 
-    /// Check if we're currently in the body of a class with `Protocol` in its base class list
+    /// Check if we're directly in the body of a class with `Protocol` in its base class list
     pub fn is_in_protocol_class(&self) -> bool {
         for scope in self.iter_rev() {
-            if let ScopeKind::Class(class_scope) = &scope.kind {
-                return class_scope.has_protocol_base;
+            match &scope.kind {
+                ScopeKind::Class(class_scope) => return class_scope.has_protocol_base,
+                ScopeKind::Function(_) | ScopeKind::Method(_) => return false,
+                _ => {}
             }
         }
         false
@@ -1967,6 +1972,8 @@ impl Scopes {
     /// (like constructors) that we recognize as always being called.
     ///
     /// Returns `true` if the attribute was a self attribute.
+    /// Record a self attribute assignment (e.g., `self.x = value`) inside the current method scope.
+    /// We accumulate all assignments to the same attribute within the method so they can later be unioned.
     pub fn record_self_attr_assign(
         &mut self,
         x: &ExprAttribute,
@@ -1978,13 +1985,21 @@ impl Scopes {
                 && let Some(self_name) = &method_scope.self_name
                 && matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
             {
-                if !method_scope.instance_attributes.contains_key(&x.attr.id) {
+                if let Some(attr) = method_scope.instance_attributes.get_mut(&x.attr.id) {
+                    // Accumulate subsequent assignments in the method.
+                    attr.0.push(value);
+                    // Keep the first type annotation encountered in the method.
+                    if attr.1.is_none() {
+                        attr.1 = annotation;
+                    }
+                } else {
+                    // First time seeing this attribute in this method: record it.
                     method_scope.instance_attributes.insert(
                         x.attr.id.clone(),
                         InstanceAttribute(
-                            value,
+                            vec![value],
                             annotation,
-                            x.attr.range(),
+                            x.attr.range(), // Keep the range of the first assignment as the definition location.
                             method_scope.receiver_kind,
                         ),
                     );
@@ -2371,7 +2386,7 @@ impl Scopes {
             // `name` is absent from lexical scope, so it may resolve to an implicit builtin.
             match self.look_up_name_for_read(
                 Hashed::new(name),
-                &Usage::Narrowing(None),
+                &Usage::NonPinningValue(None),
                 lookup,
                 current_module,
             ) {
@@ -2814,6 +2829,7 @@ impl Scopes {
                     } => ClassFieldDefinition::MethodLike {
                         definition: value.idx,
                         has_return_annotation: *has_return_annotation,
+                        annotation: static_info.annotation(),
                     },
                     // Only treat pristine class definitions as nested classes.
                     // A non-pristine `ClassDef` carries the class identity for
@@ -2866,16 +2882,48 @@ impl Scopes {
                 field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
             }
         });
+        // Merge assignments from different methods.
+        // `method_attrs` yields attributes from recognized constructor methods first (e.g. __init__),
+        // followed by other helper methods.
         method_attrs.into_iter().for_each(
-            |(name, method, InstanceAttribute(value, annotation, range, _))| {
-                if !field_definitions.contains_key_hashed(name.as_ref()) {
+            |(name, method, InstanceAttribute(values, annotation, range, receiver_kind))| {
+                if let Some((
+                    ClassFieldDefinition::DefinedInMethod {
+                        values: existing_values,
+                        annotation: existing_annot,
+                        method: existing_method,
+                        receiver_kind: existing_receiver,
+                    },
+                    _,
+                )) = field_definitions.get_mut(name.key())
+                {
+                    if existing_method.recognized_attribute_defining_method
+                        && !method.recognized_attribute_defining_method
+                    {
+                        // Prioritization: Existing is from a recognized constructor, new is from an
+                        // unrecognized helper method. The constructor wins, so ignore the new assignment.
+                    } else {
+                        // Merge: Either both are constructors (e.g. __new__ and __init__), or both are
+                        // helper methods. We combine all their assignments.
+                        existing_values.extend(values);
+                        if existing_annot.is_none() {
+                            *existing_annot = annotation;
+                        }
+                        // If any constructor is a class method (e.g. __new__), the attribute is visible
+                        // on the class object. Upgrade the receiver kind to Class.
+                        if matches!(receiver_kind, MethodSelfKind::Class) {
+                            *existing_receiver = MethodSelfKind::Class;
+                        }
+                    }
+                } else if !field_definitions.contains_key_hashed(name.as_ref()) {
                     field_definitions.insert_hashed(
                         name,
                         (
                             ClassFieldDefinition::DefinedInMethod {
-                                value: Box::new(value),
+                                values,
                                 annotation,
                                 method,
+                                receiver_kind,
                             },
                             range,
                         ),
@@ -3083,7 +3131,7 @@ impl Scopes {
                 } else {
                     flow_info.initialized()
                 };
-                // Because class body scopes are dynamic, if we know that the the name is
+                // Because class body scopes are dynamic, if we know that the name is
                 // definitely not initialized in the flow, we should skip it.
                 if is_class && matches!(initialized, InitializedInFlow::No) {
                     return None;
@@ -3527,7 +3575,7 @@ impl<'a> BindingsBuilder<'a> {
             };
             let branch_idx = flow_info.idx();
 
-            // The BranchInfo always sees the branch_idx, which will will be
+            // The BranchInfo always sees the branch_idx, which will be
             // a narrow if one exists, otherwise the value. Each branch may have a
             // termination key, which potentially causes us to ignore it in the Phi based
             // on Never/NoReturn type information.
@@ -3878,7 +3926,7 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_narrow_ops(
             &narrow_ops.negate(),
             NarrowUseLocation::Span(other_range),
-            &Usage::Narrowing(None),
+            &Usage::NonPinningValue(None),
         );
         self.stmts(orelse, parent);
         // Exiting from a break skips past any `else`, so we merge them after, and the
@@ -3983,7 +4031,7 @@ impl<'a> BindingsBuilder<'a> {
                 negated_prev_ops,
                 // Generate a range that is distinct from other use_ranges of the same narrow.
                 NarrowUseLocation::End(fork.range),
-                &Usage::Narrowing(None),
+                &Usage::NonPinningValue(None),
             );
             if let Some(key) = base_termination_key {
                 self.scopes.current_mut().flow.last_stmt_expr = Some(key);

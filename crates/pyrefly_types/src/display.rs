@@ -25,13 +25,20 @@ use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
 use crate::callable::Function;
+use crate::callable::FunctionKind;
 use crate::callable::ParamOverlay;
 use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
+use crate::data_frame::SchemaCompleteness;
 use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
 use crate::quantified::QuantifiedIdentity;
+use crate::shaped_array::IntTuple;
+use crate::shaped_array::IntTupleView;
+use crate::shaped_array::ShapedArraySyntax;
+use crate::shaped_array::ShapedArrayType;
+use crate::shaped_array::is_tuple_carrier_shape_middle;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
@@ -139,6 +146,8 @@ pub struct TypeDisplayContext<'a> {
     always_display_module_name: bool,
     always_display_expanded_unions: bool,
     render_self_type_as_self: bool,
+    /// Render a `DataFrame` as its plain underlying class rather than the schema form.
+    strip_library_schemas: bool,
     /// Optional stdlib reference for resolving builtin type locations
     stdlib: Option<&'a Stdlib>,
     /// Stack of identities of type variables currently bound by enclosing Foralls.
@@ -168,6 +177,27 @@ impl<'a> TypeDisplayContext<'a> {
 
     pub fn add(&mut self, t: &'a Type) {
         t.universe(&mut |t| {
+            if let Type::ShapedArray(shaped_array) = t {
+                self.add_qname(shaped_array.base_class.qname());
+            }
+            if let Type::DataFrame(schema) = t {
+                self.add_qname(schema.underlying.qname());
+            }
+            if let Type::Series(schema) = t {
+                self.add_qname(schema.underlying.qname());
+            }
+            // A singledispatch dispatcher is displayed as its backing `_SingleDispatchCallable`
+            // class, so that class needs a registered qname to display unqualified.
+            if let Type::Function(func) = t
+                && let FunctionKind::CallbackProtocol(cls) = &func.metadata.kind
+                && matches!(
+                    cls.qname().module_name().as_str(),
+                    "functools" | "singledispatch"
+                )
+                && cls.name().as_str() == "_SingleDispatchCallable"
+            {
+                self.add_qname(cls.qname());
+            }
             if let Some(qname) = t.qname() {
                 self.add_qname(qname);
             }
@@ -194,6 +224,11 @@ impl<'a> TypeDisplayContext<'a> {
 
     pub fn always_display_expanded_unions(&mut self) {
         self.always_display_expanded_unions = true;
+    }
+
+    /// Emit schema types as their plain class, for surfaces that write a type back as source.
+    pub fn strip_library_schemas(&mut self) {
+        self.strip_library_schemas = true;
     }
 
     pub fn render_self_type_as_self(&mut self) {
@@ -342,6 +377,135 @@ impl<'a> TypeDisplayContext<'a> {
         output.write_str("]")
     }
 
+    fn fmt_shaped_array(
+        &self,
+        shaped_array: &ShapedArrayType,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        match shaped_array.syntax {
+            ShapedArraySyntax::Native => {
+                let shape_idx = match shaped_array.tuple_carrier_shape_arg_index() {
+                    Some(index) => index,
+                    None => {
+                        output.write_qname(shaped_array.base_class.qname())?;
+                        let shape = shaped_array.shape();
+                        if !shape.is_shapeless() {
+                            output.write_str("[")?;
+                            output.write_str(&shape.to_string())?;
+                            output.write_str("]")?;
+                        }
+                        return Ok(());
+                    }
+                };
+                self.fmt_shaped_array_as_class(shaped_array, shape_idx, output)
+            }
+            ShapedArraySyntax::Jaxtyping => {
+                output.write_str("Shaped[")?;
+                output.write_qname(shaped_array.base_class.qname())?;
+                output.write_str(", \"")?;
+                output.write_str(&shaped_array.shape().fmt_jaxtyping())?;
+                output.write_str("\"]")
+            }
+        }
+    }
+
+    fn fmt_shaped_array_as_class(
+        &self,
+        shaped_array: &ShapedArrayType,
+        shape_idx: usize,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        let targs = shaped_array.base_class.targs();
+        let args = targs.as_slice();
+        args.get(shape_idx)
+            .expect("shape argument index should point to a class type argument");
+
+        output.write_qname(shaped_array.base_class.qname())?;
+        let shape = shaped_array.shape();
+        let display_count = targs.display_count().max(if shape.is_shapeless() {
+            0
+        } else {
+            shape_idx + 1
+        });
+        if display_count == 0 {
+            return Ok(());
+        }
+
+        output.write_str("[")?;
+        for (i, (param, arg)) in targs.iter_paired().take(display_count).enumerate() {
+            if i > 0 {
+                output.write_str(", ")?;
+            }
+            if i == shape_idx {
+                self.fmt_shape_as_tuple_carrier(&shape, output)?;
+            } else {
+                self.fmt_targ(param, arg, output)?;
+            }
+        }
+        output.write_str("]")
+    }
+
+    fn fmt_shape_as_tuple_carrier(
+        &self,
+        shape: &IntTuple,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        if shape.is_shapeless() {
+            return self.fmt_helper_generic(&Type::any_tuple(), false, output);
+        }
+        match shape.view() {
+            IntTupleView::Concrete(dims) => {
+                write!(output, "[{}]", commas_iter(|| dims.iter()))
+            }
+            IntTupleView::Gradual => {
+                unreachable!("shaped-array unbounded shapes must be gradual IntTuple")
+            }
+            IntTupleView::Unpacked {
+                prefix,
+                middle,
+                suffix,
+            } => {
+                if prefix.is_empty() && suffix.is_empty() && is_tuple_carrier_shape_middle(middle) {
+                    return self.fmt_helper_generic(middle, false, output);
+                }
+                output.write_str("[")?;
+                let mut first = true;
+                for dim in prefix {
+                    if !first {
+                        output.write_str(", ")?;
+                    }
+                    first = false;
+                    write!(output, "{dim}")?;
+                }
+                if !first {
+                    output.write_str(", ")?;
+                }
+                first = false;
+                if matches!(middle, Type::IntTuple(shape) if shape.is_shapeless()) {
+                    output.write_str("*tuple[int, ...]")?;
+                } else if is_tuple_carrier_shape_middle(middle) {
+                    output.write_str("*Elements[")?;
+                    self.fmt_helper_generic(middle, false, output)?;
+                    output.write_str("]")?;
+                } else {
+                    self.fmt_helper_generic(
+                        &Type::Unpack(Box::new(middle.clone())),
+                        false,
+                        output,
+                    )?;
+                }
+                for dim in suffix {
+                    if !first {
+                        output.write_str(", ")?;
+                    }
+                    first = false;
+                    write!(output, "{dim}")?;
+                }
+                output.write_str("]")
+            }
+        }
+    }
+
     pub(crate) fn fmt_qname(&self, qname: &QName, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.qnames.get(&qname.id()) {
             Some(info) => info.fmt(qname, f),
@@ -466,6 +630,44 @@ impl<'a> TypeDisplayContext<'a> {
         self.fmt_helper_generic(&value_type, false, output)
     }
 
+    fn fmt_hover_type<O: TypeOutput>(
+        &self,
+        t: &Type,
+        is_toplevel: bool,
+        output: &mut O,
+        indent: usize,
+    ) -> fmt::Result {
+        if self.lsp_display_mode != LspDisplayMode::Hover {
+            return self.fmt_helper_generic(t, is_toplevel, output);
+        }
+        match t {
+            Type::Callable(c) => c.fmt_with_type_with_newlines(
+                output,
+                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                indent,
+            ),
+            Type::Forall(forall) => {
+                let Forall { tparams, body } = &**forall;
+                let Forallable::Callable(c) = body else {
+                    return self.fmt_helper_generic(t, is_toplevel, output);
+                };
+                output.write_str("[")?;
+                write!(
+                    output,
+                    "{}",
+                    commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                )?;
+                output.write_str("]")?;
+                c.fmt_with_type_with_newlines(
+                    output,
+                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                    indent,
+                )
+            }
+            _ => self.fmt_helper_generic(t, is_toplevel, output),
+        }
+    }
+
     /// Core formatting logic for types that works with any `TypeOutput` implementation.
     ///
     /// The method uses the `TypeOutput` trait abstraction to write output in various ways.
@@ -514,17 +716,6 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_type(&class_type.targs().as_slice()[0])?;
                 output.write_str(", ...]")
             }
-            // Display Dim[Unknown] as just "Dim" for cleaner output
-            Type::ClassType(class_type)
-                if class_type.has_qname("shape_extensions", "Dim")
-                    && class_type.targs().as_slice().len() == 1
-                    && matches!(
-                        class_type.targs().as_slice()[0],
-                        Type::Any(AnyStyle::Implicit | AnyStyle::Error)
-                    ) =>
-            {
-                output.write_qname(class_type.qname())
-            }
             Type::ClassType(class_type) => {
                 output.write_qname(class_type.qname())?;
                 output.write_targs(class_type.targs())
@@ -561,24 +752,54 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
-            Type::ShapedArray(shaped_array) => output.write_str(&format!("{}", shaped_array)),
+            Type::ShapedArray(shaped_array) => self.fmt_shaped_array(shaped_array, output),
+            Type::IntTuple(int_tuple) => {
+                if int_tuple.is_shapeless() {
+                    output.write_str("IntTuple")
+                } else {
+                    output.write_str("IntTuple[")?;
+                    output.write_str(&int_tuple.to_string())?;
+                    output.write_str("]")
+                }
+            }
             Type::NNModule(module) => {
                 // Display as the class name (e.g., MaxPool2d)
                 self.fmt_helper_generic(&Type::ClassType(module.class.clone()), false, output)
             }
-            Type::Size(dim) => {
-                // Display dimension value directly without Literal wrapper
-                output.write_str(&format!("{}", dim))
+            Type::DataFrame(schema) if self.strip_library_schemas => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)
             }
-            Type::Dim(inner) => {
-                // Display Dim[Unknown] as just "Dim" for cleaner output
-                // (Unknown represents implicit Any from gradual typing)
-                // But keep Dim[Any] when explicitly annotated
-                match &**inner {
-                    Type::Any(AnyStyle::Implicit | AnyStyle::Error) => output.write_str("Dim"),
-                    _ => output.write_str(&format!("Dim[{}]", self.display_internal(inner))),
+            Type::DataFrame(schema) => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
+                output.write_str("[")?;
+                for (i, (name, dtype)) in schema.columns.iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
+                    }
+                    output.write_str(name.as_str())?;
+                    output.write_str(": ")?;
+                    output.write_str(dtype.name())?;
                 }
+                // A Partial schema carries unknown extra columns, shown as a trailing "...".
+                if schema.completeness == SchemaCompleteness::Partial {
+                    if !schema.columns.is_empty() {
+                        output.write_str(", ")?;
+                    }
+                    output.write_str("...")?;
+                }
+                output.write_str("]")?;
+                Ok(())
             }
+            Type::Series(schema) if self.strip_library_schemas => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)
+            }
+            Type::Series(schema) => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
+                output.write_str("[")?;
+                output.write_str(schema.dtype.name())?;
+                output.write_str("]")
+            }
+            Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
             Type::TypeVar(t) => {
                 let type_var_qname = self.stdlib.map(|s| s.type_var().qname());
                 output.write_builtin("TypeVar", type_var_qname)?;
@@ -629,10 +850,14 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_builtin("LiteralString", qname)
             }
             Type::Callable(c) => {
-                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
-                    c.fmt_with_type_with_newlines(output, &|t, o| {
-                        self.fmt_helper_generic(t, false, o)
-                    })
+                // Hover output should be readable even when callables appear inside unions
+                // (e.g. constructor display that unions __new__ and __init__).
+                if self.lsp_display_mode == LspDisplayMode::Hover {
+                    c.fmt_with_type_with_newlines(
+                        output,
+                        &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                        0,
+                    )
                 } else {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
@@ -653,11 +878,37 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::TypeLevelDslCall(call) => {
+                output.write_str(call.function.name)?;
+                output.write_str("(")?;
+                for (i, arg) in call.args.iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
+                    }
+                    self.fmt_helper_generic(arg, false, output)?;
+                }
+                output.write_str(")")
+            }
             Type::Function(func) => {
                 let Function {
                     signature,
                     metadata,
                 } = &**func;
+                // A singledispatch dispatcher is modeled as a callback protocol over the fallback
+                // signature, but should still reveal as `_SingleDispatchCallable[T]`.
+                if let FunctionKind::CallbackProtocol(cls) = &metadata.kind
+                    && matches!(
+                        cls.qname().module_name().as_str(),
+                        "functools" | "singledispatch"
+                    )
+                    && cls.name().as_str() == "_SingleDispatchCallable"
+                {
+                    return self.fmt_helper_generic(
+                        &Type::ClassType((**cls).clone()),
+                        is_toplevel,
+                        output,
+                    );
+                }
                 match self.lsp_display_mode {
                     LspDisplayMode::Hover
                     | LspDisplayMode::SignatureHelp
@@ -669,9 +920,11 @@ impl<'a> TypeDisplayContext<'a> {
                         self.write_func_fqn(output, &func_name, &metadata.kind)?;
                         match self.lsp_display_mode {
                             LspDisplayMode::Hover => {
-                                signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                    self.fmt_helper_generic(t, false, o)
-                                })?;
+                                signature.fmt_with_type_with_newlines(
+                                    output,
+                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                    0,
+                                )?;
                             }
                             _ => {
                                 signature.fmt_with_type(output, &|t, o| {
@@ -685,8 +938,18 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str(": ...")
                         }
                     }
-                    _ => signature
-                        .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
+                    _ => {
+                        if self.lsp_display_mode == LspDisplayMode::Hover {
+                            signature.fmt_with_type_with_newlines(
+                                output,
+                                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                0,
+                            )
+                        } else {
+                            signature
+                                .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
+                        }
+                    }
                 }
             }
             Type::Overload(overload) => {
@@ -699,8 +962,8 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     Ok(())
                 } else {
-                    let multiline =
-                        is_toplevel && self.lsp_display_mode != LspDisplayMode::ProvideType;
+                    let multiline = self.lsp_display_mode == LspDisplayMode::Hover
+                        || (is_toplevel && self.lsp_display_mode != LspDisplayMode::ProvideType);
                     if multiline {
                         output.write_str("Overload[\n  ")?;
                     } else {
@@ -770,10 +1033,13 @@ impl<'a> TypeDisplayContext<'a> {
                                 };
                                 match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
-                                        effective_sig
-                                            .fmt_with_type_with_newlines(output, &|t, o| {
-                                                self.fmt_helper_generic(t, false, o)
-                                            })?;
+                                        effective_sig.fmt_with_type_with_newlines(
+                                            output,
+                                            &|t, o, indent| {
+                                                self.fmt_hover_type(t, false, o, indent)
+                                            },
+                                            0,
+                                        )?;
                                     }
                                     _ => {
                                         effective_sig.fmt_with_type(output, &|t, o| {
@@ -818,9 +1084,13 @@ impl<'a> TypeDisplayContext<'a> {
                                 let _scope = self.push_forall_scope(tparams.iter());
                                 let result = match self.lsp_display_mode {
                                     LspDisplayMode::Hover => effective_sig
-                                        .fmt_with_type_with_newlines(output, &|t, o| {
-                                            self.fmt_helper_generic(t, false, o)
-                                        }),
+                                        .fmt_with_type_with_newlines(
+                                            output,
+                                            &|t, o, indent| {
+                                                self.fmt_hover_type(t, false, o, indent)
+                                            },
+                                            0,
+                                        ),
                                     _ => effective_sig.fmt_with_type(output, &|t, o| {
                                         self.fmt_helper_generic(t, false, o)
                                     }),
@@ -1006,9 +1276,11 @@ impl<'a> TypeDisplayContext<'a> {
                                 commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
                             )?;
                             output.write_str("]")?;
-                            c.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })
+                            c.fmt_with_type_with_newlines(
+                                output,
+                                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                0,
+                            )
                         } else {
                             output.write_str("[")?;
                             write!(
@@ -1043,10 +1315,11 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                             let _scope = self.push_forall_scope(tparams.iter());
                             match self.lsp_display_mode {
-                                LspDisplayMode::Hover => signature
-                                    .fmt_with_type_with_newlines(output, &|t, o| {
-                                        self.fmt_helper_generic(t, false, o)
-                                    }),
+                                LspDisplayMode::Hover => signature.fmt_with_type_with_newlines(
+                                    output,
+                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                    0,
+                                ),
                                 _ => signature.fmt_with_type(output, &|t, o| {
                                     self.fmt_helper_generic(t, false, o)
                                 }),
@@ -1334,8 +1607,23 @@ impl Type {
         fallback_name: Option<&str>,
         mode: LspDisplayMode,
     ) -> String {
+        self.as_lsp_string_with_fallback_name_and_expanded_unions(fallback_name, mode, false)
+    }
+
+    /// Render the type for LSP display. When `expand_unions` is true, named
+    /// nested unions are shown by their members instead of their alias name —
+    /// this backs the hover panel's "+" verbosity control.
+    pub fn as_lsp_string_with_fallback_name_and_expanded_unions(
+        &self,
+        fallback_name: Option<&str>,
+        mode: LspDisplayMode,
+        expand_unions: bool,
+    ) -> String {
         let mut c = TypeDisplayContext::new(&[self]);
         c.set_lsp_display_mode(mode);
+        if expand_unions {
+            c.always_display_expanded_unions();
+        }
         let rendered = c.display(self).to_string();
         if let Some(name) = fallback_name
             && self.is_toplevel_callable()
@@ -1352,7 +1640,9 @@ impl Type {
         &self,
         stdlib: Option<&Stdlib>,
     ) -> Vec<(String, Option<TextRangeWithModule>)> {
+        // Callers insert this as a source annotation.
         let mut ctx = TypeDisplayContext::new(&[self]);
+        ctx.strip_library_schemas();
         if let Some(s) = stdlib {
             ctx.set_stdlib(s);
         }
@@ -1402,20 +1692,24 @@ pub mod tests {
     use crate::callable::Param;
     use crate::callable::ParamList;
     use crate::callable::Params;
+    use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
-    use crate::dimension::SizeExpr;
+    use crate::data_frame::DataFrameKind;
+    use crate::data_frame::DataFrameSchema;
+    use crate::dimension::Int;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
+    use crate::polars_dtype::PolarsDType;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
     use crate::quantified::QuantifiedOrigin;
-    use crate::shaped_array::ShapedArrayShape;
+    use crate::shaped_array::IntTuple;
     use crate::shaped_array::ShapedArrayType;
     use crate::tuple::Tuple;
     use crate::type_alias::TypeAlias;
@@ -1444,6 +1738,7 @@ pub mod tests {
             NestingContext::toplevel(),
             mi,
             None,
+            false,
         )
     }
 
@@ -1516,15 +1811,103 @@ pub mod tests {
     #[test]
     fn test_display_shaped_array_type_uses_base_class_name() {
         let array = ClassType::new(fake_class("Array", "arrays", 0), TArgs::default());
-        let shaped = ShapedArrayType::new(
-            array.clone(),
-            ShapedArrayShape::new(vec![SizeExpr::Literal(2)]),
-        )
-        .to_type();
+        let shaped =
+            ShapedArrayType::new(array.clone(), IntTuple::new(vec![Int::Literal(2)])).to_type();
         let shapeless = ShapedArrayType::shapeless(array).to_type();
 
         assert_eq!(shaped.to_string(), "Array[2]");
         assert_eq!(shapeless.to_string(), "Array");
+    }
+
+    #[test]
+    fn test_display_ignores_tparam_qnames_for_disambiguation() {
+        let hidden = Type::ClassType(ClassType::new(
+            fake_class("C", "hidden", 0),
+            TArgs::default(),
+        ));
+        let tparam = fake_tparam(0, "T", QuantifiedKind::TypeVar)
+            .with_restriction(Restriction::Bound(hidden));
+        let visible = Type::ClassType(ClassType::new(
+            fake_class("C", "visible", 0),
+            TArgs::new(fake_tparams(vec![tparam]), vec![Type::None]),
+        ));
+
+        assert_eq!(visible.to_string(), "C[None]");
+    }
+
+    #[test]
+    fn test_display_int_type_marks_standalone_sizes() {
+        let heap = TypeHeap::new();
+        let n = fake_tparam(0, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let m = fake_tparam(1, "M", QuantifiedKind::IntVar).to_type(&heap);
+
+        assert_eq!(Type::Int(Int::Literal(3)).to_string(), "Int[3]");
+        assert_eq!(
+            Type::Int(Int::Symbolic(Box::new(n.clone()))).to_string(),
+            "Int[N]"
+        );
+        assert_eq!(
+            Type::Int(Int::Mul(
+                Box::new(Int::Symbolic(Box::new(n))),
+                Box::new(Int::Symbolic(Box::new(m))),
+            ))
+            .to_string(),
+            "Int[(N * M)]"
+        );
+        assert_eq!(Type::Int(Int::Int).to_string(), "Int[int]");
+    }
+
+    #[test]
+    fn test_display_shaped_array_keeps_size_wrapper_out_of_shapes() {
+        let heap = TypeHeap::new();
+        let n = fake_tparam(0, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let m = fake_tparam(1, "M", QuantifiedKind::IntVar).to_type(&heap);
+        let shape = IntTuple::new(vec![
+            Int::Literal(3),
+            Int::Symbolic(Box::new(n.clone())),
+            Int::Mul(
+                Box::new(Int::Symbolic(Box::new(n))),
+                Box::new(Int::Symbolic(Box::new(m))),
+            ),
+        ]);
+        let array = ClassType::new(fake_class("Array", "arrays", 0), TArgs::default());
+
+        assert_eq!(
+            ShapedArrayType::new(array, shape).to_type().to_string(),
+            "Array[3, N, (N * M)]"
+        );
+    }
+
+    #[test]
+    fn test_display_tuple_carrier_shape_keeps_size_wrapper_out_of_shapes() {
+        let heap = TypeHeap::new();
+        let shape_param = fake_tparams(vec![fake_tparam(0, "Shape", QuantifiedKind::TypeVar)]);
+        let n = fake_tparam(1, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let shape = IntTuple::new(vec![Int::Literal(3), Int::Symbolic(Box::new(n))]);
+        let array = ClassType::new(
+            fake_class("Array", "arrays", 0),
+            TArgs::new(shape_param, vec![shape.to_shape_arg_type()]),
+        );
+
+        assert_eq!(
+            ShapedArrayType::new(array, shape)
+                .with_tuple_carrier_shape_arg(0)
+                .to_type()
+                .to_string(),
+            "Array[[3, N]]"
+        );
+    }
+
+    #[test]
+    fn test_display_int_tuple_type() {
+        let concrete = Type::IntTuple(Box::new(IntTuple::new(vec![
+            Int::Literal(2),
+            Int::Literal(3),
+        ])));
+        assert_eq!(concrete.to_string(), "IntTuple[2, 3]");
+
+        let gradual = Type::IntTuple(Box::new(IntTuple::shapeless()));
+        assert_eq!(gradual.to_string(), "IntTuple");
     }
 
     fn fake_generic_bound_method(
@@ -1694,6 +2077,56 @@ pub mod tests {
             format!("{} <: {}", ctx.display(&t1), ctx.display(&t2)),
             "mod.ule.foo@1:6 <: mod.ule.foo@1:9"
         );
+    }
+
+    fn fake_dataframe(columns: Vec<(Name, PolarsDType)>, completeness: SchemaCompleteness) -> Type {
+        Type::DataFrame(Box::new(DataFrameSchema {
+            underlying: ClassType::new(
+                fake_class("DataFrame", "polars.dataframe.frame", 0),
+                TArgs::default(),
+            ),
+            columns,
+            completeness,
+            kind: DataFrameKind::Polars,
+        }))
+    }
+
+    fn locations_string(t: &Type) -> String {
+        t.get_types_with_locations(None)
+            .into_iter()
+            .map(|(s, _)| s)
+            .collect()
+    }
+
+    #[test]
+    fn dataframe_annotation_surface_uses_plain_class() {
+        let df = fake_dataframe(
+            vec![(Name::new("a"), PolarsDType::Int64)],
+            SchemaCompleteness::Complete,
+        );
+        // reveal_type and hover keep the rich schema form.
+        assert_eq!(df.to_string(), "DataFrame[a: Int64]");
+        // Annotation surfaces emit the plain class.
+        assert_eq!(locations_string(&df), "DataFrame");
+    }
+
+    #[test]
+    fn dataframe_annotation_surface_strips_empty_and_partial_and_nested() {
+        // An empty schema would render as `DataFrame[]`, which is a hard SyntaxError as an annotation.
+        let empty = fake_dataframe(vec![], SchemaCompleteness::Complete);
+        assert_eq!(locations_string(&empty), "DataFrame");
+
+        let partial = fake_dataframe(
+            vec![(Name::new("a"), PolarsDType::Int64)],
+            SchemaCompleteness::Partial,
+        );
+        assert_eq!(locations_string(&partial), "DataFrame");
+
+        let optional = Type::optional(fake_dataframe(
+            vec![(Name::new("a"), PolarsDType::Int64)],
+            SchemaCompleteness::Complete,
+        ));
+        assert_eq!(locations_string(&optional), "DataFrame | None");
     }
 
     #[test]
@@ -1894,6 +2327,61 @@ pub mod tests {
     }
 
     #[test]
+    fn test_display_nested_callable_param_spec_hover() {
+        let t = fake_tparam(0, "T", QuantifiedKind::TypeVar);
+        let p = fake_tparam(1, "P", QuantifiedKind::ParamSpec);
+        let r = fake_tparam(2, "R", QuantifiedKind::TypeVar);
+        let t_type = Type::Quantified(Box::new(t.clone()));
+        let p_type = Type::Quantified(Box::new(p.clone()));
+        let r_type = Type::Quantified(Box::new(r.clone()));
+        let str_type = Type::ClassType(ClassType::new(
+            fake_class("str", "builtins", 0),
+            TArgs::default(),
+        ));
+        let wrapped = Type::Callable(Box::new(Callable::concatenate(
+            Box::new([
+                PrefixParam::new(t_type.clone(), Required::Required),
+                PrefixParam::new(str_type, Required::Required),
+            ]),
+            p_type.clone(),
+            r_type.clone(),
+        )));
+        let unwrapped = Type::Callable(Box::new(Callable::concatenate(
+            Box::new([PrefixParam::new(t_type, Required::Required)]),
+            p_type,
+            r_type,
+        )));
+        let callable_type = Type::Forall(Box::new(Forall {
+            tparams: fake_tparams(vec![t, p, r]),
+            body: Forallable::Callable(Callable::list(
+                ParamList::new(vec![Param::Pos(
+                    Name::new_static("func"),
+                    wrapped,
+                    Required::Required,
+                )]),
+                unwrapped,
+            )),
+        }));
+        let mut ctx = TypeDisplayContext::new(&[&callable_type]);
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            "[T, **P, R](func: (T, str, ParamSpec(P)) -> R) -> (T, ParamSpec(P)) -> R"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            r#"[T, **P, R](func: (
+    T,
+    str,
+    ParamSpec(P)
+) -> R) -> (
+    T,
+    ParamSpec(P)
+) -> R"#
+        );
+    }
+
+    #[test]
     fn test_display_args_kwargs_callable() {
         let args = Param::Varargs(Some(Name::new_static("my_args")), Type::any_implicit());
         let kwargs = Param::Kwargs(Some(Name::new_static("my_kwargs")), Type::any_implicit());
@@ -1929,7 +2417,7 @@ pub mod tests {
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&tuple).to_string(),
-            "tuple[(hello: None, *, world: None) -> None]"
+            "tuple[(\n    hello: None,\n    *,\n    world: None\n) -> None]"
         );
     }
 

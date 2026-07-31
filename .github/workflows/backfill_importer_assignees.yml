@@ -1,0 +1,76 @@
+name: Backfill importer assignees
+
+# One-off / on-demand catch-up for PRs that were imported before the
+# assign_importer.yml event workflow existed (that workflow only fires on new
+# import comments). Scans open, unassigned PRs, finds the import bot's comment,
+# and assigns the importer. Run manually from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only log what would be assigned, without assigning"
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Assign importers on open, unassigned imported PRs
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // meta-codesync[bot] posts "@<handle> has **imported** this pull
+            // request. ..." on import ("imported" is bold, so tolerate "**").
+            const IMPORT_RE = /@([A-Za-z0-9-]+) has \**imported\** this pull request/;
+
+            const dryRun = context.payload.inputs.dry_run !== 'false';
+            const { owner, repo } = context.repo;
+
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+
+            let assigned = 0;
+            for (const pr of prs) {
+              if ((pr.assignees || []).length > 0) continue;
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100,
+              });
+              // Comments come back oldest-first; the last import comment reflects
+              // the most recent importer.
+              const importComments = comments.filter(
+                (c) => c.user && c.user.login === 'meta-codesync[bot]' && IMPORT_RE.test(c.body || ''),
+              );
+              if (importComments.length === 0) continue;
+
+              const importer = importComments[importComments.length - 1].body.match(IMPORT_RE)[1];
+
+              if (dryRun) {
+                console.log(`[dry-run] would assign ${importer} to #${pr.number}`);
+                assigned++;
+                continue;
+              }
+
+              await github.rest.issues.addAssignees({
+                owner, repo, issue_number: pr.number, assignees: [importer],
+              });
+              // GitHub silently ignores assignees who lack repo access, so verify.
+              const { data: after } = await github.rest.issues.get({ owner, repo, issue_number: pr.number });
+              if (!(after.assignees || []).some((a) => a.login.toLowerCase() === importer.toLowerCase())) {
+                console.log(`#${pr.number}: could not assign ${importer} (no repo access?)`);
+                continue;
+              }
+              console.log(`#${pr.number}: assigned ${importer}`);
+              assigned++;
+            }
+
+            console.log(`Scanned ${prs.length} open PRs. ${dryRun ? 'Would assign' : 'Assigned'}: ${assigned}.`);

@@ -164,6 +164,59 @@ assert_type(b, Box[Any])
 );
 
 testcase!(
+    test_reveal_type_does_not_pin_user_defined_generic,
+    r#"
+from typing import reveal_type
+class Box[T]:
+    value: T
+def f() -> Box[int]:
+    x = Box()
+    reveal_type(x)  # E: revealed type: Box[int]
+    return x
+    "#,
+);
+
+testcase!(
+    test_reveal_type_does_not_pin_empty_list_return,
+    r#"
+from typing import reveal_type
+def f() -> list[int]:
+    x = list()
+    reveal_type(x)  # E: revealed type: list[int]
+    return x
+    "#,
+);
+
+testcase!(
+    test_reveal_type_unimported_does_not_pin,
+    r#"
+def f() -> list[int]:
+    x = list()
+    reveal_type(x)  # E: revealed type: list[int]  # E: `reveal_type` must be imported from `typing` for runtime usage
+    return x
+    "#,
+);
+
+testcase!(
+    test_reveal_type_nested_expression_still_pins,
+    r#"
+from typing import assert_type, reveal_type
+def takes_list(x: list[int]) -> None: ...
+x = []
+reveal_type(takes_list(x))  # E: revealed type: None
+assert_type(x, list[int])
+    "#,
+);
+
+testcase!(
+    test_reveal_type_keyword_arg_is_analyzed_normally,
+    r#"
+from typing import reveal_type
+reveal_type(obj=missing)  # E: reveal_type needs 1 positional argument, got 0  # E: `reveal_type` got an unexpected keyword argument `obj`  # E: Could not find name `missing`
+    "#,
+);
+
+testcase!(
     test_deferred_type_for_indeterminate_generic_function_output,
     r#"
 from typing import assert_type
