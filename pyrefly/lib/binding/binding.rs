@@ -1166,6 +1166,7 @@ pub enum BindingExpect {
         is_async: bool,
         is_generator: bool,
         has_explicit_return: bool,
+        has_infinite_loop: bool,
     },
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
