@@ -40,8 +40,13 @@ jobs:
   # must not run under Valgrind (which serializes threads and inflates the ~GB cold
   # start past any reasonable timeout). Walltime mode tolerates threads, I/O, and
   # long cold starts.
+  #
+  # Disabled on pull requests: flame-graph generation fails on nearly every run,
+  # so CodSpeed leaves an "Unable to generate the flame graphs" comment on PRs
+  # that have nothing to do with performance. Still runnable by hand.
   walltime:
     name: PyTorch benchmarks (walltime)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
