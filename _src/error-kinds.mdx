@@ -484,6 +484,15 @@ def f(): ...
 f()  # deprecated!
 ```
 
+## direct-abstract-base-instantiation
+
+Default severity: `warn`
+
+This diagnostic is raised when code instantiates a class that directly extends
+`abc.ABC` or directly uses `abc.ABCMeta`, even if the class has no abstract
+methods. Python permits such classes to be instantiated, and some libraries use
+`ABC` without prohibiting construction.
+
 ## division-by-zero
 
 Default severity: `warn`
@@ -612,7 +621,7 @@ x = [1, 2, 3]
 
 Default severity: `ignore`
 
-A lambda whose parameter or return type cannot be inferred is treated as an implicit `Any`, hiding type errors in its body and at its call sites.
+A lambda parameter whose type cannot be inferred is treated as an implicit `Any`, hiding type errors in the lambda body and at its call sites.
 
 When the lambda is used in a typed context (e.g. assigned to a `Callable` or passed to a function that expects one), the parameters are inferred from that context and no error is reported.
 
@@ -1862,7 +1871,7 @@ assert_type(1, int)  # error
 
 Default severity: `ignore`
 
-A call argument whose type is an implicit `Any` (unknown) is passed without the type checker being able to verify it against the parameter, hiding potential bugs. This is a sub-kind of [implicit-any](#implicit-any), so suppressing `implicit-any` also suppresses it. This mirrors pyright's `reportUnknownArgumentType`.
+A call argument whose type is an implicit `Any` (unknown) is passed without the type checker being able to verify it against the parameter, hiding potential bugs. This mirrors pyright's `reportUnknownArgumentType`.
 
 ```python
 def untyped(x):  # unannotated: returns an implicit `Any`

@@ -2132,7 +2132,7 @@ The default Pyrefly configuration. Equivalent to having no preset at all.
 Enables additional error codes on top of the default for stricter checking.
 
 - Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
-- Enables (as errors): [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
+- Enables (as errors): [`direct-abstract-base-instantiation`](./error-kinds.mdx#direct-abstract-base-instantiation), [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
 
 #### Preset: `all`
 
@@ -3893,6 +3893,15 @@ def f(): ...
 f()  # deprecated!
 ```
 
+## direct-abstract-base-instantiation
+
+Default severity: `warn`
+
+This diagnostic is raised when code instantiates a class that directly extends
+`abc.ABC` or directly uses `abc.ABCMeta`, even if the class has no abstract
+methods. Python permits such classes to be instantiated, and some libraries use
+`ABC` without prohibiting construction.
+
 ## division-by-zero
 
 Default severity: `warn`
@@ -4021,7 +4030,7 @@ x = [1, 2, 3]
 
 Default severity: `ignore`
 
-A lambda whose parameter or return type cannot be inferred is treated as an implicit `Any`, hiding type errors in its body and at its call sites.
+A lambda parameter whose type cannot be inferred is treated as an implicit `Any`, hiding type errors in the lambda body and at its call sites.
 
 When the lambda is used in a typed context (e.g. assigned to a `Callable` or passed to a function that expects one), the parameters are inferred from that context and no error is reported.
 
@@ -5271,7 +5280,7 @@ assert_type(1, int)  # error
 
 Default severity: `ignore`
 
-A call argument whose type is an implicit `Any` (unknown) is passed without the type checker being able to verify it against the parameter, hiding potential bugs. This is a sub-kind of [implicit-any](#implicit-any), so suppressing `implicit-any` also suppresses it. This mirrors pyright's `reportUnknownArgumentType`.
+A call argument whose type is an implicit `Any` (unknown) is passed without the type checker being able to verify it against the parameter, hiding potential bugs. This mirrors pyright's `reportUnknownArgumentType`.
 
 ```python
 def untyped(x):  # unannotated: returns an implicit `Any`
@@ -6674,7 +6683,7 @@ This means users migrating from pyright will see familiar diagnostics even befor
 | reportUnboundVariable | unbound-name |
 | reportUndefinedVariable | unknown-name |
 | reportUninitializedInstanceVariable | implicitly-defined-attribute |
-| reportUnknownArgumentType | implicit-any |
+| reportUnknownArgumentType | unknown-argument-type |
 | reportUnknownMemberType | unknown-attribute-type |
 | reportUnknownParameterType | unannotated-parameter |
 | reportUnknownVariableType | unknown-variable-type |
