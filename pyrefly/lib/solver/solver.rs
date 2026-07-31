@@ -221,6 +221,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "CallBoundary dropped without being consumed")]
+    fn call_boundary_must_be_consumed() {
+        drop(CallBoundary::new());
+    }
+
+    #[test]
     fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
         let solver = Solver::new(false, true, false, false, false, false);
         let uniques = UniqueFactory::new();
@@ -3673,13 +3679,10 @@ impl CallBoundary {
 
 impl Drop for CallBoundary {
     fn drop(&mut self) {
-        #[cfg(debug_assertions)]
-        if !std::thread::panicking() {
-            assert!(
-                self.state.is_none(),
-                "CallBoundary dropped without being consumed"
-            );
-        }
+        assert!(
+            self.state.is_none() || std::thread::panicking(),
+            "CallBoundary dropped without being consumed"
+        );
     }
 }
 
