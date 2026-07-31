@@ -76,6 +76,7 @@ use crate::types::type_var::Variance;
 use crate::types::types::Forallable;
 use crate::types::types::TArgs;
 use crate::types::types::Type;
+use crate::types::types::regex_metadata_groups;
 
 /// Extract a `TypeAliasData` reference from a `Type` that wraps one,
 /// either directly as `Type::TypeAlias` or inside `Type::Forall`.
@@ -91,18 +92,6 @@ fn as_type_alias(ty: &Type) -> Option<&TypeAliasData> {
         }
         _ => None,
     }
-}
-
-fn has_regex_metadata(metadata: &[Type]) -> bool {
-    metadata.iter().any(|ty| {
-        let Type::Tuple(Tuple::Concrete(items)) = ty else {
-            return false;
-        };
-        let Some(Type::Literal(tag)) = items.first() else {
-            return false;
-        };
-        matches!(&tag.value, Lit::Str(tag) if tag.as_str() == "__pyrefly_regex_groups__")
-    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1820,11 +1809,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.is_subset_eq(got, &self.type_order.untype_alias(want_data))
             }
             (Type::Annotated(inner, metadata), _)
-                if !matches!(want, Type::Type(_)) && has_regex_metadata(metadata) =>
+                if !matches!(want, Type::Type(_)) && regex_metadata_groups(metadata).is_some() =>
             {
                 self.is_subset_eq(inner, want)
             }
-            (_, Type::Annotated(inner, metadata)) if has_regex_metadata(metadata) => {
+            (_, Type::Annotated(inner, metadata)) if regex_metadata_groups(metadata).is_some() => {
                 self.is_subset_eq(got, inner)
             }
             (Type::Quantified(q), Type::Ellipsis) | (Type::Ellipsis, Type::Quantified(q))

@@ -1602,7 +1602,7 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
-            Type::Annotated(ty, metadata) if has_regex_metadata(metadata) => {
+            Type::Annotated(ty, metadata) if regex_metadata_groups(metadata).is_some() => {
                 self.fmt_helper_generic(ty, is_toplevel, output)
             }
             Type::Annotated(ty, _metadata) => {

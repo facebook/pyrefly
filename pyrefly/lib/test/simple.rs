@@ -758,6 +758,8 @@ import re
 
 re.compile("(")  # E: missing ), unterminated subpattern at position 0
 re.search("(", "")  # E: missing ), unterminated subpattern at position 0
+re.compile("a(b(c)")  # E: missing ), unterminated subpattern at position 1
+re.compile("(?# comment)")
 
 if m := re.search("(a)?(b)", ""):
     assert_type(m.group(0), str)

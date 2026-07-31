@@ -124,7 +124,9 @@ use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
+use crate::types::types::REGEX_GROUPS_METADATA_TAG;
 use crate::types::types::Type;
+use crate::types::types::regex_metadata_groups;
 
 #[derive(Debug, Clone, Copy)]
 pub enum TypeOrExpr<'a> {
@@ -2110,7 +2112,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn regex_metadata(&self, groups: &[RegexGroup]) -> Type {
-        let tag = self.str_literal("__pyrefly_regex_groups__");
+        let tag = self.str_literal(REGEX_GROUPS_METADATA_TAG);
         let groups = self.heap.mk_concrete_tuple(
             groups
                 .iter()
@@ -2130,9 +2132,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn regex_groups_from_type(&self, ty: &Type) -> Option<Vec<RegexGroup>> {
         match ty {
-            Type::Annotated(_, metadata) => metadata
-                .iter()
-                .find_map(|ty| self.regex_metadata_to_groups(ty)),
+            Type::Annotated(_, metadata) => self.regex_groups_from_metadata(metadata),
             Type::Union(union) => union
                 .members
                 .iter()
@@ -2141,20 +2141,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn regex_metadata_to_groups(&self, ty: &Type) -> Option<Vec<RegexGroup>> {
-        let Type::Tuple(Tuple::Concrete(items)) = ty else {
-            return None;
-        };
-        let [tag, groups] = items.as_slice() else {
-            return None;
-        };
-        if !matches!(tag, Type::Literal(lit) if matches!(&lit.value, Lit::Str(tag) if tag.as_str() == "__pyrefly_regex_groups__"))
-        {
-            return None;
-        }
-        let Type::Tuple(Tuple::Concrete(groups)) = groups else {
-            return None;
-        };
+    fn regex_groups_from_metadata(&self, metadata: &[Type]) -> Option<Vec<RegexGroup>> {
+        let groups = regex_metadata_groups(metadata)?;
         groups
             .iter()
             .map(|group| {
@@ -3443,9 +3431,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         allow_type_level_dsl,
                     );
                     if self.is_regex_match_type(&inner)
-                        && let Some(groups) = metadata
-                            .iter()
-                            .find_map(|ty| self.regex_metadata_to_groups(ty))
+                        && let Some(groups) = self.regex_groups_from_metadata(&metadata)
                     {
                         self.regex_validate_group_key(&groups, slice, errors);
                     }
