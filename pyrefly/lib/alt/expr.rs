@@ -207,22 +207,22 @@ impl<'a> TypeOrExpr<'a> {
     }
 }
 
-pub struct ExprOptions<'a, 'b> {
+pub struct ExprOptions<'a, 'b, 'subset> {
     errors: &'a ErrorCollector,
-    expectation: ExprExpectation<'a, 'b>,
+    expectation: ExprExpectation<'a, 'b, 'subset>,
 }
 
-enum ExprExpectation<'a, 'b> {
+enum ExprExpectation<'a, 'b, 'subset> {
     Infer(Option<HintRef<'a, 'b>>),
     Check {
         want: &'b Type,
         errors: &'a ErrorCollector,
         context: &'a dyn Fn() -> TypeCheckContext,
-        call_context: Option<&'a CallContext>,
+        call_context: Option<&'a CallContext<'subset>>,
     },
 }
 
-impl<'a, 'b> ExprOptions<'a, 'b> {
+impl<'a, 'b, 'subset> ExprOptions<'a, 'b, 'subset> {
     pub fn infer(errors: &'a ErrorCollector, hint: Option<HintRef<'a, 'b>>) -> Self {
         Self {
             errors,
@@ -235,7 +235,7 @@ impl<'a, 'b> ExprOptions<'a, 'b> {
         errors: &'a ErrorCollector,
         check_errors: &'a ErrorCollector,
         context: &'a dyn Fn() -> TypeCheckContext,
-        call_context: Option<&'a CallContext>,
+        call_context: Option<&'a CallContext<'subset>>,
     ) -> Self {
         Self {
             errors,
@@ -443,7 +443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Infer a type for an expression, with options to influence the inference and control whether
     /// and how the type is checked against an expected type.
-    pub fn expr_with_options(&self, x: &Expr, options: ExprOptions) -> TypeInfo {
+    pub fn expr_with_options(&self, x: &Expr, options: ExprOptions<'_, '_, '_>) -> TypeInfo {
         match options.expectation {
             ExprExpectation::Check {
                 want,

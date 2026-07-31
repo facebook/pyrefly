@@ -2509,7 +2509,7 @@ impl Solver {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
         type_order: TypeOrder<Ans>,
-        call_context: Option<&CallContext>,
+        call_context: Option<&CallContext<'_>>,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let (vs, mut captures) = if let Some(cc) = call_context {
             let tracked_fresh_vars = cc.take_deferred_quantified_vars();
@@ -3116,12 +3116,12 @@ impl Solver {
     ///
     /// If `call_context` is provided, the subset check runs with that context
     /// active (e.g. to enable residual capture during call analysis).
-    pub fn is_subset_eq<Ans: LookupAnswer>(
+    pub fn is_subset_eq<'subset, Ans: LookupAnswer>(
         &self,
         got: &Type,
         want: &Type,
         type_order: TypeOrder<Ans>,
-        call_context: Option<&CallContext>,
+        call_context: Option<&CallContext<'subset>>,
     ) -> Result<(), SubsetError> {
         let mut subset = self.subset(type_order);
         if let Some(cc) = call_context {
@@ -3151,7 +3151,10 @@ impl Solver {
         subset.is_equivalent(got, want)
     }
 
-    fn subset<'a, Ans: LookupAnswer>(&'a self, type_order: TypeOrder<'a, Ans>) -> Subset<'a, Ans> {
+    fn subset<'solver, 'subset, Ans: LookupAnswer>(
+        &'solver self,
+        type_order: TypeOrder<'solver, Ans>,
+    ) -> Subset<'solver, 'subset, Ans> {
         Subset {
             solver: self,
             type_order,
@@ -3541,8 +3544,25 @@ impl ResidualWitnessContext {
     }
 }
 
+/// A lexical scope token borrowed by contexts participating in one call.
+#[derive(Debug)]
+pub(crate) struct CallBoundary;
+
+impl CallBoundary {
+    pub(crate) fn new() -> Self {
+        Self
+    }
+
+    pub(crate) fn context(&self) -> CallContext<'_> {
+        let mut context = CallContext::default();
+        context._boundary = Some(self);
+        context.require_boundary_consumption()
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct CallContext {
+pub struct CallContext<'subset> {
+    _boundary: Option<&'subset CallBoundary>,
     witness: Option<ResidualWitnessContext>,
     argument_side: ArgumentSide,
     deferred_quantified_vars: Arc<Mutex<SmallSet<Var>>>,
@@ -3555,9 +3575,10 @@ pub struct CallContext {
     boundary_consumed_and_drained: Arc<AtomicBool>,
 }
 
-impl Default for CallContext {
+impl<'subset> Default for CallContext<'subset> {
     fn default() -> Self {
         Self {
+            _boundary: None,
             witness: None,
             argument_side: ArgumentSide::default(),
             deferred_quantified_vars: Arc::new(Mutex::new(SmallSet::new())),
@@ -3568,7 +3589,7 @@ impl Default for CallContext {
     }
 }
 
-impl CallContext {
+impl<'subset> CallContext<'subset> {
     pub fn outside() -> Self {
         Self::default()
     }
@@ -3714,7 +3735,7 @@ impl CallContext {
     }
 }
 
-impl Drop for CallContext {
+impl<'subset> Drop for CallContext<'subset> {
     fn drop(&mut self) {
         #[cfg(debug_assertions)]
         {
@@ -3744,14 +3765,14 @@ impl Drop for CallContext {
 
 /// A helper to implement subset ergonomically.
 /// Should only be used within `crate::subset`, which implements part of it.
-pub struct Subset<'a, Ans: LookupAnswer> {
-    pub(crate) solver: &'a Solver,
-    pub type_order: TypeOrder<'a, Ans>,
+pub struct Subset<'solver, 'subset, Ans: LookupAnswer> {
+    pub(crate) solver: &'solver Solver,
+    pub type_order: TypeOrder<'solver, Ans>,
     gas: Gas,
     /// Invariant: there is a single active call context for a subset query.
     /// Nested work is recursive subset checking inside the same call, not a
     /// nested full call pipeline with independent call-scoped solving.
-    pub(crate) active_call_context: CallContext,
+    pub(crate) active_call_context: CallContext<'subset>,
     /// Memoization cache for recursive subset checks (protocols and recursive type aliases).
     /// Doubles as a cycle detector: `InProgress` entries break cycles via coinductive
     /// reasoning by optimistically returning `Ok(())`.
@@ -3785,7 +3806,7 @@ pub struct Subset<'a, Ans: LookupAnswer> {
     witness_deferred_vars: SmallMap<u64, SmallSet<Var>>,
 }
 
-impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
+impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     fn snapshot_witness_deferred_vars(&self) -> SmallMap<u64, SmallSet<Var>> {
         self.witness_deferred_vars.clone()
     }
@@ -3883,7 +3904,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     pub fn with_active_call_context<T>(
         &mut self,
-        call_context: CallContext,
+        call_context: CallContext<'subset>,
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let old = mem::replace(&mut self.active_call_context, call_context);

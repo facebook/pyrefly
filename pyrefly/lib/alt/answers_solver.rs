@@ -103,13 +103,13 @@ enum JaxtypingQuantifiedKey {
     ShapeCarrier(Name, QuantifiedKind),
 }
 
-pub struct TypeCheckOptions<'a> {
+pub struct TypeCheckOptions<'a, 'subset> {
     errors: &'a ErrorCollector,
     context: &'a dyn Fn() -> TypeCheckContext,
-    call_context: Option<&'a CallContext>,
+    call_context: Option<&'a CallContext<'subset>>,
 }
 
-impl<'a> TypeCheckOptions<'a> {
+impl<'a, 'subset> TypeCheckOptions<'a, 'subset> {
     pub fn new(errors: &'a ErrorCollector, context: &'a dyn Fn() -> TypeCheckContext) -> Self {
         Self {
             errors,
@@ -118,7 +118,7 @@ impl<'a> TypeCheckOptions<'a> {
         }
     }
 
-    pub fn with_call_context(mut self, call_context: &'a CallContext) -> Self {
+    pub fn with_call_context(mut self, call_context: &'a CallContext<'subset>) -> Self {
         self.call_context = Some(call_context);
         self
     }
@@ -3093,7 +3093,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         got: &Type,
         want: &Type,
         loc: TextRange,
-        options: TypeCheckOptions,
+        options: TypeCheckOptions<'_, '_>,
     ) -> bool {
         // Record expected type for LSP query
         self.record_expected_type_trace(loc, want);

@@ -7145,7 +7145,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
-        call_context: &CallContext,
+        call_context: &CallContext<'_>,
     ) -> Option<Type> {
         let lit = x.as_string_literal_expr()?;
         let value: &str = &lit.as_single_part_string()?.value;

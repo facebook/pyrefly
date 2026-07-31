@@ -197,7 +197,7 @@ struct FreshForall {
     witness: ResidualWitnessContext,
 }
 
-impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
+impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     fn is_subset_literal_int_size(
         &mut self,
         literal: i64,

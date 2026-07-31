@@ -50,6 +50,7 @@ use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
 use crate::solver::solver::ArgumentSide;
+use crate::solver::solver::CallBoundary;
 use crate::solver::solver::CallContext;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::TypeVarSpecializationError;
@@ -395,7 +396,7 @@ impl CallArgPreEval<'_> {
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        call_context: &CallContext,
+        call_context: &CallContext<'_>,
     ) -> Option<Type> {
         let tcc = &|| {
             TypeCheckContext::of_kind(if vararg {
@@ -731,7 +732,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        call_context: &CallContext,
+        call_context: &CallContext<'_>,
         // If Some, records parameter-name → argument-type bindings (for meta-shape inference).
         bound_args: &mut Option<HashMap<String, Type>>,
     ) -> ArgMap {
@@ -1716,9 +1717,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Vec<ReturnTypeResolutionError>,
         ArgMap,
     ) {
-        let call_context = CallContext::outside()
-            .with_argument_side(ArgumentSide::Got)
-            .require_boundary_consumption();
+        let call_boundary = CallBoundary::new();
+        let call_context = call_boundary
+            .context()
+            .with_argument_side(ArgumentSide::Got);
 
         let shape_transform_func = shape_transform.map(|t| t.to_meta_shape_function());
         let meta_shape_func: Option<&dyn MetaShapeFunction> = shape_transform_func.as_deref();
