@@ -143,6 +143,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Compute kw_only fields once for all methods that need it
         let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
 
+        self.check_duplicate_kw_only_markers(cls, errors);
         self.check_dataclass_non_data_descriptors(cls, dataclass, errors);
         self.check_dataclass_data_descriptor_defaults(cls, dataclass, errors);
         self.check_attrs_default_decorator_return_types(cls, dataclass, errors);
@@ -328,6 +329,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.get_dataclass_replace(cls, dataclass, &kw_only_by_class, errors),
         );
         Some(ClassSynthesizedFields::new(fields))
+    }
+
+    fn check_duplicate_kw_only_markers(&self, cls: &Class, errors: &ErrorCollector) {
+        let Some(class_fields) = self.get_class_fields(cls) else {
+            return;
+        };
+        let mut seen_marker = false;
+        for name in class_fields.names() {
+            if class_fields.is_field_annotated(name)
+                && matches!(
+                    self.get_dataclass_member(cls, name),
+                    DataclassMember::KwOnlyMarker
+                )
+            {
+                if seen_marker && let Some(range) = class_fields.field_decl_range(name) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::BadClassDefinition,
+                        format!("`{name}` is KW_ONLY, but KW_ONLY has already been specified"),
+                    );
+                }
+                seen_marker = true;
+            }
+        }
     }
 
     /// Check for non-data descriptors in dataclass fields and emit errors.
