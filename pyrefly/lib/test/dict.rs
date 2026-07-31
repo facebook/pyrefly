@@ -275,3 +275,27 @@ d = {"photo": [images[0]], "enabled": ["yes"]}
 same(d, [dict(photo=[images[0]], enabled=["yes"], **extra)])
     "#,
 );
+
+// Nesting constructor calls inside container literals used to cost `O(overloads^depth)`
+testcase!(
+    test_nested_dict_subclass_ctor_calls,
+    r#"
+from typing import Any, assert_type
+
+class D(dict[str, Any]):
+    pass
+
+x = D({"n": D({"n": D({"n": D({"n": D({"n": D({"n": D({"n": D({"n": None})})})})})})})})
+assert_type(x, D)
+"#,
+);
+
+testcase!(
+    test_nested_dict_ctor_from_pairs,
+    r#"
+from typing import assert_type
+
+x = dict([("n", dict([("n", dict([("n", dict([("n", dict([("n", 1)]))]))]))]))])
+assert_type(x, dict[str, dict[str, dict[str, dict[str, dict[str, int]]]]])
+"#,
+);

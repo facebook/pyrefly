@@ -983,6 +983,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
+        // Classes that override `__new__` and also define `__init__` check/infer args
+        // twice, potentially leading to exponential check costs: `O(2^depth)`.
+        let checks_args_twice = |cls: &ClassType, preserve_self| {
+            self.get_dunder_new(cls, preserve_self).is_some()
+                && self.get_dunder_init(cls, false).is_some()
+        };
+        let is_nested_ctor = |x: &TypeOrExpr| match x {
+            TypeOrExpr::Expr(Expr::Call(c)) => {
+                matches!(self.expr_infer(&c.func, &self.error_collector()),
+                    Type::ClassDef(inner)
+                        if self.get_class_tparams(&inner).is_empty()
+                            && checks_args_twice(&self.as_class_type_unchecked(&inner), false))
+            }
+            _ => false,
+        };
+
+        // Infer nested constructors once, up front.
+        let flatten_nested = args
+            .iter()
+            .map(|a| match a {
+                CallArg::Arg(x) | CallArg::Star(x, _) => x,
+            })
+            .chain(keywords.iter().map(|k| &k.value))
+            .any(|x| matches!(x, TypeOrExpr::Expr(Expr::Call(_))))
+            && checks_args_twice(&cls, constructor_kind == ConstructorKind::TypeOfSelf);
+
+        let call = CallWithTypes::new();
+        let flattened = flatten_nested.then(|| {
+            (
+                args.map(|a| match a {
+                    CallArg::Arg(x) | CallArg::Star(x, _) if is_nested_ctor(x) => {
+                        call.call_arg(a, self, errors)
+                    }
+                    _ => a.clone(),
+                }),
+                keywords.map(|k| {
+                    if is_nested_ctor(&k.value) {
+                        call.call_keyword(k, self, errors)
+                    } else {
+                        k.clone()
+                    }
+                }),
+            )
+        });
+        let (args, keywords) = match &flattened {
+            Some((args, keywords)) => (args.as_slice(), keywords.as_slice()),
+            None => (args, keywords),
+        };
+
         self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
             self.construct_class_inner(
                 cls.clone(),
