@@ -529,6 +529,23 @@ class A:
 );
 
 testcase!(
+    test_total_ordering_inherited_rich_cmp,
+    r#"
+from functools import total_ordering
+from typing import reveal_type
+
+class Base:
+    def __lt__(self, other: "Base") -> bool: ...
+
+@total_ordering
+class Child(Base):
+    pass
+
+reveal_type(Child.__gt__)  # E: revealed type: (self: Child, other: Base) -> bool
+    "#,
+);
+
+testcase!(
     test_total_ordering_dataclass,
     r#"
 from dataclasses import dataclass
