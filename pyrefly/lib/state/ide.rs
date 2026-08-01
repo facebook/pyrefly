@@ -110,8 +110,11 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             Binding::Phi(_, branches) if !branches.is_empty() => {
                 current_idx = branches[0].value_key
             }
-            Binding::PossibleLegacyTParam(k, _) => {
-                let binding = bindings.get(*k);
+            Binding::PossibleLegacyTParam(keys, _) => {
+                let first_key = keys
+                    .first()
+                    .expect("PossibleLegacyTParam bindings must always have at least one key");
+                let binding = bindings.get(*first_key);
                 current_idx = binding.idx();
             }
             Binding::AssignToSubscript(x)
@@ -147,8 +150,11 @@ fn create_intermediate_definition_from(
             Binding::Forward(k) | Binding::PromoteForward(k) | Binding::ForwardToFirstUse(k) => {
                 current_binding = bindings.get(*k)
             }
-            Binding::PossibleLegacyTParam(k, _) => {
-                let binding = bindings.get(*k);
+            Binding::PossibleLegacyTParam(keys, _) => {
+                let first_key = keys
+                    .first()
+                    .expect("PossibleLegacyTParam bindings must always have at least one key");
+                let binding = bindings.get(*first_key);
                 current_binding = bindings.get(binding.idx());
             }
             Binding::Import(x) => {
