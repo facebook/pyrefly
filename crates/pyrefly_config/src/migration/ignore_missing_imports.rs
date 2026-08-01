@@ -57,8 +57,9 @@ impl ConfigOptionMigrater for IgnoreMissingImports {
             ));
         }
 
-        // If we have a global ignore_missing_imports, add a wildcard for all
+        // A global wildcard makes narrower patterns redundant.
         if ignore_all_missing_imports {
+            ignore_imports.clear();
             ignore_imports.push("*".to_owned());
         }
 
@@ -310,35 +311,30 @@ mod tests {
         let ignore_imports = IgnoreMissingImports;
         let _ = ignore_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
-        // Should contain both the specific module and the global wildcard
-        let expected = [
-            ModuleWildcard::new("some.module").unwrap(),
-            ModuleWildcard::new("*").unwrap(),
-        ];
         assert_eq!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .len(),
-            2
+            pyrefly_cfg.root.ignore_missing_imports,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
         );
-        assert!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .contains(&expected[0])
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_global_follow_imports_and_specific() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "follow_imports", Some("skip".to_owned()));
+        mypy_cfg.set(
+            "mypy-some.module",
+            "ignore_missing_imports",
+            Some("True".to_owned()),
         );
-        assert!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .contains(&expected[1])
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let ignore_imports = IgnoreMissingImports;
+        let _ = ignore_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        assert_eq!(
+            pyrefly_cfg.root.ignore_missing_imports,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
         );
     }
 
