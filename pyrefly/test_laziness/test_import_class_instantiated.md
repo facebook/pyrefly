@@ -34,10 +34,11 @@ class Foo:
 a: Solutions
 b: Answers
 
-(159 builtin demands hidden)
+(34 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)
+a -> b::Exports(is_implicit_reexport)
 a -> b::Exports(get_deprecated)
 a -> b::KeyExport(Name("Foo"))
 a -> b::KeyClassMetadata(ClassDefIndex(0))

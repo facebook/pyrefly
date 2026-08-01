@@ -1,9 +1,9 @@
 {
   "total": 140,
-  "pass": 133,
-  "fail": 7,
-  "pass_rate": 0.95,
-  "differences": 19,
+  "pass": 134,
+  "fail": 6,
+  "pass_rate": 0.96,
+  "differences": 13,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -44,6 +44,7 @@
     "directives_assert_type.py",
     "directives_cast.py",
     "directives_deprecated.py",
+    "directives_disjoint_base.py",
     "directives_no_type_check.py",
     "directives_reveal_type.py",
     "directives_type_checking.py",
@@ -144,7 +145,6 @@
     "callables_annotation.py": 1,
     "constructors_callable.py": 2,
     "dataclasses_descriptors.py": 2,
-    "directives_disjoint_base.py": 6,
     "exceptions_context_managers.py": 2,
     "generics_scoping.py": 4
   },

@@ -280,6 +280,26 @@ assert_type(f([1], [2]), list[int])
 );
 
 testcase!(
+    test_overloaded_shadow_builtin_range,
+    r#"
+from typing import overload
+
+class Block[T]:
+    pass
+
+@overload
+def range(stop: int) -> Block[int]: ...
+@overload
+def range(stop: int, stop2: int) -> Block[int]: ...
+def range(stop: int, stop2: int | None = None) -> Block[int]:
+    return Block()
+
+def f() -> Block[int]:
+    return range(1)  # E: Returned type `Block[int] | range`
+"#,
+);
+
+testcase!(
     test_unordered_defs,
     r#"
 def f() -> int:
@@ -712,7 +732,7 @@ testcase!(
     r#"
 from typing import assert_type
 x1: dict[str, int] = {"foo": 1, **{"bar": 2}}
-x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `dict[str, int | str]` is not assignable to `dict[str, int]`
+x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `Literal['bar']` is not assignable to dict value type `int`
 assert_type({"foo": 1, **{"bar": "bar"}}, dict[str, int | str])
 {"foo": 1, **1}  # E: Expected a mapping, got Literal[1]
 "#,
@@ -952,6 +972,34 @@ def test(
 );
 
 testcase!(
+    test_ellipsis_invalid_type_form,
+    r#"
+from typing import Callable, ParamSpec, TypeVar, Generic
+
+# `...` leaking into non-ParamSpec positions is rejected.
+class C1[T: ...]: ...                # E: `Ellipsis` is not allowed in this context
+x1: list[...]                        # E: `...` cannot be used for type parameter
+x2: dict[int, ...]                   # E: `...` cannot be used for type parameter
+x3: type[...]                        # E: `Ellipsis` is not allowed in this context
+TBad = TypeVar("TBad", bound=...)    # E: `Ellipsis` is not allowed in this context
+
+# Still rejected via existing paths.
+def g() -> ...: ...                  # E: Expression cannot be used in annotations
+y_ret: Callable[..., ...]            # E: `...` is not a valid return type
+y_tup: tuple[...]                    # E: Invalid position for `...`
+
+# `...` remains valid where a ParamSpec or homogeneous tuple is expected.
+T = TypeVar("T")
+P = ParamSpec("P")
+ok1: Callable[..., int]
+ok2: tuple[int, ...]
+PD = ParamSpec("PD", default=...)
+class X(Generic[T, P]): ...
+def f(a: X[int, ...]) -> None: ...
+"#,
+);
+
+testcase!(
     test_invalid_type_arguments,
     r#"
 from typing import assert_type
@@ -1081,6 +1129,30 @@ from typing import assert_type
 def f(x: int | str) -> None:
     assert_type(type(x), type[int] | type[str])
     assert_type(type(x), type[int | str])
+"#,
+);
+
+testcase!(
+    test_kw_call_transparent_for_subtyping,
+    r#"
+from dataclasses import dataclass
+from typing import Any
+
+class Foo:
+    x: int = 0
+
+def takes_type_foo(cls: type[Foo]) -> None: ...
+
+def returns_type_foo() -> type[Foo]:
+    return dataclass(Foo)
+
+foo_cls: type[Foo] = dataclass(Foo)
+any_cls: type[Any] = dataclass(Foo)
+wrong_cls: type[int] = dataclass(Foo)  # E: `type[Foo]` is not assignable to `type[int]`
+takes_type_foo(dataclass(Foo))
+
+def make_dynamic_dataclass(base: type) -> type:
+    return dataclass(type(f"Dynamic{base.__name__}", (), {"__annotations__": {"x": int}}))
 "#,
 );
 
@@ -1270,6 +1342,20 @@ match x:
 );
 
 testcase!(
+    test_syntax_error_empty_import_name,
+    r#"
+from os import , # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_import_python_empty_import_name,
+    r#"
+import_python("a.b.c.cinc", "")
+    "#,
+);
+
+testcase!(
     test_mangled_for,
     r#"
 # This has identical Identifiers in the AST, which seems like the right AST.
@@ -1447,7 +1533,7 @@ testcase!(
     test_typing_alias,
     r#"
 from typing import Dict, assert_type
-y: Dict[str, int] = {"test": "test"} # E: `dict[str, str]` is not assignable to `dict[str, int]`
+y: Dict[str, int] = {"test": "test"} # E: `Literal['test']` is not assignable to dict value type `int`
 assert_type(y, dict[str, int])
 "#,
 );
@@ -1887,7 +1973,7 @@ testcase!(
     test_crash_on_decorator_assign,
     r#"
 from typing import TypeVar
-@T=TypeVar()  # E: Expected newline, found `=` # E: Missing argument `name`
+@T=TypeVar()  # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
 "#,
 );
 
@@ -2044,6 +2130,7 @@ testcase!(
     r#"
 def f(x: int = "test"): # E: Default `Literal['test']` is not assignable to parameter `x` with type `int`
     pass
+f()  # Make sure we don't get a cascading bad-argument-type error
 "#,
 );
 

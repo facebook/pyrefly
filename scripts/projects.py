@@ -16,8 +16,8 @@ class Project:
     deps: list[str] | None = None
 
     # BELOW ARE UNUSED FIELDS
-    mypy_cmd: str
-    pyright_cmd: str | None
+    mypy_cmd: str | None = None
+    pyright_cmd: str | None = None
 
     install_cmd: str | None = None
     needs_mypy_plugins: bool = False
@@ -138,6 +138,28 @@ def get_mypy_primer_projects() -> list[Project]:
             expected_mypy_success=True,
         ),
         Project(
+            location="https://github.com/twisted/twisted",
+            mypy_cmd="{mypy} src/twisted",
+            pyright_cmd="{pyright} src/twisted",
+            pyrefly_cmd="{pyrefly} src/twisted",
+            deps=[
+                "attrs",
+                "automat",
+                "constantly",
+                "hyperlink",
+                "incremental",
+                "zope.interface",
+                "typing_extensions",
+            ],
+        ),
+        Project(
+            location="https://github.com/hypothesisworks/hypothesis",
+            mypy_cmd="{mypy} hypothesis/src/hypothesis",
+            pyright_cmd="{pyright} hypothesis/src/hypothesis",
+            pyrefly_cmd="{pyrefly} hypothesis/src/hypothesis",
+            deps=["attrs", "sortedcontainers"],
+        ),
+        Project(
             location="https://github.com/sphinx-doc/sphinx",
             mypy_cmd="{mypy} sphinx",
             pyright_cmd="{pyright} sphinx",
@@ -161,6 +183,9 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} src",
             deps=["types-filelock", "types-freezegun", "types-setuptools"],
             expected_mypy_success=True,
+            # The upstream repo contains symlinks whose targets include a trailing newline.
+            # https://github.com/pypa/bandersnatch/pull/2280
+            skip_pyrefly=True,
         ),
         Project(
             location="https://github.com/hauntsaninja/boostedblob",
@@ -417,6 +442,11 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} dulwich",
             deps=["types-certifi", "types-paramiko"],
             expected_mypy_success=True,
+        ),
+        Project(
+            location="https://github.com/numpy/numpy",
+            pyrefly_cmd="{pyrefly} check --search-path=. numpy/typing/tests/data",
+            deps=["pytest"],
         ),
         Project(
             location="https://github.com/optuna/optuna",
@@ -1429,9 +1459,9 @@ def get_mypy_primer_projects() -> list[Project]:
         ),
         Project(
             location="https://github.com/pola-rs/polars",
-            mypy_cmd="{mypy} py-polars/src/polars",
-            pyright_cmd="{pyright} py-polars/src/polars",
-            pyrefly_cmd="{pyrefly} py-polars/src/polars",
+            mypy_cmd="{mypy} py-polars/src/polars py-polars/tests",
+            pyright_cmd="{pyright} py-polars/src/polars py-polars/tests",
+            pyrefly_cmd="{pyrefly} py-polars/src/polars py-polars/tests",
             deps=[
                 "pandas-stubs",
                 "boto3-stubs",
@@ -1462,6 +1492,41 @@ def get_mypy_primer_projects() -> list[Project]:
                 "hypothesis",
                 "orjson",
             ],
+        ),
+        Project(
+            location="https://github.com/JakobGM/patito",
+            mypy_cmd="{mypy} src/patito tests",
+            pyright_cmd="{pyright} src/patito tests",
+            pyrefly_cmd="{pyrefly} src/patito tests",
+            deps=["polars", "pydantic", "typing-extensions"],
+        ),
+        Project(
+            location="https://github.com/quantco/dataframely",
+            mypy_cmd="{mypy} dataframely tests",
+            pyright_cmd="{pyright} dataframely tests",
+            pyrefly_cmd="{pyrefly} dataframely tests",
+            deps=["polars", "numpy", "fsspec", "pydantic"],
+        ),
+        Project(
+            location="https://github.com/functime-org/functime",
+            mypy_cmd="{mypy} functime tests",
+            pyright_cmd="{pyright} functime tests",
+            pyrefly_cmd="{pyrefly} functime tests",
+            deps=["polars", "numpy"],
+        ),
+        Project(
+            location="https://github.com/pyjanitor-devs/pyjanitor",
+            mypy_cmd="{mypy} janitor tests",
+            pyright_cmd="{pyright} janitor tests",
+            pyrefly_cmd="{pyrefly} janitor tests",
+            deps=["pandas-stubs", "numpy", "multipledispatch", "natsort"],
+        ),
+        Project(
+            location="https://github.com/has2k1/plotnine",
+            mypy_cmd="{mypy} plotnine tests",
+            pyright_cmd="{pyright} plotnine tests",
+            pyrefly_cmd="{pyrefly} plotnine tests",
+            deps=["pandas-stubs", "numpy", "matplotlib", "mizani"],
         ),
         Project(
             location="https://github.com/pytorch/helion",
@@ -1661,5 +1726,12 @@ def get_mypy_primer_projects() -> list[Project]:
             pyright_cmd="{pyright} src/pytest_autoprofile tests",
             pyrefly_cmd="{pyrefly} src/pytest_autoprofile tests",
             deps=["pytest", "pluggy", "line_profiler", "typing-extensions"],
+        ),
+        Project(
+            location="https://github.com/python-attrs/cattrs",
+            mypy_cmd="{mypy} src",
+            pyright_cmd="{pyright} src",
+            pyrefly_cmd="{pyrefly} src",
+            deps=["attrs"],
         ),
     ]

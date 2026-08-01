@@ -84,10 +84,6 @@
           },
           "default": ["type", "pyrefly"]
         },
-        "tensor-shapes": {
-          "description": "Whether to enable tensor shape checking.",
-          "type": "boolean"
-        },
         "recursion-depth-limit": {
           "description": "Maximum recursion depth for type evaluation. Set to 0 to disable the limit.",
           "type": "integer",
@@ -157,10 +153,20 @@
           "default": []
         },
         "python-platform": {
-          "description": "The value used with conditions based on type checking against sys.platform values. Common values include 'linux', 'darwin', 'win32', but any valid sys.platform string is accepted.",
-          "type": "string",
+          "description": "The value used with conditions based on type checking against sys.platform values. Common values include 'linux', 'darwin', 'win32', but any valid sys.platform string is accepted. Use 'all' or a list of values to type check against multiple platforms.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
           "default": "linux",
-          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix"]
+          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix", "all", ["linux", "darwin"]]
         },
         "python-version": {
           "description": "The Python version to use for type checking. Format: <major>[.<minor>[.<micro>]]",
@@ -280,6 +286,26 @@
               }
             }
           ]
+        },
+        "coverage": {
+          "description": "Include/exclude overrides used only by the pyrefly coverage commands. Each field falls back to the corresponding project glob setting when unset.",
+          "type": "object",
+          "properties": {
+            "includes": {
+              "description": "The glob patterns describing which files the coverage commands report on. Takes precedence over project-includes when set.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "excludes": {
+              "description": "The glob patterns describing which files the coverage commands skip. Takes precedence over project-excludes when set, and the --project-excludes flag over both.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
         },
         "sub-config": {
           "description": "Override specific config values for matched paths in your project. SubConfigs allow fine-grained configuration based on filepath glob matching.",

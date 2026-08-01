@@ -228,6 +228,133 @@ class Baz(Bar, A): pass
     assert_eq!(mro_baz, vec!["Bar", "Foo", "A"]);
 }
 
+/// Partial MROs from nonlinearizable inheritance must not panic; the
+/// disjoint-base check should still fire for the other direct bases.
+#[test]
+fn test_disjoint_base_nonlinear_mro_no_panic() {
+    let (handle, state) = mk_state(
+        r#"
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class X: ...
+
+class Y: ...
+
+class A(X, Y): ...
+class B(Y, X): ...
+
+class Nonlinear(A, B): ...
+
+@disjoint_base
+class Z: ...
+
+class NonlinearAndZ(Nonlinear, Z): ...
+
+@disjoint_base
+class NonlinearRepresentative(A, B): ...
+
+class NonlinearRepresentativeAndZ(NonlinearRepresentative, Z): ...
+class NonlinearRepresentativeAndX(NonlinearRepresentative, X): ...
+"#,
+    );
+    assert_has_error(
+        &handle,
+        &state,
+        "Class `Nonlinear` has a nonlinearizable inheritance chain",
+        "expected nonlinearizable diagnostic for `Nonlinear`",
+    );
+    assert_has_error(
+        &handle,
+        &state,
+        "Class `NonlinearRepresentative` has a nonlinearizable inheritance chain",
+        "expected nonlinearizable diagnostic for `NonlinearRepresentative`",
+    );
+    for class_name in [
+        "NonlinearAndZ",
+        "NonlinearRepresentativeAndZ",
+        // Cascades because the partial MRO can't prove `X` is already inside.
+        "NonlinearRepresentativeAndX",
+    ] {
+        let errors = state
+            .transaction()
+            .get_errors([&handle])
+            .collect_errors()
+            .ordinary;
+        errors
+            .iter()
+            .find(|e| {
+                e.msg().contains(class_name) && e.msg().contains("incompatible disjoint bases")
+            })
+            .unwrap_or_else(|| {
+                panic!("expected incompatible-disjoint-bases diagnostic for `{class_name}`")
+            });
+    }
+}
+
+/// A cyclic direct base contributes nothing to the disjoint-base check;
+/// the other direct bases are still checked against each other.
+#[test]
+fn test_disjoint_base_cyclic_mro_skip_cyclic_base() {
+    let (handle, state) = mk_state(
+        r#"
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class A(C): ...
+
+class B(A): ...
+class C(B): ...
+
+@disjoint_base
+class Left: ...
+
+@disjoint_base
+class Right: ...
+
+class UsesCyclicOnly(A, Left): ...
+class UsesCyclicAndIncompatible(A, Left, Right): ...
+"#,
+    );
+    let errors = state
+        .transaction()
+        .get_errors([&handle])
+        .collect_errors()
+        .ordinary;
+
+    // Cyclic base only: just the cycle diagnostic.
+    errors
+        .iter()
+        .find(|e| e.msg().contains("UsesCyclicOnly") && e.msg().contains("creates a cycle"))
+        .expect("expected cycle diagnostic for `UsesCyclicOnly`");
+    assert!(
+        !errors.iter().any(|e| {
+            e.msg().contains("UsesCyclicOnly") && e.msg().contains("incompatible disjoint bases")
+        }),
+        "did not expect incompatible-disjoint-bases diagnostic for `UsesCyclicOnly`",
+    );
+
+    // Cyclic base AND incompatible siblings: both diagnostics fire.
+    errors
+        .iter()
+        .find(|e| {
+            e.msg().contains("UsesCyclicAndIncompatible") && e.msg().contains("creates a cycle")
+        })
+        .expect("expected cycle diagnostic for `UsesCyclicAndIncompatible`");
+    errors
+        .iter()
+        .find(|e| {
+            let msg = e.msg();
+            msg.contains("UsesCyclicAndIncompatible")
+                && msg.contains("incompatible disjoint bases")
+                && msg.contains("Left")
+                && msg.contains("Right")
+        })
+        .expect(
+            "expected incompatible-disjoint-bases diagnostic for `UsesCyclicAndIncompatible` mentioning `Left` and `Right`",
+        );
+}
+
 testcase!(
     test_class_is_object_instance,
     r#"

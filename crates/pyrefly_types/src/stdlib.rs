@@ -71,6 +71,7 @@ pub struct Stdlib {
     exception_group: Option<StdlibResult<(Class, Arc<TParams>)>>,
     list: StdlibResult<(Class, Arc<TParams>)>,
     dict: StdlibResult<(Class, Arc<TParams>)>,
+    partial: StdlibResult<(Class, Arc<TParams>)>,
     deque: StdlibResult<(Class, Arc<TParams>)>,
     frozenset: StdlibResult<(Class, Arc<TParams>)>,
     dict_items: StdlibResult<(Class, Arc<TParams>)>,
@@ -79,6 +80,7 @@ pub struct Stdlib {
     mapping: StdlibResult<(Class, Arc<TParams>)>,
     set: StdlibResult<(Class, Arc<TParams>)>,
     tuple: StdlibResult<(Class, Arc<TParams>)>,
+    enumerate: StdlibResult<(Class, Arc<TParams>)>,
     iterable: StdlibResult<(Class, Arc<TParams>)>,
     async_iterable: StdlibResult<(Class, Arc<TParams>)>,
     async_iterator: StdlibResult<(Class, Arc<TParams>)>,
@@ -105,6 +107,9 @@ pub struct Stdlib {
     /// After 3.14, `typing_extensions` reexports from `typing`.
     /// For 3.12 and 3.13 defined separately in both locations.
     type_alias_type: StdlibResult<ClassType>,
+    /// Defined in `typing_extensions` as Sentinel.
+    /// Defined in `builtins` as `sentinel` since 3.15.
+    sentinel: StdlibResult<ClassType>,
     traceback_type: StdlibResult<ClassType>,
     builtins_type: StdlibResult<ClassType>,
     /// Introduced in Python 3.10.
@@ -115,6 +120,7 @@ pub struct Stdlib {
     method_type: StdlibResult<ClassType>,
     module_type: StdlibResult<ClassType>,
     enum_meta: StdlibResult<ClassType>,
+    protocol_meta: StdlibResult<ClassType>,
     enum_flag: StdlibResult<ClassType>,
     enum_class: StdlibResult<ClassType>,
     /// A fallback class that contains attributes that all NamedTuple subclasses share. Note that
@@ -230,6 +236,7 @@ impl Stdlib {
                 .then(|| lookup_generic(builtins, "ExceptionGroup", 1)),
             list: lookup_generic(builtins, "list", 1),
             dict: lookup_generic(builtins, "dict", 2),
+            partial: lookup_generic(ModuleName::from_str("functools"), "partial", 1),
             deque: lookup_generic(ModuleName::collections(), "deque", 1),
             frozenset: lookup_generic(builtins, "frozenset", 1),
             dict_items: lookup_generic(collections_abc, "dict_items", 2),
@@ -237,6 +244,7 @@ impl Stdlib {
             dict_values: lookup_generic(collections_abc, "dict_values", 2),
             set: lookup_generic(builtins, "set", 1),
             tuple: lookup_generic(builtins, "tuple", 1),
+            enumerate: lookup_generic(builtins, "enumerate", 1),
             builtins_type: lookup_concrete(builtins, "type"),
             ellipsis_type: version
                 .at_least(3, 10)
@@ -257,12 +265,18 @@ impl Stdlib {
             param_spec_kwargs: lookup_concrete(standardised(3, 10), "ParamSpecKwargs"),
             type_var_tuple: lookup_concrete(standardised(3, 11), "TypeVarTuple"),
             type_alias_type: lookup_concrete(standardised(3, 12), "TypeAliasType"),
+            sentinel: if version.at_least(3, 15) {
+                lookup_concrete(builtins, "sentinel")
+            } else {
+                lookup_concrete(typing_extensions, "Sentinel")
+            },
             traceback_type: lookup_concrete(types, "TracebackType"),
             function_type: lookup_concrete(types, "FunctionType"),
             method_type: lookup_concrete(types, "MethodType"),
             module_type: lookup_concrete(types, "ModuleType"),
             mapping: lookup_generic(typing, "Mapping", 2),
             enum_meta: lookup_concrete(enum_, "EnumMeta"),
+            protocol_meta: lookup_concrete(typing, "_ProtocolMeta"),
             enum_flag: lookup_concrete(enum_, "Flag"),
             enum_class: lookup_concrete(enum_, "Enum"),
             named_tuple_fallback: lookup_concrete(type_checker_internals, "NamedTupleFallback"),
@@ -326,6 +340,10 @@ impl Stdlib {
 
     pub fn enum_meta(&self) -> &ClassType {
         Self::primitive(&self.enum_meta)
+    }
+
+    pub fn protocol_meta(&self) -> &ClassType {
+        Self::primitive(&self.protocol_meta)
     }
 
     pub fn enum_flag(&self) -> &ClassType {
@@ -446,8 +464,16 @@ impl Stdlib {
         Self::apply(&self.tuple, vec![x])
     }
 
+    pub fn enumerate(&self, x: Type) -> ClassType {
+        Self::apply(&self.enumerate, vec![x])
+    }
+
     pub fn list(&self, x: Type) -> ClassType {
         Self::apply(&self.list, vec![x])
+    }
+
+    pub fn partial(&self, ret: Type) -> ClassType {
+        Self::apply(&self.partial, vec![ret])
     }
 
     pub fn list_object(&self) -> &Class {
@@ -579,6 +605,10 @@ impl Stdlib {
 
     pub fn type_alias_type(&self) -> &ClassType {
         Self::primitive(&self.type_alias_type)
+    }
+
+    pub fn sentinel(&self) -> &ClassType {
+        Self::primitive(&self.sentinel)
     }
 
     pub fn traceback_type(&self) -> &ClassType {
