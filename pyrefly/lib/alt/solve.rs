@@ -1135,6 +1135,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn legacy_quantified_identity(
+        &self,
+        alias_anchor: TextRange,
+        declaration_range: TextRange,
+    ) -> QuantifiedIdentity {
+        QuantifiedIdentity::new(
+            self.module().name(),
+            AnchorIndex::new(alias_anchor, u32::from(declaration_range.start())),
+            QuantifiedOrigin::ScopedLegacy,
+        )
+    }
+
+    fn quantified_type_var(&self, ty_var: &TypeVar, alias_anchor: TextRange) -> Quantified {
+        Quantified::from_type_var(
+            ty_var,
+            self.legacy_quantified_identity(alias_anchor, ty_var.qname().range()),
+        )
+    }
+
+    fn quantified_type_var_tuple(
+        &self,
+        ty_var_tuple: &TypeVarTuple,
+        alias_anchor: TextRange,
+    ) -> Quantified {
+        Quantified::type_var_tuple(
+            ty_var_tuple.qname().id().clone(),
+            self.legacy_quantified_identity(alias_anchor, ty_var_tuple.qname().range()),
+            ty_var_tuple.default().cloned(),
+        )
+    }
+
+    fn quantified_param_spec(&self, param_spec: &ParamSpec, alias_anchor: TextRange) -> Quantified {
+        Quantified::param_spec(
+            param_spec.qname().id().clone(),
+            self.legacy_quantified_identity(alias_anchor, param_spec.qname().range()),
+            param_spec.default().cloned(),
+        )
+    }
+
     fn tvars_to_tparams_for_type_alias_type(
         &self,
         exprs: &Vec<Expr>,
@@ -1184,12 +1223,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // Use `range` (the alias expression range) as anchor so that two
                             // TypeAliasType aliases at different positions get distinct Quantifieds
                             // even when they use the same module-level TypeVar.
-                            let identity = QuantifiedIdentity::new(
-                                self.module().name(),
-                                AnchorIndex::new(range, u32::from(ty_var.qname().range().start())),
-                                QuantifiedOrigin::ScopedLegacy,
-                            );
-                            let q = Quantified::from_type_var(&ty_var, identity);
+                            let q = self.quantified_type_var(&ty_var, range);
                             e.insert(q.clone());
                             tparams.push(q.clone());
                         }
@@ -1206,19 +1240,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         Entry::Vacant(e) => {
-                            let identity = QuantifiedIdentity::new(
-                                self.module().name(),
-                                AnchorIndex::new(
-                                    range,
-                                    u32::from(ty_var_tuple.qname().range().start()),
-                                ),
-                                QuantifiedOrigin::ScopedLegacy,
-                            );
-                            let q = Quantified::type_var_tuple(
-                                ty_var_tuple.qname().id().clone(),
-                                identity,
-                                ty_var_tuple.default().cloned(),
-                            );
+                            let q = self.quantified_type_var_tuple(&ty_var_tuple, range);
                             e.insert(q.clone());
                             tparams.push(q.clone());
                         }
@@ -1235,19 +1257,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         Entry::Vacant(e) => {
-                            let identity = QuantifiedIdentity::new(
-                                self.module().name(),
-                                AnchorIndex::new(
-                                    range,
-                                    u32::from(param_spec.qname().range().start()),
-                                ),
-                                QuantifiedOrigin::ScopedLegacy,
-                            );
-                            let q = Quantified::param_spec(
-                                param_spec.qname().id().clone(),
-                                identity,
-                                param_spec.default().cloned(),
-                            );
+                            let q = self.quantified_param_spec(&param_spec, range);
                             e.insert(q.clone());
                             tparams.push(q.clone());
                         }
@@ -1402,15 +1412,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // Use alias_anchor so two aliases using the same TypeVar get
                         // different Quantifieds. The ordinal is the TypeVar's declaration
                         // range start, which is unique per TypeVar within a module.
-                        let identity = QuantifiedIdentity::new(
-                            self.module().name(),
-                            AnchorIndex::new(
-                                alias_anchor,
-                                u32::from(ty_var.qname().range().start()),
-                            ),
-                            QuantifiedOrigin::ScopedLegacy,
-                        );
-                        let q = Quantified::from_type_var(ty_var, identity);
+                        let q = self.quantified_type_var(ty_var, alias_anchor);
                         e.insert(q.clone());
                         tparams.push((ty_var.qname().range(), q.clone()));
                         q
@@ -1422,19 +1424,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let q = match seen_type_var_tuples.entry(ty_var_tuple.dupe()) {
                     Entry::Occupied(e) => e.get().clone(),
                     Entry::Vacant(e) => {
-                        let identity = QuantifiedIdentity::new(
-                            self.module().name(),
-                            AnchorIndex::new(
-                                alias_anchor,
-                                u32::from(ty_var_tuple.qname().range().start()),
-                            ),
-                            QuantifiedOrigin::ScopedLegacy,
-                        );
-                        let q = Quantified::type_var_tuple(
-                            ty_var_tuple.qname().id().clone(),
-                            identity,
-                            ty_var_tuple.default().cloned(),
-                        );
+                        let q = self.quantified_type_var_tuple(ty_var_tuple, alias_anchor);
                         e.insert(q.clone());
                         tparams.push((ty_var_tuple.qname().range(), q.clone()));
                         q
@@ -1446,19 +1436,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let q = match seen_param_specs.entry(param_spec.dupe()) {
                     Entry::Occupied(e) => e.get().clone(),
                     Entry::Vacant(e) => {
-                        let identity = QuantifiedIdentity::new(
-                            self.module().name(),
-                            AnchorIndex::new(
-                                alias_anchor,
-                                u32::from(param_spec.qname().range().start()),
-                            ),
-                            QuantifiedOrigin::ScopedLegacy,
-                        );
-                        let q = Quantified::param_spec(
-                            param_spec.qname().id().clone(),
-                            identity,
-                            param_spec.default().cloned(),
-                        );
+                        let q = self.quantified_param_spec(param_spec, alias_anchor);
                         e.insert(q.clone());
                         tparams.push((param_spec.qname().range(), q.clone()));
                         q
