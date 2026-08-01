@@ -70,18 +70,69 @@ from polars.dataframe.frame import DataFrame
 def concat(items: Iterable[DataFrame], *, how: str = "vertical", rechunk: bool = False, parallel: bool = True) -> DataFrame: ...
 "#,
     );
+    env.add_with_path(
+        "polars.expr.expr",
+        "polars/expr/expr.pyi",
+        r#"
+from typing import Any
+class Expr:
+    def __add__(self, other: Any) -> "Expr": ...
+    def __radd__(self, other: Any) -> "Expr": ...
+    def __sub__(self, other: Any) -> "Expr": ...
+    def __mul__(self, other: Any) -> "Expr": ...
+    def __truediv__(self, other: Any) -> "Expr": ...
+    def __floordiv__(self, other: Any) -> "Expr": ...
+    def __mod__(self, other: Any) -> "Expr": ...
+    def __pow__(self, other: Any) -> "Expr": ...
+    def __and__(self, other: Any) -> "Expr": ...
+    def __or__(self, other: Any) -> "Expr": ...
+    def __xor__(self, other: Any) -> "Expr": ...
+    def __neg__(self) -> "Expr": ...
+    def __pos__(self) -> "Expr": ...
+    def __invert__(self) -> "Expr": ...
+    def __gt__(self, other: Any) -> "Expr": ...
+    def __ge__(self, other: Any) -> "Expr": ...
+    def __lt__(self, other: Any) -> "Expr": ...
+    def __le__(self, other: Any) -> "Expr": ...
+    def alias(self, name: str) -> "Expr": ...
+    def cast(self, dtype: Any, *, strict: bool = True) -> "Expr": ...
+    def sum(self) -> "Expr": ...
+"#,
+    );
+    env.add_with_path(
+        "polars.functions.col",
+        "polars/functions/col.pyi",
+        r#"
+from polars.expr.expr import Expr
+def col(*names: str) -> Expr: ...
+"#,
+    );
+    env.add_with_path(
+        "polars.functions.lit",
+        "polars/functions/lit.pyi",
+        r#"
+from polars.expr.expr import Expr
+def lit(value: object, dtype: object = None) -> Expr: ...
+"#,
+    );
     env.add(
         "polars",
         r#"
 from polars.dataframe.frame import DataFrame as DataFrame
 from polars.series.series import Series as Series
 from polars.functions.eager import concat as concat
+from polars.functions.col import col as col
+from polars.functions.lit import lit as lit
+from polars.expr.expr import Expr as Expr
 class Int8: ...
+class Int16: ...
 class Int32: ...
 class Int64: ...
 class Int128: ...
+class UInt8: ...
 class UInt64: ...
 class UInt128: ...
+class Float32: ...
 class Float64: ...
 class String: ...
 class Boolean: ...
@@ -1973,13 +2024,14 @@ reveal_type(df.rename({"a": 2}))  # E: revealed type: DataFrame
 );
 
 testcase!(
-    test_with_columns_appends_new_keyword_column,
+    test_with_columns_bare_string_is_column_reference,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.with_columns(b="x"))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+# A bare string keyword value names a column to copy, so `b` takes `a`'s dtype.
+reveal_type(df.with_columns(b="a"))  # E: revealed type: DataFrame[a: Int64, b: Int64]
 "#,
 );
 
@@ -1990,7 +2042,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.with_columns(a="y"))  # E: revealed type: DataFrame[a: Unknown, b: String]
+reveal_type(df.with_columns(a=pl.col("b")))  # E: revealed type: DataFrame[a: String, b: String]
 "#,
 );
 
@@ -2001,7 +2053,223 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.with_columns(a="y", c="z"))  # E: revealed type: DataFrame[a: Unknown, b: String, c: Unknown]
+reveal_type(df.with_columns(a=pl.lit(2.0), c=pl.lit(3)))  # E: revealed type: DataFrame[a: Float64, b: String, c: Int32]
+"#,
+);
+
+testcase!(
+    test_with_columns_col_copy,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(b=pl.col("a")))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_with_columns_lit_scalar_kinds,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(i=pl.lit(5)))  # E: revealed type: DataFrame[a: Int64, i: Int32]
+reveal_type(df.with_columns(f=pl.lit(5.0)))  # E: revealed type: DataFrame[a: Int64, f: Float64]
+reveal_type(df.with_columns(s=pl.lit("x")))  # E: revealed type: DataFrame[a: Int64, s: String]
+reveal_type(df.with_columns(bo=pl.lit(True)))  # E: revealed type: DataFrame[a: Int64, bo: Boolean]
+reveal_type(df.with_columns(n=pl.lit(None)))  # E: revealed type: DataFrame[a: Int64, n: Null]
+reveal_type(df.with_columns(by=pl.lit(b"x")))  # E: revealed type: DataFrame[a: Int64, by: Binary]
+"#,
+);
+
+testcase!(
+    test_with_columns_lit_int_magnitude,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# An int literal widens by magnitude, so within i32 is Int32, past i32 is Int64, and past i64 is Int128.
+reveal_type(df.with_columns(b=pl.lit(1099511627776)))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+reveal_type(df.with_columns(c=pl.lit(1180591620717411303424)))  # E: revealed type: DataFrame[a: Int64, c: Int128]
+"#,
+);
+
+testcase!(
+    test_with_columns_lit_dtype_keyword,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(b=pl.lit(5, dtype=pl.Int64)))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_with_columns_arithmetic_supertype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "c": [1.0]})
+reveal_type(df.with_columns(x=pl.col("a") + pl.col("c")))  # E: revealed type: DataFrame[a: Int64, c: Float64, x: Float64]
+reveal_type(df.with_columns(x=pl.col("a") + 1))  # E: revealed type: DataFrame[a: Int64, c: Float64, x: Int64]
+reveal_type(df.with_columns(x=pl.col("a") / pl.col("a")))  # E: revealed type: DataFrame[a: Int64, c: Float64, x: Float64]
+"#,
+);
+
+testcase!(
+    test_with_columns_float32_division_keeps_width,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame(schema={"a": pl.Float32, "b": pl.Int32})
+# True division promotes to Float64 only when the numeric supertype is an integer, so a Float32 supertype stays Float32.
+reveal_type(df.with_columns(x=pl.col("a") / pl.col("a")))  # E: revealed type: DataFrame[a: Float32, b: Int32, x: Float32]
+reveal_type(df.with_columns(x=pl.col("a") / 2.0))  # E: revealed type: DataFrame[a: Float32, b: Int32, x: Float32]
+reveal_type(df.with_columns(x=pl.col("a") / 2))  # E: revealed type: DataFrame[a: Float32, b: Int32, x: Float32]
+# Int32 does not fit in Float32, so the supertype is Float64.
+reveal_type(df.with_columns(x=pl.col("a") / pl.col("b")))  # E: revealed type: DataFrame[a: Float32, b: Int32, x: Float64]
+reveal_type(df.with_columns(x=pl.col("b") / pl.col("b")))  # E: revealed type: DataFrame[a: Float32, b: Int32, x: Float64]
+"#,
+);
+
+testcase!(
+    test_with_columns_comparison_is_boolean,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(b=pl.col("a") > pl.col("a")))  # E: revealed type: DataFrame[a: Int64, b: Boolean]
+reveal_type(df.with_columns(b=pl.col("a") == pl.col("a")))  # E: revealed type: DataFrame[a: Int64, b: Boolean]
+reveal_type(df.with_columns(b=pl.col("a") > 1))  # E: revealed type: DataFrame[a: Int64, b: Boolean]
+"#,
+);
+
+testcase!(
+    test_with_columns_bitwise_and_invert_boolean,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"d": [True]})
+reveal_type(df.with_columns(x=pl.col("d") & pl.col("d")))  # E: revealed type: DataFrame[d: Boolean, x: Boolean]
+reveal_type(df.with_columns(x=~pl.col("d")))  # E: revealed type: DataFrame[d: Boolean, x: Boolean]
+"#,
+);
+
+testcase!(
+    test_with_columns_cast,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(b=pl.col("a").cast(pl.Float64)))  # E: revealed type: DataFrame[a: Int64, b: Float64]
+"#,
+);
+
+testcase!(
+    test_with_columns_alias_passes_value_through,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# The keyword name is the output name, so an inner `.alias` only forwards the dtype.
+reveal_type(df.with_columns(b=(pl.col("a") + 1).alias("z")))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_with_columns_unknown_column_errors_and_degrades,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(b=pl.col("nope")))  # E: revealed type: DataFrame[a: Int64, b: Unknown] # E: Column `nope` is not in the DataFrame schema
+reveal_type(df.with_columns(b="nope"))  # E: revealed type: DataFrame[a: Int64, b: Unknown] # E: Column `nope` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_with_columns_parallel_evaluation,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# `z` reads the pre-call `a` (Int64), not the `Float64` a sibling assigns in the same call.
+reveal_type(df.with_columns(a=pl.col("a").cast(pl.Float64), z=pl.col("a") + 1))  # E: revealed type: DataFrame[a: Float64, z: Int64]
+# A sibling's new column is not visible, so `c=col("b")` cannot see the just-added `b`.
+reveal_type(df.with_columns(b=pl.col("a").cast(pl.Float64), c=pl.col("b")))  # E: revealed type: DataFrame[a: Int64, b: Float64, c: Unknown] # E: Column `b` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_with_columns_narrow_overflow_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame(schema={"a": pl.Int8})
+# Int8 + 1000 widens to Int16 by a data-dependent rule, so the column degrades rather than guess.
+reveal_type(df.with_columns(b=pl.col("a") + 1000))  # E: revealed type: DataFrame[a: Int8, b: Unknown]
+reveal_type(df.with_columns(b=pl.col("a") + 1))  # E: revealed type: DataFrame[a: Int8, b: Int8]
+"#,
+);
+
+testcase!(
+    test_with_columns_unsigned_negation_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame(schema={"a": pl.UInt8})
+# Negating an unsigned column raises at runtime, so the column degrades rather than guess.
+reveal_type(df.with_columns(b=-pl.col("a")))  # E: revealed type: DataFrame[a: UInt8, b: Unknown]
+"#,
+);
+
+testcase!(
+    test_with_columns_selector_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.with_columns(c=pl.col("a", "b")))  # E: revealed type: DataFrame[a: Int64, b: String, c: Unknown]
+"#,
+);
+
+testcase!(
+    test_with_columns_bare_string_selector_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# A regex or wildcard bare-string value selects a data-dependent set of columns, so the added
+# column falls back to Unknown rather than emit a false unknown-column error.
+reveal_type(df.with_columns(z="^a$"))  # E: revealed type: DataFrame[a: Int64, z: Unknown]
+reveal_type(df.with_columns(z="*"))  # E: revealed type: DataFrame[a: Int64, z: Unknown]
+"#,
+);
+
+testcase!(
+    test_with_columns_namespace_method_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(b=pl.col("a").sum()))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
 "#,
 );
 

@@ -18,6 +18,7 @@ use pyrefly_types::polars_dtype::PolarsDType;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Arguments;
+use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprDict;
@@ -25,6 +26,8 @@ use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
+use ruff_python_ast::Operator;
+use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -392,6 +395,203 @@ fn is_polars_selector_string(arg: &Expr) -> bool {
     };
     let value = s.value.to_str();
     value == "*" || (value.starts_with('^') && value.ends_with('$'))
+}
+
+/// A resolved Polars expression, either a pinned dtype or a flexible numeric literal that adapts to
+/// the operand it meets. Only a literal stays flexible.
+#[derive(Clone, Copy)]
+enum ExprValue {
+    Dtype(PolarsDType),
+    IntLit(i128),
+    FloatLit,
+}
+
+impl ExprValue {
+    /// The dtype a value materializes to as a standalone column. A float literal is `Float64`, and an
+    /// integer literal takes the narrowest signed width that holds it.
+    fn dtype(self) -> PolarsDType {
+        match self {
+            ExprValue::Dtype(d) => d,
+            ExprValue::FloatLit => PolarsDType::Float64,
+            ExprValue::IntLit(v) => {
+                if i32::try_from(v).is_ok() {
+                    PolarsDType::Int32
+                } else if i64::try_from(v).is_ok() {
+                    PolarsDType::Int64
+                } else {
+                    PolarsDType::Int128
+                }
+            }
+        }
+    }
+
+    fn is_numeric(self) -> bool {
+        match self {
+            ExprValue::IntLit(_) | ExprValue::FloatLit => true,
+            ExprValue::Dtype(d) => d.is_numeric(),
+        }
+    }
+
+    fn is_integer(self) -> bool {
+        match self {
+            ExprValue::IntLit(_) => true,
+            ExprValue::FloatLit => false,
+            ExprValue::Dtype(d) => d.is_integer(),
+        }
+    }
+}
+
+/// A Python scalar literal as an `ExprValue`, or `None` for a non-literal. A numeric literal is
+/// flexible, every other literal pins a dtype, and an integer past `i128` falls back like the constructor.
+fn literal_value(expr: &Expr) -> Option<ExprValue> {
+    match expr {
+        Expr::NumberLiteral(ExprNumberLiteral {
+            value: Number::Int(i),
+            ..
+        }) => i.to_string().parse::<i128>().ok().map(ExprValue::IntLit),
+        Expr::NumberLiteral(ExprNumberLiteral {
+            value: Number::Float(_),
+            ..
+        }) => Some(ExprValue::FloatLit),
+        Expr::BooleanLiteral(_) => Some(ExprValue::Dtype(PolarsDType::Boolean)),
+        Expr::StringLiteral(_) => Some(ExprValue::Dtype(PolarsDType::String)),
+        Expr::BytesLiteral(_) => Some(ExprValue::Dtype(PolarsDType::Binary)),
+        Expr::NoneLiteral(_) => Some(ExprValue::Dtype(PolarsDType::Null)),
+        _ => None,
+    }
+}
+
+/// The dtype of a column read by name against a receiver schema, or `None` when it cannot resolve.
+/// Reports `UnknownColumn` at `range` only on a `Complete` schema, since a `Partial` one may hold the
+/// name untracked.
+fn resolve_column(
+    schema: &DataFrameSchema,
+    name: &Name,
+    range: TextRange,
+    errors: &ErrorCollector,
+) -> Option<PolarsDType> {
+    match schema.columns.iter().find(|(c, _)| c == name) {
+        Some((_, ty)) => Some(*ty),
+        None => {
+            if schema.completeness == SchemaCompleteness::Complete {
+                errors
+                    .error_builder(
+                        range,
+                        ErrorKind::UnknownColumn,
+                        format!("Column `{name}` is not in the DataFrame schema"),
+                    )
+                    .emit();
+            }
+            None
+        }
+    }
+}
+
+/// Combine two numeric operands under a supertype-forming operator. A flexible integer literal keeps
+/// a narrower integer column's dtype only when its value fits that column's range.
+fn arith(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
+    use ExprValue::*;
+    match (a, b) {
+        (Dtype(da), Dtype(db)) if da.is_numeric() && db.is_numeric() => da.supertype(db).map(Dtype),
+        (Dtype(_), Dtype(_)) => None,
+        (Dtype(d), IntLit(v)) | (IntLit(v), Dtype(d)) => int_lit_with_dtype(d, v),
+        (Dtype(d), FloatLit) | (FloatLit, Dtype(d)) => float_lit_with_dtype(d),
+        (IntLit(_), IntLit(_)) => a.dtype().supertype(b.dtype()).map(Dtype),
+        (IntLit(_), FloatLit) | (FloatLit, IntLit(_)) | (FloatLit, FloatLit) => {
+            Some(Dtype(PolarsDType::Float64))
+        }
+    }
+}
+
+/// A flexible integer literal keeps a float column's dtype, and an integer column's dtype only when
+/// the value fits its range. Anything else falls back.
+fn int_lit_with_dtype(d: PolarsDType, v: i128) -> Option<ExprValue> {
+    if d.is_float() {
+        return Some(ExprValue::Dtype(d));
+    }
+    match d.int_bounds() {
+        Some((lo, hi)) if (lo..=hi).contains(&v) => Some(ExprValue::Dtype(d)),
+        _ => None,
+    }
+}
+
+/// A flexible float literal keeps `Float32` and widens a `Float64` or integer column to `Float64`. A
+/// boolean or non-numeric column falls back.
+fn float_lit_with_dtype(d: PolarsDType) -> Option<ExprValue> {
+    use PolarsDType::*;
+    match d {
+        Float32 => Some(ExprValue::Dtype(Float32)),
+        Float64 => Some(ExprValue::Dtype(Float64)),
+        d if d.is_integer() => Some(ExprValue::Dtype(Float64)),
+        _ => None,
+    }
+}
+
+/// Resolve a binary operator over two resolved operands, or `None` when the result is data-dependent
+/// or the operands are incompatible. Division promotes an integer result to `Float64`, bitwise ops
+/// act on two booleans or two integers, and the rest form the numeric supertype.
+fn combine_binop(op: Operator, a: ExprValue, b: ExprValue) -> Option<ExprValue> {
+    use ExprValue::*;
+    match op {
+        Operator::Div => {
+            let result = arith(a, b)?;
+            Some(if result.is_integer() {
+                Dtype(PolarsDType::Float64)
+            } else {
+                result
+            })
+        }
+        Operator::BitAnd | Operator::BitOr | Operator::BitXor => {
+            if matches!(
+                (a, b),
+                (Dtype(PolarsDType::Boolean), Dtype(PolarsDType::Boolean))
+            ) {
+                Some(Dtype(PolarsDType::Boolean))
+            } else if a.is_integer() && b.is_integer() {
+                arith(a, b)
+            } else {
+                None
+            }
+        }
+        Operator::Add
+        | Operator::Sub
+        | Operator::Mult
+        | Operator::FloorDiv
+        | Operator::Mod
+        | Operator::Pow => arith(a, b),
+        Operator::LShift | Operator::RShift | Operator::MatMult => None,
+    }
+}
+
+/// Resolve a unary operator over a resolved operand. Negation keeps a signed-int or float dtype and
+/// negates a literal but falls back for an unsigned column. `~` yields `Boolean` for a boolean and
+/// the operand's dtype for an integer.
+fn unary_value(op: UnaryOp, a: ExprValue) -> Option<ExprValue> {
+    use ExprValue::*;
+    match op {
+        UnaryOp::USub | UnaryOp::UAdd => match a {
+            IntLit(v) if op == UnaryOp::USub => v.checked_neg().map(IntLit),
+            IntLit(v) => Some(IntLit(v)),
+            FloatLit => Some(FloatLit),
+            Dtype(d) if d.is_signed_int() || d.is_float() => Some(Dtype(d)),
+            Dtype(_) => None,
+        },
+        UnaryOp::Invert => match a {
+            Dtype(PolarsDType::Boolean) => Some(Dtype(PolarsDType::Boolean)),
+            v if v.is_integer() => Some(Dtype(v.dtype())),
+            _ => None,
+        },
+        UnaryOp::Not => None,
+    }
+}
+
+/// A comparison yields `Boolean` when both operands are comparable, meaning both numeric or the same
+/// pinned dtype. Otherwise it falls back rather than fabricate a `Boolean` the runtime would reject.
+fn comparison_value(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
+    use ExprValue::*;
+    let comparable =
+        (a.is_numeric() && b.is_numeric()) || matches!((a, b), (Dtype(x), Dtype(y)) if x == y);
+    comparable.then_some(Dtype(PolarsDType::Boolean))
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -950,9 +1150,94 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Model `df.with_columns(x=..., y=...)` as a new schema, overwriting a matching column
-    /// in place or appending a new one with an `Unknown` element type since the value type is
-    /// not modeled. Falls back with `None` unless every argument is a keyword with a name.
+    /// Resolve a Polars expression to an `ExprValue` against the receiver schema, or `None` to leave
+    /// the output column `Unknown`. A bare string here is a literal, not a column reference.
+    fn eval_polars_expr(
+        &self,
+        expr: &Expr,
+        schema: &DataFrameSchema,
+        errors: &ErrorCollector,
+    ) -> Option<ExprValue> {
+        match expr {
+            Expr::Call(call) => {
+                if let Expr::Attribute(attr) = &*call.func {
+                    match attr.attr.id.as_str() {
+                        "cast" => {
+                            self.eval_polars_expr(&attr.value, schema, errors)?;
+                            let [target] = &call.arguments.args[..] else {
+                                return None;
+                            };
+                            return polars_dtype_from_expr(target).map(ExprValue::Dtype);
+                        }
+                        "alias" => return self.eval_polars_expr(&attr.value, schema, errors),
+                        _ => {}
+                    }
+                }
+                let Some(CalleeKind::Function(FunctionKind::Def(id))) = self
+                    .expr_infer(&call.func, &self.error_swallower())
+                    .callee_kind()
+                else {
+                    return None;
+                };
+                match (id.name.as_str(), id.module.name().as_str()) {
+                    ("col", "polars.functions.col") => {
+                        let [arg] = &call.arguments.args[..] else {
+                            return None;
+                        };
+                        let Expr::StringLiteral(s) = arg else {
+                            return None;
+                        };
+                        // `"*"` and a regex select many columns whose names are data-dependent.
+                        if is_polars_selector_string(arg) {
+                            return None;
+                        }
+                        resolve_column(schema, &Name::new(s.value.to_str()), arg.range(), errors)
+                            .map(ExprValue::Dtype)
+                    }
+                    ("lit", "polars.functions.lit") => {
+                        for kw in &call.arguments.keywords {
+                            if kw.arg.as_ref().is_some_and(|a| a.id.as_str() == "dtype") {
+                                return polars_dtype_from_expr(&kw.value).map(ExprValue::Dtype);
+                            }
+                        }
+                        let [value] = &call.arguments.args[..] else {
+                            return None;
+                        };
+                        literal_value(value)
+                    }
+                    _ => None,
+                }
+            }
+            Expr::BinOp(binop) => {
+                let a = self.eval_polars_expr(&binop.left, schema, errors)?;
+                let b = self.eval_polars_expr(&binop.right, schema, errors)?;
+                combine_binop(binop.op, a, b)
+            }
+            Expr::UnaryOp(unary) => {
+                let a = self.eval_polars_expr(&unary.operand, schema, errors)?;
+                unary_value(unary.op, a)
+            }
+            Expr::Compare(cmp) => {
+                let ([op], [right]) = (&*cmp.ops, &*cmp.comparators) else {
+                    return None;
+                };
+                if !matches!(
+                    op,
+                    CmpOp::Eq | CmpOp::NotEq | CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE
+                ) {
+                    return None;
+                }
+                let a = self.eval_polars_expr(&cmp.left, schema, errors)?;
+                let b = self.eval_polars_expr(right, schema, errors)?;
+                comparison_value(a, b)
+            }
+            _ => literal_value(expr),
+        }
+    }
+
+    /// Model `df.with_columns(x=..., y=...)` as a new schema, overwriting or appending each named
+    /// column with the dtype inferred from its Polars expression. Falls back unless every argument is
+    /// a named keyword.
     pub fn polars_with_columns(
         &self,
         base: &Type,
@@ -979,14 +1264,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             named.push((arg.id.clone(), &kw.value));
         }
+        // Polars evaluates every keyword expression against the receiver's original schema in
+        // parallel, so a sibling's new column is not visible; resolve all values before applying.
         let mut columns = schema.columns.clone();
         for (name, value) in named {
-            // Infer the value to surface type errors inside it; its type is unused.
+            // Infer the value to surface type errors inside it; `eval_polars_expr` is the sole
+            // reporter of column errors and uses only the receiver schema.
             self.expr_infer(value, errors);
-            let unknown = PolarsDType::Unknown;
+            let dtype = match value {
+                // A regex or wildcard selects a data-dependent column set, so fall back rather than
+                // report the selector as a missing column.
+                Expr::StringLiteral(_) if is_polars_selector_string(value) => None,
+                // A bare string keyword value names a column to copy, whereas a string inside an
+                // expression is a literal.
+                Expr::StringLiteral(s) => {
+                    resolve_column(schema, &Name::new(s.value.to_str()), value.range(), errors)
+                }
+                _ => self
+                    .eval_polars_expr(value, schema, errors)
+                    .map(ExprValue::dtype),
+            }
+            .unwrap_or(PolarsDType::Unknown);
             match columns.iter_mut().find(|(c, _)| *c == name) {
-                Some((_, ty)) => *ty = unknown,
-                None => columns.push((name, unknown)),
+                Some((_, ty)) => *ty = dtype,
+                None => columns.push((name, dtype)),
             }
         }
         Some(

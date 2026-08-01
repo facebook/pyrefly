@@ -111,8 +111,38 @@ impl PolarsDType {
         }
     }
 
-    fn is_float(self) -> bool {
+    pub fn is_float(self) -> bool {
         matches!(self, PolarsDType::Float32 | PolarsDType::Float64)
+    }
+
+    /// Whether this is any integer dtype, signed or unsigned.
+    pub fn is_integer(self) -> bool {
+        self.signed_width().is_some() || self.unsigned_width().is_some()
+    }
+
+    /// Whether this is a signed integer dtype, the dtypes for which unary negation is valid.
+    pub fn is_signed_int(self) -> bool {
+        self.signed_width().is_some()
+    }
+
+    /// The inclusive value range an integer dtype holds, as `i128`, or `None` for a non-integer.
+    /// `UInt128`'s real max exceeds `i128::MAX`, but any `i128` literal fits below it, so the bound
+    /// never over-rejects.
+    pub fn int_bounds(self) -> Option<(i128, i128)> {
+        use PolarsDType::*;
+        Some(match self {
+            Int8 => (i8::MIN as i128, i8::MAX as i128),
+            Int16 => (i16::MIN as i128, i16::MAX as i128),
+            Int32 => (i32::MIN as i128, i32::MAX as i128),
+            Int64 => (i64::MIN as i128, i64::MAX as i128),
+            Int128 => (i128::MIN, i128::MAX),
+            UInt8 => (0, u8::MAX as i128),
+            UInt16 => (0, u16::MAX as i128),
+            UInt32 => (0, u32::MAX as i128),
+            UInt64 => (0, u64::MAX as i128),
+            UInt128 => (0, i128::MAX),
+            _ => return None,
+        })
     }
 
     /// The common supertype of `self` and `other`, or `None` when the two cannot be combined
@@ -185,7 +215,7 @@ impl PolarsDType {
         None
     }
 
-    fn is_numeric(self) -> bool {
+    pub fn is_numeric(self) -> bool {
         self.signed_width().is_some() || self.unsigned_width().is_some() || self.is_float()
     }
 
