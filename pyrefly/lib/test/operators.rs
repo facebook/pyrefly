@@ -969,6 +969,31 @@ def test(a: A, b: B, c: C) -> None:
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4342
+testcase!(
+    test_date_datetime_comparison,
+    r#"
+from datetime import date, datetime
+
+d = date.today()
+dt = datetime.now()
+
+dt < d  # E: `<` is not supported between `datetime` and `date`
+dt <= d  # E: `<=` is not supported between `datetime` and `date`
+dt > d  # E: `>` is not supported between `datetime` and `date`
+dt >= d  # E: `>=` is not supported between `datetime` and `date`
+d < dt  # E: `<` is not supported between `date` and `datetime`
+d <= dt  # E: `<=` is not supported between `date` and `datetime`
+d > dt  # E: `>` is not supported between `date` and `datetime`
+d >= dt  # E: `>=` is not supported between `date` and `datetime`
+
+dt == d
+dt != d
+d < date.today()
+dt < datetime.now()
+"#,
+);
+
 testcase!(
     test_bitor_unknown_operands,
     r#"

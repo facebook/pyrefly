@@ -828,6 +828,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 current_right_range,
                             )
                         };
+                        // `datetime` inherits from `date`, but their runtime ordering methods
+                        // reject the other type instead of honoring that nominal relationship.
+                        if matches!(op, CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE)
+                            && matches!(
+                                (left, right),
+                                (Type::ClassType(left), Type::ClassType(right))
+                                    if (left == self.stdlib.datetime()
+                                        && right == self.stdlib.date())
+                                        || (left == self.stdlib.date()
+                                            && right == self.stdlib.datetime())
+                            )
+                        {
+                            self.error(
+                                errors,
+                                x.range,
+                                ErrorKind::UnsupportedOperation,
+                                context().format(),
+                            );
+                            return self.heap.mk_class_type(self.stdlib.bool().clone());
+                        }
                         match op {
                             CmpOp::Is | CmpOp::IsNot => {
                                 // These comparisons never error.
