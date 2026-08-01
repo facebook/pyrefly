@@ -796,9 +796,24 @@ impl ConfigFile {
         let hidden_dir_filter = if self.disable_project_excludes_heuristics {
             HiddenDirFilter::Disabled
         } else {
-            match root {
-                Some(r) => HiddenDirFilter::RelativeTo(vec![r.to_path_buf()]),
-                None => HiddenDirFilter::All,
+            // Hidden ancestors above the project's own roots must not hide
+            // the project's files: check components relative to every
+            // include root, plus the import root. The import root alone is
+            // not enough — a src-layout project's `import_root` is `src/`,
+            // and an include outside it (`tests/check.py`) would fall back
+            // to the absolute path, where a checkout under a hidden
+            // directory (`~/.codex/worktrees/…`, `.claude/worktrees/…`)
+            // has every component chain hidden. Deliberately independent of
+            // `use_ignore_files`: turning ignore files off must not make
+            // hidden-directory filtering stricter.
+            let mut roots = includes.roots();
+            if let Some(import_root) = self.import_root.as_deref() {
+                roots.push(import_root.to_path_buf());
+            }
+            if roots.is_empty() {
+                HiddenDirFilter::All
+            } else {
+                HiddenDirFilter::RelativeTo(roots)
             }
         };
         FilteredGlobs::new(includes, project_excludes, root, hidden_dir_filter)
@@ -3320,7 +3335,10 @@ output-format = "omit-errors"
                 globs(&["covered/**"]),
                 globs(&excludes),
                 None,
-                HiddenDirFilter::All,
+                // Hidden-directory filtering is relative to the include
+                // roots, so a project under a hidden directory still sees
+                // its own files.
+                HiddenDirFilter::RelativeTo(globs(&["covered/**"]).roots()),
             )
         };
 
