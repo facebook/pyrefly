@@ -32,6 +32,7 @@ use super::extract_shared::unique_name;
 use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::lsp::Transaction;
 
 const DEFAULT_FACTORY_NAME: &str = "create";
@@ -125,6 +126,10 @@ fn build_factory_insertion_edit(
     ))
 }
 
+/// Rewrites constructor references in modules that depend on the selected class.
+///
+/// The global lookup covers disk-backed reverse dependencies. Loaded in-memory modules are
+/// checked separately because unsaved buffers may not be represented in that dependency graph.
 fn build_constructor_callsite_edits(
     transaction: &mut Transaction<'_>,
     handle: &Handle,
@@ -137,10 +142,9 @@ fn build_constructor_callsite_edits(
             *handle.sys_info(),
             definition.metadata.clone(),
             TextRangeWithModule::new(definition.module.dupe(), definition.definition_range),
-            false,
+            ReferenceOptions::textual_only(false),
         )
         .ok()?;
-    // Unsaved modules may not be in the filesystem reverse-dependency graph.
     for module_handle in transaction.handles() {
         if !matches!(module_handle.path().details(), ModulePathDetails::Memory(_))
             || references
@@ -154,7 +158,7 @@ fn build_constructor_callsite_edits(
             definition.metadata.clone(),
             definition.definition_range,
             &definition.module,
-            false,
+            ReferenceOptions::textual_only(false),
         ) else {
             continue;
         };
