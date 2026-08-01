@@ -2524,6 +2524,46 @@ from mymod.submod.deep import Bar
 }
 
 #[test]
+fn goto_def_on_module_components_in_string_literal() {
+    let code = r#"
+def include(path: str): ...
+include("accounts.urls")
+#         ^        ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("accounts", "# accounts/__init__.py"),
+            ("accounts.urls", "# accounts/urls.py"),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | include("accounts.urls")
+              ^
+Definition Result:
+1 | # accounts/__init__.py
+    ^
+
+3 | include("accounts.urls")
+                       ^
+Definition Result:
+1 | # accounts/urls.py
+    ^
+
+
+# accounts.py
+
+# accounts.urls.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn goto_def_on_first_component_when_intermediate_module_missing() {
     // Only mymod.submod exists, not mymod itself
     let mymod_submod_init = r#"# mymod/submod/__init__.py
