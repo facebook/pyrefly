@@ -429,10 +429,18 @@ impl<'a> Transaction<'a> {
                                 .keywords
                                 .iter()
                                 .any(|kw| kw.value.range() == arg.range());
+                            let keyword_args_before = call
+                                .arguments
+                                .keywords
+                                .iter()
+                                .filter(|kw| kw.range().start() < arg.range().start())
+                                .count();
 
                             if !is_keyword_arg
-                                && let Some(param_match) =
-                                    Self::param_name_for_positional_argument(&params, arg_idx)
+                                && let Some(param_match) = Self::param_name_for_positional_argument(
+                                    &params,
+                                    arg_idx + keyword_args_before,
+                                )
                                 && !param_match.is_vararg_repeat
                                 && param_match.name.as_str() != "self"
                                 && param_match.name.as_str() != "cls"

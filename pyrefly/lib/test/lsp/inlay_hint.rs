@@ -418,6 +418,38 @@ obj.method(5, "world")
 }
 
 #[test]
+fn test_parameter_name_hints_after_keyword_insertion() {
+    let code = r#"
+def example(a: str, b: str) -> None:
+    pass
+
+# This is the transient source after inserting the first positional hint.
+example(a="a", "b")
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let hints = state
+        .transaction()
+        .inlay_hints(
+            handles.get("main").unwrap(),
+            InlayHintConfig {
+                call_argument_names: AllOffPartial::All,
+                variable_types: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let labels: Vec<String> = hints
+        .into_iter()
+        .filter_map(|hint| {
+            let label: String = hint.label_parts.into_iter().map(|(text, _)| text).collect();
+            label.ends_with("= ").then_some(label)
+        })
+        .collect();
+    assert_eq!(labels, vec!["b= "]);
+}
+
+#[test]
 fn test_parameter_name_hints_with_variable_types() {
     let code = r#"
 def my_function(x: int, y: str, z: bool) -> None:
