@@ -31,6 +31,51 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     )
 }
 
+fn get_prepare_rename_report(state: &State, handle: &Handle, position: TextSize) -> String {
+    let transaction = state.transaction();
+    let range = transaction.prepare_rename(handle, position).unwrap();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    format!(
+        "Rename range:\n{}",
+        code_frame_of_source_at_range(module_info.contents(), range)
+    )
+}
+
+#[test]
+fn prepare_rename_symbol_literals() {
+    let code = r#"
+foo = 1
+__all__ = ["foo"]
+#            ^
+
+class C:
+    __slots__ = ("bar",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.bar = 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_prepare_rename_report);
+    assert_eq!(
+        r#"
+# main.py
+3 | __all__ = ["foo"]
+                 ^
+Rename range:
+3 | __all__ = ["foo"]
+                ^^^
+
+7 |     __slots__ = ("bar",)
+                       ^
+Rename range:
+7 |     __slots__ = ("bar",)
+                      ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn test_rename_parameter_updates_keyword_arguments() {
     let code = r#"

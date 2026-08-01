@@ -304,11 +304,32 @@ impl Exports {
             .entries
             .iter()
             .find_map(|entry| match entry {
-                DunderAllEntry::Name(range, name) if range.contains_inclusive(position) => {
+                DunderAllEntry::Name(range, name) | DunderAllEntry::Remove(range, name)
+                    if range.contains_inclusive(position) =>
+                {
                     Some((*range, name.clone()))
                 }
                 _ => None,
             })
+    }
+
+    /// Return the ranges and names of all entries in a user-specified `__all__`.
+    pub fn dunder_all_names(&self) -> Option<impl Iterator<Item = (TextRange, &Name)>> {
+        match self.definitions.dunder_all.kind {
+            DunderAllKind::Specified => Some(
+                self.definitions
+                    .dunder_all
+                    .entries
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        DunderAllEntry::Name(range, name) | DunderAllEntry::Remove(range, name) => {
+                            Some((*range, name))
+                        }
+                        _ => None,
+                    }),
+            ),
+            DunderAllKind::Inferred | DunderAllKind::Unresolvable(_) => None,
+        }
     }
 
     pub fn is_submodule_imported_implicitly(&self, name: &Name) -> bool {

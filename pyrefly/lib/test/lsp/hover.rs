@@ -33,6 +33,26 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     }
 }
 
+#[test]
+fn hover_symbol_literals() {
+    let code = r#"
+foo: int = 1
+__all__ = ["foo"]
+#            ^
+
+class C:
+    __slots__ = ("bar",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.bar: str = ""
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(report.contains("(variable) foo: int"), "got: {report}");
+    assert!(report.contains("(attribute) bar: str"), "got: {report}");
+    assert!(!report.contains("Literal"), "got: {report}");
+}
+
 fn get_test_report_at_verbosity(
     state: &State,
     handle: &Handle,
