@@ -512,6 +512,35 @@ foo("hello", 1, 2, 3, 5, a=1, b=2, t=4)
     );
 }
 
+#[test]
+fn test_parameter_name_hints_for_callable_object() {
+    let code = r#"
+class MarkDecorator:
+    def __call__(self, *fixtures: str) -> None:
+        pass
+
+mark = MarkDecorator()
+mark("database", "cache")
+"#;
+    assert_eq!(
+        r#"
+# main.py
+7 | mark("database", "cache")
+         ^ inlay-hint: `fixtures= `
+"#
+        .trim(),
+        generate_inlay_hint_report(
+            code,
+            InlayHintConfig {
+                call_argument_names: AllOffPartial::All,
+                variable_types: false,
+                ..Default::default()
+            }
+        )
+        .trim()
+    );
+}
+
 /// todo(jvansch): Update test once parameter hints have locations.
 #[test]
 fn test_parameter_hints_do_not_have_locations() {
