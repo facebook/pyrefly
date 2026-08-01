@@ -125,6 +125,10 @@ fn build_factory_insertion_edit(
     ))
 }
 
+/// Rewrites constructor references in modules that depend on the selected class.
+///
+/// The global lookup covers disk-backed reverse dependencies. Loaded in-memory modules are
+/// checked separately because unsaved buffers may not be represented in that dependency graph.
 fn build_constructor_callsite_edits(
     transaction: &mut Transaction<'_>,
     handle: &Handle,
@@ -140,7 +144,6 @@ fn build_constructor_callsite_edits(
             false,
         )
         .ok()?;
-    // Unsaved modules may not be in the filesystem reverse-dependency graph.
     for module_handle in transaction.handles() {
         if !matches!(module_handle.path().details(), ModulePathDetails::Memory(_))
             || references
