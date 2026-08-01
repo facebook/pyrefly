@@ -129,7 +129,10 @@ impl PythonEnvironment {
         command.arg("-c");
         command.arg(Self::query_script());
 
-        Self::get_env_from_command(command, interpreter.display().to_string())
+        Self::get_env_from_command(
+            command,
+            format!("Python interpreter (`{}`)", interpreter.display()),
+        )
     }
 
     /// Query the environment that `uv` would create for a PEP 723 script.
