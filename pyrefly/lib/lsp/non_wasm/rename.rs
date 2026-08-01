@@ -23,52 +23,17 @@ use crate::state::state::CancellableTransaction;
 
 pub(crate) fn append_comment_and_string_occurrences(
     transaction: &CancellableTransaction<'_>,
-    workspace_root: Option<&Path>,
     old_name: &str,
     references: &mut Vec<(ModuleInfo, Vec<TextRange>)>,
 ) {
     let tx = transaction.as_ref();
-    let mut merged = std::mem::take(references);
-
-    for candidate in tx.handles() {
-        let Some(module_info) = tx.get_module_info(&candidate) else {
-            continue;
-        };
-        if let Some(root) = workspace_root
-            && !candidate.path().as_path().starts_with(root)
-        {
-            continue;
-        }
-        if !PYTHON_EXTENSIONS.iter().any(|ext| {
-            candidate
-                .path()
-                .as_path()
-                .extension()
-                .and_then(|e| e.to_str())
-                == Some(*ext)
-        }) {
-            continue;
-        }
-        if tx.is_third_party_module(&module_info, &candidate)
-            && !tx.is_source_file(&module_info, &candidate)
-        {
-            continue;
-        }
-        let comment_ranges = tx.text_occurrences_in_comments_and_strings(&module_info, old_name);
-        if comment_ranges.is_empty() {
-            continue;
-        }
-        if let Some((_, ranges)) = merged
-            .iter_mut()
-            .find(|(existing, _)| existing.path() == module_info.path())
-        {
-            ranges.extend(comment_ranges);
-        } else {
-            merged.push((module_info, comment_ranges));
-        }
+    for (module_info, ranges) in &mut *references {
+        let comment_ranges = tx.text_occurrences_in_comments_and_strings(module_info, old_name);
+        ranges.extend(comment_ranges);
+        ranges.sort_by_key(|range| (range.start(), range.end()));
+        ranges.dedup();
     }
-
-    *references = merged;
+    references.sort_by(|(left, _), (right, _)| left.path().as_path().cmp(right.path().as_path()));
 }
 
 pub(crate) fn text_occurrence_edits_in_workspace(
@@ -151,6 +116,7 @@ fn workspace_file_paths(root: &Path) -> Vec<PathBuf> {
         }
     }
 
+    files.sort();
     files
 }
 
