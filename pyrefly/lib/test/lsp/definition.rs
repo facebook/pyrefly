@@ -163,6 +163,57 @@ Definition Result:
 }
 
 #[test]
+fn typed_dict_key_test() {
+    let code = r#"
+from typing import TypedDict
+
+class Person(TypedDict):
+    name: str
+
+class Employee(Person):
+    employee_id: int
+
+Functional = TypedDict("Functional", {"title": str})
+
+person: Person = {"name": ""}
+employee: Employee = {"name": "", "employee_id": 0}
+functional: Functional = {"title": ""}
+
+person["name"]
+#       ^
+employee["name"]
+#         ^
+functional["title"]
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+16 | person["name"]
+             ^
+Definition Result:
+5 |     name: str
+        ^^^^
+
+18 | employee["name"]
+               ^
+Definition Result:
+5 |     name: str
+        ^^^^
+
+20 | functional["title"]
+                 ^
+Definition Result:
+10 | Functional = TypedDict("Functional", {"title": str})
+                                           ^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn pytest_fixture_parameter_goes_to_fixture_definition() {
     let code = r#"
 import pytest  # type: ignore
