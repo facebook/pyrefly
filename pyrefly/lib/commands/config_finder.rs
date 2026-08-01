@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -188,8 +189,10 @@ pub fn default_config_finder_with_overrides(
     )
 }
 
+type CachedPep723Override = (String, Result<ArcId<ConfigFile>, Arc<str>>);
+
 struct Pep723ScriptOverrides {
-    cache: Arc<Mutex<SmallMap<(PathBuf, String), ArcId<ConfigFile>>>>,
+    cache: Arc<Mutex<SmallMap<PathBuf, CachedPep723Override>>>,
     query_environment: Arc<dyn Fn(&Path) -> anyhow::Result<PythonEnvironment> + Send + Sync>,
 }
 
@@ -215,29 +218,44 @@ impl Pep723ScriptOverrides {
             return Ok(config);
         };
 
-        let cache_key = (script_path.to_path_buf(), metadata);
-        if let Some(config) = self.cache.lock().get(&cache_key) {
-            return Ok(config.dupe());
+        let cached = self
+            .cache
+            .lock()
+            .get(script_path)
+            .filter(|(cached_metadata, _)| cached_metadata == &metadata)
+            .map(|(_, result)| result.clone());
+        if let Some(result) = cached {
+            return result.map_err(|error| anyhow::anyhow!(error.to_string()));
         }
 
-        let mut script_environment = (self.query_environment)(script_path)?;
-        // Preserve explicit user-specified site-package paths such as `typings/`,
-        // while replacing interpreter-derived environment data with the script's.
-        script_environment.site_package_path = config.python_environment.site_package_path.clone();
+        // This cannot live solely in `ConfigFile::get_sys_info`: PEP 723 affects dependency
+        // search paths as well as the Python version and platform, so the full environment
+        // must be replaced for this script.
+        let result = (|| {
+            let mut script_environment = (self.query_environment)(script_path)?;
+            // Preserve explicit user-specified site-package paths such as `typings/`,
+            // while replacing interpreter-derived environment data with the script's.
+            script_environment.site_package_path =
+                config.python_environment.site_package_path.clone();
 
-        let mut config = config.as_ref().clone();
-        config.interpreters.disable_query();
-        config.python_environment = script_environment;
+            let mut config = config.as_ref().clone();
+            config.interpreters.disable_query();
+            config.python_environment = script_environment;
+            Ok(ArcId::new(config))
+        })()
+        .map_err(|error: anyhow::Error| Arc::<str>::from(format!("{error:#}")));
 
-        let config = ArcId::new(config);
-        self.cache.lock().insert(cache_key, config.dupe());
-        Ok(config)
+        self.cache
+            .lock()
+            .insert(script_path.to_path_buf(), (metadata, result.clone()));
+        result.map_err(|error| anyhow::anyhow!(error.to_string()))
     }
 
     fn script_path(path: &ModulePath) -> Option<&Path> {
         match path.details() {
-            ModulePathDetails::FileSystem(path) | ModulePathDetails::Memory(path) => Some(path),
-            ModulePathDetails::Namespace(_)
+            ModulePathDetails::FileSystem(path) => Some(path),
+            ModulePathDetails::Memory(_)
+            | ModulePathDetails::Namespace(_)
             | ModulePathDetails::BundledTypeshed(_)
             | ModulePathDetails::BundledTypeshedThirdParty(_)
             | ModulePathDetails::BundledThirdParty(_) => None,
@@ -245,7 +263,7 @@ impl Pep723ScriptOverrides {
     }
 
     fn read_pep723_metadata(path: &Path) -> anyhow::Result<Option<String>> {
-        let contents = std::fs::read_to_string(path)?;
+        let contents = fs::read_to_string(path)?;
         Ok(Self::extract_pep723_metadata(&contents))
     }
 
@@ -254,7 +272,8 @@ impl Pep723ScriptOverrides {
         let mut in_script_block = false;
 
         for line in contents.lines() {
-            match line.trim_start() {
+            let trimmed = line.trim_start();
+            match trimmed {
                 "# /// script" if !in_script_block => {
                     in_script_block = true;
                     metadata.push(line);
@@ -263,6 +282,7 @@ impl Pep723ScriptOverrides {
                     metadata.push(line);
                     return Some(metadata.join("\n"));
                 }
+                _ if in_script_block && !trimmed.starts_with('#') => return None,
                 _ if in_script_block => metadata.push(line),
                 _ => {}
             }
@@ -455,6 +475,7 @@ mod tests {
     use pyrefly_util::includes::Includes;
     use pyrefly_python::sys_info::PythonPlatform;
     use pyrefly_python::sys_info::PythonVersion;
+    use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
@@ -528,6 +549,12 @@ print('hello')
             Pep723ScriptOverrides::extract_pep723_metadata("print('hello')"),
             None
         );
+        assert_eq!(
+            Pep723ScriptOverrides::extract_pep723_metadata(
+                "# /// script\n# dependencies = [\"click\"]\nprint('invalid')\n# ///"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -567,6 +594,13 @@ import click
         config.python_environment.site_package_path = Some(vec![PathBuf::from("/tmp/typings")]);
         let config = ArcId::new(config);
         let module_path = ModulePath::filesystem(script_path.clone());
+        let memory_path = ModulePath::memory(script_path);
+
+        let unchanged = overrides
+            .override_config(&memory_path, config.dupe())
+            .unwrap();
+        assert_eq!(query_count.load(Ordering::Relaxed), 0);
+        assert_eq!(unchanged, config);
 
         let overridden = overrides
             .override_config(&module_path, config.dupe())
@@ -600,6 +634,47 @@ import click
         );
         assert!(overridden.interpreters.skip_interpreter_query);
         assert_eq!(overridden, cached);
+    }
+
+    #[test]
+    fn test_pep723_override_caches_failures_and_replaces_changed_metadata() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let script_path = tempdir.path().join("script.py");
+        fs::write(
+            &script_path,
+            "# /// script\n# dependencies = [\"click\"]\n# ///\nimport click\n",
+        )
+        .unwrap();
+
+        let query_count = Arc::new(AtomicUsize::new(0));
+        let query_count_for_closure = Arc::clone(&query_count);
+        let overrides = Pep723ScriptOverrides::new(Arc::new(move |_| {
+            query_count_for_closure.fetch_add(1, Ordering::Relaxed);
+            Err(anyhow::anyhow!("uv failed"))
+        }));
+        let module_path = ModulePath::filesystem(script_path.clone());
+        let config = ArcId::new(ConfigFile::default());
+
+        assert!(
+            overrides
+                .override_config(&module_path, config.dupe())
+                .is_err()
+        );
+        assert!(
+            overrides
+                .override_config(&module_path, config.dupe())
+                .is_err()
+        );
+        assert_eq!(query_count.load(Ordering::Relaxed), 1);
+
+        fs::write(
+            &script_path,
+            "# /// script\n# dependencies = [\"rich\"]\n# ///\nimport rich\n",
+        )
+        .unwrap();
+        assert!(overrides.override_config(&module_path, config).is_err());
+        assert_eq!(query_count.load(Ordering::Relaxed), 2);
+        assert_eq!(overrides.cache.lock().len(), 1);
     }
 
     #[test]
