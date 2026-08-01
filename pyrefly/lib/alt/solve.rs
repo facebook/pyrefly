@@ -5477,6 +5477,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (Type, Type) {
         let base = self.expr_infer(&subscript.value, errors);
         let slice_ty = self.expr_infer(&subscript.slice, errors);
+        // A declared dict[str, Any] target gives a dict-literal RHS a soft value hint.
+        let dict_value_hint = match &base {
+            Type::ClassType(cls) if cls.has_qname("builtins", "dict") => {
+                match cls.targs().as_slice() {
+                    [key, value]
+                        if matches!(key, Type::ClassType(cls) if cls.has_qname("builtins", "str"))
+                            && value.is_any() =>
+                    {
+                        Some(value.clone())
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
         let assigned_ty = self.distribute_over_union(&base, |base| {
             self.distribute_over_union(&slice_ty, |key| {
                 match (base, key) {
@@ -5525,15 +5540,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         };
                         match value {
                             ExprOrBinding::Expr(e) => {
-                                call_setitem(CallArg::expr(e));
-                                // We already emit errors for `e` during `call_method_or_error`
-                                self.expr_infer(
-                                    e,
-                                    &ErrorCollector::new(
-                                        errors.module().clone(),
-                                        ErrorStyle::Never,
-                                    ),
-                                )
+                                if let Some(hint) = &dict_value_hint
+                                    && matches!(e, Expr::Dict(_))
+                                {
+                                    let value_ty = self.expr_infer_with_hint(
+                                        e,
+                                        Some(HintRef::soft(hint)),
+                                        errors,
+                                    );
+                                    call_setitem(CallArg::ty(&value_ty, e.range()));
+                                    value_ty
+                                } else {
+                                    call_setitem(CallArg::expr(e));
+                                    // We already emit errors for `e` during `call_method_or_error`
+                                    self.expr_infer(
+                                        e,
+                                        &ErrorCollector::new(
+                                            errors.module().clone(),
+                                            ErrorStyle::Never,
+                                        ),
+                                    )
+                                }
                             }
                             ExprOrBinding::Binding(b) => {
                                 let binding_ty = self

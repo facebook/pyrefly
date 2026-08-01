@@ -196,6 +196,23 @@ def f(_symbols=[]): # E: Cannot infer type of empty container
 );
 
 testcase!(
+    test_implicit_any_empty_container_in_typed_dict_subscript,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Any
+
+response: dict[str, Any] = {}
+response["meta"] = {"time_to_live": None}
+
+untyped = {}
+untyped["meta"] = {"time_to_live": None}  # E: Cannot infer type of empty container
+
+narrow: dict[str, int] = {}
+narrow["meta"] = {"time_to_live": None}  # E: Cannot set item in `dict[str, int]`  # E: Cannot infer type of empty container
+"#,
+);
+
+testcase!(
     test_implicit_any_default_disabled,
     r#"
 from typing import Iterable
