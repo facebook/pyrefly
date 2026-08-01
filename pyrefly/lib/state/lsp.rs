@@ -4206,6 +4206,9 @@ impl<'a> Transaction<'a> {
         name: &str,
     ) -> Vec<TextRange> {
         let source = module.contents();
+        if !source.contains(name) {
+            return Vec::new();
+        }
         let ranges = comment_and_string_content_ranges(source);
         find_word_occurrences_in_ranges(source, name, &ranges)
     }

@@ -88,9 +88,6 @@ use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
 use lsp_types::InlayHintLabelPart;
 use lsp_types::InlayHintParams;
-use lsp_types::LinkedEditingRangeParams;
-use lsp_types::LinkedEditingRangeServerCapabilities;
-use lsp_types::LinkedEditingRanges;
 use lsp_types::Location;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
@@ -194,7 +191,6 @@ use lsp_types::request::GotoTypeDefinitionResponse;
 use lsp_types::request::HoverRequest;
 use lsp_types::request::Initialize;
 use lsp_types::request::InlayHintRequest;
-use lsp_types::request::LinkedEditingRange;
 use lsp_types::request::PrepareRenameRequest;
 use lsp_types::request::References;
 use lsp_types::request::RegisterCapability;
@@ -1389,12 +1385,6 @@ pub fn capabilities(
                 }))
             }
         },
-        linked_editing_range_provider: match indexing_mode {
-            IndexingMode::None => None,
-            IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
-                Some(LinkedEditingRangeServerCapabilities::Simple(true))
-            }
-        },
         signature_help_provider: Some(SignatureHelpOptions {
             trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
             ..Default::default()
@@ -2278,17 +2268,6 @@ impl Server {
                             }
                         };
                         self.send_response(new_response(x.id, Ok(response)));
-                    }
-                } else if let Some(params) = as_request::<LinkedEditingRange>(&x) {
-                    if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<LinkedEditingRange>(
-                            params, &x.id,
-                        )
-                    {
-                        self.send_response(new_response(
-                            x.id,
-                            Ok(self.linked_editing_range(&transaction, params)),
-                        ));
                     }
                 } else if let Some(params) = as_request::<Rename>(&x) {
                     if let Some(params) =
@@ -5164,7 +5143,6 @@ impl Server {
             });
         let new_name = params.new_name.clone();
         let old_name_for_comments = old_name.clone();
-        let workspace_root_for_comments = workspace_root.clone();
         self.async_find_references_helper(
             transaction,
             FindReferencesRequest {
@@ -5184,7 +5162,6 @@ impl Server {
                 if rename_config.comments_and_strings {
                     append_comment_and_string_occurrences(
                         transaction,
-                        workspace_root_for_comments.as_deref(),
                         &old_name_for_comments,
                         references,
                     );
@@ -5243,42 +5220,6 @@ impl Server {
         Ok(transaction
             .prepare_rename(&handle, position)
             .map(|range| PrepareRenameResponse::Range(info.to_lsp_range(range))))
-    }
-
-    fn linked_editing_range(
-        &self,
-        transaction: &Transaction<'_>,
-        params: LinkedEditingRangeParams,
-    ) -> Option<LinkedEditingRanges> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self
-            .make_handle_if_enabled(uri, Some(Rename::METHOD))
-            .ok()?;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            return None;
-        }
-        let info = transaction.get_module_info(&handle)?;
-        let position =
-            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
-        transaction.prepare_rename(&handle, position)?;
-        let identifier = transaction.identifier_at(&handle, position)?;
-        let mut ranges = transaction.find_local_references(&handle, position, true);
-        let rename_config = self.workspaces.rename_config(handle.path().as_path());
-        if rename_config.comments_and_strings {
-            ranges.extend(transaction.text_occurrences_in_comments_and_strings(
-                &info,
-                identifier.identifier.id.as_str(),
-            ));
-        }
-        ranges.sort_by_key(|range| (range.start(), range.end()));
-        ranges.dedup();
-        Some(LinkedEditingRanges {
-            ranges: ranges
-                .into_iter()
-                .map(|range| info.to_lsp_range(range))
-                .collect(),
-            word_pattern: None,
-        })
     }
 
     fn signature_help(

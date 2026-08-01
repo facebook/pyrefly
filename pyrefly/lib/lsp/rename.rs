@@ -126,10 +126,12 @@ pub(crate) fn find_word_occurrences_in_ranges(
         if start >= end {
             continue;
         }
-        let slice = &source[start..end];
+        let Some(slice) = source.get(start..end) else {
+            continue;
+        };
         for (rel_idx, _) in slice.match_indices(word) {
             let absolute = start + rel_idx;
-            let before = source[..absolute].chars().last();
+            let before = source[..absolute].chars().next_back();
             let after = source[absolute + word_len..].chars().next();
             if before.is_some_and(is_identifier_char) || after.is_some_and(is_identifier_char) {
                 continue;
@@ -150,6 +152,9 @@ fn is_identifier_char(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+
     use super::comment_and_string_content_ranges;
     use super::find_word_occurrences_in_ranges;
 
@@ -193,5 +198,27 @@ mod tests {
         let start = range.start().to_usize();
         let end = range.end().to_usize();
         assert_eq!(&source[start..end], "foo");
+    }
+
+    #[test]
+    fn skips_ranges_that_are_not_char_boundaries() {
+        let source = "a𝐁";
+        let ranges = [TextRange::new(TextSize::new(0), TextSize::new(2))];
+
+        assert!(find_word_occurrences_in_ranges(source, "a", &ranges).is_empty());
+    }
+
+    #[test]
+    fn handles_invalid_implicit_string_concatenation() {
+        let source = "x = \"a\" b'𝐁";
+        let ranges = comment_and_string_content_ranges(source);
+        let hits = find_word_occurrences_in_ranges(source, "𝐁", &ranges);
+
+        for range in hits {
+            assert_eq!(
+                source.get(range.start().to_usize()..range.end().to_usize()),
+                Some("𝐁")
+            );
+        }
     }
 }
