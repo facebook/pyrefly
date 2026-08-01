@@ -54,8 +54,8 @@ class C:
     def foo(cls) -> int:
         return 42
 def f(c: C):
-    reveal_type(C.foo)  # E: revealed type: (cls: type[C]) -> int
-    reveal_type(c.foo)  # E: revealed type: (cls: type[C]) -> int
+    reveal_type(C.foo)  # E: revealed type: () -> int
+    reveal_type(c.foo)  # E: revealed type: () -> int
     "#,
 );
 
@@ -103,6 +103,23 @@ def f(c: C):
 );
 
 testcase!(
+    test_overloaded_property_class_access_preserves_narrow_self,
+    r#"
+from typing import LiteralString, overload, reveal_type
+class C(str):
+    @property
+    @overload
+    def foo(self: LiteralString) -> int: ...
+    @property
+    @overload
+    def foo(self: str) -> str: ...
+    @property
+    def foo(self: str) -> int | str: ...
+reveal_type(C.foo)  # E: revealed type: Overload[ (self: LiteralString) -> int (self: str) -> str ]
+    "#,
+);
+
+testcase!(
     test_abstract_property,
     r#"
 from typing import assert_type
@@ -130,7 +147,39 @@ class C:
 def f(c: C):
     assert_type(c.foo, int)
     c.foo = "42"
-    reveal_type(C.foo)  # E: revealed type: (self: C, value: str)
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: str) -> None
+    "#,
+);
+
+testcase!(
+    test_deprecated_overloaded_property_setter,
+    r#"
+from typing import overload
+from warnings import deprecated
+
+class C:
+    @property
+    def x(self) -> int:
+        ...
+
+    @x.setter
+    @overload
+    @deprecated("Setting x to None is deprecated")
+    def x(self, value: None) -> None:
+        ...
+
+    @x.setter
+    @overload
+    def x(self, value: int) -> None:
+        ...
+
+    @x.setter
+    def x(self, value: int | None) -> None:
+        ...
+
+c = C()
+c.x = None  # E: Call to deprecated overload `C.x`
+c.x = 1
     "#,
 );
 
@@ -155,7 +204,7 @@ class C:
 def f(c: C) -> None:
     assert_type(c.foo, int)
     c.foo = 1
-    reveal_type(C.foo)  # E: revealed type: (self: C, value: int)
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: int) -> None
     del c.foo
     "#,
 );
@@ -300,15 +349,24 @@ class MethodInitialized:
     def __init__(self) -> None:
         self.device = Device()
 
-def f(a: AnnotationOnly, m: MethodInitialized) -> None:
+class AnnotatedAndMethodInitialized:
+    device: Device
+    def __init__(self) -> None:
+        self.device = Device()
+
+def f(a: AnnotationOnly, m: MethodInitialized, am: AnnotatedAndMethodInitialized) -> None:
     # Annotation-only descriptor: writes are rejected (no `__set__`).
     a.device = Device()  # E: Attribute `device` of class `AnnotationOnly` is a read-only descriptor with no `__set__` and cannot be set
     # Method-initialized: plain instance attribute, write allowed.
     m.device = Device()
+    # An annotation does not install a descriptor on the class when the field is
+    # initialized on the instance.
+    am.device = Device()
     # Annotation-only descriptor: read invokes `__get__` and returns int.
     assert_type(a.device, int)
     # Method-initialized: read returns the attribute itself.
     assert_type(m.device, Device)
+    assert_type(am.device, Device)
     "#,
 );
 
@@ -641,6 +699,80 @@ DatasetMetadata()
     "#,
 );
 
+testcase!(
+    test_descriptor_field_specifier_in_dataclass_transform,
+    r#"
+from typing import Any, assert_type, dataclass_transform
+
+class Stored[T]:
+    def __get__(self, instance: object | None, owner: type | None) -> T: ...
+    def __set__(self, instance: object, value: T) -> None: ...
+
+def column[T](**options: Any) -> Stored[T]: ...
+
+@dataclass_transform(field_specifiers=(column,), kw_only_default=True)
+class Entity: ...
+
+class Product(Entity):
+    sku: Stored[str] = column(alias="code")
+    quantity: Stored[int] = column()
+    internal_id: Stored[int] = column(init=False)
+    rating: Stored[int] = column(default=0)
+    labels: Stored[list[str]] = column(default_factory=list)
+    price: Stored[float] = column(kw_only=False)
+
+product = Product(9.99, code="item", quantity=2)
+Product(9.99, code="item", quantity=2, rating=5, labels=["sale"])
+
+assert_type(product.sku, str)
+assert_type(product.quantity, int)
+assert_type(product.internal_id, int)
+assert_type(product.rating, int)
+assert_type(product.labels, list[str])
+assert_type(product.price, float)
+
+Product(code="item", quantity=2)  # E: Missing argument `price`
+Product(9.99, code="item")  # E: Missing argument `quantity`
+Product(9.99, code="item", quantity=2, internal_id=1)  # E: Unexpected keyword argument `internal_id`
+    "#,
+);
+
+testcase!(
+    test_descriptor_field_specifier_validation_flags,
+    r#"
+from typing import Any, assert_type, dataclass_transform
+
+class Data:
+    def __get__(self, obj: object | None, owner: type | None) -> str: ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class NonData:
+    def __get__(self, obj: object | None, owner: type | None) -> str: ...
+
+def data_field(**kwargs: Any) -> Data: ...
+def non_data_field(**kwargs: Any) -> NonData: ...
+
+@dataclass_transform(field_specifiers=(data_field, non_data_field))
+class Model: ...
+
+class Safe(Model):
+    required: Data = data_field()
+    defaulted: Data = data_field(default=0)
+    no_init: Data = data_field(init=False)
+    readonly: NonData = non_data_field(init=False)
+
+safe = Safe(required=1)
+Safe(required=1, defaulted=2)
+assert_type(safe.required, str)
+assert_type(safe.defaulted, str)
+assert_type(safe.no_init, str)
+assert_type(safe.readonly, str)
+
+class Unsafe(Model):
+    value: NonData = non_data_field()  # E: Cannot set field `value` to non-data descriptor `NonData`\n  Hint: add a `__set__` method to make `NonData` a data descriptor
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/1803
 testcase!(
     test_set_instance_attribute,
@@ -778,6 +910,33 @@ class B[T: A]:
 );
 
 testcase!(
+    test_overloaded_descriptor_get_preserves_specialized_owner,
+    r#"
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, assert_type, overload
+
+Storage: TypeAlias = Literal["python", "pyarrow"]
+StorageT = TypeVar("StorageT", bound=Storage)
+_StorageT = TypeVar("_StorageT", bound=Storage | None, default=None)
+
+class _CatStorageDescriptor:
+    @overload
+    def __get__(self, instance: Cat[None], owner: type[Cat[None]]) -> Storage: ...
+    @overload
+    def __get__(
+        self, instance: Cat[StorageT], owner: type[Cat[StorageT]]
+    ) -> StorageT: ...
+
+    def __get__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class Cat(Generic[_StorageT]):
+    storage = _CatStorageDescriptor()
+
+def main(cat: Cat[Literal["pyarrow"]]) -> None:
+    assert_type(cat.storage, Literal["pyarrow"])
+    "#,
+);
+
+testcase!(
     test_property_constructor_non_callable_arg,
     r#"
 from typing import Any, assert_type
@@ -831,7 +990,7 @@ def f(c: C):
     assert_type(c.foo, int)
     c.foo = "42"
     c.foo = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str`
-    reveal_type(C.foo)  # E: revealed type: (self: C, value: str)
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: str) -> None
     "#,
 );
 
@@ -910,5 +1069,119 @@ class C:
     x = property(_get_x)
 def f(c: C):
     assert_type(c.x, str | None)
+    "#,
+);
+
+// A `__get__` whose type is itself a descriptor must not recurse forever; the
+// read falls back to the descriptor's instance type, so the call below is reported
+// as not callable rather than overflowing the stack.
+testcase!(
+    test_self_referential_descriptor_get_no_crash,
+    r#"
+class C:
+    def d() -> C: ...
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __get__():
+        pass
+C.__get__()  # E: Expected a callable, got `C`
+    "#,
+);
+
+// A protocol used as a decorator return type that defines both `__call__` and
+// `__get__` is a descriptor: attribute access must go through `__get__`, not be
+// treated as a callback protocol. See GitHub issue #3345.
+testcase!(
+    test_callable_descriptor_protocol,
+    r#"
+from typing import Any, Callable, Concatenate, Protocol, Self, assert_type, overload
+
+
+class Method[**P, R](Protocol):
+    def __call__(self, __self__: Any, /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type[Any]) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Any, owner: type[Any] | None = None) -> Callable[P, R]: ...
+
+    def __get__(self, instance: Any | None, owner: type[Any] | None = None) -> Self | Callable[P, R]: ...
+
+
+def wrap[**P, R](method: Callable[Concatenate[Any, P], R]) -> Method[P, R]: ...
+
+
+class Foo:
+    @wrap
+    def bar(self) -> None: ...
+
+
+def f(foo: Foo) -> None:
+    assert_type(foo.bar, Callable[[], None])
+    foo.bar()
+    "#,
+);
+
+// Assignment resolves a descriptor through its getter too, so the same guard keeps
+// the write path from overflowing the stack.
+testcase!(
+    test_self_referential_descriptor_set_no_crash,
+    r#"
+class C:
+    def d() -> C: ...
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __get__():
+        pass
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __set__():
+        pass
+class Host:
+    x: C = C()
+def f(h: Host) -> None:
+    h.x = 5  # E: Expected a callable, got `C`
+    "#,
+);
+
+testcase!(
+    test_access_property_on_metaclass,
+    r#"
+class DTypeMeta(type):
+    @property
+    def time_unit(cls) -> str: ...
+
+class DType: ...
+
+class Datetime(DType, metaclass=DTypeMeta):
+    __slots__ = ("time_unit",)
+    def __init__(self, time_unit: str = "us") -> None:
+        self.time_unit: str = time_unit
+
+def get_unit(dtype: DType | type[DType]):
+    if (
+        isinstance(dtype, type)
+        and issubclass(dtype, Datetime)
+        or isinstance(dtype, Datetime)
+    ):
+        return dtype.time_unit
+    "#,
+);
+
+testcase!(
+    test_delete_only_data_descriptor_on_metaclass,
+    r#"
+from typing import assert_type
+
+class DeleteOnlyDescriptor:
+    def __delete__(self, instance: object) -> None: ...
+
+class Meta(type):
+    value = DeleteOnlyDescriptor()
+
+class C(metaclass=Meta):
+    __slots__ = ("value",)
+    def __init__(self) -> None:
+        self.value: int = 0
+
+assert_type(C.value, DeleteOnlyDescriptor)
     "#,
 );

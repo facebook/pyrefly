@@ -31,6 +31,141 @@ def anywhere():
     "#,
 );
 
+testcase!(
+    test_useless_overload_body,
+    r#"
+from typing import overload
+
+# should warn
+
+@overload
+def returns_expr(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    return x + 1
+
+@overload
+def returns_expr(x: str) -> str:
+    ...
+
+@overload
+def raises_other(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    raise ValueError("bad")
+
+@overload
+def raises_other(x: str) -> str:
+    ...
+
+@overload
+def has_assignment(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    x = 1
+    return x
+
+@overload
+def has_assignment(x: str) -> str:
+    ...
+
+@overload
+def has_multiple_stmts(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    print("side effect")
+    return x
+
+@overload
+def has_multiple_stmts(x: str) -> str:
+    ...
+
+def returns_expr(x: int | str) -> int | str:
+    return x
+
+def raises_other(x: int | str) -> int | str:
+    return x
+
+def has_assignment(x: int | str) -> int | str:
+    return x
+
+def has_multiple_stmts(x: int | str) -> int | str:
+    return x
+
+# should not warn 
+
+@overload
+def body_pass(x: int) -> int:
+    pass
+
+@overload
+def body_pass(x: str) -> str:
+    ...
+
+def body_pass(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_ellipsis(x: int) -> int:
+    ...
+
+@overload
+def body_ellipsis(x: str) -> str:
+    ...
+
+def body_ellipsis(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_docstring_only(x: int) -> int:
+    """This is fine."""
+
+@overload
+def body_docstring_only(x: str) -> str:
+    ...
+
+def body_docstring_only(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_raise_not_impl(x: int) -> int:
+    raise NotImplementedError
+
+@overload
+def body_raise_not_impl(x: str) -> str:
+    ...
+
+def body_raise_not_impl(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_raise_not_impl_msg(x: int) -> int:
+    raise NotImplementedError("not done")
+
+@overload
+def body_raise_not_impl_msg(x: str) -> str:
+    ...
+
+def body_raise_not_impl_msg(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_return_not_impl(x: int) -> int:
+    return NotImplemented
+
+@overload
+def body_return_not_impl(x: str) -> str:
+    ...
+
+def body_return_not_impl(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_docstring_then_pass(x: int) -> int:
+    """docstring stripped first, then pass is trivial."""
+    pass
+
+@overload
+def body_docstring_then_pass(x: str) -> str:
+    ...
+
+def body_docstring_then_pass(x: int | str) -> int | str:
+    return x
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2867
 testcase!(
     test_urlunparse_prefers_string_overload_for_parse_result,
@@ -425,6 +560,57 @@ f(b"")  # E: No matching overload found for function `f`
 );
 
 testcase!(
+    test_overload_assignable_to_overloaded_callback_protocol,
+    r#"
+from typing import Protocol, overload
+
+class Decorator(Protocol):
+    @overload
+    def __call__(self, fn: int) -> int: ...
+    @overload
+    def __call__(self, fn: str) -> str: ...
+
+def good() -> Decorator:
+    @overload
+    def decorator(fn: int) -> int: ...
+    @overload
+    def decorator(fn: str) -> str: ...
+    def decorator(fn: int | str) -> int | str:
+        return fn
+    return decorator
+
+def bad() -> Decorator:
+    @overload
+    def decorator(fn: int) -> int: ...
+    @overload
+    def decorator(fn: bytes) -> bytes: ...
+    def decorator(fn: int | bytes) -> int | bytes:
+        return fn
+    return decorator  # E: not assignable
+
+def takes(p: Decorator) -> None: ...
+
+def use_good() -> None:
+    @overload
+    def decorator(fn: int) -> int: ...
+    @overload
+    def decorator(fn: str) -> str: ...
+    def decorator(fn: int | str) -> int | str:
+        return fn
+    takes(decorator)
+
+def use_bad() -> None:
+    @overload
+    def decorator(fn: int) -> int: ...
+    @overload
+    def decorator(fn: bytes) -> bytes: ...
+    def decorator(fn: int | bytes) -> int | bytes:
+        return fn
+    takes(decorator)  # E: not assignable
+    "#,
+);
+
+testcase!(
     test_overload_assignable_to_callable_union,
     r#"
 from typing import Callable, overload
@@ -721,7 +907,7 @@ def f(x: int) -> int: ...
 def f(x: str) -> str: ...
 
 @overload
-def f(x: int | str) -> int | str: # E: @overload decorator should not be used on function implementation
+def f(x: int | str) -> int | str: # E: @overload decorator should not be used on function implementation  # E: `@overload` bodies should not contain executable logic
     return x
     "#,
 );
@@ -765,7 +951,7 @@ from typing import overload, Any
 @overload
 def foo(a: int) -> int: ...
 @overload
-def foo(a: str) -> str:
+def foo(a: str) -> str:  # E: `@overload` bodies should not contain executable logic
     """Docstring"""
     return 123             # E: Returned type `Literal[123]` is not assignable to declared return type `str`
 def foo(*args, **kwargs) -> Any:
@@ -961,10 +1147,10 @@ def catch(f: S | None = None, *, exception: T) -> S | T: ...
 testcase!(
     test_abstract,
     r#"
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import Literal, overload
 
-class Derp:
+class Derp(ABC):
     @overload
     @abstractmethod
     def f(self, m: Literal["x"] = "x") -> int: ...
@@ -1132,6 +1318,92 @@ def g(x: tuple[int, bool]):
 );
 
 testcase!(
+    test_expand_refines_generic_match_dropping_never,
+    TestEnv::new().enable_legacy_overload_expansion(),
+    r#"
+from typing import assert_type, overload, NoReturn, TypeVar
+T = TypeVar("T")
+
+@overload
+def not_none(x: None) -> NoReturn: ...
+@overload
+def not_none(x: T) -> T: ...
+def not_none(x: T | None) -> T:
+    raise NotImplementedError
+
+def g(x: int | None):
+    assert_type(not_none(x), int)
+    "#,
+);
+
+testcase!(
+    test_no_refine_matched_overload_by_default,
+    r#"
+from typing import assert_type, overload, NoReturn, TypeVar
+T = TypeVar("T")
+
+@overload
+def not_none(x: None) -> NoReturn: ...
+@overload
+def not_none(x: T) -> T: ...
+def not_none(x: T | None) -> T:
+    raise NotImplementedError
+
+def g(x: int | None):
+    assert_type(not_none(x), int | None)
+    "#,
+);
+
+testcase!(
+    test_expand_refines_when_unrelated_arg_expands_first,
+    TestEnv::new().enable_legacy_overload_expansion(),
+    r#"
+from typing import assert_type, Never, overload, TypeVar
+T = TypeVar("T")
+@overload
+def f(x: object, y: None) -> Never: ...
+@overload
+def f(x: object, y: T) -> T: ...
+def f(x: object, y: T | None) -> T:
+    if y is None:
+        raise AssertionError
+    return y
+def test(x: int | str, y: int | None) -> None:
+    # `x` expands first without dropping an arm; refinement must keep going to `y`.
+    assert_type(f(x, y), int)
+    "#,
+);
+
+testcase!(
+    test_expand_refine_only_does_not_broaden,
+    TestEnv::new().enable_legacy_overload_expansion(),
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(x: int) -> bytes: ...
+@overload
+def f(x: object) -> str: ...
+def f(x: object) -> bytes | str:
+    raise NotImplementedError
+
+def g(x: int | str):
+    assert_type(f(x), str)
+    "#,
+);
+
+testcase!(
+    test_expand_no_refine_without_uninhabited_arm,
+    TestEnv::new().enable_legacy_overload_expansion(),
+    r#"
+from typing import assert_type
+
+def f(a: list[int] | list[str], b: list[bytes]):
+    assert_type(zip(a, b), zip[tuple[int | str, bytes]])
+    "#,
+);
+
+testcase!(
     test_wrong_arity,
     r#"
 from typing import overload
@@ -1143,7 +1415,25 @@ def f(x: int, y: int) -> int: ...
 def f(x: int, y: int = 0) -> int:
     return x + y
 
-f(0, 1, 2)  # E: (x: int, y: int) -> int [closest match]
+f(0, 1, 2)  # E: (x: int, y: int) -> int [closest match]\n  Expected at most 2 arguments, got 3
+    "#,
+);
+
+testcase!(
+    test_wrong_method_arity,
+    r#"
+from typing import overload
+
+class A:
+    @overload
+    def f(self, x: int, y: str = ..., /, *, z: float = ...) -> int: ...
+    @overload
+    def f(self, x: str, y: int = ..., /, *, z: float = ...) -> str: ...
+    def f(self, x: int | str, y: int | str = "", /, *, z: float = 0.0) -> int | str: ...
+
+A().f()  # E: Expected at least 1 argument, got 0
+A().f(0, "1", 0.0)  # E: Expected at most 2 positional arguments, got 3
+A().f(0, y="1", z=0.0)  # E: Expected at most 1 keyword argument, got 2
     "#,
 );
 
@@ -1386,7 +1676,7 @@ class B(ABC):
     def f(self, x: int) -> int: ...
     @abstractmethod
     @overload
-    def f(Self, x: str) -> str: ...
+    def f(self, x: str) -> str: ...
     "#,
 );
 
@@ -1416,6 +1706,21 @@ def g(x, y): return x
 
 g(1, "hello")  # E: No matching overload found for function `g` called with arguments: (Literal[1], Literal['hello'])
 g(x=1, y="hello")  # E: No matching overload found for function `g` called with arguments: (x=Literal[1], y=Literal['hello'])
+    "#,
+);
+
+testcase!(
+    test_overload_error_shows_call_error,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: str) -> str: ...
+def f(x): return x
+
+f(3.14)  # E: `float` is not assignable to parameter `x` with type `int`
     "#,
 );
 
@@ -2061,5 +2366,156 @@ def func(
     include_c: bool | None = None,
 ) -> A | B | C | T:
     raise NotImplementedError
+    "#,
+);
+
+testcase!(
+    test_overload_error_shows_relevant_signature_part,
+    r#"
+from typing import overload
+
+@overload
+def f(*args: int, **kwargs: str) -> int: ...
+@overload
+def f(*args: str, **kwargs: int) -> str: ...
+def f(*args, **kwargs):
+    return args[0]
+
+f(4.2)  # E: (*args: int, ...) -> int [closest match]\n    (*args: str, ...) -> str
+f(x=4.2)  # E: (..., **kwargs: str) -> int [closest match]\n    (..., **kwargs: int) -> str
+
+# When any arguments are unpacked, we conservatively fall back to showing full signatures
+f(*[4.2])  # E: (*args: int, **kwargs: str) -> int [closest match]\n    (*args: str, **kwargs: int) -> str
+f(**{"x": 4.2})  # E: (*args: int, **kwargs: str) -> int [closest match]\n    (*args: str, **kwargs: int) -> str
+    "#,
+);
+
+testcase!(
+    test_overload_error_shows_unpacked_kwargs,
+    r#"
+from typing import overload, TypedDict, Unpack
+
+class TD(TypedDict):
+    y: int
+
+@overload
+def f(x: int = ..., **kwargs: Unpack[TD]) -> int: ...
+@overload
+def f(x: str = ..., **kwargs: Unpack[TD]) -> str: ...
+def f(x=0, **kwargs):
+    return x
+
+f(y=4.2)  # E: (..., **kwargs: Unpack[TD]) -> int [closest match]\n    (..., **kwargs: Unpack[TD]) -> str
+    "#,
+);
+
+testcase!(
+    test_overload_error_does_not_truncate_on_different_param_names,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int, /) -> int: ...
+@overload
+def f(y: str, /) -> str: ...
+def f(x, /): return x
+
+# Make sure we show 'y' in the second overload even though 'x' was matched in the first overload
+f(4.2)  # E: (x: int, /) -> int [closest match]\n    (y: str, /) -> str
+    "#,
+);
+
+testcase!(
+    test_overload_error_truncates_method_signatures,
+    r#"
+from typing import overload
+
+class A:
+    @overload
+    def f(self, x: str, y: int = ...) -> str: ...
+    @overload
+    def f(self, x: int, y: str = ...) -> int: ...
+    def f(self, x, y=0): return x
+
+A().f(4.2)  # E: (x: str, ...) -> str [closest match]\n    (x: int, ...) -> int
+    "#,
+);
+
+testcase!(
+    test_overload_error_shows_missing_parameter,
+    r#"
+from typing import Any, overload
+
+@overload
+def f(x: int, y: str = ..., z: float = ...) -> int: ...
+@overload
+def f(x: str, y: int = ..., z: float = ...) -> str: ...
+def f(x, y="", z=0.0): return x
+
+y: Any = ...
+f(y=y)  # E: (x: int, y: str = ..., ...) -> int [closest match]\n    (x: str, y: int = ..., ...) -> str
+    "#,
+);
+
+testcase!(
+    test_arg_error_isolation,
+    r#"
+from typing import Callable, Literal, assert_type, overload
+@overload
+def f(tag: Literal[1], xs: list[Callable[[int], str]]) -> int: ...
+@overload
+def f(tag: Literal[2], xs: list[Callable[[str], str]]) -> str: ...
+def f(tag: Literal[1, 2], xs: list[Callable[..., str]]) -> int | str:
+    return 0 if tag == 1 else ""
+assert_type(f(2, [lambda value: value + "x"]), str)
+    "#,
+);
+
+testcase!(
+    test_overload_constrained_typevar_arg,
+    r#"
+from typing import overload, assert_type
+class A: ...
+class B: ...
+@overload
+def g(x: A) -> A: ...
+@overload
+def g(x: B) -> B: ...
+def g(x: A | B) -> A | B: ...
+def f[T: (A, B)](x: T) -> None:
+    g(x)  # constrained typevar expands to its constraints; each matches an overload
+def h[T: (A, B)](x: T) -> A | B:
+    return g(x)
+assert_type(g(A()), A)
+assert_type(g(B()), B)
+"#,
+);
+
+testcase!(
+    test_overload_constrained_typevar_arg_no_match,
+    r#"
+from typing import overload
+class A: ...
+class B: ...
+class C: ...
+@overload
+def g(x: A) -> A: ...
+@overload
+def g(x: C) -> C: ...
+def g(x: A | C) -> A | C: ...
+def f[T: (A, B)](x: T) -> None:
+    g(x)  # E: No matching overload found for function `g`
+"#,
+);
+
+testcase!(
+    test_overloaded_function_does_not_need_impl_in_type_checking_block,
+    r#"
+from typing import TYPE_CHECKING, overload
+if TYPE_CHECKING:
+    @overload
+    def f(a: int): ...
+    @overload
+    def f(a: str): ...
     "#,
 );
