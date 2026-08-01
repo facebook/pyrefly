@@ -1118,6 +1118,26 @@ Completion Results:
 }
 
 #[test]
+fn kwargs_completion_unpack_typed_dict() {
+    let code = r#"
+from typing import TypedDict, Unpack
+
+class Movie(TypedDict):
+    name: str
+    year: int
+
+def foo(**kwargs: Unpack[Movie]) -> None: ...
+foo(
+#  ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Variable) name=: str"), "{report}");
+    assert!(report.contains("- (Variable) year=: int"), "{report}");
+}
+
+#[test]
 fn no_value_completions_after_keyword_argument() {
     // `foo(a=1, x|`: because a keyword argument precedes the cursor, the next
     // argument must be a keyword name (Python forbids a positional after a
