@@ -453,10 +453,7 @@ def f(x):
 print(f(1))
 #      ^
 "#;
-    let report = get_batched_lsp_operations_report(
-        &[("main", code)],
-        test_report_factory(code),
-    );
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
     assert_eq!(
         r#"
 # main.py

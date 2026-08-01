@@ -66,7 +66,9 @@ pub struct PluginRegistry {
 impl PluginRegistry {
     /// Empty registry. Tests and minimal builds use this.
     pub fn empty() -> Self {
-        Self { plugins: Vec::new() }
+        Self {
+            plugins: Vec::new(),
+        }
     }
 
     /// Build the default registry: every built-in plugin compiled into this
@@ -106,9 +108,7 @@ impl PluginRegistry {
     /// Whether any registered plugin claims ownership of `module`.
     pub fn owns_module(&self, module: &ModuleName) -> bool {
         let s = module.as_str();
-        self.plugins
-            .iter()
-            .any(|p| p.owned_modules().contains(&s))
+        self.plugins.iter().any(|p| p.owned_modules().contains(&s))
     }
 }
 
@@ -143,10 +143,7 @@ struct StaticOverride {
 }
 
 impl pyrefly_types::class::ClassKindOverride for StaticOverride {
-    fn class_kind_for_qname(
-        &self,
-        qname: &QName,
-    ) -> Option<pyrefly_types::class::ClassKind> {
+    fn class_kind_for_qname(&self, qname: &QName) -> Option<pyrefly_types::class::ClassKind> {
         self.registry.class_kind_for_qname(qname)
     }
 }

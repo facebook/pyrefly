@@ -44,10 +44,9 @@ impl Plugin for SqlAlchemyPlugin {
     }
 
     fn class_kind_for_qname(&self, qname: &QName) -> Option<ClassKind> {
-        // `sqlalchemy.orm.Mapped` and `sqlalchemy.orm.relationship` mark
-        // declarative field specifiers, not plain classes. We classify them
-        // as dataclass-field-shaped so the synthesis pass treats their
-        // annotations as model fields.
+        // `sqlalchemy.orm.Mapped` and `sqlalchemy.orm.relationship` are
+        // declarative field specifiers; classify as dataclass-field-shaped
+        // so the synthesis pass treats their annotations as model fields.
         match (qname.module_name().as_str(), qname.id().as_str()) {
             ("sqlalchemy.orm", "Mapped") | ("sqlalchemy.orm", "MappedAsDataclass") => {
                 Some(ClassKind::DataclassField)
@@ -101,14 +100,20 @@ mod tests {
     #[test]
     fn owns_module_checks_all_plugins() {
         let reg = PluginRegistry::builtins();
-        assert!(reg.owns_module(&pyrefly_python::module_name::ModuleName::from_str(
-            "sqlalchemy"
-        )));
-        assert!(reg.owns_module(&pyrefly_python::module_name::ModuleName::from_str(
-            "celery.app.task"
-        )));
-        assert!(!reg.owns_module(
-            &pyrefly_python::module_name::ModuleName::from_str("unrelated_pkg")
-        ));
+        assert!(
+            reg.owns_module(&pyrefly_python::module_name::ModuleName::from_str(
+                "sqlalchemy"
+            ))
+        );
+        assert!(
+            reg.owns_module(&pyrefly_python::module_name::ModuleName::from_str(
+                "celery.app.task"
+            ))
+        );
+        assert!(
+            !reg.owns_module(&pyrefly_python::module_name::ModuleName::from_str(
+                "unrelated_pkg"
+            ))
+        );
     }
 }

@@ -19,7 +19,7 @@ use crate::error_kind::Severity;
 ///
 /// * `ini` - The INI configuration to iterate over
 /// * `section_filter` - A function that determines which sections to process
-/// * `section_processor` - A function that processes each section that passes the filter
+	/// * `section_processor` - Processes each section that passes the filter
 ///
 /// # Example
 ///
@@ -144,18 +144,18 @@ pub fn make_error_config(
     for error_code in enables {
         errors.insert(error_code, Severity::Error);
     }
-        if let Some(MypyErrorConfigFlags {
-            warn_return_any,
-            warn_redundant_casts,
-            warn_unused_ignores,
-            disallow_untyped_defs,
-            disallow_incomplete_defs,
-            disallow_any_generics,
-            disallow_any_explicit,
-            strict,
-            report_deprecated_as_note,
-            allow_redefinitions,
-        }) = mypy_error_config_flags
+    if let Some(MypyErrorConfigFlags {
+        warn_return_any,
+        warn_redundant_casts,
+        warn_unused_ignores,
+        disallow_untyped_defs,
+        disallow_incomplete_defs,
+        disallow_any_generics,
+        disallow_any_explicit,
+        strict,
+        report_deprecated_as_note,
+        allow_redefinitions,
+    }) = mypy_error_config_flags
     {
         // These severities take precedence over enable/disable
         if warn_return_any || strict {
@@ -167,12 +167,14 @@ pub fn make_error_config(
                 Severity::Warn,
             );
         }
-        // mypy `warn_unused_ignores` (part of `--strict`) surfaces
-        // redundant `# type: ignore` comments. pyrefly's `UnusedIgnore`
-        // defaults to Ignore; under strict it must be an Error so the
-        // migration matches mypy's strict-expansion behavior.
+        // mypy `warn_unused_ignores` (part of `--strict`) surfaces redundant
+        // `# type: ignore` comments; pyrefly's `UnusedIgnore` defaults to
+        // Ignore but strict requires Error to match mypy semantics.
         if warn_unused_ignores || strict {
-            errors.insert(ErrorKind::UnusedIgnore.to_name().to_owned(), Severity::Error);
+            errors.insert(
+                ErrorKind::UnusedIgnore.to_name().to_owned(),
+                Severity::Error,
+            );
         }
         if disallow_untyped_defs || disallow_incomplete_defs || strict {
             errors.insert(
