@@ -423,7 +423,16 @@ impl<'a> Transaction<'a> {
                         callee_type.and_then(normalize_singleton_function_type_into_params)
                     {
                         for (arg_idx, arg) in call.arguments.args.iter().enumerate() {
-                            // Skip keyword arguments - they already show their parameter name
+                            // Account for keyword arguments omitted from `args`, including
+                            // malformed calls while an inlay edit is being applied.
+                            let positional_arg_idx = arg_idx
+                                + call
+                                    .arguments
+                                    .keywords
+                                    .iter()
+                                    .filter(|kw| kw.range().start() < arg.range().start())
+                                    .count();
+                            // Skip keyword arguments - they already show their parameter name.
                             let is_keyword_arg = call
                                 .arguments
                                 .keywords
@@ -431,8 +440,10 @@ impl<'a> Transaction<'a> {
                                 .any(|kw| kw.value.range() == arg.range());
 
                             if !is_keyword_arg
-                                && let Some(param_match) =
-                                    Self::param_name_for_positional_argument(&params, arg_idx)
+                                && let Some(param_match) = Self::param_name_for_positional_argument(
+                                    &params,
+                                    positional_arg_idx,
+                                )
                                 && !param_match.is_vararg_repeat
                                 && param_match.name.as_str() != "self"
                                 && param_match.name.as_str() != "cls"
