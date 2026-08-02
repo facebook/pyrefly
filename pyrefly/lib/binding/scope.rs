@@ -24,11 +24,13 @@ use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprUnaryOp;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtReturn;
+use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -1871,10 +1873,17 @@ impl Scopes {
         if let Some(value) = sys_info.evaluate_bool(x) {
             return Some(value);
         }
-        if let Expr::Name(name) = x {
-            return self.lookup_final_bool_value(&name.id);
+        match x {
+            Expr::Name(name) => self.lookup_final_bool_value(&name.id),
+            // `SysInfo::evaluate_bool` only negates tests it can evaluate itself,
+            // so `not FLAG` must be negated here to stay in step with `FLAG`.
+            Expr::UnaryOp(ExprUnaryOp {
+                op: UnaryOp::Not,
+                operand,
+                ..
+            }) => Some(!self.evaluate_bool_for_control_flow(sys_info, operand)?),
+            _ => None,
         }
-        None
     }
 
     pub fn push(&mut self, scope: Scope) {

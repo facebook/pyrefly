@@ -321,6 +321,7 @@ impl<'a> BindingsBuilder<'a> {
         Option<SelfAssignments>,
         Vec<UnusedParameter>,
         Vec<UnusedVariable>,
+        Idx<Key>,
     ) {
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
@@ -345,6 +346,7 @@ impl<'a> BindingsBuilder<'a> {
             );
             self.bind_name(&dunder_class_identifier.id, idx, FlowStyle::Other);
         }
+        let implicit_return = self.implicit_return(&body, func_name);
         self.stmts(
             body,
             &NestingContext::function(ShortIdentifier::new(func_name), parent.dupe()),
@@ -356,6 +358,7 @@ impl<'a> BindingsBuilder<'a> {
             self_assignments,
             unused_parameters,
             unused_variables,
+            implicit_return,
         )
     }
 
@@ -398,7 +401,8 @@ impl<'a> BindingsBuilder<'a> {
     ///
     /// This function must not be called unless the function body statements will be bound;
     /// it relies on that binding to ensure we don't have a dangling `Idx<Key>` (which could lead
-    /// to a panic).
+    /// to a panic). For the same reason it must be called from inside the function's own scope,
+    /// after `init_static_scope`, so that it prunes on the same `Final` bool values as `stmts`.
     fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> Idx<Key> {
         let last_exprs = function_last_expressions(body, self.sys_info, &self.scopes).map(|x| {
             x.into_map(|(last, x)| {
@@ -709,18 +713,19 @@ impl<'a> BindingsBuilder<'a> {
             );
             (false, self_assignments)
         } else if is_unannotated {
-            let implicit_return = Some(self.implicit_return(&body, func_name));
-            let (yields_and_returns, self_assignments, _, _) = self.function_body_scope(
-                parameters,
-                body,
-                range,
-                func_name,
-                parent,
-                undecorated_idx,
-                class_key,
-                is_async,
-                method_self_kind,
-            );
+            let (yields_and_returns, self_assignments, _, _, implicit_return) = self
+                .function_body_scope(
+                    parameters,
+                    body,
+                    range,
+                    func_name,
+                    parent,
+                    undecorated_idx,
+                    class_key,
+                    is_async,
+                    method_self_kind,
+                );
+            let implicit_return = Some(implicit_return);
             self.analyze_return_type(
                 func_name,
                 class_key,
@@ -733,21 +738,26 @@ impl<'a> BindingsBuilder<'a> {
             );
             (false, self_assignments)
         } else {
-            // Compute implicit_return: in this branch the body is always fully analyzed,
-            // so we can always determine whether there's an implicit return.
-            let implicit_return = Some(self.implicit_return(&body, func_name));
-            let (yields_and_returns, self_assignments, unused_parameters, unused_variables) = self
-                .function_body_scope(
-                    parameters,
-                    body,
-                    range,
-                    func_name,
-                    parent,
-                    undecorated_idx,
-                    class_key,
-                    is_async,
-                    method_self_kind,
-                );
+            // In this branch the body is always fully analyzed, so we can always
+            // determine whether there's an implicit return.
+            let (
+                yields_and_returns,
+                self_assignments,
+                unused_parameters,
+                unused_variables,
+                implicit_return,
+            ) = self.function_body_scope(
+                parameters,
+                body,
+                range,
+                func_name,
+                parent,
+                undecorated_idx,
+                class_key,
+                is_async,
+                method_self_kind,
+            );
+            let implicit_return = Some(implicit_return);
             if should_report_unused_parameters {
                 self.record_unused_parameters(unused_parameters);
                 self.record_unused_variables(unused_variables);

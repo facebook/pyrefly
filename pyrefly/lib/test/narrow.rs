@@ -160,6 +160,63 @@ def prune_if_no_else() -> None:
 "#,
 );
 
+// Same regression, but for `Final` bools declared inside the function. These are
+// only visible once `init_static_scope` has populated the function scope, so the
+// implicit-return scan has to run inside that scope to prune what the traversal
+// prunes.
+testcase!(
+    test_final_bool_function_scoped_implicit_return_no_panic,
+    r#"
+from typing import Final, Literal, reveal_type
+def prune_if_no_else_local() -> None:
+    FLAG_FALSE: Final = False
+    if FLAG_FALSE:
+        print("pruned and last")
+def prune_else_local() -> None:
+    FLAG_FALSE: Final = False
+    if FLAG_FALSE:
+        print("pruned")
+    else:
+        print("kept")
+def prune_if_local() -> None:
+    FLAG_TRUE: Final = True
+    if FLAG_TRUE:
+        foo = 1
+    else:
+        foo = 2
+    reveal_type(foo)  # E: revealed type: Literal[1]
+"#,
+);
+
+testcase!(
+    test_final_bool_not_operator,
+    r#"
+from typing import Final, Literal, reveal_type
+FLAG: Final = False
+if not FLAG:
+    foo = 1
+else:
+    foo = 2
+reveal_type(foo)  # E: revealed type: Literal[1]
+"#,
+);
+
+// A binding closer than the `Final` must win, so neither branch may be pruned
+// even though the outer name is statically known.
+testcase!(
+    test_final_bool_shadowed_by_closer_binding,
+    r#"
+from typing import Final, Literal, reveal_type
+flag: Final = True
+def foo(flag: bool):
+    if flag:
+        bar = 1
+    else:
+        bar = 2
+    reveal_type(bar)  # E: revealed type: Literal[1, 2]
+"#,
+);
+
 testcase!(
     test_is_subtype,
     r#"
