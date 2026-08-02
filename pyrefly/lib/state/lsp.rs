@@ -34,6 +34,7 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
@@ -2305,13 +2306,13 @@ impl<'a> Transaction<'a> {
         Ok(Some(defs))
     }
 
-    /// Resolve a string subscript on a TypedDict to the field declaration.
-    fn find_definition_for_typed_dict_key(
+    /// Return the declared TypedDict and key when the cursor is on a string subscript.
+    fn typed_dict_key_at(
         &self,
         handle: &Handle,
         position: TextSize,
         covering_nodes: &[AnyNodeRef],
-    ) -> Option<FindDefinitionItemWithDocstring> {
+    ) -> Option<(TypedDictInner, Name)> {
         let subscript = covering_nodes.iter().find_map(|node| match node {
             AnyNodeRef::ExprSubscript(subscript) => Some(subscript),
             _ => None,
@@ -2330,35 +2331,44 @@ impl<'a> Transaction<'a> {
             | Type::PartialTypedDict(TypedDict::TypedDict(typed_dict)) => typed_dict,
             _ => return None,
         };
-        let display_name = name.to_string();
-        let (module, definition_range, docstring_range) = self
-            .ad_hoc_solve(handle, "typed_dict_key_definition", |solver| {
-                let class = typed_dict.class_object();
-                let mro = solver.get_mro_for_class(class);
-                iter::once(class)
-                    .chain(
-                        mro.ancestors_no_object()
-                            .iter()
-                            .map(|ancestor| ancestor.class_object()),
-                    )
-                    .find_map(|class| {
-                        let fields = solver.get_class_fields(class)?;
-                        Some((
-                            class.module().dupe(),
-                            fields.field_decl_range(&name)?,
-                            fields.field_docstring_range(&name),
-                        ))
-                    })
-            })
-            .flatten()?;
+        Some((typed_dict, name))
+    }
 
-        Some(FindDefinitionItemWithDocstring {
-            metadata: DefinitionMetadata::Attribute,
-            definition_range,
-            module,
-            docstring_range,
-            display_name: Some(display_name),
+    /// Resolve a TypedDict key to its field declaration.
+    fn find_definition_for_typed_dict_key(
+        &self,
+        handle: &Handle,
+        typed_dict: &TypedDictInner,
+        name: &Name,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        self.ad_hoc_solve(handle, "typed_dict_key_definition", |solver| {
+            let class = typed_dict.class_object();
+            let mro = solver.get_mro_for_class(class);
+            iter::once(class)
+                .chain(
+                    mro.ancestors_no_object()
+                        .iter()
+                        .map(|ancestor| ancestor.class_object()),
+                )
+                .find_map(|class| {
+                    let fields = solver.get_class_fields(class)?;
+                    Some((
+                        class.module().dupe(),
+                        fields.field_decl_range(name)?,
+                        fields.field_docstring_range(name),
+                    ))
+                })
         })
+        .flatten()
+        .map(
+            |(module, definition_range, docstring_range)| FindDefinitionItemWithDocstring {
+                metadata: DefinitionMetadata::Attribute,
+                definition_range,
+                module,
+                docstring_range,
+                display_name: Some(name.to_string()),
+            },
+        )
     }
 
     pub fn find_definition_for_attribute(
@@ -2899,10 +2909,17 @@ impl<'a> Transaction<'a> {
                         }),
                     };
                 }
-                if let Some(definition) =
-                    self.find_definition_for_typed_dict_key(handle, position, &covering_nodes)
+                if let Some((typed_dict, name)) =
+                    self.typed_dict_key_at(handle, position, &covering_nodes)
                 {
-                    return Ok(vec1![definition]);
+                    return match self.find_definition_for_typed_dict_key(handle, &typed_dict, &name)
+                    {
+                        Some(definition) => Ok(vec1![definition]),
+                        None => Err(EmptyResponseReason::DefinitionNotFound {
+                            name: name.to_string(),
+                            context: DefinitionContext::Attribute,
+                        }),
+                    };
                 }
                 // Fall back to operator handling
                 if let Some(defs) =

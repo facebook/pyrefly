@@ -214,6 +214,41 @@ Definition Result:
 }
 
 #[test]
+fn typed_dict_missing_key_test() {
+    let code = r#"
+from typing import TypedDict
+
+class Person(TypedDict):
+    name: str
+
+Functional = TypedDict("Functional", {"title": str})
+
+person: Person = {"name": ""}
+functional: Functional = {"title": ""}
+
+person["missing"]
+#       ^
+functional["missing"]
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+12 | person["missing"]
+             ^
+Definition Result: None
+
+14 | functional["missing"]
+                 ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn pytest_fixture_parameter_goes_to_fixture_definition() {
     let code = r#"
 import pytest  # type: ignore
