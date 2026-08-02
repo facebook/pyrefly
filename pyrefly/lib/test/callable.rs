@@ -1668,6 +1668,176 @@ f: Callable[[int], None] = lambda x, y: None  # E: Type of lambda parameter `y` 
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4301
+testcase!(
+    test_implicit_any_empty_container_absorbed_by_any,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Any
+
+# An `Any` annotation absorbs the placeholder, so there is nothing to warn about.
+a: Any = {"t": None}
+b: dict[str, Any] = {"t": None}
+
+def takes_any(v: Any) -> None: ...
+takes_any({"t": None})
+
+def subscript(response: dict[str, Any]) -> None:
+    response["meta"] = {"t": None}
+
+# The container's own value type is still unsolved here, so the placeholder does
+# leak into what `x` is inferred as, and the diagnostic is warranted.
+x = {}
+x["y"] = {"t": None}  # E: Cannot infer type of empty container
+"#,
+);
+
+// Absorbing is a property of the expectation, not of the syntax that carries it, so
+// every position that checks a display against a declared `Any` absorbs alike.
+testcase!(
+    test_implicit_any_empty_container_absorbed_in_every_position,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Any, TypedDict
+
+class C:
+    attr: Any
+
+def attribute(c: C) -> None:
+    c.attr = {"t": None}
+
+def returns_any() -> Any:
+    return {"t": None}
+
+def default_arg(x: Any = {"t": None}) -> None: ...
+
+class TD(TypedDict):
+    k: Any
+
+def typed_dict(t: TD) -> None:
+    t["k"] = {"t": None}
+
+G: Any = {}
+
+def global_assign() -> None:
+    global G
+    G = {"t": None}
+"#,
+);
+
+// Unpacking is the one position left out, and deliberately so: `bind_unpacking`
+// records that "we never contextually type unpacks, we do the unpacking at type
+// level for simplicity (for now)". The target's `Any` never reaches the value, so
+// the placeholder is minted with no expectation to absorb it. Closing this belongs
+// to contextually typing unpacks, not here.
+testcase!(
+    bug = "unpacked subscript targets do not absorb the placeholder",
+    test_implicit_any_empty_container_unpacked_target,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Any
+
+def unpacked(d: dict[str, Any]) -> None:
+    d["a"], d["b"] = {"t": None}, {"u": None}  # E: Cannot infer type of empty container  # E: Cannot infer type of empty container
+"#,
+);
+
+// A name keeps its own diagnostic wherever it appears on the right-hand side: its
+// placeholder outlives the assignment, so an absorbing target must not silence the
+// warning that the name itself has no inferrable type. Only the placeholders the
+// display minted for itself are absorbed.
+testcase!(
+    test_implicit_any_empty_container_name_rhs_still_reported,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Any
+
+def name_rhs(d: dict[str, Any]) -> None:
+    y = []  # E: Cannot infer type of empty container
+    d["k"] = y
+
+def name_nested_in_display(d: dict[str, Any]) -> None:
+    y = []  # E: Cannot infer type of empty container
+    d["k"] = {"a": y}
+
+def name_nested_deeply(d: dict[str, Any]) -> None:
+    y = []  # E: Cannot infer type of empty container
+    d["k"] = {"a": [y]}
+
+def display_rhs(d: dict[str, Any]) -> None:
+    d["k"] = {"a": []}
+"#,
+);
+
+// A target only absorbs if its own type is known. One pinned from `{}` holds an
+// `Any` pyrefly inferred rather than one the user declared, so it propagates the
+// same uncertainty and its contents stay reportable. The union case is why this is
+// decided for the whole target rather than per arm: pinning is global, so a solved
+// arm must not silence what an unsolved arm leaks.
+testcase!(
+    test_implicit_any_empty_container_unknown_target_still_reported,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Any
+
+def inferred_target() -> None:
+    x = {}  # E: Cannot infer type of empty container
+    y = x
+    y["k"] = {"t": None}  # E: Cannot infer type of empty container
+
+def chained() -> None:
+    x = {}
+    x["a"] = {}  # E: Cannot infer type of empty container
+    x["a"]["b"] = {"t": None}  # E: Cannot infer type of empty container
+
+def union_with_unsolved_arm(flag: bool, declared: dict[str, Any]) -> None:
+    x = {}  # E: Cannot infer type of empty container
+    target = declared if flag else x
+    target["k"] = {"t": None}  # E: Cannot infer type of empty container
+"#,
+);
+
+// A fully-known target that cannot hold the value at all: `__setitem__` already
+// rejects it, and nothing can observe the placeholder inside a value being
+// rejected, so the second diagnostic is dropped as redundant.
+testcase!(
+    test_implicit_any_empty_container_narrow_target_reports_once,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+def narrow(d: dict[str, int]) -> None:
+    d["k"] = {"t": None}  # E: Cannot set item in `dict[str, int]`
+"#,
+);
+
+// Whether the placeholder can escape depends on the target, not on which container
+// the target happens to be, so every fully-solved target absorbs it alike.
+testcase!(
+    test_implicit_any_empty_container_absorbed_by_any_containers,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from collections import defaultdict
+from typing import Any, MutableMapping
+
+def sequence(xs: list[Any]) -> None:
+    xs[0] = {"t": None}
+
+def non_str_key(d: dict[int, Any]) -> None:
+    d[0] = {"t": None}
+
+def protocol(d: MutableMapping[str, Any]) -> None:
+    d["k"] = {"t": None}
+
+def subclass(d: defaultdict[str, Any]) -> None:
+    d["k"] = {"t": None}
+
+class Custom:
+    def __setitem__(self, key: str, value: Any) -> None: ...
+
+def custom(c: Custom) -> None:
+    c["k"] = {"t": None}
+"#,
+);
+
 testcase!(
     test_implicit_any_lambda_explicit_any_context,
     TestEnv::new().enable_implicit_any_lambda_error(),

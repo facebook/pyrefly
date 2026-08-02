@@ -1275,6 +1275,36 @@ impl Solver {
         self.sanitize_vars(ty.collect_all_vars(), pin_partial_types)
     }
 
+    /// Pin empty-container placeholders that were created *inside* `range`, silently.
+    ///
+    /// A `PartialContained` var records the literal that created it, so containment
+    /// distinguishes a placeholder the expression at `range` minted itself from one it
+    /// merely mentions by name. Only the former can be pinned without consequence: a
+    /// name's placeholder outlives the expression and keeps its own diagnostic.
+    pub fn pin_contained_placeholders_within(&self, ty: &Type, range: TextRange) {
+        let mut pending = ty.collect_all_vars();
+        let mut seen = SmallSet::new();
+        while let Some(var) = pending.pop() {
+            if !seen.insert(var) {
+                continue;
+            }
+            let variables = self.variables.lock();
+            let mut variable = variables.get_mut(var);
+            match &mut *variable {
+                Variable::PartialContained(literal) if range.contains_range(*literal) => {
+                    *variable = Variable::Answer(self.heap.mk_any_implicit());
+                }
+                // Traverse only through variables that already have an answer. `force_var`
+                // would pin an unanswered one as a side effect, which is precisely what this
+                // must not do - it would silence the placeholders the containment test is
+                // here to protect. Missing a var this way only costs a diagnostic we would
+                // have suppressed, never one we should have kept.
+                Variable::Answer(answer) => pending.extend(answer.collect_all_vars()),
+                _ => {}
+            }
+        }
+    }
+
     pub fn sanitize_vars(&self, mut pending: Vec<Var>, pin_partial_types: bool) -> Vec<PinError> {
         let mut seen = SmallSet::new();
         let mut errors = Vec::new();
