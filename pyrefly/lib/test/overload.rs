@@ -2538,6 +2538,24 @@ def call(x: bool) -> None:
 "#,
 );
 
+// Six `bool` arguments are 2^6 = 64 combinations, which fits in the budget; only the seventh
+// argument above pushes it over. https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_argument_expansion_limit_counts_combinations,
+    r#"
+from typing import overload
+
+@overload
+def f(a: str, b: str, c: str, d: str, e: str, g: str, /) -> int: ...
+@overload
+def f(a: bytes, b: bytes, c: bytes, d: bytes, e: bytes, g: bytes, /) -> str: ...
+def f(*args: str | bytes) -> int | str: ...
+
+def call(x: bool) -> None:
+    f(x, x, x, x, x, x)  # E: No matching overload found
+"#,
+);
+
 // A concrete tuple applies the same limit while expanding its element combinations, so seven
 // `bool` elements (2^7 combinations) must report that truncation too.
 // https://github.com/facebook/pyrefly/issues/4213
@@ -2682,5 +2700,69 @@ def f(t: object, flag: bool) -> int | str: ...
 
 def call(x: bool, flag: bool) -> None:
     assert_type(f((x, x, x, x, x, x, x), flag), int | str)
+"#,
+);
+
+// A generic overload set (each candidate returns via its own `T`) whose blow-up comes from seven
+// type-variable-free shared `bool` args; only `key` discriminates. The old blanket generic
+// exclusion disabled *all* pruning whenever any candidate was generic, so this hit the limit.
+// Per-argument pruning of the shared, type-variable-free args now lets it resolve. Mirrors the
+// strawberry `field` / Tanjun `add_argument` / scipy `minimize` primer sites.
+// https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_expansion_prunes_tvfree_args_with_generic_overloads,
+    r#"
+from typing import Literal, assert_type, overload
+
+@overload
+def f[T](val: T, a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, key: Literal["x"], /) -> T: ...
+@overload
+def f[T](val: T, a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, key: Literal["y"], /) -> list[T]: ...
+def f[T](val: T, a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, key: Literal["x", "y"], /) -> T | list[T]: ...
+
+def call(flag: bool, x: int, k: Literal["x", "y"]) -> None:
+    assert_type(f(x, flag, flag, flag, flag, flag, flag, flag, k), int | list[int])
+"#,
+);
+
+// Regression guard for the jax/ibis class the generic exclusion originally protected: expansion of
+// the union argument is what *solves* the type variable `T`, so the type-variable-bearing arg must
+// stay expandable. `list[T]` vs `set[T]` matches neither overload as a union; splitting `v` gives
+// `T = int` from `list[int]` and `T = str` from `set[str]`. Result must be unchanged by the fix.
+// https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_expansion_keeps_tv_bearing_discriminator,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f[T](x: list[T]) -> T: ...
+@overload
+def f[T](x: set[T]) -> list[T]: ...
+def f[T](x: list[T] | set[T]) -> T | list[T]: ...
+
+def call(v: list[int] | set[str]) -> None:
+    assert_type(f(v), int | list[str])
+"#,
+);
+
+// Pruning and type-variable-driven expansion must coexist: the seven shared `bool`s are pruned so
+// the call stays under the limit, while the type-variable-bearing arg `x` keeps expanding so `T`
+// still solves to `int` (from `list[int]`) and `str` (from `set[str]`). On HEAD the generic
+// exclusion disabled pruning, so the bools exhausted the limit before `x` was reached.
+// https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_expansion_prunes_shared_args_and_still_solves_type_var,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f[T](a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, x: list[T]) -> T: ...
+@overload
+def f[T](a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, x: set[T]) -> list[T]: ...
+def f[T](a: bool, b: bool, c: bool, d: bool, e: bool, g: bool, h: bool, x: list[T] | set[T]) -> T | list[T]: ...
+
+def call(flag: bool, v: list[int] | set[str]) -> None:
+    assert_type(f(flag, flag, flag, flag, flag, flag, flag, v), int | list[str])
 "#,
 );

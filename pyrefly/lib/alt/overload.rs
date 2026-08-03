@@ -21,7 +21,6 @@ use pyrefly_types::type_output::TypeOutput;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::display::count;
-use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -138,9 +137,7 @@ pub struct ArgsExpander<'a, Ans: LookupAnswer> {
     idx: Either<usize, usize>,
     /// Current argument lists.
     arg_lists: Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>,
-    /// Hard-coded limit to how many times we'll expand.
-    gas: Gas,
-    /// Set once `gas` is exhausted, so the caller can report the truncated expansion.
+    /// Set once the expansion budget is exceeded, so the caller can report the truncated expansion.
     limit_hit: bool,
     /// Which positional / keyword arguments are worth expanding. Both default to all-`true`
     /// (expand everything); `call_overloads` narrows them once the candidate overloads are known.
@@ -150,6 +147,7 @@ pub struct ArgsExpander<'a, Ans: LookupAnswer> {
 }
 
 impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
+    /// The most argument-type combinations we are willing to check for a single call.
     const GAS: usize = 100;
 
     pub fn new(
@@ -166,7 +164,6 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                 Either::Left(0)
             },
             arg_lists: vec![(posargs, keywords)],
-            gas: Gas::new(Self::GAS as isize),
             limit_hit: false,
             expandable_pos,
             expandable_kw,
@@ -218,7 +215,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                 // A single argument's expansion (e.g. a large concrete tuple's cartesian product)
                 // can exceed the budget on its own. Skip it like `NotExpandable` and try the next
                 // argument, but record the truncation so a call that ultimately fails to match still
-                // reports it. Only the per-round budget below (`gas.stop`) aborts expansion entirely.
+                // reports it. Only an over-budget round below aborts expansion entirely.
                 self.limit_hit = true;
                 Vec::new()
             }
@@ -226,6 +223,12 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
         if expanded_types.is_empty() {
             // Nothing to expand here (or this position cannot disambiguate), try the next argument.
             self.expand(errors, owner)
+        } else if self.arg_lists.len().saturating_mul(expanded_types.len()) > Self::GAS {
+            // Splitting this argument would take us past the budget. Stop expanding, and move `idx`
+            // past the end of the keywords so that subsequent `expand` calls know we're done.
+            self.limit_hit = true;
+            self.idx = Either::Right(keywords.len());
+            None
         } else {
             let expanded_types = expanded_types.into_map(|t| owner.push(t));
             let mut new_arg_lists = Vec::new();
@@ -251,13 +254,6 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                         }
                     }
                     new_arg_lists.push((new_posargs, new_keywords));
-                    if self.gas.stop() {
-                        // We've hit our hard-coded limit; stop expanding, and move `idx` past the
-                        // end of the keywords so that subsequent `expand` calls know we're done.
-                        self.limit_hit = true;
-                        self.idx = Either::Right(keywords.len());
-                        return None;
-                    }
                 }
             }
             self.arg_lists = new_arg_lists.clone();
@@ -430,21 +426,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .then(|| ArgsExpander::new(args.clone(), keywords.clone(), self));
                 // Prune expansion of arguments that cannot change the outcome. Leaving a position
                 // un-split is safe exactly when every candidate binds it to an equivalent parameter
-                // type `p` *and* the argument is already assignable to `p`: then splitting cannot
-                // discriminate between candidates (they all check against the same `p`), and it
-                // cannot rescue the call either, because every expanded member is a subtype of the
-                // argument and so stays assignable. Both halves are load-bearing — an argument that
-                // only checks out once split (`tuple[str | None, str]` against
-                // `tuple[str, str] | tuple[None, str]`) must keep expanding even when it binds the
-                // same parameter everywhere. Conservative elsewhere: a position whose binding isn't
-                // statically determinable (call-site unpacking, `*args`/`**kwargs` absorption,
-                // `ParamSpec`, differing arities) stays expandable, and generic overloads are
-                // excluded entirely because expansion also drives their type-variable solving.
-                if let Some(args_expander) = args_expander.as_mut()
-                    && !arity_compatible_overloads
-                        .iter()
-                        .any(|o| o.0.as_ref().is_some_and(|tparams| !tparams.is_empty()))
-                {
+                // type `p` that mentions no type variable, *and* the argument is already assignable
+                // to `p`. All three conditions are load-bearing:
+                // - equivalent `p`: splitting cannot discriminate between candidates, since they all
+                //   check the argument against the same `p`;
+                // - argument already assignable to `p`: splitting cannot rescue the call, since every
+                //   expanded member is a subtype of the argument and so stays assignable (an argument
+                //   that only checks out once split, `tuple[str | None, str]` against
+                //   `tuple[str, str] | tuple[None, str]`, must keep expanding even here);
+                // - `p` type-variable-free: splitting cannot change type-variable solving, since a
+                //   type-variable-free `p` adds no constraints to any type variable. This condition
+                //   is per-argument, so a generic overload set is still pruned for its shared,
+                //   type-variable-free arguments, while a type-variable-bearing discriminator (the
+                //   jax/ibis class, whose solving the expansion drives) stays expandable.
+                // Conservative elsewhere: a position whose binding isn't statically determinable
+                // (call-site unpacking, `*args`/`**kwargs` absorption, `ParamSpec`, differing
+                // arities) stays expandable.
+                if let Some(args_expander) = args_expander.as_mut() {
                     // Parameter types can mention placeholder vars owned by the receiver (an empty
                     // `{}` passed as `self`, say), and the probes below solve vars, so snapshot
                     // around them exactly as `find_closest_overload` does for speculative calls.
@@ -467,7 +465,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let Some(Some(first)) = param_tys.next() else {
                             return false;
                         };
-                        param_tys.all(|t| t.is_some_and(|t| self.is_equivalent(first, t)))
+                        // `first` must mention no type variable: an equivalent, type-variable-free
+                        // parameter contributes no constraints to solving, so pruning it is sound
+                        // even when other parameters of these overloads are generic. A parameter
+                        // that mentions a type variable stays expandable so expansion can drive it.
+                        !first.contains_type_variable()
+                            && param_tys.all(|t| t.is_some_and(|t| self.is_equivalent(first, t)))
                             && self.is_subset_eq(arg_ty, first)
                     };
                     // A call-site `*args` splat makes positional-slot correspondence unreliable, so
