@@ -706,6 +706,33 @@ assert_type(bad(Sub), Sub)
 );
 
 testcase!(
+    test_typevar_union_with_type_of_specialized_generic_alias,
+    r#"
+from typing import Generic, Protocol, TypeVar, assert_type, overload
+
+class NBit: ...
+class Bit32(NBit): ...
+class GenericBase: ...
+class SignedInteger[TBit: NBit](GenericBase): ...
+class DType[T: GenericBase]: ...
+class HasDType[T: DType](Protocol):
+    @property
+    def dtype(self) -> T: ...
+
+type DTypeLike[T: GenericBase] = type[T] | DType[T] | HasDType[DType[T]]
+
+@overload
+def array[T: GenericBase](x: object, dtype: DTypeLike[T]) -> list[T]: ...
+@overload
+def array(x: object, dtype: object = ...) -> list[object]: ...
+def array(x: object, dtype: object = None) -> object: ...
+
+Int32 = SignedInteger[Bit32]
+assert_type(array([1], Int32), list[SignedInteger[Bit32]])
+"#,
+);
+
+testcase!(
     test_generic_alias_fields,
     r#"
 from typing import assert_type

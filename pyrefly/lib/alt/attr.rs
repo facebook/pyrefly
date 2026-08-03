@@ -231,7 +231,7 @@ impl AttrSubsetError {
 /// The result of an attempt to access an attribute (which will eventually be
 /// used either for an action like get / set / delete, or in a structural subtype
 /// check).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Attribute {
     /// An attribute resolved through a class field lookup.
     ClassAttribute(ClassAttribute),
@@ -1386,6 +1386,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         attr_name: &Name,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> Result<(), SubsetError> {
+        let got_is_class_object = self.unwrap_class_object_silently(got).is_some();
         if let Some(got_attrs) = self
             .as_attribute_base(got.clone())
             .map(|got_base| {
@@ -1411,6 +1412,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
                 for (got_attr, _) in got_attrs.iter() {
+                    // A `__getattr__` fallback on a class object is not evidence that the
+                    // missing member exists: `__getattr__` governs instance attribute
+                    // access, not attributes of the class object itself. Reject rather
+                    // than letting the fallback satisfy the protocol requirement.
+                    if got_is_class_object && matches!(got_attr, Attribute::GetAttr(..)) {
+                        return Err(SubsetError::MissingAttribute(
+                            protocol.name().clone(),
+                            attr_name.clone(),
+                        ));
+                    }
                     // Filter overloaded got-side methods by self-type so the subset
                     // solver doesn't match an overload whose `self:` is incompatible
                     // with the receiver.
@@ -1460,10 +1471,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let synthetic_got = ClassAttribute::read_write(got_ty.clone());
                 self.is_class_attribute_subset(&synthetic_got, want, is_subset)
             }
-            Attribute::GetAttr(..) => {
-                // NOTE(grievejia): `__getattr__` does not participate in structural subtyping
-                // check for now. We may revisit this in the future if the need comes.
-                Err(Box::new(AttrSubsetError::Getattr))
+            Attribute::GetAttr(not_found, got_attr, name) => {
+                let NotFoundOn::ClassInstance(cls, _) = not_found else {
+                    return Err(Box::new(AttrSubsetError::Getattr));
+                };
+                let errors = self.error_swallower();
+                let fake_range = TextRange::default();
+                let got_ty = self
+                    .resolve_get_access(name, (**got_attr).clone(), fake_range, &errors, None)
+                    .map(|getattr_ty| {
+                        self.call_getattr_or_delattr(
+                            getattr_ty,
+                            name.clone(),
+                            fake_range,
+                            &errors,
+                            None,
+                        )
+                    })
+                    .map_err(|_| Box::new(AttrSubsetError::Getattr))?;
+                let synthetic_got = if self.has_custom_setattr(cls) {
+                    ClassAttribute::read_write(got_ty)
+                } else {
+                    ClassAttribute::read_only(got_ty, ReadOnlyReason::Getattr)
+                };
+                self.is_class_attribute_subset(&synthetic_got, want, is_subset)
             }
             Attribute::ModuleFallback(..) => Err(Box::new(AttrSubsetError::ModuleFallback)),
         }
@@ -2078,46 +2109,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn apply_getattr_fallback(&self, attr_name: &Name, mut result: LookupResult) -> LookupResult {
+        // `__getattr__`, `__setattr__`, and `__getattribute__` cannot be satisfied by a fallback
+        if attr_name == &dunder::GETATTR
+            || attr_name == &dunder::SETATTR
+            || attr_name == &dunder::GETATTRIBUTE
+        {
+            return result;
+        }
         let direct_lookup_not_found = std::mem::take(&mut result.not_found);
         for not_found in direct_lookup_not_found {
+            let (getattribute_found, getattribute_not_found, getattribute_internal_error) = self
+                .lookup_magic_dunder_attr(
+                    not_found.attr_base1().to_attr_base(),
+                    &dunder::GETATTRIBUTE,
+                )
+                .decompose();
+            if getattribute_not_found.is_empty() && getattribute_internal_error.is_empty() {
+                for (attr, found_on) in getattribute_found {
+                    result.found(
+                        Attribute::getattr(not_found.clone(), attr, attr_name.clone()),
+                        found_on,
+                    );
+                }
+                continue;
+            }
+
             let (getattr_found, getattr_not_found, getattr_internal_error) = self
                 .lookup_magic_dunder_attr(not_found.attr_base1().to_attr_base(), &dunder::GETATTR)
                 .decompose();
-            if !(getattr_not_found.is_empty() && getattr_internal_error.is_empty()) {
-                // If the `__getattr__` lookup fails, we fall back to `__getattribute__`
-                // Note: at runtime, `__getattribute__` is checked BEFORE looking up the attribute by name,
-                // but because the declaration is on `object` and returns `Any`, all attribute accesses
-                // would return `Any`.
-                let (getattribute_found, getattribute_not_found, getattribute_internal_error) =
-                    self.lookup_magic_dunder_attr(
-                        not_found.attr_base1().to_attr_base(),
-                        &dunder::GETATTRIBUTE,
-                    )
-                    .decompose();
-                if !(getattribute_not_found.is_empty() && getattribute_internal_error.is_empty()) {
-                    result.not_found.push(not_found.clone())
-                } else {
-                    for (attr, found_on) in getattribute_found {
-                        result.found(
-                            Attribute::getattr(not_found.clone(), attr, attr_name.clone()),
-                            found_on,
-                        );
-                    }
-                }
-            } else {
+            if getattr_not_found.is_empty() && getattr_internal_error.is_empty() {
                 for (attr, found_on) in getattr_found {
                     result.found(
                         Attribute::getattr(not_found.clone(), attr, attr_name.clone()),
                         found_on,
                     );
                 }
+            } else {
+                result.not_found.push(not_found);
             }
         }
         result
     }
 
-    /// The standard full attribute lookup: static class field lookup followed by
-    /// `__getattr__`/`__getattribute__` fallback for any not-found branches.
+    /// Static class field lookup followed by `__getattribute__`/`__getattr__` fallback for any not-found branches.
     fn lookup_attr(&self, base: AttributeBase, attr_name: &Name) -> LookupResult {
         let direct_lookup_result = self.lookup_attr_static(base.clone(), attr_name);
         self.apply_getattr_fallback(attr_name, direct_lookup_result)
