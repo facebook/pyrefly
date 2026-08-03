@@ -276,10 +276,10 @@ author.book_set  # E: `Author` has no attribute `book_set`
 // OneToOneField reverse relation: returns single object (not a manager like FK)
 // Default name is just the lowercase model name without `_set`
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_one_to_one_reverse_default_name,
     r#"
 from django.db import models
+from typing import assert_type
 
 class Place(models.Model):
     name = models.CharField(max_length=50)
@@ -289,7 +289,7 @@ class Restaurant(models.Model):
 
 place = Place()
 # OneToOne reverse is just the lowercase model name (no _set suffix)
-place.restaurant  # E: `Place` has no attribute `restaurant`
+assert_type(place.restaurant, Restaurant)
 "#,
 );
 
@@ -313,10 +313,10 @@ tag.article_set  # E: `Tag` has no attribute `article_set`
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_one_to_one_reverse_custom_name,
     r#"
 from django.db import models
+from typing import assert_type
 
 class Place(models.Model):
     name = models.CharField(max_length=50)
@@ -325,7 +325,7 @@ class Restaurant(models.Model):
     place = models.OneToOneField(Place, on_delete=models.CASCADE, related_name='dining_spot')
 
 place = Place()
-place.dining_spot  # E: `Place` has no attribute `dining_spot`
+assert_type(place.dining_spot, Restaurant)
 "#,
 );
 

@@ -102,6 +102,12 @@ const RELATED_NAME: Name = Name::new_static("related_name");
 
 const RELATED_MANAGER: Name = Name::new_static("RelatedManager");
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DjangoRelationKind {
+    ForeignKey,
+    OneToOne,
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn is_one_to_one_field(&self, field: &Class) -> bool {
         field.has_toplevel_qname(
@@ -618,9 +624,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     continue;
                 };
 
-                if !self.is_django_foreign_key_relation(expr) {
+                let Some(relation_kind) = self.django_relation_kind(expr) else {
                     continue;
-                }
+                };
 
                 let Some(to_expr) = call_expr.arguments.args.first() else {
                     continue;
@@ -633,11 +639,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::ClassDef(class_def) => class_def,
                     _ => continue,
                 };
-                let Some(related_name) = self.django_related_name(call_expr, source_class) else {
+                let Some(related_name) =
+                    self.django_related_name(call_expr, source_class, relation_kind)
+                else {
                     continue;
                 };
                 let Some(related_type) =
-                    self.get_related_manager_type(self.instantiate(source_class))
+                    self.django_reverse_field_type(relation_kind, source_class)
                 else {
                     continue;
                 };
@@ -657,21 +665,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(DjangoReverseRelationIndex::new(reverse_relations))
     }
 
-    fn is_django_foreign_key_relation(&self, expr: &Expr) -> bool {
+    fn django_relation_kind(&self, expr: &Expr) -> Option<DjangoRelationKind> {
         let ty = self.expr_infer(expr, &self.error_swallower());
         let field_class = match &ty {
             Type::ClassType(cls) => cls.class_object(),
             Type::ClassDef(cls) => cls,
-            _ => return false,
+            _ => return None,
         };
 
-        self.is_foreign_key_like_field(field_class) && !self.is_one_to_one_field(field_class)
+        if self.is_one_to_one_field(field_class) {
+            Some(DjangoRelationKind::OneToOne)
+        } else if self.is_foreign_key_like_field(field_class) {
+            Some(DjangoRelationKind::ForeignKey)
+        } else {
+            None
+        }
     }
 
-    fn django_related_name(&self, call_expr: &ExprCall, source_class: &Class) -> Option<Name> {
+    fn django_reverse_field_type(
+        &self,
+        relation_kind: DjangoRelationKind,
+        source_class: &Class,
+    ) -> Option<Type> {
+        let source_type = self.instantiate(source_class);
+        match relation_kind {
+            DjangoRelationKind::ForeignKey => self.get_related_manager_type(source_type),
+            DjangoRelationKind::OneToOne => Some(source_type),
+        }
+    }
+
+    fn django_related_name(
+        &self,
+        call_expr: &ExprCall,
+        source_class: &Class,
+        relation_kind: DjangoRelationKind,
+    ) -> Option<Name> {
         match find_keyword(call_expr, &RELATED_NAME) {
             None | Some(Expr::NoneLiteral(_)) => {
-                Some(self.django_default_related_name(source_class))
+                Some(self.django_default_related_name(source_class, relation_kind))
             }
             Some(Expr::StringLiteral(lit)) => {
                 self.format_related_name(lit.value.to_str(), source_class)
@@ -680,11 +711,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn django_default_related_name(&self, source_class: &Class) -> Name {
-        Name::new(format!(
-            "{}_set",
-            source_class.name().as_str().to_lowercase()
-        ))
+    fn django_default_related_name(
+        &self,
+        source_class: &Class,
+        relation_kind: DjangoRelationKind,
+    ) -> Name {
+        let mut name = source_class.name().as_str().to_lowercase();
+        if relation_kind == DjangoRelationKind::ForeignKey {
+            name.push_str("_set");
+        }
+        Name::new(name)
     }
 
     fn format_related_name(&self, raw: &str, source_class: &Class) -> Option<Name> {
