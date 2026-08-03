@@ -30,8 +30,24 @@ jobs:
       # by Cargo have long paths and will cause builds/tests to fail
       if: ${{ matrix.os == 'windows-latest' }}
       run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
-    - name: install Scrut
-      run: cargo install scrut --locked
+    - name: Restore Scrut cache
+      uses: actions/cache@v4
+      if: ${{ matrix.os != 'windows-latest' }}
+      with:
+        path: |
+          ~/.cargo/bin/scrut
+          ~/.cargo/.crates.toml
+          ~/.cargo/.crates2.json
+        key: ${{ runner.os }}-${{ runner.arch }}-scrut-0.4.3-v2
+    - name: Install Scrut
+      uses: ./.github/actions/retry-command
+      with:
+        command: |
+          if command -v scrut >/dev/null 2>&1 && scrut --version | grep -q '0\.4\.3'; then
+            scrut --version
+          else
+            cargo install scrut --version 0.4.3 --locked --force
+          fi
       # Scrut doesn't support Windows yet
       if: ${{ matrix.os != 'windows-latest' }}
     - name: set up rust cache
@@ -42,6 +58,10 @@ jobs:
       with:
         toolchain: stable
         components: clippy, rustfmt
+    - name: Fetch Cargo dependencies
+      uses: ./.github/actions/retry-command
+      with:
+        command: cargo fetch --locked
     - run: cargo fmt -- --check
     - run: cargo clippy --release
     - run: cargo build --release

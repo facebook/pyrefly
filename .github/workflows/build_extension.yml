@@ -107,9 +107,9 @@ jobs:
       - uses: actions/checkout@v6
       - name: install toolchain dependencies
         if: ${{ matrix.container == 'ubuntu:20.04' }}
-        shell: bash
-        run: |
-          apt-get update && apt-get -y install curl build-essential
+        uses: ./.github/actions/retry-command
+        with:
+          command: apt-get update && apt-get -y install curl build-essential
       - uses: dtolnay/rust-toolchain@stable
       - name: set windows cargo home
         # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
@@ -126,6 +126,17 @@ jobs:
       - name: set jemalloc page size for ARM64 macOS
         if: ${{ matrix.arch == 'arm64' && matrix.platform == 'darwin' }}
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=14" >> ${{ matrix.github_env }}
+      - name: Fetch Cargo dependencies
+        uses: ./.github/actions/retry-command
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        with:
+          command: |
+            if [ -n "$RUST_TARGET" ]; then
+              cargo fetch --locked --manifest-path pyrefly/Cargo.toml --target "$RUST_TARGET"
+            else
+              cargo fetch --locked --manifest-path pyrefly/Cargo.toml
+            fi
       - name: build pyrefly binary (cross-compile)
         if: ${{ matrix.rust_target != '' }}
         uses: houseabsolute/actions-rust-cross@v1
@@ -155,10 +166,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: lsp/package-lock.json
       - name: save platform name
         run: echo "platform=${{ matrix.platform }}-${{ matrix.arch }}" >> ${{ matrix.github_env }}
-      - run: npm ci
-        working-directory: lsp/
+      - name: Install extension npm dependencies
+        uses: ./.github/actions/retry-command
+        with:
+          working-directory: lsp/
+          command: npm ci
       - run: npx vsce package --target ${{ env.platform }} ${{ needs.get_version.outputs.prerelease_flag }} ${{needs.get_version.outputs.marketplace_version}}
         working-directory: lsp/
       - uses: actions/upload-artifact@v6
