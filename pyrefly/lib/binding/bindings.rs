@@ -2013,17 +2013,56 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn check_for_all_caps_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
-        if self.treat_all_caps_as_final
-            && is_constant_name(name)
-            && !self.scopes.is_final_in_current_scope(name)
-            && self.scopes.current_flow_idx(name).is_some()
+        if !self.treat_all_caps_as_final
+            || !is_constant_name(name)
+            || self.scopes.is_final_in_current_scope(name)
         {
-            self.error(
-                self.idx_to_key(idx).range(),
-                ErrorKind::BadAssignment,
-                format!("Cannot assign to variable `{name}` because it is marked final"),
-            );
+            return;
         }
+        // Only bindings that count as a value reassignment should fire. Imports
+        // are included, so re-imports of a constant fire; type parameters
+        // (`class C[T, T]`) and function/class definitions (including overload
+        // chains) are not. Those non-assignment bindings are inserted before
+        // `bind_name`, so they are visible here and skipped. A plain assignment's
+        // `NameAssign` is inserted *after* `bind_name` (it needs the annotation
+        // this returns), so it shows up as `None` and correctly falls through.
+        if let Some(binding) = self.idx_to_binding(idx)
+            && !matches!(
+                binding,
+                Binding::NameAssign(..)
+                    | Binding::MultiTargetAssign(..)
+                    | Binding::UnpackedValue(..)
+                    | Binding::AugAssign(..)
+                    | Binding::AnnotatedType(..)
+                    | Binding::IterableValueLoop(..)
+                    | Binding::ContextValue(..)
+                    | Binding::ExceptionHandler(..)
+                    | Binding::Import(..)
+            )
+        {
+            return;
+        }
+        // A prior *initialized* value must already exist for this to be a
+        // reassignment. This runs before `define_in_current_flow`, so
+        // `current_flow_style` reflects the entry from before this binding. A
+        // bare annotation (`FOO: int`) leaves an uninitialized entry whose first
+        // real assignment is not a reassignment.
+        match self.scopes.current_flow_style(name) {
+            None
+            | Some(
+                FlowStyle::Uninitialized
+                | FlowStyle::PossiblyUninitialized
+                | FlowStyle::MaybeInitialized(_),
+            ) => return,
+            Some(_) => {}
+        }
+        self.error(
+            self.idx_to_key(idx).range(),
+            ErrorKind::BadAssignment,
+            format!(
+                "Cannot assign to variable `{name}` because it is marked final due to `treat-all-caps-as-final`"
+            ),
+        );
     }
 
     pub fn type_params(&mut self, x: &mut TypeParams) -> SmallSet<Name> {

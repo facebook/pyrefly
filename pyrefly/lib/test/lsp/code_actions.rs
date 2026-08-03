@@ -3723,13 +3723,13 @@ fn convert_star_import_shadowed_name() {
 # CONVERT-START
 from foo import *
 # CONVERT-END
-A = 42
-print(A)
-print(B)
+a = 42
+print(a)
+print(b)
 "#;
     let code_foo = r#"
-A = 1
-B = 2
+a = 1
+b = 2
 "#;
     let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
     let (module_info, actions, titles) = compute_convert_star_import_actions(
@@ -3739,14 +3739,14 @@ B = 2
     );
     assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
     let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
-    // Only B should be imported since A is shadowed by a local assignment.
+    // Only b should be imported since a is shadowed by a local assignment.
     let expected = r#"
 # CONVERT-START
-from foo import B
+from foo import b
 # CONVERT-END
-A = 42
-print(A)
-print(B)
+a = 42
+print(a)
+print(b)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }

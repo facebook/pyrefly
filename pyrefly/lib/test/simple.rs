@@ -583,6 +583,144 @@ MAX_SIZE = 10  # E: Cannot assign to `MAX_SIZE` because it is imported as final
 "#,
 );
 
+fn env_all_caps_imports() -> TestEnv {
+    let mut t = TestEnv::new().enable_treat_all_caps_as_final();
+    t.add(
+        "foo",
+        r#"
+from typing import Final
+MAX_SIZE: Final = 42
+DEFAULT_NAME = "abc"
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_all_caps_as_final_class_scope,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+class C:
+    ATTR = 1
+    ATTR = 2  # E: Cannot assign to variable `ATTR` because it is marked final
+"#,
+);
+
+// Assigning the same constant once per mutually-exclusive branch is not a
+// reassignment, so no error should fire.
+testcase!(
+    test_all_caps_as_final_branches,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+def f(cond: bool) -> None:
+    if cond:
+        MODE = 1
+    else:
+        MODE = 2
+    print(MODE)
+"#,
+);
+
+// A duplicate PEP 695 type parameter is not a value assignment, so it must
+// report only the duplicate-type-parameter error, not "marked final".
+testcase!(
+    test_all_caps_dup_type_param,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+class C[T, T]: ...  # E: duplicate type parameter
+"#,
+);
+
+// Overload chains rebind the function name but are function definitions, not
+// assignments, so an ALL_CAPS overloaded method must not be flagged.
+testcase!(
+    test_all_caps_overload_method,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+from typing import overload
+class C:
+    @overload
+    def METHOD(self, x: int) -> int: ...
+    @overload
+    def METHOD(self, x: str) -> str: ...
+    def METHOD(self, x): return x
+"#,
+);
+
+// Single-letter uppercase names are still constants: a genuine value
+// reassignment of one is flagged (only type parameters/defs are exempt).
+testcase!(
+    test_all_caps_single_letter_reassign,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+T = 1
+T = 2  # E: Cannot assign to variable `T` because it is marked final
+"#,
+);
+
+// Reassigning an ALL_CAPS type alias reports only the more specific
+// redefinition error, not an additional "marked final" error.
+testcase!(
+    test_all_caps_type_alias_single_error,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+from typing import TypeAlias
+FOO: TypeAlias = int
+FOO = str  # E: Cannot redefine existing type alias `FOO`
+
+type BAR = int
+BAR = str  # E: Cannot redefine existing type alias `BAR`
+"#,
+);
+
+testcase!(
+    test_all_caps_type_checking_branching,
+    env_all_caps_imports(),
+    r#"
+from typing import TYPE_CHECKING
+from foo import DEFAULT_NAME
+if TYPE_CHECKING:
+    from foo import MAX_SIZE
+    from foo import DEFAULT_NAME  # E: Cannot assign to variable `DEFAULT_NAME` because it is marked final
+else:
+    from foo import MAX_SIZE
+"#,
+);
+
+testcase!(
+    test_all_caps_classvar_behavior,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO: bool = True
+class A:
+    FOO: bool = False
+
+    def bar(self, b: bool) -> None:
+        FOO = b
+
+    def baz(self, b: bool) -> None:
+        global FOO
+        FOO = b  # E: Cannot assign to variable `FOO` because it is marked final due to `treat-all-caps-as-final`
+A.FOO = FOO
+"#,
+);
+
+testcase!(
+    test_all_caps_function_behavior,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO = True
+
+def bar(b: bool):
+    FOO = b
+
+def baz(b: bool):
+    global FOO
+    FOO = b  # E: Cannot assign to variable `FOO` because it is marked final due to `treat-all-caps-as-final`
+
+"#,
+);
+
 testcase!(
     test_reveal_type,
     r#"
