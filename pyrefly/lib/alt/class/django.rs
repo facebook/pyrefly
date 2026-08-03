@@ -33,6 +33,11 @@ use crate::alt::class::enums::VALUE_PROP;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
+use crate::binding::binding::BindingDjangoRelations;
+use crate::binding::binding::ClassFieldDefinition;
+use crate::binding::binding::ExprOrBinding;
+use crate::error::collector::ErrorCollector;
 use crate::types::simplify::unions;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
@@ -92,7 +97,18 @@ fn has_keyword_true(call_expr: &ExprCall, name: &Name) -> bool {
         .is_some_and(|v| matches!(v, Expr::BooleanLiteral(lit) if lit.value))
 }
 
+const RELATED_NAME: Name = Name::new_static("related_name");
+
+const RELATED_MANAGER: Name = Name::new_static("RelatedManager");
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn is_one_to_one_field(&self, field: &Class) -> bool {
+        field.has_toplevel_qname(
+            ModuleName::django_models_fields_related().as_str(),
+            ONE_TO_ONE_FIELD.as_str(),
+        )
+    }
+
     pub fn get_django_field_type(
         &self,
         ty: &Type,
@@ -219,6 +235,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             MANYRELATEDMANAGER,
             vec![target_model_type, model_instance_type],
         )
+    }
+
+    fn get_related_manager_type(&self, target_model_type: Type) -> Option<Type> {
+        self.specialize_manager_type(RELATED_MANAGER, vec![target_model_type])
     }
 
     fn specialize_manager_type(&self, name: Name, type_args: Vec<Type>) -> Option<Type> {
@@ -559,6 +579,107 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
 
+        let reverse_relations = self.django_reverse_relations_index();
+        if let Some(reverse_fields) = reverse_relations.get(cls) {
+            for (name, field) in reverse_fields.fields() {
+                fields.insert(name.clone(), field.clone());
+            }
+        }
+
         Some(ClassSynthesizedFields::new(fields))
+    }
+
+    pub fn solve_django_reverse_relations(
+        &self,
+        binding: &BindingDjangoRelations,
+        _range: TextRange,
+        _errors: &ErrorCollector,
+    ) -> Arc<DjangoReverseRelationIndex> {
+        let mut per_class = SmallMap::new();
+
+        for candidate_class in &binding.classes {
+            let Some(source_class) = &self.get_idx(candidate_class.class_idx).0 else {
+                continue;
+            };
+            if !self.get_metadata_for_class(source_class).is_django_model() {
+                continue;
+            }
+
+            for field_idx in &candidate_class.fields {
+                let binding = self.bindings().get(*field_idx);
+                let ClassFieldDefinition::AssignedInBody { value, .. } = &binding.definition else {
+                    continue;
+                };
+                let ExprOrBinding::Expr(expr) = value.as_ref() else {
+                    continue;
+                };
+                let Some(call_expr) = expr.as_call_expr() else {
+                    continue;
+                };
+
+                if !self.is_django_foreign_key_relation(expr) {
+                    continue;
+                }
+
+                let Some(to_expr) = call_expr.arguments.args.first() else {
+                    continue;
+                };
+                let Some(target_type) = self.resolve_target(to_expr, source_class) else {
+                    continue;
+                };
+                let target_class = match &target_type {
+                    Type::ClassType(cls_type) => cls_type.class_object(),
+                    Type::ClassDef(class_def) => class_def,
+                    _ => continue,
+                };
+                let Some(related_name) = self.django_related_name(call_expr, source_class) else {
+                    continue;
+                };
+                let Some(related_type) =
+                    self.get_related_manager_type(self.instantiate(source_class))
+                else {
+                    continue;
+                };
+
+                per_class
+                    .entry(target_class.clone())
+                    .or_insert_with(SmallMap::new)
+                    .insert(related_name, ClassSynthesizedField::new(related_type));
+            }
+        }
+
+        let mut reverse_relations = SmallMap::new();
+        for (class, fields) in per_class.into_iter_hashed() {
+            reverse_relations.insert_hashed(class, ClassSynthesizedFields::new(fields));
+        }
+
+        Arc::new(DjangoReverseRelationIndex::new(reverse_relations))
+    }
+
+    fn is_django_foreign_key_relation(&self, expr: &Expr) -> bool {
+        let ty = self.expr_infer(expr, &self.error_swallower());
+        let field_class = match &ty {
+            Type::ClassType(cls) => cls.class_object(),
+            Type::ClassDef(cls) => cls,
+            _ => return false,
+        };
+
+        self.is_foreign_key_like_field(field_class) && !self.is_one_to_one_field(field_class)
+    }
+
+    fn django_related_name(&self, call_expr: &ExprCall, source_class: &Class) -> Option<Name> {
+        match find_keyword(call_expr, &RELATED_NAME) {
+            None | Some(Expr::NoneLiteral(_)) => {
+                Some(self.django_default_related_name(source_class))
+            }
+            _ => None,
+        }
+    }
+
+    fn django_default_related_name(&self, source_class: &Class) -> Name {
+        Name::new(format!(
+            "{}_set",
+            source_class.name().as_str().to_lowercase()
+        ))
     }
 }

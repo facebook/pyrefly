@@ -54,10 +54,11 @@ Author()
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_default_name,
     r#"
 from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+from typing import assert_type
 
 class Reporter(models.Model):
     full_name = models.CharField(max_length=70)
@@ -67,7 +68,7 @@ class Article(models.Model):
 
 reporter = Reporter()
 # Default reverse name is <model_lowercase>_set
-reporter.article_set  # E: `Reporter` has no attribute `article_set`
+assert_type(reporter.article_set, RelatedManager[Article])
 "#,
 );
 
@@ -109,10 +110,11 @@ author.book_set  # E: `Author` has no attribute `book_set`
 
 // Self-referential FK creates reverse accessor on the same model
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_self_reference,
     r#"
 from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+from typing import assert_type
 
 class Person(models.Model):
     name = models.CharField(max_length=100)
@@ -120,7 +122,24 @@ class Person(models.Model):
     parent = models.ForeignKey('self', null=True, on_delete=models.CASCADE)
 
 person = Person()
-person.person_set  # E: `Person` has no attribute `person_set`
+assert_type(person.person_set, RelatedManager[Person])
+"#,
+);
+
+django_testcase!(
+    test_foreign_key_reverse_unicode_default_name,
+    r#"
+from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+from typing import assert_type
+
+class Reporter(models.Model): ...
+
+class ÜberBook(models.Model):
+    reporter = models.ForeignKey(Reporter, on_delete=models.CASCADE)
+
+reporter = Reporter()
+assert_type(reporter.überbook_set, RelatedManager[ÜberBook])
 "#,
 );
 
