@@ -923,7 +923,6 @@ service(nonexistent_param=True)  # E: Missing argument `service_name` # E: Unexp
 
 // Regression test for https://github.com/facebook/pyrefly/issues/3706
 testcase!(
-    bug = "Should reveal `A[[int, int]]`",
     test_concatenate_paramspec_tail_in_class_targ,
     r#"
 from typing import Concatenate, reveal_type
@@ -932,13 +931,12 @@ class A[**P]:
     def transform(self) -> A[Concatenate[int, P]]:
         raise NotImplementedError
 
-reveal_type(A[int]().transform())  # E: revealed type: A[Concatenate[int, P]]
+reveal_type(A[int]().transform())  # E: revealed type: A[[int, int]]
 "#,
 );
 
 // Regression test for https://github.com/facebook/pyrefly/issues/3828
 testcase!(
-    bug = "Should accept both calls and reveal `B[[]]` / `B[[str, int]]`",
     test_concatenate_paramspec_tail_in_class_param,
     r#"
 from typing import Concatenate, reveal_type
@@ -953,10 +951,88 @@ def transform[**P](arg: A[Concatenate[int, P]]) -> B[P]:
     raise NotImplementedError
 
 a1: A[[int]] = A()
-reveal_type(transform(a1))  # E: revealed type: B[@_]  # E: Argument `A[[int]]` is not assignable to parameter `arg` with type `A[Concatenate[int, P]]`
+reveal_type(transform(a1))  # E: revealed type: B[[]]
 
 a2: A[[int, str, int]] = A()
-reveal_type(transform(a2))  # E: revealed type: B[@_]  # E: Argument `A[[int, str, int]]` is not assignable to parameter `arg` with type `A[Concatenate[int, P]]`
+reveal_type(transform(a2))  # E: revealed type: B[[str, int]]
 "#,
 );
 
+// Nesting exercises the `Concatenate[..., Concatenate[...]]` collapse in the solver, which
+// could not fire while the ParamSpec tail was unreachable.
+testcase!(
+    test_concatenate_paramspec_tail_nested,
+    r#"
+from typing import Concatenate, reveal_type
+
+class A[**P]:
+    pass
+
+def add_int[**P](x: A[P]) -> A[Concatenate[int, P]]: ...
+def add_str[**P](x: A[P]) -> A[Concatenate[str, P]]: ...
+def drop_int[**P](x: A[Concatenate[int, P]]) -> A[P]: ...
+
+a: A[[bool]] = A()
+reveal_type(add_int(a))                        # E: revealed type: A[[int, bool]]
+reveal_type(add_str(add_int(a)))               # E: revealed type: A[[str, int, bool]]
+reveal_type(add_str(add_str(add_int(a))))      # E: revealed type: A[[str, str, int, bool]]
+reveal_type(drop_int(add_int(a)))              # E: revealed type: A[[bool]]
+"#,
+);
+
+// A bare `Concatenate` in a class type argument is the only thing that reaches the
+// `Type::Concatenate` arm of `tvars_to_tparams_for_type_alias`.
+testcase!(
+    test_concatenate_paramspec_tail_in_type_alias,
+    r#"
+from typing import Concatenate, ParamSpec, reveal_type
+
+class A[**P2]:
+    pass
+
+P = ParamSpec("P")
+Legacy = A[Concatenate[int, P]]
+
+type Modern[**Q] = A[Concatenate[str, Q]]
+
+def f(x: Legacy[[bool]]) -> None:
+    reveal_type(x)  # E: revealed type: A[[int, bool]]
+
+def g(x: Modern[[bool]]) -> None:
+    reveal_type(x)  # E: revealed type: A[[str, bool]]
+"#,
+);
+
+// A `ParamSpec` reachable only through a `Concatenate` tail still counts as a type variable.
+testcase!(
+    test_concatenate_paramspec_tail_is_a_type_variable,
+    r#"
+from typing import ClassVar, Concatenate
+
+class A[**P]:
+    pass
+
+class C[**P]:
+    bad: ClassVar[A[Concatenate[int, P]]]  # E: `ClassVar` arguments may not contain any type variables
+"#,
+);
+
+// `Callable[..., int]` binds `P` in `Callable[Concatenate[int, P], int]`, but the equivalent
+// user-defined generic does not; see `test_param_spec_solve` for the working `Callable` case.
+testcase!(
+    bug = "`...` should bind the tail, giving `A[Concatenate[int, ...]]` and `A[...]`",
+    test_concatenate_paramspec_tail_gradual,
+    r#"
+from typing import Concatenate, reveal_type
+
+class A[**P]:
+    pass
+
+def add_int[**P](x: A[P]) -> A[Concatenate[int, P]]: ...
+def drop_int[**P](x: A[Concatenate[int, P]]) -> A[P]: ...
+
+g: A[...] = A()
+reveal_type(add_int(g))   # E: revealed type: A[Concatenate[int, Ellipsis]]
+reveal_type(drop_int(g))  # E: revealed type: A[@_]
+"#,
+);
