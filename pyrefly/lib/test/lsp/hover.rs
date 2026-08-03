@@ -826,6 +826,65 @@ def f(x: E) -> None:
 }
 
 #[test]
+fn hover_on_match_wildcard_with_attribute_subject() {
+    let code = r#"
+class Holder:
+    value: bytes
+
+def f(h: Holder) -> None:
+    match h.value:
+        case _:
+#            ^
+            pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("bytes"),
+        "Expected hover to show the subject attribute's type, got: {report}"
+    );
+    assert!(
+        !report.contains("Holder"),
+        "Hover must not fall back to the base object's type, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_match_wildcard_with_subscript_subject() {
+    let code = r#"
+def f(xs: list[bytes]) -> None:
+    match xs[0]:
+        case _:
+#            ^
+            pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("bytes"),
+        "Expected hover to show the subscripted element type, got: {report}"
+    );
+    assert!(
+        !report.contains("list[bytes]"),
+        "Hover must not fall back to the container's type, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_string_with_hash_character() {
     let code = r#"
 x = "hello # world"  # pyrefly: ignore

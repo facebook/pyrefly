@@ -928,8 +928,8 @@ impl<'a> Transaction<'a> {
             AnyNodeRef::MatchCase(case) => Some(case.range),
             _ => None,
         })?;
-        let subject_start = covering_nodes.iter().find_map(|node| match node {
-            AnyNodeRef::StmtMatch(stmt_match) => Some(stmt_match.subject.range().start()),
+        let subject_range = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::StmtMatch(stmt_match) => Some(stmt_match.subject.range()),
             _ => None,
         })?;
         let key = Key::PatternNarrow(case_range);
@@ -939,7 +939,10 @@ impl<'a> Transaction<'a> {
         {
             self.get_type_for_surface(handle, &key, for_display)
         } else {
-            self.get_type_at_impl(handle, subject_start, for_display)
+            // The subject must be looked up by its whole range: a position inside it
+            // resolves the leading token, which is the base (`obj` in `match obj.attr:`)
+            // rather than the subject expression.
+            self.get_type_trace_for_surface(handle, subject_range, for_display)
         }
     }
 
