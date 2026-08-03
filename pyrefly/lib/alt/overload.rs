@@ -21,7 +21,6 @@ use pyrefly_types::type_output::TypeOutput;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::display::count;
-use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -138,9 +137,7 @@ pub struct ArgsExpander<'a, Ans: LookupAnswer> {
     idx: Either<usize, usize>,
     /// Current argument lists.
     arg_lists: Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>,
-    /// Hard-coded limit to how many times we'll expand.
-    gas: Gas,
-    /// Set once `gas` is exhausted, so the caller can report the truncated expansion.
+    /// Set once the expansion budget is exceeded, so the caller can report the truncated expansion.
     limit_hit: bool,
     /// Which positional / keyword arguments are worth expanding. Both default to all-`true`
     /// (expand everything); `call_overloads` narrows them once the candidate overloads are known.
@@ -150,6 +147,7 @@ pub struct ArgsExpander<'a, Ans: LookupAnswer> {
 }
 
 impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
+    /// The most argument-type combinations we are willing to check for a single call.
     const GAS: usize = 100;
 
     pub fn new(
@@ -166,7 +164,6 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                 Either::Left(0)
             },
             arg_lists: vec![(posargs, keywords)],
-            gas: Gas::new(Self::GAS as isize),
             limit_hit: false,
             expandable_pos,
             expandable_kw,
@@ -218,7 +215,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                 // A single argument's expansion (e.g. a large concrete tuple's cartesian product)
                 // can exceed the budget on its own. Skip it like `NotExpandable` and try the next
                 // argument, but record the truncation so a call that ultimately fails to match still
-                // reports it. Only the per-round budget below (`gas.stop`) aborts expansion entirely.
+                // reports it. Only an over-budget round below aborts expansion entirely.
                 self.limit_hit = true;
                 Vec::new()
             }
@@ -226,6 +223,12 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
         if expanded_types.is_empty() {
             // Nothing to expand here (or this position cannot disambiguate), try the next argument.
             self.expand(errors, owner)
+        } else if self.arg_lists.len().saturating_mul(expanded_types.len()) > Self::GAS {
+            // Splitting this argument would take us past the budget. Stop expanding, and move `idx`
+            // past the end of the keywords so that subsequent `expand` calls know we're done.
+            self.limit_hit = true;
+            self.idx = Either::Right(keywords.len());
+            None
         } else {
             let expanded_types = expanded_types.into_map(|t| owner.push(t));
             let mut new_arg_lists = Vec::new();
@@ -251,13 +254,6 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                         }
                     }
                     new_arg_lists.push((new_posargs, new_keywords));
-                    if self.gas.stop() {
-                        // We've hit our hard-coded limit; stop expanding, and move `idx` past the
-                        // end of the keywords so that subsequent `expand` calls know we're done.
-                        self.limit_hit = true;
-                        self.idx = Either::Right(keywords.len());
-                        return None;
-                    }
                 }
             }
             self.arg_lists = new_arg_lists.clone();

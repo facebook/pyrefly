@@ -2538,6 +2538,24 @@ def call(x: bool) -> None:
 "#,
 );
 
+// Six `bool` arguments are 2^6 = 64 combinations, which fits in the budget; only the seventh
+// argument above pushes it over. https://github.com/facebook/pyrefly/issues/4213
+testcase!(
+    test_overload_argument_expansion_limit_counts_combinations,
+    r#"
+from typing import overload
+
+@overload
+def f(a: str, b: str, c: str, d: str, e: str, g: str, /) -> int: ...
+@overload
+def f(a: bytes, b: bytes, c: bytes, d: bytes, e: bytes, g: bytes, /) -> str: ...
+def f(*args: str | bytes) -> int | str: ...
+
+def call(x: bool) -> None:
+    f(x, x, x, x, x, x)  # E: No matching overload found
+"#,
+);
+
 // A concrete tuple applies the same limit while expanding its element combinations, so seven
 // `bool` elements (2^7 combinations) must report that truncation too.
 // https://github.com/facebook/pyrefly/issues/4213
