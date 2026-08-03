@@ -81,7 +81,6 @@ use crate::error::suppress;
 use crate::error::suppress::CommentLocation;
 use crate::error::suppress::SerializedError;
 use crate::error::suppress::UnusedIgnoreKind;
-use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
@@ -1255,7 +1254,6 @@ impl CheckArgs {
             default: if retain {
                 Require::Everything
             } else if self.behavior.check_all
-                || stdlib_search_path().is_some()
                 || self.output.report_pysa.is_some()
                 || self.output.report_cinderx.is_some()
             {
