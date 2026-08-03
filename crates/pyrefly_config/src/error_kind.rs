@@ -618,9 +618,22 @@ impl ErrorKind {
     pub fn is_soft(self) -> bool {
         matches!(
             self,
-            ErrorKind::ImplicitAnyLambda
+            ErrorKind::Deprecated
+                | ErrorKind::ImplicitAnyAttribute
+                | ErrorKind::ImplicitAnyEmptyContainer
+                | ErrorKind::ImplicitAnyLambda
+                | ErrorKind::ImplicitAnyParameter
+                | ErrorKind::ImplicitAnyTypeArgument
+                | ErrorKind::PytorchEfficiencyLintCudaCall
+                | ErrorKind::PytorchEfficiencyLintItemCall
+                | ErrorKind::PytorchEfficiencyLintPrintTensor
+                | ErrorKind::PytorchEfficiencyLintRedundantToCall
+                | ErrorKind::RedundantCast
                 | ErrorKind::StringAsIterable
                 | ErrorKind::UnknownArgumentType
+                | ErrorKind::UnknownAttributeType
+                | ErrorKind::UnknownVariableType
+                | ErrorKind::UnnecessaryTypeConversion
         )
     }
 
