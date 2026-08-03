@@ -22,6 +22,7 @@ use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -44,6 +45,7 @@ use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingDecorator;
+use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
@@ -69,6 +71,7 @@ use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
@@ -395,6 +398,21 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassSynthesizedFields {
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         ClassSynthesizedFields::default()
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyDjangoRelations {
+    fn solve(
+        _answers: &AnswersSolver<Ans>,
+        _binding: &BindingDjangoRelations,
+        _range: TextRange,
+        _errors: &ErrorCollector,
+    ) -> Arc<DjangoReverseRelationIndex> {
+        Arc::new(DjangoReverseRelationIndex::default())
+    }
+
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        DjangoReverseRelationIndex::default()
     }
 }
 

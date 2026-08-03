@@ -745,6 +745,14 @@ impl VisitMut<Type> for DjangoReverseRelationIndex {
     }
 }
 
+impl VisitTrait<Type> for DjangoReverseRelationIndex {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        for (_, fields) in self.0.iter() {
+            fields.recurse(f);
+        }
+    }
+}
+
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ProtocolMetadata {
     /// All members of the protocol, excluding ones defined on `object` and not overridden in a subclass.
