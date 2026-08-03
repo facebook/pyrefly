@@ -222,7 +222,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             dunder::ITER,
             params,
             self.heap
-                .mk_class_type(self.stdlib.iterable(self.unions(element_types))),
+                .mk_class_type(self.stdlib.iterator(self.unions(element_types))),
         );
         ClassSynthesizedField::new(ty)
     }
