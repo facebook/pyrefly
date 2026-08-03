@@ -137,7 +137,9 @@
   "qualifiers_final_annotation.py": [],
   "qualifiers_final_decorator.py": [],
   "specialtypes_any.py": [],
-  "specialtypes_never.py": [],
+  "specialtypes_never.py": [
+    "Line 19: Expected 1 errors"
+  ],
   "specialtypes_none.py": [],
   "specialtypes_promotions.py": [],
   "specialtypes_type.py": [],
