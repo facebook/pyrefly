@@ -3290,6 +3290,24 @@ impl DisplayWith<Bindings> for BindingClassMetadata {
     }
 }
 
+/// Binding for Django relations in a module, used to synthesize reverse relationships.
+#[derive(Clone, Debug)]
+pub struct BindingDjangoRelations {
+    pub classes: Box<[BindingDjangoRelationClass]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BindingDjangoRelationClass {
+    pub class_idx: Idx<KeyClass>,
+    pub fields: Box<[Idx<KeyClassField>]>,
+}
+
+impl DisplayWith<Bindings> for BindingDjangoRelations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &Bindings) -> fmt::Result {
+        write!(f, "BindingDjangoRelations(len={})", self.classes.len())
+    }
+}
+
 /// Binding for the class's MRO
 /// This requires base classes; these should match what `BindingClassMetadata` has.
 #[derive(Clone, Debug)]
