@@ -1372,25 +1372,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 func.signature.recurse_mut(&mut visit);
             }
-            Type::Concatenate(prefix, pspec) => {
-                for t in prefix {
+            Type::Concatenate(..) => {
+                let mut visit = |t: &mut Type| {
                     self.tvars_to_tparams_for_type_alias(
-                        t.ty_mut(),
+                        t,
                         alias_anchor,
                         seen_type_vars,
                         seen_type_var_tuples,
                         seen_param_specs,
                         tparams,
                     )
-                }
-                self.tvars_to_tparams_for_type_alias(
-                    pspec,
-                    alias_anchor,
-                    seen_type_vars,
-                    seen_type_var_tuples,
-                    seen_param_specs,
-                    tparams,
-                )
+                };
+                ty.recurse_mut(&mut visit);
             }
             Type::Tuple(tuple) => {
                 let mut visit = |t: &mut Type| {
