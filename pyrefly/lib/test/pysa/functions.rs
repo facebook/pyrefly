@@ -1638,9 +1638,9 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
                         required: true,
                     }],
                     PysaType::new(
-                        "typing.Iterable[Unknown]".to_owned(),
+                        "typing.Iterator[Unknown]".to_owned(),
                         ClassNamesFromType::from_classes(
-                            vec![get_class_ref("typing", "Iterable", context)],
+                            vec![get_class_ref("typing", "Iterator", context)],
                             true,
                         ),
                     ),
