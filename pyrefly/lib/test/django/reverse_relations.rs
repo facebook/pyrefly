@@ -295,10 +295,11 @@ assert_type(place.restaurant, Restaurant)
 
 // ManyToManyField reverse relation: returns a manager like FK
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_many_to_many_reverse_default_name,
     r#"
 from django.db import models
+from django.db.models.fields.related_descriptors import ManyRelatedManager
+from typing import assert_type
 
 class Tag(models.Model):
     name = models.CharField(max_length=50)
@@ -308,7 +309,7 @@ class Article(models.Model):
 
 tag = Tag()
 # ManyToMany default reverse name is <model_lowercase>_set
-tag.article_set  # E: `Tag` has no attribute `article_set`
+assert_type(tag.article_set, ManyRelatedManager[Article, models.Model])
 "#,
 );
 
@@ -347,10 +348,11 @@ place.restaurant  # E: `Place` has no attribute `restaurant`
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_many_to_many_reverse_custom_name,
     r#"
 from django.db import models
+from django.db.models.fields.related_descriptors import ManyRelatedManager
+from typing import assert_type
 
 class Tag(models.Model):
     name = models.CharField(max_length=50)
@@ -359,7 +361,7 @@ class Article(models.Model):
     tags = models.ManyToManyField(Tag, related_name='tagged_articles')
 
 tag = Tag()
-tag.tagged_articles  # E: `Tag` has no attribute `tagged_articles`
+assert_type(tag.tagged_articles, ManyRelatedManager[Article, models.Model])
 "#,
 );
 
@@ -399,10 +401,11 @@ person.person_set  # E: `Person` has no attribute `person_set`
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_many_to_many_self_reference_asymmetrical,
     r#"
 from django.db import models
+from django.db.models.fields.related_descriptors import ManyRelatedManager
+from typing import assert_type
 
 class Person(models.Model):
     name = models.CharField(max_length=100)
@@ -411,6 +414,23 @@ class Person(models.Model):
 
 person = Person()
 # With symmetrical=False, reverse accessor is created
-person.followers  # E: `Person` has no attribute `followers`
+assert_type(person.followers, ManyRelatedManager[Person, models.Model])
+"#,
+);
+
+django_testcase!(
+    test_many_to_many_self_reference_dynamic_symmetry,
+    r#"
+from django.db import models
+from django.db.models.fields.related_descriptors import ManyRelatedManager
+from typing import assert_type
+
+symmetrical = False
+
+class Person(models.Model):
+    following = models.ManyToManyField('self', symmetrical=symmetrical, related_name='followers')
+
+person = Person()
+assert_type(person.followers, ManyRelatedManager[Person, models.Model])
 "#,
 );

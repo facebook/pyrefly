@@ -81,6 +81,7 @@ const CHAR_FIELD: Name = Name::new_static("CharField");
 const MANY_TO_MANY_FIELD: Name = Name::new_static("ManyToManyField");
 const MODEL: Name = Name::new_static("Model");
 const MANYRELATEDMANAGER: Name = Name::new_static("ManyRelatedManager");
+const SYMMETRICAL: Name = Name::new_static("symmetrical");
 
 /// Find a keyword argument by name and return its value expression.
 fn find_keyword<'a>(call_expr: &'a ExprCall, name: &Name) -> Option<&'a Expr> {
@@ -106,6 +107,7 @@ const RELATED_MANAGER: Name = Name::new_static("RelatedManager");
 enum DjangoRelationKind {
     ForeignKey,
     OneToOne,
+    ManyToMany,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -639,6 +641,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::ClassDef(class_def) => class_def,
                     _ => continue,
                 };
+                if relation_kind == DjangoRelationKind::ManyToMany
+                    && self.is_symmetrical_self_m2m(call_expr, source_class, target_class)
+                {
+                    continue;
+                }
                 let Some(related_name) =
                     self.django_related_name(call_expr, source_class, relation_kind)
                 else {
@@ -675,6 +682,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         if self.is_one_to_one_field(field_class) {
             Some(DjangoRelationKind::OneToOne)
+        } else if self.is_many_to_many_field(field_class) {
+            Some(DjangoRelationKind::ManyToMany)
         } else if self.is_foreign_key_like_field(field_class) {
             Some(DjangoRelationKind::ForeignKey)
         } else {
@@ -691,6 +700,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match relation_kind {
             DjangoRelationKind::ForeignKey => self.get_related_manager_type(source_type),
             DjangoRelationKind::OneToOne => Some(source_type),
+            DjangoRelationKind::ManyToMany => self.get_manager_type(source_type),
         }
     }
 
@@ -717,7 +727,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         relation_kind: DjangoRelationKind,
     ) -> Name {
         let mut name = source_class.name().as_str().to_lowercase();
-        if relation_kind == DjangoRelationKind::ForeignKey {
+        if matches!(
+            relation_kind,
+            DjangoRelationKind::ForeignKey | DjangoRelationKind::ManyToMany
+        ) {
             name.push_str("_set");
         }
         Name::new(name)
@@ -754,5 +767,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         Some(Name::new(substituted))
+    }
+
+    fn is_symmetrical_self_m2m(
+        &self,
+        call_expr: &ExprCall,
+        source_class: &Class,
+        target_class: &Class,
+    ) -> bool {
+        if source_class != target_class {
+            return false;
+        }
+        // Suppress the reverse accessor only when symmetry is statically known.
+        match find_keyword(call_expr, &SYMMETRICAL) {
+            None => true,
+            Some(Expr::NoneLiteral(_)) => true,
+            Some(Expr::BooleanLiteral(lit)) => lit.value,
+            Some(_) => false,
+        }
     }
 }
