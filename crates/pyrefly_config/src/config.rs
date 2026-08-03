@@ -892,6 +892,13 @@ impl ConfigFile {
             .chain(self.search_path_from_file.iter())
     }
 
+    /// The root that stdlib modules are found under in a custom typeshed, if
+    /// one is configured. A typeshed checkout keeps its stdlib stubs in
+    /// `stdlib/`, so `<typeshed>/stdlib/typing.pyi` is the module `typing`.
+    pub fn typeshed_stdlib_path(&self) -> Option<PathBuf> {
+        self.typeshed_path.as_ref().map(|p| p.join("stdlib"))
+    }
+
     /// The heuristic import_root, if search path heuristics are enabled.
     pub fn heuristic_search_path(&self) -> impl Iterator<Item = &PathBuf> + Clone {
         if self.disable_search_path_heuristics {
@@ -1112,14 +1119,17 @@ impl ConfigFile {
         {
             Some(handle) => handle.dupe(),
             None => {
-                // Order: explicit search paths (user intent) > site-package
-                // paths (known third-party roots) > heuristic import_root.
-                // This ensures files in site-packages nested under the project
-                // root resolve from the site-package prefix, not from the
-                // heuristic project root, while still letting explicit search
-                // paths override when the user has configured them.
+                // Order: explicit search paths (user intent) > custom typeshed
+                // stdlib > site-package paths (known third-party roots) >
+                // heuristic import_root. This ensures files in site-packages or
+                // a custom typeshed nested under the project root resolve from
+                // that prefix, not from the heuristic project root, while still
+                // letting explicit search paths override when the user has
+                // configured them.
+                let typeshed_stdlib = self.typeshed_stdlib_path();
                 let search_paths = self
                     .explicit_search_path()
+                    .chain(typeshed_stdlib.iter())
                     .chain(self.site_package_path())
                     .chain(self.heuristic_search_path());
                 let path = module_path.as_path();
@@ -3884,6 +3894,35 @@ output-format = "omit-errors"
 
         let handle = config.handle_from_module_path(ModulePath::filesystem(init));
         assert_eq!(handle.module(), ModuleName::from_str("fastapi"));
+    }
+
+    #[test]
+    fn test_custom_typeshed_stdlib_wins_over_heuristic_import_root() {
+        // A file inside a custom typeshed's `stdlib/` is the stdlib module of
+        // that name, not a module named after its path from the project root.
+        // Getting this wrong means `typing.pyi` is checked as `stdlib.typing`,
+        // so the special forms it defines (`TypeVar`, `Protocol`, ...) are no
+        // longer recognized as special.
+        let root = TempDir::new().unwrap();
+        let typeshed = root.path().join("typeshed");
+        let stdlib = typeshed.join("stdlib");
+        fs::create_dir_all(&stdlib).unwrap();
+        let typing = stdlib.join("typing.pyi");
+        fs::write(&typing, "").unwrap();
+
+        let mut config = ConfigFile {
+            import_root: Some(root.path().to_path_buf()),
+            typeshed_path: Some(typeshed),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.python_environment.set_empty_to_default();
+
+        let handle = config.handle_from_module_path(ModulePath::filesystem(typing));
+        assert_eq!(handle.module(), ModuleName::from_str("typing"));
     }
 
     #[test]

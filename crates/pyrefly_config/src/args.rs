@@ -124,7 +124,7 @@ pub struct EnvironmentArgs {
     pub(crate) skip_interpreter_query: bool,
 
     /// Override the bundled typeshed with a custom path.
-    #[arg(long)]
+    #[arg(long, value_parser = absolute_path_parser)]
     pub(crate) typeshed_path: Option<PathBuf>,
 }
 
