@@ -470,15 +470,21 @@ Tup = namedtuple("Tup", ["a", "b"], defaults=(1, 2, 3))  # E: Too many defaults:
 testcase!(
     test_named_tuple_dunder_unpack,
     r#"
-from typing import NamedTuple
+from typing import NamedTuple, assert_type
+
 class A(NamedTuple):
     a: int
     b: str
-    def __repr__(self) -> str:
-        return "A"
 
-def test(x: A) -> None:
+    def test_unpack_self(self) -> None:
+        a, b = self
+        assert_type(a, int)
+        assert_type(b, str)
+
+def test_unpack(x: A) -> None:
     a, b = x
+    assert_type(a, int)
+    assert_type(b, str)
 "#,
 );
 
