@@ -1071,6 +1071,14 @@ impl ConfigFile {
                  self.root.legacy_overload_expansion.unwrap())
     }
 
+    pub fn treat_all_caps_as_final(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_treat_all_caps_as_final, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.treat_all_caps_as_final.unwrap())
+    }
+
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
         self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
             .unwrap_or_else(||
@@ -1408,6 +1416,7 @@ impl ConfigFile {
             apply_preset_default!(legacy_overload_expansion);
             apply_preset_default!(ignore_errors_in_generated_code);
             apply_preset_default!(permissive_ignores);
+            apply_preset_default!(treat_all_caps_as_final);
         }
 
         if self.root.errors.is_none() {
@@ -1474,6 +1483,10 @@ impl ConfigFile {
 
         if self.root.legacy_overload_expansion.is_none() {
             self.root.legacy_overload_expansion = Some(false);
+        }
+
+        if self.root.treat_all_caps_as_final.is_none() {
+            self.root.treat_all_caps_as_final = Some(false);
         }
 
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
@@ -1981,6 +1994,7 @@ mod tests {
                     recursion_overflow_handler: None,
                     spec_compliant_overloads: None,
                     legacy_overload_expansion: None,
+                    treat_all_caps_as_final: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -2008,6 +2022,7 @@ mod tests {
                         recursion_overflow_handler: None,
                         spec_compliant_overloads: None,
                         legacy_overload_expansion: None,
+                        treat_all_caps_as_final: None,
                     }
                 }],
                 coverage: CoverageConfig {
@@ -2587,6 +2602,7 @@ output-format = "omit-errors"
                 recursion_overflow_handler: None,
                 spec_compliant_overloads: None,
                 legacy_overload_expansion: None,
+                treat_all_caps_as_final: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -3456,6 +3472,7 @@ output-format = "omit-errors"
                 recursion_overflow_handler: None,
                 spec_compliant_overloads: None,
                 legacy_overload_expansion: None,
+                treat_all_caps_as_final: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -3497,6 +3514,7 @@ output-format = "omit-errors"
                 recursion_overflow_handler: None,
                 spec_compliant_overloads: None,
                 legacy_overload_expansion: None,
+                treat_all_caps_as_final: None,
             },
             sub_configs: vec![],
             ..Default::default()

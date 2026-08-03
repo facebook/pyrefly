@@ -533,6 +533,57 @@ with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is ma
 );
 
 testcase!(
+    test_all_caps_as_final_reassign,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO = 1
+FOO = 2  # E: Cannot assign to variable `FOO` because it is marked final
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2  # E: Cannot assign to variable `LOCAL` because it is marked final
+
+Bar = 1
+Bar = 2
+"#,
+);
+
+testcase!(
+    test_all_caps_as_final_disabled_by_default,
+    r#"
+FOO = 1
+FOO = 2
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2
+"#,
+);
+
+fn env_all_caps_imported_final() -> TestEnv {
+    let mut t = TestEnv::new().enable_treat_all_caps_as_final();
+    t.add(
+        "foo",
+        r#"
+from typing import Final
+MAX_SIZE: Final = 42
+"#,
+    );
+    t
+}
+
+// Reassigning an ALL_CAPS name that is also imported as final would trigger both
+// the imported-final check and the ALL_CAPS check; only the former should report.
+testcase!(
+    test_all_caps_imported_final_single_error,
+    env_all_caps_imported_final(),
+    r#"
+from foo import MAX_SIZE
+MAX_SIZE = 10  # E: Cannot assign to `MAX_SIZE` because it is imported as final
+"#,
+);
+
+testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type

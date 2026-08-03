@@ -311,6 +311,10 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_overload_expansion: Option<bool>,
 
+    /// Whether to treat ALL_CAPS names as final after their first assignment, in any scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treat_all_caps_as_final: Option<bool>,
+
     /// Any unknown config items
     #[serde(flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -426,6 +430,10 @@ impl ConfigBase {
 
     pub fn get_legacy_overload_expansion(base: &Self) -> Option<bool> {
         base.legacy_overload_expansion
+    }
+
+    pub fn get_treat_all_caps_as_final(base: &Self) -> Option<bool> {
+        base.treat_all_caps_as_final
     }
 }
 

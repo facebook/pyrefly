@@ -103,6 +103,7 @@ use crate::binding::scope::UnusedImport;
 use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
+use crate::binding::scope::is_constant_name;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
 use crate::config::error_kind::ErrorKind;
@@ -292,6 +293,7 @@ pub struct BindingsBuilder<'a> {
     /// In CLI batch-check mode this is false to avoid wasted work.
     pub analyze_unannotated_for_ide: bool,
     pub infer_return_types: InferReturnTypes,
+    pub treat_all_caps_as_final: bool,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
@@ -616,6 +618,7 @@ impl Bindings {
         check_unannotated_defs: bool,
         analyze_unannotated_for_ide: bool,
         infer_return_types: InferReturnTypes,
+        treat_all_caps_as_final: bool,
     ) -> Self {
         let pytest_info = PytestBindingInfo::from_module(&x);
         // Compute module ranges from the AST before consuming it. These are
@@ -638,6 +641,7 @@ impl Bindings {
             check_unannotated_defs,
             analyze_unannotated_for_ide,
             infer_return_types,
+            treat_all_caps_as_final,
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
@@ -1918,8 +1922,14 @@ impl<'a> BindingsBuilder<'a> {
         if name.is_empty() {
             return None;
         }
-        self.check_for_type_alias_redefinition(name, idx);
-        self.check_for_imported_final_reassignment(name, idx);
+        // Suppress the ALL_CAPS check when a more specific check already reported
+        // on this reassignment, to avoid emitting two overlapping errors. Both
+        // checks are always run so their own diagnostics are unaffected.
+        let type_alias_reported = self.check_for_type_alias_redefinition(name, idx);
+        let imported_final_reported = self.check_for_imported_final_reassignment(name, idx);
+        if !type_alias_reported && !imported_final_reported {
+            self.check_for_all_caps_final_reassignment(name, idx);
+        }
         let name = Hashed::new(name);
         let write_info = self
             .scopes
@@ -1937,32 +1947,38 @@ impl<'a> BindingsBuilder<'a> {
         write_info.annotation
     }
 
-    fn check_for_type_alias_redefinition(&self, name: &Name, idx: Idx<Key>) {
-        let prev_idx = self.scopes.current_flow_idx(name);
-        if let Some(prev_idx) = prev_idx {
-            if matches!(
-                self.idx_to_binding(prev_idx),
-                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
-            ) {
-                self.error(
-                    self.idx_to_key(idx).range(),
-                    ErrorKind::Redefinition,
-                    format!("Cannot redefine existing type alias `{name}`",),
-                )
-            } else if matches!(
-                self.idx_to_binding(idx),
-                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
-            ) {
-                self.error(
-                    self.idx_to_key(idx).range(),
-                    ErrorKind::Redefinition,
-                    format!("Cannot redefine existing name `{name}` as a type alias",),
-                );
-            }
+    /// Returns `true` if an error was reported for this reassignment.
+    fn check_for_type_alias_redefinition(&self, name: &Name, idx: Idx<Key>) -> bool {
+        let Some(prev_idx) = self.scopes.current_flow_idx(name) else {
+            return false;
+        };
+        if matches!(
+            self.idx_to_binding(prev_idx),
+            Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
+        ) {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorKind::Redefinition,
+                format!("Cannot redefine existing type alias `{name}`"),
+            );
+            return true;
         }
+        if matches!(
+            self.idx_to_binding(idx),
+            Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
+        ) {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorKind::Redefinition,
+                format!("Cannot redefine existing name `{name}` as a type alias"),
+            );
+            return true;
+        }
+        false
     }
 
-    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+    /// Returns `true` if an error was reported for this reassignment.
+    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) -> bool {
         let prev_idx = self.scopes.current_flow_idx(name);
         if let Some(prev_idx) = prev_idx
             && let Some(Binding::Import(prev)) = self.idx_to_binding(prev_idx)
@@ -1974,7 +1990,7 @@ impl<'a> BindingsBuilder<'a> {
                 && cur.module == prev.module
                 && cur.name == prev.name
             {
-                return;
+                return false;
             }
             let prev_origin = self.lookup.export_origin(prev.module, &prev.name);
             if prev_origin.is_final {
@@ -1983,14 +1999,30 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(Binding::Import(cur)) = self.idx_to_binding(idx)
                     && self.lookup.export_origin(cur.module, &cur.name).origin == prev_origin.origin
                 {
-                    return;
+                    return false;
                 }
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorKind::BadAssignment,
                     format!("Cannot assign to `{name}` because it is imported as final"),
                 );
+                return true;
             }
+        }
+        false
+    }
+
+    fn check_for_all_caps_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+        if self.treat_all_caps_as_final
+            && is_constant_name(name)
+            && !self.scopes.is_final_in_current_scope(name)
+            && self.scopes.current_flow_idx(name).is_some()
+        {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorKind::BadAssignment,
+                format!("Cannot assign to variable `{name}` because it is marked final"),
+            );
         }
     }
 
