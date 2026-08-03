@@ -5,9 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::django_testcase;
 use crate::test::django::util::django_env;
 use crate::test::util::TestEnv;
+use crate::test::util::get_class;
 use crate::testcase;
 
 // Cross-module reverse relations: when the FK target is in a different module,
@@ -23,6 +25,12 @@ class Author(models.Model):
     name = models.CharField(max_length=100)
 "#,
     );
+    env
+}
+
+fn django_env_with_module(name: &str, code: &str) -> TestEnv {
+    let mut env = django_env();
+    env.add(name, code);
     env
 }
 
@@ -73,10 +81,11 @@ assert_type(reporter.article_set, RelatedManager[Article])
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_custom_name,
     r#"
 from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+from typing import assert_type
 
 class Author(models.Model):
     name = models.CharField(max_length=100)
@@ -86,7 +95,7 @@ class Book(models.Model):
 
 author = Author()
 # Custom related_name should be used instead of default
-author.written_books  # E: `Author` has no attribute `written_books`
+assert_type(author.written_books, RelatedManager[Book])
 "#,
 );
 
@@ -106,6 +115,110 @@ author = Author()
 # No reverse accessor should exist
 author.book_set  # E: `Author` has no attribute `book_set`
 "#,
+);
+
+// An attribute whose name is not an identifier is unreachable from Python code, so the
+// only way to observe one is to look at the synthesized fields directly.
+#[test]
+fn test_foreign_key_reverse_invalid_identifier_synthesizes_nothing() {
+    let mut env = django_env();
+    env.add(
+        "main",
+        r#"
+from django.db import models
+
+class Author(models.Model): ...
+
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name='written_books')
+
+class Magazine(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name='123articles')
+"#,
+    );
+    let (state, handle_for) = env.to_state();
+    let handle = handle_for("main");
+    let author = get_class("Author", &handle, &state);
+    let solutions = state.transaction().get_solutions(&handle).unwrap();
+    let fields = solutions.get(&KeyClassSynthesizedFields(author.index()));
+    let mut names = fields
+        .fields()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    names.sort();
+    // `123articles` is dropped entirely rather than synthesized under an unusable name.
+    assert_eq!(names, vec!["id", "pk", "written_books"]);
+}
+
+// A related name that is not a valid identifier names an attribute that can never be
+// accessed, so no reverse relation is created at all -- not even under the default name.
+django_testcase!(
+    test_foreign_key_reverse_invalid_identifier,
+    r#"
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name=' written_books ')
+
+class Magazine(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name='123articles')
+
+class Poem(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name='written.poems')
+
+author = Author()
+author.written_books  # E: `Author` has no attribute `written_books`
+author.book_set  # E: `Author` has no attribute `book_set`
+author.magazine_set  # E: `Author` has no attribute `magazine_set`
+author.poem_set  # E: `Author` has no attribute `poem_set`
+"#,
+);
+
+django_testcase!(
+    test_foreign_key_reverse_unknown_app_label,
+    r#"
+from django.db import models
+
+class Author(models.Model): ...
+
+class Book(models.Model):
+    author = models.ForeignKey(
+        Author,
+        on_delete=models.CASCADE,
+        related_name='%(app_label)s_books',
+    )
+
+author = Author()
+author.main_books  # E: `Author` has no attribute `main_books`
+"#,
+);
+
+testcase!(
+    test_foreign_key_reverse_app_label,
+    django_env_with_module(
+        "myapp.models",
+        r#"
+from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+from typing import assert_type
+
+class Author(models.Model): ...
+
+class Book(models.Model):
+    author = models.ForeignKey(
+        Author,
+        on_delete=models.CASCADE,
+        related_name='%(app_label)s_%(class)s_books',
+    )
+
+author = Author()
+assert_type(author.myapp_book_books, RelatedManager[Book])
+"#
+    ),
+    "",
 );
 
 // Self-referential FK creates reverse accessor on the same model

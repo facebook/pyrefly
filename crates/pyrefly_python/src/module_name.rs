@@ -535,7 +535,7 @@ impl ModuleName {
 }
 
 /// Whether `str.isidentifier()` would return true (Python 3 rules, no keyword check).
-fn is_python_identifier(s: &str) -> bool {
+pub fn is_python_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
         Some(c) if c == '_' || c.is_alphabetic() => {}

@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::is_python_identifier;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
@@ -672,6 +673,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None | Some(Expr::NoneLiteral(_)) => {
                 Some(self.django_default_related_name(source_class))
             }
+            Some(Expr::StringLiteral(lit)) => {
+                self.format_related_name(lit.value.to_str(), source_class)
+            }
             _ => None,
         }
     }
@@ -681,5 +685,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             "{}_set",
             source_class.name().as_str().to_lowercase()
         ))
+    }
+
+    fn format_related_name(&self, raw: &str, source_class: &Class) -> Option<Name> {
+        if raw.ends_with('+') {
+            return None;
+        }
+
+        let class_name = source_class.name().as_str().to_lowercase();
+        let mut substituted = raw.replace("%(class)s", &class_name);
+        if substituted.contains("%(app_label)s") {
+            let module_name = source_class.module_name();
+            let mut module_parts = module_name.as_str().rsplit('.');
+            let mut child = module_parts
+                .next()
+                .expect("rsplit always yields at least one element");
+            let mut app_label = None;
+            for parent in module_parts {
+                if child == "models" {
+                    app_label = Some(parent);
+                    break;
+                }
+                child = parent;
+            }
+            substituted = substituted.replace("%(app_label)s", &app_label?.to_lowercase());
+        }
+
+        // Django rejects a related name that is not a valid identifier. This also discards
+        // names with unsubstituted placeholders, which are never valid identifiers.
+        if !is_python_identifier(&substituted) {
+            return None;
+        }
+
+        Some(Name::new(substituted))
     }
 }
