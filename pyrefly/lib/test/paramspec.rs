@@ -920,3 +920,43 @@ service(service_name="nginx", running=True, _sudo=True, name="Start nginx")
 service(nonexistent_param=True)  # E: Missing argument `service_name` # E: Unexpected keyword argument `nonexistent_param`
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3706
+testcase!(
+    bug = "Should reveal `A[[int, int]]`",
+    test_concatenate_paramspec_tail_in_class_targ,
+    r#"
+from typing import Concatenate, reveal_type
+
+class A[**P]:
+    def transform(self) -> A[Concatenate[int, P]]:
+        raise NotImplementedError
+
+reveal_type(A[int]().transform())  # E: revealed type: A[Concatenate[int, P]]
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3828
+testcase!(
+    bug = "Should accept both calls and reveal `B[[]]` / `B[[str, int]]`",
+    test_concatenate_paramspec_tail_in_class_param,
+    r#"
+from typing import Concatenate, reveal_type
+
+class A[**P]:
+    pass
+
+class B[**P]:
+    pass
+
+def transform[**P](arg: A[Concatenate[int, P]]) -> B[P]:
+    raise NotImplementedError
+
+a1: A[[int]] = A()
+reveal_type(transform(a1))  # E: revealed type: B[@_]  # E: Argument `A[[int]]` is not assignable to parameter `arg` with type `A[Concatenate[int, P]]`
+
+a2: A[[int, str, int]] = A()
+reveal_type(transform(a2))  # E: revealed type: B[@_]  # E: Argument `A[[int, str, int]]` is not assignable to parameter `arg` with type `A[Concatenate[int, P]]`
+"#,
+);
+
