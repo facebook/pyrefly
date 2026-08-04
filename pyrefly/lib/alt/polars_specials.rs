@@ -277,6 +277,15 @@ pub struct PolarsConstruct<'b> {
     strict: bool,
 }
 
+pub(crate) enum PolarsCallSpecialization {
+    DataFrame {
+        columns: Vec<(Name, PolarsDType)>,
+        kind: DataFrameKind,
+        completeness: SchemaCompleteness,
+    },
+    Series(PolarsDType),
+}
+
 /// A `pl.Series(...)` call reduced to what element inference needs. The name does not affect the
 /// dtype, so only the `values` expression, an optional `dtype=` override, and `strict` are kept.
 struct SeriesConstruct<'b> {
@@ -626,6 +635,77 @@ impl Reducer {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    pub(crate) fn infer_polars_call_specialization(
+        &self,
+        callee: &Type,
+        arguments: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<PolarsCallSpecialization> {
+        if let Type::ClassDef(cls) = callee
+            && (is_polars_dataframe(cls) || is_pandas_dataframe(cls))
+            && let Some(construct) = self.polars_construct_options(arguments)
+        {
+            let kind = if is_polars_dataframe(cls) {
+                DataFrameKind::Polars
+            } else {
+                DataFrameKind::Pandas
+            };
+            return self
+                .infer_dataframe_schema(&construct, kind.clone(), errors)
+                .map(
+                    |(columns, completeness)| PolarsCallSpecialization::DataFrame {
+                        columns,
+                        kind,
+                        completeness,
+                    },
+                );
+        }
+        if is_polars_concat(callee) {
+            return self.infer_polars_concat(arguments).map(|columns| {
+                PolarsCallSpecialization::DataFrame {
+                    columns,
+                    kind: DataFrameKind::Polars,
+                    completeness: SchemaCompleteness::Complete,
+                }
+            });
+        }
+        if let Type::ClassDef(cls) = callee
+            && is_polars_series(cls)
+        {
+            return self
+                .infer_series_dtype(arguments)
+                .map(PolarsCallSpecialization::Series);
+        }
+        None
+    }
+
+    pub(crate) fn apply_polars_call_specialization(
+        &self,
+        result: Type,
+        specialization: Option<PolarsCallSpecialization>,
+    ) -> Type {
+        match (specialization, result) {
+            (
+                Some(PolarsCallSpecialization::DataFrame {
+                    columns,
+                    kind,
+                    completeness,
+                }),
+                Type::ClassType(underlying),
+            ) => DataFrameSchema {
+                underlying,
+                columns,
+                completeness,
+                kind,
+            }
+            .to_type(),
+            (Some(PolarsCallSpecialization::Series(dtype)), Type::ClassType(underlying)) => {
+                SeriesSchema { underlying, dtype }.to_type()
+            }
+            (_, result) => result,
+        }
+    }
+
     /// Map a `pl.<DType>` expression such as `pl.Int8` or `pl.Datetime("us")` to its dtype, or `None`
     /// to fall back. The class must resolve into the `polars` package, so an unrelated symbol reusing a
     /// dtype name like `other.Float64` is not mistaken for one.
