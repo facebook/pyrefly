@@ -752,7 +752,7 @@ impl GleanState<'_> {
         {
             self.transaction
                 .ad_hoc_solve(self.handle, "glean_attribute_definition", |solver| {
-                    let completions = |ty| solver.completions(ty, Some(attr_name), false);
+                    let completions = |ty| solver.completions(ty, Some(attr_name), false, false);
 
                     let tys = match base_type.clone() {
                         Type::Union(u) => u.members,
