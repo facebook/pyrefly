@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_types::callable::BodyKind;
 use pyrefly_types::literal::LitStyle;
@@ -26,6 +27,7 @@ use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -66,6 +68,7 @@ use crate::types::class::ClassType;
 use crate::types::keywords::KwCall;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
+use crate::types::module::ModuleType;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -2191,6 +2194,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
         } else {
             self.expand_mut(&mut callee_ty);
+            self.check_unittest_mock_patch_target(&callee_ty, &x.arguments, errors);
 
             let args;
             let kws;
@@ -2453,6 +2457,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         self.apply_polars_call_specialization(result, polars_call)
+    }
+
+    fn check_unittest_mock_patch_target(
+        &self,
+        callee_ty: &Type,
+        arguments: &Arguments,
+        errors: &ErrorCollector,
+    ) {
+        let Type::ClassType(cls) = callee_ty else {
+            return;
+        };
+        if !cls.has_qname("unittest.mock", "_patcher") {
+            return;
+        }
+        if arguments.args.len() > 1 || arguments.keywords.iter().any(|kw| kw.arg.is_none()) {
+            return;
+        }
+        if arguments
+            .find_keyword("create")
+            .is_some_and(|kw| !matches!(&kw.value, Expr::BooleanLiteral(lit) if !lit.value))
+        {
+            return;
+        }
+        let Some(target_expr) = arguments.find_argument_value("target", 0) else {
+            return;
+        };
+        let Expr::StringLiteral(ExprStringLiteral { value, .. }) = target_expr else {
+            return;
+        };
+        let range = target_expr.range();
+        let target = value.to_str();
+        let parts: Vec<&str> = target.split('.').collect();
+        if parts.len() < 2 || parts.iter().any(|p| p.is_empty()) {
+            return;
+        }
+
+        let Some((module_prefix_len, module)) = (1..parts.len()).rev().find_map(|i| {
+            let candidate = ModuleName::from_str(&parts[..i].join("."));
+            (candidate == self.module().name()
+                || self.exports.module_exists(candidate).finding().is_some())
+            .then_some((i, candidate))
+        }) else {
+            // The target may be resolved dynamically at runtime, so only check paths rooted in a
+            // module that is available in the current environment.
+            return;
+        };
+
+        let mut base_ty = ModuleType::new_as(module).to_type(self.heap);
+        for attr in &parts[module_prefix_len..] {
+            base_ty = self.type_of_attr_get(
+                &base_ty,
+                &Name::new(*attr),
+                range,
+                errors,
+                None,
+                "unittest.mock.patch target",
+            );
+        }
     }
 
     pub fn freeform_call_infer(
