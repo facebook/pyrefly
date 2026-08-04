@@ -1295,7 +1295,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .insert(&id.id, (*ty, origin.clone(), **req == Required::Required));
                         hint = Some((origin.clone(), *ty));
                         has_matching_param = true;
-                    } else if kwargs.is_none_or(|(_, ty)| ty.is_none()) {
+                    } else if matches!(callable_name, Some(FunctionKind::DataclassTransform))
+                        || kwargs.is_none_or(|(_, ty)| ty.is_none())
+                    {
                         unexpected_keyword_error(&id.id, id.range);
                     }
                     if let Some((origin, expected)) = &hint {
