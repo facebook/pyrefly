@@ -729,6 +729,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         None
     }
 
+    /// The string an expression resolves to from its inferred `Literal[str]`, or `None` for any wider
+    /// type.
+    fn polars_string_literal(&self, expr: &Expr) -> Option<String> {
+        // Swallow errors here, since a fallback call path re-infers the argument.
+        let ty = self.expr_infer(expr, &self.error_swallower());
+        match &ty {
+            Type::Literal(lit) => match &lit.value {
+                Lit::Str(value) => Some(value.to_string()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// A data dict literal as an order-preserving name-to-value map, or `None` if a key does not
     /// resolve to a single column name or repeats (Python keeps only the last value for a repeated
     /// key).
@@ -1304,15 +1318,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for kw in keywords {
             let arg = kw.arg.as_ref()?;
             if arg.id.as_str() == "how" {
-                // Swallow errors here, since the fallback call path re-infers this and is the sole reporter.
-                let ty = self.expr_infer(&kw.value, &self.error_swallower());
-                let Type::Literal(lit) = &ty else {
-                    return None;
-                };
-                let Lit::Str(value) = &lit.value else {
-                    return None;
-                };
-                how = match value.as_str() {
+                how = match self.polars_string_literal(&kw.value)?.as_str() {
                     "vertical" => ConcatHow::Vertical,
                     "vertical_relaxed" => ConcatHow::VerticalRelaxed,
                     _ => return None,
@@ -2376,10 +2382,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match arg.id.as_str() {
                 "on" => on = Some(&kw.value),
                 "how" => {
-                    let Expr::StringLiteral(s) = &kw.value else {
-                        return None;
-                    };
-                    how = JoinHow::parse(s.value.to_str())?;
+                    how = JoinHow::parse(self.polars_string_literal(&kw.value)?.as_str())?;
                 }
                 _ => return None,
             }

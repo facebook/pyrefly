@@ -5696,3 +5696,29 @@ df = pl.DataFrame({"a": [1]})
 reveal_type(df.cast({A: pl.Float64}))  # E: revealed type: DataFrame[a: Float64]
 "#,
 );
+
+testcase!(
+    test_join_final_how,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+HOW: Final = "inner"
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Float64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "b": pl.String})
+reveal_type(d1.join(d2, on="k", how=HOW))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String]
+"#,
+);
+
+testcase!(
+    test_concat_final_how,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+HOW: Final = "vertical"
+d1 = pl.DataFrame({"a": [1]})
+d2 = pl.DataFrame({"a": [2]})
+reveal_type(pl.concat([d1, d2], how=HOW))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
