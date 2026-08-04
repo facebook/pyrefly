@@ -5,8 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cell::RefCell;
 use std::iter;
 use std::sync::Arc;
+
+thread_local! {
+    static CONSTRUCTION_GUARD: RefCell<Vec<ClassType>> = RefCell::new(Vec::new());
+}
 
 use pyrefly_python::dunder;
 use pyrefly_types::data_frame::DataFrameSchema;
@@ -135,12 +140,13 @@ impl CallTarget {
 pub enum CallTargetLookup {
     /// When a type is callable, this represents what can be called.
     Ok(Box<CallTarget>),
-    /// When a type is not callable, still collect what can be called in callable "subcases". This is
-    /// for example used for a union type that is not callable, but some of its "subcases" are callable.
+    /// When a type is not callable, still collect callable targets from
+    /// callable "subcases", e.g., for a union type that is not callable,
+    /// but some of its subcases are.
     Error(Type, Vec<CallTarget>),
     /// `__call__` resolves back to the same class, creating infinite recursion
-    /// through descriptor resolution. This is distinct from `Error` because
-    /// the type *has* a `__call__`, it just can't be resolved to a concrete target.
+    /// through descriptor resolution. Distinct from Error — the type has a
+    /// `__call__`, just can't resolve to a concrete target.
     CircularCall(Type),
 }
 
@@ -385,11 +391,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some(*quantified),
                         )
                     }
-                    // For unhandled cases, we accept any arguments and return
-                    // the quantified type itself.
-                    // We can't handle constraints because we need to take
-                    // intersection of constructor types of all constraints,
-                    // which is currently not possible.
+                    // Unhandled: accept any args, return quantified type.
+                    // Can't handle constraints (no intersection of ctor types).
                     _ => CallTarget::Callable(TargetWithTParams(
                         None,
                         Callable {
@@ -499,10 +502,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None => CallTargetLookup::Error(Type::ClassType(cls), vec![]),
                 }
             }
-            // NNModule instances delegate call dispatch to their underlying class.
-            // instance_as_dunder_call resolves the stubbed `__call__` proxy for nn.Module subclasses.
-            // We patch the BoundMethod's self object to be the NNModule type so
-            // that inject_module_attrs can detect NNModule and inject its fields.
+            // NNModule delegates to underlying class. Patch BoundMethod self to NNModule
+            // so inject_module_attrs can detect it and inject its fields.
             Type::NNModule(module) => {
                 let nn_module_ty = Type::NNModule(module.clone());
                 let cls = module.class.clone();
@@ -911,17 +912,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
-        self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
-            self.construct_class_inner(
-                cls.clone(),
-                constructor_kind.clone(),
-                args,
-                keywords,
-                arguments_range,
-                callee_range,
-                context,
-                hint,
-            )
+        CONSTRUCTION_GUARD.with(|guard| {
+            let mut stack = guard.borrow_mut();
+            if stack.contains(&cls) {
+                return Type::Any(AnyStyle::Error);
+            }
+            stack.push(cls.clone());
+            drop(stack);
+            let result = self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
+                self.construct_class_inner(
+                    cls.clone(),
+                    constructor_kind.clone(),
+                    args,
+                    keywords,
+                    arguments_range,
+                    callee_range,
+                    context,
+                    hint,
+                )
+            });
+            CONSTRUCTION_GUARD.with(|g| g.borrow_mut().pop());
+            result
         })
     }
 
