@@ -964,11 +964,19 @@ pub fn testcase_for_macro(
         } else {
             let (state, handle) = env.clone().to_state();
             let t = state.transaction();
+            let project_root = PathBuf::new();
             // First check against main, so we can capture any import order errors.
-            check(t.get_errors(&[handle("main")]))?;
+            let main_errors = t.get_errors(&[handle("main")]);
+            print_errors(
+                project_root.as_path(),
+                &main_errors.collect_display_errors(),
+            );
+            check(main_errors)?;
             // THen check all handles, so we make sure the rest of the TestEnv is valid.
             let handles = env.modules.map(|(x, _, _)| handle(x.as_str()));
-            check(state.transaction().get_errors(handles.iter()))?;
+            let env_errors = state.transaction().get_errors(handles.iter());
+            print_errors(project_root.as_path(), &env_errors.collect_display_errors());
+            check(env_errors)?;
         }
         if start.elapsed().as_secs() <= limit {
             return Ok(());
