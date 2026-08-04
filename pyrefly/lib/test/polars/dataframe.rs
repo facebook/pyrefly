@@ -5640,3 +5640,59 @@ def f(i: int) -> None:
     reveal_type(df.to_series(i))  # E: revealed type: Series
 "#,
 );
+
+testcase!(
+    test_construct_final_column_key,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+A: Final = "a"
+reveal_type(pl.DataFrame({A: [1]}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_schema_final_column_key,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+A: Final = "a"
+reveal_type(pl.DataFrame(schema={A: pl.Int64}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_pandas_columns_final_key,
+    env_with_pandas_stubs(),
+    r#"
+import pandas as pd
+from typing import Final, reveal_type
+B: Final = "b"
+reveal_type(pd.DataFrame({"a": [1], "b": ["x"]}, columns=[B]))  # E: revealed type: DataFrame[b: String, ...]
+"#,
+);
+
+testcase!(
+    test_schema_overrides_final_key,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+A: Final = "a"
+reveal_type(pl.DataFrame({"a": [1]}, schema_overrides={A: pl.Float64}))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_cast_final_column_key,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+A: Final = "a"
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.cast({A: pl.Float64}))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);

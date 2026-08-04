@@ -341,40 +341,6 @@ struct SeriesConstruct<'b> {
     strict: bool,
 }
 
-/// A data dict literal as an order-preserving name-to-value map, or `None` if a key is not a
-/// string literal or repeats (Python keeps only the last value for a repeated key).
-fn dataframe_data_map(dict: &ExprDict) -> Option<SmallMap<Name, &Expr>> {
-    let mut map = SmallMap::with_capacity(dict.items.len());
-    for item in &dict.items {
-        let Some(Expr::StringLiteral(key)) = &item.key else {
-            return None;
-        };
-        if map
-            .insert(Name::new(key.value.to_str()), &item.value)
-            .is_some()
-        {
-            return None;
-        }
-    }
-    Some(map)
-}
-
-/// A list-of-dicts as an ordered column-to-per-row-values map (first-appearance order), or `None`
-/// if not a record literal we model. Only the first 100 rows are read, matching Polars'
-/// `infer_schema_length` default, so a key that first appears past row 100 is absent at runtime too.
-fn dataframe_records_map(list: &ExprList) -> Option<SmallMap<Name, Vec<&Expr>>> {
-    let mut columns: SmallMap<Name, Vec<&Expr>> = SmallMap::new();
-    for elt in list.elts.iter().take(100) {
-        let Expr::Dict(dict) = elt else {
-            return None;
-        };
-        for (name, value) in dataframe_data_map(dict)? {
-            columns.entry(name).or_default().push(value);
-        }
-    }
-    (!columns.is_empty()).then_some(columns)
-}
-
 /// How a `schema=` was written: a bare dict literal treats a `None` value as "defer to data
 /// inference", but an inline `pl.Schema({...})` forbids `None` (runtime error). They diverge on `None`.
 #[derive(Clone, Copy, PartialEq)]
@@ -763,6 +729,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         None
     }
 
+    /// A data dict literal as an order-preserving name-to-value map, or `None` if a key does not
+    /// resolve to a single column name or repeats (Python keeps only the last value for a repeated
+    /// key).
+    fn dataframe_data_map<'b>(&self, dict: &'b ExprDict) -> Option<SmallMap<Name, &'b Expr>> {
+        let mut map = SmallMap::with_capacity(dict.items.len());
+        for item in &dict.items {
+            let name = self.polars_column_name(item.key.as_ref()?)?;
+            if map.insert(name, &item.value).is_some() {
+                return None;
+            }
+        }
+        Some(map)
+    }
+
+    /// A list-of-dicts as an ordered column-to-per-row-values map (first-appearance order), or `None`
+    /// if not a record literal we model. Only the first 100 rows are read, matching Polars'
+    /// `infer_schema_length` default, so a key that first appears past row 100 is absent at runtime too.
+    fn dataframe_records_map<'b>(
+        &self,
+        list: &'b ExprList,
+    ) -> Option<SmallMap<Name, Vec<&'b Expr>>> {
+        let mut columns: SmallMap<Name, Vec<&Expr>> = SmallMap::new();
+        for elt in list.elts.iter().take(100) {
+            let Expr::Dict(dict) = elt else {
+                return None;
+            };
+            for (name, value) in self.dataframe_data_map(dict)? {
+                columns.entry(name).or_default().push(value);
+            }
+        }
+        (!columns.is_empty()).then_some(columns)
+    }
+
     /// Reduce a `pl.Series(...)` call to a `SeriesConstruct`, or `None` to fall back to the opaque
     /// Series. Positional slots are `(name, values, dtype)`, but a non-string first slot is itself the
     /// values. An ambiguous name slot, a positional-plus-keyword clash, or an unrecognized keyword
@@ -824,10 +823,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut entries = Vec::with_capacity(dict.items.len());
         let mut seen = SmallSet::new();
         for item in &dict.items {
-            let Some(Expr::StringLiteral(key)) = &item.key else {
-                return None;
-            };
-            let name = Name::new(key.value.to_str());
+            let name = self.polars_column_name(item.key.as_ref()?)?;
             if !seen.insert(name.clone()) {
                 return None;
             }
@@ -1227,10 +1223,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     };
                     let mut names = Vec::with_capacity(list.elts.len());
                     for elt in &list.elts {
-                        let Expr::StringLiteral(s) = elt else {
-                            return None;
-                        };
-                        let name = Name::new(s.value.to_str());
+                        // The list is written in place, but each element resolves through its type,
+                        // so a `Final`/`Literal[str]` names a column like a bare string.
+                        let name = self.polars_column_name(elt)?;
                         // Duplicate output columns are not modeled; fall back.
                         if names.contains(&name) {
                             return None;
@@ -1244,12 +1239,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         return None;
                     };
                     for item in &dict.items {
-                        let (Some(Expr::StringLiteral(key)), value) = (&item.key, &item.value)
-                        else {
+                        // Each key resolves through its type, so a `Final`/`Literal[str]` names a
+                        // column like a bare string.
+                        let (Some(key), value) = (&item.key, &item.value) else {
                             return None;
                         };
                         overrides.insert(
-                            Name::new(key.value.to_str()),
+                            self.polars_column_name(key)?,
                             self.polars_dtype_from_expr(value)?,
                         );
                     }
@@ -1273,10 +1269,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None | Some(Expr::NoneLiteral(_)) => None,
             Some(Expr::Dict(dict)) if dict.items.is_empty() => None,
             Some(Expr::Dict(dict)) => Some(PolarsData::Dict(PolarsDictData {
-                columns: dataframe_data_map(dict)?,
+                columns: self.dataframe_data_map(dict)?,
                 range: dict.range(),
             })),
-            Some(Expr::List(list)) => Some(PolarsData::Records(dataframe_records_map(list)?)),
+            Some(Expr::List(list)) => Some(PolarsData::Records(self.dataframe_records_map(list)?)),
             // A non-literal `data=` whose type is a TypedDict names its columns through its fields.
             Some(expr) => {
                 let (columns, completeness) = self.typed_dict_data_columns(expr)?;
@@ -2291,13 +2287,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut casts: SmallMap<Name, (TextRange, PolarsDType)> =
                     SmallMap::with_capacity(mapping.items.len());
                 for item in &mapping.items {
-                    let (Some(Expr::StringLiteral(key)), value) = (&item.key, &item.value) else {
+                    // The dict is written in place, but each key resolves through its type, so a
+                    // `Final`/`Literal[str]` names a column like a bare string.
+                    let (Some(key), value) = (&item.key, &item.value) else {
                         return None;
                     };
-                    casts.insert(
-                        Name::new(key.value.to_str()),
-                        (key.range(), self.polars_dtype_from_expr(value)?),
-                    );
+                    let name = self.polars_column_name(key)?;
+                    casts.insert(name, (key.range(), self.polars_dtype_from_expr(value)?));
                 }
                 for (name, (range, _)) in &casts {
                     if !schema.has_column(name) && schema.is_complete() {
