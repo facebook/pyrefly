@@ -189,7 +189,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Import(import) => {
                 import.module.as_str() == "jaxtyping" && import.name.as_str() == "jaxtyping"
             }
-            Binding::PossibleLegacyTParam(keys, _) => keys
+            Binding::PossibleLegacyTParam(legacy_tparam, _) => legacy_tparam
+                .keys()
                 .iter()
                 .any(|key| self.legacy_tparam_is_jaxtyping_module(*key)),
             _ => false,
@@ -204,7 +205,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Binding::ForwardToFirstUse(idx) => {
                 self.binding_is_jaxtyping_wrapper_origin(self.binding_following_forwards(*idx))
             }
-            Binding::PossibleLegacyTParam(keys, _) => keys
+            Binding::PossibleLegacyTParam(legacy_tparam, _) => legacy_tparam
+                .keys()
                 .iter()
                 .any(|key| self.legacy_tparam_is_jaxtyping_wrapper_origin(*key)),
             _ => false,

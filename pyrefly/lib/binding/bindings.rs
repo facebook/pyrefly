@@ -84,6 +84,7 @@ use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LambdaParamId;
 use crate::binding::binding::LastStmt;
+use crate::binding::binding::LegacyTParamBinding;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
@@ -1840,9 +1841,8 @@ impl<'a> BindingsBuilder<'a> {
             // intercept_lookup which wraps them in PossibleLegacyTParam.
             // By finalize time we can follow through to the original
             // binding to check whether it's actually a type alias.
-            Binding::PossibleLegacyTParam(tparam_idxs, _)
-                if let Some(tparam_idx) = tparam_idxs.first()
-                    && let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) =>
+            Binding::PossibleLegacyTParam(legacy_tparam, _)
+                if let Some(legacy_binding) = self.idx_to_binding(legacy_tparam.first_key()) =>
             {
                 self.follow_to_type_alias(legacy_binding.idx())
             }
@@ -2506,9 +2506,13 @@ impl<'a> BindingsBuilder<'a> {
         // `CheckLegacyTypeParam`, and return the `Idx<Key>`.
         let tparam_idx = Self::make_legacy_tparam(&id, original_binding, original_idx)
             .map(|(k, v)| self.insert_binding(k, v))?;
+        let legacy_tparam = match &id {
+            LegacyTParamId::Name(_) => LegacyTParamBinding::Parameter(tparam_idx),
+            LegacyTParamId::Attr(..) => LegacyTParamBinding::Module(Vec1::new(tparam_idx)),
+        };
         let idx = self.insert_binding(
             id.as_possible_legacy_tparam_key(),
-            Binding::PossibleLegacyTParam(Box::new([tparam_idx]), has_scoped_type_params),
+            Binding::PossibleLegacyTParam(Box::new(legacy_tparam), has_scoped_type_params),
         );
         Some(PossibleTParam {
             id,
@@ -2573,28 +2577,31 @@ impl<'a> BindingsBuilder<'a> {
     pub fn add_name_definitions(&mut self, legacy_tparams: &LegacyTParamCollector) {
         // Module attributes sharing a base collapse onto one scope entry, so its binding must
         // retain every possible legacy type parameter hosted by that module.
-        let mut by_base: SmallMap<Name, (Vec<Idx<KeyLegacyTypeParam>>, Key)> = SmallMap::new();
+        let mut by_base: SmallMap<Name, (Vec1<Idx<KeyLegacyTypeParam>>, Key)> = SmallMap::new();
         for entry in legacy_tparams.legacy_tparams.values() {
             if let TParamLookupResult::MaybeTParam(possible_tparam) = entry {
                 self.scopes
                     .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
+                if !matches!(possible_tparam.id, LegacyTParamId::Attr(..)) {
+                    continue;
+                }
                 let base = possible_tparam.id.as_identifier().id.clone();
                 // The surviving scope entry is the last one added, so track its key.
                 let key = possible_tparam.id.as_possible_legacy_tparam_key();
-                if let Some((idxs, entry_key)) = by_base.get_mut(&base) {
-                    idxs.push(possible_tparam.tparam_idx);
+                if let Some((keys, entry_key)) = by_base.get_mut(&base) {
+                    keys.push(possible_tparam.tparam_idx);
                     *entry_key = key;
                 } else {
-                    by_base.insert(base, (vec![possible_tparam.tparam_idx], key));
+                    by_base.insert(base, (Vec1::new(possible_tparam.tparam_idx), key));
                 }
             }
         }
-        for (_base, (idxs, entry_key)) in by_base {
-            if idxs.len() > 1 {
+        for (_base, (keys, entry_key)) in by_base {
+            if keys.len() > 1 {
                 self.insert_binding_overwrite(
                     entry_key,
                     Binding::PossibleLegacyTParam(
-                        idxs.into_boxed_slice(),
+                        Box::new(LegacyTParamBinding::Module(keys)),
                         legacy_tparams.has_scoped_tparams,
                     ),
                 );

@@ -9,6 +9,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
+use std::slice;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -2297,6 +2298,35 @@ pub struct ImportFallback {
     pub is_unreachable: bool,
 }
 
+/// The legacy type parameter(s) a `Binding::PossibleLegacyTParam` may resolve to. Each key
+/// carries its own original binding and attribute path, so this only records the grouping.
+#[derive(Clone, Debug)]
+pub enum LegacyTParamBinding {
+    /// A bare name (`T`), which is never grouped with any other.
+    Parameter(Idx<KeyLegacyTypeParam>),
+    /// The attributes of a module reference (`foo.T`, `foo.P`, ...), which all collapse onto
+    /// the one `foo` scope entry.
+    Module(Vec1<Idx<KeyLegacyTypeParam>>),
+}
+
+impl LegacyTParamBinding {
+    pub fn keys(&self) -> &[Idx<KeyLegacyTypeParam>] {
+        match self {
+            Self::Parameter(key) => slice::from_ref(key),
+            Self::Module(keys) => keys.as_slice(),
+        }
+    }
+
+    /// Any member of the group will do when we only need to follow the name back to the
+    /// binding it was intercepted from: they are all attributes of the same module.
+    pub fn first_key(&self) -> Idx<KeyLegacyTypeParam> {
+        match self {
+            Self::Parameter(key) => *key,
+            Self::Module(keys) => *keys.first(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Binding {
     /// An expression, optionally with a Key saying what the type must be.
@@ -2423,11 +2453,9 @@ pub enum Binding {
     /// the use of legacy type parameters is invalid; the error is reported at the range of
     /// whichever key it applies to.
     ///
-    /// The slice usually has a single element. It holds multiple keys only for a module
-    /// reference (e.g. `foo`) that hosts several legacy type parameters accessed as
-    /// attributes (`foo.T`, `foo.P`, ...): all of them are collapsed onto the one base-name
-    /// scope entry, so we must narrow the module at every hosted tparam's attribute facet.
-    PossibleLegacyTParam(Box<[Idx<KeyLegacyTypeParam>]>, bool),
+    /// Module references may host multiple legacy type parameters because all their attributes
+    /// collapse onto one base-name scope entry.
+    PossibleLegacyTParam(Box<LegacyTParamBinding>, bool),
     /// An assignment to a name.
     NameAssign(Box<NameAssign>),
     /// A type alias (legacy, scoped, or `TypeAliasType` call).
@@ -2620,13 +2648,13 @@ impl DisplayWith<Bindings> for Binding {
             Self::TypeParameter(tp) => {
                 write!(f, "TypeParameter({}, {}, ..)", tp.identity, tp.kind)
             }
-            Self::PossibleLegacyTParam(ks, _) => {
+            Self::PossibleLegacyTParam(legacy_tparam, _) => {
                 write!(f, "PossibleLegacyTParam(")?;
-                for (i, k) in ks.iter().enumerate() {
+                for (i, key) in legacy_tparam.keys().iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", ctx.display(*k))?;
+                    write!(f, "{}", ctx.display(*key))?;
                 }
                 write!(f, ")")
             }

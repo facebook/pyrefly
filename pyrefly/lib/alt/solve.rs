@@ -115,6 +115,7 @@ use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
+use crate::binding::binding::LegacyTParamBinding;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::MultiTargetReceiver;
 use crate::binding::binding::NoneIfRecursive;
@@ -5244,64 +5245,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     #[inline(never)]
     fn binding_to_type_info_possible_legacy_tparam(
         &self,
-        keys: &[Idx<KeyLegacyTypeParam>],
+        legacy_tparam: &LegacyTParamBinding,
         has_scoped_tparams: bool,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        // `keys` usually holds a single element. It holds several only for a module reference
-        // (`foo`) hosting multiple legacy tparams accessed as attributes (`foo.T`, `foo.P`, ...),
-        // all of which collapsed onto this one base-name scope entry. In that case every key is
-        // `ModuleKeyed` against the same module, and we must narrow the module at *each* hosted
-        // tparam's attribute facet so a reference to any of them resolves to its Quantified.
-        let mut module_type_info: Option<TypeInfo> = None;
-        let mut param_type_info: Option<TypeInfo> = None;
-        for &key in keys {
-            let ty = match &*self.get_idx(key) {
-                LegacyTypeParameterLookup::Parameter(p) => {
-                    // This class or function has scoped (PEP 695) type parameters. Mixing legacy-style parameters is an error.
-                    if has_scoped_tparams {
-                        let tparam_key = self.bindings().idx_to_key(key);
-                        self.error(
-                            errors,
-                            tparam_key.range(),
-                            ErrorKind::InvalidTypeVar,
-                            format!(
-                                "Type parameter {} is not included in the type parameter list",
-                                self.module().display(&tparam_key.0)
-                            ),
-                        );
-                    }
-                    p.clone().to_value()
+        let resolve = |key: Idx<KeyLegacyTypeParam>| match &*self.get_idx(key) {
+            LegacyTypeParameterLookup::Parameter(p) => {
+                // This class or function has scoped (PEP 695) type parameters. Mixing legacy-style parameters is an error.
+                if has_scoped_tparams {
+                    let tparam_key = self.bindings().idx_to_key(key);
+                    self.error(
+                        errors,
+                        tparam_key.range(),
+                        ErrorKind::InvalidTypeVar,
+                        format!(
+                            "Type parameter {} is not included in the type parameter list",
+                            self.module().display(&tparam_key.0)
+                        ),
+                    );
                 }
-                LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
-            };
-            match self.bindings().get(key) {
-                BindingLegacyTypeParam::ModuleKeyed(idx, attrs) => {
-                    // `idx` points to a module whose attr chain may end in a legacy type
-                    // variable that needs to be replaced with a QuantifiedValue. Since the
-                    // binding is for the module itself, we use the mechanism for attribute
-                    // ("facet") type narrowing to change the type produced when the final
-                    // attr is accessed. Multiple hosted tparams narrow the same module, so we
-                    // thread the accumulating `TypeInfo` through each iteration.
-                    let module = module_type_info
-                        .take()
-                        .unwrap_or_else(|| (*self.get_idx(*idx)).clone());
-                    module_type_info = Some(if matches!(ty, Type::QuantifiedValue(_)) {
+                p.clone().to_value()
+            }
+            LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
+        };
+        match legacy_tparam {
+            LegacyTParamBinding::Parameter(key) => TypeInfo::of_ty(resolve(*key)),
+            LegacyTParamBinding::Module(keys) => {
+                // Each key points at a module whose attr chain may end in a legacy type
+                // variable that needs to be replaced with a QuantifiedValue. Since the
+                // binding is for the module itself, we use the mechanism for attribute
+                // ("facet") type narrowing to change the type produced when the final
+                // attr is accessed. All the keys are attributes of the same module, so we
+                // start from that module and narrow it at every hosted tparam's facet.
+                let mut module = (*self.get_idx(self.bindings().get(*keys.first()).idx())).clone();
+                for &key in keys {
+                    let ty = resolve(key);
+                    if matches!(ty, Type::QuantifiedValue(_)) {
+                        let BindingLegacyTypeParam::ModuleKeyed(_, attrs) =
+                            self.bindings().get(key)
+                        else {
+                            unreachable!("a grouped legacy tparam is a module attribute")
+                        };
                         let facets = attrs.mapped_ref(|a| FacetKind::Attribute(a.clone()));
-                        module.with_narrow(&facets, ty)
-                    } else {
-                        module
-                    });
+                        module = module.with_narrow(&facets, ty);
+                    }
                 }
-                BindingLegacyTypeParam::ParamKeyed(_) => {
-                    // A bare-name tparam is never grouped with siblings, so this is the only key.
-                    param_type_info = Some(TypeInfo::of_ty(ty));
-                }
+                module
             }
         }
-        module_type_info
-            .or(param_type_info)
-            .unwrap_or_else(|| TypeInfo::of_ty(Type::any_implicit()))
     }
 
     /// Handle `Binding::NameAssign` in binding_to_type_info - process name assignment with dict facets.
@@ -5367,9 +5358,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::AssignToSubscript(x) => {
                 self.binding_to_type_info_assign_to_subscript(&x.0, &x.1, errors)
             }
-            Binding::PossibleLegacyTParam(keys, has_scoped_tparams) => {
-                self.binding_to_type_info_possible_legacy_tparam(keys, *has_scoped_tparams, errors)
-            }
+            Binding::PossibleLegacyTParam(legacy_tparam, has_scoped_tparams) => self
+                .binding_to_type_info_possible_legacy_tparam(
+                    legacy_tparam,
+                    *has_scoped_tparams,
+                    errors,
+                ),
             _ => {
                 // All other Bindings model `Type` level operations where we do not
                 // propagate any attribute narrows.
