@@ -1986,6 +1986,75 @@ class B(A):
 }
 
 #[test]
+fn completion_method_override_inserts_stub_and_decorator() {
+    let code = r#"
+class Base:
+    def method(self, value: str, *, flag: bool = False) -> int:
+        return 0
+
+class Child(Base):
+    def met
+#         ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completion = txn
+        .completion(handle, position, ImportFormat::Absolute, true, None)
+        .into_iter()
+        .find(|item| item.label == "method")
+        .expect("expected inherited method completion");
+    assert_eq!(completion.kind, Some(CompletionItemKind::METHOD));
+    assert_eq!(
+        completion.insert_text.as_deref(),
+        Some(
+            "method(self, value: str, *, flag: bool = False) -> int:\n        return super().method(value, flag=flag)"
+        )
+    );
+    let edits = completion
+        .additional_text_edits
+        .expect("expected override decorator and import edits");
+    assert_eq!(edits.len(), 2);
+    assert!(
+        edits
+            .iter()
+            .any(|edit| edit.new_text.contains("from typing import override"))
+    );
+    assert!(edits.iter().any(|edit| edit.new_text == "@override\n    "));
+}
+
+#[test]
+fn completion_method_override_does_not_duplicate_decorator() {
+    let code = r#"
+from typing import override
+
+class Base:
+    def method(self) -> None:
+        pass
+
+class Child(Base):
+    @override
+    def met
+#         ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completion = txn
+        .completion(handle, position, ImportFormat::Absolute, true, None)
+        .into_iter()
+        .find(|item| item.label == "method")
+        .expect("expected inherited method completion");
+    assert_eq!(
+        completion.insert_text.as_deref(),
+        Some("method(self) -> None:\n        return super().method()")
+    );
+    assert_eq!(completion.additional_text_edits, None);
+}
+
+#[test]
 fn attribute_completion_remains_unfiltered() {
     let code = r#"
 class A:

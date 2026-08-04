@@ -104,6 +104,7 @@ mod extra_extensions;
 mod pytest;
 mod quick_fixes;
 
+pub(crate) use self::quick_fixes::add_override::override_in_scope;
 pub(crate) use self::quick_fixes::move_module::MoveModuleMemberContext;
 pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
 
@@ -3512,7 +3513,7 @@ impl<'a> Transaction<'a> {
     /// Builds an edit inserting `from typing import override` (preferring `typing`
     /// over `typing_extensions`) at the top of the file. Returns `None` when no
     /// module in scope exports `override`.
-    fn override_import_edit(
+    pub(crate) fn override_import_edit(
         &self,
         handle: &Handle,
         module_info: &Module,
