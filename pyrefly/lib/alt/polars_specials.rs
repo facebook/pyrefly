@@ -61,6 +61,10 @@ fn is_polars_expr(cls: &Class) -> bool {
     cls.has_toplevel_qname("polars.expr.expr", "Expr")
 }
 
+pub fn is_polars_lazyframe(cls: &Class) -> bool {
+    cls.has_toplevel_qname("polars.lazyframe.frame", "LazyFrame")
+}
+
 /// The receiver schema for a column transform whose method takes only positional
 /// arguments: `base` must carry a schema and `func` must name `method` with no
 /// keywords. Shared preamble so each transform states only what is unique to it.
@@ -2036,6 +2040,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // error inside it, since returning here bypasses ordinary call-checking.
         self.expr_infer(other_expr, errors);
         Some(base.clone())
+    }
+
+    /// Model `df.lazy()` and `lf.collect()`, which move the column set unchanged onto the converted
+    /// frame class. A receiver without a schema, a non-Polars frame, or any positional argument falls back.
+    pub fn polars_lazy_collect(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if !matches!(func.attr.id.as_str(), "lazy" | "collect")
+            || schema.kind != DataFrameKind::Polars
+            || !args.args.is_empty()
+        {
+            return None;
+        }
+        // The stub is the single source of truth for the converted class and any keyword errors.
+        let call_kws: Vec<CallKeyword> = args.keywords.iter().map(CallKeyword::new).collect();
+        let result = self.call_method_or_error(
+            &schema.underlying_type(),
+            &func.attr.id,
+            func.range(),
+            &[],
+            &call_kws,
+            errors,
+            None,
+        );
+        // An unexpected converted class keeps the opaque result rather than carrying a wrong schema.
+        match (func.attr.id.as_str(), result) {
+            ("lazy", Type::ClassType(cls)) if is_polars_lazyframe(cls.class_object()) => Some(
+                DataFrameSchema {
+                    underlying: cls,
+                    ..(**schema).clone()
+                }
+                .to_type(),
+            ),
+            ("collect", Type::ClassType(cls)) if is_polars_dataframe(cls.class_object()) => Some(
+                DataFrameSchema {
+                    underlying: cls,
+                    ..(**schema).clone()
+                }
+                .to_type(),
+            ),
+            (_, result) => Some(result),
+        }
     }
 
     /// Model `df.cast(...)`, which rewrites column dtypes. A single `pl.<DType>` casts every column;

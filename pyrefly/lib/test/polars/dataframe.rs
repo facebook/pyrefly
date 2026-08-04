@@ -32,6 +32,7 @@ class Series:
         r#"
 from typing import Iterator, overload
 from polars.series.series import Series
+from polars.lazyframe.frame import LazyFrame
 class DataFrame:
     columns: list[str]
     def __init__(self, data: object = None, schema: object = None, schema_overrides: object = None, strict: bool = True) -> None: ...
@@ -62,8 +63,25 @@ class DataFrame:
     def insert_column(self, index: int, column: object) -> "DataFrame": ...
     def replace_column(self, index: int, column: object) -> "DataFrame": ...
     def group_by(self, *by: object, maintain_order: bool = False, **named_by: object) -> "GroupBy": ...
+    def lazy(self) -> "LazyFrame": ...
 class GroupBy:
     def agg(self, *aggs: object, **named_aggs: object) -> DataFrame: ...
+"#,
+    );
+    env.add_with_path(
+        "polars.lazyframe.frame",
+        "polars/lazyframe/frame.pyi",
+        r#"
+from typing import Literal
+from polars.dataframe.frame import DataFrame
+class LazyFrame:
+    def select(self, *exprs: object, **named_exprs: object) -> "LazyFrame": ...
+    def drop(self, *columns: object, strict: bool = True) -> "LazyFrame": ...
+    def rename(self, mapping: object, *, strict: bool = True) -> "LazyFrame": ...
+    def with_columns(self, *exprs: object, **named_exprs: object) -> "LazyFrame": ...
+    def filter(self, *predicates: object, **constraints: object) -> "LazyFrame": ...
+    def sort(self, by: object, *more: object, descending: bool = False) -> "LazyFrame": ...
+    def collect(self, *, engine: Literal["auto", "in-memory", "streaming", "gpu"] = "auto") -> DataFrame: ...
 "#,
     );
     env.add_with_path(
@@ -5066,5 +5084,75 @@ df = pl.DataFrame({"a": [1], "b": ["x"]})
 narrowed = df.select("a")
 narrowed["a"]
 narrowed["b"]  # E: Column `b` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_lazy_preserves_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.lazy())  # E: revealed type: LazyFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_lazy_collect_round_trips_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.lazy().collect())  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_lazy_transform_narrows_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.lazy().select("a"))  # E: revealed type: LazyFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_lazy_unknown_column_read_errors_after_collect,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+collected = df.lazy().select("a").collect()
+collected["a"]
+collected["b"]  # E: Column `b` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_lazy_on_opaque_frame_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(df: pl.DataFrame) -> None:
+    reveal_type(df.lazy())  # E: revealed type: LazyFrame
+"#,
+);
+
+// `collect` keeps the schema while the stub enforces the `engine` literal, which polars also
+// rejects at runtime for an unknown value.
+testcase!(
+    test_lazy_collect_engine_literal_enforced,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.lazy().collect(engine="streaming"))  # E: revealed type: DataFrame[a: Int64, b: String]
+reveal_type(df.lazy().collect(engine="bad"))  # E: revealed type: DataFrame[a: Int64, b: String] # E: not assignable to parameter `engine`
 "#,
 );

@@ -990,6 +990,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let Some(ty) = self.polars_cast(base.ty(), func, &x.arguments, errors) {
                 return PreparedExprCall::Resolved(ty);
             }
+            if let Some(ty) = self.polars_lazy_collect(base.ty(), func, &x.arguments, errors) {
+                return PreparedExprCall::Resolved(ty);
+            }
             if let Some(ty) = self.polars_join(base.ty(), func, &x.arguments, errors) {
                 return PreparedExprCall::Resolved(ty);
             }
