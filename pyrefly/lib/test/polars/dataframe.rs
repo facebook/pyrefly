@@ -1685,16 +1685,53 @@ reveal_type(df["b"])  # E: Column `b` is not in the DataFrame schema # E: reveal
 );
 
 testcase!(
-    test_non_literal_key_no_unknown_column_error,
+    test_wider_str_key_no_unknown_column_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+def key() -> str: ...
+reveal_type(df[key()])  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_resolved_key_reports_unknown_column,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 k = "b"
-reveal_type(df[k])  # E: revealed type: Series
-def key() -> str: ...
-reveal_type(df[key()])  # E: revealed type: Series
+reveal_type(df[k])  # E: Column `b` is not in the DataFrame schema # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_subscript_and_get_column_resolved_name_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def name(x: int) -> Literal["a"]: ...
+df = pl.DataFrame({"a": [1]})
+df[name("s")]  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
+df.get_column(name("s"))  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_name_only_apis_treat_star_as_literal_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"*": [1], "a": ["x"]})
+reveal_type(df["*"])                   # E: revealed type: Series[Int64]
+reveal_type(df.get_column("*"))        # E: revealed type: Series[Int64]
+reveal_type(df.rename({"*": "star"}))  # E: revealed type: DataFrame[star: Int64, a: String]
+reveal_type(df.drop("*"))              # E: revealed type: DataFrame
 "#,
 );
 
@@ -1818,15 +1855,27 @@ reveal_type(df[["a", "missing"]])  # E: Column `missing` is not in the DataFrame
 );
 
 testcase!(
-    test_select_list_non_literal_element_delegates,
+    test_select_list_resolves_named_element,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 k = "a"
-reveal_type(df[[k]])  # E: revealed type: DataFrame
+reveal_type(df[[k]])  # E: revealed type: DataFrame[a: Int64]
 reveal_type(df[[1]])  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_list_resolved_element_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def name(x: int) -> Literal["a"]: ...
+df = pl.DataFrame({"a": [1]})
+df[[name("s")]]  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
 "#,
 );
 
@@ -1898,16 +1947,67 @@ reveal_type(df)  # E: revealed type: DataFrame[a: Int64, b: String]
 );
 
 testcase!(
-    test_select_method_non_literal_falls_back,
+    test_select_method_resolves_named_str,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 k = "a"
-reveal_type(df.select(k))  # E: revealed type: DataFrame
-reveal_type(df.select("a", k))  # E: revealed type: DataFrame
-reveal_type(df.select([k]))  # E: revealed type: DataFrame
+reveal_type(df.select(k))  # E: revealed type: DataFrame[a: Int64]
+reveal_type(df.select("b", k))  # E: revealed type: DataFrame[b: String, a: Int64]
+reveal_type(df.select([k]))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_select_method_wider_str_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(k: str) -> None:
+    df = pl.DataFrame({"a": [1], "b": ["x"]})
+    reveal_type(df.select(k))  # E: revealed type: DataFrame
+    reveal_type(df.select("a", k))  # E: revealed type: DataFrame
+    reveal_type(df.select([k]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_method_resolves_name_inside_col,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+k = "a"
+reveal_type(df.select(pl.col(k)))  # E: revealed type: DataFrame[a: Int64]
+reveal_type(df.select(pl.col(k).alias("renamed")))  # E: revealed type: DataFrame[renamed: Int64]
+"#,
+);
+
+testcase!(
+    test_select_method_resolved_name_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def name(x: int) -> Literal["a"]: ...
+df = pl.DataFrame({"a": [1]})
+df.select(name("s"))  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_select_method_resolved_star_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def star(x: int) -> Literal["*"]: ...
+df = pl.DataFrame({"a": [1]})
+df.select(star("s"))  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
 "#,
 );
 
@@ -2337,29 +2437,55 @@ reveal_type(df.drop("a", "c"))  # E: revealed type: DataFrame[b: String]
 );
 
 testcase!(
-    test_drop_method_non_literal_falls_back,
+    test_drop_method_resolves_named_str,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 k = "a"
-reveal_type(df.drop(k))  # E: revealed type: DataFrame
-reveal_type(df.drop("a", k))  # E: revealed type: DataFrame
-reveal_type(df.drop((k,)))  # E: revealed type: DataFrame
+reveal_type(df.drop(k))  # E: revealed type: DataFrame[b: String]
+reveal_type(df.drop("b", k))  # E: revealed type: DataFrame[]
+reveal_type(df.drop((k,)))  # E: revealed type: DataFrame[b: String]
 "#,
 );
 
 testcase!(
-    test_drop_method_unknown_and_non_literal_falls_back,
+    test_drop_method_wider_str_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(k: str) -> None:
+    df = pl.DataFrame({"a": [1], "b": ["x"]})
+    reveal_type(df.drop(k))  # E: revealed type: DataFrame
+    reveal_type(df.drop("a", k))  # E: revealed type: DataFrame
+    reveal_type(df.drop((k,)))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_drop_method_resolved_name_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def name(x: int) -> Literal["a"]: ...
+df = pl.DataFrame({"a": [1]})
+df.drop(name("s"))  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_drop_method_unknown_and_resolved_name,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 k = "a"
-reveal_type(df.drop("missing", k))  # E: revealed type: DataFrame
-reveal_type(df.drop(k, "missing"))  # E: revealed type: DataFrame
+reveal_type(df.drop("missing", k))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[]
+reveal_type(df.drop(k, "missing"))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[]
 "#,
 );
 
@@ -2550,6 +2676,19 @@ from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 reveal_type(df.rename({1: "z"}))  # E: revealed type: DataFrame
 reveal_type(df.rename({"a": 2}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_rename_resolved_names_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def source(x: int) -> Literal["a"]: ...
+def target(x: int) -> Literal["z"]: ...
+df = pl.DataFrame({"a": [1]})
+df.rename({source("s"): target("t")})  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int` # E: Argument `Literal['t']` is not assignable to parameter `x` with type `int`
 "#,
 );
 
@@ -3865,7 +4004,7 @@ reveal_type(d1.join(d2, on="k", how="outer"))  # E: revealed type: DataFrame
 );
 
 testcase!(
-    test_join_non_literal_key_falls_back,
+    test_join_resolved_key,
     env_with_polars_stubs(),
     r#"
 import polars as pl
@@ -3873,7 +4012,34 @@ from typing import reveal_type
 d1 = pl.DataFrame(schema={"k": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Int64})
 k = "k"
-reveal_type(d1.join(d2, on=k, how="inner"))  # E: revealed type: DataFrame
+reveal_type(d1.join(d2, on=k, how="inner"))  # E: revealed type: DataFrame[k: Int64]
+"#,
+);
+
+testcase!(
+    test_join_wider_str_key_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(k: str) -> None:
+    d1 = pl.DataFrame(schema={"k": pl.Int64})
+    d2 = pl.DataFrame(schema={"k": pl.Int64})
+    reveal_type(d1.join(d2, on=k, how="inner"))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_resolved_key_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def name(x: int) -> Literal["k"]: ...
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+d1.join(d2, on=name("s"), how="inner")  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
+d1.join(d2, on=[name("s")], how="inner")  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
 "#,
 );
 
@@ -4659,6 +4825,18 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"g": ["a"], "x": [1]})
 reveal_type(df.group_by("g").agg(pl.col("x", "y").sum()))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_group_by_agg_resolved_name_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def name(x: int) -> Literal["x"]: ...
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+df.group_by("g").agg(name("s"))  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
 "#,
 );
 

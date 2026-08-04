@@ -3277,15 +3277,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         return narrowed;
                     }
-                    // A string key on a Complete Polars schema reads one column: a known column
-                    // pins the result Series to its dtype, an absent one errors, and every other
-                    // case leaves `column_dtype` unset so the read stays an opaque Series.
                     let mut column_dtype = None;
-                    if let Expr::StringLiteral(key) = slice
-                        && schema.is_complete()
+                    if schema.is_complete()
+                        && let Some(name) = self.polars_column_name(slice)
                     {
-                        let name = key.value.to_str();
-                        match schema.columns.iter().find(|(c, _)| c.as_str() == name) {
+                        match schema.columns.iter().find(|(c, _)| **c == name) {
                             Some((_, dtype)) if schema.kind == DataFrameKind::Polars => {
                                 column_dtype = Some(*dtype);
                             }
