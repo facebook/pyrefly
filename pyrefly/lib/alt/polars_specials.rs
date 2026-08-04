@@ -540,43 +540,6 @@ fn get_column_name_arg(args: &Arguments) -> Option<&Expr> {
     }
 }
 
-/// The static index of a `to_series` call. An absent argument means `0`, otherwise one integer
-/// literal, positional or `index=`. A non-integer, extra positionals, both ways, or any other keyword
-/// falls back with `None`.
-fn to_series_index(args: &Arguments) -> Option<i128> {
-    let mut index_keyword = None;
-    for kw in &args.keywords {
-        match kw.arg.as_ref()?.id.as_str() {
-            "index" => index_keyword = Some(&kw.value),
-            _ => return None,
-        }
-    }
-    let index_positional = match &args.args[..] {
-        [] => None,
-        [index] => Some(index),
-        _ => return None,
-    };
-    match (index_positional, index_keyword) {
-        (Some(_), Some(_)) => None,
-        (None, None) => Some(0),
-        (Some(e), None) | (None, Some(e)) => integer_literal(e),
-    }
-}
-
-/// An integer literal's value, possibly behind a unary `+`/`-`, or `None` otherwise. Negative
-/// indexing means `-1` must resolve to its signed value.
-fn integer_literal(expr: &Expr) -> Option<i128> {
-    match expr {
-        Expr::NumberLiteral(ExprNumberLiteral {
-            value: Number::Int(i),
-            ..
-        }) => i.to_string().parse::<i128>().ok(),
-        Expr::UnaryOp(u) if u.op == UnaryOp::USub => integer_literal(&u.operand).map(|v| -v),
-        Expr::UnaryOp(u) if u.op == UnaryOp::UAdd => integer_literal(&u.operand),
-        _ => None,
-    }
-}
-
 /// The dtype of a column read by name against a receiver schema, or `None` when it cannot resolve.
 /// Reports `UnknownColumn` at `range` only on a `Complete` schema, since a `Partial` one may hold the
 /// name untracked.
@@ -2614,6 +2577,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(self.wrap_series_method(schema, func, args, dtype, errors))
     }
 
+    /// Return the index passed to `to_series`, or `0` when it is omitted.
+    /// The index may be positional or `index=`, but not both, and must resolve to `Literal[int]`.
+    fn to_series_index(&self, args: &Arguments) -> Option<i128> {
+        let mut index_keyword = None;
+        for kw in &args.keywords {
+            match kw.arg.as_ref()?.id.as_str() {
+                "index" => index_keyword = Some(&kw.value),
+                _ => return None,
+            }
+        }
+        let index_positional = match &args.args[..] {
+            [] => None,
+            [index] => Some(index),
+            _ => return None,
+        };
+        match (index_positional, index_keyword) {
+            (Some(_), Some(_)) => None,
+            (None, None) => Some(0),
+            (Some(e), None) | (None, Some(e)) => {
+                // Swallow errors here, since the fallback call path re-infers the argument.
+                let ty = self.expr_infer(e, &self.error_swallower());
+                match &ty {
+                    Type::Literal(lit) => match &lit.value {
+                        Lit::Int(i) => i.as_i64().map(i128::from),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+        }
+    }
+
     /// Model `df.to_series(i)` as `Series[dtype]` of the column at position `i`, with negative indexing.
     /// Only a static integer index is modeled, and anything else falls back. An index out of the
     /// column count raises `IndexError` at runtime, so it is reported and keeps the opaque `Series`.
@@ -2625,7 +2620,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         let schema = series_method_schema(base, func, "to_series")?;
-        let index = to_series_index(args)?;
+        let index = self.to_series_index(args)?;
         let len = schema.columns.len() as i128;
         let resolved = if index < 0 { index + len } else { index };
         let dtype = if (0..len).contains(&resolved) {

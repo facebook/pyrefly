@@ -5604,3 +5604,39 @@ def f(x: int | None) -> None:
         reveal_type(pl.DataFrame({"a": [x]}))  # E: revealed type: DataFrame[a: Null]
 "#,
 );
+
+testcase!(
+    test_to_series_variable_index,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+i = 1
+reveal_type(df.to_series(i))  # E: revealed type: Series[String]
+"#,
+);
+
+testcase!(
+    test_to_series_final_negative_index,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+I: Final = -1
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.to_series(I))  # E: revealed type: Series[String]
+"#,
+);
+
+testcase!(
+    test_to_series_wider_int_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(i: int) -> None:
+    df = pl.DataFrame({"a": [1], "b": ["x"]})
+    reveal_type(df.to_series(i))  # E: revealed type: Series
+"#,
+);
