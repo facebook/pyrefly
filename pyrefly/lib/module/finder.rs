@@ -475,10 +475,10 @@ pub fn find_import_internal(
         timing,
     ) {
         path
-    } else if let Some(custom_typeshed_path) = &config.typeshed_path
+    } else if let Some(custom_typeshed_stdlib) = config.typeshed_stdlib_path()
         && let Some(path) = find_module(
             module,
-            std::iter::once(&custom_typeshed_path.join("stdlib")),
+            std::iter::once(&custom_typeshed_stdlib),
             &mut namespaces_found,
             style_filter,
             None,

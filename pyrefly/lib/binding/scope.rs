@@ -1829,6 +1829,11 @@ impl Scopes {
         self.scopes.first().scope.final_names.contains(name)
     }
 
+    /// Check if a name is declared as `Final` in the current (innermost) scope.
+    pub fn is_final_in_current_scope(&self, name: &Name) -> bool {
+        self.current().final_names.contains(name)
+    }
+
     /// Look up a Final variable's string literal value in the current scope stack.
     /// Searches from the innermost scope outward, stopping at the first scope
     /// that binds the name, even if it's not Final.

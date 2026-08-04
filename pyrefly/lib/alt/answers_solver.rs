@@ -59,10 +59,12 @@ use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers::TraceSideEffects;
 use crate::alt::traits::Solve;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LambdaParamId;
@@ -1892,6 +1894,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub(crate) fn has_active_scc(&self) -> bool {
         !self.stack().sccs_is_empty()
+    }
+
+    pub fn django_reverse_relations_index(&self) -> Arc<DjangoReverseRelationIndex> {
+        self.answers
+            .get(
+                self.module().name(),
+                Some(self.module().path()),
+                &KeyDjangoRelations,
+                self.thread_state,
+            )
+            .expect("the current module must be available while solving its Django relations")
     }
 
     /// Access the thread-local state for trace recording.

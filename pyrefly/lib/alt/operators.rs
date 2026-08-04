@@ -19,6 +19,7 @@ use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::CmpOp;
+use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprUnaryOp;
@@ -404,7 +405,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             rhs = self.expr_infer_with_hint(&x.right, hint, errors);
         } else {
             lhs = self.expr_infer(&x.left, errors);
-            rhs = self.expr_infer(&x.right, errors);
+            rhs = if x.op == Operator::BitOr
+                && matches!(&*x.right, Expr::Dict(_))
+                && matches!(&lhs, Type::ClassType(cls) if cls.class_object().is_builtin("dict"))
+            {
+                self.expr_infer_with_hint(&x.right, Some(HintRef::soft(&lhs)), errors)
+            } else {
+                self.expr_infer(&x.right, errors)
+            };
         }
 
         // Optimisation: If we have `Union[a, b] | Union[c, d]`, instead of unioning
@@ -679,7 +687,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
         let base = self.expr_infer(&x.target, errors);
-        let rhs = self.expr_infer(&x.value, errors);
+        let rhs = if x.op == Operator::BitOr
+            && matches!(&*x.value, Expr::Dict(_))
+            && matches!(&base, Type::ClassType(cls) if cls.class_object().is_builtin("dict"))
+        {
+            self.expr_infer_with_hint(&x.value, Some(HintRef::soft(&base)), errors)
+        } else {
+            self.expr_infer(&x.value, errors)
+        };
         if matches!(x.op, Operator::Div | Operator::FloorDiv | Operator::Mod)
             && Self::is_literal_zero(&rhs)
         {

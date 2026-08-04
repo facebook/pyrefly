@@ -6,7 +6,6 @@
  */
 
 use std::collections::HashMap;
-use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,12 +73,8 @@ impl BundledStub for BundledTypeshedStdlib {
 
     fn config() -> ArcId<ConfigFile> {
         static CONFIG: LazyLock<ArcId<ConfigFile>> = LazyLock::new(|| {
-            let search_paths = match stdlib_search_path() {
-                Some(path) => vec![path],
-                None => Vec::new(),
-            };
             let config_file = create_bundled_stub_config(
-                Some(search_paths),
+                Some(Vec::new()),
                 Some(stdlib_error_overrides()),
                 Some(true),
             );
@@ -120,15 +115,6 @@ pub fn typeshed() -> anyhow::Result<&'static BundledTypeshedStdlib> {
         Ok(typeshed) => Ok(typeshed),
         Err(error) => Err(anyhow!("{error:#}")),
     }
-}
-
-/// This is a workaround for bundled typeshed incorrectly taking precedence over
-/// stubs manually put at the beginning of the search path.
-/// See https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering.
-/// Note that you need to set both the PYREFLY_STDLIB_SEARCH_PATH environment variable AND
-/// --search-path/SEARCH_PATH for this workaround to be effective.
-pub fn stdlib_search_path() -> Option<PathBuf> {
-    env::var_os("PYREFLY_STDLIB_SEARCH_PATH").map(|path| Path::new(&path).to_path_buf())
 }
 
 #[cfg(test)]

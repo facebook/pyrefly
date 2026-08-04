@@ -45,6 +45,8 @@ pub enum ReadOnlyReason {
     PydanticFrozenField,
     /// Field is an enum member's value
     EnumMemberValue,
+    /// Field is only reachable through `__getattr__`, and the class has no `__setattr__`
+    Getattr,
 }
 
 impl ReadOnlyReason {
@@ -79,6 +81,9 @@ impl ReadOnlyReason {
             }
             ReadOnlyReason::EnumMemberValue => {
                 "An enum member's value may not be modified".to_owned()
+            }
+            ReadOnlyReason::Getattr => {
+                "This field is only accessible through `__getattr__`, and the class has no `__setattr__`".to_owned()
             }
         }
     }

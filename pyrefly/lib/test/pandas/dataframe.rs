@@ -323,6 +323,20 @@ reveal_type(df.rename({"missing": "z"}))  # E: revealed type: DataFrame
 );
 
 testcase!(
+    test_fp_pandas_transform_then_missing_read_no_error,
+    env_with_pandas_frame_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+# We don't model pandas `rename` precisely, so the result is an opaque DataFrame, which allows
+# arbitrary column accesses (like this one, which would raise `KeyError` at runtime) to avoid
+# false positives.
+df = pd.DataFrame({"a": [1]})
+reveal_type(df.rename({"a": "b"})["missing"])  # E: revealed type: Series
+"#,
+);
+
+testcase!(
     test_pandas_subclass_falls_back,
     env_with_pandas_frame_stubs(),
     r#"

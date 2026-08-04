@@ -132,6 +132,7 @@ pub struct TestEnv {
     strict_partial_subtyping: bool,
     spec_compliant_overloads: bool,
     legacy_overload_expansion: bool,
+    treat_all_caps_as_final: bool,
     no_any_return_error: bool,
     no_any_return_explicit_error: bool,
     no_any_return_implicit_error: bool,
@@ -186,6 +187,7 @@ impl TestEnv {
             strict_partial_subtyping: false,
             spec_compliant_overloads: false,
             legacy_overload_expansion: false,
+            treat_all_caps_as_final: false,
             no_any_return_error: false,
             no_any_return_explicit_error: false,
             no_any_return_implicit_error: false,
@@ -417,6 +419,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_treat_all_caps_as_final(mut self) -> Self {
+        self.treat_all_caps_as_final = true;
+        self
+    }
+
     pub fn enable_no_any_return_error(mut self) -> Self {
         self.no_any_return_error = true;
         self
@@ -556,6 +563,7 @@ impl TestEnv {
         config.root.strict_partial_subtyping = Some(self.strict_partial_subtyping);
         config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
         config.root.legacy_overload_expansion = Some(self.legacy_overload_expansion);
+        config.root.treat_all_caps_as_final = Some(self.treat_all_caps_as_final);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };

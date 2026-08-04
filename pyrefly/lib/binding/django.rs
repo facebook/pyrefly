@@ -17,6 +17,7 @@ use crate::binding::bindings::BindingsBuilder;
 const PRIMARY_KEY: Name = Name::new_static("primary_key");
 const FOREIGN_KEY: Name = Name::new_static("ForeignKey");
 const ONE_TO_ONE_FIELD: Name = Name::new_static("OneToOneField");
+const MANY_TO_MANY_FIELD: Name = Name::new_static("ManyToManyField");
 const CHOICES: Name = Name::new_static("choices");
 
 /// Django-specific field information detected during binding phase.
@@ -26,6 +27,8 @@ pub struct DjangoFieldInfo {
     pub primary_key_field: Option<Name>,
     /// Names of ForeignKey and OneToOneField fields.
     pub foreign_key_like_fields: Vec<Name>,
+    /// Names of fields that may create reverse relationships.
+    pub relation_fields: Vec<Name>,
     /// Names of fields with choices=...
     pub fields_with_choices: Vec<Name>,
 }
@@ -40,6 +43,7 @@ impl<'a> BindingsBuilder<'a> {
     ) -> DjangoFieldInfo {
         let mut primary_key_field = None;
         let mut foreign_key_like_fields = Vec::new();
+        let mut relation_fields = Vec::new();
         let mut fields_with_choices = Vec::new();
         for (name, (definition, _range)) in field_definitions.iter() {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = definition
@@ -50,9 +54,13 @@ impl<'a> BindingsBuilder<'a> {
                     Expr::Name(name) => Some(name.id()),
                     Expr::Attribute(attr) => Some(attr.attr.id()),
                     _ => None,
-                } && (*constructor_name == FOREIGN_KEY || *constructor_name == ONE_TO_ONE_FIELD)
-                {
-                    foreign_key_like_fields.push(name.clone());
+                } {
+                    if *constructor_name == FOREIGN_KEY || *constructor_name == ONE_TO_ONE_FIELD {
+                        foreign_key_like_fields.push(name.clone());
+                        relation_fields.push(name.clone());
+                    } else if *constructor_name == MANY_TO_MANY_FIELD {
+                        relation_fields.push(name.clone());
+                    }
                 }
 
                 for keyword in &call.arguments.keywords {
@@ -76,6 +84,7 @@ impl<'a> BindingsBuilder<'a> {
         DjangoFieldInfo {
             primary_key_field,
             foreign_key_like_fields,
+            relation_fields,
             fields_with_choices,
         }
     }

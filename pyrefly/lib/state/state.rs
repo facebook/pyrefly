@@ -176,6 +176,8 @@ pub struct ModuleDeps {
     pub classes: SmallSet<ClassDefIndex>,
     /// Which type aliases do we depend on?
     pub type_aliases: SmallSet<TypeAliasIndex>,
+    /// Do we depend on module-level Django reverse relation metadata?
+    pub django_relations: bool,
 }
 
 /// Per-module change tracking. Represents what changed in a module's exports.
@@ -247,7 +249,7 @@ impl ModuleChanges {
             AnyExportedKey::KeyExport(k) => {
                 self.0.names.entry(k.0).or_default();
             }
-            // Classes and type aliases don't distinguish between existence and change.
+            // Classes, type aliases, and django relations don't distinguish between existence and change.
             _ => self.add_key(key),
         }
     }
@@ -270,6 +272,9 @@ impl ModuleChanges {
     /// more impactful than a type/metadata-only change.
     pub fn overlaps(&self, other: &ModuleChanges) -> bool {
         if self.0.wildcard || other.0.wildcard {
+            return true;
+        }
+        if self.0.django_relations && other.0.django_relations {
             return true;
         }
         for (name, self_dep) in &self.0.names {
@@ -308,6 +313,9 @@ impl ModuleDeps {
             }
             AnyExportedKey::KeyTypeAlias(k) => {
                 self.type_aliases.insert(k.0);
+            }
+            AnyExportedKey::KeyDjangoRelations(_) => {
+                self.django_relations = true;
             }
             AnyExportedKey::KeyTParams(KeyTParams(c))
             | AnyExportedKey::KeyClassBaseType(KeyClassBaseType(c))
@@ -371,6 +379,7 @@ impl ModuleDeps {
         self.classes.extend(other.classes);
         self.type_aliases.extend(other.type_aliases);
         self.wildcard |= other.wildcard;
+        self.django_relations |= other.django_relations;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -378,6 +387,7 @@ impl ModuleDeps {
             && !self.wildcard
             && self.classes.is_empty()
             && self.type_aliases.is_empty()
+            && !self.django_relations
     }
 
     /// Check if these dependencies are affected by the given change.
@@ -408,6 +418,9 @@ impl ModuleDeps {
                     return true;
                 }
             }
+        }
+        if self.django_relations && changed.0.django_relations {
+            return true;
         }
         if self.classes.iter().any(|c| changed.0.classes.contains(c)) {
             return true;
@@ -1457,6 +1470,8 @@ impl<'a> Transaction<'a> {
                     .spec_compliant_overloads(module_data.handle.path().as_path()),
                 legacy_overload_expansion: config
                     .legacy_overload_expansion(module_data.handle.path().as_path()),
+                treat_all_caps_as_final: config
+                    .treat_all_caps_as_final(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context,
                 cinderx_enabled: self.data.cinderx_reporter.is_some(),
@@ -2468,6 +2483,7 @@ impl<'a> Transaction<'a> {
                     .spec_compliant_overloads(m.handle.path().as_path()),
                 legacy_overload_expansion: config
                     .legacy_overload_expansion(m.handle.path().as_path()),
+                treat_all_caps_as_final: config.treat_all_caps_as_final(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context: None,
                 cinderx_enabled: false,

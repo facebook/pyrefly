@@ -124,7 +124,7 @@ pub struct EnvironmentArgs {
     pub(crate) skip_interpreter_query: bool,
 
     /// Override the bundled typeshed with a custom path.
-    #[arg(long)]
+    #[arg(long, value_parser = absolute_path_parser)]
     pub(crate) typeshed_path: Option<PathBuf>,
 }
 
@@ -362,6 +362,14 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     legacy_overload_expansion: Option<bool>,
+    /// Treat ALL_CAPS names as final after their first assignment.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    treat_all_caps_as_final: Option<bool>,
 }
 
 impl ConfigOverrideArgs {
@@ -515,6 +523,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.legacy_overload_expansion {
             config.root.legacy_overload_expansion = Some(*x);
+        }
+        if let Some(x) = &self.treat_all_caps_as_final {
+            config.root.treat_all_caps_as_final = Some(*x);
         }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {

@@ -11,8 +11,9 @@
 //! Each case builds a synthetic Python snippet that stresses one part of the
 //! checker (enum member resolution, exhaustiveness, protocol structural matching,
 //! narrowing, gradual-typing calls, type-variable joins, inferred typed dicts,
-//! overload resolution, nested generic construction) and times a single in-memory
-//! check of it. `SHARED_STATE`
+//! overload resolution, nested generic construction, and the Polars/pandas
+//! schema-tracking dispatch chain run against non-DataFrame receivers) and times a
+//! single in-memory check of it. `SHARED_STATE`
 //! pre-initializes the stdlib once, so only the snippet's check is measured, and
 //! each case asserts its expected error count up front so a scenario that stops
 //! exercising the intended path fails loudly instead of silently measuring
@@ -300,6 +301,46 @@ result: Base[object] = {expression}
     )
 }
 
+/// `count` reassignments through a user method returning its own class. Every call walks the Polars
+/// dispatch chain but falls through on a `ClassType` receiver, the primary gate that schema tracking
+/// costs ordinary method calls nothing.
+fn user_method_burst(count: usize) -> String {
+    let calls = joined(count, "\n", |_| "c = c.m()".to_owned());
+    format!("class C:\n    def m(self) -> \"C\":\n        return self\nc = C()\n{calls}")
+}
+
+/// `count` reassignments through builtin `str` methods, exercising the same dispatch chain on a
+/// builtin receiver with no errors.
+fn builtin_method_burst(count: usize) -> String {
+    const METHODS: [&str; 4] = ["upper", "lower", "strip", "title"];
+    let calls = joined(count, "\n", |i| {
+        format!("s = s.{}()", METHODS[i % METHODS.len()])
+    });
+    format!("s = \"x\"\n{calls}")
+}
+
+/// A class whose method names collide with Polars DataFrame methods, called `count` times. The
+/// receiver is a `ClassType`, never a `DataFrame`, so every Polars guard returns `None`.
+fn method_name_collision_burst(count: usize) -> String {
+    let methods = joined(4, "\n", |i| {
+        let name = ["select", "filter", "agg", "group_by"][i];
+        format!("    def {name}(self, x: str) -> \"Fake\": return self")
+    });
+    let calls = joined(count, "\n", |i| match i % 3 {
+        0 => "f = f.select(\"a\")".to_owned(),
+        1 => "f = f.filter(\"a\")".to_owned(),
+        _ => "f = f.group_by(\"a\").agg(\"b\")".to_owned(),
+    });
+    format!("class Fake:\n{methods}\nf = Fake()\n{calls}")
+}
+
+/// `count` instantiations of a trivial class, exercising the constructor-call dispatch in `call.rs`
+/// with no errors.
+fn constructor_burst(count: usize) -> String {
+    let calls = joined(count, "\n", |_| "k = K()".to_owned());
+    format!("class K: ...\n{calls}")
+}
+
 /// Type-check `source` once to assert it produces `expected_errors`, then
 /// register a criterion benchmark that repeats the check. The up-front assertion
 /// guards against a scenario silently drifting to a different error count (and
@@ -375,6 +416,27 @@ fn nested_generic_constructor(c: &mut Criterion) {
     );
 }
 
+fn user_method_dispatch(c: &mut Criterion) {
+    measure(c, "user_method_burst_256", user_method_burst(256), 0);
+}
+
+fn builtin_method_dispatch(c: &mut Criterion) {
+    measure(c, "builtin_method_burst_256", builtin_method_burst(256), 0);
+}
+
+fn method_name_collision(c: &mut Criterion) {
+    measure(
+        c,
+        "method_name_collision_burst_256",
+        method_name_collision_burst(256),
+        0,
+    );
+}
+
+fn constructor_dispatch(c: &mut Criterion) {
+    measure(c, "constructor_burst_256", constructor_burst(256), 0);
+}
+
 criterion_group!(
     benches,
     smoke,
@@ -388,5 +450,9 @@ criterion_group!(
     anon_typed_dict,
     overloads,
     nested_generic_constructor,
+    user_method_dispatch,
+    builtin_method_dispatch,
+    method_name_collision,
+    constructor_dispatch,
 );
 criterion_main!(benches);

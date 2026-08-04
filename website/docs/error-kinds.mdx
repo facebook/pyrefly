@@ -461,6 +461,16 @@ def two_elems() -> tuple:
 a, b, c = two_elems()
 ```
 
+## column-schema-mismatch
+
+A Polars DataFrame's data columns do not name exactly the columns declared by its `schema=`. A declared `schema` is the authoritative column set, so a data column that is missing from it or absent from the data raises `ValueError` or `KeyError` at runtime.
+
+```python
+import polars as pl
+
+pl.DataFrame({"x": [1]}, schema={"a": pl.Int64})  # data column `x` is not in the schema, and `a` has no data
+```
+
 ## column-type-mismatch
 
 A Polars DataFrame column literal has an element whose type does not fit the column's dtype. Polars infers the dtype from the first element and requires every later element to fit it, so a mismatch raises `TypeError` at runtime.

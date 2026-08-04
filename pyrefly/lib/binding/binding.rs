@@ -9,6 +9,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
+use std::slice;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -62,6 +63,7 @@ use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -108,6 +110,7 @@ assert_bytes!(KeyClassSynthesizedFields, 4);
 assert_bytes!(KeyClassChecks, 4);
 assert_bytes!(KeyAnnotation, 12);
 assert_bytes!(KeyClassMetadata, 4);
+assert_bytes!(KeyDjangoRelations, 0);
 assert_bytes!(KeyClassMro, 4);
 assert_bytes!(KeyClassDisjointBase, 4);
 assert_bytes!(KeyAbstractClassCheck, 4);
@@ -127,6 +130,7 @@ assert_words!(BindingClass, 10);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 14);
+assert_words!(BindingDjangoRelations, 2);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingClassChecks, 4);
 assert_bytes!(BindingClassDisjointBase, 4);
@@ -160,6 +164,7 @@ pub enum AnyIdx {
     KeyUndecoratedFunctionRange(Idx<KeyUndecoratedFunctionRange>),
     KeyAnnotation(Idx<KeyAnnotation>),
     KeyClassMetadata(Idx<KeyClassMetadata>),
+    KeyDjangoRelations(Idx<KeyDjangoRelations>),
     KeyClassMro(Idx<KeyClassMro>),
     KeyClassDisjointBase(Idx<KeyClassDisjointBase>),
     KeyAbstractClassCheck(Idx<KeyAbstractClassCheck>),
@@ -229,6 +234,9 @@ macro_rules! dispatch_anyidx {
             }
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx)
+            }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx)
             }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx)
@@ -303,6 +311,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx, $($args),+)
             }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx, $($args),+)
+            }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx, $($args),+)
             }
@@ -351,6 +362,7 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyUndecoratedFunctionRange(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAnnotation(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMetadata(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyDjangoRelations(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMro(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassDisjointBase(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAbstractClassCheck(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -373,6 +385,7 @@ pub enum AnyExportedKey {
     KeyVariance(KeyVariance),
     KeyExport(KeyExport),
     KeyClassMetadata(KeyClassMetadata),
+    KeyDjangoRelations(KeyDjangoRelations),
     KeyClassMro(KeyClassMro),
     KeyClassDisjointBase(KeyClassDisjointBase),
     KeyAbstractClassCheck(KeyAbstractClassCheck),
@@ -701,6 +714,25 @@ impl Keyed for KeyClassMetadata {
 impl Exported for KeyClassMetadata {
     fn to_anykey(&self) -> AnyExportedKey {
         AnyExportedKey::KeyClassMetadata(self.clone())
+    }
+}
+impl Keyed for KeyDjangoRelations {
+    const EXPORTED: bool = true;
+    type Value = BindingDjangoRelations;
+    type Answer = DjangoReverseRelationIndex;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyDjangoRelations(idx)
+    }
+    fn range_with(_idx: Idx<Self>, _bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        TextRange::default()
+    }
+}
+impl Exported for KeyDjangoRelations {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyDjangoRelations(self.clone())
     }
 }
 impl Keyed for KeyClassMro {
@@ -1656,6 +1688,22 @@ impl DisplayWith<ModuleInfo> for KeyClassMetadata {
     }
 }
 
+/// Key for Django reverse relationship metadata within a module.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyDjangoRelations;
+
+impl Ranged for KeyDjangoRelations {
+    fn range(&self) -> TextRange {
+        TextRange::default()
+    }
+}
+
+impl DisplayWith<ModuleInfo> for KeyDjangoRelations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyDjangoRelations")
+    }
+}
+
 /// Keys that refer to a class's `Mro` (which tracks its ancestors, in method
 /// resolution order).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -2250,6 +2298,35 @@ pub struct ImportFallback {
     pub is_unreachable: bool,
 }
 
+/// The legacy type parameter(s) a `Binding::PossibleLegacyTParam` may resolve to. Each key
+/// carries its own original binding and attribute path, so this only records the grouping.
+#[derive(Clone, Debug)]
+pub enum LegacyTParamBinding {
+    /// A bare name (`T`), which is never grouped with any other.
+    Parameter(Idx<KeyLegacyTypeParam>),
+    /// The attributes of a module reference (`foo.T`, `foo.P`, ...), which all collapse onto
+    /// the one `foo` scope entry.
+    Module(Vec1<Idx<KeyLegacyTypeParam>>),
+}
+
+impl LegacyTParamBinding {
+    pub fn keys(&self) -> &[Idx<KeyLegacyTypeParam>] {
+        match self {
+            Self::Parameter(key) => slice::from_ref(key),
+            Self::Module(keys) => keys.as_slice(),
+        }
+    }
+
+    /// Any member of the group will do when we only need to follow the name back to the
+    /// binding it was intercepted from: they are all attributes of the same module.
+    pub fn first_key(&self) -> Idx<KeyLegacyTypeParam> {
+        match self {
+            Self::Parameter(key) => *key,
+            Self::Module(keys) => *keys.first(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Binding {
     /// An expression, optionally with a Key saying what the type must be.
@@ -2372,10 +2449,13 @@ pub enum Binding {
     /// diagnostic.
     Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>, Option<TextRange>)>),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
-    /// The TextRange is optional and controls whether to produce an error
-    /// saying there are scoped type parameters for this function / class, and
-    /// therefore the use of legacy type parameters is invalid.
-    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, Option<TextRange>),
+    /// The flag records that this function / class has scoped type parameters, in which case
+    /// the use of legacy type parameters is invalid; the error is reported at the range of
+    /// whichever key it applies to.
+    ///
+    /// Module references may host multiple legacy type parameters because all their attributes
+    /// collapse onto one base-name scope entry.
+    PossibleLegacyTParam(Box<LegacyTParamBinding>, bool),
     /// An assignment to a name.
     NameAssign(Box<NameAssign>),
     /// A type alias (legacy, scoped, or `TypeAliasType` call).
@@ -2568,8 +2648,15 @@ impl DisplayWith<Bindings> for Binding {
             Self::TypeParameter(tp) => {
                 write!(f, "TypeParameter({}, {}, ..)", tp.identity, tp.kind)
             }
-            Self::PossibleLegacyTParam(k, _) => {
-                write!(f, "PossibleLegacyTParam({})", ctx.display(*k))
+            Self::PossibleLegacyTParam(legacy_tparam, _) => {
+                write!(f, "PossibleLegacyTParam(")?;
+                for (i, key) in legacy_tparam.keys().iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ctx.display(*key))?;
+                }
+                write!(f, ")")
             }
             Self::AnnotatedType(k1, k2) => {
                 write!(
@@ -3287,6 +3374,24 @@ impl DisplayWith<Bindings> for BindingClassMetadata {
             "BindingClassMetadata({}, ..)",
             ctx.display(self.class_idx)
         )
+    }
+}
+
+/// Binding for Django relations in a module, used to synthesize reverse relationships.
+#[derive(Clone, Debug)]
+pub struct BindingDjangoRelations {
+    pub classes: Box<[BindingDjangoRelationClass]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BindingDjangoRelationClass {
+    pub class_idx: Idx<KeyClass>,
+    pub fields: Box<[Idx<KeyClassField>]>,
+}
+
+impl DisplayWith<Bindings> for BindingDjangoRelations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &Bindings) -> fmt::Result {
+        write!(f, "BindingDjangoRelations(len={})", self.classes.len())
     }
 }
 

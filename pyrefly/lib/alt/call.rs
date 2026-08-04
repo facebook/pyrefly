@@ -12,9 +12,6 @@ use itertools::Itertools;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_types::callable::BodyKind;
-use pyrefly_types::data_frame::DataFrameKind;
-use pyrefly_types::data_frame::DataFrameSchema;
-use pyrefly_types::data_frame::SchemaCompleteness;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::quantified::Quantified;
@@ -49,9 +46,6 @@ use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::class::dataclass::ReplaceKind;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::nn_module_specials::is_nn_sequential;
-use crate::alt::polars_specials::is_pandas_dataframe;
-use crate::alt::polars_specials::is_polars_concat;
-use crate::alt::polars_specials::is_polars_dataframe;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
 use crate::binding::binding::Key;
@@ -2184,26 +2178,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        // A pandas frame is mutable so columns can be added after construction, which leaves
-        // its schema Partial. A Polars frame is immutable so its schema is Complete.
-        let dataframe_schema = if let Type::ClassDef(cls) = &callee_ty
-            && (is_polars_dataframe(cls) || is_pandas_dataframe(cls))
-            && let Some(construct) = self.polars_construct_options(&x.arguments)
-        {
-            let (kind, completeness) = if is_polars_dataframe(cls) {
-                (DataFrameKind::Polars, SchemaCompleteness::Complete)
-            } else {
-                (DataFrameKind::Pandas, SchemaCompleteness::Partial)
-            };
-            self.infer_dataframe_schema(&construct, kind.clone(), errors)
-                .map(|c| (c, kind, completeness))
-        } else if is_polars_concat(&callee_ty) {
-            // A concat of frames is always a Polars, Complete frame reusing the elements' schemas.
-            self.infer_polars_concat(&x.arguments)
-                .map(|c| (c, DataFrameKind::Polars, SchemaCompleteness::Complete))
-        } else {
-            None
-        };
+        let polars_call = self.infer_polars_call_specialization(&callee_ty, &x.arguments, errors);
 
         let result = if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
             // Because we have to construct a binding for super in order to fill in implicit arguments,
@@ -2477,18 +2452,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
-        if let Some((columns, kind, completeness)) = dataframe_schema
-            && let Type::ClassType(underlying) = result.clone()
-        {
-            return DataFrameSchema {
-                underlying,
-                columns,
-                completeness,
-                kind,
-            }
-            .to_type();
-        }
-        result
+        self.apply_polars_call_specialization(result, polars_call)
     }
 
     pub fn freeform_call_infer(

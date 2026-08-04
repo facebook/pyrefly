@@ -969,36 +969,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // receiver is reused for ordinary callee inference rather than inferred again.
         let callee_ty = if let Expr::Attribute(func) = &*x.func {
             let base = self.expr_infer_impl(&func.value, None, errors);
-            if let Some(ty) = self.polars_select(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_drop(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_rename(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_with_columns(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_row_transform(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_row_append(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_cast(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_join(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_hstack(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) =
-                self.polars_in_place_column_mutation(base.ty(), func, &x.arguments, errors)
-            {
+            if let Some(ty) = self.polars_method_call(base.ty(), func, &x.arguments, errors) {
                 return PreparedExprCall::Resolved(ty);
             }
             let attr = self.attr_access_infer(func, &base, errors);
@@ -3025,6 +2996,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         allow_type_level_dsl,
                     ))
                 }
+                // A `pl.DataFrame[Schema]` annotation carries the schema class's columns as the
+                // frame's schema, so an annotated parameter is checked like a constructed frame.
+                Type::ClassDef(ref cls)
+                    if let [arg] = xs
+                        && let Some(df) = self.polars_dataframe_schema_annotation(cls, arg) =>
+                {
+                    Type::type_of(df)
+                }
                 Type::ClassDef(ref cls) if self.is_int_tuple_class(cls) => {
                     self.parse_int_tuple_type(xs, errors)
                 }
@@ -3257,15 +3236,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         return narrowed;
                     }
-                    // A string key on a Complete Polars schema reads one column: a known column
-                    // pins the result Series to its dtype, an absent one errors, and every other
-                    // case leaves `column_dtype` unset so the read stays an opaque Series.
                     let mut column_dtype = None;
-                    if let Expr::StringLiteral(key) = slice
-                        && schema.is_complete()
+                    if schema.is_complete()
+                        && let Some(name) = self.polars_column_name(slice)
                     {
-                        let name = key.value.to_str();
-                        match schema.columns.iter().find(|(c, _)| c.as_str() == name) {
+                        match schema.columns.iter().find(|(c, _)| **c == name) {
                             Some((_, dtype)) if schema.kind == DataFrameKind::Polars => {
                                 column_dtype = Some(*dtype);
                             }
