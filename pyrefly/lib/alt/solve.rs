@@ -5244,45 +5244,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     #[inline(never)]
     fn binding_to_type_info_possible_legacy_tparam(
         &self,
-        key: Idx<KeyLegacyTypeParam>,
-        range_if_scoped_params_exist: &Option<TextRange>,
+        keys: &[Idx<KeyLegacyTypeParam>],
+        has_scoped_tparams: bool,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        let ty = match &*self.get_idx(key) {
-            LegacyTypeParameterLookup::Parameter(p) => {
-                // This class or function has scoped (PEP 695) type parameters. Mixing legacy-style parameters is an error.
-                if let Some(r) = range_if_scoped_params_exist {
-                    self.error(
-                        errors,
-                        *r,
-                        ErrorKind::InvalidTypeVar,
-                        format!(
-                            "Type parameter {} is not included in the type parameter list",
-                            self.module().display(&self.bindings().idx_to_key(key).0)
-                        ),
-                    );
+        // `keys` usually holds a single element. It holds several only for a module reference
+        // (`foo`) hosting multiple legacy tparams accessed as attributes (`foo.T`, `foo.P`, ...),
+        // all of which collapsed onto this one base-name scope entry. In that case every key is
+        // `ModuleKeyed` against the same module, and we must narrow the module at *each* hosted
+        // tparam's attribute facet so a reference to any of them resolves to its Quantified.
+        let mut module_type_info: Option<TypeInfo> = None;
+        let mut param_type_info: Option<TypeInfo> = None;
+        for &key in keys {
+            let ty = match &*self.get_idx(key) {
+                LegacyTypeParameterLookup::Parameter(p) => {
+                    // This class or function has scoped (PEP 695) type parameters. Mixing legacy-style parameters is an error.
+                    if has_scoped_tparams {
+                        let tparam_key = self.bindings().idx_to_key(key);
+                        self.error(
+                            errors,
+                            tparam_key.range(),
+                            ErrorKind::InvalidTypeVar,
+                            format!(
+                                "Type parameter {} is not included in the type parameter list",
+                                self.module().display(&tparam_key.0)
+                            ),
+                        );
+                    }
+                    p.clone().to_value()
                 }
-                p.clone().to_value()
-            }
-            LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
-        };
-        match self.bindings().get(key) {
-            BindingLegacyTypeParam::ModuleKeyed(idx, attrs) => {
-                // `idx` points to a module whose attr chain may end in a legacy type
-                // variable that needs to be replaced with a QuantifiedValue. Since the
-                // binding is for the module itself, we use the mechanism for attribute
-                // ("facet") type narrowing to change the type produced when the final
-                // attr is accessed.
-                let module = (*self.get_idx(*idx)).clone();
-                if matches!(ty, Type::QuantifiedValue(_)) {
-                    let facets = attrs.mapped_ref(|a| FacetKind::Attribute(a.clone()));
-                    module.with_narrow(&facets, ty)
-                } else {
-                    module
+                LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
+            };
+            match self.bindings().get(key) {
+                BindingLegacyTypeParam::ModuleKeyed(idx, attrs) => {
+                    // `idx` points to a module whose attr chain may end in a legacy type
+                    // variable that needs to be replaced with a QuantifiedValue. Since the
+                    // binding is for the module itself, we use the mechanism for attribute
+                    // ("facet") type narrowing to change the type produced when the final
+                    // attr is accessed. Multiple hosted tparams narrow the same module, so we
+                    // thread the accumulating `TypeInfo` through each iteration.
+                    let module = module_type_info
+                        .take()
+                        .unwrap_or_else(|| (*self.get_idx(*idx)).clone());
+                    module_type_info = Some(if matches!(ty, Type::QuantifiedValue(_)) {
+                        let facets = attrs.mapped_ref(|a| FacetKind::Attribute(a.clone()));
+                        module.with_narrow(&facets, ty)
+                    } else {
+                        module
+                    });
+                }
+                BindingLegacyTypeParam::ParamKeyed(_) => {
+                    // A bare-name tparam is never grouped with siblings, so this is the only key.
+                    param_type_info = Some(TypeInfo::of_ty(ty));
                 }
             }
-            BindingLegacyTypeParam::ParamKeyed(_) => TypeInfo::of_ty(ty),
         }
+        module_type_info
+            .or(param_type_info)
+            .unwrap_or_else(|| TypeInfo::of_ty(Type::any_implicit()))
     }
 
     /// Handle `Binding::NameAssign` in binding_to_type_info - process name assignment with dict facets.
@@ -5348,12 +5367,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::AssignToSubscript(x) => {
                 self.binding_to_type_info_assign_to_subscript(&x.0, &x.1, errors)
             }
-            Binding::PossibleLegacyTParam(key, range_if_scoped_params_exist) => self
-                .binding_to_type_info_possible_legacy_tparam(
-                    *key,
-                    range_if_scoped_params_exist,
-                    errors,
-                ),
+            Binding::PossibleLegacyTParam(keys, has_scoped_tparams) => {
+                self.binding_to_type_info_possible_legacy_tparam(keys, *has_scoped_tparams, errors)
+            }
             _ => {
                 // All other Bindings model `Type` level operations where we do not
                 // propagate any attribute narrows.

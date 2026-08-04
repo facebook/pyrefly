@@ -2419,10 +2419,15 @@ pub enum Binding {
     /// diagnostic.
     Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>, Option<TextRange>)>),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
-    /// The TextRange is optional and controls whether to produce an error
-    /// saying there are scoped type parameters for this function / class, and
-    /// therefore the use of legacy type parameters is invalid.
-    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, Option<TextRange>),
+    /// The flag records that this function / class has scoped type parameters, in which case
+    /// the use of legacy type parameters is invalid; the error is reported at the range of
+    /// whichever key it applies to.
+    ///
+    /// The slice usually has a single element. It holds multiple keys only for a module
+    /// reference (e.g. `foo`) that hosts several legacy type parameters accessed as
+    /// attributes (`foo.T`, `foo.P`, ...): all of them are collapsed onto the one base-name
+    /// scope entry, so we must narrow the module at every hosted tparam's attribute facet.
+    PossibleLegacyTParam(Box<[Idx<KeyLegacyTypeParam>]>, bool),
     /// An assignment to a name.
     NameAssign(Box<NameAssign>),
     /// A type alias (legacy, scoped, or `TypeAliasType` call).
@@ -2615,8 +2620,15 @@ impl DisplayWith<Bindings> for Binding {
             Self::TypeParameter(tp) => {
                 write!(f, "TypeParameter({}, {}, ..)", tp.identity, tp.kind)
             }
-            Self::PossibleLegacyTParam(k, _) => {
-                write!(f, "PossibleLegacyTParam({})", ctx.display(*k))
+            Self::PossibleLegacyTParam(ks, _) => {
+                write!(f, "PossibleLegacyTParam(")?;
+                for (i, k) in ks.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ctx.display(*k))?;
+                }
+                write!(f, ")")
             }
             Self::AnnotatedType(k1, k2) => {
                 write!(
