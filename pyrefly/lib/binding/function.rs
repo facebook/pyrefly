@@ -16,8 +16,10 @@ use pyrefly_python::dunder;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::PlaceholderBodyKind;
+use pyrefly_types::callable::BodyKind;
+use pyrefly_types::callable::FuncFacts;
 use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
+use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
@@ -52,7 +54,6 @@ use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FunctionDefData;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
@@ -244,11 +245,12 @@ impl<'a> SelfAttrNames<'a> {
         parameters: &mut Box<Parameters>,
         body: ThinVec<Stmt>,
     ) -> Option<SelfAssignments> {
-        let self_name = if let Some(p) = parameters.iter_non_variadic_params().next() {
-            &p.parameter.name.id
-        } else {
-            return None;
-        };
+        let self_name = &parameters
+            .iter_non_variadic_params()
+            .next()?
+            .parameter
+            .name
+            .id;
         let mut finder = SelfAttrNames {
             self_name,
             names: SmallMap::new(),
@@ -506,7 +508,7 @@ impl<'a> BindingsBuilder<'a> {
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
         implicit_return: Option<Idx<Key>>,
         should_infer_return_type: bool,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
     ) {
         let is_generator = yields_and_returns.is_generator;
         let return_ann = return_ann_with_range.as_ref().map(|(_, key)| *key);
@@ -564,8 +566,8 @@ impl<'a> BindingsBuilder<'a> {
             .into_boxed_slice();
 
         let return_type_binding = {
-            let kind = match (return_ann_with_range, implicit_return, stub_or_impl) {
-                (Some((range, annotation)), Some(implicit_return), FunctionStubOrImpl::Impl) => {
+            let kind = match (return_ann_with_range, implicit_return, is_stub) {
+                (Some((range, annotation)), Some(implicit_return), false) => {
                     self.insert_binding(
                         KeyExpect::ValidateImplicitReturn(range),
                         BindingExpect::ValidateImplicitReturn {
@@ -583,7 +585,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
                 // We have an explicit return annotation on a stub function, so we just trust it, ignoring the implicit return.
-                (Some((range, annotation)), Some(_), FunctionStubOrImpl::Stub)
+                (Some((range, annotation)), Some(_), true)
                 // We have an explicit return annotation and no implicit return.
                 | (Some((range, annotation)), None, _) => {
                     ReturnTypeKind::ShouldTrustAnnotation {
@@ -699,12 +701,7 @@ impl<'a> BindingsBuilder<'a> {
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
-    ) -> (
-        FunctionStubOrImpl,
-        Option<PlaceholderBodyKind>,
-        bool,
-        Option<SelfAssignments>,
-    ) {
+    ) -> (BodyKind, bool, Option<SelfAssignments>) {
         // If the first statement in the body is a docstring, remove it
         let body_no_docstring = if let Some(s) = body.first()
             && is_docstring(s)
@@ -713,17 +710,7 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             body.as_slice()
         };
-        let body_is_ellipse = match body_no_docstring {
-            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
-            _ => false,
-        };
-        let body_is_trivial = body_is_ellipse
-            || (match body_no_docstring {
-                [] => true,
-                [Stmt::Pass(_)] => true,
-                _ => false,
-            });
-        let placeholder_body_kind = match body_no_docstring {
+        let body_kind = match body_no_docstring {
             // raise NotImplementedError(...)
             [Stmt::Raise(StmtRaise { exc: Some(exc), .. })]
                 if self.as_special_export(match &**exc {
@@ -731,7 +718,7 @@ impl<'a> BindingsBuilder<'a> {
                     other => other,
                 }) == Some(SpecialExport::NotImplementedError) =>
             {
-                Some(PlaceholderBodyKind::RaiseNotImplementedError)
+                BodyKind::RaiseNotImplementedError
             }
             // return NotImplemented
             [
@@ -739,35 +726,33 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(val), ..
                 }),
             ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => {
-                Some(PlaceholderBodyKind::ReturnNotImplemented)
+                BodyKind::ReturnNotImplemented
             }
-            _ => None,
+            // ...
+            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => {
+                BodyKind::Ellipsis
+            }
+            [] | [Stmt::Pass(_)] => BodyKind::Trivial,
+            _ => BodyKind::Other,
         };
-        if decorators.is_overload && !body_is_trivial && placeholder_body_kind.is_none() {
+        if decorators.is_overload && !body_kind.is_placeholder_or_trivial() {
             self.error(
                 func_name.range(),
                 ErrorKind::UselessOverloadBody,
                 "`@overload` bodies should not contain executable logic".to_owned(),
             );
         }
-        // A `...` body is always interpreted as a stub function.
-        // Functions with other trivial bodies are interpreted as stubs in some contexts.
-        let stub_or_impl = if body_is_ellipse
-            || ((self.scopes.is_in_protocol_class()
-                || decorators.is_abstract_method
-                || decorators.is_overload)
-                && body_is_trivial)
-        {
-            FunctionStubOrImpl::Stub
-        } else {
-            FunctionStubOrImpl::Impl
+        let facts = FuncFacts {
+            body_kind,
+            is_in_protocol_class: self.scopes.is_in_protocol_class(),
+            is_abstract_method: decorators.is_abstract_method,
+            is_overload: decorators.is_overload,
+            is_in_type_checking_block: self.type_checking_depth > 0,
         };
-        let should_report_unused_parameters = stub_or_impl == FunctionStubOrImpl::Impl
-            && !body_is_trivial
-            && placeholder_body_kind.is_none()
-            && !decorators.is_overload
-            && !decorators.is_override
-            && !decorators.is_abstract_method;
+        let ignore_unused_parameters = body_kind.is_placeholder_or_trivial()
+            || decorators.is_overload
+            || decorators.is_override
+            || decorators.is_abstract_method;
         let method_self_kind = if class_key.is_some()
             && (decorators.is_classmethod
                 || func_name.id == dunder::INIT_SUBCLASS
@@ -817,7 +802,7 @@ impl<'a> BindingsBuilder<'a> {
                 return_ann_with_range,
                 implicit_return,
                 false,
-                stub_or_impl,
+                facts.is_stub(),
             );
             (false, self_assignments)
         } else {
@@ -836,10 +821,10 @@ impl<'a> BindingsBuilder<'a> {
                     is_async,
                     method_self_kind,
                 );
-            if should_report_unused_parameters {
+            if !ignore_unused_parameters {
                 self.record_unused_parameters(unused_parameters);
-                self.record_unused_variables(unused_variables);
             }
+            self.record_unused_variables(unused_variables);
             let should_infer = match self.infer_return_types {
                 InferReturnTypes::Checked => true,
                 InferReturnTypes::Annotated => is_annotated(&return_ann_with_range, parameters),
@@ -853,7 +838,7 @@ impl<'a> BindingsBuilder<'a> {
                 return_ann_with_range,
                 implicit_return,
                 should_infer,
-                stub_or_impl,
+                facts.is_stub(),
             );
             // Mirror the `ReturnTypeKind::ShouldInferType` arm in `analyze_return_type`:
             // we infer iff there's no return annotation and inference was requested.
@@ -868,12 +853,7 @@ impl<'a> BindingsBuilder<'a> {
             (is_return_inferred, self_assignments)
         };
 
-        (
-            stub_or_impl,
-            placeholder_body_kind,
-            is_return_inferred,
-            self_assignments,
-        )
+        (body_kind, is_return_inferred, self_assignments)
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
@@ -899,16 +879,42 @@ impl<'a> BindingsBuilder<'a> {
         // Get preceding function definition, if any. Used for building an overload type.
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
 
-        let (class_key, metadata_key) = match self.scopes.current_class_and_metadata_keys() {
-            Some((class_key, metadata_key)) => (Some(class_key), Some(metadata_key)),
-            _ => (None, None),
-        };
+        let class_key = self.scopes.current_class_key();
 
         // Check whether this function is decorated with `@shape_dsl_function`
         // before `decorators()` takes the decorator list.
         let is_shape_dsl = x.decorator_list.iter().any(|d| {
             self.as_special_export(&d.expression) == Some(SpecialExport::ShapeDslFunction)
         });
+        let is_type_shape_dsl = x.decorator_list.iter().any(|d| {
+            self.as_special_export(&d.expression) == Some(SpecialExport::TypeShapeDslFunction)
+        });
+        if is_shape_dsl && is_type_shape_dsl {
+            self.error(
+                func_name.range(),
+                ErrorKind::InvalidArgument,
+                "`@shape_dsl_function` and `@type_shape_dsl_function` cannot be combined"
+                    .to_owned(),
+            );
+        }
+
+        let type_shape_dsl_def = if is_type_shape_dsl && !is_shape_dsl {
+            let is_top_level =
+                class_key.is_none() && parent.ancestor_function_path(&self.module_info).is_none();
+            match ValidatedTypeShapeDslFunction::try_new(x.clone(), is_top_level) {
+                Ok(definition) => Some(Arc::new(definition)),
+                Err(error) => {
+                    self.error(
+                        error.range,
+                        ErrorKind::InvalidArgument,
+                        format!("@type_shape_dsl_function {}", error.message),
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Extract the IR function name from @uses_shape_dsl(ir_fn) if present.
         let uses_shape_dsl_ir_name = x.decorator_list.iter().find_map(|d| {
@@ -925,7 +931,7 @@ impl<'a> BindingsBuilder<'a> {
 
         // Convert the function to DSL IR before `function_header` takes `returns`
         // and before `function_body` takes `body`.
-        let shape_dsl_def = if is_shape_dsl {
+        let shape_dsl_def = if is_shape_dsl && !is_type_shape_dsl {
             // Warn about parameter kinds the DSL silently ignores.
             if let Some(vararg) = &x.parameters.vararg {
                 self.error(
@@ -986,19 +992,18 @@ impl<'a> BindingsBuilder<'a> {
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let calls_super_method = SuperMethodCallFinder::find(&func_name.id, &x.body);
-        let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self
-            .function_body(
-                &mut x.parameters,
-                mem::take(&mut x.body),
-                &decorators,
-                x.range,
-                x.is_async,
-                return_ann_with_range,
-                &func_name,
-                parent,
-                undecorated_idx,
-                class_key,
-            );
+        let (body_kind, is_return_inferred, self_assignments) = self.function_body(
+            &mut x.parameters,
+            mem::take(&mut x.body),
+            &decorators,
+            x.range,
+            x.is_async,
+            return_ann_with_range,
+            &func_name,
+            parent,
+            undecorated_idx,
+            class_key,
+        );
 
         // Pop the annotation scope to get back to the parent scope, and handle this
         // case where we need to track assignments to `self` from methods.
@@ -1011,16 +1016,16 @@ impl<'a> BindingsBuilder<'a> {
             BindingUndecoratedFunction {
                 def_index: func_def_index,
                 def: FunctionDefData::new(x),
-                stub_or_impl,
-                placeholder_body_kind,
+                is_in_type_checking_block: self.type_checking_depth > 0,
+                body_kind,
                 is_return_inferred,
                 calls_super_method,
                 class_key,
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
-                module_style: self.module_info.path().style(),
                 outer_funcs,
                 shape_dsl_def,
+                type_shape_dsl_def,
                 uses_shape_dsl_ir_name,
             },
         );
@@ -1037,7 +1042,11 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_current_as(
             &func_name,
             def_idx,
-            Binding::Function(function_idx, pred_idx, metadata_key),
+            Binding::Function {
+                decorated_idx: function_idx,
+                pred_idx,
+                in_class: class_key.is_some(),
+            },
             FlowStyle::FunctionDef {
                 function_idx,
                 has_return_annotation: return_ann_with_range.is_some(),
@@ -1155,7 +1164,10 @@ fn function_last_expressions<'a>(
                 let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
                     f(sys_info, &case.body, res)?;
-                    if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
+                    // Must match the binding step's exhaustiveness judgment in
+                    // `stmt_match`; otherwise the `Key::Exhaustive(Match, ...)` promised
+                    // below is never inserted and solve time panics.
+                    if Ast::pattern_is_irrefutable_for_subject(&case.pattern, &x.subject) {
                         syntactically_exhaustive = true;
                         break;
                     }

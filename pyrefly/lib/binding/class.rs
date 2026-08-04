@@ -388,7 +388,7 @@ impl<'a> BindingsBuilder<'a> {
             args.keywords.iter_mut().for_each(|keyword| {
                 if let Some(name) = &keyword.arg {
                     self.ensure_expr(&mut keyword.value, class_object.usage());
-                    keywords.push((name.id.clone(), keyword.value.clone()));
+                    keywords.push((name.clone(), keyword.value.clone()));
                 } else {
                     self.error(
                         keyword.range(),
@@ -452,12 +452,14 @@ impl<'a> BindingsBuilder<'a> {
 
         let django_field_info = self.extract_django_fields_from_class_body(&field_definitions);
         let mut fields = SmallMap::with_capacity(field_definitions.len());
+        let mut django_relation_fields = Vec::new();
         for (name, (definition, range)) in field_definitions.into_iter_hashed() {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = &definition
                 && let ExprOrBinding::Expr(e) = value.as_ref()
             {
                 self.extract_pydantic_config_dict(e, &name, &mut pydantic_config_dict);
             }
+            let is_django_relation_candidate = django_field_info.relation_fields.contains(&name);
             let (is_initialized_on_class, is_annotated, is_defined_in_class_body) =
                 match &definition {
                     ClassFieldDefinition::DefinedInMethod { annotation, .. } => {
@@ -493,8 +495,12 @@ impl<'a> BindingsBuilder<'a> {
                 range,
                 definition,
             };
-            self.insert_binding(key_field, binding);
+            let field_idx = self.insert_binding(key_field, binding);
+            if is_django_relation_candidate {
+                django_relation_fields.push(field_idx);
+            }
         }
+        self.record_django_relation_class(class_indices.class_idx, django_relation_fields);
 
         self.bind_current_as(
             &x.name,
@@ -1151,7 +1157,7 @@ impl<'a> BindingsBuilder<'a> {
         class_indices: ClassIndices,
         parent: &NestingContext,
         base: Option<Expr>,
-        keywords: Box<[(Name, Expr)]>,
+        keywords: Box<[(Identifier, Expr)]>,
         // name, position, annotation, value
         member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         illegal_identifier_handling: IllegalIdentifierHandling,
@@ -1599,8 +1605,12 @@ impl<'a> BindingsBuilder<'a> {
                 (Some(name), _) if name == "extra_items" => Some(name),
                 _ => None,
             };
-            if let Some(kw_name) = recognized_kw {
-                base_class_keywords.push((kw_name.clone(), kw.value.clone()));
+            if recognized_kw.is_some() {
+                let kw_name = kw
+                    .arg
+                    .clone()
+                    .expect("recognized TypedDict keyword must have a name");
+                base_class_keywords.push((kw_name, kw.value.clone()));
             } else {
                 let msg = if let Some(name) = &kw.arg {
                     format!("Unrecognized keyword argument `{name}`")

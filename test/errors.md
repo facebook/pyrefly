@@ -140,6 +140,16 @@ $ echo "x: str = 0" > $TMPDIR/test.py && \
 [1]
 ```
 
+## `--min-severity info` causes nonzero exit on directives
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> printf "from typing import reveal_type\nreveal_type(1)\n" > $TMPDIR/test.py && \
+> $PYREFLY check $TMPDIR/test.py --min-severity=info --output-format=min-text
+ INFO */test.py:2:12-15: revealed type: Literal[1] [reveal-type] (glob)
+[1]
+```
+
 ## `--output-format junit-xml` emits well-formed XML
 
 ```scrut {output_stream: stdout}

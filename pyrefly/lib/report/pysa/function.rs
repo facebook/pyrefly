@@ -16,7 +16,6 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncDefIndex;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::PropertyRole;
@@ -378,11 +377,8 @@ fn assert_decorated_function_in_context(
     function: &DecoratedFunction,
     context: &ModuleAnswersContext,
 ) {
-    match &function.undecorated.metadata.kind {
-        FunctionKind::Def(func_id) => {
-            assert_eq!(func_id.module, context.module_info);
-        }
-        _ => (),
+    if let Some(func_id) = function.undecorated.metadata.kind.definition_id() {
+        assert_eq!(func_id.module, context.module_info);
     }
 }
 
@@ -613,9 +609,9 @@ impl FunctionNode {
                 ..
             }) => {
                 let binding = context.bindings.get(*definition);
-                if let Binding::Function(key_decorated_function, _, _) = binding {
+                if let Binding::Function { decorated_idx, .. } = binding {
                     let exported_function = get_exported_decorated_function(
-                        *key_decorated_function,
+                        *decorated_idx,
                         /* skip_property_getter */ false,
                         context,
                     );
@@ -733,7 +729,9 @@ impl FunctionNode {
 
     fn is_stub(&self) -> bool {
         match self {
-            FunctionNode::DecoratedFunction(function) => function.is_stub(),
+            FunctionNode::DecoratedFunction(function) => {
+                function.metadata().flags.facts().is_stub()
+            }
             FunctionNode::ClassField { .. } => false,
         }
     }

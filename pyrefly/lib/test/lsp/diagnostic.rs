@@ -298,6 +298,26 @@ def main():
     assert_eq!(report, "Variable `unused_var` is unused");
 }
 
+#[test]
+fn test_unused_variable_in_override() {
+    let code = r#"
+from typing_extensions import override
+
+class Base:
+    def method(self) -> None:
+        pass
+
+class Child(Base):
+    @override
+    def method(self) -> None:
+        unused_var = "this is unused"
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "Variable `unused_var` is unused");
+}
+
 // Reassigning a parameter inside a loop using its own value should not be
 // reported as unused.
 #[test]

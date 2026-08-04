@@ -152,6 +152,19 @@ Example(id="123")  # E: Missing argument `attribute_1`
 );
 
 pydantic_testcase!(
+    test_frozen_field_override_covariant,
+    r#"
+from pydantic import BaseModel, Field
+
+class Foo(BaseModel):
+    id: int | None = Field(frozen=True)
+
+class Bar(Foo):
+    id: int = Field(frozen=True)
+"#,
+);
+
+pydantic_testcase!(
     bug = "consider erroring on invalid5 and invalid6",
     test_discriminated_unions,
     r#"
@@ -487,5 +500,22 @@ class Model(BaseModel):
 
 m = Model(self="test")
 assert_type(m.self, str)
+"#,
+);
+
+// pydantic `BaseModel` does not honor `Field(init=False)`,
+// unlike stdlib/attrs dataclasses and unlike pydantic.dataclass
+// The field stays a real keyword parameter of the synthesized `__init__`,
+// and it is type-checked.
+pydantic_testcase!(
+    test_pydantic_model_field_init_false_ignored,
+    r#"
+from typing import reveal_type
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(init=False, default=0)
+
+reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, x: LaxInt = ..., **Unknown) -> None
 "#,
 );

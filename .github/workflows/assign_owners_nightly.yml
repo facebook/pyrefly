@@ -8,8 +8,11 @@ name: Nightly assign team owners to unassigned PRs
 # having to trigger it.
 #
 # Selection is least-loaded (balanced against each owner's current open-PR
-# backlog) and each assignment is announced in the team Discord channel.
+# backlog). The picked owner is both assigned and requested as a reviewer (so
+# the PR shows up in their review queue), and each assignment is announced in
+# the team Discord channel.
 #
+# Scheduled runs assign for real.
 # Scheduled runs assign for real. A manual run from the Actions tab exposes a
 # "dry_run" toggle (default off) to preview without assigning.
 
@@ -205,10 +208,25 @@ jobs:
                   console.log(`#${pr.number}: could not assign ${pick} (no repo access?)`);
                   continue;
                 }
+                // Also request them as a reviewer so the PR lands in their review
+                // queue, not just their assigned list. GitHub rejects requesting
+                // review from the PR author (422), so skip that case; a failure
+                // here must not undo the assignment we just verified.
+                if (pr.user.login.toLowerCase() === pick) {
+                  console.log(`#${pr.number}: ${pick} is the PR author, skipping review request`);
+                } else {
+                  try {
+                    await github.rest.pulls.requestReviewers({
+                      owner, repo, pull_number: pr.number, reviewers: [pick],
+                    });
+                  } catch (e) {
+                    console.log(`#${pr.number}: could not request review from ${pick}: ${e.message}`);
+                  }
+                }
               }
 
               load.set(pick, load.get(pick) + 1);
-              console.log(`${dryRun ? '[dry-run] would assign' : '#' + pr.number + ': assigned'} ${pick}${dryRun ? ` to #${pr.number}` : ''} (load now ${load.get(pick)})`);
+              console.log(`${dryRun ? '[dry-run] would assign + request review from' : '#' + pr.number + ': assigned + requested review from'} ${pick}${dryRun ? ` to #${pr.number}` : ''} (load now ${load.get(pick)})`);
               await notify(pick, pr);
               assigned++;
             }

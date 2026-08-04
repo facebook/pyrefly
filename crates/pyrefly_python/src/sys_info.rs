@@ -845,6 +845,51 @@ impl SysInfo {
         x == "TYPE_CHECKING" || x == "TYPE_CHECKING_WITH_PYREFLY"
     }
 
+    /// Returns whether the expression is syntactically guarded by `TYPE_CHECKING`.
+    pub fn is_type_checking_guard(x: &Expr) -> bool {
+        match x {
+            Expr::Name(name) => Self::is_type_checking_constant_name(name.id()),
+            // Only `typing.TYPE_CHECKING` / `typing_extensions.TYPE_CHECKING` count; an
+            // unrelated `foo.TYPE_CHECKING` must not be mistaken for a type-checking guard.
+            Expr::Attribute(ExprAttribute { value, attr, .. }) => {
+                matches!(
+                    &**value,
+                    Expr::Name(base) if matches!(base.id.as_str(), "typing" | "typing_extensions")
+                ) && Self::is_type_checking_constant_name(attr.as_str())
+            }
+            Expr::BoolOp(x) => match x.op {
+                BoolOp::And => x.values.iter().any(Self::is_type_checking_guard),
+                BoolOp::Or => x.values.iter().all(Self::is_type_checking_guard),
+            },
+            _ => false,
+        }
+    }
+
+    /// Returns whether the expression is a runtime-only guard like `not TYPE_CHECKING`,
+    /// `TYPE_CHECKING is False`, or `TYPE_CHECKING == False`.
+    pub fn is_not_type_checking_guard(x: &Expr) -> bool {
+        match x {
+            Expr::UnaryOp(x) if matches!(x.op, UnaryOp::Not) => {
+                Self::is_type_checking_guard(&x.operand)
+            }
+            Expr::Compare(x)
+                if x.ops.len() == 1
+                    && x.comparators.len() == 1
+                    && matches!(x.ops[0], CmpOp::Is | CmpOp::Eq) =>
+            {
+                let is_false = |e: &Expr| {
+                    matches!(
+                        e,
+                        Expr::BooleanLiteral(ExprBooleanLiteral { value: false, .. })
+                    )
+                };
+                (Self::is_type_checking_guard(&x.left) && is_false(&x.comparators[0]))
+                    || (is_false(&x.left) && Self::is_type_checking_guard(&x.comparators[0]))
+            }
+            _ => false,
+        }
+    }
+
     fn evaluate(self, x: &Expr) -> Option<Value> {
         match x {
             Expr::Compare(x) if x.ops.len() == 1 && x.comparators.len() == 1 => Some(Value::Bool(

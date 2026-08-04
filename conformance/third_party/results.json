@@ -3,7 +3,7 @@
   "pass": 135,
   "fail": 5,
   "pass_rate": 0.96,
-  "differences": 11,
+  "differences": 12,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -143,7 +143,7 @@
   ],
   "failing": {
     "callables_annotation.py": 1,
-    "constructors_callable.py": 2,
+    "constructors_callable.py": 1,
     "dataclasses_descriptors.py": 2,
     "exceptions_context_managers.py": 2,
     "generics_scoping.py": 4

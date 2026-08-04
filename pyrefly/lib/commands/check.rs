@@ -80,7 +80,7 @@ use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
 use crate::error::suppress::CommentLocation;
 use crate::error::suppress::SerializedError;
-use crate::module::typeshed::stdlib_search_path;
+use crate::error::suppress::UnusedIgnoreKind;
 use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
@@ -235,7 +235,7 @@ impl SnippetCheckArgs {
                 check_all: false,
                 suppress_errors: false,
                 expectations: false,
-                remove_unused_ignores: false,
+                remove_unused_ignores: None,
             },
         };
         let (status, check_result) =
@@ -360,7 +360,7 @@ struct OutputArgs {
     baseline: Option<PathBuf>,
 
     /// When specified, emit a sorted/formatted JSON of the errors to the baseline file
-    #[arg(long, requires("baseline"))]
+    #[arg(long)]
     update_baseline: bool,
 
     /// Minimum severity level for errors to be displayed.
@@ -420,9 +420,17 @@ struct BehaviorArgs {
     /// Check against any `E:` lines in the file.
     #[arg(long)]
     expectations: bool,
-    /// Remove unused ignores from the input files.
-    #[arg(long)]
-    remove_unused_ignores: bool,
+    /// Remove unused ignores from the input files, optionally selecting `pyrefly`, `type`, or `all`.
+    /// Defaults to `pyrefly` when no kind is specified.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "KIND",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "pyrefly"
+    )]
+    remove_unused_ignores: Option<UnusedIgnoreKind>,
 }
 
 fn write_errors_to_file(
@@ -1246,7 +1254,6 @@ impl CheckArgs {
             default: if retain {
                 Require::Everything
             } else if self.behavior.check_all
-                || stdlib_search_path().is_some()
                 || self.output.report_pysa.is_some()
                 || self.output.report_cinderx.is_some()
             {
@@ -1266,6 +1273,13 @@ impl CheckArgs {
         require: Require,
         upsell: UpsellDecision,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let baseline_path = if self.output.update_baseline {
+            Some(self.output.baseline.as_ref().context(
+                "`--update-baseline` requires a baseline file set by `--baseline` or configuration",
+            )?)
+        } else {
+            None
+        };
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         if let Some(pysa_directory) = &self.output.report_pysa {
@@ -1330,9 +1344,10 @@ impl CheckArgs {
         );
         let output_format = self.output.output_format();
 
-        let collected = loads.collect_errors();
+        let mut collected = loads.collect_errors();
         // Pass pre-collected errors to avoid redundant error collection.
         let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display(&collected);
+        collected.ordinary.extend(unused_ignore_errors.ordinary);
         let errors = loads.apply_baseline(
             collected,
             self.output.baseline.as_deref(),
@@ -1355,20 +1370,6 @@ impl CheckArgs {
         } else {
             (errors.directives, errors.ordinary)
         };
-        let ordinary_errors: Vec<_> = if let Some(only) = &self.output.only {
-            let only = only.iter().collect::<SmallSet<_>>();
-            let filtered: Vec<_> = unused_ignore_errors
-                .ordinary
-                .into_iter()
-                .filter(|e| only.contains(&e.error_kind()))
-                .collect();
-            ordinary_errors.into_iter().chain(filtered).collect()
-        } else {
-            ordinary_errors
-                .into_iter()
-                .chain(unused_ignore_errors.ordinary)
-                .collect()
-        };
 
         // Filter by minimum severity. Directives are not subject to this
         // filter — they are merged separately in the output step below.
@@ -1387,25 +1388,23 @@ impl CheckArgs {
             // TODO: Deprecate this in favor of `pyrefly suppress`
             let serialized_errors: Vec<SerializedError> = ordinary_errors
                 .iter()
+                .filter(|e| e.error_kind().is_suppressable())
                 .filter_map(SerializedError::from_error)
-                .filter(|e| !e.is_unused_ignore())
                 .collect();
             suppress::suppress_errors(serialized_errors, CommentLocation::LineBefore);
         }
-        if self.behavior.remove_unused_ignores {
+        if let Some(kind) = self.behavior.remove_unused_ignores {
             // TODO: Deprecate this in favor of `pyrefly suppress`
             let collected = loads.collect_errors();
             let unused_errors = loads.collect_unused_ignore_errors(&collected);
-            suppress::remove_unused_ignores(unused_errors);
+            suppress::remove_unused_ignores(unused_errors, kind);
         }
 
         // We update the baseline file if requested, after reporting any new
         // errors using the old baseline. Directives are structurally excluded
         // — they live in `directives`, not `ordinary_errors`. The baseline only
         // tracks errors that meet the min-severity threshold.
-        if self.output.update_baseline
-            && let Some(baseline_path) = &self.output.baseline
-        {
+        if let Some(baseline_path) = baseline_path {
             let mut new_baseline = ordinary_errors.clone();
             new_baseline.extend(
                 errors
@@ -1424,9 +1423,14 @@ impl CheckArgs {
             write_error_json_to_file(baseline_path, relative_to.as_path(), &new_baseline)?;
         }
 
-        // Count only ordinary errors for exit code determination. Directives
-        // (e.g. reveal_type) do not contribute to the error count.
-        let ordinary_errors_count = config_errors_count + ordinary_errors.len();
+        // Directives always display, but only affect the exit code when they
+        // meet the user's severity threshold.
+        let diagnostics_count = config_errors_count
+            + ordinary_errors.len()
+            + directives
+                .iter()
+                .filter(|e| e.severity() >= min_severity)
+                .count();
 
         // Merge directives into the display list, re-sorting by module
         // name, path, and source range so output preserves file/line
@@ -1463,7 +1467,7 @@ impl CheckArgs {
             } else {
                 "error"
             };
-            let mut parts = vec![count(ordinary_errors_count, label)];
+            let mut parts = vec![count(diagnostics_count, label)];
             if suppress_count > 0 {
                 parts.push(format!("{} suppressed", number_thousands(suppress_count)));
             }
@@ -1548,7 +1552,7 @@ impl CheckArgs {
                 // Generate a safe filename using hash to avoid OS filename length limits
                 let module_hash = blake3::hash(handle.path().to_string().as_bytes());
                 fs_anyhow::write(
-                    &glean.join(format!("{}.json", &module_hash)),
+                    &glean.join(format!("{}.json", module_hash)),
                     report::glean::glean(transaction, handle),
                 )?;
             }
@@ -1588,7 +1592,7 @@ impl CheckArgs {
         if self.behavior.expectations {
             loads.check_against_expectations()?;
             Ok((CommandExitStatus::Success, output_errors))
-        } else if ordinary_errors_count > 0 {
+        } else if diagnostics_count > 0 {
             Ok((CommandExitStatus::UserError, output_errors))
         } else {
             Ok((CommandExitStatus::Success, output_errors))
@@ -1789,6 +1793,35 @@ mod tests {
         output.inherit_defaults_from_config(&config);
 
         assert_eq!(output.output_format(), OutputFormat::Json);
+    }
+
+    #[test]
+    fn remove_unused_ignores_cli_values() {
+        for (argument, expected) in [
+            (None, None),
+            (
+                Some("--remove-unused-ignores"),
+                Some(UnusedIgnoreKind::Pyrefly),
+            ),
+            (
+                Some("--remove-unused-ignores=pyrefly"),
+                Some(UnusedIgnoreKind::Pyrefly),
+            ),
+            (
+                Some("--remove-unused-ignores=type"),
+                Some(UnusedIgnoreKind::Type),
+            ),
+            (
+                Some("--remove-unused-ignores=all"),
+                Some(UnusedIgnoreKind::All),
+            ),
+        ] {
+            let args = argument.map_or_else(
+                || CheckArgs::parse_from(["check"]),
+                |argument| CheckArgs::parse_from(["check", argument]),
+            );
+            assert_eq!(args.behavior.remove_unused_ignores, expected);
+        }
     }
 
     fn upsell_string(reason: SynthesizedPresetReason) -> String {

@@ -1254,6 +1254,21 @@ assert_type(C.__match_args__, tuple[Literal["x"]])
 );
 
 testcase!(
+    test_duplicate_kw_only_sentinel,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+
+@dataclass
+class C:
+    x: int
+    first: KW_ONLY
+    y: str
+    second: KW_ONLY  # E: `second` is KW_ONLY, but KW_ONLY has already been specified
+    z: bytes
+    "#,
+);
+
+testcase!(
     test_order,
     r#"
 from dataclasses import dataclass

@@ -21,6 +21,20 @@ def f(a: int, b: int) -> None:
 );
 
 testcase!(
+    test_dict_union_literal_keys,
+    r#"
+from typing import Literal
+
+Allowed = Literal["a", "b", "c"]
+d: dict[Allowed, int] = {"a": 0, "b": 0}
+e: dict[Allowed, int] = d | {"c": 0}
+d |= {"c": 0}
+bad_key: dict[Allowed, int] = d | {"not-allowed": 0}  # E: `dict[Literal['a', 'b', 'c'] | str, int]` is not assignable to `dict[Allowed, int]`
+bad_value: dict[Allowed, int] = d | {"a": "not-an-int"}  # E: `dict[Literal['a', 'b', 'c'] | str, int | str]` is not assignable to `dict[Allowed, int]`
+    "#,
+);
+
+testcase!(
     test_bounded_type_var_comparison,
     r#"
 def compare[T: int](x: T, y: T) -> bool:
@@ -906,6 +920,27 @@ ThisClassDoesNotWork(True) & ThisClassDoesNotWork(False)
 ThisClassDoesNotWork(True) & False
 True & ThisClassDoesNotWork(False)
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3876
+testcase!(
+    test_reflected_dunder_subclass_priority,
+    r#"
+from enum import IntFlag
+from typing import assert_type
+
+class Color(IntFlag):
+    RED = 1
+    GREEN = 2
+
+def f(x: int, c: Color) -> None:
+    # `int & Color` invokes `Color.__rand__` at runtime because `Color` is a
+    # proper subclass of `int` that overrides the reflected dunder, so the result
+    # keeps the flag type instead of widening to `int`.
+    assert_type(x & c, Color)
+    assert_type(x | c, Color)
+    assert_type(x ^ c, Color)
+"#,
 );
 
 testcase!(

@@ -46,10 +46,10 @@ use crate::types::types::Type;
 /// the `Type` object itself does not contain enough information to determine
 /// subset relations.
 #[derive(Clone_, Copy_, Dupe_)]
-pub struct TypeOrder<'a, Ans: LookupAnswer>(&'a AnswersSolver<'a, Ans>);
+pub struct TypeOrder<'solver, Ans: LookupAnswer>(&'solver AnswersSolver<'solver, Ans>);
 
-impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
-    pub fn new(solver: &'a AnswersSolver<'a, Ans>) -> Self {
+impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
+    pub fn new(solver: &'solver AnswersSolver<'solver, Ans>) -> Self {
         Self(solver)
     }
 
@@ -58,7 +58,11 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.is_debug()
     }
 
-    pub fn stdlib(self) -> &'a Stdlib {
+    pub fn has_active_scc(self) -> bool {
+        self.0.has_active_scc()
+    }
+
+    pub fn stdlib(self) -> &'solver Stdlib {
         self.0.stdlib
     }
 
@@ -194,9 +198,9 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
 
     pub fn args_expander(
         self,
-        posargs: Vec<CallArg<'a>>,
-        keywords: Vec<CallKeyword<'a>>,
-    ) -> ArgsExpander<'a, Ans> {
+        posargs: Vec<CallArg<'solver>>,
+        keywords: Vec<CallKeyword<'solver>>,
+    ) -> ArgsExpander<'solver, Ans> {
         ArgsExpander::new(posargs, keywords, self.0)
     }
 

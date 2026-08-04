@@ -10,20 +10,21 @@ use pyrefly_derive::VisitMut;
 
 use crate::binding::pydantic::PydanticAliasGenerator;
 
-/// Flags that control whether a Pydantic model's fields are populated by their names or their aliases.
-/// See https://docs.pydantic.dev/latest/api/config/#pydantic.config.ConfigDict.validate_by_name.
-#[derive(Debug, Clone, PartialEq, Eq, TypeEq)]
+/// Options that control whether fields are populated by their names or aliases.
+/// `None` means the option was not configured and its Pydantic default applies.
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default)]
 pub struct PydanticValidationFlags {
-    pub validate_by_name: bool,
-    pub validate_by_alias: bool,
+    pub validate_by_name: Option<bool>,
+    pub validate_by_alias: Option<bool>,
 }
 
-impl Default for PydanticValidationFlags {
-    fn default() -> Self {
-        Self {
-            validate_by_name: false,
-            validate_by_alias: true,
-        }
+impl PydanticValidationFlags {
+    pub fn validate_by_name(&self) -> bool {
+        self.validate_by_name.unwrap_or(false)
+    }
+
+    pub fn validate_by_alias(&self) -> bool {
+        self.validate_by_alias.unwrap_or(true)
     }
 }
 

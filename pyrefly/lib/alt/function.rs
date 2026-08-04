@@ -16,10 +16,10 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::BodyKind;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::IdentityIgnored;
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::Int;
@@ -29,6 +29,8 @@ use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::meta_shape_dsl::validate_shape_dsl_functions;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
+use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
+use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::BoundMethod;
@@ -63,10 +65,8 @@ use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Binding;
 use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionParameter;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
-use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::config::error_kind::ErrorKind;
@@ -147,6 +147,14 @@ struct FunctionParamsResult {
     paramspec: Option<Quantified>,
     /// Maps parameter names to their resolved types for unannotated parameters.
     resolved_param_types: SmallMap<Name, Type>,
+}
+
+fn type_shape_dsl_domain(ty: &Type) -> Option<TypeShapeDslDomain> {
+    match ty {
+        Type::Int(_) => Some(TypeShapeDslDomain::Int),
+        Type::IntTuple(_) => Some(TypeShapeDslDomain::IntTuple),
+        _ => None,
+    }
 }
 
 struct ParentParamHints {
@@ -270,23 +278,93 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    /// Validates resolved DSL annotations, emitting diagnostics and metadata only on success.
+    fn validate_type_shape_dsl_declaration(
+        &self,
+        dsl: &Arc<ValidatedTypeShapeDslFunction>,
+        params: &[Param],
+        return_type: &Type,
+        function_kind: &FunctionKind,
+        function_range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<FunctionKind> {
+        let parameter_domain = if dsl.has_parameter_annotation() {
+            params
+                .first()
+                .and_then(|param| type_shape_dsl_domain(param.as_type()))
+        } else {
+            None
+        };
+        let return_domain = if dsl.has_return_annotation() {
+            type_shape_dsl_domain(return_type)
+        } else {
+            None
+        };
+        match (parameter_domain, return_domain) {
+            (Some(parameter), Some(result)) if parameter == result => {
+                if let FunctionKind::Def(func_id) = function_kind {
+                    Some(FunctionKind::TypeShapeDsl(
+                        func_id.clone(),
+                        parameter,
+                        dsl.clone(),
+                    ))
+                } else {
+                    self.error(
+                        errors,
+                        function_range,
+                        ErrorKind::InvalidArgument,
+                        "`@type_shape_dsl_function` must be applied to an ordinary function definition"
+                            .to_owned(),
+                    );
+                    None
+                }
+            }
+            (None, _) => {
+                self.error(
+                    errors,
+                    dsl.parameter_annotation_range(),
+                    ErrorKind::InvalidArgument,
+                    format!(
+                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int` or `IntTuple`",
+                        dsl.parameter_name()
+                    ),
+                );
+                None
+            }
+            (_, None) => {
+                self.error(
+                    errors,
+                    dsl.return_annotation_range(),
+                    ErrorKind::InvalidArgument,
+                    "`@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`"
+                        .to_owned(),
+                );
+                None
+            }
+            (Some(_), Some(_)) => {
+                self.error(
+                    errors,
+                    dsl.return_annotation_range(),
+                    ErrorKind::InvalidArgument,
+                    "`@type_shape_dsl_function` parameter and return annotations must use the same domain"
+                        .to_owned(),
+                );
+                None
+            }
+        }
+    }
+
     pub fn solve_function_binding(
         &self,
         def: DecoratedFunction,
         predecessor: &mut Option<Idx<Key>>,
-        class_metadata: Option<&Idx<KeyClassMetadata>>,
         errors: &ErrorCollector,
     ) -> Type {
-        // Overloads in .pyi should not have an implementation.
-        let skip_implementation = self.module().path().style() == ModuleStyle::Interface
-            || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol())
-            || def.metadata().flags.is_abstract_method;
         let mut ty = if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.get_function_successor(&def);
             if successor.is_none() {
                 // This is the last definition in the chain. We should produce an overload type.
-                let is_impl = def.is_impl();
                 let mut acc =
                     Vec1::new((def.id_range(), (*def.ty).clone(), def.metadata().clone()));
                 let mut impl_before_overload_range = None;
@@ -300,8 +378,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 let first_range = acc.last().0;
                 let last_range = acc.first().0;
-                if !skip_implementation {
+                if self.module().path().style() == ModuleStyle::Executable
+                    && !def.metadata().flags.facts().allows_missing_implementation()
+                {
+                    // The last definition in the chain is decorated with `@overload`, and we're in
+                    // a context in which an overloaded function must end with an implementation.
+                    // Guess at what kind of mistake the user has made.
                     if let Some(range) = impl_before_overload_range {
+                        // A non-`@overload` definition appeared earlier in the chain, so the
+                        // mistake was likely putting the implementation out-of-order.
                         self.error(
                             errors,
                             range,
@@ -309,7 +394,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             "@overload declarations must come before function implementation"
                                 .to_owned(),
                         );
-                    } else if is_impl {
+                    } else if !matches!(
+                        def.metadata().flags.body_kind,
+                        BodyKind::Ellipsis | BodyKind::Trivial
+                    ) {
+                        // This definition has a non-trivial body, so the mistake was likely
+                        // decorating the implementation with `@overload`.
                         self.error(
                             errors,
                             last_range,
@@ -318,6 +408,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .to_owned(),
                         );
                     } else {
+                        // Fall back to assuming that the implementation is missing.
                         self.error(
                             errors,
                             first_range,
@@ -404,10 +495,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
         }
 
-        if def.is_stub()
-            && self.module().path().style() != ModuleStyle::Interface
-            && let Some(cls) = def.defining_cls()
-            && self.get_metadata_for_class(cls).is_protocol()
+        if matches!(
+            def.metadata().flags.body_kind,
+            BodyKind::Ellipsis | BodyKind::Trivial
+        ) && self.module().path().style() != ModuleStyle::Interface
+            && def.metadata().flags.is_in_protocol_class
         {
             ty.transform_toplevel_func_metadata(|meta| {
                 meta.flags.is_abstract_method = true;
@@ -436,16 +528,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         def: &FunctionDefData,
         def_index: FuncDefIndex,
-        stub_or_impl: FunctionStubOrImpl,
-        placeholder_body_kind: Option<PlaceholderBodyKind>,
+        is_in_type_checking_block: bool,
+        body_kind: BodyKind,
         is_return_inferred: bool,
         calls_super_method: bool,
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
-        module_style: ModuleStyle,
         outer_funcs: Option<Name>,
         shape_dsl_def: Option<Arc<ShapeDslFunction>>,
+        type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
         uses_shape_dsl_ir_name: Option<ShortIdentifier>,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
@@ -466,7 +558,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_staticmethod: is_dunder_new,
             is_classmethod: is_dunder_init_subclass,
             is_async: def.is_async,
-            placeholder_body_kind,
+            body_kind,
             is_return_inferred,
             calls_super_method,
             ..Default::default()
@@ -543,12 +635,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         };
 
-        if stub_or_impl == FunctionStubOrImpl::Stub {
-            flags.lacks_implementation = true;
-        }
-        if module_style == ModuleStyle::Interface {
-            flags.defined_in_stub_file = true;
-        }
+        flags.is_in_protocol_class = defining_cls
+            .as_ref()
+            .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol());
+        flags.is_in_type_checking_block = is_in_type_checking_block;
+        flags.module_style = self.module().path().style();
 
         // Look for a @classmethod or @staticmethod decorator and change the "self" type
         // accordingly. This is not totally correct, since it doesn't account for chaining
@@ -591,7 +682,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             resolved_param_types,
         } = self.get_params_and_paramspec(
             def,
-            stub_or_impl,
+            flags.facts().is_stub(),
             &mut self_type,
             &mut decorator_param_hints,
             &mut parent_param_hints,
@@ -679,8 +770,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             tparams,
             params,
             paramspec,
-            stub_or_impl,
             defining_cls,
+            type_shape_dsl_def,
             resolved_param_types,
         })
     }
@@ -702,6 +793,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 stmt.name.range(),
                 ErrorKind::UnannotatedReturn,
                 format!("`{}` is missing a return annotation", stmt.name),
+            );
+        }
+        if def.metadata.flags.body_kind == BodyKind::Ellipsis
+            && has_return_annotation
+            && def.metadata.flags.module_style == ModuleStyle::Executable
+            && !def.metadata.flags.facts().is_in_interface_like_context()
+            && !if stmt.is_async {
+                self.unwrap_coroutine(&ret)
+                    .is_some_and(|(_, _, return_ty)| {
+                        self.is_subset_eq(&self.heap.mk_none(), &return_ty)
+                    })
+            } else {
+                self.is_subset_eq(&self.heap.mk_none(), &ret)
+            }
+        {
+            self.error(
+                errors,
+                stmt.name.range(),
+                ErrorKind::EmptyBody,
+                "Function body cannot consist only of `...` when the return type is not `None`"
+                    .to_owned(),
             );
         }
         // The first parameter of a non-static method is the implicit self/cls
@@ -857,9 +969,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams =
             self.collect_jaxtyping_tparams(&callable, &def.tparams, stmt.name.range, errors);
 
+        let mut metadata = def.metadata.clone();
+        if let Some(dsl) = &def.type_shape_dsl_def
+            && let Some(kind) = self.validate_type_shape_dsl_declaration(
+                dsl,
+                &def.params,
+                &callable.ret,
+                &metadata.kind,
+                stmt.name.range(),
+                errors,
+            )
+        {
+            metadata.kind = kind;
+        }
+
         let mut ty = Forallable::Function(Function {
             signature: callable,
-            metadata: def.metadata.clone(),
+            metadata,
         })
         .forall(tparams);
         ty = self.move_return_tparams_of_type(ty);
@@ -1047,13 +1173,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         default: Option<&Expr>,
         check: Option<(&Type, &dyn Fn() -> TypeCheckContext)>,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
         errors: &ErrorCollector,
     ) -> Required {
         match default {
             Some(default)
-                if (stub_or_impl == FunctionStubOrImpl::Stub
-                    || self.module().path().style() == ModuleStyle::Interface)
+                if (is_stub || self.module().path().style() == ModuleStyle::Interface)
                     && matches!(default, Expr::EllipsisLiteral(_)) =>
             {
                 Required::Optional(None)
@@ -1112,7 +1237,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         name: &Identifier,
         default: Option<&Expr>,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
         self_type: &mut Option<Type>,
         hint: Option<Type>,
         errors: &ErrorCollector,
@@ -1146,11 +1271,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     Some((&param_ty, &make_context))
                 };
-                let required = self.get_requiredness(default, check, stub_or_impl, errors);
+                let required = self.get_requiredness(default, check, is_stub, errors);
                 (param_ty, required, false)
             }
             FunctionParameter::Unannotated(_, _, _) => {
-                let required = self.get_requiredness(default, None, stub_or_impl, errors);
+                let required = self.get_requiredness(default, None, is_stub, errors);
                 // If this is the first parameter and there is a self type, resolve to `Self`.
                 // We only try to resolve the first param for now. Other unannotated params
                 // resolve to Any. If a default value of type T is provided, it will resolve to Any | T.
@@ -1187,7 +1312,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_params_and_paramspec(
         &self,
         def: &FunctionDefData,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
         self_type: &mut Option<Type>,
         decorator_param_hints: &mut Option<DecoratorParamHints>,
         parent_param_hints: &mut Option<ParentParamHints>,
@@ -1215,7 +1340,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
-                stub_or_impl,
+                is_stub,
                 self_type,
                 decorator_hint.or(parent_hint),
                 errors,
@@ -1249,7 +1374,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
-                stub_or_impl,
+                is_stub,
                 self_type,
                 decorator_hint.or(parent_hint),
                 errors,
@@ -1293,7 +1418,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
-                stub_or_impl,
+                is_stub,
                 &mut None,
                 parent_hint,
                 errors,
@@ -1330,7 +1455,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
-                stub_or_impl,
+                is_stub,
                 self_type,
                 parent_hint,
                 errors,
@@ -1349,7 +1474,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
-                stub_or_impl,
+                is_stub,
                 self_type,
                 parent_hint,
                 errors,
@@ -1950,9 +2075,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             b = self.bindings().get(*k);
         }
-        if let Binding::Function(idx, pred_, _) = b {
-            *pred = *pred_;
-            Some(self.get_decorated_function(*idx))
+        if let Binding::Function {
+            decorated_idx,
+            pred_idx,
+            ..
+        } = b
+        {
+            *pred = *pred_idx;
+            Some(self.get_decorated_function(*decorated_idx))
         } else {
             None
         }
@@ -2405,7 +2535,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // For each callable, set its return type to its first param's type (i.e. `self`).
         func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
             if let Some(self_type) = c.get_first_param() {
-                c.ret = self_type;
+                c.ret = self_type.clone();
             }
         });
         self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)

@@ -136,9 +136,11 @@ z: list[A] | list[B] = [B2() for _ in range(10)]
 testcase!(
     test_dict_union,
     r#"
+from typing import Sequence
 d1: dict[int, int] | dict[str, list[int]] = {"x": [True]}
 x: list[str] = []
 d2: dict[int, int] | dict[str, list[int]] = {k: [True] for k in x}
+d3: Sequence[dict[str, int]] | Sequence[dict[int, int]] = [{"x": 1}]
     "#,
 );
 
@@ -208,11 +210,11 @@ testcase!(
     r#"
 from typing import Iterable, MutableMapping, Literal
 x1: dict[str, int] = {"a": 1}
-x2: dict[str, int] = {"a": "oops"}  # E: `dict[str, str]` is not assignable to `dict[str, int]`
-x3: dict[str, Literal[1]] = {"a": 2} # E: `dict[str, int]` is not assignable to `dict[str, Literal[1]]`
+x2: dict[str, int] = {"a": "oops"}  # E: `Literal['oops']` is not assignable to dict value type `int`
+x3: dict[str, Literal[1]] = {"a": 2} # E: `Literal[2]` is not assignable to dict value type `Literal[1]`
 x4: MutableMapping[str, int] = {"a": 1}
 x5: Iterable[str] = {"a": 1}
-x6: Iterable[int] = {"oops": 1}  # E: `dict[str, int]` is not assignable to `Iterable[int]`
+x6: Iterable[int] = {"oops": 1}  # E: `Literal['oops']` is not assignable to dict key type `int`
 x7: Iterable[Literal[4]] = {4: "a"}
 x8: object = {"a": 1}
 x9: list[str] = {"a": 1}  # E: `dict[str, int]` is not assignable to `list[str]`
@@ -368,6 +370,7 @@ class B: ...
 class B2(B): ...
 f1: Callable[[], list[B]] = lambda: [B2()]
 f2: Callable[[], list[A]] | Callable[[], list[B]] = lambda: [B2()]
+f3: Callable[[], dict[int, A]] | Callable[[], dict[int, B]] = lambda: {0: B2()}
 "#,
 );
 
@@ -422,15 +425,16 @@ reveal_type(x2) # E: revealed type: (x: int, y: str) -> None
 );
 
 testcase!(
-    bug = "We should contextually type *args and **kwargs here based on the paramspec",
     test_context_lambda_paramspec_args_kwargs,
     r#"
 from typing import Callable, assert_type
 def f[**P, R](f: Callable[P, R], g: Callable[P, R]) -> Callable[P, R]: ...
 def g1(x: int, *args: int): ...
 def g2(x: int, **kwargs: str): ...
-x1 = f(g1, lambda x, *args: assert_type(args, tuple[int, ...])) # E: assert_type(Unknown, tuple[int, ...]) failed
-x2 = f(g2, lambda x, **kwargs: assert_type(kwargs, dict[str, str])) # E: assert_type(Unknown, dict[str, str]) failed
+x1 = f(g1, lambda x, *args: assert_type(args, tuple[int, ...]))
+x2 = f(g2, lambda x, **kwargs: assert_type(kwargs, dict[str, str]))
+assert_type(x1(0), None | tuple[int, ...])
+assert_type(x2(0), None | dict[str, str])
     "#,
 );
 
@@ -704,14 +708,13 @@ x: Identity = lambda x: x
 );
 
 testcase!(
-    bug = "We should contextually type *args and **kwargs here based on the Protocol",
     test_context_lambda_args_kwargs_protocol,
     r#"
 from typing import Protocol, assert_type, Any
 class Identity(Protocol):
     def __call__(self, *args: int, **kwargs: int) -> Any: ...
-x: Identity = lambda *args, **kwargs: assert_type(args, tuple[int, ...]) # E: assert_type(Unknown, tuple[int, ...]) failed
-y: Identity = lambda *args, **kwargs: assert_type(kwargs, dict[str, int]) # E: assert_type(Unknown, dict[str, int]) failed
+x: Identity = lambda *args, **kwargs: assert_type(args, tuple[int, ...])
+y: Identity = lambda *args, **kwargs: assert_type(kwargs, dict[str, int])
     "#,
 );
 
@@ -898,5 +901,24 @@ class DB(TypedDict):
     x: B
 
 f: Callable[[], DA] | Callable[[], DB] = lambda: {"x": B2()}
+    "#,
+);
+
+testcase!(
+    test_nested_typeddict_in_union,
+    r#"
+from typing import TypedDict
+
+class A(TypedDict):
+    x: int
+
+class B(TypedDict, total=False):
+    x: str
+
+type X = list[A] | list[B]
+
+x1: X = [{"x": ""}]
+x2: X = [{}]
+x3: X = [{"x": 1.0}]  # E: `float` is not assignable to TypedDict key `x` with type `int`
     "#,
 );

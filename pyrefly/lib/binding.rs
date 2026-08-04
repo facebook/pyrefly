@@ -16,6 +16,7 @@ pub mod function;
 pub mod metadata;
 pub mod narrow;
 pub mod pattern;
+pub mod polars;
 pub mod pydantic;
 pub mod pytest;
 pub mod scope;

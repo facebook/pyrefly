@@ -60,6 +60,7 @@ fn test_initialize_basic() {
             "notebookDocumentSync":{"notebookSelector":[{"cells":[{"language":"python"}]}]},
             "documentSymbolProvider": true,
             "foldingRangeProvider":true,
+            "selectionRangeProvider": true,
             "workspaceSymbolProvider": true,
             "workspace": {
                 "workspaceFolders": {

@@ -24,6 +24,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::VecExt;
@@ -41,6 +42,8 @@ use crate::equality::TypeEqCtx;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::meta_shape_dsl::ShapeTransform;
+use crate::type_level_dsl::TypeShapeDslDomain;
+use crate::type_level_dsl::ValidatedTypeShapeDslFunction;
 use crate::type_output::DisplayOutput;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
@@ -308,33 +311,39 @@ impl ParamList {
     pub fn fmt_with_type_with_newlines<O: TypeOutput>(
         &self,
         output: &mut O,
-        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
+        write_type: &impl Fn(&Type, &mut O, usize) -> fmt::Result,
+        indent: usize,
     ) -> fmt::Result {
         let mut named_posonly = false;
         let mut kwonly = false;
 
         for (i, param) in self.0.iter().enumerate() {
             if i > 0 {
-                output.write_str(",\n    ")?;
+                output.write_str(",\n")?;
+                write_indent(output, indent)?;
             }
 
             if matches!(param, Param::PosOnly(Some(_), _, _)) {
                 named_posonly = true;
             } else if named_posonly {
                 named_posonly = false;
-                output.write_str("/,\n    ")?;
+                output.write_str("/,\n")?;
+                write_indent(output, indent)?;
             }
 
             if !kwonly && matches!(param, Param::KwOnly(..)) {
                 kwonly = true;
-                output.write_str("*,\n    ")?;
+                output.write_str("*,\n")?;
+                write_indent(output, indent)?;
             }
 
-            param.fmt_with_type(output, write_type)?;
+            param.fmt_with_type(output, &|t, o| write_type(t, o, indent))?;
         }
 
         if named_posonly {
-            output.write_str(",\n    /")?;
+            output.write_str(",\n")?;
+            write_indent(output, indent)?;
+            output.write_str("/")?;
         }
 
         Ok(())
@@ -367,6 +376,13 @@ impl ParamList {
             Param::Kwargs(None, Type::any_implicit()),
         ])
     }
+}
+
+fn write_indent<O: TypeOutput>(output: &mut O, indent: usize) -> fmt::Result {
+    for _ in 0..indent {
+        output.write_str(" ")?;
+    }
+    Ok(())
 }
 
 /// Represents a prefix parameter in `Concatenate`.
@@ -629,24 +645,64 @@ pub enum PropertyRole {
     DeleterDecorator,
 }
 
-/// Shape of a function body that consists of a single placeholder statement.
-/// The two variants share the surface form of "trivial body" but have very
-/// different semantics: `RaiseNotImplementedError` is an "abstract-ish"
-/// placeholder that never returns at runtime, while `ReturnNotImplemented`
-/// returns the singleton `NotImplemented` value (a real runtime value used by
-/// the dunder protocol). The type checker keeps them separate so it can relax
-/// override-consistency only for the abstract-style form, without conflating
-/// it with the dunder-protocol form.
+/// Shape of a function body.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
 )]
-pub enum PlaceholderBodyKind {
+pub enum BodyKind {
     /// Body is exactly `raise NotImplementedError(...)`. This is the canonical
     /// "abstract-ish" placeholder; concrete subclasses override it.
     RaiseNotImplementedError,
     /// Body is exactly `return NotImplemented`. This is the dunder-protocol
     /// signal to defer to the other operand and is not an override placeholder.
     ReturnNotImplemented,
+    /// Body is exactly `...`. This is the canonical placeholder for an elided
+    /// function body in a stub-like context.
+    Ellipsis,
+    /// Body is `pass` or a docstring.
+    Trivial,
+    #[default]
+    Other,
+}
+
+impl BodyKind {
+    pub fn is_placeholder_or_trivial(&self) -> bool {
+        matches!(
+            self,
+            Self::RaiseNotImplementedError
+                | Self::ReturnNotImplemented
+                | Self::Ellipsis
+                | Self::Trivial
+        )
+    }
+}
+
+/// Ephemeral struct for computing facts about a function definition.
+#[derive(Debug)]
+pub struct FuncFacts {
+    pub body_kind: BodyKind,
+    pub is_in_protocol_class: bool,
+    pub is_in_type_checking_block: bool,
+    pub is_abstract_method: bool,
+    pub is_overload: bool,
+}
+
+impl FuncFacts {
+    pub fn allows_missing_implementation(&self) -> bool {
+        self.is_in_protocol_class || self.is_in_type_checking_block || self.is_abstract_method
+    }
+
+    /// Is this function defined in an interface (i.e., .pyi) -like context?
+    pub fn is_in_interface_like_context(&self) -> bool {
+        self.allows_missing_implementation() || self.is_overload
+    }
+
+    pub fn is_stub(&self) -> bool {
+        // A `...` body is always interpreted as a stub function.
+        // Functions with other trivial bodies are interpreted as stubs in some contexts.
+        self.body_kind == BodyKind::Ellipsis
+            || (self.is_in_interface_like_context() && self.body_kind == BodyKind::Trivial)
+    }
 }
 
 #[derive(
@@ -695,21 +751,17 @@ pub struct FuncFlags {
     pub is_abstract_method: bool,
     /// A function decorated with `@typing.no_type_check` or `@typing_extensions.no_type_check`
     pub has_no_type_check: bool,
-    /// Function body is treated as a stub (e.g. body is `...` or absent in a stub file)
-    pub lacks_implementation: bool,
-    /// Is the function definition in a `.pyi` file
-    pub defined_in_stub_file: bool,
+    /// Style of the module the function is defined in
+    pub module_style: ModuleStyle,
     /// Set when the function was declared with `async def` (NOT when a regular
     /// `def` happens to return a `Coroutine[...]`-typed value). Used to
     /// distinguish async-def placeholders from sync functions explicitly
     /// annotated to return a coroutine, which look identical at the type level
     /// once the async-wrapping into `Coroutine[Any, Any, T]` has happened.
     pub is_async: bool,
-    /// Set when the function body is a single placeholder statement (see
-    /// `PlaceholderBodyKind`), ignoring a leading docstring. `None` for
-    /// ordinary function bodies, and also for trivial bodies (`pass`, `...`,
-    /// or empty) — those are tracked separately as stubs, not placeholders.
-    pub placeholder_body_kind: Option<PlaceholderBodyKind>,
+    /// Tracks special function body shapes such as placeholder statements
+    /// and trivial bodies (see `BodyKind`).
+    pub body_kind: BodyKind,
     /// Set when the function's return type has no user-supplied annotation and
     /// was inferred from the body (corresponds to
     /// `ReturnTypeKind::ShouldInferType`). Used to distinguish a return type
@@ -729,14 +781,20 @@ pub struct FuncFlags {
     pub shape_transform: Option<Arc<ShapeTransform>>,
     /// A function decorated with `@defines_assert_shape`.
     pub is_assert_shape: bool,
+    /// A method directly inside a `Protocol` class.
+    pub is_in_protocol_class: bool,
+    pub is_in_type_checking_block: bool,
 }
 
 impl FuncFlags {
-    /// Whether the function lacks a runtime implementation and is not defined in a stub file.
-    /// This indicates a method that cannot actually be called at runtime (e.g. an abstract
-    /// method or protocol method with a `...` or `pass` body in a `.py` file).
-    pub fn lacks_runtime_implementation(&self) -> bool {
-        self.lacks_implementation && !self.defined_in_stub_file
+    pub fn facts(&self) -> FuncFacts {
+        FuncFacts {
+            body_kind: self.body_kind,
+            is_in_protocol_class: self.is_in_protocol_class,
+            is_in_type_checking_block: self.is_in_type_checking_block,
+            is_abstract_method: self.is_abstract_method,
+            is_overload: self.is_overload,
+        }
     }
 }
 
@@ -922,6 +980,12 @@ pub enum FunctionKind {
         Arc<ShapeDslFunction>,
         IdentityIgnored<Arc<Vec<Arc<ShapeDslFunction>>>>,
     ),
+    /// A validated user-defined type-level shape DSL function.
+    TypeShapeDsl(
+        Arc<FuncId>,
+        TypeShapeDslDomain,
+        Arc<ValidatedTypeShapeDslFunction>,
+    ),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,
     /// The `shape_extensions.defines_assert_shape` decorator function itself.
@@ -990,21 +1054,82 @@ impl Callable {
     pub fn fmt_with_type_with_newlines<O: TypeOutput>(
         &self,
         output: &mut O,
-        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
+        write_type: &impl Fn(&Type, &mut O, usize) -> fmt::Result,
+        indent: usize,
     ) -> fmt::Result {
         match &self.params {
             Params::List(params) | Params::Partial(params) if params.len() > 1 => {
                 // For multiple parameters, put each on a new line with indentation
-                output.write_str("(\n    ")?;
-                params.fmt_with_type_with_newlines(output, write_type)?;
-                output.write_str("\n) -> ")?;
-                write_type(&self.ret, output)
+                let param_indent = indent + 4;
+                output.write_str("(\n")?;
+                write_indent(output, param_indent)?;
+                params.fmt_with_type_with_newlines(output, write_type, param_indent)?;
+                output.write_str("\n")?;
+                write_indent(output, indent)?;
+                output.write_str(") -> ")?;
+                write_type(&self.ret, output, indent)
+            }
+            Params::ParamSpec(args, _) if !args.is_empty() => {
+                let param_indent = indent + 4;
+                output.write_str("(\n")?;
+                write_indent(output, param_indent)?;
+                self.fmt_param_spec_with_newlines(output, write_type, param_indent)?;
+                output.write_str("\n")?;
+                write_indent(output, indent)?;
+                output.write_str(") -> ")?;
+                write_type(&self.ret, output, indent)
             }
             Params::List(..)
             | Params::Partial(..)
             | Params::ParamSpec(..)
             | Params::Ellipsis
-            | Params::Materialization => self.fmt_with_type(output, write_type),
+            | Params::Materialization => {
+                self.fmt_with_type(output, &|t, o| write_type(t, o, indent))
+            }
+        }
+    }
+
+    fn fmt_param_spec_with_newlines<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O, usize) -> fmt::Result,
+        indent: usize,
+    ) -> fmt::Result {
+        let Params::ParamSpec(args, pspec) = &self.params else {
+            unreachable!("only ParamSpec callables can be formatted as ParamSpec")
+        };
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                output.write_str(",\n")?;
+                write_indent(output, indent)?;
+            }
+            write_type(arg.ty(), output, indent)?;
+        }
+        match pspec {
+            Type::ParamSpecValue(params) if !params.is_empty() => {
+                if !args.is_empty() {
+                    output.write_str(",\n")?;
+                    write_indent(output, indent)?;
+                }
+                params.fmt_with_type_with_newlines(output, write_type, indent)
+            }
+            Type::ParamSpecValue(_) => Ok(()),
+            Type::Ellipsis => {
+                if !args.is_empty() {
+                    output.write_str(",\n")?;
+                    write_indent(output, indent)?;
+                }
+                output.write_str("...")
+            }
+            _ => {
+                if !args.is_empty() {
+                    output.write_str(",\n")?;
+                    write_indent(output, indent)?;
+                }
+                output.write_str("ParamSpec(")?;
+                write_type(pspec, output, indent)?;
+                output.write_str(")")
+            }
         }
     }
 
@@ -1098,9 +1223,15 @@ impl Callable {
         }
     }
 
-    pub fn get_first_param(&self) -> Option<Type> {
-        self.split_first_param(&mut Owner::new())
-            .map(|(first, _)| first.clone())
+    pub fn get_first_param(&self) -> Option<&Type> {
+        match &self.params {
+            Params::List(params) | Params::Partial(params) => {
+                params.0.first().map(|param| param.as_type())
+            }
+            Params::ParamSpec(prefix, _) => prefix.first().map(|param| param.ty()),
+            Params::Ellipsis => Some(&Type::Any(AnyStyle::Implicit)),
+            Params::Materialization => None,
+        }
     }
 
     /// Whether this signature can be called with a single positional argument, i.e. none of the
@@ -1288,6 +1419,16 @@ impl Display for Param {
 }
 
 impl FunctionKind {
+    /// Return source-definition identity for variants that preserve an ordinary function def.
+    pub fn definition_id(&self) -> Option<&FuncId> {
+        match self {
+            Self::Def(func_id) | Self::ShapeDsl(func_id, ..) | Self::TypeShapeDsl(func_id, ..) => {
+                Some(func_id)
+            }
+            _ => None,
+        }
+    }
+
     pub fn from_name(
         module: Module,
         cls: Option<Class>,
@@ -1371,7 +1512,7 @@ impl FunctionKind {
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Def(func_id) => func_id.module.name().dupe(),
-            Self::ShapeDsl(id, _, _) => id.module.name().dupe(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.module.name().dupe(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
             Self::DefinesAssertShape => ModuleName::from_str("shape_extensions"),
         }
@@ -1410,7 +1551,7 @@ impl FunctionKind {
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
-            Self::ShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
             Self::DefinesAssertShape => Cow::Owned(Name::new_static("defines_assert_shape")),
         }
@@ -1449,7 +1590,7 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
-            Self::ShapeDsl(id, _, _) => id.cls.clone(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.cls.clone(),
             Self::UsesShapeDsl => None,
             Self::DefinesAssertShape => None,
         }
@@ -1457,7 +1598,9 @@ impl FunctionKind {
 
     pub fn outer_funcs(&self) -> Option<&Name> {
         match self {
-            Self::Def(func_id) | Self::ShapeDsl(func_id, _, _) => func_id.outer_funcs.as_ref(),
+            Self::Def(func_id)
+            | Self::ShapeDsl(func_id, _, _)
+            | Self::TypeShapeDsl(func_id, _, _) => func_id.outer_funcs.as_ref(),
             _ => None,
         }
     }
@@ -1492,6 +1635,7 @@ pub fn unexpected_keyword(error: &dyn Fn(String), func: &str, keyword: &Keyword)
 #[cfg(test)]
 mod tests {
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_util::owner::Owner;
     use pyrefly_util::visit::Visit;
     use pyrefly_util::visit::VisitMut;
     use ruff_python_ast::name::Name;
@@ -1501,6 +1645,7 @@ mod tests {
     use crate::callable::DefaultValue;
     use crate::callable::Param;
     use crate::callable::ParamList;
+    use crate::callable::Params;
     use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::quantified::AnchorIndex;
@@ -1511,6 +1656,38 @@ mod tests {
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::types::Type;
+
+    #[test]
+    fn test_get_first_param_matches_split_first_param() {
+        let callables = [
+            Callable::list(ParamList::new(Vec::new()), Type::None),
+            Callable::list(
+                ParamList::new(vec![Param::PosOnly(None, Type::None, Required::Required)]),
+                Type::None,
+            ),
+            Callable::partial(
+                ParamList::new(vec![Param::Varargs(None, Type::any_implicit())]),
+                Type::None,
+            ),
+            Callable::concatenate(
+                vec![PrefixParam::new(Type::None, Required::Required)].into_boxed_slice(),
+                Type::any_implicit(),
+                Type::None,
+            ),
+            Callable::param_spec(Type::any_implicit(), Type::None),
+            Callable::ellipsis(Type::None),
+            Callable {
+                params: Params::Materialization,
+                ret: Type::None,
+            },
+        ];
+        for callable in callables {
+            let expected = callable
+                .split_first_param(&mut Owner::new())
+                .map(|(first, _)| first.clone());
+            assert_eq!(callable.get_first_param(), expected.as_ref());
+        }
+    }
 
     #[test]
     fn test_arg_counts_positional() {

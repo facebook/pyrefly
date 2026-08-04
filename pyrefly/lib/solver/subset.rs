@@ -197,7 +197,7 @@ struct FreshForall {
     witness: ResidualWitnessContext,
 }
 
-impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
+impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     fn is_subset_literal_int_size(
         &mut self,
         literal: i64,
@@ -423,6 +423,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
+                (
+                    Some(Param::Varargs(_, l @ Type::Var(_))),
+                    Some(Param::Varargs(_, u @ Type::Unpack(_))),
+                ) => {
+                    self.is_subset_eq(u, l)?;
+                    l_arg = l_args.next();
+                    u_arg = u_args.next();
+                }
                 (Some(Param::Varargs(_, l)), Some(Param::Varargs(_, Type::Unpack(u)))) => {
                     self.is_subset_eq(u, &self.solver.heap.mk_unbounded_tuple(l.clone()))?;
                     l_arg = l_args.next();
@@ -473,6 +481,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             .mk_class_type(self.type_order.stdlib().object().clone());
         // Expand typed dict kwargs if necessary, check regular kwargs
         let l_kwargs = match (l_kwargs, u_kwargs) {
+            (Some(l @ Type::Var(_)), Some(ref u @ Type::Unpack(ref u_inner)))
+                if l_keywords.is_empty() && matches!(&**u_inner, Type::TypedDict(_)) =>
+            {
+                self.is_subset_eq(u, &l)?;
+                Some(object_type)
+            }
             (Some(Type::Unpack(l_inner)), Some(Type::Unpack(u_inner)))
                 if matches!(
                     (&*l_inner, &*u_inner),
@@ -673,7 +687,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         //    that could be invalidated by rollback)
         let used_coinductive = self.coinductive_assumptions_used;
         if has_no_vars && !used_coinductive {
-            self.solver.store_protocol_cache(got, want, res.clone());
+            self.solver
+                .store_protocol_cache(&got, &want, &res, self.type_order);
         }
 
         // Restore: propagate any coinductive usage upward
@@ -723,7 +738,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             if matches!(
                 got,
-                Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)
+                Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_) | Type::Overload(_)
             ) && name == dunder::CALL
                 && let Some(want) = self.type_order.instance_as_dunder_call(&protocol)
             {
@@ -1207,7 +1222,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         let used_coinductive = self.coinductive_assumptions_used;
         if cacheable && !used_coinductive {
             self.solver
-                .store_typed_dict_cache(got.clone(), want.clone(), res.clone());
+                .store_typed_dict_cache(got, want, &res, self.type_order);
         }
         self.coinductive_assumptions_used = prev_coinductive || used_coinductive;
         res
@@ -1602,22 +1617,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn is_subset_forall(&mut self, got: FreshForall, want: &Type) -> Result<(), SubsetError> {
-        self.active_call_context
-            .register_fresh_quantified_vars(got.handle.vars());
+        let FreshForall {
+            handle,
+            ty,
+            witness,
+        } = got;
         let (result, mut maybe_witness) = self.with_active_call_context(
             self.active_call_context
                 .clone()
-                .with_residual_witness(got.witness),
+                .with_residual_witness(witness),
             |me| {
                 (
-                    me.is_subset_eq(&got.ty, want),
+                    me.is_subset_eq(&ty, want),
                     me.active_call_context.take_residual_witness(),
                 )
             },
         );
-        // Either defer finishing to the active
-        // call boundary (when inside call analysis) or finish eagerly
-        // for ad-hoc subset checks outside calls.
         let in_call_analysis = !matches!(
             self.active_call_context.argument_side(),
             ArgumentSide::NotAnalyzingACall
@@ -1631,24 +1646,21 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             self.active_call_context.record_generic_residuals(witness);
         }
-        if in_call_analysis {
-            result
-        } else {
-            // Even when subset checking fails, finish the fresh vars
-            // to avoid leaking Quantified placeholders in ad-hoc paths.
-            let finish_result = self
-                .solver
-                .finish_quantified(
-                    got.handle,
-                    self.solver.infer_with_first_use,
-                    self.type_order,
-                    None,
-                )
-                .map_err(SubsetError::TypeVarSpecialization);
-            match result {
-                Ok(()) => finish_result,
-                Err(e) => Err(e),
+        let handle = if in_call_analysis {
+            match self.active_call_context.defer_quantified(handle) {
+                Ok(()) => return result,
+                Err(handle) => handle,
             }
+        } else {
+            handle
+        };
+        let finish_result = self
+            .solver
+            .finish_quantified(handle, self.solver.infer_with_first_use, self.type_order)
+            .map_err(SubsetError::TypeVarSpecialization);
+        match result {
+            Ok(()) => finish_result,
+            Err(e) => Err(e),
         }
     }
 
@@ -2061,6 +2073,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                 }
             }
+            // Route an overloaded candidate against a protocol through structural matching so its
+            // overloaded `__call__` target is compared overload-vs-overload. The general `Overload`
+            // arm below peels the source with `any` up front; reaching it with an overloaded
+            // `__call__` target would invert the quantifier to `∃source ∀target` instead of the
+            // correct `∀target ∃source`.
+            (Type::Overload(_), Type::ClassType(want))
+                if self.type_order.is_protocol(want.class_object()) =>
+            {
+                self.is_subset_protocol(got.clone(), want.clone())
+            }
             (Type::Overload(overload), want) => self.is_subset_overload(overload, want),
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
                 if let Some(l_no_self) =
@@ -2191,6 +2213,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // both directions.
             (Type::DataFrame(schema), _) => self.is_subset_eq(&schema.underlying_type(), want),
             (_, Type::DataFrame(schema)) => self.is_subset_eq(got, &schema.underlying_type()),
+            // A Series delegates subtyping to its underlying instance type in both directions.
+            (Type::Series(schema), _) => self.is_subset_eq(&schema.underlying_type(), want),
+            (_, Type::Series(schema)) => self.is_subset_eq(got, &schema.underlying_type()),
             // Any Int expression represents an integer dimension value, whether it is a
             // concrete literal (`Int[3]`) or symbolic (`Int[N]`, `Int[N + 1]`).
             (Type::Int(_), Type::ClassType(cls))
@@ -2424,6 +2449,19 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (Type::ClassDef(got), Type::ClassType(want)) => {
                 ok_or(self.type_order.has_metaclass(got, want), SubsetError::Other)
+            }
+            (Type::Type(inner), want @ Type::ClassType(_))
+                if matches!(&**inner, Type::SpecialForm(SpecialForm::Protocol)) =>
+            {
+                // Protocol is an instance of _ProtocolMeta. We need to hard-code this
+                // relationship because Protocol is marked as a special form in typeshed.
+                self.is_subset_eq(
+                    &self
+                        .solver
+                        .heap
+                        .mk_class_type(self.type_order.stdlib().protocol_meta().clone()),
+                    want,
+                )
             }
             (Type::Type(inner), Type::ClassType(want))
                 if let Type::ClassType(got_cls) = &**inner =>
@@ -2779,7 +2817,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
         for (got_arg, want_arg, param) in izip!(got, want, params.iter()) {
             if param.kind() == QuantifiedKind::TypeVarTuple {
-                self.is_consistent(got_arg, want_arg)?;
+                let as_tuple_carrier = |arg: &Type| {
+                    // A symbolic variadic argument represents the whole tuple, like `tuple[*Ts]`.
+                    if matches!(arg, Type::Var(_)) || arg.is_kind_type_var_tuple() {
+                        self.solver
+                            .heap
+                            .mk_unpacked_tuple(Vec::new(), arg.clone(), Vec::new())
+                    } else {
+                        arg.clone()
+                    }
+                };
+                self.is_consistent(&as_tuple_carrier(got_arg), &as_tuple_carrier(want_arg))?;
             } else if param.kind() == QuantifiedKind::IntVar {
                 let got_arg = Self::intvar_targ_for_compare(got_arg)?;
                 let want_arg = Self::intvar_targ_for_compare(want_arg)?;

@@ -33,14 +33,17 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::lined_buffer::LinedBuffer;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::thread_pool::ThreadCount;
+use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
+use crate::config::config::toml_error_span;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::lsp::wasm::hover::get_hover;
@@ -161,6 +164,29 @@ impl Range {
             },
         })
     }
+}
+
+fn toml_parse_error_range(contents: &str, err: &anyhow::Error) -> (i32, i32, i32, i32) {
+    let Some(span) = toml_error_span::<ConfigFile>(contents, err) else {
+        return (1, 1, 1, 1);
+    };
+    // Delegate byte-offset -> (line, column) conversion to `LinedBuffer` so the
+    // config diagnostic uses the same UTF-scalar column convention as every other
+    // diagnostic and clamps offsets that land inside a multi-byte character.
+    let lined_buffer = LinedBuffer::new(Arc::new(contents.to_owned()));
+    let range = lined_buffer.display_range(
+        TextRange::new(
+            TextSize::new(span.start as u32),
+            TextSize::new(span.end as u32),
+        ),
+        None,
+    );
+    (
+        range.start.line_within_file().get() as i32,
+        range.start.column().get() as i32,
+        range.end.line_within_file().get() as i32,
+        range.end.column().get() as i32,
+    )
 }
 
 #[derive(Serialize, Clone)]
@@ -296,15 +322,17 @@ impl Playground {
         // Parse configuration if present in the in-memory files
         let mut parsed_config: Option<ConfigFile> = None;
         if let Some(cfg_str) = files.get("pyrefly.toml") {
-            match toml::from_str::<ConfigFile>(cfg_str) {
+            match ConfigFile::parse_config(cfg_str) {
                 Ok(cfg) => parsed_config = Some(cfg),
                 Err(err) => {
+                    let (start_line, start_col, end_line, end_col) =
+                        toml_parse_error_range(cfg_str, &err);
                     // Attach a diagnostic to pyrefly.toml on parse/validation failure
                     self.config_diagnostics.push(Diagnostic {
-                        start_line: 1,
-                        start_col: 1,
-                        end_line: 1,
-                        end_col: 1,
+                        start_line,
+                        start_col,
+                        end_line,
+                        end_col,
                         message_header: "TOML parse error".to_owned(),
                         message_details: err.to_string(),
                         kind: "parse-error".to_owned(),
@@ -970,6 +998,31 @@ mod tests {
             !state.handles.contains_key("pyrefly.toml"),
             "Config file should not be a module"
         );
+    }
+
+    #[test]
+    fn test_config_toml_parse_error_range() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("main.py".to_owned(), String::new());
+        files.insert(
+            "pyrefly.toml".to_owned(),
+            "preset = \"strict\"\npytorch-efficiency-lints = \"true\"\n".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+
+        let diagnostic = state
+            .get_errors()
+            .into_iter()
+            .find(|error| error.filename == "pyrefly.toml")
+            .expect("expected a pyrefly.toml parse diagnostic");
+        assert_eq!(diagnostic.message_header, "TOML parse error");
+        // The diagnostic points at the offending value on line 2. Column 28 is
+        // the opening quote of `"true"`: `pytorch-efficiency-lints = ` is 27
+        // characters, so the value begins at 1-based column 28.
+        assert_eq!(diagnostic.start_line, 2);
+        assert_eq!(diagnostic.start_col, 28);
     }
 
     #[test]

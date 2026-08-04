@@ -60,6 +60,7 @@ use pyrefly_util::telemetry::TelemetryEventKind;
 use pyrefly_util::telemetry::TelemetryTransactionStats;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::ThreadPool;
+use pyrefly_util::timer::Timer;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -175,6 +176,8 @@ pub struct ModuleDeps {
     pub classes: SmallSet<ClassDefIndex>,
     /// Which type aliases do we depend on?
     pub type_aliases: SmallSet<TypeAliasIndex>,
+    /// Do we depend on module-level Django reverse relation metadata?
+    pub django_relations: bool,
 }
 
 /// Per-module change tracking. Represents what changed in a module's exports.
@@ -246,7 +249,7 @@ impl ModuleChanges {
             AnyExportedKey::KeyExport(k) => {
                 self.0.names.entry(k.0).or_default();
             }
-            // Classes and type aliases don't distinguish between existence and change.
+            // Classes, type aliases, and django relations don't distinguish between existence and change.
             _ => self.add_key(key),
         }
     }
@@ -269,6 +272,9 @@ impl ModuleChanges {
     /// more impactful than a type/metadata-only change.
     pub fn overlaps(&self, other: &ModuleChanges) -> bool {
         if self.0.wildcard || other.0.wildcard {
+            return true;
+        }
+        if self.0.django_relations && other.0.django_relations {
             return true;
         }
         for (name, self_dep) in &self.0.names {
@@ -307,6 +313,9 @@ impl ModuleDeps {
             }
             AnyExportedKey::KeyTypeAlias(k) => {
                 self.type_aliases.insert(k.0);
+            }
+            AnyExportedKey::KeyDjangoRelations(_) => {
+                self.django_relations = true;
             }
             AnyExportedKey::KeyTParams(KeyTParams(c))
             | AnyExportedKey::KeyClassBaseType(KeyClassBaseType(c))
@@ -370,6 +379,7 @@ impl ModuleDeps {
         self.classes.extend(other.classes);
         self.type_aliases.extend(other.type_aliases);
         self.wildcard |= other.wildcard;
+        self.django_relations |= other.django_relations;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -377,6 +387,7 @@ impl ModuleDeps {
             && !self.wildcard
             && self.classes.is_empty()
             && self.type_aliases.is_empty()
+            && !self.django_relations
     }
 
     /// Check if these dependencies are affected by the given change.
@@ -407,6 +418,9 @@ impl ModuleDeps {
                     return true;
                 }
             }
+        }
+        if self.django_relations && changed.0.django_relations {
+            return true;
         }
         if self.classes.iter().any(|c| changed.0.classes.contains(c)) {
             return true;
@@ -671,7 +685,7 @@ impl<'a> TransactionData<'a> {
     /// underlying state is unchanged, otherwise the transaction data might make inconsistent
     /// assumptions, in particular about deps/rdeps.
     pub(crate) fn restore(self) -> Result<Transaction<'a>, Duration> {
-        let start = Instant::now();
+        let start = Timer::start();
         let readable = self.state.state.read();
         let state_lock_blocked = start.elapsed();
         if self.base == readable.now {
@@ -1374,7 +1388,7 @@ impl<'a> Transaction<'a> {
         if !module_data.state.is_checked(self.data.now)
             && let Some(guard) = module_data.state.try_start_clean(self.data.now)
         {
-            let clean_start = Instant::now();
+            let clean_start = Timer::start();
             self.clean(module_data, guard);
             self.timing
                 .clean_ns
@@ -1391,7 +1405,7 @@ impl<'a> Transaction<'a> {
             }
 
             // Try to acquire exclusive compute access for the next step.
-            let wait_start = Instant::now();
+            let wait_start = Timer::start();
             let result = module_data.state.try_start_compute(step);
             let wait_ns = wait_start.elapsed().as_nanos() as u64;
             if wait_ns > 1000 {
@@ -1454,6 +1468,10 @@ impl<'a> Transaction<'a> {
                     .strict_partial_subtyping(module_data.handle.path().as_path()),
                 spec_compliant_overloads: config
                     .spec_compliant_overloads(module_data.handle.path().as_path()),
+                legacy_overload_expansion: config
+                    .legacy_overload_expansion(module_data.handle.path().as_path()),
+                treat_all_caps_as_final: config
+                    .treat_all_caps_as_final(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context,
                 cinderx_enabled: self.data.cinderx_reporter.is_some(),
@@ -1464,7 +1482,7 @@ impl<'a> Transaction<'a> {
             // then releases the computing flag and notifies waiting threads.
             // Post-compute work (diffing, invalidation, eviction) runs without
             // the flag held.
-            let compute_start = Instant::now();
+            let compute_start = Timer::start();
             let post = guard.compute(&ctx);
             let elapsed_ns = compute_start.elapsed().as_nanos() as u64;
             let (ns_counter, count_counter) = match todo {
@@ -1989,7 +2007,7 @@ impl<'a> Transaction<'a> {
         require: Require,
         custom_thread_pool: Option<&ThreadPool>,
     ) -> Result<(), Cancelled> {
-        let run_start = Instant::now();
+        let run_start = Timer::start();
 
         self.data.now.next();
 
@@ -2012,7 +2030,7 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        let work_start = Instant::now();
+        let work_start = Timer::start();
         let cancelled = AtomicBool::new(false);
         // When the todo queue is empty, run `work()` on the calling thread instead of
         // dispatching to the shared thread pool. `spawn_many` uses rayon `scope` which
@@ -2091,7 +2109,7 @@ impl<'a> Transaction<'a> {
         let run_number = self.data.state.run_count.fetch_add(1, Ordering::SeqCst);
         // Compute stdlib once before the epoch loop. Stdlib is deterministic for a
         // given SysInfo and does not depend on user code, so it only needs to run once.
-        let stdlib_start = Instant::now();
+        let stdlib_start = Timer::start();
         let stdlib_cached = self.compute_stdlib(handles);
         let compute_stdlib_time = stdlib_start.elapsed();
         {
@@ -2463,6 +2481,9 @@ impl<'a> Transaction<'a> {
                     .strict_partial_subtyping(m.handle.path().as_path()),
                 spec_compliant_overloads: config
                     .spec_compliant_overloads(m.handle.path().as_path()),
+                legacy_overload_expansion: config
+                    .legacy_overload_expansion(m.handle.path().as_path()),
+                treat_all_caps_as_final: config.treat_all_caps_as_final(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context: None,
                 cinderx_enabled: false,
@@ -2657,7 +2678,7 @@ impl<'a> TransactionHandle<'a> {
                     Some(path) => path.dupe(),
                     None => {
                         drop(imports_read);
-                        let fi_start = Instant::now();
+                        let fi_start = Timer::start();
                         let finding = self
                             .transaction
                             .get_cached_loader(&self.module_data.config.read())
@@ -3302,7 +3323,7 @@ impl State {
         default_require: Require,
         subscriber: Option<Box<dyn Subscriber + 'a>>,
     ) -> Transaction<'a> {
-        let start = Instant::now();
+        let start = Timer::start();
         let readable = self.state.read();
         let state_lock_blocked = start.elapsed();
         let now = readable.now;
@@ -3428,7 +3449,7 @@ impl State {
         );
         assert!(dirty.into_inner().is_empty(), "Transaction is dirty");
 
-        let state_lock_start = Instant::now();
+        let state_lock_start = Timer::start();
         let mut state = self.state.write();
         stats.state_lock_blocked += state_lock_start.elapsed();
 

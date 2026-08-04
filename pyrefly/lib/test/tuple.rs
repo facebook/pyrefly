@@ -527,6 +527,19 @@ def f[Z: tuple[str, int, bytes]](x: Z):
 );
 
 testcase!(
+    test_unpack_unpacked_tuple_assignment,
+    r#"
+from typing import assert_type
+
+def f(x: tuple[str, *tuple[int, ...]]) -> str:
+    head, *tail = x
+    assert_type(head, str)
+    assert_type(tail, list[int])
+    return head
+"#,
+);
+
+testcase!(
     test_unpack_constrained_typevar_tuple,
     r#"
 from typing import TypeVar, reveal_type
@@ -561,6 +574,60 @@ from typing import assert_type
 def test(x: tuple[int, str, bool], y: tuple[int, ...], start: int, stop: int, step: int):
     assert_type(x[start:stop:step], tuple[int | str | bool, ...])
     assert_type(y[start:stop:step], tuple[int, ...])
+"#,
+);
+
+testcase!(
+    test_slice_invalid_components,
+    r#"
+def test(xs: list[int], ys: tuple[int, ...]) -> None:
+    xs[1.5:]  # E: Slice indices must be integers or have an `__index__` method
+    ys[:1.5]  # E: Slice indices must be integers or have an `__index__` method
+    xs[::1.5]  # E: Slice indices must be integers or have an `__index__` method
+    ys[::1.5]  # E: Slice indices must be integers or have an `__index__` method
+"#,
+);
+
+testcase!(
+    test_slice_accepts_index_method,
+    r#"
+class Index:
+    def __index__(self) -> int:
+        return 0
+
+def test(xs: list[int], ys: tuple[int, ...], index: Index) -> None:
+    xs[index:]
+    ys[:index]
+    xs[::index]
+"#,
+);
+
+testcase!(
+    test_slice_zero_step,
+    r#"
+def test(xs: list[int], ys: tuple[int, ...]) -> None:
+    xs[::0]  # E: Slice step cannot be zero
+    ys[::0]  # E: Slice step cannot be zero
+"#,
+);
+
+testcase!(
+    test_slice_omitted_positions_preserved,
+    r#"
+from typing import assert_type
+
+def test(x: tuple[int, str, bool]) -> None:
+    assert_type(x[:2], tuple[int, str])
+    assert_type(x[1:], tuple[str, bool])
+"#,
+);
+
+testcase!(
+    test_slice_union_step_reported_once,
+    r#"
+def test(xs: list[int] | tuple[int, ...]) -> None:
+    xs[::0]  # E: Slice step cannot be zero
+    xs[::1.5]  # E: Slice indices must be integers or have an `__index__` method
 "#,
 );
 

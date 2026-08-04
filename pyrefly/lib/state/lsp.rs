@@ -31,7 +31,6 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -327,11 +326,13 @@ pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
         ty if ty.is_toplevel_callable() => {
             // A callable attribute is a method unless its metadata proves it is a free
             // function. Overloads and bound dunder methods (e.g. `__getitem__`, an
-            // overloaded operator) carry no directly resolvable `Def` metadata, so they
+            // overloaded operator) carry no directly resolvable definition metadata, so they
             // must default to method rather than function.
-            let is_function = ty.visit_toplevel_func_metadata(
-                &|meta| matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_none()),
-            );
+            let is_function = ty.visit_toplevel_func_metadata(&|meta| {
+                meta.kind
+                    .definition_id()
+                    .is_some_and(|func| func.cls.is_none())
+            });
             if is_function {
                 SymbolKind::Function
             } else {
@@ -909,6 +910,42 @@ impl<'a> Transaction<'a> {
         None
     }
 
+    fn type_from_match_wildcard_at_impl(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        for_display: bool,
+    ) -> Option<Type> {
+        let module = self.get_ast(handle)?;
+        let covering_nodes = Ast::locate_node(&module, position);
+        let is_wildcard = covering_nodes
+            .iter()
+            .any(|node| matches!(node, AnyNodeRef::PatternMatchAs(pattern) if pattern.name.is_none() && pattern.pattern.is_none()));
+        if !is_wildcard {
+            return None;
+        }
+        let case_range = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::MatchCase(case) => Some(case.range),
+            _ => None,
+        })?;
+        let subject_range = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::StmtMatch(stmt_match) => Some(stmt_match.subject.range()),
+            _ => None,
+        })?;
+        let key = Key::PatternNarrow(case_range);
+        if self
+            .get_bindings(handle)
+            .is_some_and(|bindings| bindings.is_valid_key(&key))
+        {
+            self.get_type_for_surface(handle, &key, for_display)
+        } else {
+            // The subject must be looked up by its whole range: a position inside it
+            // resolves the leading token, which is the base (`obj` in `match obj.attr:`)
+            // rather than the subject expression.
+            self.get_type_trace_for_surface(handle, subject_range, for_display)
+        }
+    }
+
     pub(crate) fn identifier_at(
         &self,
         handle: &Handle,
@@ -1237,7 +1274,11 @@ impl<'a> Transaction<'a> {
             context,
         }) = self.identifier_at(handle, position)
         else {
-            return self.type_from_expression_at_impl(handle, position, false, for_display);
+            return self
+                .type_from_match_wildcard_at_impl(handle, position, for_display)
+                .or_else(|| {
+                    self.type_from_expression_at_impl(handle, position, false, for_display)
+                });
         };
         let kind = self.classify_surface(handle, &identifier, &context);
         self.type_from_resolution(
@@ -1709,8 +1750,13 @@ impl<'a> Transaction<'a> {
                     Some((def_handle, export))
                 }
             }
-            IntermediateDefinition::Module(import_range, name) => {
-                if matches!(preference.import_behavior, ImportBehavior::StopAtEverything) {
+            IntermediateDefinition::Module(import_range, name, is_renamed_import) => {
+                if matches!(preference.import_behavior, ImportBehavior::StopAtEverything)
+                    || matches!(
+                        preference.import_behavior,
+                        ImportBehavior::StopAtRenamedImports if is_renamed_import
+                    )
+                {
                     return Some((
                         handle.dupe(),
                         Export {
@@ -3719,7 +3765,6 @@ impl<'a> Transaction<'a> {
                  metadata,
                  definition_range,
                  module,
-                 docstring_range: _,
                  ..
              }| {
                 self.local_references_from_definition(

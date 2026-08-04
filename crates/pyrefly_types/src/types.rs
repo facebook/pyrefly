@@ -61,6 +61,7 @@ use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::sentinel::Sentinel;
+use crate::series::SeriesSchema;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::ShapedArrayType;
 use crate::simplify::unions;
@@ -68,6 +69,7 @@ use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
+use crate::type_level_dsl::TypeLevelDslCall;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
@@ -236,7 +238,7 @@ pub struct TArgs(Arc<(Arc<TParams>, Box<[Type]>)>);
 
 impl Visit<Type> for TArgs {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
-        self.0.0.visit(f);
+        // TParams describe the declaration; only applied arguments are contained types.
         self.0.1.visit(f);
     }
 }
@@ -769,6 +771,9 @@ pub enum Type {
     /// of the argument, so that we can resonstruct the same generic/overload structure if it
     /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
     CallableResidual(Box<CallableResidual>),
+    /// A type-level shape DSL application that is valid inside callable return annotations.
+    /// Call return-boundary processing forces this to a result-schema projection.
+    TypeLevelDslCall(Box<TypeLevelDslCall>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
     Function(Box<Function>),
@@ -817,6 +822,8 @@ pub enum Type {
     /// Wraps an underlying DataFrame instance type and an ordered column schema;
     /// all behavior delegates to the underlying type.
     DataFrame(Box<DataFrameSchema>),
+    /// A Series instance carrying its element dtype; behavior delegates to the underlying type.
+    Series(Box<SeriesSchema>),
     /// Dimension value type - represents values that satisfy Dim bound
     /// Examples:
     ///   - `Type::Int(Int::Literal(6))` for concrete dimension 6
@@ -915,6 +922,7 @@ impl Visit for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit(f),
             Type::CallableResidual(x) => x.visit(f),
+            Type::TypeLevelDslCall(x) => x.visit(f),
             Type::Function(x) => x.visit(f),
             Type::BoundMethod(x) => x.visit(f),
             Type::Overload(x) => x.visit(f),
@@ -928,6 +936,7 @@ impl Visit for Type {
             Type::IntTuple(x) => x.visit(f),
             Type::NNModule(x) => x.visit(f),
             Type::DataFrame(x) => x.visit(f),
+            Type::Series(x) => x.visit(f),
             Type::Int(x) => x.visit(f),
             Type::Tuple(x) => x.visit(f),
             Type::Module(x) => x.visit(f),
@@ -973,6 +982,7 @@ impl VisitMut for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit_mut(f),
             Type::CallableResidual(x) => x.visit_mut(f),
+            Type::TypeLevelDslCall(x) => x.visit_mut(f),
             Type::Function(x) => x.visit_mut(f),
             Type::BoundMethod(x) => x.visit_mut(f),
             Type::Overload(x) => x.visit_mut(f),
@@ -986,6 +996,7 @@ impl VisitMut for Type {
             Type::IntTuple(x) => x.visit_mut(f),
             Type::NNModule(x) => x.visit_mut(f),
             Type::DataFrame(x) => x.visit_mut(f),
+            Type::Series(x) => x.visit_mut(f),
             Type::Int(x) => x.visit_mut(f),
             Type::Tuple(x) => x.visit_mut(f),
             Type::Module(x) => x.visit_mut(f),
@@ -1484,6 +1495,72 @@ impl Type {
         self
     }
 
+    pub fn finalize_type_level_dsl_at_boundary(&mut self) -> Vec<dimension::ShapeError> {
+        let mut errors = Vec::new();
+
+        // Nested applications are dependencies of the public application being forced here:
+        // propagate the first invalid dependency upward so fallback is applied only at that
+        // public result-schema boundary.
+        fn force_nested(ty: &mut Type) -> Result<(), dimension::ShapeError> {
+            let Type::TypeLevelDslCall(call) = ty else {
+                match ty {
+                    Type::Callable(_)
+                    | Type::Function(_)
+                    | Type::BoundMethod(_)
+                    | Type::Overload(_)
+                    | Type::Forall(_) => return Ok(()),
+                    _ => {
+                        let mut error = None;
+                        ty.recurse_mut(&mut |ty| {
+                            if error.is_none() {
+                                error = force_nested(ty).err();
+                            }
+                        });
+                        return match error {
+                            Some(error) => Err(error),
+                            None => Ok(()),
+                        };
+                    }
+                }
+            };
+            for arg in &mut call.args {
+                if let Err(error) = force_nested(arg) {
+                    *ty = call.fallback();
+                    return Err(error);
+                }
+            }
+            match call.evaluate() {
+                Ok(result) => {
+                    *ty = result;
+                    Ok(())
+                }
+                Err(error) => {
+                    *ty = call.fallback();
+                    Err(error)
+                }
+            }
+        }
+
+        fn collect_errors(ty: &mut Type, errors: &mut Vec<dimension::ShapeError>) {
+            if matches!(ty, Type::TypeLevelDslCall(_)) {
+                if let Err(error) = force_nested(ty) {
+                    errors.push(error);
+                }
+                return;
+            }
+            match ty {
+                Type::Callable(_)
+                | Type::Function(_)
+                | Type::BoundMethod(_)
+                | Type::Overload(_)
+                | Type::Forall(_) => {}
+                _ => ty.recurse_mut(&mut |ty| collect_errors(ty, errors)),
+            }
+        }
+        collect_errors(self, &mut errors);
+        errors
+    }
+
     pub fn subst_self_special_form_mut(&mut self, self_type: &Type) {
         self.transform_mut(&mut |x| {
             if x == &Type::SpecialForm(SpecialForm::SelfType) {
@@ -1630,11 +1707,6 @@ impl Type {
         self.visit_toplevel_func_metadata(&|meta| meta.flags.dataclass_transform_metadata.as_ref())
     }
 
-    /// If a Protocol method lacks an implementation and does not come from a `.pyi` file, then it cannot be called
-    pub fn is_non_callable_protocol_method(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.lacks_runtime_implementation())
-    }
-
     /// Transforms this type's function metadata, if it is a function. Note that we do *not*
     /// recurse into the type to find nested function types.
     pub fn transform_toplevel_func_metadata(&mut self, mut f: impl FnMut(&mut FuncMetadata)) {
@@ -1762,7 +1834,7 @@ impl Type {
         let mut params = Vec::new();
         let mut get_param = |callable: &Callable| {
             if let Some(p) = callable.get_first_param() {
-                params.push(p);
+                params.push(p.clone());
             }
         };
         self.visit_toplevel_callable(&mut get_param);
@@ -1899,6 +1971,17 @@ impl Type {
     pub fn transform(mut self, f: &mut dyn FnMut(&mut Type)) -> Self {
         self.transform_mut(f);
         self
+    }
+
+    /// Replace every DataFrame and Series schema with its plain underlying class. The schema forms
+    /// (`DataFrame[a: Int64, ...]`, `Series[Int64]`) are not valid annotation syntax, so a surface
+    /// that emits a type as source must strip them first.
+    pub fn strip_library_schemas(self) -> Type {
+        self.transform(&mut |t| match t {
+            Type::DataFrame(schema) => *t = schema.underlying_type(),
+            Type::Series(schema) => *t = schema.underlying_type(),
+            _ => {}
+        })
     }
 
     /// If this type represents a (possibly narrowed) quantified (i.e., `Q`  or `Q & T`), returns
@@ -2092,16 +2175,50 @@ impl<'a> TypeVariable<'a> {
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
+    use std::sync::Arc;
 
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_util::visit::Visit;
     use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
 
     use crate::equality::TypeEq;
     use crate::equality::TypeEqCtx;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
+    use crate::quantified::AnchorIndex;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
+    use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::Restriction;
+    use crate::types::TArgs;
+    use crate::types::TParams;
     use crate::types::Type;
     use crate::types::Union;
+
+    #[test]
+    fn test_targs_visit_only_visits_applied_arguments() {
+        let tparam = Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("test"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static("T"),
+            QuantifiedKind::TypeVar,
+            Some(Type::None),
+            Restriction::Bound(Type::LiteralString(LitStyle::Implicit)),
+            PreInferenceVariance::Undefined,
+        );
+        let targs = TArgs::new(Arc::new(TParams::new(vec![tparam])), vec![Type::Ellipsis]);
+        let mut visited = Vec::new();
+
+        targs.visit(&mut |ty| visited.push(ty.clone()));
+
+        assert_eq!(visited, vec![Type::Ellipsis]);
+    }
 
     /// `display_name` is presentation-only, so two unions with identical members
     /// but different names must agree across `Eq`, `Ord`, and `TypeEq`.

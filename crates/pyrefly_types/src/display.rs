@@ -146,6 +146,8 @@ pub struct TypeDisplayContext<'a> {
     always_display_module_name: bool,
     always_display_expanded_unions: bool,
     render_self_type_as_self: bool,
+    /// Render a `DataFrame` as its plain underlying class rather than the schema form.
+    strip_library_schemas: bool,
     /// Optional stdlib reference for resolving builtin type locations
     stdlib: Option<&'a Stdlib>,
     /// Stack of identities of type variables currently bound by enclosing Foralls.
@@ -179,6 +181,9 @@ impl<'a> TypeDisplayContext<'a> {
                 self.add_qname(shaped_array.base_class.qname());
             }
             if let Type::DataFrame(schema) = t {
+                self.add_qname(schema.underlying.qname());
+            }
+            if let Type::Series(schema) = t {
                 self.add_qname(schema.underlying.qname());
             }
             // A singledispatch dispatcher is displayed as its backing `_SingleDispatchCallable`
@@ -219,6 +224,11 @@ impl<'a> TypeDisplayContext<'a> {
 
     pub fn always_display_expanded_unions(&mut self) {
         self.always_display_expanded_unions = true;
+    }
+
+    /// Emit schema types as their plain class, for surfaces that write a type back as source.
+    pub fn strip_library_schemas(&mut self) {
+        self.strip_library_schemas = true;
     }
 
     pub fn render_self_type_as_self(&mut self) {
@@ -620,6 +630,44 @@ impl<'a> TypeDisplayContext<'a> {
         self.fmt_helper_generic(&value_type, false, output)
     }
 
+    fn fmt_hover_type<O: TypeOutput>(
+        &self,
+        t: &Type,
+        is_toplevel: bool,
+        output: &mut O,
+        indent: usize,
+    ) -> fmt::Result {
+        if self.lsp_display_mode != LspDisplayMode::Hover {
+            return self.fmt_helper_generic(t, is_toplevel, output);
+        }
+        match t {
+            Type::Callable(c) => c.fmt_with_type_with_newlines(
+                output,
+                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                indent,
+            ),
+            Type::Forall(forall) => {
+                let Forall { tparams, body } = &**forall;
+                let Forallable::Callable(c) = body else {
+                    return self.fmt_helper_generic(t, is_toplevel, output);
+                };
+                output.write_str("[")?;
+                write!(
+                    output,
+                    "{}",
+                    commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                )?;
+                output.write_str("]")?;
+                c.fmt_with_type_with_newlines(
+                    output,
+                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                    indent,
+                )
+            }
+            _ => self.fmt_helper_generic(t, is_toplevel, output),
+        }
+    }
+
     /// Core formatting logic for types that works with any `TypeOutput` implementation.
     ///
     /// The method uses the `TypeOutput` trait abstraction to write output in various ways.
@@ -718,16 +766,19 @@ impl<'a> TypeDisplayContext<'a> {
                 // Display as the class name (e.g., MaxPool2d)
                 self.fmt_helper_generic(&Type::ClassType(module.class.clone()), false, output)
             }
+            Type::DataFrame(schema) if self.strip_library_schemas => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)
+            }
             Type::DataFrame(schema) => {
                 self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
                 output.write_str("[")?;
-                for (i, (name, ty)) in schema.columns.iter().enumerate() {
+                for (i, (name, dtype)) in schema.columns.iter().enumerate() {
                     if i > 0 {
                         output.write_str(", ")?;
                     }
                     output.write_str(name.as_str())?;
                     output.write_str(": ")?;
-                    self.fmt_helper_generic(ty, false, output)?;
+                    output.write_str(dtype.name())?;
                 }
                 // A Partial schema carries unknown extra columns, shown as a trailing "...".
                 if schema.completeness == SchemaCompleteness::Partial {
@@ -738,6 +789,15 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 output.write_str("]")?;
                 Ok(())
+            }
+            Type::Series(schema) if self.strip_library_schemas => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)
+            }
+            Type::Series(schema) => {
+                self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
+                output.write_str("[")?;
+                output.write_str(schema.dtype.name())?;
+                output.write_str("]")
             }
             Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
             Type::TypeVar(t) => {
@@ -793,9 +853,11 @@ impl<'a> TypeDisplayContext<'a> {
                 // Hover output should be readable even when callables appear inside unions
                 // (e.g. constructor display that unions __new__ and __init__).
                 if self.lsp_display_mode == LspDisplayMode::Hover {
-                    c.fmt_with_type_with_newlines(output, &|t, o| {
-                        self.fmt_helper_generic(t, false, o)
-                    })
+                    c.fmt_with_type_with_newlines(
+                        output,
+                        &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                        0,
+                    )
                 } else {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
@@ -816,6 +878,17 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::TypeLevelDslCall(call) => {
+                output.write_str(call.function.name)?;
+                output.write_str("(")?;
+                for (i, arg) in call.args.iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
+                    }
+                    self.fmt_helper_generic(arg, false, output)?;
+                }
+                output.write_str(")")
+            }
             Type::Function(func) => {
                 let Function {
                     signature,
@@ -847,9 +920,11 @@ impl<'a> TypeDisplayContext<'a> {
                         self.write_func_fqn(output, &func_name, &metadata.kind)?;
                         match self.lsp_display_mode {
                             LspDisplayMode::Hover => {
-                                signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                    self.fmt_helper_generic(t, false, o)
-                                })?;
+                                signature.fmt_with_type_with_newlines(
+                                    output,
+                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                    0,
+                                )?;
                             }
                             _ => {
                                 signature.fmt_with_type(output, &|t, o| {
@@ -865,9 +940,11 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     _ => {
                         if self.lsp_display_mode == LspDisplayMode::Hover {
-                            signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })
+                            signature.fmt_with_type_with_newlines(
+                                output,
+                                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                0,
+                            )
                         } else {
                             signature
                                 .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
@@ -956,10 +1033,13 @@ impl<'a> TypeDisplayContext<'a> {
                                 };
                                 match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
-                                        effective_sig
-                                            .fmt_with_type_with_newlines(output, &|t, o| {
-                                                self.fmt_helper_generic(t, false, o)
-                                            })?;
+                                        effective_sig.fmt_with_type_with_newlines(
+                                            output,
+                                            &|t, o, indent| {
+                                                self.fmt_hover_type(t, false, o, indent)
+                                            },
+                                            0,
+                                        )?;
                                     }
                                     _ => {
                                         effective_sig.fmt_with_type(output, &|t, o| {
@@ -1004,9 +1084,13 @@ impl<'a> TypeDisplayContext<'a> {
                                 let _scope = self.push_forall_scope(tparams.iter());
                                 let result = match self.lsp_display_mode {
                                     LspDisplayMode::Hover => effective_sig
-                                        .fmt_with_type_with_newlines(output, &|t, o| {
-                                            self.fmt_helper_generic(t, false, o)
-                                        }),
+                                        .fmt_with_type_with_newlines(
+                                            output,
+                                            &|t, o, indent| {
+                                                self.fmt_hover_type(t, false, o, indent)
+                                            },
+                                            0,
+                                        ),
                                     _ => effective_sig.fmt_with_type(output, &|t, o| {
                                         self.fmt_helper_generic(t, false, o)
                                     }),
@@ -1192,9 +1276,11 @@ impl<'a> TypeDisplayContext<'a> {
                                 commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
                             )?;
                             output.write_str("]")?;
-                            c.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })
+                            c.fmt_with_type_with_newlines(
+                                output,
+                                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                0,
+                            )
                         } else {
                             output.write_str("[")?;
                             write!(
@@ -1229,10 +1315,11 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                             let _scope = self.push_forall_scope(tparams.iter());
                             match self.lsp_display_mode {
-                                LspDisplayMode::Hover => signature
-                                    .fmt_with_type_with_newlines(output, &|t, o| {
-                                        self.fmt_helper_generic(t, false, o)
-                                    }),
+                                LspDisplayMode::Hover => signature.fmt_with_type_with_newlines(
+                                    output,
+                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                                    0,
+                                ),
                                 _ => signature.fmt_with_type(output, &|t, o| {
                                     self.fmt_helper_generic(t, false, o)
                                 }),
@@ -1520,8 +1607,23 @@ impl Type {
         fallback_name: Option<&str>,
         mode: LspDisplayMode,
     ) -> String {
+        self.as_lsp_string_with_fallback_name_and_expanded_unions(fallback_name, mode, false)
+    }
+
+    /// Render the type for LSP display. When `expand_unions` is true, named
+    /// nested unions are shown by their members instead of their alias name —
+    /// this backs the hover panel's "+" verbosity control.
+    pub fn as_lsp_string_with_fallback_name_and_expanded_unions(
+        &self,
+        fallback_name: Option<&str>,
+        mode: LspDisplayMode,
+        expand_unions: bool,
+    ) -> String {
         let mut c = TypeDisplayContext::new(&[self]);
         c.set_lsp_display_mode(mode);
+        if expand_unions {
+            c.always_display_expanded_unions();
+        }
         let rendered = c.display(self).to_string();
         if let Some(name) = fallback_name
             && self.is_toplevel_callable()
@@ -1538,7 +1640,9 @@ impl Type {
         &self,
         stdlib: Option<&Stdlib>,
     ) -> Vec<(String, Option<TextRangeWithModule>)> {
+        // Callers insert this as a source annotation.
         let mut ctx = TypeDisplayContext::new(&[self]);
+        ctx.strip_library_schemas();
         if let Some(s) = stdlib {
             ctx.set_stdlib(s);
         }
@@ -1588,14 +1692,18 @@ pub mod tests {
     use crate::callable::Param;
     use crate::callable::ParamList;
     use crate::callable::Params;
+    use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::data_frame::DataFrameKind;
+    use crate::data_frame::DataFrameSchema;
     use crate::dimension::Int;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
+    use crate::polars_dtype::PolarsDType;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedIdentity;
@@ -1709,6 +1817,22 @@ pub mod tests {
 
         assert_eq!(shaped.to_string(), "Array[2]");
         assert_eq!(shapeless.to_string(), "Array");
+    }
+
+    #[test]
+    fn test_display_ignores_tparam_qnames_for_disambiguation() {
+        let hidden = Type::ClassType(ClassType::new(
+            fake_class("C", "hidden", 0),
+            TArgs::default(),
+        ));
+        let tparam = fake_tparam(0, "T", QuantifiedKind::TypeVar)
+            .with_restriction(Restriction::Bound(hidden));
+        let visible = Type::ClassType(ClassType::new(
+            fake_class("C", "visible", 0),
+            TArgs::new(fake_tparams(vec![tparam]), vec![Type::None]),
+        ));
+
+        assert_eq!(visible.to_string(), "C[None]");
     }
 
     #[test]
@@ -1955,6 +2079,56 @@ pub mod tests {
         );
     }
 
+    fn fake_dataframe(columns: Vec<(Name, PolarsDType)>, completeness: SchemaCompleteness) -> Type {
+        Type::DataFrame(Box::new(DataFrameSchema {
+            underlying: ClassType::new(
+                fake_class("DataFrame", "polars.dataframe.frame", 0),
+                TArgs::default(),
+            ),
+            columns,
+            completeness,
+            kind: DataFrameKind::Polars,
+        }))
+    }
+
+    fn locations_string(t: &Type) -> String {
+        t.get_types_with_locations(None)
+            .into_iter()
+            .map(|(s, _)| s)
+            .collect()
+    }
+
+    #[test]
+    fn dataframe_annotation_surface_uses_plain_class() {
+        let df = fake_dataframe(
+            vec![(Name::new("a"), PolarsDType::Int64)],
+            SchemaCompleteness::Complete,
+        );
+        // reveal_type and hover keep the rich schema form.
+        assert_eq!(df.to_string(), "DataFrame[a: Int64]");
+        // Annotation surfaces emit the plain class.
+        assert_eq!(locations_string(&df), "DataFrame");
+    }
+
+    #[test]
+    fn dataframe_annotation_surface_strips_empty_and_partial_and_nested() {
+        // An empty schema would render as `DataFrame[]`, which is a hard SyntaxError as an annotation.
+        let empty = fake_dataframe(vec![], SchemaCompleteness::Complete);
+        assert_eq!(locations_string(&empty), "DataFrame");
+
+        let partial = fake_dataframe(
+            vec![(Name::new("a"), PolarsDType::Int64)],
+            SchemaCompleteness::Partial,
+        );
+        assert_eq!(locations_string(&partial), "DataFrame");
+
+        let optional = Type::optional(fake_dataframe(
+            vec![(Name::new("a"), PolarsDType::Int64)],
+            SchemaCompleteness::Complete,
+        ));
+        assert_eq!(locations_string(&optional), "DataFrame | None");
+    }
+
     #[test]
     fn test_display_qualified() {
         let c = fake_class("foo", "mod.ule", 5);
@@ -2149,6 +2323,61 @@ pub mod tests {
     *,
     world: None
 ) -> None"#
+        );
+    }
+
+    #[test]
+    fn test_display_nested_callable_param_spec_hover() {
+        let t = fake_tparam(0, "T", QuantifiedKind::TypeVar);
+        let p = fake_tparam(1, "P", QuantifiedKind::ParamSpec);
+        let r = fake_tparam(2, "R", QuantifiedKind::TypeVar);
+        let t_type = Type::Quantified(Box::new(t.clone()));
+        let p_type = Type::Quantified(Box::new(p.clone()));
+        let r_type = Type::Quantified(Box::new(r.clone()));
+        let str_type = Type::ClassType(ClassType::new(
+            fake_class("str", "builtins", 0),
+            TArgs::default(),
+        ));
+        let wrapped = Type::Callable(Box::new(Callable::concatenate(
+            Box::new([
+                PrefixParam::new(t_type.clone(), Required::Required),
+                PrefixParam::new(str_type, Required::Required),
+            ]),
+            p_type.clone(),
+            r_type.clone(),
+        )));
+        let unwrapped = Type::Callable(Box::new(Callable::concatenate(
+            Box::new([PrefixParam::new(t_type, Required::Required)]),
+            p_type,
+            r_type,
+        )));
+        let callable_type = Type::Forall(Box::new(Forall {
+            tparams: fake_tparams(vec![t, p, r]),
+            body: Forallable::Callable(Callable::list(
+                ParamList::new(vec![Param::Pos(
+                    Name::new_static("func"),
+                    wrapped,
+                    Required::Required,
+                )]),
+                unwrapped,
+            )),
+        }));
+        let mut ctx = TypeDisplayContext::new(&[&callable_type]);
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            "[T, **P, R](func: (T, str, ParamSpec(P)) -> R) -> (T, ParamSpec(P)) -> R"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            r#"[T, **P, R](func: (
+    T,
+    str,
+    ParamSpec(P)
+) -> R) -> (
+    T,
+    ParamSpec(P)
+) -> R"#
         );
     }
 

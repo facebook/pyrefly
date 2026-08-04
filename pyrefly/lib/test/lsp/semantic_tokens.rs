@@ -265,6 +265,72 @@ token-type: keyword
 }
 
 #[test]
+fn pattern_capture_test() {
+    let code = r#"
+class Foo:
+    child: int
+def unpack(value):
+    match value:
+        case [head, *tail]:
+            return head, tail
+        case Foo(child=c):
+            return c
+        case [_, *_]:
+            return value
+"#;
+    // Capture names (`head`, `tail`, `c`) are plain variables. The class-pattern keyword
+    // `child` (the matched attribute name) and the wildcards `_` / `*_` produce no tokens,
+    // while the class name `Foo` in a pattern is tokenized as a class.
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 3, text: Foo
+token-type: class
+
+line: 2, column: 4, length: 5, text: child
+token-type: variable
+
+line: 2, column: 11, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 3, column: 4, length: 6, text: unpack
+token-type: function
+
+line: 3, column: 11, length: 5, text: value
+token-type: parameter
+
+line: 4, column: 10, length: 5, text: value
+token-type: parameter
+
+line: 5, column: 14, length: 4, text: head
+token-type: variable
+
+line: 5, column: 21, length: 4, text: tail
+token-type: variable
+
+line: 6, column: 19, length: 4, text: head
+token-type: variable
+
+line: 6, column: 25, length: 4, text: tail
+token-type: variable
+
+line: 7, column: 13, length: 3, text: Foo
+token-type: class
+
+line: 7, column: 23, length: 1, text: c
+token-type: variable
+
+line: 8, column: 19, length: 1, text: c
+token-type: variable
+
+line: 10, column: 19, length: 5, text: value
+token-type: parameter
+"#,
+    );
+}
+
+#[test]
 fn multiline_syntax_token_test() {
     let code = r##"x = """one
 two"""

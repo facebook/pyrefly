@@ -48,6 +48,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
+use crate::alt::polars_specials::polars_degrade_for_mutation;
 use crate::alt::types::instance::Instance;
 use crate::binding::binding::Key;
 use crate::binding::narrow::AtomicNarrowOp;
@@ -175,12 +176,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn is_final(&self, class: &Class) -> bool {
-        self.get_metadata_for_class(class).is_final()
-            || (self.get_enum_from_class(class).is_some()
-                && !self.get_enum_members(class).is_empty())
-    }
-
     fn intersect_impl(&self, left: &Type, right: &Type, fallback: IntersectFallback) -> Type {
         if self.is_subset_eq(right, left) {
             if left.is_toplevel_callable()
@@ -223,13 +218,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         | (Type::SelfType(self_cls), Type::ClassType(cls)) = (left, right)
             && self.as_superclass(cls, self_cls.class_object()).as_ref() == Some(self_cls)
         {
-            // ClassType(C) & SelfType(Parent) simplifies to ClassType(C) when C
-            // is a subclass of Parent with a matching inherited instantiation,
-            // because Self[Parent] represents "Parent or any subclass" and
-            // ClassType(C) is already such a subclass.
-            // Without this, an unsimplified Intersect(ClassType, SelfType) can
-            // leak to downstream consumers that don't handle Intersect types.
-            self.heap.mk_class_type(cls.clone())
+            // ClassType(C) & SelfType(Parent) simplifies to SelfType(C) when C
+            // is a subclass of Parent with a matching inherited instantiation.
+            // Self[Parent] represents "Parent or any subclass", so narrowing it
+            // to the subclass C keeps it a self-type anchored at C: attribute and
+            // constructor lookups resolve through C, while the value stays
+            // assignable back to Self[Parent] (all self-types are mutually
+            // assignable). Collapsing to a plain ClassType(C) instead would drop
+            // the self-ness and spuriously reject `return self`/`return cls()`
+            // against a declared `-> Self`.
+            // Producing a SelfType (rather than an unsimplified Intersect) also
+            // avoids leaking Intersect types to downstream consumers that don't
+            // handle them.
+            self.heap.mk_self_type(cls.clone())
         } else if left.is_scalar() || right.is_scalar() {
             // The only inhabited intersections of literals are things like
             // `Literal[0] & Literal[0]` or `Literal[0] & int` that would have already been
@@ -243,12 +244,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             if let Type::ClassType(left_cls) = left
                 && let Type::ClassType(right_cls) = right
-                && (self.is_final(left_cls.class_object())
-                    || self.is_final(right_cls.class_object()))
+                && (!self.is_subclassable(left_cls.class_object())
+                    || !self.is_subclassable(right_cls.class_object()))
             {
                 // The only way for `left & right` to exist is if it is an instance of a class that
                 // multiply inherits from both `left` and `right`'s classes. But at least one of
-                // the classes is final, so such a class does not exist.
+                // the classes cannot be subclassed, so such a class does not exist.
                 self.heap.mk_never()
             } else {
                 let left_base = self.disjoint_base(left);
@@ -296,6 +297,62 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             [ty0, ty1] => self.intersect(ty0, ty1),
             [ty0, ts @ ..] => self.intersect(ty0, &self.intersects(ts)),
         }
+    }
+
+    /// Whether two types have no possible runtime value in common for the `invalid-cast` check.
+    ///
+    /// This is intentionally incomplete: uncertain type forms return `false` to avoid noisy
+    /// diagnostics.
+    pub fn is_provably_disjoint(&self, left: &Type, right: &Type) -> bool {
+        // Normalize types with a precise nominal runtime class, where disjointness is high signal.
+        // Return `None` for structural and gradual forms to avoid noisy invalid-cast diagnostics.
+        let runtime_type = |ty: &Type| match ty {
+            Type::ClassType(cls) if !cls.class_object().is_protocol() => {
+                let mut cls = cls.clone();
+                for arg in cls.targs_mut().as_mut() {
+                    *arg = self.heap.mk_any_implicit();
+                }
+                Some(self.heap.mk_class_type(cls))
+            }
+            Type::ClassDef(cls) => Some(
+                self.heap.mk_class_type(
+                    self.get_metadata_for_class(cls)
+                        .metaclass(self.stdlib)
+                        .clone(),
+                ),
+            ),
+            Type::Literal(lit) => Some(
+                self.heap
+                    .mk_class_type(lit.value.general_class_type(self.stdlib).clone()),
+            ),
+            Type::LiteralString(_) => Some(self.heap.mk_class_type(self.stdlib.str().clone())),
+            Type::None => Some(self.heap.mk_class_type(self.stdlib.none_type().clone())),
+            Type::Tuple(_) => Some(
+                self.heap
+                    .mk_class_type(self.stdlib.tuple(self.heap.mk_any_implicit())),
+            ),
+            Type::TypedDict(_) | Type::PartialTypedDict(_) => Some(
+                self.heap.mk_class_type(
+                    self.stdlib
+                        .dict(self.heap.mk_any_implicit(), self.heap.mk_any_implicit()),
+                ),
+            ),
+            _ => None,
+        };
+        let normalize = |ty: &Type| match ty {
+            Type::Union(union) => union
+                .members
+                .iter()
+                .map(&runtime_type)
+                .collect::<Option<Vec<_>>>()
+                .map(|members| self.unions(members)),
+            _ => runtime_type(ty),
+        };
+        let [Some(left), Some(right)] = [left, right].map(normalize) else {
+            return false;
+        };
+        self.intersect_with_fallback(&left, &right, IntersectFallback::Right)
+            .is_never()
     }
 
     fn subtract(&self, left: &Type, right: &Type) -> Type {
@@ -750,9 +807,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// because otherwise X could still be a subclass of Y.
     fn narrow_type_not_eq(&self, left: &Type, right_expr: &Expr, errors: &ErrorCollector) -> Type {
         let right = self.expr_infer(right_expr, errors);
-        // Only narrow if the RHS is a final class type (e.g., `type(x) != bool`)
+        // Only narrow if the RHS is a non-subclassable class type (e.g., `type(x) != bool`)
         if let Type::ClassDef(cls) = &right
-            && self.is_final(cls)
+            && !self.is_subclassable(cls)
         {
             self.distribute_over_union(left, |l| {
                 if let Some((tparams, unwrapped)) = self.unwrap_class_info_target(l, &right) {
@@ -802,9 +859,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Type::Type(f) = &t
                         && let Type::ClassType(cls) = &**f
                     {
-                        // If `C` is not final, `type[C]` may be a subclass of `C`,
-                        // making negative narrowing unsafe.
-                        let allows_negative_narrow = me.is_final(cls.class_object());
+                        // If `type[C]` may be a subclass of `C`, negative narrowing is unsafe.
+                        let allows_negative_narrow = !me.is_subclassable(cls.class_object());
                         res.push((t, allows_negative_narrow));
                     } else {
                         for t in me.as_class_info(t) {
@@ -1067,6 +1123,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         base: &Type,
         facet: &FacetKind,
         op: &AtomicNarrowOp,
+        allow_never_collapse: bool,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
@@ -1151,9 +1208,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }))
             }
-            // Only filter members of a union to avoid inferring `Never` excessively
+            // If `allow_never_collapse` is not set, we only filter members of a union
+            // to avoid inferring `Never` excessively
             AtomicNarrowOp::IsInstance(_, _) | AtomicNarrowOp::IsNotInstance(_, _)
-                if base.is_union() =>
+                if base.is_union() || allow_never_collapse =>
             {
                 let suppress_errors = self.error_swallower();
                 Some(self.distribute_over_union(base, |t| {
@@ -1691,6 +1749,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     t.clone()
                 })
             }
+            AtomicNarrowOp::PolarsColumnMutation(kind) => {
+                polars_degrade_for_mutation(ty, kind, |callee| {
+                    self.polars_series_constructor(callee)
+                })
+            }
             AtomicNarrowOp::Eq(v) => {
                 let right = self.expr_infer(v, errors);
                 if matches!(
@@ -2030,6 +2093,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &base_ty,
                                 last,
                                 &op_for_narrow,
+                                facet_subject.allow_never_collapse,
                                 range,
                                 errors,
                             ) && narrowed_ty != base_ty
@@ -2048,6 +2112,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 base_ty,
                                 last,
                                 &op_for_narrow,
+                                facet_subject.allow_never_collapse,
                                 range,
                                 errors,
                             ) && narrowed_ty != *base_ty
@@ -2130,9 +2195,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
         match ty {
             Type::ClassType(cls) => {
-                // Final classes can't have subclasses, so they are exhaustible, with the exception
-                // of Flag enums, whose members can be combined into new members via bitwise ops
-                !self.is_flag_enum(cls) && self.is_final(cls.class_object())
+                // Non-subclassable classes are exhaustible, with the exception of Flag enums,
+                // whose members can be combined into new members via bitwise ops
+                !self.is_flag_enum(cls) && !self.is_subclassable(cls.class_object())
                     // bool is effectively Literal[True] | Literal[False]
                     || cls.is_builtin("bool")
             }

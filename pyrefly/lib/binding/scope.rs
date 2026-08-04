@@ -1387,12 +1387,9 @@ impl Scope {
         }
     }
 
-    fn class_and_metadata_keys(&self) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
+    fn class_key(&self) -> Option<Idx<KeyClass>> {
         match &self.kind {
-            ScopeKind::Class(class_scope) => Some((
-                class_scope.indices.class_idx,
-                class_scope.indices.metadata_idx,
-            )),
+            ScopeKind::Class(class_scope) => Some(class_scope.indices.class_idx),
             _ => None,
         }
     }
@@ -1685,11 +1682,9 @@ impl Scopes {
             .is_some_and(|l| l.finally_depth == self.current().finally_depth)
     }
 
-    /// Are we currently in a class body. If so, return the keys for the class and its metadata.
-    pub fn current_class_and_metadata_keys(
-        &self,
-    ) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
-        self.current().class_and_metadata_keys()
+    /// Are we currently in a class body. If so, return the key for the class.
+    pub fn current_class_key(&self) -> Option<Idx<KeyClass>> {
+        self.current().class_key()
     }
 
     /// Are we anywhere inside a class? If so, return the class object idx.
@@ -1703,11 +1698,13 @@ impl Scopes {
         None
     }
 
-    /// Check if we're currently in the body of a class with `Protocol` in its base class list
+    /// Check if we're directly in the body of a class with `Protocol` in its base class list
     pub fn is_in_protocol_class(&self) -> bool {
         for scope in self.iter_rev() {
-            if let ScopeKind::Class(class_scope) = &scope.kind {
-                return class_scope.has_protocol_base;
+            match &scope.kind {
+                ScopeKind::Class(class_scope) => return class_scope.has_protocol_base,
+                ScopeKind::Function(_) | ScopeKind::Method(_) => return false,
+                _ => {}
             }
         }
         false
@@ -1830,6 +1827,11 @@ impl Scopes {
     /// Check if a name is declared as `Final` at module scope.
     pub fn is_final_at_module_scope(&self, name: &Name) -> bool {
         self.scopes.first().scope.final_names.contains(name)
+    }
+
+    /// Check if a name is declared as `Final` in the current (innermost) scope.
+    pub fn is_final_in_current_scope(&self, name: &Name) -> bool {
+        self.current().final_names.contains(name)
     }
 
     /// Look up a Final variable's string literal value in the current scope stack.

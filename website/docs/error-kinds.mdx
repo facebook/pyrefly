@@ -461,6 +461,16 @@ def two_elems() -> tuple:
 a, b, c = two_elems()
 ```
 
+## column-schema-mismatch
+
+A Polars DataFrame's data columns do not name exactly the columns declared by its `schema=`. A declared `schema` is the authoritative column set, so a data column that is missing from it or absent from the data raises `ValueError` or `KeyError` at runtime.
+
+```python
+import polars as pl
+
+pl.DataFrame({"x": [1]}, schema={"a": pl.Int64})  # data column `x` is not in the schema, and `a` has no data
+```
+
 ## column-type-mismatch
 
 A Polars DataFrame column literal has an element whose type does not fit the column's dtype. Polars infers the dtype from the first element and requires every later element to fit it, so a mismatch raises `TypeError` at runtime.
@@ -484,6 +494,15 @@ def f(): ...
 f()  # deprecated!
 ```
 
+## direct-abstract-base-instantiation
+
+Default severity: `warn`
+
+This diagnostic is raised when code instantiates a class that directly extends
+`abc.ABC` or directly uses `abc.ABCMeta`, even if the class has no abstract
+methods. Python permits such classes to be instantiated, and some libraries use
+`ABC` without prohibiting construction.
+
 ## division-by-zero
 
 Default severity: `warn`
@@ -494,6 +513,20 @@ Division, floor division, or modulo by a literal zero value. This catches cases 
 x = 10 / 0   # error: division by zero
 y = 10 // 0  # error: division by zero
 z = 10 % 0   # error: division by zero
+```
+
+## empty-body
+
+Default severity: `ignore`
+
+A function body consists only of `...` even though the function declares a
+return type that `None` is not assignable to.
+
+Empty ellipsis bodies are allowed in stub files, protocol methods, abstract
+methods, overload declarations, and `if TYPE_CHECKING` blocks.
+
+```python
+def f() -> int: ...  # error: empty body
 ```
 
 ## explicit-any
@@ -598,7 +631,7 @@ x = [1, 2, 3]
 
 Default severity: `ignore`
 
-A lambda whose parameter or return type cannot be inferred is treated as an implicit `Any`, hiding type errors in its body and at its call sites.
+A lambda parameter whose type cannot be inferred is treated as an implicit `Any`, hiding type errors in the lambda body and at its call sites.
 
 When the lambda is used in a typed context (e.g. assigned to a `Callable` or passed to a function that expects one), the parameters are inferred from that context and no error is reported.
 
@@ -639,6 +672,27 @@ def f(xs: list) -> tuple:  # implicit-any-type-argument on both `list` and `tupl
 # Fix:
 def f(xs: list[int]) -> tuple[int, ...]:
     return tuple(xs)
+```
+
+## implicit-bool
+
+Default severity: `ignore`
+
+This error is emitted when a non-`bool` value is used in a boolean context. Enable it to require
+explicit checks for values whose truthiness could conflate distinct cases, such as `None` and zero
+or `None` and an empty container. An explicit `bool(...)` conversion is allowed.
+
+```python
+def get_temperature() -> int | None:
+    return 0
+
+temperature = get_temperature()
+if not temperature:  # implicit-bool
+    raise RuntimeError("Temperature sensor unavailable")
+
+# Fix:
+if temperature is None:
+    raise RuntimeError("Temperature sensor unavailable")
 ```
 
 ## implicit-import
@@ -844,6 +898,30 @@ Mismatch = NewType("Wrong Name", int)
 UserId = NewType("UserId", int)
 if isinstance(1, UserId):
   ...
+```
+
+## invalid-cast
+
+Default severity: `ignore`
+
+This warning is raised when `typing.cast` or `typing_extensions.cast` converts
+between types that Pyrefly can prove have disjoint runtime classes. The check
+applies to class instances and objects, literals, `None`, tuples, `TypedDict`,
+and unions containing only supported types. Literals and structural containers
+are compared using their nominal runtime classes. This means that a
+`TypedDict` overlaps with `dict`, and tuple element types do not by themselves
+make two tuples disjoint. Generic arguments similarly do not make two class
+instances disjoint, so casting `list[int]` to `list[str]` does not produce this
+warning. Type variables, protocols, `Never`, callables, and other types without
+a sufficiently precise nominal runtime class are not reported. Two open nominal
+classes are not considered disjoint unless their disjoint-base representatives
+conflict, because a multiple-inheritance subclass could satisfy both.
+
+```python
+from typing import cast
+
+x: int = 1
+cast(str, x)  # Cast from `int` to `str` is invalid because the types are disjoint [invalid-cast]
 ```
 
 ## invalid-decorator
@@ -1799,6 +1877,21 @@ reveal_type(1)  # error
 assert_type(1, int)  # error
 ```
 
+## unknown-argument-type
+
+Default severity: `ignore`
+
+A call argument whose type is an implicit `Any` (unknown) is passed without the type checker being able to verify it against the parameter, hiding potential bugs. This mirrors pyright's `reportUnknownArgumentType`.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))  # the argument's type is unknown [unknown-argument-type]
+```
+
 ## unknown-attribute-type
 
 Default severity: `ignore`
@@ -1820,6 +1913,7 @@ class C:
 ## unknown-column
 
 Accessing a DataFrame column that does not exist in the inferred schema.
+
 
 ## unknown-name
 
@@ -1988,6 +2082,21 @@ This error occurs when attempting to `del` something that cannot be deleted.
 
 Besides obvious things like built-in values (you can't `del True`!), some object attributes are protected from deletion.
 For example, read-only and required `TypedDict` fields cannot be deleted.
+
+## unsupported-dynamic-base
+
+Default severity: `ignore`
+
+This error is raised for dynamic class definitions created with `type()` when
+the base classes are not statically known class literals.
+
+```python
+class Base: ...
+
+def factory(base: type[Base]) -> type:
+    return type("Dynamic", (base,), {})
+    # Base class `type[Base]` in `type()` call is not a statically known class [unsupported-dynamic-base]
+```
 
 ## unsupported-operation
 

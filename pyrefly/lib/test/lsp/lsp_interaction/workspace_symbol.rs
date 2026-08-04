@@ -110,6 +110,61 @@ fn test_workspace_symbol_prefers_non_init_result() {
     interaction.shutdown().unwrap();
 }
 
+// Methods live inside a `ClassDef`, so they are not module exports and never
+// appear via the export-table path that backs `workspace/symbol`. D90689263
+// only relabeled methods in `textDocument/documentSymbol` (the per-file
+// outline); it did not touch `workspace/symbol` (Cmd+T), which is a separate
+// implementation, so methods are still missing there.
+//
+// TODO(pyrefly): unify workspace symbols with document symbols by caching
+// per-module document symbols (a memoized artifact on the `Solutions` step,
+// gated by `Require::keep_index`, mirroring the find-refs `Index`) and scanning
+// them in `search_exports`, filtered to first-party modules via
+// `should_skip_module_for_indexing`. This mirrors ty's `symbols_for_file`
+// (a salsa-tracked query shared by both providers). Ignored until then.
+#[ignore = "workspace/symbol does not yet include class methods; see TODO above"]
+#[test]
+fn test_workspace_symbol_includes_methods_of_open_files() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("workspace_symbol_methods.py");
+
+    let uri = Url::from_file_path(root_path.join("workspace_symbol_methods.py")).unwrap();
+    interaction
+        .client
+        .send_workspace_symbol("workspace_symbol_method_deterministic_name")
+        .expect_response_with(|result| {
+            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                panic!("Unexpected workspace symbol response: {result:?}");
+            };
+            let method = symbols
+                .iter()
+                .find(|s| s.name == "workspace_symbol_method_deterministic_name")
+                .expect("expected the method to appear in workspace symbols");
+            assert_eq!(method.kind, lsp_types::SymbolKind::METHOD);
+            assert_eq!(method.location.uri, uri);
+            assert_eq!(
+                method.container_name.as_deref(),
+                Some("WorkspaceSymbolMethodHost")
+            );
+            true
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
 // Regression test for https://github.com/facebook/pyrefly/issues/3041
 #[test]
 fn test_workspace_symbol_multibyte_no_panic() {

@@ -59,6 +59,8 @@ use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::BindingDjangoRelationClass;
+use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
@@ -69,7 +71,9 @@ use crate::binding::binding::ImportBinding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecoratedFunction;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
@@ -99,6 +103,7 @@ use crate::binding::scope::UnusedImport;
 use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
+use crate::binding::scope::is_constant_name;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
 use crate::config::error_kind::ErrorKind;
@@ -288,9 +293,11 @@ pub struct BindingsBuilder<'a> {
     /// In CLI batch-check mode this is false to avoid wasted work.
     pub analyze_unannotated_for_ide: bool,
     pub infer_return_types: InferReturnTypes,
+    pub treat_all_caps_as_final: bool,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
+    django_relation_classes: Vec<BindingDjangoRelationClass>,
     semantic_checker: SemanticSyntaxChecker,
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
     pytest_info: Option<crate::binding::pytest::PytestBindingInfo>,
@@ -310,6 +317,7 @@ pub struct BindingsBuilder<'a> {
     /// set by `stmts()` and consumed by namedtuple synthesis in `stmt()`.
     pub adjacent_namedtuple_defaults: Option<Vec<Expr>>,
     pub promote_ranges: SmallSet<TextRange>,
+    pub type_checking_depth: usize,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -554,7 +562,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for lambda parameter `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -570,7 +578,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for parameter `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -589,7 +597,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for return type `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -610,6 +618,7 @@ impl Bindings {
         check_unannotated_defs: bool,
         analyze_unannotated_for_ide: bool,
         infer_return_types: InferReturnTypes,
+        treat_all_caps_as_final: bool,
     ) -> Self {
         let pytest_info = PytestBindingInfo::from_module(&x);
         // Compute module ranges from the AST before consuming it. These are
@@ -632,9 +641,11 @@ impl Bindings {
             check_unannotated_defs,
             analyze_unannotated_for_ide,
             infer_return_types,
+            treat_all_caps_as_final,
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
+            django_relation_classes: Vec::new(),
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
             pytest_info,
@@ -645,6 +656,7 @@ impl Bindings {
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
+            type_checking_depth: 0,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -740,6 +752,12 @@ impl Bindings {
             }
         }
         let module_deletes = scope_trace.module_deletes().clone();
+        builder.table.insert(
+            KeyDjangoRelations,
+            BindingDjangoRelations {
+                classes: builder.django_relation_classes.into_boxed_slice(),
+            },
+        );
         Self(Arc::new(BindingsInner {
             module_info,
             sys_info: builder.sys_info,
@@ -1126,6 +1144,20 @@ impl<'a> BindingsBuilder<'a> {
             let idx = self.idx_for_promise(Key::Import(Box::new((name.clone(), range))));
             self.insert_implicit_builtin_binding(idx, module, &name);
             self.bind_name(&name, idx, FlowStyle::Import(module, name.clone()));
+        }
+    }
+
+    pub fn record_django_relation_class(
+        &mut self,
+        class_idx: Idx<KeyClass>,
+        fields: Vec<Idx<KeyClassField>>,
+    ) {
+        if !fields.is_empty() {
+            self.django_relation_classes
+                .push(BindingDjangoRelationClass {
+                    class_idx,
+                    fields: fields.into_boxed_slice(),
+                });
         }
     }
 
@@ -1913,8 +1945,14 @@ impl<'a> BindingsBuilder<'a> {
         if name.is_empty() {
             return None;
         }
-        self.check_for_type_alias_redefinition(name, idx);
-        self.check_for_imported_final_reassignment(name, idx);
+        // Suppress the ALL_CAPS check when a more specific check already reported
+        // on this reassignment, to avoid emitting two overlapping errors. Both
+        // checks are always run so their own diagnostics are unaffected.
+        let type_alias_reported = self.check_for_type_alias_redefinition(name, idx);
+        let imported_final_reported = self.check_for_imported_final_reassignment(name, idx);
+        if !type_alias_reported && !imported_final_reported {
+            self.check_for_all_caps_final_reassignment(name, idx);
+        }
         let name = Hashed::new(name);
         let write_info = self
             .scopes
@@ -1932,32 +1970,38 @@ impl<'a> BindingsBuilder<'a> {
         write_info.annotation
     }
 
-    fn check_for_type_alias_redefinition(&self, name: &Name, idx: Idx<Key>) {
-        let prev_idx = self.scopes.current_flow_idx(name);
-        if let Some(prev_idx) = prev_idx {
-            if matches!(
-                self.idx_to_binding(prev_idx),
-                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
-            ) {
-                self.error(
-                    self.idx_to_key(idx).range(),
-                    ErrorKind::Redefinition,
-                    format!("Cannot redefine existing type alias `{name}`",),
-                )
-            } else if matches!(
-                self.idx_to_binding(idx),
-                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
-            ) {
-                self.error(
-                    self.idx_to_key(idx).range(),
-                    ErrorKind::Redefinition,
-                    format!("Cannot redefine existing name `{name}` as a type alias",),
-                );
-            }
+    /// Returns `true` if an error was reported for this reassignment.
+    fn check_for_type_alias_redefinition(&self, name: &Name, idx: Idx<Key>) -> bool {
+        let Some(prev_idx) = self.scopes.current_flow_idx(name) else {
+            return false;
+        };
+        if matches!(
+            self.idx_to_binding(prev_idx),
+            Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
+        ) {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorKind::Redefinition,
+                format!("Cannot redefine existing type alias `{name}`"),
+            );
+            return true;
         }
+        if matches!(
+            self.idx_to_binding(idx),
+            Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
+        ) {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorKind::Redefinition,
+                format!("Cannot redefine existing name `{name}` as a type alias"),
+            );
+            return true;
+        }
+        false
     }
 
-    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+    /// Returns `true` if an error was reported for this reassignment.
+    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) -> bool {
         let prev_idx = self.scopes.current_flow_idx(name);
         if let Some(prev_idx) = prev_idx
             && let Some(Binding::Import(prev)) = self.idx_to_binding(prev_idx)
@@ -1969,7 +2013,7 @@ impl<'a> BindingsBuilder<'a> {
                 && cur.module == prev.module
                 && cur.name == prev.name
             {
-                return;
+                return false;
             }
             let prev_origin = self.lookup.export_origin(prev.module, &prev.name);
             if prev_origin.is_final {
@@ -1978,15 +2022,70 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(Binding::Import(cur)) = self.idx_to_binding(idx)
                     && self.lookup.export_origin(cur.module, &cur.name).origin == prev_origin.origin
                 {
-                    return;
+                    return false;
                 }
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorKind::BadAssignment,
                     format!("Cannot assign to `{name}` because it is imported as final"),
                 );
+                return true;
             }
         }
+        false
+    }
+
+    fn check_for_all_caps_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+        if !self.treat_all_caps_as_final
+            || !is_constant_name(name)
+            || self.scopes.is_final_in_current_scope(name)
+        {
+            return;
+        }
+        // Only bindings that count as a value reassignment should fire. Imports
+        // are included, so re-imports of a constant fire; type parameters
+        // (`class C[T, T]`) and function/class definitions (including overload
+        // chains) are not. Those non-assignment bindings are inserted before
+        // `bind_name`, so they are visible here and skipped. A plain assignment's
+        // `NameAssign` is inserted *after* `bind_name` (it needs the annotation
+        // this returns), so it shows up as `None` and correctly falls through.
+        if let Some(binding) = self.idx_to_binding(idx)
+            && !matches!(
+                binding,
+                Binding::NameAssign(..)
+                    | Binding::MultiTargetAssign(..)
+                    | Binding::UnpackedValue(..)
+                    | Binding::AugAssign(..)
+                    | Binding::AnnotatedType(..)
+                    | Binding::IterableValueLoop(..)
+                    | Binding::ContextValue(..)
+                    | Binding::ExceptionHandler(..)
+                    | Binding::Import(..)
+            )
+        {
+            return;
+        }
+        // A prior *initialized* value must already exist for this to be a
+        // reassignment. This runs before `define_in_current_flow`, so
+        // `current_flow_style` reflects the entry from before this binding. A
+        // bare annotation (`FOO: int`) leaves an uninitialized entry whose first
+        // real assignment is not a reassignment.
+        match self.scopes.current_flow_style(name) {
+            None
+            | Some(
+                FlowStyle::Uninitialized
+                | FlowStyle::PossiblyUninitialized
+                | FlowStyle::MaybeInitialized(_),
+            ) => return,
+            Some(_) => {}
+        }
+        self.error(
+            self.idx_to_key(idx).range(),
+            ErrorKind::BadAssignment,
+            format!(
+                "Cannot assign to variable `{name}` because it is marked final due to `treat-all-caps-as-final`"
+            ),
+        );
     }
 
     pub fn type_params(&mut self, x: &mut TypeParams) -> SmallSet<Name> {

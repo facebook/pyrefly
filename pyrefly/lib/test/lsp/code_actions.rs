@@ -3723,13 +3723,13 @@ fn convert_star_import_shadowed_name() {
 # CONVERT-START
 from foo import *
 # CONVERT-END
-A = 42
-print(A)
-print(B)
+a = 42
+print(a)
+print(b)
 "#;
     let code_foo = r#"
-A = 1
-B = 2
+a = 1
+b = 2
 "#;
     let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
     let (module_info, actions, titles) = compute_convert_star_import_actions(
@@ -3739,14 +3739,14 @@ B = 2
     );
     assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
     let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
-    // Only B should be imported since A is shadowed by a local assignment.
+    // Only b should be imported since a is shadowed by a local assignment.
     let expected = r#"
 # CONVERT-START
-from foo import B
+from foo import b
 # CONVERT-END
-A = 42
-print(A)
-print(B)
+a = 42
+print(a)
+print(b)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4991,6 +4991,83 @@ def test_one(answer: int, user: str):
     print(answer, user)
 "#;
     assert_eq!(expected.trim(), updated_all.trim());
+}
+
+#[test]
+fn pytest_fixture_dataframe_annotation_uses_plain_class() {
+    // The quick fix emits the plain class on both the fixture return and the test parameter.
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "polars.dataframe.frame",
+        "polars/dataframe/frame.pyi",
+        "class DataFrame:\n    def __init__(self, data: object = None) -> None: ...\n",
+    );
+    env.add(
+        "polars",
+        "from polars.dataframe.frame import DataFrame as DataFrame\n",
+    );
+    let code = r#"
+import pytest  # type: ignore
+import polars as pl
+
+@pytest.fixture
+def frame():
+    return pl.DataFrame({"a": [1]})
+
+def test_uses_frame(frame):
+    print(frame)
+"#;
+    env.add("main", code);
+    let (state, handle_for_module) = env
+        .with_default_require_level(Require::Everything)
+        .to_state();
+    let handle = handle_for_module("main");
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(&handle).unwrap();
+
+    let fixture_cursor = TextSize::try_from(code.find("def frame").unwrap()).unwrap();
+    let fixture_actions = transaction
+        .pytest_fixture_type_annotation_code_actions(
+            &handle,
+            TextRange::new(fixture_cursor, fixture_cursor),
+            ImportFormat::Absolute,
+        )
+        .unwrap_or_default();
+    let return_action = fixture_actions
+        .iter()
+        .find(|action| action.title == "Add pytest fixture type annotation")
+        .expect("missing fixture return annotation action");
+    let updated_return = apply_refactor_edits_for_module(&module_info, &return_action.edits);
+    assert!(
+        updated_return.contains("def frame() -> DataFrame:"),
+        "expected a plain class return annotation, got:\n{updated_return}"
+    );
+    assert!(
+        !updated_return.contains("DataFrame["),
+        "the schema display form is not legal annotation syntax, got:\n{updated_return}"
+    );
+
+    let param_cursor = TextSize::try_from(code.find("frame):").unwrap()).unwrap();
+    let param_actions = transaction
+        .pytest_fixture_type_annotation_code_actions(
+            &handle,
+            TextRange::new(param_cursor, param_cursor),
+            ImportFormat::Absolute,
+        )
+        .unwrap_or_default();
+    let param_action = param_actions
+        .iter()
+        .find(|action| action.title == "Add pytest fixture parameter type annotation")
+        .expect("missing fixture parameter annotation action");
+    let updated_param = apply_refactor_edits_for_module(&module_info, &param_action.edits);
+    assert!(
+        updated_param.contains("def test_uses_frame(frame: DataFrame):"),
+        "expected a plain class parameter annotation, got:\n{updated_param}"
+    );
+    assert!(
+        !updated_param.contains("DataFrame["),
+        "the schema display form is not legal annotation syntax, got:\n{updated_param}"
+    );
 }
 
 /// Returns the edits of the "Add `@override` decorator" quick fix for the method

@@ -11,7 +11,9 @@
 //! Each case builds a synthetic Python snippet that stresses one part of the
 //! checker (enum member resolution, exhaustiveness, protocol structural matching,
 //! narrowing, gradual-typing calls, type-variable joins, inferred typed dicts,
-//! overload resolution) and times a single in-memory check of it. `SHARED_STATE`
+//! overload resolution, nested generic construction, and the Polars/pandas
+//! schema-tracking dispatch chain run against non-DataFrame receivers) and times a
+//! single in-memory check of it. `SHARED_STATE`
 //! pre-initializes the stdlib once, so only the snippet's check is measured, and
 //! each case asserts its expected error count up front so a scenario that stops
 //! exercising the intended path fails loudly instead of silently measuring
@@ -25,7 +27,6 @@
 //! Run with buck: `buck run @fbcode//mode/opt fbcode//pyrefly/pyrefly:micro_bench -- --bench`
 
 use std::fmt::Write as _;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -39,6 +40,8 @@ use pyrefly::state::require::Require;
 use pyrefly::state::state::State;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::config::ConfigFile;
+use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_config::error_kind::Severity;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -47,21 +50,35 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::timer::set_timing_enabled;
 
 const BENCH_FILE: &str = "bench.py";
 
 /// Single-threaded state with stdlib pre-initialized.
 static SHARED_STATE: LazyLock<State> = LazyLock::new(|| {
+    // Disable the type checker's profiling timers: each `Instant::now()` is a
+    // `clock_gettime` syscall under instrumentation and the benchmark doesn't need them.
+    set_timing_enabled(false);
     let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::default());
     let config = {
         let mut c = ConfigFile::default();
         c.python_environment.python_version = Some(PythonVersion::default());
         c.python_environment.python_platform = Some(PythonPlatform::default());
+        // Skip interpreter discovery: `configure()` otherwise spawns `python3` to
+        // probe site-packages. The snippets only use stdlib from bundled typeshed.
+        c.interpreters.skip_interpreter_query = true;
+        c.python_environment.site_package_path = Some(Vec::new());
+        c.root
+            .errors
+            .get_or_insert_default()
+            .set_error_severity(ErrorKind::ImplicitAnyLambda, Severity::Error);
         c.configure();
         ArcId::new(c)
     };
     let finder = ConfigFinder::new_constant(config);
-    let state = State::new(finder, ThreadCount::NumThreads(NonZeroUsize::MIN));
+    // Inline (no rayon pool): a pooled run would block this thread on a `futex`
+    // while a worker does the check. Inline keeps the whole check on this thread.
+    let state = State::new(finder, ThreadCount::Inline);
     // Force stdlib init by running an empty module.
     let h = Handle::new(
         ModuleName::from_str("_bench_init"),
@@ -258,6 +275,72 @@ fn overload_resolution(overloads: usize, calls: usize) -> String {
     src
 }
 
+/// Each layer pushes `Base[object]` inward. Treating the leaf's soft diagnostic as
+/// a failed contextual attempt makes every layer retry, producing exponential work.
+fn nested_generic_constructor_soft_error(depth: usize) -> String {
+    let mut expression = "Leaf(lambda x: 0)".to_owned();
+    for _ in 0..depth {
+        expression = format!("Box({expression})");
+    }
+    format!(
+        r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T", covariant=True)
+
+class Base(Generic[T]): ...
+
+class Box(Base[T], Generic[T]):
+    def __init__(self, value: Base[T]) -> None: ...
+
+class Leaf(Base[T], Generic[T]):
+    def __init__(self, value: T) -> None: ...
+
+result: Base[object] = {expression}
+"#
+    )
+}
+
+/// `count` reassignments through a user method returning its own class. Every call walks the Polars
+/// dispatch chain but falls through on a `ClassType` receiver, the primary gate that schema tracking
+/// costs ordinary method calls nothing.
+fn user_method_burst(count: usize) -> String {
+    let calls = joined(count, "\n", |_| "c = c.m()".to_owned());
+    format!("class C:\n    def m(self) -> \"C\":\n        return self\nc = C()\n{calls}")
+}
+
+/// `count` reassignments through builtin `str` methods, exercising the same dispatch chain on a
+/// builtin receiver with no errors.
+fn builtin_method_burst(count: usize) -> String {
+    const METHODS: [&str; 4] = ["upper", "lower", "strip", "title"];
+    let calls = joined(count, "\n", |i| {
+        format!("s = s.{}()", METHODS[i % METHODS.len()])
+    });
+    format!("s = \"x\"\n{calls}")
+}
+
+/// A class whose method names collide with Polars DataFrame methods, called `count` times. The
+/// receiver is a `ClassType`, never a `DataFrame`, so every Polars guard returns `None`.
+fn method_name_collision_burst(count: usize) -> String {
+    let methods = joined(4, "\n", |i| {
+        let name = ["select", "filter", "agg", "group_by"][i];
+        format!("    def {name}(self, x: str) -> \"Fake\": return self")
+    });
+    let calls = joined(count, "\n", |i| match i % 3 {
+        0 => "f = f.select(\"a\")".to_owned(),
+        1 => "f = f.filter(\"a\")".to_owned(),
+        _ => "f = f.group_by(\"a\").agg(\"b\")".to_owned(),
+    });
+    format!("class Fake:\n{methods}\nf = Fake()\n{calls}")
+}
+
+/// `count` instantiations of a trivial class, exercising the constructor-call dispatch in `call.rs`
+/// with no errors.
+fn constructor_burst(count: usize) -> String {
+    let calls = joined(count, "\n", |_| "k = K()".to_owned());
+    format!("class K: ...\n{calls}")
+}
+
 /// Type-check `source` once to assert it produces `expected_errors`, then
 /// register a criterion benchmark that repeats the check. The up-front assertion
 /// guards against a scenario silently drifting to a different error count (and
@@ -324,6 +407,36 @@ fn overloads(c: &mut Criterion) {
     );
 }
 
+fn nested_generic_constructor(c: &mut Criterion) {
+    measure(
+        c,
+        "nested_generic_constructor_soft_error_12",
+        nested_generic_constructor_soft_error(12),
+        1,
+    );
+}
+
+fn user_method_dispatch(c: &mut Criterion) {
+    measure(c, "user_method_burst_256", user_method_burst(256), 0);
+}
+
+fn builtin_method_dispatch(c: &mut Criterion) {
+    measure(c, "builtin_method_burst_256", builtin_method_burst(256), 0);
+}
+
+fn method_name_collision(c: &mut Criterion) {
+    measure(
+        c,
+        "method_name_collision_burst_256",
+        method_name_collision_burst(256),
+        0,
+    );
+}
+
+fn constructor_dispatch(c: &mut Criterion) {
+    measure(c, "constructor_burst_256", constructor_burst(256), 0);
+}
+
 criterion_group!(
     benches,
     smoke,
@@ -336,5 +449,10 @@ criterion_group!(
     typevar_mapping,
     anon_typed_dict,
     overloads,
+    nested_generic_constructor,
+    user_method_dispatch,
+    builtin_method_dispatch,
+    method_name_collision,
+    constructor_dispatch,
 );
 criterion_main!(benches);

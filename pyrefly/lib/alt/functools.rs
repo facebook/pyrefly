@@ -113,7 +113,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             callee_range,
-                            ErrorKind::BadInstantiation,
+                            ErrorKind::DirectAbstractBaseInstantiation,
                             format!(
                                 "Cannot instantiate `{}` because it directly extends `ABC` or uses `ABCMeta`",
                                 cls.name()

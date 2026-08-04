@@ -7,13 +7,17 @@
 
 use std::path::PathBuf;
 
+use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::type_var::Restriction;
 use ruff_python_ast::name::Name;
 
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTParams;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 use crate::test::class_keywords::get_class_metadata;
 use crate::test::util::TestEnv;
 use crate::test::util::get_class;
@@ -190,6 +194,150 @@ class Tensor[Shape: IntTuple]:
     );
     env
 }
+
+#[test]
+fn test_type_shape_dsl_function_declarations() {
+    let mut env = shaped_array_env();
+    env.add(
+        "main",
+        r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def int_identity(x: Int) -> Int:
+    return x
+
+@type_shape_dsl_function
+def shape_identity(shape: IntTuple) -> IntTuple:
+    return shape
+"#,
+    );
+    let (state, handle) = env.to_state();
+    let main = handle("main");
+    let solutions = state
+        .transaction()
+        .get_solutions(&main)
+        .expect("module should solve");
+    for (name, expected_domain) in [
+        ("int_identity", TypeShapeDslDomain::Int),
+        ("shape_identity", TypeShapeDslDomain::IntTuple),
+    ] {
+        let ty = &**solutions.get(&KeyExport(Name::new(name)));
+        assert!(
+            matches!(ty, Type::Function(function)
+                if matches!(&function.metadata.kind,
+                    FunctionKind::TypeShapeDsl(_, domain, _) if *domain == expected_domain)),
+            "expected `{name}` to retain type-level DSL metadata, got `{ty}`"
+        );
+        assert_eq!(attribute_symbol_kind_from_type(ty), SymbolKind::Function);
+    }
+}
+
+#[test]
+fn test_invalid_type_shape_dsl_function_recovers_as_def() {
+    let mut env = shaped_array_env();
+    env.add(
+        "main",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions.dsl import shape_dsl_function
+
+@type_shape_dsl_function
+def invalid(x: Int) -> Int:
+    return x + 1
+
+@type_shape_dsl_function
+def invalid_domain(x: str) -> str:
+    return x
+
+@shape_dsl_function
+@type_shape_dsl_function
+def conflicting(x: Int) -> Int:
+    return x
+"#,
+    );
+    let (state, handle) = env.to_state();
+    let main = handle("main");
+    let solutions = state
+        .transaction()
+        .get_solutions(&main)
+        .expect("module should solve");
+    for name in ["invalid", "invalid_domain", "conflicting"] {
+        let ty = &**solutions.get(&KeyExport(Name::new(name)));
+        assert!(
+            matches!(ty, Type::Function(function)
+                if matches!(&function.metadata.kind, FunctionKind::Def(_))),
+            "expected invalid DSL declaration `{name}` to recover as an ordinary function, got `{ty}`"
+        );
+    }
+}
+
+testcase!(
+    test_type_shape_dsl_function_invalid_syntax,
+    shaped_array_env(),
+    r#"
+from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions.dsl import shape_dsl_function
+
+@type_shape_dsl_function
+async def asynchronous(x: Int) -> Int:  # E: @type_shape_dsl_function does not support async functions
+    return x
+
+@type_shape_dsl_function
+def generic[T](x: Int) -> Int:  # E: @type_shape_dsl_function does not support type parameters
+    return x
+
+@type_shape_dsl_function
+def two_parameters(x: Int, y: Int) -> Int:  # E: @type_shape_dsl_function requires exactly one ordinary positional parameter
+    return x
+
+@type_shape_dsl_function
+def default(x: Int = 1) -> Int:  # E: @type_shape_dsl_function does not support parameter defaults
+    return x
+
+@type_shape_dsl_function
+def expression(x: Int) -> Int:
+    return x + 1  # E: @type_shape_dsl_function return value must be the bare parameter name
+
+@type_shape_dsl_function
+def wrong_name(x: Int) -> Int:
+    return other  # E: @type_shape_dsl_function returned name must match the parameter name  # E: Could not find name `other`
+
+def outer() -> None:
+    @type_shape_dsl_function
+    def nested(x: Int) -> Int:  # E: @type_shape_dsl_function must decorate a top-level function
+        return x
+
+@shape_dsl_function
+@type_shape_dsl_function
+def conflicting(x: Int) -> Int:  # E: `@shape_dsl_function` and `@type_shape_dsl_function` cannot be combined
+    return x
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_function_invalid_annotations,
+    shaped_array_env(),
+    r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def missing_parameter(x) -> Int:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`
+    return x
+
+@type_shape_dsl_function
+def missing_return(x: Int):  # E: `@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`
+    return x
+
+@type_shape_dsl_function
+def wrong_type(x: str) -> str:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`
+    return x
+
+@type_shape_dsl_function
+def cross_domain(x: Int) -> IntTuple:  # E: `@type_shape_dsl_function` parameter and return annotations must use the same domain
+    return x  # E: Returned type `Int[int]` is not assignable to declared return type `IntTuple`
+"#,
+);
 
 fn assert_shaped_array_shape(shape: &Quantified, name: &str, kind: QuantifiedKind) {
     assert_eq!(shape.name().as_str(), name);
@@ -781,6 +929,79 @@ def f(x: Array[[2, 3], int]) -> None:
     y = x.clone()
     reveal_type(y)  # E: revealed type: Array[[2, 3], int]
     reveal_type(y[0])  # E: revealed type: Array[[3], int]
+"#,
+);
+
+testcase!(
+    test_type_level_dsl_broadcast_return_boundary,
+    shaped_array_env_with_shaped_torch(),
+    r#"
+import shape_extensions
+import shape_extensions as shapes
+from shape_extensions import IntTuple, broadcast
+from torch import Tensor
+from typing import overload, reveal_type
+
+def add_qualified[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[shape_extensions.broadcast(S0, S1)]: ...
+def add_imported[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[broadcast(S0, S1)]: ...
+def add_alias[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[shapes.broadcast(S0, S1)]: ...
+def add_same[S: IntTuple](x: Tensor[S], y: Tensor[S]) -> Tensor[broadcast(S, S)]: ...
+def add_nested[S0: IntTuple, S1: IntTuple, S2: IntTuple](
+    x: Tensor[S0],
+    y: Tensor[S1],
+    z: Tensor[S2],
+) -> Tensor[broadcast(broadcast(S0, S1), S2)]: ...
+def add_repeated[S0: IntTuple, S1: IntTuple](
+    x: Tensor[S0],
+    y: Tensor[S1],
+) -> Tensor[broadcast(broadcast(S0, S1), broadcast(S0, S1))]: ...
+
+@overload
+def add_overloaded(x: Tensor[[2, 3]], y: Tensor[[1, 3]]) -> Tensor[broadcast(IntTuple[2, 3], IntTuple[1, 3])]: ...
+@overload
+def add_overloaded(x: Tensor[[2, 3]], y: Tensor[[4, 3]]) -> Tensor[broadcast(IntTuple[2, 3], IntTuple[4, 3])]: ...
+def add_overloaded(x: Tensor, y: Tensor) -> Tensor: ...
+
+def add_expanded(
+    args: tuple[Tensor[[2, 3]], Tensor[[1, 3]]]
+    | tuple[Tensor[[2, 3]], Tensor[[4, 3]]],
+) -> None:
+    add_overloaded(*args)  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
+
+def bad_domain[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(int, S0)]: ...  # E: Expected an `IntTuple` argument to `broadcast`
+def bad_arity[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(S0)]: ...  # E: Expected 2 arguments for `broadcast`, got 1
+def bad_keyword[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(S0, right=S0)]: ...  # E: `broadcast` does not accept keyword arguments
+
+def test_same[S: IntTuple](x: Tensor[S]) -> None:
+    reveal_type(add_same(x, x))  # E: revealed type: Tensor[S]
+
+def test(x: Tensor[[2, 3]], y: Tensor[[1, 3]], z: Tensor[[2, 1]], bad: Tensor[[4, 3]], unknown: Tensor[IntTuple]) -> None:
+    reveal_type(add_qualified(x, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(add_imported(x, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(add_alias(x, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(add_nested(x, z, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(add_imported(x, unknown))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    add_imported(x, bad)  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
+    add_nested(x, bad, y)  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
+    add_repeated(x, bad)  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
+"#,
+);
+
+testcase!(
+    test_type_level_dsl_broadcast_rejected_outside_return_annotation,
+    shaped_array_env_with_shaped_torch(),
+    r#"
+from shape_extensions import IntTuple, broadcast
+from torch import Tensor
+
+BadAlias = Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E:
+
+bad_global: Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E:
+
+class C:
+    bad_attr: Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E:
+
+def bad_parameter[S0: IntTuple](x: Tensor[broadcast(S0, S0)]) -> None: ...  # E:
 "#,
 );
 
@@ -2037,12 +2258,13 @@ testcase!(
     shaped_array_env(),
     r#"
 from typing import Any, reveal_type
-from shape_extensions import shaped_array
+from shape_extensions import broadcast, IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Array[Shape, DType]:
+class Array[Shape: IntTuple, DType]:
     shape: Shape
     def dtype(self) -> DType: ...
+    def __add__[OtherShape: IntTuple](self, other: Array[OtherShape, DType]) -> Array[broadcast(Shape, OtherShape), DType]: ...
 
 def f(
     x: Array[[2, 3], int],
@@ -2070,11 +2292,12 @@ testcase!(
     shaped_array_env(),
     r#"
 from typing import Literal, reveal_type
-from shape_extensions import Int, shaped_array
+from shape_extensions import broadcast, Int, IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Array[Shape, DType]:
+class Array[Shape: IntTuple, DType]:
     shape: Shape
+    def __add__[OtherShape: IntTuple](self, other: Array[OtherShape, DType]) -> Array[broadcast(Shape, OtherShape), DType]: ...
 
 def f(
     known: Array[[5, 5], int],
@@ -2658,6 +2881,64 @@ def f(s: Int, s3: Int[3]) -> None:
     takes_size_bound(s3)
     takes_size(id_size(s3))
     takes_size3(id_size(s3))
+"#,
+);
+
+testcase!(
+    test_tensor_shapes_recanonicalizes_expanded_dimension_roots,
+    shaped_array_env(),
+    r#"
+from collections.abc import Callable
+from shape_extensions import Int, IntVar
+
+def take_product[X: IntVar, Y: IntVar](
+    left: Int[X],
+    right: Int[Y],
+    value: Int[X * Y],
+) -> None: ...
+
+def make_product[X: IntVar, Y: IntVar](left: Int[X], right: Int[Y]) -> Int[X * Y]: ...
+
+def f[A: IntVar, B: IntVar, C: IntVar, D: IntVar](
+    left: Int[A + B],
+    right: Int[C + D],
+    expanded: Int[A * C + A * D + B * C + B * D],
+) -> None:
+    # The want root needs another pass after X and Y expand to sums.
+    take_product(left, right, expanded)
+    # Callable parameter matching solves X and Y before comparing the return type.
+    check: Callable[
+        [Int[A + B], Int[C + D]],
+        Int[A * C + A * D + B * C + B * D],
+    ] = make_product
+"#,
+);
+
+testcase!(
+    test_tensor_shapes_recanonicalizes_mixed_dimension_roots,
+    shaped_array_env(),
+    r#"
+from collections.abc import Callable
+from shape_extensions import Int, IntVar
+
+class Box[N: IntVar]:
+    def get(self) -> Int[N]: ...
+
+def take_box[X: IntVar, Y: IntVar](
+    left: Int[X],
+    right: Int[Y],
+    value: Box[X * Y],
+) -> None: ...
+
+def make_box[X: IntVar, Y: IntVar](left: Int[X], right: Int[Y]) -> Box[X * Y]: ...
+
+def f[A: IntVar, B: IntVar, C: IntVar, D: IntVar, Q: IntVar](
+    left: Int[A + B],
+    right: Int[C + D],
+    box: Box[Q],
+) -> None:
+    quantified_want: Callable[[Int[A + B], Int[C + D]], Box[Q]] = make_box  # E: Shape dimension mismatch: expected Int[Q], got Int[((((A * C) + (A * D)) + (B * C)) + (B * D))]
+    take_box(left, right, box)  # E: Shape dimension mismatch: expected Int[((((A * C) + (A * D)) + (B * C)) + (B * D))], got Int[Q]
 "#,
 );
 

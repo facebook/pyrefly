@@ -120,6 +120,7 @@ pub struct Stdlib {
     method_type: StdlibResult<ClassType>,
     module_type: StdlibResult<ClassType>,
     enum_meta: StdlibResult<ClassType>,
+    protocol_meta: StdlibResult<ClassType>,
     enum_flag: StdlibResult<ClassType>,
     enum_class: StdlibResult<ClassType>,
     /// A fallback class that contains attributes that all NamedTuple subclasses share. Note that
@@ -275,6 +276,7 @@ impl Stdlib {
             module_type: lookup_concrete(types, "ModuleType"),
             mapping: lookup_generic(typing, "Mapping", 2),
             enum_meta: lookup_concrete(enum_, "EnumMeta"),
+            protocol_meta: lookup_concrete(typing, "_ProtocolMeta"),
             enum_flag: lookup_concrete(enum_, "Flag"),
             enum_class: lookup_concrete(enum_, "Enum"),
             named_tuple_fallback: lookup_concrete(type_checker_internals, "NamedTupleFallback"),
@@ -338,6 +340,10 @@ impl Stdlib {
 
     pub fn enum_meta(&self) -> &ClassType {
         Self::primitive(&self.enum_meta)
+    }
+
+    pub fn protocol_meta(&self) -> &ClassType {
+        Self::primitive(&self.protocol_meta)
     }
 
     pub fn enum_flag(&self) -> &ClassType {

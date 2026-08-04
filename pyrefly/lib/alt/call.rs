@@ -8,10 +8,10 @@
 use std::iter;
 use std::sync::Arc;
 
+use itertools::Itertools;
 use pyrefly_python::dunder;
-use pyrefly_types::data_frame::DataFrameKind;
-use pyrefly_types::data_frame::DataFrameSchema;
-use pyrefly_types::data_frame::SchemaCompleteness;
+use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_types::callable::BodyKind;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::quantified::Quantified;
@@ -40,13 +40,12 @@ use crate::alt::attr::NoAccessReason;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
+use crate::alt::callable::ReturnTypeResolutionError;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::class::dataclass::ReplaceKind;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::nn_module_specials::is_nn_sequential;
-use crate::alt::polars_specials::is_pandas_dataframe;
-use crate::alt::polars_specials::is_polars_dataframe;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
 use crate::binding::binding::Key;
@@ -526,6 +525,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::DataFrame(schema) => self
                 .as_call_target_impl(schema.underlying_type(), quantified)
                 .with_error_type(|_| Type::DataFrame(schema)),
+            // A Series delegates call dispatch to its underlying instance type.
+            Type::Series(schema) => self
+                .as_call_target_impl(schema.underlying_type(), quantified)
+                .with_error_type(|_| Type::Series(schema)),
             Type::SelfType(cls) => {
                 // Ignoring `quantified` is okay here because Self is not a valid typevar bound.
                 match self.self_as_dunder_call(&cls) {
@@ -857,6 +860,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub(crate) fn add_return_type_resolution_errors(
+        &self,
+        errors_to_add: impl IntoIterator<Item = ReturnTypeResolutionError>,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) {
+        for error in errors_to_add.into_iter().unique() {
+            match error {
+                ReturnTypeResolutionError::TypeLevelDsl(error) => self.error_with_context(
+                    errors,
+                    range,
+                    ErrorKind::UnsupportedOperation,
+                    format!("Cannot evaluate type-level shape DSL call: {error}"),
+                    context,
+                ),
+            };
+        }
+    }
+
     /// Handles union hint decomposition for class and TypedDict construction.
     /// When the hint is a union, tries each member independently and keeps only
     /// successful constructions, preferring those assignable to their hint member.
@@ -877,7 +900,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut ret_no_match_hint = None;
             for member_hint in hints.iter() {
                 let ret = construct(Some(member_hint));
-                if !ret.errors.is_empty() {
+                if ret.errors.has_hard() {
                     continue;
                 }
                 if ret.matched_hint && ret.specialization_errors.is_none() {
@@ -1381,6 +1404,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn check_dynamic_type_bases(&self, bases: &Expr, errors: &ErrorCollector) {
+        let Expr::Tuple(tuple) = bases else {
+            self.error(
+                errors,
+                bases.range(),
+                ErrorKind::UnsupportedDynamicBase,
+                "Base classes in `type()` calls must be a tuple literal of statically known classes"
+                    .to_owned(),
+            );
+            return;
+        };
+        for base in &tuple.elts {
+            if matches!(base, Expr::Starred(_)) {
+                self.error(
+                    errors,
+                    base.range(),
+                    ErrorKind::UnsupportedDynamicBase,
+                    "Base classes in `type()` calls cannot use unpacking".to_owned(),
+                );
+                continue;
+            }
+            let base_ty = self.expr_infer(base, &self.error_swallower());
+            // `type[Any]` is a fully-gradual class object, so exempt it like bare `Any`.
+            // A known-but-dynamic `type[Base]` is still reported as a dynamic base.
+            if base_ty.is_any()
+                || matches!(&base_ty, Type::Type(inner) if inner.is_any())
+                || matches!(base_ty, Type::ClassDef(_))
+            {
+                continue;
+            }
+            self.error(
+                errors,
+                base.range(),
+                ErrorKind::UnsupportedDynamicBase,
+                format!(
+                    "Base class `{}` in `type()` call is not a statically known class",
+                    self.for_display(base_ty)
+                ),
+            );
+        }
+    }
+
     fn call_infer_with_callee_range(
         &self,
         call_target: CallTarget,
@@ -1389,6 +1454,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arguments_range: TextRange,
         callee_range: Option<TextRange>,
         errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
@@ -1396,7 +1462,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metadata = call_target.function_metadata();
         if let Some(meta) = metadata
             && meta.flags.is_abstract_method
-            && meta.flags.lacks_runtime_implementation()
+            && matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
+            && meta.flags.module_style == ModuleStyle::Executable
             && self.should_error_for_abstract_call(&call_target)
         {
             let method_name = meta.kind.format(self.module().name());
@@ -1475,7 +1542,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error_with_context(
                             errors,
                             arguments_range,
-                            ErrorKind::BadInstantiation,
+                            ErrorKind::DirectAbstractBaseInstantiation,
                             format!(
                                 "Cannot instantiate `{}` because it directly extends `ABC` or uses `ABCMeta`",
                                 cls.name()
@@ -1543,6 +1610,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 arguments_range,
                 errors,
                 errors,
+                return_errors,
                 context,
                 hint,
                 ctor_targs,
@@ -1558,6 +1626,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 arguments_range,
                 errors,
                 errors,
+                return_errors,
                 context,
                 hint,
                 ctor_targs,
@@ -1579,6 +1648,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 arguments_range,
                 errors,
                 errors,
+                return_errors,
                 context,
                 hint,
                 ctor_targs,
@@ -1593,6 +1663,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     keywords,
                     arguments_range,
                     errors,
+                    return_errors,
                     context,
                     hint,
                     ctor_targs,
@@ -1609,6 +1680,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     keywords,
                     arguments_range,
                     errors,
+                    return_errors,
                     context,
                     hint,
                     ctor_targs,
@@ -1628,6 +1700,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         arguments_range,
                         callee_range,
                         errors,
+                        return_errors,
                         context,
                         hint,
                         ctor_targs,
@@ -1704,20 +1777,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arguments_range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
+        let retry_input = hint.map(|_| (callable.clone(), self_obj.clone()));
         // First try the call without the hint to see if it succeeds.
         let mut ctor_targs_no_hint = ctor_targs.as_ref().map(|x| (**x).clone());
         let arg_errors_no_hint = self.error_collector();
         let call_errors_no_hint = self.error_collector();
         let res_no_hint = self.callable_infer(
-            callable.clone(),
+            callable,
             callable_name,
             shape_transform,
             tparams,
-            self_obj.clone(),
+            self_obj,
             args,
             keywords,
             arguments_range,
@@ -1729,7 +1804,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         // If the call succeeds, attempt contextual typing with the hint.
         let (chosen_ctor_targs, chosen_call_errors, chosen_arg_errors, chosen_res) =
-            if call_errors_no_hint.is_empty() && hint.is_some() {
+            if !call_errors_no_hint.has_hard()
+                && let Some((callable, self_obj)) = retry_input
+            {
                 let mut ctor_targs_with_hint = ctor_targs.as_ref().map(|x| (**x).clone());
                 let arg_errors_with_hint = self.error_collector();
                 let call_errors_with_hint = self.error_collector();
@@ -1748,8 +1825,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     hint,
                     ctor_targs_with_hint.as_mut(),
                 );
-                if call_errors_with_hint.is_empty()
-                    && arg_errors_with_hint.len() <= arg_errors_no_hint.len()
+                if !call_errors_with_hint.has_hard()
+                    && arg_errors_with_hint.len_hard() <= arg_errors_no_hint.len_hard()
                 {
                     (
                         ctor_targs_with_hint,
@@ -1780,10 +1857,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             *targs = chosen_targs;
         }
-        let (ty, specialization_errors, _expected_types) = chosen_res;
+        let (ty, specialization_errors, return_type_errors, _expected_types) = chosen_res;
         if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
             self.add_specialization_errors(errors, arguments_range, call_errors, context);
         }
+        self.add_return_type_resolution_errors(
+            return_type_errors,
+            arguments_range,
+            return_errors,
+            context,
+        );
         ty
     }
 
@@ -1805,6 +1888,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             arguments_range,
             None,
             errors,
+            errors,
+            context,
+            hint,
+            ctor_targs,
+        )
+    }
+
+    pub(crate) fn call_infer_with_return_errors(
+        &self,
+        call_target: CallTarget,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        hint: Option<HintRef>,
+        ctor_targs: Option<&mut TArgs>,
+    ) -> Type {
+        self.call_infer_with_callee_range(
+            call_target,
+            args,
+            keywords,
+            arguments_range,
+            None,
+            errors,
+            return_errors,
             context,
             hint,
             ctor_targs,
@@ -2068,25 +2178,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        // A pandas frame is mutable so columns can be added after construction, which leaves
-        // its schema Partial. A Polars frame is immutable so its schema is Complete.
-        let dataframe_schema = if let Type::ClassDef(cls) = &callee_ty
-            && x.arguments.args.len() == 1
-            && x.arguments.keywords.is_empty()
-            && let Expr::Dict(dict) = &x.arguments.args[0]
-        {
-            if is_polars_dataframe(cls) {
-                self.infer_dataframe_schema(dict, DataFrameKind::Polars, errors)
-                    .map(|c| (c, DataFrameKind::Polars, SchemaCompleteness::Complete))
-            } else if is_pandas_dataframe(cls) {
-                self.infer_dataframe_schema(dict, DataFrameKind::Pandas, errors)
-                    .map(|c| (c, DataFrameKind::Pandas, SchemaCompleteness::Partial))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let polars_call = self.infer_polars_call_specialization(&callee_ty, &x.arguments, errors);
 
         let result = if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
             // Because we have to construct a binding for super in order to fill in implicit arguments,
@@ -2308,6 +2400,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let arg_ty = self.expr_infer(&x.arguments.args[0], errors);
                     self.type_of(arg_ty)
                 }
+                _ if matches!(ty, Type::ClassDef(cls) if cls == self.stdlib.builtins_type().class_object())
+                    && x.arguments.args.len() == 3 =>
+                {
+                    self.check_dynamic_type_bases(&x.arguments.args[1], errors);
+                    self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors)
+                }
                 _ if let Some(ret) = self.call_builtin_enumerate(ty, x, errors) => ret,
                 // `functools.partial(func, ...)` synthesizes the residual callable instead of the
                 // opaque stub, so calls on the result are checked (see `alt::functools`).
@@ -2354,18 +2452,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
-        if let Some((columns, kind, completeness)) = dataframe_schema
-            && let Type::ClassType(underlying) = result.clone()
-        {
-            return DataFrameSchema {
-                underlying,
-                columns,
-                completeness,
-                kind,
-            }
-            .to_type();
-        }
-        result
+        self.apply_polars_call_specialization(result, polars_call)
     }
 
     pub fn freeform_call_infer(
@@ -2386,6 +2473,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             kws,
             arg_range,
             Some(callee_range),
+            errors,
             errors,
             None,
             hint,

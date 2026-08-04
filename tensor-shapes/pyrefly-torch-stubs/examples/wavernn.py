@@ -406,7 +406,8 @@ class WaveRNN[
 
             x = torch.multinomial(posterior, 1).float()
             assert_type(x, Tensor[[B, 1]])
-            x = 2 * x / (2**self.n_bits - 1.0) - 1.0
+            # A nonliteral `int` exponent makes `int.__pow__` return `Any`.
+            x = 2 * x / (2 ** (self.n_bits * 1.0) - 1.0) - 1.0
             assert_type(x, Tensor[[B, 1]])
 
             output.append(x)

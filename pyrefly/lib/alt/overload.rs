@@ -38,6 +38,7 @@ use crate::alt::callable::ArgMap;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
+use crate::alt::callable::ReturnTypeResolutionError;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
@@ -49,6 +50,7 @@ use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::Params;
 use crate::types::literal::Lit;
+use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -59,6 +61,7 @@ struct CalledOverload<'f> {
     arg_errors: ErrorCollector,
     call_errors: ErrorCollector,
     specialization_errors: Vec<TypeVarSpecializationError>,
+    return_type_errors: Vec<ReturnTypeResolutionError>,
     /// Maps each argument's source range to the parameter it was matched against.
     argmap: ArgMap,
 }
@@ -237,6 +240,13 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                     Vec::new()
                 }
             }
+
+            // a constraind typevar argument is one of its constraints, so expand like a union ie try each constraint against overloads + union the matched returns
+            Type::Quantified(q) => match q.restriction() {
+                Restriction::Constraints(constraints) => constraints.clone(),
+                _ => Vec::new(),
+            },
+
             _ => Vec::new(),
         }
     }
@@ -254,6 +264,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &[CallKeyword],
         arguments_range: TextRange,
         errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         // If we're constructing a class, its type arguments. A successful call will fill these in.
@@ -295,6 +306,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     arg_errors: self.error_collector(),
                     call_errors: self.error_collector(),
                     specialization_errors: Vec::new(),
+                    return_type_errors: Vec::new(),
                     argmap: ArgMap::new(),
                 },
                 false,
@@ -315,10 +327,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &ctor_targs,
                 );
 
-                // Step 3: perform argument type expansion.
+                // Step 3: argument type expansion. When the mypy-compatibility flag is on, we also
+                // use it to narrow an already-matched call to a more precise return type.
+                let refine = matched
+                    && self.solver().legacy_overload_expansion
+                    && matches!(&closest_overload.res, Type::Union(_));
                 let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone(), self);
                 let owner = Owner::new();
-                'outer: while !matched && let Some(arg_lists) = args_expander.expand(errors, &owner)
+                'outer: while (!matched || refine)
+                    && let Some(arg_lists) = args_expander.expand(errors, &owner)
                 {
                     // Expand by one argument (for example, try splitting up union types), and try the call with each
                     // resulting arguments list.
@@ -344,12 +361,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         matched_overloads.push(cur_closest);
                     }
-                    if let Some(first_overload) = matched_overloads.first() {
+                    if !matched_overloads.is_empty() {
+                        if matched {
+                            // Adopt only when an expanded member hit a `Never` overload, dropping it
+                            // from the union; otherwise try the next argument rather than give up.
+                            let dropped_arm = matched_overloads.iter().any(|o| o.res.is_never());
+                            let expanded_res = self.unions(matched_overloads.into_map(|o| o.res));
+                            if dropped_arm
+                                && self.is_subset_eq(&expanded_res, &closest_overload.res)
+                                && !self.is_equivalent(&expanded_res, &closest_overload.res)
+                            {
+                                closest_overload.res = expanded_res;
+                                break;
+                            }
+                            continue 'outer;
+                        }
+                        let first_overload = &matched_overloads[0];
                         let func = first_overload.func;
                         let ctor_targs = first_overload.ctor_targs.clone();
                         let argmap = first_overload.argmap.clone();
                         let arg_errors = self.error_collector();
                         let specialization_errors = first_overload.specialization_errors.clone();
+                        let return_type_errors = matched_overloads
+                            .iter()
+                            .flat_map(|overload| overload.return_type_errors.iter().cloned())
+                            .unique()
+                            .collect();
                         closest_overload = CalledOverload {
                             func,
                             ctor_targs,
@@ -361,6 +398,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             arg_errors,
                             call_errors: self.error_collector(),
                             specialization_errors,
+                            return_type_errors,
                         };
                         matched = true;
                         break;
@@ -433,6 +471,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None,
                 );
             }
+            self.add_return_type_resolution_errors(
+                closest_overload.return_type_errors,
+                arguments_range,
+                return_errors,
+                None,
+            );
             (
                 closest_overload.res,
                 closest_overload.func.1.signature.clone(),
@@ -655,6 +699,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut arg_counts = closest_overload_signature.arg_counts();
             let nposargs = args.len();
             let nkwargs = keywords.len();
+            let missing_self_param = self_obj.is_some() && arg_counts.positional.max == Some(0);
             if self_obj.is_some() {
                 arg_counts.positional.min = arg_counts.positional.min.saturating_sub(1);
                 if let Some(max) = arg_counts.positional.max {
@@ -683,13 +728,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None
                 }
             };
-            let arity_mismatch =
+            let arity_mismatch = if missing_self_param {
+                "This method has no `self` parameter to receive the implicit instance argument. Add a `self` parameter.".to_owned()
+            } else {
                 check(nposargs + nkwargs, arg_counts.overall, "").unwrap_or_else(|| {
                     check(nposargs, arg_counts.positional, "positional ").unwrap_or_else(|| {
                         check(nkwargs, arg_counts.keyword, "keyword ")
                             .expect("Overload evaluation: expected arity mismatch not found")
                     })
-                });
+                })
+            };
             builder = builder.with_detail(arity_mismatch);
         } else {
             builder = builder.with_errors_as_details(closest_overload_call_errors);
@@ -884,10 +932,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ctor_targs,
                 );
                 (
-                    // Intentionally check only `call_errors` and not `specialization_errors`. The
-                    // contextual pass re-runs with the hint and may legitimately introduce
-                    // specialization errors that the matched-overload step already accounted for,
-                    // so we only fall back to the no-hint version on hard call errors. See
+                    // The contextual pass may legitimately introduce late resolution errors, so
+                    // we only fall back to the no-hint version on hard call errors. See
                     // `test::generic_restriction::test_nested_call_of_overloaded_function_preserves_bound`.
                     if !contextual_overload.has_hard_call_errors() {
                         contextual_overload
@@ -1028,7 +1074,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let arg_errors = self.error_collector();
         let call_errors = self.error_collector();
-        let (res, specialization_errors, argmap) = self.callable_infer(
+        let (res, specialization_errors, return_type_errors, argmap) = self.callable_infer(
             callable.1.signature.clone(),
             Some(&metadata.kind),
             shape_transform,
@@ -1053,6 +1099,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             arg_errors,
             call_errors,
             specialization_errors,
+            return_type_errors,
             argmap,
         }
     }

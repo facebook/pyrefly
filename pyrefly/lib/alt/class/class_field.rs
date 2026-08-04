@@ -12,17 +12,19 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_types::callable::BodyKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::read_only::IsFinalVariableInitialized;
@@ -190,24 +192,25 @@ impl ClassAttribute {
     }
 
     /// Returns true if this attribute represents a data descriptor
-    /// (has both `__get__` and `__set__`), including properties with setters.
+    /// (has either `__set__` or `__delete__`), including properties.
     pub fn is_data_descriptor(&self) -> bool {
         match self {
-            ClassAttribute::Property(_, Some(_), _)
-            | ClassAttribute::Descriptor(
+            // All properties are data descriptors: https://docs.python.org/3/howto/descriptor.html#properties.
+            ClassAttribute::Property(..) => true,
+            // A data descriptor is one that defines `__set__` or `__delete__`:
+            // https://docs.python.org/3/reference/datamodel.html#invoking-descriptors
+            ClassAttribute::Descriptor(
                 Descriptor {
-                    getter: true,
-                    setter: true,
-                    ..
+                    setter, deleter, ..
                 },
                 _,
-            ) => true,
+            ) => *setter || *deleter,
             _ => false,
         }
     }
 }
 
-#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
+#[derive(Debug, Clone, TypeEq, PartialEq, Eq, Visit, VisitMut)]
 pub struct Descriptor {
     /// The location of the property where the descriptor is bound, where we should raise
     /// errors attempting to access the getter/setter.
@@ -215,12 +218,14 @@ pub struct Descriptor {
     /// This is the descriptor class, which is needed both for attribute subtyping
     /// checks in structural types and in the case where there is no getter method.
     cls: ClassType,
-    /// Does `__get__` exists on the descriptor?  It is typically a `BoundMethod` although
+    /// Does `__get__` exist on the descriptor?  It is typically a `BoundMethod` although
     /// it is possible for a user to erroneously define a `__get__` with any type, including a
     /// non-callable one.
     getter: bool,
-    /// Does `__set__` exists on the descriptor? Similar considerations to `getter` apply.
+    /// Does `__set__` exist on the descriptor? Similar considerations to `getter` apply.
     setter: bool,
+    /// Does `__delete__` exist on the descriptor?
+    deleter: bool,
     /// How the descriptor field was initialized. Used to distinguish class-body
     /// descriptors (which have an actual object on the class) from annotation-only
     /// descriptors (which rely on metaclass or other runtime machinery).
@@ -243,7 +248,7 @@ pub enum DescriptorBase {
 /// Correctly analyzing which attributes are visible on class objects, as well
 /// as handling method binding correctly, requires distinguishing which fields
 /// are assigned values in the class body.
-#[derive(Clone, Debug, TypeEq, VisitMut, PartialEq, Eq)]
+#[derive(Clone, Debug, TypeEq, Visit, VisitMut, PartialEq, Eq)]
 pub enum ClassFieldInitialization {
     /// If this is a dataclass field, DataclassFieldKeywords stores the field's
     /// dataclass flags (which are options that control how fields behave).
@@ -302,7 +307,7 @@ impl ClassFieldInitialization {
 /// Raw information about an attribute declared somewhere in a class. We need to
 /// know whether it is initialized in the class body in order to determine
 /// both visibility rules and whether method binding should be performed.
-#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
+#[derive(Debug, Clone, TypeEq, PartialEq, Eq, Visit, VisitMut)]
 pub struct ClassField(ClassFieldInner, IsInherited);
 
 pub enum ClassFieldVariance<'a> {
@@ -311,7 +316,7 @@ pub enum ClassFieldVariance<'a> {
     Field { ty: &'a Type, read_only: bool },
 }
 
-#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
+#[derive(Debug, Clone, TypeEq, PartialEq, Eq, Visit, VisitMut)]
 enum ClassFieldInner {
     /// Properties discovered via @property decorator.
     /// Read-onlyness is handled by presence of and type of setter.
@@ -377,7 +382,7 @@ enum ProxyMethodAnnotationForm {
 /// that this is not an inherited field so that we can skip override consistency
 /// checks. This information is not needed to understand the class field, it is
 /// only used for efficiency.
-#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
+#[derive(Debug, Clone, TypeEq, PartialEq, Eq, Visit, VisitMut)]
 enum IsInherited {
     No,
     Maybe,
@@ -873,18 +878,6 @@ impl ClassField {
         }
     }
 
-    fn is_non_callable_protocol_method(&self) -> bool {
-        match &self.0 {
-            ClassFieldInner::Property { .. } => false,
-            ClassFieldInner::Descriptor { .. } => false,
-            ClassFieldInner::Method { ty, .. } => ty.is_non_callable_protocol_method(),
-            ClassFieldInner::ProxyMethod { .. } => false,
-            ClassFieldInner::NestedClass { .. } => false,
-            ClassFieldInner::ClassAttribute { ty, .. } => ty.is_non_callable_protocol_method(),
-            ClassFieldInner::InstanceAttribute { ty, .. } => ty.is_non_callable_protocol_method(),
-        }
-    }
-
     pub fn is_foreign_key(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,
@@ -1144,6 +1137,7 @@ impl ClassField {
         match &self.0 {
             ClassFieldInner::Descriptor { descriptor, .. }
                 if !descriptor.setter
+                    && !descriptor.deleter
                     && matches!(
                         descriptor.initialization,
                         ClassFieldInitialization::ClassBody(_)
@@ -1830,7 +1824,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let binding = Binding::Forward(*definition);
                 let value_ty =
                     Arc::unwrap_or_clone(self.solve_binding(&binding, range, errors)).into_ty();
-                if let Binding::Function(decorated_idx, _, _) = self.bindings().get(*definition) {
+                if let Binding::Function { decorated_idx, .. } = self.bindings().get(*definition) {
                     descriptor_is_override = self
                         .get_decorated_function(*decorated_idx)
                         .undecorated
@@ -1983,12 +1977,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let setter = self
                         .get_class_member(cls.class_object(), &dunder::SET)
                         .is_some();
-                    if getter || setter {
+                    let deleter = self
+                        .get_class_member(cls.class_object(), &dunder::DELETE)
+                        .is_some();
+                    if getter || setter || deleter {
                         descriptor = Some(Descriptor {
                             range,
                             cls: cls.clone(),
                             getter,
                             setter,
+                            deleter,
                             initialization: initialization.clone(),
                             is_override: descriptor_is_override,
                         })
@@ -2267,7 +2265,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         range,
                         ErrorKind::ImplicitlyDefinedAttribute,
-                        format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", &name),
+                        format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", name),
                     );
                 }
             }
@@ -2710,6 +2708,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ReadOnlyReason::AttrsFrozen
             };
             return Some(reason);
+        }
+        if metadata.is_pydantic_model()
+            && let ClassFieldInitialization::ClassBody(Some(kws)) = initialization
+            && kws.frozen == Some(true)
+        {
+            return Some(ReadOnlyReason::PydanticFrozenField);
         }
 
         // Nested class definitions are read-only
@@ -3249,9 +3253,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let p = match tparams {
                         Some(tparams) => {
                             let any = self.heap.mk_any_implicit();
-                            p.subst(&tparams.iter().map(|q| (q, &any)).collect())
+                            p.clone()
+                                .subst(&tparams.iter().map(|q| (q, &any)).collect())
                         }
-                        None => p,
+                        None => p.clone(),
                     };
                     // A non-protocol `self:` can't re-enter protocol conformance, so check
                     // it directly. A protocol-typed `self:`, however, makes
@@ -3967,13 +3972,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let (placeholder_kind, is_async, is_return_inferred) = ty
                         .visit_toplevel_func_metadata(&|meta| {
                             (
-                                meta.flags.placeholder_body_kind,
+                                meta.flags.body_kind,
                                 meta.flags.is_async,
                                 meta.flags.is_return_inferred,
                             )
                         });
-                    if placeholder_kind != Some(PlaceholderBodyKind::RaiseNotImplementedError)
-                        || !is_return_inferred
+                    if placeholder_kind != BodyKind::RaiseNotImplementedError || !is_return_inferred
                     {
                         return;
                     }
@@ -4748,15 +4752,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .value
             .ty()
             .visit_toplevel_func_metadata::<bool>(&|meta| {
-                meta.flags.lacks_runtime_implementation()
+                matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
+                    && meta.flags.module_style == ModuleStyle::Executable
             });
-        if member.value.is_abstract() && lacks_runtime_impl {
-            return Some(NoAccessReason::SuperMethodNeedsImplementation(
-                member.defining_class.dupe(),
-            ));
-        }
-        let metadata = self.get_metadata_for_class(&member.defining_class);
-        if metadata.is_protocol() && member.value.is_non_callable_protocol_method() {
+        if (member.value.is_abstract()
+            || self
+                .get_metadata_for_class(&member.defining_class)
+                .is_protocol())
+            && lacks_runtime_impl
+        {
             Some(NoAccessReason::SuperMethodNeedsImplementation(
                 member.defining_class.dupe(),
             ))
@@ -4859,6 +4863,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Get the class's `__init__` method. The second argument controls whether we return an inherited `object.__init__`.
     pub fn get_dunder_init(&self, cls: &ClassType, get_object_init: bool) -> Option<Type> {
         self.get_dunder_init_helper(&Instance::of_class(cls), get_object_init)
+    }
+
+    /// Get the `__init_subclass__` method defined directly on `cls`, excluding
+    /// `object.__init_subclass__` and synthesized fields. This only inspects
+    /// `cls` itself (not its ancestors), so it is safe to call while class
+    /// metadata is still being computed; callers that need an inherited
+    /// definition must walk the bases themselves.
+    pub(crate) fn get_dunder_init_subclass(&self, cls: &ClassType) -> Option<Type> {
+        if cls.class_object().is_builtin("object") {
+            return None;
+        }
+        let field = self.get_non_synthesized_field_from_current_class_only(
+            cls.class_object(),
+            &dunder::INIT_SUBCLASS,
+        )?;
+        if field.is_init_var() {
+            return None;
+        }
+        Arc::unwrap_or_clone(field)
+            .as_raw_special_method_type(self.heap, &Instance::of_class(cls))
+            .and_then(|ty| {
+                make_bound_classmethod(self.heap, &ClassBase::ClassType(cls.clone()), ty).ok()
+            })
     }
 
     pub fn get_typed_dict_dunder_init(&self, td: &TypedDictInner) -> Type {
@@ -4973,7 +5000,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ClassAttribute::ReadOnly(attr_ty, reason) => {
                 // In pydantic, if a non-frozen model inherits from a frozen model,
                 // attributes of the frozen model are no longer readonly.
-                let should_raise_error = if let Some(instance_class) = instance_class {
+                let should_raise_error = if matches!(reason, ReadOnlyReason::PydanticFrozenField) {
+                    true
+                } else if let Some(instance_class) = instance_class {
                     let class = instance_class.class_object();
                     let metadata = self.get_metadata_for_class(class);
                     !(metadata.is_pydantic_model()
@@ -5177,16 +5206,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     else {
                         unreachable!("guarded by matches! above")
                     };
-                    let self_param = |sig: &OverloadType| match sig {
-                        OverloadType::Function(f) => f.signature.get_first_param(),
-                        OverloadType::Forall(forall) => forall.body.signature.get_first_param(),
-                    };
                     let applicable: Vec<_> = overload
                         .signatures
                         .into_iter()
                         .filter(|sig| {
-                            self_param(sig)
-                                .is_none_or(|param| self.is_subset_eq(&child_type, &param))
+                            let self_param = match sig {
+                                OverloadType::Function(f) => f.signature.get_first_param(),
+                                OverloadType::Forall(forall) => {
+                                    forall.body.signature.get_first_param()
+                                }
+                            };
+                            self_param.is_none_or(|param| self.is_subset_eq(&child_type, param))
                         })
                         .collect();
                     let signatures = vec1::Vec1::try_from_vec(applicable).ok()?;
@@ -5336,7 +5366,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         && let Some(rest) = setter_sig.strip_first_param()
                         && let Some(setter_value_type) = rest.get_first_param()
                     {
-                        is_subset(&setter_value_type, got).map_err(|subset_error| {
+                        is_subset(setter_value_type, got).map_err(|subset_error| {
                             Box::new(AttrSubsetError::Contravariant {
                                 want: want_setter.clone(),
                                 got: got.clone(),

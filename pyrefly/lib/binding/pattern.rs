@@ -57,7 +57,7 @@ enum MatchSubject {
     /// Python evaluates the subject once before matching, so we need a stable internal
     /// subject for branch narrowing while diagnostics still point at the source expression.
     Synthetic { display_subject_range: TextRange },
-    /// Per-element subjects from a tuple match (e.g., `match x, y:`).
+    /// Per-element subjects from a fixed-arity tuple match (e.g., `match x, y:`).
     Tuple(Vec<Option<NarrowingSubject>>),
 }
 
@@ -203,6 +203,64 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    /// Whether a sequence element sub-pattern's refutability is fully captured by
+    /// `sequence_element_atomic_op`, or it is irrefutable. Only when every element is
+    /// fully characterized is it sound to strip the spurious capture `Placeholder`s and let
+    /// the arm's negation subtract its covered union member for subsequent cases & exhaustiveness checks.
+    /// This behavior is conservative; a refutable element we can't fully express (nested patterns, class pattern with sub-arguments)
+    /// keeps its `Placeholder`.
+    fn sequence_element_fully_characterized(pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::MatchAs(p) => p
+                .pattern
+                .as_deref()
+                .is_none_or(Self::sequence_element_fully_characterized),
+            Pattern::MatchClass(x) => {
+                x.arguments.patterns.is_empty() && x.arguments.keywords.is_empty()
+            }
+            Pattern::MatchValue(_) | Pattern::MatchSingleton(_) | Pattern::MatchStar(_) => true,
+            _ => false,
+        }
+    }
+
+    fn accumulate_class_pattern_subpattern(
+        &mut self,
+        match_subject: &MatchSubject,
+        class_narrow_op: &AtomicNarrowOp,
+        cls_range: TextRange,
+        sub_ops: PatternNarrowOps,
+        probe_range: TextRange,
+        is_irrefutable: bool,
+        coverage_check: bool,
+        coverage_keys: &mut Vec<Idx<Key>>,
+        narrow_ops: &mut PatternNarrowOps,
+    ) {
+        if coverage_check {
+            if !is_irrefutable {
+                // Build this slot's coverage probe: narrow the subject to this class
+                // first (so other union members don't pollute the slot), then require
+                // the negated sub-pattern residual to be `Never`. Irrefutable slots are
+                // already exhausted, so only refutable slots need solve-time probes.
+                let mut coverage_scope = match_subject
+                    .subject_narrow_op(NarrowOp::Atomic(None, class_narrow_op.clone()), cls_range)
+                    .scope;
+                coverage_scope.and_all(sub_ops.scope.negate());
+                let narrow_entries = self.build_narrow_entries(&coverage_scope);
+                coverage_keys.push(self.insert_binding(
+                    Key::Exhaustive(ExhaustivenessKind::ClassPatternCoverage, probe_range),
+                    Binding::Exhaustive(Box::new(ExhaustiveBinding {
+                        kind: ExhaustivenessKind::ClassPatternCoverage,
+                        narrow_entries,
+                    })),
+                ));
+            }
+            narrow_ops.body_only.and_all(sub_ops.scope);
+            narrow_ops.body_only.and_all(sub_ops.body_only);
+        } else {
+            narrow_ops.and_all(sub_ops);
+        }
+    }
+
     /// Traverse a pattern and bind all the names; key is the reference for
     /// the value that's being matched on.
     fn bind_pattern(
@@ -240,7 +298,11 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(name) = &p.name
                     && !Ast::is_synthesized_empty_identifier(name)
                 {
-                    self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
+                    self.bind_definition(
+                        name,
+                        Binding::PatternCapture(subject_idx),
+                        FlowStyle::Other,
+                    );
                     subject = MatchSubject::Single(NarrowingSubject::Name(name.id.clone()));
                 };
                 if let Some(pattern) = p.pattern {
@@ -283,6 +345,10 @@ impl<'a> BindingsBuilder<'a> {
                     .patterns
                     .iter()
                     .all(|p| p.is_irrefutable() || p.is_wildcard());
+                let sequence_fully_characterized = num_patterns == num_non_star_patterns
+                    && x.patterns
+                        .iter()
+                        .all(Self::sequence_element_fully_characterized);
                 let mut subject_idx = subject_idx;
                 let synthesized_len = Expr::NumberLiteral(ExprNumberLiteral {
                     node_index: AtomicNodeIndex::default(),
@@ -302,27 +368,37 @@ impl<'a> BindingsBuilder<'a> {
                     NarrowOp::Atomic(None, AtomicNarrowOp::IsSequence),
                     NarrowOp::Atomic(None, len_narrow_op.clone()),
                 ]);
-                let subject_narrow_op = if num_patterns == num_non_star_patterns {
+                let element_facet_ops: Vec<NarrowOp> = if num_patterns == num_non_star_patterns {
+                    x.patterns
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| {
+                            Self::sequence_element_atomic_op(p).map(|atomic| {
+                                NarrowOp::Atomic(
+                                    Some(FacetSubject {
+                                        chain: UnresolvedFacetChain::new(Vec1::new(
+                                            UnresolvedFacetKind::Index(i as i64),
+                                        )),
+                                        origin: FacetOrigin::Direct,
+                                        allow_never_collapse: false,
+                                    }),
+                                    atomic,
+                                )
+                            })
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let subject_narrow_op = if element_facet_ops.is_empty() {
+                    combined_narrow_op.clone()
+                } else {
                     let mut ops = vec![
                         NarrowOp::Atomic(None, AtomicNarrowOp::IsSequence),
                         NarrowOp::Atomic(None, len_narrow_op.clone()),
                     ];
-                    for (i, p) in x.patterns.iter().enumerate() {
-                        if let Some(atomic) = Self::sequence_element_atomic_op(p) {
-                            ops.push(NarrowOp::Atomic(
-                                Some(FacetSubject {
-                                    chain: UnresolvedFacetChain::new(Vec1::new(
-                                        UnresolvedFacetKind::Index(i as i64),
-                                    )),
-                                    origin: FacetOrigin::Direct,
-                                }),
-                                atomic,
-                            ));
-                        }
-                    }
+                    ops.extend(element_facet_ops.iter().cloned());
                     NarrowOp::And(ops)
-                } else {
-                    combined_narrow_op.clone()
                 };
                 subject_idx = self.insert_binding(
                     Key::PatternNarrow(x.range()),
@@ -349,6 +425,13 @@ impl<'a> BindingsBuilder<'a> {
                 } else if match_subject.is_synthetic() {
                     let subject_op = if all_subpatterns_irrefutable {
                         combined_narrow_op
+                    } else if sequence_fully_characterized {
+                        let mut ops = vec![
+                            NarrowOp::Atomic(None, AtomicNarrowOp::IsSequence),
+                            NarrowOp::Atomic(None, len_narrow_op.clone()),
+                        ];
+                        ops.extend(element_facet_ops.iter().cloned());
+                        NarrowOp::And(ops)
                     } else {
                         NarrowOp::And(vec![
                             combined_narrow_op,
@@ -369,6 +452,10 @@ impl<'a> BindingsBuilder<'a> {
                                 && !Ast::is_synthesized_empty_identifier(name)
                             {
                                 let position = UnpackedPosition::Slice(i, num_patterns - i - 1);
+                                // Bind the star capture directly to its `UnpackedValue`. Unlike the
+                                // `Forward`-based captures, `UnpackedValue` is its own definition, so
+                                // `follow_to_partial_type` does not collapse a use past it and
+                                // go-to-def resolves to the capture without a `PatternCapture` wrapper.
                                 self.bind_definition(
                                     name,
                                     Binding::UnpackedValue(
@@ -456,7 +543,7 @@ impl<'a> BindingsBuilder<'a> {
                     KeyExpect::UnpackedLength(x.range),
                     BindingExpect::UnpackedLength(subject_idx, x.range, expect),
                 );
-                if all_subpatterns_irrefutable
+                if (all_subpatterns_irrefutable || sequence_fully_characterized)
                     && let Some(subject) = match_subject.as_single()
                     && let Some((op, _)) = narrow_ops.scope.0.get_mut(subject.name())
                 {
@@ -466,6 +553,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             Pattern::MatchMapping(x) => {
                 let mut narrow_ops = PatternNarrowOps::new();
+                let matches_all_mappings = x.keys.is_empty();
                 let mut subject_idx = subject_idx;
                 let narrow_op = AtomicNarrowOp::IsMapping;
                 subject_idx = self.insert_binding(
@@ -519,10 +607,20 @@ impl<'a> BindingsBuilder<'a> {
                             match_key_idx,
                         ))
                     });
+                if matches_all_mappings
+                    && let Some(subject) = match_subject.as_single()
+                    && let Some((op, _)) = narrow_ops.scope.0.get_mut(subject.name())
+                {
+                    op.strip_placeholders();
+                }
                 if let Some(rest) = x.rest
                     && !Ast::is_synthesized_empty_identifier(&rest)
                 {
-                    self.bind_definition(&rest, Binding::Forward(subject_idx), FlowStyle::Other);
+                    self.bind_definition(
+                        &rest,
+                        Binding::PatternCapture(subject_idx),
+                        FlowStyle::Other,
+                    );
                 }
                 narrow_ops
             }
@@ -569,12 +667,10 @@ impl<'a> BindingsBuilder<'a> {
                         .keywords
                         .iter()
                         .all(|kw| kw.pattern.is_irrefutable() || kw.pattern.is_wildcard());
-                // Positional-only class patterns (no keywords) with at least one refutable
-                // sub-pattern use a solve-time coverage gate (below) instead of a
-                // `Placeholder`, so the class is narrowed away when *every* positional slot's
-                // sub-pattern exhausts its slot.
-                let positional_coverage = !x.arguments.patterns.is_empty()
-                    && x.arguments.keywords.is_empty()
+                // Class patterns with at least one refutable sub-pattern use a solve-time coverage check;
+                // the class is narrowed away when every sub-pattern exhausts its slot.
+                let coverage_check = (!x.arguments.patterns.is_empty()
+                    || !x.arguments.keywords.is_empty())
                     && !all_args_irrefutable
                     && !is_exhaustive_single_slot
                     && match_subject.as_single().is_some();
@@ -584,7 +680,7 @@ impl<'a> BindingsBuilder<'a> {
                 if (!x.arguments.patterns.is_empty() || !x.arguments.keywords.is_empty())
                     && !is_exhaustive_single_slot
                     && !all_args_irrefutable
-                    && !positional_coverage
+                    && !coverage_check
                 {
                     narrow_ops.and_all(match_subject.subject_narrow_op(
                         NarrowOp::Atomic(None, AtomicNarrowOp::Placeholder),
@@ -632,39 +728,61 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         MatchSubject::None
                     };
+                    let pattern_range = pattern.range();
+                    let is_irrefutable = pattern.is_irrefutable();
                     let sub_ops = self.bind_pattern(subject_for_slot, pattern.clone(), attr_key);
-                    if positional_coverage {
-                        if !pattern.is_irrefutable() {
-                            // Build this slot's coverage probe: narrow the subject to this class
-                            // first (so other union members don't pollute the slot), then require
-                            // the negated sub-pattern residual to be `Never`. Irrefutable slots are
-                            // already exhausted, so only refutable slots need solve-time probes.
-                            let mut coverage_scope = match_subject
-                                .subject_narrow_op(
-                                    NarrowOp::Atomic(None, narrow_op.clone()),
-                                    x.cls.range(),
-                                )
-                                .scope;
-                            coverage_scope.and_all(sub_ops.scope.negate());
-                            let narrow_entries = self.build_narrow_entries(&coverage_scope);
-                            coverage_keys.push(self.insert_binding(
-                                Key::Exhaustive(
-                                    ExhaustivenessKind::ClassPatternCoverage,
-                                    pattern.range(),
-                                ),
-                                Binding::Exhaustive(Box::new(ExhaustiveBinding {
-                                    kind: ExhaustivenessKind::ClassPatternCoverage,
-                                    narrow_entries,
-                                })),
-                            ));
-                        }
-                        narrow_ops.body_only.and_all(sub_ops.scope);
-                        narrow_ops.body_only.and_all(sub_ops.body_only);
-                    } else {
-                        narrow_ops.and_all(sub_ops);
-                    }
+                    self.accumulate_class_pattern_subpattern(
+                        &match_subject,
+                        &narrow_op,
+                        x.cls.range(),
+                        sub_ops,
+                        pattern_range,
+                        is_irrefutable,
+                        coverage_check,
+                        &mut coverage_keys,
+                        &mut narrow_ops,
+                    );
                 }
-                if positional_coverage {
+                for PatternKeyword {
+                    node_index: _,
+                    range: _,
+                    attr,
+                    pattern,
+                } in x.arguments.keywords
+                {
+                    let subject_for_attr = if let Some(subject) = match_subject.as_single() {
+                        MatchSubject::Single(
+                            subject
+                                .clone()
+                                .with_facet(UnresolvedFacetKind::Attribute(attr.id.clone())),
+                        )
+                    } else {
+                        MatchSubject::None
+                    };
+                    let pattern_range = pattern.range();
+                    let is_irrefutable = pattern.is_irrefutable();
+                    let attr_key = self.insert_binding(
+                        Key::Anon(attr.range()),
+                        Binding::PatternMatchClassKeyword(Box::new((
+                            x.cls.clone(),
+                            attr,
+                            subject_idx,
+                        ))),
+                    );
+                    let sub_ops = self.bind_pattern(subject_for_attr, pattern, attr_key);
+                    self.accumulate_class_pattern_subpattern(
+                        &match_subject,
+                        &narrow_op,
+                        x.cls.range(),
+                        sub_ops,
+                        pattern_range,
+                        is_irrefutable,
+                        coverage_check,
+                        &mut coverage_keys,
+                        &mut narrow_ops,
+                    );
+                }
+                if coverage_check {
                     // The class is subtracted from later cases only when every refutable slot
                     // probe resolves to `Never` (checked by `ClassCoverageGateNeg` at solve time).
                     narrow_ops.and_all(match_subject.subject_narrow_op(
@@ -675,33 +793,6 @@ impl<'a> BindingsBuilder<'a> {
                         x.cls.range(),
                     ));
                 }
-                x.arguments.keywords.into_iter().for_each(
-                    |PatternKeyword {
-                         node_index: _,
-                         range: _,
-                         attr,
-                         pattern,
-                     }| {
-                        let subject_for_attr = if let Some(subject) = match_subject.as_single() {
-                            MatchSubject::Single(
-                                subject
-                                    .clone()
-                                    .with_facet(UnresolvedFacetKind::Attribute(attr.id.clone())),
-                            )
-                        } else {
-                            MatchSubject::None
-                        };
-                        let attr_key = self.insert_binding(
-                            Key::Anon(attr.range()),
-                            Binding::PatternMatchClassKeyword(Box::new((
-                                x.cls.clone(),
-                                attr,
-                                subject_idx,
-                            ))),
-                        );
-                        narrow_ops.and_all(self.bind_pattern(subject_for_attr, pattern, attr_key))
-                    },
-                );
                 // When all sub-patterns are irrefutable, strip Placeholders that `and_all`
                 // added for unmerged names. These Placeholders would incorrectly block
                 // negative narrowing (preventing the class from being narrowed away in
@@ -743,7 +834,11 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(name) = &p.name
                     && !Ast::is_synthesized_empty_identifier(name)
                 {
-                    self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
+                    self.bind_definition(
+                        name,
+                        Binding::PatternCapture(subject_idx),
+                        FlowStyle::Other,
+                    );
                 }
                 PatternNarrowOps::new()
             }
@@ -756,9 +851,14 @@ impl<'a> BindingsBuilder<'a> {
         let subject_expr = x.subject.clone();
         let subject_idx =
             self.insert_binding_current(subject, Binding::Expr(None, Box::new(*x.subject.clone())));
-        // When the match subject is a tuple (e.g., `match x, y:`), extract per-element
-        // narrowing subjects so that sequence patterns can narrow each element individually.
-        let match_subject = if let Expr::Tuple(ref tuple_expr) = *x.subject {
+        // When the match subject is a fixed-arity tuple (e.g., `match x, y:`), extract
+        // per-element narrowing subjects so sequence patterns can narrow each element individually.
+        let match_subject = if let Expr::Tuple(ref tuple_expr) = *x.subject
+            && tuple_expr
+                .elts
+                .iter()
+                .all(|elt| !matches!(elt, Expr::Starred(_)))
+        {
             MatchSubject::Tuple(
                 tuple_expr
                     .elts
@@ -795,7 +895,8 @@ impl<'a> BindingsBuilder<'a> {
                 ..
             } = case;
             self.start_branch();
-            let case_is_irrefutable = pattern.is_wildcard() || pattern.is_irrefutable();
+            let case_is_irrefutable =
+                Ast::pattern_is_irrefutable_for_subject(&pattern, &subject_expr);
             if case_is_irrefutable {
                 exhaustive = true;
             }
@@ -878,6 +979,7 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
             }
+            let has_guard = guard.is_some();
             if let Some(mut guard) = guard {
                 self.ensure_expr(&mut guard, &mut Usage::NonPinningValue(None));
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
@@ -886,10 +988,9 @@ impl<'a> BindingsBuilder<'a> {
                     NarrowUseLocation::Span(guard.range()),
                     &Usage::NonPinningValue(None),
                 );
-                self.insert_binding(
-                    Key::Anon(guard.range()),
-                    Binding::Expr(None, Box::new(*guard)),
-                );
+                // Route the guard through `BindingExpect::Bool` (like `if`/`while`) so it
+                // receives the same condition checks, e.g. `implicit-bool`.
+                self.insert_binding(KeyExpect::Bool(guard.range()), BindingExpect::Bool(*guard));
                 new_narrow_ops.and_all(PatternNarrowOps::from_scope(guard_narrow_ops))
             }
             // Only accumulate narrows for the match subject. Alias names
@@ -904,7 +1005,16 @@ impl<'a> BindingsBuilder<'a> {
                     .as_ref()
                     .is_some_and(|s| name == s.name())
             });
-            let negated_new_narrow_ops = new_narrow_ops.negate();
+            let mut negated_new_narrow_ops = new_narrow_ops.negate();
+            // The negation of an unguarded match arm subtracts the members it covered;
+            // when the arm fully characterizes its member, this subtraction may soundly
+            // reduce a non-union subject to `Never` (needed for exhaustiveness across cases).
+            if !has_guard {
+                negated_new_narrow_ops.scope.set_allow_never_collapse();
+                if let Some((op, _)) = negated_new_narrow_ops.subject.as_mut() {
+                    op.set_allow_never_collapse();
+                }
+            }
             negated_prev_ops.and_all(negated_new_narrow_ops.scope);
             if let Some((new_op, new_range)) = negated_new_narrow_ops.subject {
                 negated_prev_subject = Some(match negated_prev_subject {

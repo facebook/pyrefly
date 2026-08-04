@@ -10,6 +10,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
@@ -53,7 +54,10 @@ use crate::binding::binding::TypeAliasParams;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::polars::polars_column_mutation;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
@@ -1247,6 +1251,7 @@ impl<'a> BindingsBuilder<'a> {
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
+                let mut following_runtime_only_branch = false;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
                     self.bind_narrow_ops(
@@ -1281,6 +1286,15 @@ impl<'a> BindingsBuilder<'a> {
                         }
                     }
                     is_first_branch = false;
+                    let later_branches_are_type_checking = test
+                        .as_ref()
+                        .is_some_and(SysInfo::is_not_type_checking_guard);
+                    let is_type_checking_branch = (test.is_none() && following_runtime_only_branch)
+                        || test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
+                    // Record this before any early `continue`: a `not TYPE_CHECKING` guard
+                    // always evaluates statically to `false`, so its branch is skipped below,
+                    // yet the following `else` branch must still be treated as type-checking-only.
+                    following_runtime_only_branch |= later_branches_are_type_checking;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
@@ -1308,7 +1322,13 @@ impl<'a> BindingsBuilder<'a> {
                         &Usage::NonPinningValue(None),
                     );
                     negated_prev_ops.and_all(new_narrow_ops.negate());
-                    self.stmts(body, parent);
+                    if is_type_checking_branch {
+                        self.type_checking_depth += 1;
+                        self.stmts(body, parent);
+                        self.type_checking_depth -= 1;
+                    } else {
+                        self.stmts(body, parent);
+                    }
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
                         exhaustive = true;
@@ -1368,7 +1388,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.bind_target_no_expr(&mut opts, &make_binding);
                     } else {
                         self.insert_binding(
-                            Key::Anon(item_range),
+                            Key::ContextValue(item_range),
                             Binding::ContextValue(None, context_idx, expr_range, kind),
                         );
                     }
@@ -1626,6 +1646,18 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Expr(mut x) => {
                 let mut current = self.declare_current_idx(Key::StmtExpr(x.value.range()));
                 self.ensure_expr(&mut x.value, current.usage());
+                // A Polars in-place mutation on a bare name rebinds it to the degraded schema, so a
+                // discarded return value still degrades the frame.
+                let mutated_receiver = if let Expr::Call(call) = &*x.value
+                    && let Expr::Attribute(func) = &*call.func
+                    && let Expr::Name(receiver) = &*func.value
+                    && let Some(kind) =
+                        polars_column_mutation(func.attr.id.as_str(), &call.arguments)
+                {
+                    Some((receiver.id.clone(), func.attr.range, kind))
+                } else {
+                    None
+                };
                 let special_export = if let Expr::Call(ExprCall { func, .. }) = &*x.value {
                     self.as_special_export(func)
                 } else {
@@ -1635,6 +1667,21 @@ impl<'a> BindingsBuilder<'a> {
                     .insert_binding_current(current, Binding::StmtExpr(x.value, special_export));
                 // Track this StmtExpr as the trailing statement for type-based termination
                 self.scopes.set_last_stmt_expr(Some(key));
+                if let Some((name, range, kind)) = mutated_receiver {
+                    let mut narrow_ops = NarrowOps::new();
+                    narrow_ops.0.insert(
+                        name,
+                        (
+                            NarrowOp::Atomic(None, AtomicNarrowOp::PolarsColumnMutation(kind)),
+                            range,
+                        ),
+                    );
+                    self.bind_narrow_ops(
+                        &narrow_ops,
+                        NarrowUseLocation::Span(range),
+                        &Usage::NonPinningValue(None),
+                    );
+                }
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {

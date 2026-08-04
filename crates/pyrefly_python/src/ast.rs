@@ -49,6 +49,8 @@ use ruff_python_parser::Parsed;
 use ruff_python_parser::UnsupportedSyntaxError;
 use ruff_python_parser::parse_expression_range;
 use ruff_python_parser::parse_unchecked;
+use ruff_python_parser::typing::AnnotationKind;
+use ruff_python_parser::typing::parse_type_annotation;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -178,20 +180,20 @@ impl Ast {
             .body)
     }
 
-    pub fn parse_type_literal(x: &StringLiteral) -> anyhow::Result<Expr> {
-        let mut s = &*x.value;
-        let buffer;
-        let mut add = x.flags.prefix().text_len() + TextSize::new(1);
-
-        if x.flags.is_triple_quoted() {
-            // Implicitly bracketed, so add them explicitly
-            buffer = format!("({s})");
-            s = &buffer;
-            add += TextSize::new(1); // 3 for the quotes, minus 1 for the bracket, minus 1 for the raw quote
+    pub fn parse_type_literal(x: &ExprStringLiteral, source: &str) -> anyhow::Result<Expr> {
+        let parsed = parse_type_annotation(x, source)?;
+        match parsed.kind() {
+            AnnotationKind::Simple => Ok(parsed.expression().clone()),
+            AnnotationKind::Complex => {
+                // Complex strings have no exact decoded-to-source range mapping, but
+                // binding keys still require distinct, module-relative ranges.
+                let value = x.value.to_str();
+                Ast::parse_expr(
+                    value,
+                    x.start() + x.value.first_literal_flags().opener_len(),
+                )
+            }
         }
-        // Make sure the range is precise, so that we get the right UTF8 indices.
-        // We might have a problem with \ escapes moving indices, but if necessary we can ban those.
-        Ast::parse_expr(s, x.range.start() + add)
     }
 
     pub fn unpack_slice(x: &Expr) -> &[Expr] {
@@ -597,6 +599,43 @@ impl Ast {
             _ => Some("Expression"),
         }
     }
+
+    /// Whether `pattern` always matches a `match` whose subject expression is `subject`.
+    /// Beyond ruff's syntactic `is_irrefutable`, a sequence pattern over a fixed-arity
+    /// tuple subject (e.g. `case _, _` for `match x, y`) is irrefutable when its arity
+    /// matches and every element is irrefutable: the subject is always a tuple of exactly
+    /// that length, so the pattern is a catch-all.
+    ///
+    /// This is the single source of truth for match-case irrefutability. It must be used
+    /// by every "is this match exhaustive?" judgment (binding-step exhaustive-fork handling
+    /// in `stmt_match` and the implicit-return scan in `function.rs`); if the judgments
+    /// diverge, one side promises a `Key::Exhaustive(Match, ...)` binding the other never
+    /// inserts, panicking at solve time with "key lacking binding".
+    pub fn pattern_is_irrefutable_for_subject(pattern: &Pattern, subject: &Expr) -> bool {
+        if pattern.is_wildcard() || pattern.is_irrefutable() {
+            return true;
+        }
+        // A fixed-arity tuple subject `match x, y:` has no starred elements (see the
+        // `MatchSubject::Tuple` construction in `stmt_match`).
+        if let (Pattern::MatchSequence(seq), Expr::Tuple(subject_tuple)) = (pattern, subject)
+            && subject_tuple
+                .elts
+                .iter()
+                .all(|elt| !matches!(elt, Expr::Starred(_)))
+        {
+            let has_star = seq
+                .patterns
+                .iter()
+                .any(|p| matches!(p, Pattern::MatchStar(_)));
+            return !has_star
+                && seq.patterns.len() == subject_tuple.elts.len()
+                && seq
+                    .patterns
+                    .iter()
+                    .all(|p| p.is_wildcard() || p.is_irrefutable());
+        }
+        false
+    }
 }
 
 #[cfg(test)]
@@ -610,6 +649,27 @@ mod tests {
             Some(Stmt::Expr(stmt)) => *stmt.value,
             other => panic!("expected an expression statement, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn complex_type_literal_ranges_are_module_relative() {
+        let source = "prefix: int\nx: \"lib.Literal['\\\\n']\"\n";
+        let (module, errors, _) = Ast::parse(source, PySourceType::Python);
+        assert!(errors.is_empty());
+        let Stmt::AnnAssign(stmt) = &module.body[1] else {
+            panic!("expected an annotated assignment");
+        };
+        let Expr::StringLiteral(literal) = stmt.annotation.as_ref() else {
+            panic!("expected a string annotation");
+        };
+        let Expr::Subscript(subscript) = Ast::parse_type_literal(literal, source).unwrap() else {
+            panic!("expected a subscript annotation");
+        };
+        let Expr::Attribute(attribute) = subscript.value.as_ref() else {
+            panic!("expected an attribute annotation");
+        };
+        let start = TextSize::new(source.find("Literal").unwrap() as u32);
+        assert_eq!(attribute.attr.range, TextRange::at(start, TextSize::new(7)));
     }
 
     #[test]

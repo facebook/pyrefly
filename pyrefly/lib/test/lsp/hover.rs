@@ -13,7 +13,9 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
+use crate::lsp::wasm::hover::HoverOptions;
 use crate::lsp::wasm::hover::get_hover;
+use crate::lsp::wasm::hover::get_hover_with_verbosity;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
@@ -29,6 +31,105 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         }) => markup.value,
         _ => "None".to_owned(),
     }
+}
+
+fn get_test_report_at_verbosity(
+    state: &State,
+    handle: &Handle,
+    position: TextSize,
+    verbosity_level: usize,
+) -> (String, bool) {
+    match get_hover_with_verbosity(
+        &state.transaction(),
+        handle,
+        position,
+        HoverOptions {
+            show_go_to_links: true,
+            verbosity_level,
+        },
+    ) {
+        Some(result) => match result.hover {
+            Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            } => (markup.value, result.can_increase_verbosity),
+            _ => ("None".to_owned(), false),
+        },
+        _ => ("None".to_owned(), false),
+    }
+}
+
+#[test]
+fn hover_verbosity_expands_named_unions() {
+    let code = r#"
+type A = int | str
+x: list[A] = []
+#^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let position = extract_cursors_for_test(code)[0];
+
+    let (compact, compact_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 0);
+    let (expanded, expanded_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 1);
+
+    assert!(compact.contains("x: list[A]"), "got: {compact}");
+    assert!(compact_can_increase);
+    assert!(expanded.contains("x: list[int | str]"), "got: {expanded}");
+    assert!(!expanded_can_increase);
+}
+
+#[test]
+fn hover_verbosity_expands_named_unions_in_constructor() {
+    // The named union appears only in the constructor signature, not the bare
+    // class type, so expandability must be computed on the rendered constructor.
+    let code = r#"
+type A = int | str
+class C:
+    def __init__(self, x: A) -> None: ...
+value = C
+#       ^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let position = extract_cursors_for_test(code)[0];
+
+    let (compact, compact_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 0);
+    let (expanded, expanded_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 1);
+
+    assert!(compact.contains("x: A"), "got: {compact}");
+    assert!(compact_can_increase);
+    assert!(expanded.contains("x: int | str"), "got: {expanded}");
+    assert!(!expanded_can_increase);
+}
+
+#[test]
+fn hover_verbosity_hides_plus_without_named_union() {
+    // No named union to reveal, so compact and expanded renders are identical and
+    // the "+" affordance must not be offered.
+    let code = r#"
+x: int = 0
+#^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let position = extract_cursors_for_test(code)[0];
+
+    let (compact, compact_can_increase) =
+        get_test_report_at_verbosity(&state, &handle, position, 0);
+
+    assert!(compact.contains("x: int"), "got: {compact}");
+    assert!(!compact_can_increase);
 }
 
 fn assert_sphinx_resolved_as_link(report: &str, role: &str, target: &str) {
@@ -302,6 +403,31 @@ takes(foo=1, bar="x", baz=None)
 }
 
 #[test]
+fn hover_wraps_nested_callable_params() {
+    let code = r#"
+from typing import Callable, Concatenate, ParamSpec, TypeVar
+
+T = TypeVar("T")
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def drop_str(func: Callable[Concatenate[T, str, P], R]) -> Callable[Concatenate[T, P], R]: ...
+
+drop_str
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("func: (\n    T,\n    str,\n    ParamSpec(P)\n) -> R"),
+        "Expected wrapped input callable in hover, got: {report}"
+    );
+    assert!(
+        report.contains(") -> (\n    T,\n    ParamSpec(P)\n) -> R"),
+        "Expected wrapped return callable in hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_callable_instance_uses_dunder_call_signature() {
     let code = r#"
 class Greeter:
@@ -528,6 +654,62 @@ def f(x: int | str | None) -> None:
 }
 
 #[test]
+fn hover_type_source_match_capture_then_narrow() {
+    let code = r#"
+def f(subject: object) -> None:
+    match subject:
+        case y:
+            if isinstance(y, int):
+                y
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("**Type source**"),
+        "Expected type source section in hover, got: {report}"
+    );
+    assert!(
+        report.contains("isinstance(y, int)"),
+        "Expected the capture's own narrow attributed to it, got: {report}"
+    );
+}
+
+#[test]
+fn hover_bare_capture_does_not_show_subject_narrow() {
+    // A `PatternCapture` is a definition boundary: hovering the capture must not
+    // attribute the matched *subject's* narrow to the capture name.
+    let code = r#"
+def f(x: int | None) -> None:
+    if x is not None:
+        match x:
+            case y:
+                y
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        !report.contains("Narrowed by condition"),
+        "Bare capture must not inherit the subject's narrow, got: {report}"
+    );
+}
+
+#[test]
 fn hover_type_source_attribute_narrow() {
     let code = r#"
 class C:
@@ -612,6 +794,97 @@ def f() -> None:
 }
 
 #[test]
+fn hover_on_match_wildcard_shows_remaining_type() {
+    let code = r#"
+from enum import StrEnum
+
+class E(StrEnum):
+    x = "1"
+    y = "2"
+
+def f(x: E) -> None:
+    match x:
+        case E.x:
+            pass
+        case _:
+#            ^
+            pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("Literal[E.y]"),
+        "Expected hover to show remaining match type, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_match_wildcard_with_attribute_subject() {
+    let code = r#"
+class Holder:
+    value: bytes
+
+def f(h: Holder) -> None:
+    match h.value:
+        case _:
+#            ^
+            pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("bytes"),
+        "Expected hover to show the subject attribute's type, got: {report}"
+    );
+    assert!(
+        !report.contains("Holder"),
+        "Hover must not fall back to the base object's type, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_match_wildcard_with_subscript_subject() {
+    let code = r#"
+def f(xs: list[bytes]) -> None:
+    match xs[0]:
+        case _:
+#            ^
+            pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("bytes"),
+        "Expected hover to show the subscripted element type, got: {report}"
+    );
+    assert!(
+        !report.contains("list[bytes]"),
+        "Hover must not fall back to the container's type, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_string_with_hash_character() {
     let code = r#"
 x = "hello # world"  # pyrefly: ignore
@@ -675,6 +948,29 @@ foo(x=1, y="hello")
     assert!(
         report.contains("y: str"),
         "Expected keyword argument hover to show imported parameter type, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_dataclass_constructor_keyword_shows_field_type() {
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Test:
+    foo: int
+
+Test(foo=1)
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("foo: int"),
+        "Expected dataclass constructor keyword hover to show field type, got: {report}"
+    );
+    assert!(
+        !report.contains("(class) Test") && !report.contains("Test: int"),
+        "Keyword hover should not be labeled as the class, got: {report}"
     );
 }
 

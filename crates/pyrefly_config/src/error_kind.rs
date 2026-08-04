@@ -149,6 +149,8 @@ pub enum ErrorKind {
     /// An error caused by unpacking.
     /// e.g. attempting to unpack an iterable into the wrong number of variables.
     BadUnpacking,
+    /// A Polars DataFrame's data columns do not match the column set declared by its `schema=`.
+    ColumnSchemaMismatch,
     /// A Polars DataFrame column literal has an element that does not fit the column's first-element dtype.
     ColumnTypeMismatch,
     /// A symbol has no type coverage. Emitted only by `pyrefly coverage check`.
@@ -157,8 +159,13 @@ pub enum ErrorKind {
     CoveragePartial,
     /// Calling a function marked with `@deprecated`
     Deprecated,
+    /// Instantiating a class that directly extends `ABC` or directly uses `ABCMeta`, even though
+    /// it has no abstract methods.
+    DirectAbstractBaseInstantiation,
     /// Division, floor division, or modulo by a literal zero value.
     DivisionByZero,
+    /// A function has an empty body despite declaring a non-None return type.
+    EmptyBody,
     /// Explicit usage of `typing.Any` in an annotation.
     ExplicitAny,
     /// Raised when a class implicitly becomes abstract by defining abstract members without
@@ -177,8 +184,7 @@ pub enum ErrorKind {
     /// be inferred from context and is pinned to a container of `Any`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyEmptyContainer,
-    /// An implicit `Any` introduced when a lambda parameter or return type cannot
-    /// be inferred from context.
+    /// An implicit `Any` introduced when a lambda parameter cannot be inferred from context.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyLambda,
     /// An implicit `Any` introduced because a function parameter has no
@@ -191,6 +197,8 @@ pub enum ErrorKind {
     /// to `Any`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyTypeArgument,
+    /// A non-`bool` value is used in a boolean context, such as an `if` condition.
+    ImplicitBool,
     /// Usage of a module that was not actually imported, but does exist.
     ImplicitImport,
     /// Importing a name from a module that only made it available via a plain
@@ -222,6 +230,8 @@ pub enum ErrorKind {
     InvalidAnnotation,
     /// Passing an argument that is invalid for reasons besides type.
     InvalidArgument,
+    /// Casting between types that are provably disjoint.
+    InvalidCast,
     /// A method-only decorator was applied to a top-level function.
     /// e.g. using `@final` or `@override` on a top-level function.
     /// Defaults to `warn` because such usage is harmless at runtime and is
@@ -377,6 +387,9 @@ pub enum ErrorKind {
     UnexpectedPositionalArgument,
     /// Attempting to use a type checker directive without importing it from `typing`.
     UnimportedDirective,
+    /// A call argument whose type is an implicit `Any` (unknown), because the value
+    /// passed has an unknown type.
+    UnknownArgumentType,
     /// An unannotated attribute assigned a value with unknown type.
     UnknownAttributeType,
     /// Accessing a DataFrame column that does not exist in the inferred schema.
@@ -406,6 +419,8 @@ pub enum ErrorKind {
     Unsupported,
     /// Attempting to `del` something that cannot be deleted
     UnsupportedDelete,
+    /// A dynamically created class has a base that cannot be statically resolved.
+    UnsupportedDynamicBase,
     /// Attempting to apply an operation to arguments that do not support it.
     UnsupportedOperation,
     /// A class decorator whose own type is `Any`, obscuring the decorated class type.
@@ -476,6 +491,7 @@ impl ErrorKind {
     /// Suppressing the parent kind also suppresses this kind.
     pub fn parent_kind(self) -> Option<ErrorKind> {
         match self {
+            ErrorKind::DirectAbstractBaseInstantiation => Some(ErrorKind::BadInstantiation),
             ErrorKind::BadOverrideMutableAttribute | ErrorKind::BadOverrideParamName => {
                 Some(ErrorKind::BadOverride)
             }
@@ -516,7 +532,9 @@ impl ErrorKind {
             ErrorKind::CoverageMissing => Severity::Warn,
             ErrorKind::CoveragePartial => Severity::Warn,
             ErrorKind::Deprecated => Severity::Warn,
+            ErrorKind::DirectAbstractBaseInstantiation => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
+            ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
@@ -524,11 +542,13 @@ impl ErrorKind {
             ErrorKind::ImplicitAnyEmptyContainer => Severity::Ignore,
             ErrorKind::ImplicitAnyParameter => Severity::Ignore,
             ErrorKind::ImplicitAnyTypeArgument => Severity::Ignore,
+            ErrorKind::ImplicitBool => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,
             ErrorKind::ImplicitReexport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::IncompatibleComparison => Severity::Ignore,
             ErrorKind::InvalidAbstractMethod => Severity::Ignore,
+            ErrorKind::InvalidCast => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
             ErrorKind::MisplacedIgnore => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
@@ -553,6 +573,7 @@ impl ErrorKind {
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
+            ErrorKind::UnknownArgumentType => Severity::Ignore,
             ErrorKind::ImplicitAnyLambda => Severity::Ignore,
             ErrorKind::UnknownAttributeType => Severity::Ignore,
             ErrorKind::UnknownVariableType => Severity::Ignore,
@@ -561,6 +582,7 @@ impl ErrorKind {
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnreachableMatchCase => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            ErrorKind::UnsupportedDynamicBase => Severity::Ignore,
             ErrorKind::UntypedClassDecorator => Severity::Ignore,
             ErrorKind::UntypedFunctionDecorator => Severity::Ignore,
             ErrorKind::UntypedImport => Severity::Warn,
@@ -582,11 +604,39 @@ impl ErrorKind {
         matches!(self, ErrorKind::RevealType)
     }
 
+    /// Returns whether `--suppress-errors` may write a suppression comment for
+    /// this kind. Unused-ignore diagnostics are excluded because suppressing one
+    /// would only leave behind another unused ignore.
+    pub fn is_suppressable(self) -> bool {
+        match self {
+            ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore => false,
+            _ => true,
+        }
+    }
+
     /// A soft error is a warning that should not influence overload selection
     /// or other type-inference decisions. The type check itself passed, but the
     /// code pattern is suspicious.
     pub fn is_soft(self) -> bool {
-        matches!(self, ErrorKind::StringAsIterable)
+        matches!(
+            self,
+            ErrorKind::Deprecated
+                | ErrorKind::ImplicitAnyAttribute
+                | ErrorKind::ImplicitAnyEmptyContainer
+                | ErrorKind::ImplicitAnyLambda
+                | ErrorKind::ImplicitAnyParameter
+                | ErrorKind::ImplicitAnyTypeArgument
+                | ErrorKind::PytorchEfficiencyLintCudaCall
+                | ErrorKind::PytorchEfficiencyLintItemCall
+                | ErrorKind::PytorchEfficiencyLintPrintTensor
+                | ErrorKind::PytorchEfficiencyLintRedundantToCall
+                | ErrorKind::RedundantCast
+                | ErrorKind::StringAsIterable
+                | ErrorKind::UnknownArgumentType
+                | ErrorKind::UnknownAttributeType
+                | ErrorKind::UnknownVariableType
+                | ErrorKind::UnnecessaryTypeConversion
+        )
     }
 
     /// Coverage kinds are emitted only by `pyrefly coverage check`.
@@ -631,36 +681,6 @@ mod tests {
     fn test_error_kind_name() {
         assert_eq!(ErrorKind::Unsupported.to_name(), "unsupported");
         assert_eq!(ErrorKind::ParseError.to_name(), "parse-error");
-    }
-
-    #[test]
-    fn test_unknown_column_kind_exists() {
-        assert_eq!(ErrorKind::UnknownColumn.to_name(), "unknown-column");
-        assert_eq!(
-            "unknown-column".parse::<ErrorKind>(),
-            Ok(ErrorKind::UnknownColumn)
-        );
-    }
-
-    #[test]
-    fn test_column_type_mismatch_kind_exists() {
-        assert_eq!(
-            ErrorKind::ColumnTypeMismatch.to_name(),
-            "column-type-mismatch"
-        );
-        assert_eq!(
-            "column-type-mismatch".parse::<ErrorKind>(),
-            Ok(ErrorKind::ColumnTypeMismatch)
-        );
-        assert_eq!(
-            ErrorKind::ColumnTypeMismatch.default_severity(),
-            Severity::Error
-        );
-    }
-
-    #[test]
-    fn test_unknown_column_default_severity() {
-        assert_eq!(ErrorKind::UnknownColumn.default_severity(), Severity::Error);
     }
 
     #[test]

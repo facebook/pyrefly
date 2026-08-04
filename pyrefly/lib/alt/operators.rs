@@ -15,12 +15,11 @@ use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
-use pyrefly_types::shaped_array::ShapedArrayType;
-use pyrefly_types::shaped_array::broadcast_shapes;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::CmpOp;
+use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprUnaryOp;
@@ -74,12 +73,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             callee_errors,
             Some(context),
         );
-        self.call_infer(
+        self.call_infer_with_return_errors(
             callable,
             &[CallArg::ty(call_arg_type, range)],
             &[],
             range,
             call_errors,
+            callee_errors,
             Some(context),
             None,
             None,
@@ -236,7 +236,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 dunder,
                 arg,
             );
-            if call_errors.is_empty() {
+            // Soft errors (e.g. unknown-argument-type) must not reject an otherwise
+            // valid dunder call, so gate on hard errors only.
+            if !call_errors.has_hard() {
                 errors.extend(callee_errors);
                 return ret;
             } else if first_call.is_none() {
@@ -403,7 +405,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             rhs = self.expr_infer_with_hint(&x.right, hint, errors);
         } else {
             lhs = self.expr_infer(&x.left, errors);
-            rhs = self.expr_infer(&x.right, errors);
+            rhs = if x.op == Operator::BitOr
+                && matches!(&*x.right, Expr::Dict(_))
+                && matches!(&lhs, Type::ClassType(cls) if cls.class_object().is_builtin("dict"))
+            {
+                self.expr_infer_with_hint(&x.right, Some(HintRef::soft(&lhs)), errors)
+            } else {
+                self.expr_infer(&x.right, errors)
+            };
         }
 
         // Optimisation: If we have `Union[a, b] | Union[c, d]`, instead of unioning
@@ -534,10 +543,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Reflected operator implementation: This deviates from the runtime semantics by calling the reflected dunder if the regular dunder call errors.
             // At runtime, the reflected dunder is called only if the regular dunder method doesn't exist or if it returns NotImplemented.
             // This deviation is necessary, given that the typeshed stubs don't record when NotImplemented is returned
-            let calls_to_try = [
-                (&Name::new_static(op.dunder()), lhs, rhs),
-                (&Name::new_static(op.reflected_dunder()), rhs, lhs),
-            ];
+            let forward = Name::new_static(op.dunder());
+            let reflected = Name::new_static(op.reflected_dunder());
+            let forward_call = (&forward, lhs, rhs);
+            let reflected_call = (&reflected, rhs, lhs);
+            // Python data model: when the right operand's type is a *proper* subclass of the
+            // left operand's type, the reflected dunder is tried first. This lets e.g.
+            // `int_val & some_IntFlag_member` resolve through `IntFlag.__rand__` (which returns
+            // the flag type) rather than `int.__and__` (which widens back to `int`). A subclass
+            // that does not override the reflected dunder inherits it unchanged, and
+            // `try_binop_calls` still falls back to the forward dunder, so non-overriding
+            // subclasses are unaffected.
+            let reflected_first = match (lhs, rhs) {
+                (Type::ClassType(lhs_cls), Type::ClassType(rhs_cls)) => {
+                    let lhs_obj = lhs_cls.class_object();
+                    let rhs_obj = rhs_cls.class_object();
+                    lhs_obj != rhs_obj && self.has_superclass(rhs_obj, lhs_obj)
+                }
+                _ => false,
+            };
+            let calls_to_try = if reflected_first {
+                [reflected_call, forward_call]
+            } else {
+                [forward_call, reflected_call]
+            };
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
         self.distribute_over_union(lhs, |lhs| {
@@ -584,25 +613,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(result) = self.try_tuple_repeat(lhs, rhs)
                 {
                     result
-                } else if matches!(
-                    x.op,
-                    Operator::Add
-                        | Operator::Sub
-                        | Operator::Mult
-                        | Operator::Div
-                        | Operator::Mod
-                        | Operator::Pow
-                        | Operator::FloorDiv
-                ) && let Type::ShapedArray(l_shaped_array) = lhs
-                    && let Type::ShapedArray(r_shaped_array) = rhs
-                {
-                    // Tensor element-wise operations with broadcasting
-                    self.broadcast_shaped_array_binop(
-                        l_shaped_array,
-                        r_shaped_array,
-                        x.range,
-                        errors,
-                    )
                 } else if let Some(result) = self.try_int_binop(x.op, lhs, rhs) {
                     result
                 } else if x.op == Operator::Pow
@@ -677,7 +687,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
         let base = self.expr_infer(&x.target, errors);
-        let rhs = self.expr_infer(&x.value, errors);
+        let rhs = if x.op == Operator::BitOr
+            && matches!(&*x.value, Expr::Dict(_))
+            && matches!(&base, Type::ClassType(cls) if cls.class_object().is_builtin("dict"))
+        {
+            self.expr_infer_with_hint(&x.value, Some(HintRef::soft(&base)), errors)
+        } else {
+            self.expr_infer(&x.value, errors)
+        };
         if matches!(x.op, Operator::Div | Operator::FloorDiv | Operator::Mod)
             && Self::is_literal_zero(&rhs)
         {
@@ -896,6 +913,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn unop_infer(&self, x: &ExprUnaryOp, errors: &ErrorCollector) -> Type {
         let t = self.expr_infer(&x.operand, errors);
+        if x.op == UnaryOp::Not {
+            self.check_implicit_bool(&t, x.operand.range(), errors);
+        }
         let unop = |t: &Type, f: &dyn Fn(&Lit) -> Option<Type>, method: &Name| {
             let operand_range = x.operand.range();
             let context = || {
@@ -913,7 +933,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | Type::Quantified(_)
                 | Type::ShapedArray(_)
                 | Type::NNModule(_)
-                | Type::DataFrame(_) => {
+                | Type::DataFrame(_)
+                | Type::Series(_) => {
                     self.call_method_or_error(t, method, x.range, &[], &[], errors, Some(&context))
                 }
                 Type::Literal(lit) if let Lit::Enum(lit_enum) = &lit.value => self
@@ -960,8 +981,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Checks for unnecessary identity comparisons.
     ///
-    /// Only emits warnings for identity comparisons (`is` or `is not`) between literals
-    /// whose comparison result is statically known.
+    /// Only emits warnings for identity comparisons (`is` or `is not`) whose result is
+    /// statically known.
     /// Returns early without warnings for other comparison operators.
     fn check_unnecessary_comparison(
         &self,
@@ -1044,20 +1065,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
 
-            // ClassDef vs ClassType - disjoint unless ClassType is `type`, `object`,
-            // or another metaclass (subclass of type)
-            (Type::ClassDef(cdef), ctype @ Type::ClassType(cls))
-            | (ctype @ Type::ClassType(cls), Type::ClassDef(cdef)) => {
-                // A class object is an instance of `type` (or a metaclass), so it's only
-                // compatible with ClassType if that ClassType is `type`, `object`, or a metaclass
-                let is_metaclass_or_object = cls.is_builtin("object")
-                    || self.has_superclass(
-                        cls.class_object(),
-                        self.stdlib.builtins_type().class_object(),
-                    );
-                if !is_metaclass_or_object {
-                    emit_instance_is_class_warning(&ctype.to_string(), cdef.name().as_str(), is_op);
-                }
+            // ClassDef vs ClassType - disjoint unless the class object is assignable to ClassType.
+            (cdef @ Type::ClassDef(cdef_inner), ctype @ Type::ClassType(_))
+            | (ctype @ Type::ClassType(_), cdef @ Type::ClassDef(cdef_inner))
+                if !self.is_subset_eq(cdef, ctype) =>
+            {
+                emit_instance_is_class_warning(
+                    &ctype.to_string(),
+                    cdef_inner.name().as_str(),
+                    is_op,
+                );
             }
 
             // All other combinations: no warning
@@ -1065,30 +1082,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Handle element-wise binary operations on tensors with broadcasting.
-    /// broadcast_shapes handles all shape variants: Concrete shapes are broadcast
-    /// precisely, Unpacked shapes match suffix then middles then prefixes, and
-    /// mixed Concrete+Unpacked aligns against the suffix.
-    fn broadcast_shaped_array_binop(
-        &self,
-        left: &ShapedArrayType,
-        right: &ShapedArrayType,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Type {
-        match broadcast_shapes(&left.shape(), &right.shape()) {
-            Ok(result_shape) => self.shaped_array_with_shape(left, result_shape).to_type(),
-            Err(err) => {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::UnsupportedOperation,
-                    format!("Cannot broadcast tensor shapes: {}", err),
-                );
-                Type::any_error()
-            }
-        }
-    }
     /// Checks for incompatible equality comparisons between types that cannot overlap.
     fn check_incompatible_comparison(
         &self,

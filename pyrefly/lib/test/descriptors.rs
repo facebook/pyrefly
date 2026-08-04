@@ -1041,3 +1041,47 @@ def f(h: Host) -> None:
     h.x = 5  # E: Expected a callable, got `C`
     "#,
 );
+
+testcase!(
+    test_access_property_on_metaclass,
+    r#"
+class DTypeMeta(type):
+    @property
+    def time_unit(cls) -> str: ...
+
+class DType: ...
+
+class Datetime(DType, metaclass=DTypeMeta):
+    __slots__ = ("time_unit",)
+    def __init__(self, time_unit: str = "us") -> None:
+        self.time_unit: str = time_unit
+
+def get_unit(dtype: DType | type[DType]):
+    if (
+        isinstance(dtype, type)
+        and issubclass(dtype, Datetime)
+        or isinstance(dtype, Datetime)
+    ):
+        return dtype.time_unit
+    "#,
+);
+
+testcase!(
+    test_delete_only_data_descriptor_on_metaclass,
+    r#"
+from typing import assert_type
+
+class DeleteOnlyDescriptor:
+    def __delete__(self, instance: object) -> None: ...
+
+class Meta(type):
+    value = DeleteOnlyDescriptor()
+
+class C(metaclass=Meta):
+    __slots__ = ("value",)
+    def __init__(self) -> None:
+        self.value: int = 0
+
+assert_type(C.value, DeleteOnlyDescriptor)
+    "#,
+);

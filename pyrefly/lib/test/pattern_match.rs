@@ -20,6 +20,23 @@ print(y)  # E: `y` may be uninitialized
 );
 
 testcase!(
+    test_capture_narrowing,
+    r#"
+from typing import assert_type
+def f(o: object) -> None:
+    match o:
+        case y:
+            if isinstance(y, int):
+                assert_type(y, int)
+def g(xs: list[int | str]) -> None:
+    match xs:
+        case [head, *tail]:
+            assert_type(head, int | str)
+            assert_type(tail, list[int | str])
+"#,
+);
+
+testcase!(
     test_guard_narrowing_in_match,
     r#"
 from typing import assert_type
@@ -178,6 +195,52 @@ def my_func(x: dict[MyEnumType, int]) -> int:
             return a + b
         case _:
             return 0
+"#,
+);
+
+testcase!(
+    test_mapping_pattern_typed_dict_preserves_literal_value_type,
+    r#"
+from dataclasses import dataclass
+from typing import Literal, TypeAlias, TypedDict, TypeVar, assert_never
+
+T = TypeVar("T")
+Pair: TypeAlias = tuple[T, T]
+PairSpec: TypeAlias = T | Pair[T]
+BoundaryStr: TypeAlias = Literal["closed", "periodic"]
+
+class BoundaryDictSpec(TypedDict):
+    x: PairSpec[BoundaryStr]
+    y: PairSpec[BoundaryStr]
+
+BoundarySpec: TypeAlias = BoundaryStr | BoundaryDictSpec
+
+def as_pair(b: PairSpec[BoundaryStr], /) -> Pair[BoundaryStr]:
+    match b:
+        case str():
+            return (b, b)
+        case (str(b1), str(b2)):
+            return (b1, b2)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BoundarySet:
+    x: Pair[BoundaryStr]
+    y: Pair[BoundaryStr]
+
+    @staticmethod
+    def from_spec(spec: BoundarySpec, /) -> "BoundarySet | None":
+        match spec:
+            case str() as b:
+                return BoundarySet(x=as_pair(b), y=as_pair(b))
+            case {
+                "x": (str() | (str(), str())) as bx,
+                "y": (str() | (str(), str())) as by,
+            } if len(spec) == 2:
+                return BoundarySet(x=as_pair(bx), y=as_pair(by))
+            case _:
+                raise TypeError
 "#,
 );
 
@@ -1435,9 +1498,79 @@ def f(n: Node) -> int:
 "#,
 );
 
+testcase!(
+    test_match_keyword_class_pattern_exhaustive,
+    r#"
+from typing import assert_never
+class Leaf:
+    pass
+class Box:
+    item: Leaf
+def f(b: Box) -> int:
+    match b:
+        case Box(item=Leaf()):
+            return 1
+def g(b: Box) -> int:
+    match b:
+        case Box(item=Leaf()):
+            return 1
+        case _:
+            assert_never(b)
+"#,
+);
+
+// An irrefutable keyword sub-pattern (a bare capture) fully exhausts its slot, so the
+// class must be subtracted from later cases -- mirroring the positional irrefutable case.
+testcase!(
+    test_match_irrefutable_keyword_class_pattern_exhaustive,
+    r#"
+from typing import assert_never
+class Box:
+    item: int
+def f(b: Box) -> int:
+    match b:
+        case Box(item=x):
+            return x
+        case _:
+            assert_never(b)
+"#,
+);
+
+testcase!(
+    test_match_mixed_positional_keyword_class_pattern_exhaustive,
+    r#"
+class A:
+    pass
+class Pair:
+    __match_args__ = ("first",)
+    first: A
+    tag: A
+def f(p: Pair) -> int:
+    match p:
+        case Pair(A(), tag=A()):
+            return 1
+"#,
+);
+
+testcase!(
+    test_match_keyword_class_pattern_partial_not_exhaustive,
+    r#"
+class A:
+    pass
+class B:
+    pass
+class Holder:
+    val: A | B
+def f(h: Holder) -> int:  # E: one or more paths are missing an explicit
+    # `val` still admits `B` after `A()`, so the class is not covered.
+    match h:
+        case Holder(val=A()):
+            return 1
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/3805
 testcase!(
-    bug = "match on a union of tuples is not seen as exhaustive: the arms cover it but a missing-return is still reported (per-element narrowing is fixed; exhaustiveness needs a sequence coverage gate)",
     test_match_tuple_union_narrowing,
     r#"
 def foo(b: bool) -> tuple[str, int] | tuple[int, str]:
@@ -1445,7 +1578,7 @@ def foo(b: bool) -> tuple[str, int] | tuple[int, str]:
         return "foo", 1
     else:
         return 2, "bar"
-def bar(b: bool) -> int:  # E: one or more paths are missing an explicit
+def bar(b: bool) -> int:
     match foo(b):
         case (str() as x, y):
             return y
@@ -1468,6 +1601,10 @@ def named(t: tuple[str, int] | tuple[int, str]) -> None:
         case (str() as x, y):
             assert_type(x, str)
             assert_type(y, int)
+        case (x2, y2):
+            assert_type(x2, int)
+            assert_type(y2, str)
+    match t:
         case (x2, str() as y2):
             assert_type(x2, int)
             assert_type(y2, str)
@@ -1476,9 +1613,47 @@ def synthetic() -> None:
         case (str() as x, y):
             assert_type(x, str)
             assert_type(y, int)
+        case (x2, y2):
+            assert_type(x2, int)
+            assert_type(y2, str)
+    match foo(True):
         case (x2, str() as y2):
             assert_type(x2, int)
             assert_type(y2, str)
+"#,
+);
+
+testcase!(
+    test_match_sequence_union_exhaustive,
+    r#"
+def f(t: tuple[int, str] | tuple[str, int]) -> int:
+    match t:
+        case (int(), str()):
+            return 1
+        case (str(), int()):
+            return 2
+"#,
+);
+
+testcase!(
+    test_match_sequence_union_partial_not_exhaustive,
+    r#"
+def f(t: tuple[int, str] | tuple[str, int]) -> int:  # E: one or more paths are missing an explicit
+    match t:
+        case (int(), str()):
+            return 1
+"#,
+);
+
+testcase!(
+    test_match_sequence_nested_element_not_exhaustive,
+    r#"
+def f(t: tuple[tuple[int], str] | tuple[str, int]) -> int:  # E: one or more paths are missing an explicit
+    match t:
+        case ([a], str()):
+            return 1
+        case (str(), int()):
+            return 2
 "#,
 );
 
@@ -1511,12 +1686,11 @@ def f(t: tuple[object, int] | tuple[object, str]) -> None:
 
 // https://github.com/facebook/pyrefly/issues/3883
 testcase!(
-    bug = "sequence pattern with a literal element does not subtract the tuple from the union, so the match is not seen as exhaustive",
     test_match_sequence_literal_element,
     r#"
 from typing import Literal, reveal_type
 type MyUnion = Literal["a"] | tuple[Literal["b"], int] | tuple[Literal["c"], int]
-def broken(value: MyUnion) -> str:  # E: one or more paths are missing an explicit
+def exhaustive(value: MyUnion) -> str:
     match value:
         case "a":
             return "a"
@@ -1524,19 +1698,26 @@ def broken(value: MyUnion) -> str:  # E: one or more paths are missing an explic
             return "b"
         case "c", v:
             return "c"
-    reveal_type(value)  # E: revealed type: tuple[Literal['b'], int] | tuple[Literal['c'], int]
+    reveal_type(value)  # E: revealed type: Never
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2474
 testcase!(
-    bug = "mapping pattern `{}` does not narrow the negative (else) case the way isinstance(x, Mapping) does",
     test_match_mapping_pattern_else_narrow,
     r#"
 from typing import reveal_type
-def test_match(x: dict | int) -> None:
+def empty_pattern(x: dict | int) -> None:
     match x:
         case {}:
+            reveal_type(x)  # E: revealed type: dict[Unknown, Unknown]
+        case _:
+            reveal_type(x)  # E: revealed type: int
+def keyed_pattern_does_not_narrow_else(x: dict | int) -> None:
+    # `case {"k": _}` is refutable on key presence: a dict without `"k"` falls through, so
+    # the `else` must keep `dict` (only `{}` / `{**rest}` match every mapping).
+    match x:
+        case {"k": _}:
             reveal_type(x)  # E: revealed type: dict[Unknown, Unknown]
         case _:
             reveal_type(x)  # E: revealed type: dict[Unknown, Unknown] | int
@@ -1563,7 +1744,6 @@ def example(a: list[int] | None, b: list[int] | None) -> list[int]:
 
 // https://github.com/facebook/pyrefly/issues/2932
 testcase!(
-    bug = "variables assigned in every non-raising match arm are still reported as possibly-unbound after the match",
     test_match_false_positive_unbound_name,
     r#"
 from typing import assert_type
@@ -1579,8 +1759,58 @@ def test(x: int | None, y: int | None) -> None:
             v = n // 3
         case _, _:
             raise ValueError
-    assert_type(u, int)  # E: `u` may be uninitialized
-    assert_type(v, int)  # E: `v` may be uninitialized
+    assert_type(u, int)
+    assert_type(v, int)
+"#,
+);
+
+testcase!(
+    test_match_tuple_wildcard_catch_all_is_exhaustive,
+    r#"
+from typing import assert_type
+def f(x: int | None, y: int | None) -> None:
+    match x, y:
+        case None, None:
+            u = 0
+        case int(m), None:
+            u = m
+        case None, int(n):
+            u = n
+        case _, _:
+            u = 1
+    assert_type(u, int)
+"#,
+);
+
+// The final `case (begin, end)` is an all-capture sequence over a fixed-arity tuple
+// subject, so it is a catch-all: the match is exhaustive and the function always
+// returns. The binding step and the implicit-return scan must agree on this, or the
+// latter promises a `Key::Exhaustive(Match, ...)` binding the former never inserts,
+// panicking at solve time with "key lacking binding".
+testcase!(
+    test_match_tuple_capture_catch_all_is_exhaustive_return,
+    r#"
+def f(begin: int | None, end: int | None) -> int:
+    match (begin, end):
+        case (None, None):
+            return 0
+        case (None, e):
+            return 1
+        case (b, None):
+            return 2
+        case (b, e):
+            return 3
+"#,
+);
+
+testcase!(
+    test_match_starred_tuple_subject_is_not_fixed_arity,
+    r#"
+def f(xs: list[int], y: int) -> None:
+    match *xs, y:
+        case a, b:
+            u = 0
+    print(u)  # E: `u` may be uninitialized
 "#,
 );
 

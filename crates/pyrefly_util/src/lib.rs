@@ -57,6 +57,7 @@ pub mod task_heap;
 pub mod telemetry;
 pub mod test_path;
 pub mod thread_pool;
+pub mod timer;
 pub mod trace;
 pub mod uniques;
 pub mod unix_path;

@@ -1730,7 +1730,6 @@ def test_union(x: A  | B):
 );
 
 testcase!(
-    bug = "type[ClassType(..)] should be type (or the direct metaclass?)",
     test_attribute_access_on_type_class,
     r#"
 # handy hack to get a type[X] for any X
@@ -1740,13 +1739,69 @@ class C:
     @staticmethod
     def m(x: int): ...
 
-class D[T]:
+ty(C).m(0) # E: Class `type` has no class attribute `m`
+"#,
+);
+
+testcase!(
+    bug = "We get the wrong metaclass for a specialized generic",
+    test_attribute_access_on_generic_alias,
+    r#"
+# handy hack to get a type[X] for any X
+def ty[T](x: T) -> type[T]: ...
+
+class C[T]:
     @classmethod
     def m(cls, x: T): ...
 
-ty(C).m(0) # E: Class `type` has no class attribute `m`
-ty(D[int]).m(0) # E: Expr::attr_infer_for_type attribute base undefined
-"#,
+# In Python 3.12, the type of a generic class is either `typing._GenericAlias` or `types.GenericAlias`:
+# https://github.com/python/cpython/blob/9621a7d0170bf1ec48bcfc35825007cdf75265ea/Lib/typing.py#L1373-L1397
+# We don't model this, so Pyrefly mistakenly thinks the metaclass is just `type`.
+# This actually gets us the right behavior in this case (there's no `m` attribute on either generic
+# alias class), but the error message shows the incorrect inference.
+ty(C[int]).m(0)  # E: Class `type` has no class attribute `m`
+    "#,
+);
+
+testcase!(
+    test_attribute_access_on_custom_metaclass,
+    r#"
+class Meta(type):
+    def m(self): ...
+
+class A(metaclass=Meta):
+    def a(self): ...
+
+def f[T](x: T) -> type[T]:
+    return type(x)
+
+def g(x: type[A]):
+    meta1 = f(A)
+    meta2 = x.__class__
+    # Technically, the types allow `meta1` and `meta2` to be subclasses of `Meta` rather than
+    # `Meta` itself, but it's more helpful to use `Meta` here than a conservative fallback.
+    meta1.m(A)
+    meta2.m(A)
+    # Make sure we don't accidentally allow lookup of an attribute of A.
+    meta1.a  # E: `Meta` has no class attribute `a`
+    meta2.a  # E: `Meta` has no class attribute `a`
+    "#,
+);
+
+testcase!(
+    test_attribute_access_on_metaclass_union,
+    r#"
+from typing import assert_type
+class M1(type):
+    x: int
+class M2(type):
+    x: str
+class A(metaclass=M1): ...
+class B(metaclass=M2): ...
+def f(x: type[A | B]):
+    cls = x.__class__
+    assert_type(cls.x, int | str)
+    "#,
 );
 
 testcase!(
@@ -2402,7 +2457,7 @@ testcase!(
     r#"
 # Partial union failure with 3 types: attribute exists on 1, missing on 2
 def f(x: str | int | None):
-    return x.split()  # E: Object of class `NoneType` has no attribute `split`\nObject of class `int` has no attribute `split` # !E: Did you mean
+    return x.split()  # E: Object of type `int | str | None` has no attribute `split` # !E: Did you mean
 "#,
 );
 
@@ -2434,7 +2489,7 @@ class A:
 class B:
     value: str
 def f(x: A | B):
-    return x.vaule  # E: Object of class `A` has no attribute `vaule`\nObject of class `B` has no attribute `vaule`\n  Did you mean `value`?
+    return x.vaule  # E: Object of type `A | B` has no attribute `vaule`\n  Object of class `A` has no attribute `vaule`\n  Object of class `B` has no attribute `vaule`\n  Did you mean `value`?
 "#,
 );
 

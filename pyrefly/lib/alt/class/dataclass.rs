@@ -143,6 +143,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Compute kw_only fields once for all methods that need it
         let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
 
+        self.check_duplicate_kw_only_markers(cls, errors);
         self.check_dataclass_non_data_descriptors(cls, dataclass, errors);
         self.check_dataclass_data_descriptor_defaults(cls, dataclass, errors);
         self.check_attrs_default_decorator_return_types(cls, dataclass, errors);
@@ -328,6 +329,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.get_dataclass_replace(cls, dataclass, &kw_only_by_class, errors),
         );
         Some(ClassSynthesizedFields::new(fields))
+    }
+
+    fn check_duplicate_kw_only_markers(&self, cls: &Class, errors: &ErrorCollector) {
+        let Some(class_fields) = self.get_class_fields(cls) else {
+            return;
+        };
+        let mut seen_marker = false;
+        for name in class_fields.names() {
+            if class_fields.is_field_annotated(name)
+                && matches!(
+                    self.get_dataclass_member(cls, name),
+                    DataclassMember::KwOnlyMarker
+                )
+            {
+                if seen_marker && let Some(range) = class_fields.field_decl_range(name) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::BadClassDefinition,
+                        format!("`{name}` is KW_ONLY, but KW_ONLY has already been specified"),
+                    );
+                }
+                seen_marker = true;
+            }
+        }
     }
 
     /// Check for non-data descriptors in dataclass fields and emit errors.
@@ -810,6 +836,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let le = map.0.get(&LE).cloned();
 
         let strict: Option<bool> = map.0.get(&STRICT).and_then(|v| v.as_bool());
+        let frozen = map.get_bool(&DataclassFieldKeywords::FROZEN);
 
         // The raw expression of the argument for `on_setattr`.
         let attrs_on_setattr_expr = args
@@ -867,6 +894,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ge,
             le,
             strict,
+            frozen,
             converter_param,
             attrs_setattr_frozen,
         }
@@ -915,6 +943,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &args.args.map(CallArg::expr_maybe_starred),
                 &args.keywords.map(CallKeyword::new),
                 args.range,
+                errors,
                 errors,
                 None,
                 None,
@@ -1012,6 +1041,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .filter(|sig| sig.accepts_single_positional_arg())
                 .filter_map(|sig| sig.get_first_param())
+                .cloned()
                 .collect();
             if inputs.is_empty() {
                 self.heap.mk_any_implicit()
@@ -1229,11 +1259,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             self.class_self_param(cls, false)
         };
+        // Pydantic models (BaseModel/RootModel/BaseSettings) do not honor `Field(init=False)`:
+        // the field still appears in the validator-driven `__init__`.
+        // Pydantic dataclasses and stdlib/attrs dataclasses follow the behavior of built-in dataclasses.
+        let init_arg_should_be_ignored = matches!(
+            self.get_metadata_for_class(cls).pydantic_model_kind(),
+            Some(
+                PydanticModelKind::BaseModel
+                    | PydanticModelKind::RootModel
+                    | PydanticModelKind::BaseSettings
+            )
+        );
         let mut params = vec![self_param];
         let mut has_seen_default = false;
         for (name, field, field_flags) in self.iter_fields(cls, dataclass, true, kw_only_by_class) {
             let strict = field_flags.strict.unwrap_or(strict_default);
-            if field_flags.init {
+            if field_flags.init || init_arg_should_be_ignored {
                 let has_default = force_optional
                     || field_flags.default.is_some()
                     || (field_flags.init_by_name && field_flags.init_by_alias.is_some());

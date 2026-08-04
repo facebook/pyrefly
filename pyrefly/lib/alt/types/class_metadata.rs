@@ -13,12 +13,14 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_types::callable::Deprecation;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::commas_iter;
+use pyrefly_util::visit::Visit as VisitTrait;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -28,6 +30,7 @@ use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::pydantic::PydanticModelKind;
+use crate::alt::types::pydantic::PydanticValidationFlags;
 use crate::binding::pydantic::PydanticAliasGenerator;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -142,6 +145,31 @@ impl VisitMut<Type> for ClassMetadata {
         }
         if let Some(shaped_array_shape) = &mut self.shaped_array_shape {
             shaped_array_shape.visit_mut(f);
+        }
+    }
+}
+
+impl VisitTrait<Type> for ClassMetadata {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        if let Some(metaclass) = self.metaclass.get() {
+            metaclass.visit(f);
+        }
+        for (_name, ty) in &self.keywords.0 {
+            ty.visit(f);
+        }
+        if let Some(typed_dict_metadata) = &self.typed_dict_metadata
+            && let ExtraItems::Extra(extra_item) = &typed_dict_metadata.extra_items
+        {
+            extra_item.ty.visit(f);
+        }
+        if let Some(enum_metadata) = &self.enum_metadata {
+            enum_metadata.cls.visit(f);
+        }
+        if let Some(dataclass_transform_metadata) = &self.dataclass_transform_metadata {
+            dataclass_transform_metadata.visit(f);
+        }
+        if let Some(shaped_array_shape) = &self.shaped_array_shape {
+            shaped_array_shape.visit(f);
         }
     }
 }
@@ -440,6 +468,12 @@ impl VisitMut<Type> for ClassSynthesizedField {
     }
 }
 
+impl VisitTrait<Type> for ClassSynthesizedField {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        self.inner.recurse(f);
+    }
+}
+
 impl Display for ClassSynthesizedField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.inner)
@@ -461,7 +495,7 @@ impl ClassSynthesizedField {
 }
 
 /// A class's synthesized fields, such as a dataclass's `__init__` method.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default, VisitMut)]
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default, Visit, VisitMut)]
 pub struct ClassSynthesizedFields(SmallMap<Name, ClassSynthesizedField>);
 
 impl ClassSynthesizedFields {
@@ -587,13 +621,15 @@ pub struct NamedTupleMetadata {
     pub directly_extends_named_tuple: bool,
 }
 
-/// Defaults for `init_by_name` and `init_by_default`, per-field flags that control the name of
-/// a field's corresponding `__init__` parameter. See DataclassFieldKeywords for more information.
+/// Defaults for per-field flags that control `__init__` parameter names.
+/// Pydantic validation options retain `None` so subclasses can distinguish defaults from
+/// inherited configuration.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct InitDefaults {
     pub init_by_name: bool,
     pub init_by_alias: bool,
     pub alias_generator: Option<PydanticAliasGenerator>,
+    pub pydantic_validation_flags: PydanticValidationFlags,
 }
 
 impl Default for InitDefaults {
@@ -602,6 +638,7 @@ impl Default for InitDefaults {
             init_by_name: false,
             init_by_alias: true,
             alias_generator: None,
+            pydantic_validation_flags: PydanticValidationFlags::default(),
         }
     }
 }
@@ -677,6 +714,45 @@ pub struct DjangoModelMetadata {
     pub fields_with_choices: Vec<Name>,
 }
 
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
+pub struct DjangoReverseRelationIndex(SmallMap<Class, ClassSynthesizedFields>);
+
+impl DjangoReverseRelationIndex {
+    pub fn new(map: SmallMap<Class, ClassSynthesizedFields>) -> Self {
+        Self(map)
+    }
+
+    pub fn get(&self, cls: &Class) -> Option<&ClassSynthesizedFields> {
+        self.0.get(cls)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Class, &ClassSynthesizedFields)> {
+        self.0.iter()
+    }
+}
+
+impl Display for DjangoReverseRelationIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "DjangoReverseRelationIndex(len={})", self.0.len())
+    }
+}
+
+impl VisitMut<Type> for DjangoReverseRelationIndex {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        for (_, fields) in self.0.iter_mut() {
+            fields.recurse_mut(f);
+        }
+    }
+}
+
+impl VisitTrait<Type> for DjangoReverseRelationIndex {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        for (_, fields) in self.0.iter() {
+            fields.recurse(f);
+        }
+    }
+}
+
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ProtocolMetadata {
     /// All members of the protocol, excluding ones defined on `object` and not overridden in a subclass.
@@ -712,7 +788,7 @@ pub struct TotalOrderingMetadata {
 /// `linearization_complete` is false when `ancestors` is only a recovery prefix
 /// after nonlinearizable inheritance. Callers that need an exact ancestor list
 /// must check it.
-#[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum ClassMro {
     Resolved {
         ancestors: Vec<ClassType>,
@@ -808,7 +884,7 @@ impl ClassMro {
 /// the inherited representative from a direct base. `None` means no
 /// disjoint-base information, in which case narrowing falls back to
 /// `object`.
-#[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct ClassDisjointBase {
     representative: Option<Class>,
 }

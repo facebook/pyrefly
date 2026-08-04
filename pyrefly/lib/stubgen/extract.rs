@@ -44,6 +44,7 @@ use starlark_map::Hashed;
 
 use crate::alt::answers::Answers;
 use crate::alt::types::decorated_function::DecoratedFunction;
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
@@ -463,6 +464,7 @@ fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
     }
     let mut display = TypeDisplayContext::new(&[ty]);
     display.render_self_type_as_self();
+    display.strip_library_schemas();
     let s = display.display(ty).to_string();
     if s.contains("@") || s.contains("Unknown") {
         ctx.uses_incomplete = true;
@@ -935,20 +937,29 @@ fn extract_ann_assign(
     ctx: &mut ExtractionContext,
     in_class: bool,
 ) -> Option<StubVariable> {
-    let name = match ann_assign.target.as_ref() {
-        Expr::Name(n) => n.id.as_str(),
+    let name_expr = match ann_assign.target.as_ref() {
+        Expr::Name(name_expr) => name_expr,
         _ => return None,
     };
+    let name = name_expr.id.as_str();
     if !should_include_name(name, ctx.config, in_class, ctx.dunder_all) {
         return None;
     }
 
     let annotation = expr_source_text(ctx.module_info, ann_assign.annotation.range());
 
-    let value = ann_assign
-        .value
-        .as_deref()
-        .and_then(|v| simple_value_text(v, ctx.module_info));
+    let def_key = Key::Definition(ShortIdentifier::expr_name(name_expr));
+    let is_type_alias = ctx
+        .bindings
+        .key_to_idx_hashed_opt(Hashed::new(&def_key))
+        .is_some_and(|idx| matches!(ctx.bindings.get(idx), Binding::TypeAlias(_)));
+    let value = ann_assign.value.as_deref().and_then(|value| {
+        if is_type_alias {
+            Some(expr_source_text(ctx.module_info, value.range()))
+        } else {
+            simple_value_text(value, ctx.module_info)
+        }
+    });
 
     Some(StubVariable {
         name: name.to_owned(),

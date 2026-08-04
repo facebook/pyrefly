@@ -113,6 +113,7 @@ pub struct TestEnv {
     unannotated_return_error: bool,
     implicit_any_parameter_error: bool,
     implicit_any_attribute_error: bool,
+    implicit_bool_error: bool,
     unknown_attribute_type_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
@@ -121,18 +122,24 @@ pub struct TestEnv {
     not_required_key_access_error: bool,
     pytorch_efficiency_lint_error: bool,
     incompatible_comparison_error: bool,
+    invalid_cast_warning: bool,
     untyped_class_decorator_error: bool,
     untyped_function_decorator_error: bool,
     unused_call_result_error: bool,
     string_as_iterable_warning: bool,
+    unsupported_dynamic_base_error: bool,
     strict_callable_subtyping: bool,
     strict_partial_subtyping: bool,
     spec_compliant_overloads: bool,
+    legacy_overload_expansion: bool,
+    treat_all_caps_as_final: bool,
     no_any_return_error: bool,
     no_any_return_explicit_error: bool,
     no_any_return_implicit_error: bool,
     implicit_any_lambda_error: bool,
     invalid_abstract_method_error: bool,
+    empty_body_error: bool,
+    unknown_argument_type_error: bool,
     unknown_variable_type_error: bool,
     implicit_reexport_error: bool,
     default_require_level: Require,
@@ -161,6 +168,7 @@ impl TestEnv {
             unannotated_return_error: false,
             implicit_any_parameter_error: false,
             implicit_any_attribute_error: false,
+            implicit_bool_error: false,
             unknown_attribute_type_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
@@ -169,18 +177,24 @@ impl TestEnv {
             not_required_key_access_error: false,
             pytorch_efficiency_lint_error: false,
             incompatible_comparison_error: false,
+            invalid_cast_warning: false,
             untyped_class_decorator_error: false,
             untyped_function_decorator_error: false,
             unused_call_result_error: false,
             string_as_iterable_warning: false,
+            unsupported_dynamic_base_error: false,
             strict_callable_subtyping: false,
             strict_partial_subtyping: false,
             spec_compliant_overloads: false,
+            legacy_overload_expansion: false,
+            treat_all_caps_as_final: false,
             no_any_return_error: false,
             no_any_return_explicit_error: false,
             no_any_return_implicit_error: false,
             implicit_any_lambda_error: false,
             invalid_abstract_method_error: false,
+            empty_body_error: false,
+            unknown_argument_type_error: false,
             unknown_variable_type_error: false,
             implicit_reexport_error: false,
             default_require_level: Require::Exports,
@@ -300,6 +314,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_implicit_bool_error(mut self) -> Self {
+        self.implicit_bool_error = true;
+        self
+    }
+
     pub fn enable_unknown_attribute_type_error(mut self) -> Self {
         self.unknown_attribute_type_error = true;
         self
@@ -350,6 +369,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_invalid_cast_warning(mut self) -> Self {
+        self.invalid_cast_warning = true;
+        self
+    }
+
     pub fn enable_untyped_class_decorator_error(mut self) -> Self {
         self.untyped_class_decorator_error = true;
         self
@@ -370,6 +394,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unsupported_dynamic_base_error(mut self) -> Self {
+        self.unsupported_dynamic_base_error = true;
+        self
+    }
+
     pub fn enable_strict_callable_subtyping(mut self) -> Self {
         self.strict_callable_subtyping = true;
         self
@@ -382,6 +411,16 @@ impl TestEnv {
 
     pub fn enable_spec_compliant_overloads(mut self) -> Self {
         self.spec_compliant_overloads = true;
+        self
+    }
+
+    pub fn enable_legacy_overload_expansion(mut self) -> Self {
+        self.legacy_overload_expansion = true;
+        self
+    }
+
+    pub fn enable_treat_all_caps_as_final(mut self) -> Self {
+        self.treat_all_caps_as_final = true;
         self
     }
 
@@ -407,6 +446,16 @@ impl TestEnv {
 
     pub fn enable_invalid_abstract_method_error(mut self) -> Self {
         self.invalid_abstract_method_error = true;
+        self
+    }
+
+    pub fn enable_empty_body_error(mut self) -> Self {
+        self.empty_body_error = true;
+        self
+    }
+
+    pub fn enable_unknown_argument_type_error(mut self) -> Self {
+        self.unknown_argument_type_error = true;
         self
     }
 
@@ -513,6 +562,8 @@ impl TestEnv {
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
         config.root.strict_partial_subtyping = Some(self.strict_partial_subtyping);
         config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
+        config.root.legacy_overload_expansion = Some(self.legacy_overload_expansion);
+        config.root.treat_all_caps_as_final = Some(self.treat_all_caps_as_final);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };
@@ -528,6 +579,9 @@ impl TestEnv {
         }
         if self.implicit_any_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyAttribute, Severity::Error);
+        }
+        if self.implicit_bool_error {
+            errors.set_error_severity(ErrorKind::ImplicitBool, Severity::Error);
         }
         if self.unknown_attribute_type_error {
             errors.set_error_severity(ErrorKind::UnknownAttributeType, Severity::Error);
@@ -571,6 +625,9 @@ impl TestEnv {
         if self.incompatible_comparison_error {
             errors.set_error_severity(ErrorKind::IncompatibleComparison, Severity::Error);
         }
+        if self.invalid_cast_warning {
+            errors.set_error_severity(ErrorKind::InvalidCast, Severity::Warn);
+        }
         if self.untyped_class_decorator_error {
             errors.set_error_severity(ErrorKind::UntypedClassDecorator, Severity::Error);
         }
@@ -583,11 +640,20 @@ impl TestEnv {
         if self.string_as_iterable_warning {
             errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);
         }
+        if self.unsupported_dynamic_base_error {
+            errors.set_error_severity(ErrorKind::UnsupportedDynamicBase, Severity::Error);
+        }
+        if self.unknown_argument_type_error {
+            errors.set_error_severity(ErrorKind::UnknownArgumentType, Severity::Error);
+        }
         if self.implicit_any_lambda_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyLambda, Severity::Error);
         }
         if self.invalid_abstract_method_error {
             errors.set_error_severity(ErrorKind::InvalidAbstractMethod, Severity::Error);
+        }
+        if self.empty_body_error {
+            errors.set_error_severity(ErrorKind::EmptyBody, Severity::Error);
         }
         if self.unknown_variable_type_error {
             errors.set_error_severity(ErrorKind::UnknownVariableType, Severity::Error);

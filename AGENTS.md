@@ -86,42 +86,17 @@ Do not write a laundry list of implementation changes. Focus on:
 
 A reader should be able to understand the intent and rationale from the commit message, without following all the code changes in details.
 
-For any diff in this project (internal/Sapling), always:
-
-- Prefix the title with `[pyrefly]`.
-- Add the `#pyrefly` project as a reviewer (note the `#` — it is a Phabricator
-  project tag, not a user). E.g. `jf template --add-reviewers "#pyrefly"` before
-  `jf submit`, or `meta phabricator.diff update -n D<number> --add-reviewers
-  "#pyrefly"` if the diff already exists.
-
 ## Development environments
 
-There are three possible development environments:
+Pyrefly is developed both on GitHub and inside Meta's monorepo, and the
+available tooling differs. **How to detect which one you are in:** check for a
+`BUCK` file in the project root — BUCK files are not exported to GitHub.
 
-1. **External/GitHub checkout**: Only `cargo` is available. The `buck` and `arc`
-   commands do not exist.
-2. **Internal on-demand**: Only `buck` is available. The `cargo` command may not
-   be configured.
-3. **Internal devserver with cargo**: Both `buck` and `cargo` are available.
-
-**How to detect the environment:** Check for the presence of a `BUCK` file in
-the project root. BUCK files are not exported to GitHub, so:
-- If `BUCK` exists → internal checkout, `buck` and `arc` are available
-- If `BUCK` does not exist → GitHub checkout, only `cargo` works
-
-### Source control
-
-**Do not assume git.** This repo may be either a Git checkout or a Sapling
-(Mercurial-based) checkout. Before running any source-control commands, detect
-which VCS is in use:
-
-- If `.git` exists at the repo root → Git. Use `git` commands.
-- If `.sl` exists at the repo root → Sapling. Use `sl` commands (`sl status`,
-  `sl diff`, `sl commit`, `sl amend`, etc.). **Do not use `git`.**
-
-You can check with: `test -d "$(sl root 2>/dev/null)/.sl" && echo sapling || echo git`
-
-The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
+- No `BUCK` → GitHub checkout. Only `cargo` is available, `buck` and `arc` do
+  not exist, and source control is git. The rest of this file assumes this case.
+- `BUCK` present → Meta-internal checkout. Read `facebook/AGENTS.md`, which
+  covers the internal tooling and conventions (buck, arc, Sapling, Phabricator
+  diffs) and overrides this file where they conflict.
 
 ## Feature guidelines
 
@@ -130,23 +105,15 @@ The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
 
 ### Running tests
 
-- **With buck (internal):** `buck test pyrefly:pyrefly_library -- <name of test>`
-  (from within the project folder)
-- **With cargo (external):** `cargo test <name of test>`
+- `cargo test <name of test>`
 
 ### Running the full test suite
 
 - `./test.py` runs linters and tests. It is heavyweight, so only run it when
   you are confident the feature is complete.
-- By default, `test.py` auto-detects the build tool based on BUCK file presence.
-  You can override this with `--mode buck` or `--mode cargo`.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
   `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
-
-### After modifying BUCK files (internal only)
-
-- Run `arc autocargo` to regenerate Cargo.toml files and validate changes
 
 ### Before committing
 

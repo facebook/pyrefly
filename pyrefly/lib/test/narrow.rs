@@ -4086,3 +4086,60 @@ def g(x: A | B | C) -> None:
         assert_type(x, A)
 "#,
 );
+
+testcase!(
+    test_class_may_be_falsy,
+    r#"
+from typing import assert_type
+
+class MyClass:
+    name: str
+
+def myfn(x: MyClass | None):
+    # `x` could be a falsy instance of a subclass of `MyClass`
+    assert_type(x and x.name, MyClass | str | None)
+    "#,
+);
+
+testcase!(
+    test_final_class_is_truthy,
+    r#"
+from typing import assert_type, final
+
+@final
+class MyClass:
+    name: str
+
+def myfn(x: MyClass | None):
+    assert_type(x and x.name, str | None)
+    "#,
+);
+
+testcase!(
+    test_class_with_bool_may_be_falsy,
+    r#"
+from typing import assert_type, final
+
+@final
+class MyClass:
+    name: str
+    def __bool__(self) -> bool: ...
+
+def myfn(x: MyClass | None):
+    assert_type(x and x.name, MyClass | str | None)
+    "#,
+);
+
+testcase!(
+    test_enum_with_members_is_truthy,
+    r#"
+from enum import Enum
+from typing import assert_type
+
+class MyClass(Enum):
+    X = 1
+
+def myfn(x: MyClass | None):
+    assert_type(x and x.name, str | None)
+    "#,
+);
