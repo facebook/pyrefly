@@ -5757,3 +5757,25 @@ n = "s"
 reveal_type(pl.Series(n, [1, 2, 3]))  # E: revealed type: Series[Int64]
 "#,
 );
+
+testcase!(
+    test_construct_final_strict_false_widens,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+STRICT: Final = False
+reveal_type(pl.DataFrame({"a": [1, 2.0]}, strict=STRICT))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_construct_wider_bool_strict_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(s: bool) -> None:
+    reveal_type(pl.DataFrame({"a": [1, 2.0]}, strict=s))  # E: revealed type: DataFrame
+"#,
+);

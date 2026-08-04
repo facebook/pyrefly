@@ -723,6 +723,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         None
     }
 
+    /// The boolean an expression resolves to, from its inferred `Literal[bool]`, or `None` for any
+    /// wider type.
+    fn polars_bool_literal(&self, expr: &Expr) -> Option<bool> {
+        // Swallow errors here, since a fallback call path re-infers the argument as the sole reporter.
+        let ty = self.expr_infer(expr, &self.error_swallower());
+        match &ty {
+            Type::Literal(lit) => match &lit.value {
+                Lit::Bool(b) => Some(*b),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The string an expression resolves to from its inferred `Literal[str]`, or `None` for any wider
     /// type.
     fn polars_string_literal(&self, expr: &Expr) -> Option<String> {
@@ -795,10 +809,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "name" | "nan_to_null" => {}
                 "values" => values_keyword = Some(&kw.value),
                 "dtype" => dtype_keyword = Some(&kw.value),
-                "strict" => match &kw.value {
-                    Expr::BooleanLiteral(b) => strict = b.value,
-                    _ => return None,
-                },
+                "strict" => strict = self.polars_bool_literal(&kw.value)?,
                 _ => return None,
             }
         }
@@ -1269,10 +1280,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                 }
-                "strict" => match &kw.value {
-                    Expr::BooleanLiteral(b) => strict = b.value,
-                    _ => return None,
-                },
+                "strict" => strict = self.polars_bool_literal(&kw.value)?,
                 _ => return None,
             }
         }
