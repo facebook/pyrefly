@@ -71,6 +71,29 @@ class Foo:
     }
 }
 
+#[test]
+fn completion_method_definition_has_unique_suggestions() {
+    let code = r#"
+class Foo:
+    def get_value(self) -> int:
+        return 1
+
+    def get_
+#           ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let get_value_suggestions = state
+        .transaction()
+        .completion(handle, position, ImportFormat::Absolute, true, None)
+        .into_iter()
+        .filter(|item| item.label == "get_value")
+        .count();
+
+    assert_eq!(get_value_suggestions, 1);
+}
+
 fn get_default_test_report() -> impl Fn(&State, &Handle, TextSize) -> String {
     get_test_report(ResultsFilter::default(), ImportFormat::Absolute)
 }

@@ -1186,7 +1186,7 @@ impl Transaction<'_> {
                 let skip_value_completions = covering_nodes
                     .as_deref()
                     .is_some_and(|nodes| Self::is_typing_keyword_argument_name(nodes, position));
-                if !skip_value_completions {
+                if !skip_value_completions && !is_method_def {
                     let at_statement_start = matches!(
                         covering_nodes.as_deref().and_then(|nodes| nodes.get(1)),
                         Some(AnyNodeRef::StmtExpr(_))
