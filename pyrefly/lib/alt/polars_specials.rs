@@ -224,6 +224,16 @@ fn is_polars_dataframe_type(ty: &Type) -> bool {
 /// Map a Python scalar value type to its Polars construction dtype, e.g. `int` to `Int64`. A `bool`
 /// is exact and distinct from `int`. Returns `None` for any other type so the caller degrades.
 fn polars_dtype_from_scalar_type(ty: &Type) -> Option<PolarsDType> {
+    // Integers past i64 have a data-shape-dependent runtime dtype, so do not claim Int64.
+    if let Type::Literal(lit) = ty {
+        return Some(match &lit.value {
+            Lit::Int(i) => return i.as_i64().map(|_| PolarsDType::Int64),
+            Lit::Bool(_) => PolarsDType::Boolean,
+            Lit::Str(_) => PolarsDType::String,
+            Lit::Bytes(_) => PolarsDType::Binary,
+            Lit::Enum(_) => return None,
+        });
+    }
     let Type::ClassType(cls) = ty else {
         return None;
     };
@@ -1408,51 +1418,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         strict: bool,
         errors: &ErrorCollector,
     ) -> Option<PolarsDType> {
-        let scalar = |e: &Expr| match e {
-            // An integer literal that fits in i64 is Int64; past i64 the runtime dtype is data-shape
-            // dependent (UInt64 or Int128), so we degrade rather than claim a wrong Int64.
-            Expr::NumberLiteral(ExprNumberLiteral {
-                value: Number::Int(i),
-                ..
-            }) => i.as_i64().map(|_| PolarsDType::Int64),
-            Expr::NumberLiteral(ExprNumberLiteral {
+        let scalar = |e: &Expr| {
+            // A float literal's type is the plain `float`, indistinguishable from a `float` variable,
+            // so a written float literal is the one element read from syntax to keep pandas floats pinned.
+            if let Expr::NumberLiteral(ExprNumberLiteral {
                 value: Number::Float(_),
                 ..
-            }) => Some(PolarsDType::Float64),
-            Expr::BooleanLiteral(_) => Some(PolarsDType::Boolean),
-            Expr::StringLiteral(_) => Some(PolarsDType::String),
-            Expr::BytesLiteral(_) => Some(PolarsDType::Binary),
-            // `None` is `Null` in Polars only; pandas coerces it (int-with-`None` → `float64`),
-            // which we do not model, so fall back there.
-            Expr::NoneLiteral(_) if kind == DataFrameKind::Polars => Some(PolarsDType::Null),
-            // A datetime-constructor call resolves by its callee class, not the element type, because a
-            // variable typed `date` may hold a `datetime` subclass at runtime and so does not pin the
-            // dtype. Any other non-literal element in a Polars frame contributes its inferred scalar type.
-            _ if kind == DataFrameKind::Polars => {
-                if let Expr::Call(call) = e {
-                    let temporal = match self.expr_infer(&call.func, &self.error_swallower()) {
-                        Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "date") => {
-                            Some(PolarsDType::Date)
-                        }
-                        Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "datetime") => {
-                            Some(PolarsDType::Datetime)
-                        }
-                        Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "time") => {
-                            Some(PolarsDType::Time)
-                        }
-                        Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "timedelta") => {
-                            Some(PolarsDType::Duration)
-                        }
-                        _ => None,
-                    };
-                    if temporal.is_some() {
-                        return temporal;
-                    }
-                }
-                // Only the primitive scalar types map to a dtype; anything else falls back.
-                polars_dtype_from_scalar_type(&self.expr_infer(e, &self.error_swallower()))
+            }) = e
+            {
+                return Some(PolarsDType::Float64);
             }
-            _ => None,
+            let ty = self.expr_infer(e, &self.error_swallower());
+            if matches!(ty, Type::Literal(_))
+                && let Some(dtype) = polars_dtype_from_scalar_type(&ty)
+            {
+                return Some(dtype);
+            }
+            // Beyond a literal, pandas coerces mixed and null-bearing columns in ways we do not model
+            // (int-with-`None` becomes float64), so only Polars pins the dtype of a non-literal element.
+            if kind != DataFrameKind::Polars {
+                return None;
+            }
+            // A datetime-constructor call resolves by its callee class, not its element type, because a
+            // variable typed `date` may hold a `datetime` subclass at runtime and so does not pin the
+            // dtype. Only a direct constructor call is specific enough.
+            if let Expr::Call(call) = e {
+                let temporal = match self.expr_infer(&call.func, &self.error_swallower()) {
+                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "date") => {
+                        Some(PolarsDType::Date)
+                    }
+                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "datetime") => {
+                        Some(PolarsDType::Datetime)
+                    }
+                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "time") => {
+                        Some(PolarsDType::Time)
+                    }
+                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "timedelta") => {
+                        Some(PolarsDType::Duration)
+                    }
+                    _ => None,
+                };
+                if temporal.is_some() {
+                    return temporal;
+                }
+            }
+            if matches!(ty, Type::None) {
+                return Some(PolarsDType::Null);
+            }
+            polars_dtype_from_scalar_type(&ty)
         };
         let mut rest = elts.clone();
         let Some(first) = rest.next() else {

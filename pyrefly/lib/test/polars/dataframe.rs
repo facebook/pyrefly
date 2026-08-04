@@ -5524,3 +5524,83 @@ td: Cols = {"a": 1}
 reveal_type(pl.DataFrame(data=td))  # E: revealed type: DataFrame
 "#,
 );
+
+testcase!(
+    test_construct_element_variable_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+x = 5
+s = "hi"
+reveal_type(pl.DataFrame({"a": [x], "b": [s]}))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_construct_element_final_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+X: Final = 7
+reveal_type(pl.DataFrame({"a": [X]}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_construct_element_annotated_param_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(n: int, t: str) -> None:
+    reveal_type(pl.DataFrame({"a": [n], "b": [t]}))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_construct_element_big_int_variable_degrades,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+X: Final = 99999999999999999999999999
+reveal_type(pl.DataFrame({"a": [X]}))  # E: revealed type: DataFrame[a: Unknown]
+"#,
+);
+
+testcase!(
+    test_construct_element_variable_dtype_pandas_partial,
+    env_with_pandas_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+n: int = 5
+reveal_type(pd.DataFrame({"a": [n]}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_construct_element_float_variable_polars,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(x: float) -> None:
+    reveal_type(pl.DataFrame({"a": [x]}))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_construct_optional_element_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f(x: int | None) -> None:
+    reveal_type(pl.DataFrame({"a": [x]}))  # E: revealed type: DataFrame[a: Unknown]
+    if x is None:
+        reveal_type(pl.DataFrame({"a": [x]}))  # E: revealed type: DataFrame[a: Null]
+"#,
+);
