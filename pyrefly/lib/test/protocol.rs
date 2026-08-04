@@ -553,7 +553,7 @@ class P(Protocol):
     __call__: ProxyMethod["forward"]  # E: `ProxyMethod` cannot be declared in protocols
 
 class Meta(type):
-    __call__: ProxyMethod["make"]  # E: `ProxyMethod` cannot be declared in metaclasses
+    __call__: ProxyMethod["make"]  # E: `ProxyMethod` cannot be declared in metaclasses  # E: Class member `Meta.__call__` overrides parent class `type` in an inconsistent manner
     def make(cls) -> object: ...
 
 class Initialized:

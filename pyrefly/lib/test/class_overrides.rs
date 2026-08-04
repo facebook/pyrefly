@@ -824,7 +824,6 @@ class C:
 );
 
 testcase!(
-    bug = "We currently skip checking overrides of `__call__`, which is a soundness hole",
     test_override_dunder_call,
     r#"
 class Base: pass
@@ -834,7 +833,65 @@ class UseBase:
     def __call__(self) -> list[Base]: ...
 
 class UseDerived(UseBase):
-    def __call__(self) -> list[Derived]: ...
+    def __call__(self) -> list[Derived]: ...  # E: Class member `UseDerived.__call__` overrides parent class `UseBase` in an inconsistent manner
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/4220
+testcase!(
+    test_override_dunder_call_protocol,
+    r#"
+from typing import Protocol
+
+class ProtocolB(Protocol):
+    def __call__(self, s: str): ...
+
+class Bar(ProtocolB):
+    def __call__(self, s: int): ...  # E: Class member `Bar.__call__` overrides parent class `ProtocolB` in an inconsistent manner
+    "#,
+);
+
+// The gradual form `(*args: Any, **kwargs: Any)` is equivalent to `...` per the typing spec,
+// so it is consistent with any signature and must stay overridable. Much of typeshed writes
+// `__call__` this way, and this is what makes checking the rest of them safe.
+testcase!(
+    test_override_dunder_call_gradual_parent,
+    r#"
+from typing import Any
+
+class Callback:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class Narrow(Callback):
+    def __call__(self, x: int) -> str: ...
+    "#,
+);
+
+testcase!(
+    test_override_dunder_call_compatible,
+    r#"
+class Base: pass
+class Derived(Base): pass
+
+class UseDerived:
+    def __call__(self, x: Derived) -> Derived: ...
+
+class UseBase(UseDerived):
+    def __call__(self, x: Base) -> Derived: ...
+    "#,
+);
+
+testcase!(
+    test_override_dunder_call_explicit_override,
+    r#"
+from typing import override
+
+class A:
+    def __call__(self, x: int) -> None: ...
+
+class B(A):
+    @override
+    def __call__(self, x: str) -> None: ...  # E: Class member `B.__call__` overrides parent class `A` in an inconsistent manner
     "#,
 );
 
