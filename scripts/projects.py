@@ -1590,6 +1590,19 @@ def get_mypy_primer_projects() -> list[Project]:
             expected_mypy_success=True,
         ),
         Project(
+            location="https://github.com/typeddjango/django-stubs",
+            pyrefly_cmd="{pyrefly} tests/assert_type",
+            deps=[
+                "asgiref",
+                "django-stubs-ext",
+                "django",
+                "redis",
+                "tomli",
+                "types-PyYAML",
+            ],
+            name_override="django-stubs-tests",
+        ),
+        Project(
             location="https://github.com/scipy/scipy",
             mypy_cmd="{mypy} scipy",
             pyright_cmd=None,
