@@ -18,7 +18,7 @@ fn env_with_polars_stubs() -> TestEnv {
         r#"
 from typing import Any, overload
 class Series:
-    def __init__(self, name: str = "", values: object = None) -> None: ...
+    def __init__(self, name: object = None, values: object = None, dtype: object = None, *, strict: bool = True, nan_to_null: bool = False) -> None: ...
     @overload
     def __getitem__(self, key: int) -> Any: ...
     @overload
@@ -176,6 +176,7 @@ df = pl.DataFrame({"a": [1], "b": ["x"]})
 df_kw = pl.DataFrame(data={"a": [1], "b": ["x"]})
 df_schema = pl.DataFrame(schema={"a": pl.Int64, "b": pl.String})
 df_records = pl.DataFrame([{"a": 1}, {"b": 2}])
+s = pl.Series("a", [1])
 "#,
     );
     env
@@ -4524,5 +4525,147 @@ import defs
 import polars as pl
 from typing import reveal_type
 reveal_type(defs.df.group_by("b").agg(pl.col("a").sum()))  # E: revealed type: DataFrame[b: String, a: Int64]
+"#,
+);
+
+// Section F: `pl.Series(...)` construction, which reuses the DataFrame column fold for its element dtype.
+
+testcase!(
+    test_series_construct_int,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series("a", [1]))  # E: revealed type: Series[Int64]
+"#,
+);
+
+testcase!(
+    test_series_construct_scalar_dtypes,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series("a", [1, 2, 3]))  # E: revealed type: Series[Int64]
+reveal_type(pl.Series("a", [1.0]))  # E: revealed type: Series[Float64]
+reveal_type(pl.Series("a", ["x"]))  # E: revealed type: Series[String]
+reveal_type(pl.Series("a", [True]))  # E: revealed type: Series[Boolean]
+reveal_type(pl.Series("a", [b"x"]))  # E: revealed type: Series[Binary]
+reveal_type(pl.Series("a", [None]))  # E: revealed type: Series[Null]
+"#,
+);
+
+testcase!(
+    test_series_construct_values_as_first_arg,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series([1, 2, 3]))  # E: revealed type: Series[Int64]
+reveal_type(pl.Series((1, 2)))  # E: revealed type: Series[Int64]
+"#,
+);
+
+testcase!(
+    test_series_construct_keyword_values,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series(name="a", values=[1]))  # E: revealed type: Series[Int64]
+reveal_type(pl.Series("a", values=[1]))  # E: revealed type: Series[Int64]
+"#,
+);
+
+testcase!(
+    test_series_construct_none_anchoring,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series("a", [1, None, 2]))  # E: revealed type: Series[Int64]
+reveal_type(pl.Series("a", [None, 1]))  # E: revealed type: Series[Int64]
+reveal_type(pl.Series("a", [1, True]))  # E: revealed type: Series[Int64]
+"#,
+);
+
+testcase!(
+    test_series_construct_dtype_override,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series("a", [1], dtype=pl.Int8))  # E: revealed type: Series[Int8]
+reveal_type(pl.Series("a", [1, 2], dtype=pl.Int8))  # E: revealed type: Series[Int8]
+reveal_type(pl.Series("a", [1], pl.Float32))  # E: revealed type: Series[Float32]
+reveal_type(pl.Series("a", dtype=pl.Int8))  # E: revealed type: Series[Int8]
+"#,
+);
+
+testcase!(
+    test_series_construct_strict_false_supertype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series("a", [1, 2.0], strict=False))  # E: revealed type: Series[Float64]
+"#,
+);
+
+testcase!(
+    test_series_construct_no_values_is_null,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series("a"))  # E: revealed type: Series[Null]
+reveal_type(pl.Series())  # E: revealed type: Series[Null]
+"#,
+);
+
+// Reusing the column fold reports an empty list as `Unknown` like the DataFrame path, though the runtime dtype is `Null`.
+testcase!(
+    bug = "empty-values Series is Series[Unknown], runtime is Null",
+    test_series_construct_empty_values,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series("a", []))  # E: revealed type: Series[Unknown]
+"#,
+);
+
+testcase!(
+    test_series_construct_mismatch_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.Series("a", [1, 2.0]))  # E: revealed type: Series
+reveal_type(pl.Series("a", [1, "x"]))  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_series_construct_unmodeled_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+xs = [1, 2, 3]
+reveal_type(pl.Series("a", xs))  # E: revealed type: Series
+reveal_type(pl.Series("a", range(3)))  # E: revealed type: Series
+reveal_type(pl.Series("a", [10**19]))  # E: revealed type: Series
+reveal_type(pl.Series("a", [[1, 2], [3]]))  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_series_construct_cross_file,
+    env_cross_file(),
+    r#"
+import defs
+from typing import reveal_type
+reveal_type(defs.s)  # E: revealed type: Series[Int64]
 "#,
 );

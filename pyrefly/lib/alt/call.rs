@@ -18,6 +18,7 @@ use pyrefly_types::data_frame::SchemaCompleteness;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::series::SeriesSchema;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
@@ -52,6 +53,7 @@ use crate::alt::nn_module_specials::is_nn_sequential;
 use crate::alt::polars_specials::is_pandas_dataframe;
 use crate::alt::polars_specials::is_polars_concat;
 use crate::alt::polars_specials::is_polars_dataframe;
+use crate::alt::polars_specials::is_polars_series;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
 use crate::binding::binding::Key;
@@ -2205,6 +2207,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         };
 
+        // A Polars Series carries its element dtype the same way a single DataFrame column does.
+        let series_dtype = if let Type::ClassDef(cls) = &callee_ty
+            && is_polars_series(cls)
+        {
+            self.infer_series_dtype(&x.arguments)
+        } else {
+            None
+        };
+
         let result = if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
             // Because we have to construct a binding for super in order to fill in implicit arguments,
             // we can't handle things like local aliases to super. If we hit a case where the binding
@@ -2487,6 +2498,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 kind,
             }
             .to_type();
+        }
+        if let Some(dtype) = series_dtype
+            && let Type::ClassType(underlying) = result.clone()
+        {
+            return SeriesSchema { underlying, dtype }.to_type();
         }
         result
     }

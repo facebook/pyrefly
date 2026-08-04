@@ -26,6 +26,7 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
+use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
@@ -282,6 +283,61 @@ pub struct PolarsConstruct<'b> {
     schema: Option<Vec<(Name, Option<PolarsDType>)>>,
     overrides: SmallMap<Name, PolarsDType>,
     strict: bool,
+}
+
+/// A `pl.Series(...)` call reduced to what element inference needs. The name does not affect the
+/// dtype, so only the `values` expression, an optional `dtype=` override, and `strict` are kept.
+struct SeriesConstruct<'b> {
+    values: Option<&'b Expr>,
+    dtype: Option<PolarsDType>,
+    strict: bool,
+}
+
+/// Reduce a `pl.Series(...)` call to a `SeriesConstruct`, or `None` to fall back to the opaque
+/// Series. Positional slots are `(name, values, dtype)`, but a non-string first slot is itself the
+/// values. An ambiguous name slot, a positional-plus-keyword clash, or an unrecognized keyword
+/// falls back, while `name` and `nan_to_null` are tolerated.
+fn polars_series_options(arguments: &Arguments) -> Option<SeriesConstruct<'_>> {
+    let mut values_keyword: Option<&Expr> = None;
+    let mut dtype_keyword: Option<&Expr> = None;
+    let mut strict = true;
+    for kw in &arguments.keywords {
+        let Some(arg) = &kw.arg else {
+            return None;
+        };
+        match arg.id.as_str() {
+            "name" | "nan_to_null" => {}
+            "values" => values_keyword = Some(&kw.value),
+            "dtype" => dtype_keyword = Some(&kw.value),
+            "strict" => match &kw.value {
+                Expr::BooleanLiteral(b) => strict = b.value,
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    let (values_positional, dtype_positional) = match &arguments.args[..] {
+        [] => (None, None),
+        [Expr::StringLiteral(_)] => (None, None),
+        [values] => (Some(values), None),
+        [Expr::StringLiteral(_), values] => (Some(values), None),
+        [Expr::StringLiteral(_), values, dtype] => (Some(values), Some(dtype)),
+        _ => return None,
+    };
+    let values = match (values_positional, values_keyword) {
+        (Some(_), Some(_)) => return None,
+        (e, None) | (None, e) => e,
+    };
+    let dtype = match (dtype_positional, dtype_keyword) {
+        (Some(_), Some(_)) => return None,
+        (Some(e), None) | (None, Some(e)) => Some(polars_dtype_from_expr(e)?),
+        (None, None) => None,
+    };
+    Some(SeriesConstruct {
+        values,
+        dtype,
+        strict,
+    })
 }
 
 /// A data dict literal as an order-preserving name-to-value map, or `None` if a key is not a
@@ -770,6 +826,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Some(_), Some(_)) => None,
             (e, None) | (None, e) => Some(e),
         }
+    }
+
+    /// The element dtype of a `pl.Series(...)` call, or `None` to fall back to the opaque Series. A
+    /// `dtype=` override wins, a literal list/tuple `values` resolves through the DataFrame column
+    /// fold, an absent `values` is `Null`, and a non-literal `values` falls back.
+    pub fn infer_series_dtype(&self, arguments: &Arguments) -> Option<PolarsDType> {
+        let construct = polars_series_options(arguments)?;
+        if let Some(dtype) = construct.dtype {
+            return Some(dtype);
+        }
+        let elts = match construct.values {
+            None => return Some(PolarsDType::Null),
+            Some(Expr::List(ExprList { elts, .. })) | Some(Expr::Tuple(ExprTuple { elts, .. })) => {
+                elts
+            }
+            Some(_) => return None,
+        };
+        self.dataframe_list_element_type(
+            &Name::new_static("values"),
+            elts.iter(),
+            DataFrameKind::Polars,
+            construct.strict,
+            &self.error_swallower(),
+        )
     }
 
     /// Reduce a DataFrame constructor call to a `PolarsConstruct`, or `None` to fall back to plain
