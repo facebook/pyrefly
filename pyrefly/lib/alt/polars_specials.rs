@@ -1518,6 +1518,158 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    /// A bound `GroupBy` does not expose its receiver schema, so only an inline chain is modeled.
+    pub fn polars_group_by_agg(
+        &self,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        if func.attr.id.as_str() != "agg" {
+            return None;
+        }
+        let Expr::Call(group_by) = &*func.value else {
+            return None;
+        };
+        let Expr::Attribute(group_by_func) = &*group_by.func else {
+            return None;
+        };
+        if group_by_func.attr.id.as_str() != "group_by" {
+            return None;
+        }
+        // Read the already-inferred receiver schema without reporting its errors again.
+        let Type::DataFrame(schema) =
+            self.expr_infer(&group_by_func.value, &self.error_swallower())
+        else {
+            return None;
+        };
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        // Validate all names before dtype inference so a collision cannot leak diagnostics.
+        enum ColumnKind {
+            Key,
+            Agg,
+        }
+        let mut outputs = Vec::new();
+        for arg in &group_by.arguments.args {
+            for elt in unpack_list_or_tuple_literal(arg) {
+                outputs.push((self.polars_group_output_name(elt)?, elt, ColumnKind::Key));
+            }
+        }
+        for kw in &group_by.arguments.keywords {
+            let Some(name) = &kw.arg else {
+                return None;
+            };
+            if name.id.as_str() == "maintain_order" {
+                continue;
+            }
+            outputs.push((name.id.clone(), &kw.value, ColumnKind::Key));
+        }
+        for arg in &args.args {
+            for elt in unpack_list_or_tuple_literal(arg) {
+                outputs.push((self.polars_group_output_name(elt)?, elt, ColumnKind::Agg));
+            }
+        }
+        for kw in &args.keywords {
+            let Some(name) = &kw.arg else {
+                return None;
+            };
+            self.polars_group_output_name(&kw.value)?;
+            outputs.push((name.id.clone(), &kw.value, ColumnKind::Agg));
+        }
+        let mut seen = SmallSet::new();
+        if outputs
+            .iter()
+            .any(|(name, _, _)| !seen.insert(name.clone()))
+        {
+            return None;
+        }
+
+        let columns = outputs
+            .into_iter()
+            .map(|(name, expr, kind)| {
+                let dtype = match kind {
+                    ColumnKind::Key => self.polars_group_key_dtype(&schema, expr, errors)?,
+                    ColumnKind::Agg => self.polars_agg_dtype(&schema, expr, errors)?,
+                };
+                Some((name, dtype))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(
+            DataFrameSchema {
+                underlying: schema.underlying.clone(),
+                columns,
+                completeness: schema.completeness.clone(),
+                kind: schema.kind.clone(),
+            }
+            .to_type(),
+        )
+    }
+
+    fn polars_group_output_name(&self, expr: &Expr) -> Option<Name> {
+        if let Expr::StringLiteral(s) = expr {
+            return (!is_polars_selector_string(expr)).then(|| Name::new(s.value.to_str()));
+        }
+        self.polars_expr_output_name(expr)
+    }
+
+    fn polars_group_key_dtype(
+        &self,
+        schema: &DataFrameSchema,
+        expr: &Expr,
+        errors: &ErrorCollector,
+    ) -> Option<PolarsDType> {
+        if let Expr::StringLiteral(s) = expr {
+            let name = Name::new(s.value.to_str());
+            return resolve_column(schema, &name, expr.range(), errors);
+        }
+        Some(
+            self.eval_polars_expr(expr, schema, errors)
+                .map_or(PolarsDType::Unknown, ExprValue::dtype),
+        )
+    }
+
+    fn polars_agg_dtype(
+        &self,
+        schema: &DataFrameSchema,
+        expr: &Expr,
+        errors: &ErrorCollector,
+    ) -> Option<PolarsDType> {
+        if let Expr::StringLiteral(s) = expr {
+            let name = Name::new(s.value.to_str());
+            resolve_column(schema, &name, expr.range(), errors);
+            return Some(PolarsDType::Unknown);
+        }
+        self.expr_infer(expr, errors);
+        let dtype = if self.polars_expr_aggregates(expr) {
+            self.eval_polars_expr(expr, schema, errors)
+                .map_or(PolarsDType::Unknown, ExprValue::dtype)
+        } else {
+            // Evaluate for column-existence errors, but the list dtype is unmodeled.
+            self.eval_polars_expr(expr, schema, errors);
+            PolarsDType::Unknown
+        };
+        Some(dtype)
+    }
+
+    fn polars_expr_aggregates(&self, expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        if let Some(id) = self.polars_function_id(&call.func) {
+            return id.name.as_str() == "len"
+                && id.module.name().as_str() == "polars.functions.len";
+        }
+        match &*call.func {
+            Expr::Attribute(attr) => match attr.attr.id.as_str() {
+                "alias" | "cast" => self.polars_expr_aggregates(&attr.value),
+                method => Reducer::parse(method).is_some(),
+            },
+            _ => false,
+        }
+    }
+
     /// Model row-only transforms as returning the receiver's schema unchanged; they drop, reorder,
     /// deduplicate, window, or replace rows without touching the column set. `None` if no schema.
     pub fn polars_row_transform(

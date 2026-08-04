@@ -59,6 +59,9 @@ class DataFrame:
     def extend(self, other: "DataFrame") -> "DataFrame": ...
     def insert_column(self, index: int, column: object) -> "DataFrame": ...
     def replace_column(self, index: int, column: object) -> "DataFrame": ...
+    def group_by(self, *by: object, maintain_order: bool = False, **named_by: object) -> "GroupBy": ...
+class GroupBy:
+    def agg(self, *aggs: object, **named_aggs: object) -> DataFrame: ...
 "#,
     );
     env.add_with_path(
@@ -4245,5 +4248,281 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"x": [1, 2]})
 reveal_type(df.select(pl.len()))  # E: revealed type: DataFrame[len: UInt32]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_sum_keeps_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x").sum()))  # E: revealed type: DataFrame[g: String, x: Int64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_mean_promotes_to_float,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x").mean()))  # E: revealed type: DataFrame[g: String, x: Float64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_count_is_uint32,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x").count()))  # E: revealed type: DataFrame[g: String, x: UInt32]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_len_is_uint32,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.len()))  # E: revealed type: DataFrame[g: String, len: UInt32]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_sum_narrow_int_widens_to_int64,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]}, schema={"g": pl.String, "x": pl.Int8})
+reveal_type(df.group_by("g").agg(pl.col("x").sum()))  # E: revealed type: DataFrame[g: String, x: Int64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_sum_int32_stays_int32,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]}, schema={"g": pl.String, "x": pl.Int32})
+reveal_type(df.group_by("g").agg(pl.col("x").sum()))  # E: revealed type: DataFrame[g: String, x: Int32]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_multiple_keys_positional,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "h": [1], "x": [1.0]})
+reveal_type(df.group_by("g", "h").agg(pl.col("x").sum()))  # E: revealed type: DataFrame[g: String, h: Int64, x: Float64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_keys_as_list,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "h": [1], "x": [1]})
+reveal_type(df.group_by(["g", "h"]).agg(pl.col("x").sum()))  # E: revealed type: DataFrame[g: String, h: Int64, x: Int64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_expression_key_with_alias,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"x": [1], "y": [1.0]})
+reveal_type(df.group_by((pl.col("x") > 1).alias("big")).agg(pl.col("y").sum()))  # E: revealed type: DataFrame[big: Boolean, y: Float64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_col_key_resolves_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by(pl.col("g")).agg(pl.col("x").sum()))  # E: revealed type: DataFrame[g: String, x: Int64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_multiple_aggs,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1], "y": [1.0]})
+reveal_type(df.group_by("g").agg(pl.col("x").sum(), pl.col("y").mean()))  # E: revealed type: DataFrame[g: String, x: Int64, y: Float64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_aggs_as_list,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1], "y": [1.0]})
+reveal_type(df.group_by("g").agg([pl.col("x").sum(), pl.col("y").mean()]))  # E: revealed type: DataFrame[g: String, x: Int64, y: Float64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_alias_names_output,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x").sum().alias("total")))  # E: revealed type: DataFrame[g: String, total: Int64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_named_keyword_names_output,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(total=pl.col("x").sum()))  # E: revealed type: DataFrame[g: String, total: Int64]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_bare_col_is_unknown_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x")))  # E: revealed type: DataFrame[g: String, x: Unknown]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_bare_string_is_unknown_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg("x"))  # E: revealed type: DataFrame[g: String, x: Unknown]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_empty_keeps_only_keys,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg())  # E: revealed type: DataFrame[g: String]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_selector_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x", "y").sum()))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_group_by_agg_variable_receiver_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+gb = df.group_by("g")
+reveal_type(gb.agg(pl.col("x").sum()))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_group_by_agg_unknown_key_reports,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("missing").agg(pl.col("x").sum()))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_group_by_agg_key_agg_collision_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x").sum().alias("g")))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_group_by_agg_agg_agg_collision_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x").sum(), pl.col("x").mean()))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_group_by_agg_collision_reports_argument_error_once,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x").sum(1).alias("g")))  # E: Expected 0 positional arguments, got 1 # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_group_by_agg_collision_does_not_emit_schema_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("missing").sum().alias("g")))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_group_by_agg_cross_file_schema,
+    env_cross_file(),
+    r#"
+import defs
+import polars as pl
+from typing import reveal_type
+reveal_type(defs.df.group_by("b").agg(pl.col("a").sum()))  # E: revealed type: DataFrame[b: String, a: Int64]
 "#,
 );

@@ -996,6 +996,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let Some(ty) = self.polars_hstack(base.ty(), func, &x.arguments, errors) {
                 return PreparedExprCall::Resolved(ty);
             }
+            if let Some(ty) = self.polars_group_by_agg(func, &x.arguments, errors) {
+                return PreparedExprCall::Resolved(ty);
+            }
             if let Some(ty) =
                 self.polars_in_place_column_mutation(base.ty(), func, &x.arguments, errors)
             {
