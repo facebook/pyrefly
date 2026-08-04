@@ -76,41 +76,6 @@ fn column_transform_schema<'b>(
     (func.attr.id.as_str() == method && args.keywords.is_empty()).then_some(&**schema)
 }
 
-/// Map a `pl.<DType>` expression such as `pl.Int8` or `pl.Datetime("us")` to its dtype, or `None`
-/// for anything that is not a recognized dtype so the caller falls back rather than guessing.
-fn polars_dtype_from_expr(e: &Expr) -> Option<PolarsDType> {
-    let name = match e {
-        Expr::Attribute(a) => a.attr.id.as_str(),
-        Expr::Call(c) => match &*c.func {
-            Expr::Attribute(a) => a.attr.id.as_str(),
-            _ => return None,
-        },
-        _ => return None,
-    };
-    Some(match name {
-        "Int8" => PolarsDType::Int8,
-        "Int16" => PolarsDType::Int16,
-        "Int32" => PolarsDType::Int32,
-        "Int64" => PolarsDType::Int64,
-        "Int128" => PolarsDType::Int128,
-        "UInt8" => PolarsDType::UInt8,
-        "UInt16" => PolarsDType::UInt16,
-        "UInt32" => PolarsDType::UInt32,
-        "UInt64" => PolarsDType::UInt64,
-        "UInt128" => PolarsDType::UInt128,
-        "Float32" => PolarsDType::Float32,
-        "Float64" => PolarsDType::Float64,
-        "Boolean" => PolarsDType::Boolean,
-        "String" | "Utf8" => PolarsDType::String,
-        "Binary" => PolarsDType::Binary,
-        "Date" => PolarsDType::Date,
-        "Datetime" => PolarsDType::Datetime,
-        "Duration" => PolarsDType::Duration,
-        "Time" => PolarsDType::Time,
-        _ => return None,
-    })
-}
-
 pub fn is_pandas_dataframe(cls: &Class) -> bool {
     cls.has_toplevel_qname("pandas.core.frame", "DataFrame")
 }
@@ -301,53 +266,6 @@ struct SeriesConstruct<'b> {
     strict: bool,
 }
 
-/// Reduce a `pl.Series(...)` call to a `SeriesConstruct`, or `None` to fall back to the opaque
-/// Series. Positional slots are `(name, values, dtype)`, but a non-string first slot is itself the
-/// values. An ambiguous name slot, a positional-plus-keyword clash, or an unrecognized keyword
-/// falls back, while `name` and `nan_to_null` are tolerated.
-fn polars_series_options(arguments: &Arguments) -> Option<SeriesConstruct<'_>> {
-    let mut values_keyword: Option<&Expr> = None;
-    let mut dtype_keyword: Option<&Expr> = None;
-    let mut strict = true;
-    for kw in &arguments.keywords {
-        let Some(arg) = &kw.arg else {
-            return None;
-        };
-        match arg.id.as_str() {
-            "name" | "nan_to_null" => {}
-            "values" => values_keyword = Some(&kw.value),
-            "dtype" => dtype_keyword = Some(&kw.value),
-            "strict" => match &kw.value {
-                Expr::BooleanLiteral(b) => strict = b.value,
-                _ => return None,
-            },
-            _ => return None,
-        }
-    }
-    let (values_positional, dtype_positional) = match &arguments.args[..] {
-        [] => (None, None),
-        [Expr::StringLiteral(_)] => (None, None),
-        [values] => (Some(values), None),
-        [Expr::StringLiteral(_), values] => (Some(values), None),
-        [Expr::StringLiteral(_), values, dtype] => (Some(values), Some(dtype)),
-        _ => return None,
-    };
-    let values = match (values_positional, values_keyword) {
-        (Some(_), Some(_)) => return None,
-        (e, None) | (None, e) => e,
-    };
-    let dtype = match (dtype_positional, dtype_keyword) {
-        (Some(_), Some(_)) => return None,
-        (Some(e), None) | (None, Some(e)) => Some(polars_dtype_from_expr(e)?),
-        (None, None) => None,
-    };
-    Some(SeriesConstruct {
-        values,
-        dtype,
-        strict,
-    })
-}
-
 /// A data dict literal as an order-preserving name-to-value map, or `None` if a key is not a
 /// string literal or repeats (Python keeps only the last value for a repeated key).
 fn dataframe_data_map(dict: &ExprDict) -> Option<SmallMap<Name, &Expr>> {
@@ -388,36 +306,6 @@ fn dataframe_records_map(list: &ExprList) -> Option<SmallMap<Name, Vec<&Expr>>> 
 enum SchemaForm {
     Dict,
     SchemaClass,
-}
-
-/// A `schema=` dict literal as an ordered column list, each pinned to a `pl.<DType>` or `None` to
-/// defer to data inference. Returns `None` to fall back for an empty dict, an unrecognized entry, or
-/// a `None` under the `pl.Schema` form, which forbids it.
-fn schema_dict_entries(
-    form: SchemaForm,
-    dict: &ExprDict,
-) -> Option<Vec<(Name, Option<PolarsDType>)>> {
-    if dict.items.is_empty() {
-        return None;
-    }
-    let mut entries = Vec::with_capacity(dict.items.len());
-    let mut seen = SmallSet::new();
-    for item in &dict.items {
-        let Some(Expr::StringLiteral(key)) = &item.key else {
-            return None;
-        };
-        let name = Name::new(key.value.to_str());
-        if !seen.insert(name.clone()) {
-            return None;
-        }
-        let dtype = match &item.value {
-            Expr::NoneLiteral(_) if form == SchemaForm::Dict => None,
-            Expr::NoneLiteral(_) => return None,
-            value => Some(polars_dtype_from_expr(value)?),
-        };
-        entries.push((name, dtype));
-    }
-    Some(entries)
 }
 
 /// The join strategies column inference models. They differ only in which key columns survive and
@@ -810,6 +698,123 @@ impl Reducer {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Map a `pl.<DType>` expression such as `pl.Int8` or `pl.Datetime("us")` to its dtype, or `None`
+    /// to fall back. The class must resolve into the `polars` package, so an unrelated symbol reusing a
+    /// dtype name like `other.Float64` is not mistaken for one.
+    fn polars_dtype_from_expr(&self, e: &Expr) -> Option<PolarsDType> {
+        // Swallow errors here, since the fallback call path re-infers this and is the sole reporter.
+        let ty = self.expr_infer(e, &self.error_swallower());
+        let cls = match &ty {
+            Type::ClassDef(cls) => cls,
+            Type::ClassType(cls) => cls.class_object(),
+            _ => return None,
+        };
+        let module = cls.module_name();
+        if module.as_str() != "polars" && !module.as_str().starts_with("polars.") {
+            return None;
+        }
+        Some(match cls.name().as_str() {
+            "Int8" => PolarsDType::Int8,
+            "Int16" => PolarsDType::Int16,
+            "Int32" => PolarsDType::Int32,
+            "Int64" => PolarsDType::Int64,
+            "Int128" => PolarsDType::Int128,
+            "UInt8" => PolarsDType::UInt8,
+            "UInt16" => PolarsDType::UInt16,
+            "UInt32" => PolarsDType::UInt32,
+            "UInt64" => PolarsDType::UInt64,
+            "UInt128" => PolarsDType::UInt128,
+            "Float32" => PolarsDType::Float32,
+            "Float64" => PolarsDType::Float64,
+            "Boolean" => PolarsDType::Boolean,
+            "String" => PolarsDType::String,
+            "Binary" => PolarsDType::Binary,
+            "Date" => PolarsDType::Date,
+            "Datetime" => PolarsDType::Datetime,
+            "Duration" => PolarsDType::Duration,
+            "Time" => PolarsDType::Time,
+            _ => return None,
+        })
+    }
+
+    /// Reduce a `pl.Series(...)` call to a `SeriesConstruct`, or `None` to fall back to the opaque
+    /// Series. Positional slots are `(name, values, dtype)`, but a non-string first slot is itself the
+    /// values. An ambiguous name slot, a positional-plus-keyword clash, or an unrecognized keyword
+    /// falls back, while `name` and `nan_to_null` are tolerated.
+    fn polars_series_options<'b>(&self, arguments: &'b Arguments) -> Option<SeriesConstruct<'b>> {
+        let mut values_keyword: Option<&Expr> = None;
+        let mut dtype_keyword: Option<&Expr> = None;
+        let mut strict = true;
+        for kw in &arguments.keywords {
+            let Some(arg) = &kw.arg else {
+                return None;
+            };
+            match arg.id.as_str() {
+                "name" | "nan_to_null" => {}
+                "values" => values_keyword = Some(&kw.value),
+                "dtype" => dtype_keyword = Some(&kw.value),
+                "strict" => match &kw.value {
+                    Expr::BooleanLiteral(b) => strict = b.value,
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        }
+        let (values_positional, dtype_positional) = match &arguments.args[..] {
+            [] => (None, None),
+            [Expr::StringLiteral(_)] => (None, None),
+            [values] => (Some(values), None),
+            [Expr::StringLiteral(_), values] => (Some(values), None),
+            [Expr::StringLiteral(_), values, dtype] => (Some(values), Some(dtype)),
+            _ => return None,
+        };
+        let values = match (values_positional, values_keyword) {
+            (Some(_), Some(_)) => return None,
+            (e, None) | (None, e) => e,
+        };
+        let dtype = match (dtype_positional, dtype_keyword) {
+            (Some(_), Some(_)) => return None,
+            (Some(e), None) | (None, Some(e)) => Some(self.polars_dtype_from_expr(e)?),
+            (None, None) => None,
+        };
+        Some(SeriesConstruct {
+            values,
+            dtype,
+            strict,
+        })
+    }
+
+    /// A `schema=` dict literal as an ordered column list, each pinned to a `pl.<DType>` or `None` to
+    /// defer to data inference. Falls back for an empty dict, an unrecognized entry, or a `None` under
+    /// the `pl.Schema` form, which forbids it.
+    fn schema_dict_entries(
+        &self,
+        form: SchemaForm,
+        dict: &ExprDict,
+    ) -> Option<Vec<(Name, Option<PolarsDType>)>> {
+        if dict.items.is_empty() {
+            return None;
+        }
+        let mut entries = Vec::with_capacity(dict.items.len());
+        let mut seen = SmallSet::new();
+        for item in &dict.items {
+            let Some(Expr::StringLiteral(key)) = &item.key else {
+                return None;
+            };
+            let name = Name::new(key.value.to_str());
+            if !seen.insert(name.clone()) {
+                return None;
+            }
+            let dtype = match &item.value {
+                Expr::NoneLiteral(_) if form == SchemaForm::Dict => None,
+                Expr::NoneLiteral(_) => return None,
+                value => Some(self.polars_dtype_from_expr(value)?),
+            };
+            entries.push((name, dtype));
+        }
+        Some(entries)
+    }
+
     /// Infer a column schema for a DataFrame constructor call, or `None` to fall back to plain
     /// construction. Purely syntactic; never infers the element expressions.
     ///
@@ -1005,7 +1010,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// `dtype=` override wins, a literal list/tuple `values` resolves through the DataFrame column
     /// fold, an absent `values` is `Null`, and a non-literal `values` falls back.
     pub fn infer_series_dtype(&self, arguments: &Arguments) -> Option<PolarsDType> {
-        let construct = polars_series_options(arguments)?;
+        let construct = self.polars_series_options(arguments)?;
         if let Some(dtype) = construct.dtype {
             return Some(dtype);
         }
@@ -1054,7 +1059,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         };
                         overrides.insert(
                             Name::new(key.value.to_str()),
-                            polars_dtype_from_expr(value)?,
+                            self.polars_dtype_from_expr(value)?,
                         );
                     }
                 }
@@ -1087,7 +1092,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None | Some(Expr::NoneLiteral(_)) => None,
             Some(expr) => {
                 let (form, dict) = self.schema_literal_dict(expr)?;
-                Some(schema_dict_entries(form, dict)?)
+                Some(self.schema_dict_entries(form, dict)?)
             }
         };
         Some(PolarsConstruct {
@@ -1547,7 +1552,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let [target] = &call.arguments.args[..] else {
                                 return None;
                             };
-                            return polars_dtype_from_expr(target).map(ExprValue::Dtype);
+                            return self.polars_dtype_from_expr(target).map(ExprValue::Dtype);
                         }
                         "alias" => return self.eval_polars_expr(&attr.value, schema, errors),
                         method => {
@@ -1580,7 +1585,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ("lit", "polars.functions.lit") => {
                         for kw in &call.arguments.keywords {
                             if kw.arg.as_ref().is_some_and(|a| a.id.as_str() == "dtype") {
-                                return polars_dtype_from_expr(&kw.value).map(ExprValue::Dtype);
+                                return self
+                                    .polars_dtype_from_expr(&kw.value)
+                                    .map(ExprValue::Dtype);
                             }
                         }
                         let [value] = &call.arguments.args[..] else {
@@ -2026,7 +2033,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     };
                     casts.insert(
                         Name::new(key.value.to_str()),
-                        (key.range(), polars_dtype_from_expr(value)?),
+                        (key.range(), self.polars_dtype_from_expr(value)?),
                     );
                 }
                 for (name, (range, _)) in &casts {
@@ -2047,7 +2054,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect()
             }
             _ => {
-                let dtype = polars_dtype_from_expr(arg)?;
+                let dtype = self.polars_dtype_from_expr(arg)?;
                 schema
                     .columns
                     .iter()

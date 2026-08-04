@@ -998,6 +998,19 @@ reveal_type(pl.DataFrame({"a": [1, 2.0]}, schema_overrides={"a": pl.Float64}))  
 );
 
 testcase!(
+    test_schema_overrides_ignores_non_polars_dtype_name,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+class Other:
+    Int8 = int
+# `Other.Int8` reuses a dtype name but is not a Polars dtype, so the override is not honored.
+reveal_type(pl.DataFrame({"a": [1]}, schema_overrides={"a": Other.Int8}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
     test_schema_keyword_with_matching_data,
     env_with_polars_stubs(),
     r#"
