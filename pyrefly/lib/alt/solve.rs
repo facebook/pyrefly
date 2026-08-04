@@ -958,7 +958,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
         };
         match iterable {
-            Type::ClassType(cls) if self.has_named_tuple_iter_override(cls) => {
+            Type::ClassType(cls) | Type::SelfType(cls)
+                if self.has_named_tuple_iter_override(cls) =>
+            {
                 let ty = self
                     .call_magic_dunder_method(
                         iterable,
@@ -975,7 +977,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     });
                 vec![Iterable::OfType(ty)]
             }
-            Type::ClassType(cls) if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) => {
+            Type::ClassType(cls) | Type::SelfType(cls)
+                if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) =>
+            {
                 vec![Iterable::FixedLen(elts.clone())]
             }
             Type::IntTuple(int_tuple) => self.iterate_int_tuple(int_tuple),

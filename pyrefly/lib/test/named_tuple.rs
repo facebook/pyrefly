@@ -346,8 +346,8 @@ class Pair2[T](NamedTuple):
     y: T
 
 def test(p: Pair, p2: Pair2[bytes]):
-    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterable[int | str]
-    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterable[bytes | int]
+    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterator[int | str]
+    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterator[bytes | int]
     "#,
 );
 
@@ -470,15 +470,21 @@ Tup = namedtuple("Tup", ["a", "b"], defaults=(1, 2, 3))  # E: Too many defaults:
 testcase!(
     test_named_tuple_dunder_unpack,
     r#"
-from typing import NamedTuple
+from typing import NamedTuple, assert_type
+
 class A(NamedTuple):
     a: int
     b: str
-    def __repr__(self) -> str:
-        return "A"
 
-def test(x: A) -> None:
+    def test_unpack_self(self) -> None:
+        a, b = self
+        assert_type(a, int)
+        assert_type(b, str)
+
+def test_unpack(x: A) -> None:
     a, b = x
+    assert_type(a, int)
+    assert_type(b, str)
 "#,
 );
 

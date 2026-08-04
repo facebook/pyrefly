@@ -82,6 +82,7 @@ pub struct Stdlib {
     tuple: StdlibResult<(Class, Arc<TParams>)>,
     enumerate: StdlibResult<(Class, Arc<TParams>)>,
     iterable: StdlibResult<(Class, Arc<TParams>)>,
+    iterator: StdlibResult<(Class, Arc<TParams>)>,
     async_iterable: StdlibResult<(Class, Arc<TParams>)>,
     async_iterator: StdlibResult<(Class, Arc<TParams>)>,
     mutable_sequence: StdlibResult<(Class, Arc<TParams>)>,
@@ -251,6 +252,7 @@ impl Stdlib {
                 .then(|| lookup_concrete(types, "EllipsisType")),
             none_type: lookup_concrete(none_location, "NoneType"),
             iterable: lookup_generic(typing, "Iterable", 1),
+            iterator: lookup_generic(typing, "Iterator", 1),
             async_iterable: lookup_generic(typing, "AsyncIterable", 1),
             async_iterator: lookup_generic(typing, "AsyncIterator", 1),
             mutable_sequence: lookup_generic(typing, "MutableSequence", 1),
@@ -530,6 +532,10 @@ impl Stdlib {
 
     pub fn iterable(&self, x: Type) -> ClassType {
         Self::apply(&self.iterable, vec![x])
+    }
+
+    pub fn iterator(&self, x: Type) -> ClassType {
+        Self::apply(&self.iterator, vec![x])
     }
 
     pub fn async_iterable(&self, x: Type) -> ClassType {
