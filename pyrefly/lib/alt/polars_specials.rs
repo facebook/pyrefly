@@ -250,10 +250,12 @@ enum PolarsData<'b> {
 
 /// A DataFrame constructor call reduced to the pieces column inference needs.
 /// `data` is `None` when absent or empty; `schema` is the ordered `schema=` column set, each
-/// column pinned to a dtype or `None` to defer to data inference.
+/// column pinned to a dtype or `None` to defer to data inference; `columns` is the pandas
+/// `columns=` selection, applied only for a pandas frame.
 pub struct PolarsConstruct<'b> {
     data: Option<PolarsData<'b>>,
     schema: Option<Vec<(Name, Option<PolarsDType>)>>,
+    columns: Option<Vec<Name>>,
     overrides: SmallMap<Name, PolarsDType>,
     strict: bool,
 }
@@ -828,6 +830,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         kind: DataFrameKind,
         errors: &ErrorCollector,
     ) -> Option<Vec<(Name, PolarsDType)>> {
+        // `columns=` is a pandas-only selector; a Polars call with it is a runtime error, so fall back.
+        if construct.columns.is_some() && kind != DataFrameKind::Pandas {
+            return None;
+        }
         match (&construct.data, &construct.schema) {
             // Record schemas do not follow the exact-name rules for column-oriented dict data.
             (Some(PolarsData::Records(_)), Some(_)) => None,
@@ -895,8 +901,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let Some(schema) = &construct.schema else {
             let data = data?;
-            let mut columns = Vec::with_capacity(data.columns.len());
-            for (name, value) in &data.columns {
+            // A pandas `columns=` selects and orders the output columns; absent it, use data order.
+            let names: Vec<&Name> = match &construct.columns {
+                Some(cols) => cols.iter().collect(),
+                None => data.columns.keys().collect(),
+            };
+            let mut result = Vec::with_capacity(names.len());
+            for name in names {
+                // A `columns=` name absent from the data is an all-NaN column; fall back rather than model it.
+                let value = data.columns.get(name).copied()?;
                 let element = if let Some(dtype) = construct.overrides.get(name) {
                     *dtype
                 } else {
@@ -906,9 +919,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None => return None,
                     }
                 };
-                columns.push((name.clone(), element));
+                result.push((name.clone(), element));
             }
-            return Some(columns);
+            return Some(result);
         };
         if kind != DataFrameKind::Polars {
             return None;
@@ -1041,6 +1054,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut strict = true;
         let mut data_keyword: Option<&Expr> = None;
         let mut schema_keyword: Option<&Expr> = None;
+        let mut columns = None;
         for kw in &arguments.keywords {
             let Some(arg) = &kw.arg else {
                 return None;
@@ -1048,6 +1062,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match arg.id.as_str() {
                 "data" => data_keyword = Some(&kw.value),
                 "schema" => schema_keyword = Some(&kw.value),
+                "columns" => {
+                    let Expr::List(list) = &kw.value else {
+                        return None;
+                    };
+                    let mut names = Vec::with_capacity(list.elts.len());
+                    for elt in &list.elts {
+                        let Expr::StringLiteral(s) = elt else {
+                            return None;
+                        };
+                        let name = Name::new(s.value.to_str());
+                        // Duplicate output columns are not modeled; fall back.
+                        if names.contains(&name) {
+                            return None;
+                        }
+                        names.push(name);
+                    }
+                    columns = Some(names);
+                }
                 "schema_overrides" => {
                     let Expr::Dict(dict) = &kw.value else {
                         return None;
@@ -1098,6 +1130,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(PolarsConstruct {
             data,
             schema,
+            columns,
             overrides,
             strict,
         })

@@ -1376,12 +1376,33 @@ reveal_type(pd.DataFrame({"a": [1], "b": ["x"]}))  # E: revealed type: DataFrame
 );
 
 testcase!(
-    test_pandas_columns_keyword_falls_back,
+    test_pandas_columns_selects_and_orders,
     env_with_pandas_stubs(),
     r#"
 import pandas as pd
 from typing import reveal_type
-reveal_type(pd.DataFrame({"a": [1]}, columns=["a"]))  # E: revealed type: DataFrame
+reveal_type(pd.DataFrame({"a": [1], "b": ["x"]}, columns=["b"]))  # E: revealed type: DataFrame[b: String, ...]
+reveal_type(pd.DataFrame({"a": [1], "b": ["x"]}, columns=["b", "a"]))  # E: revealed type: DataFrame[b: String, a: Int64, ...]
+"#,
+);
+
+testcase!(
+    test_pandas_columns_missing_name_falls_back,
+    env_with_pandas_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+reveal_type(pd.DataFrame({"a": [1]}, columns=["a", "c"]))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_polars_columns_keyword_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, columns=["a"]))  # E: revealed type: DataFrame # E: Unexpected keyword argument `columns`
 "#,
 );
 
