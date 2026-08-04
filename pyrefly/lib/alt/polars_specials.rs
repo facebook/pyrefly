@@ -221,8 +221,42 @@ fn is_polars_dataframe_type(ty: &Type) -> bool {
     }
 }
 
-/// Whether a callee is the module-level `polars.concat`, seen through any `Forall`/`Overload`
-/// wrapper via `callee_kind`.
+/// Map a resolved Polars dtype class or instance to its modeled dtype, or `None` otherwise.
+fn polars_dtype_from_type(ty: &Type) -> Option<PolarsDType> {
+    let cls = match ty {
+        Type::ClassDef(cls) => cls,
+        Type::ClassType(cls) => cls.class_object(),
+        _ => return None,
+    };
+    let module = cls.module_name();
+    if module.as_str() != "polars" && !module.as_str().starts_with("polars.") {
+        return None;
+    }
+    Some(match cls.name().as_str() {
+        "Int8" => PolarsDType::Int8,
+        "Int16" => PolarsDType::Int16,
+        "Int32" => PolarsDType::Int32,
+        "Int64" => PolarsDType::Int64,
+        "Int128" => PolarsDType::Int128,
+        "UInt8" => PolarsDType::UInt8,
+        "UInt16" => PolarsDType::UInt16,
+        "UInt32" => PolarsDType::UInt32,
+        "UInt64" => PolarsDType::UInt64,
+        "UInt128" => PolarsDType::UInt128,
+        "Float32" => PolarsDType::Float32,
+        "Float64" => PolarsDType::Float64,
+        "Boolean" => PolarsDType::Boolean,
+        "String" => PolarsDType::String,
+        "Binary" => PolarsDType::Binary,
+        "Date" => PolarsDType::Date,
+        "Datetime" => PolarsDType::Datetime,
+        "Duration" => PolarsDType::Duration,
+        "Time" => PolarsDType::Time,
+        _ => return None,
+    })
+}
+
+/// Recognize module-level `polars.concat` through callable wrappers.
 pub fn is_polars_concat(callee: &Type) -> bool {
     matches!(
         callee.callee_kind(),
@@ -710,37 +744,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn polars_dtype_from_expr(&self, e: &Expr) -> Option<PolarsDType> {
         // Swallow errors here, since the fallback call path re-infers this and is the sole reporter.
         let ty = self.expr_infer(e, &self.error_swallower());
-        let cls = match &ty {
-            Type::ClassDef(cls) => cls,
-            Type::ClassType(cls) => cls.class_object(),
-            _ => return None,
-        };
-        let module = cls.module_name();
-        if module.as_str() != "polars" && !module.as_str().starts_with("polars.") {
-            return None;
-        }
-        Some(match cls.name().as_str() {
-            "Int8" => PolarsDType::Int8,
-            "Int16" => PolarsDType::Int16,
-            "Int32" => PolarsDType::Int32,
-            "Int64" => PolarsDType::Int64,
-            "Int128" => PolarsDType::Int128,
-            "UInt8" => PolarsDType::UInt8,
-            "UInt16" => PolarsDType::UInt16,
-            "UInt32" => PolarsDType::UInt32,
-            "UInt64" => PolarsDType::UInt64,
-            "UInt128" => PolarsDType::UInt128,
-            "Float32" => PolarsDType::Float32,
-            "Float64" => PolarsDType::Float64,
-            "Boolean" => PolarsDType::Boolean,
-            "String" => PolarsDType::String,
-            "Binary" => PolarsDType::Binary,
-            "Date" => PolarsDType::Date,
-            "Datetime" => PolarsDType::Datetime,
-            "Duration" => PolarsDType::Duration,
-            "Time" => PolarsDType::Time,
-            _ => return None,
-        })
+        polars_dtype_from_type(&ty)
     }
 
     /// Reduce a `pl.Series(...)` call to a `SeriesConstruct`, or `None` to fall back to the opaque
