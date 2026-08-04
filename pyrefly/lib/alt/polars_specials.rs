@@ -610,6 +610,54 @@ fn comparison_value(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     comparable.then_some(Dtype(PolarsDType::Boolean))
 }
 
+#[derive(Clone, Copy)]
+enum Reducer {
+    Identity,
+    FloatPromote,
+    Count,
+    Sum,
+    Product,
+}
+
+impl Reducer {
+    fn parse(method: &str) -> Option<Self> {
+        Some(match method {
+            "min" | "max" | "first" | "last" => Self::Identity,
+            "mean" | "median" | "std" | "var" => Self::FloatPromote,
+            "count" | "n_unique" => Self::Count,
+            "sum" => Self::Sum,
+            "product" => Self::Product,
+            _ => return None,
+        })
+    }
+
+    /// Polars' `Int128` and `UInt128` sum/product results have not been runtime-verified.
+    fn output_dtype(self, d: PolarsDType) -> Option<PolarsDType> {
+        use PolarsDType::*;
+        match self {
+            Reducer::Identity => Some(d),
+            Reducer::Count => Some(UInt32),
+            Reducer::FloatPromote => match d {
+                Float32 => Some(Float32),
+                Boolean => Some(Float64),
+                d if d.is_numeric() => Some(Float64),
+                _ => None,
+            },
+            Reducer::Sum => match d {
+                Boolean => Some(UInt32),
+                Int8 | Int16 | UInt8 | UInt16 => Some(Int64),
+                Int32 | Int64 | UInt32 | UInt64 | Float32 | Float64 => Some(d),
+                _ => None,
+            },
+            Reducer::Product => match d {
+                UInt64 | Float32 | Float64 => Some(d),
+                Boolean | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 => Some(Int64),
+                _ => None,
+            },
+        }
+    }
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Infer a column schema for a DataFrame constructor call, or `None` to fall back to plain
     /// construction. Purely syntactic; never infers the element expressions.
@@ -1243,11 +1291,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             return polars_dtype_from_expr(target).map(ExprValue::Dtype);
                         }
                         "alias" => return self.eval_polars_expr(&attr.value, schema, errors),
-                        _ => {}
+                        method => {
+                            if let Some(reducer) = Reducer::parse(method) {
+                                let inner = self.eval_polars_expr(&attr.value, schema, errors)?;
+                                return Some(ExprValue::Dtype(
+                                    reducer.output_dtype(inner.dtype())?,
+                                ));
+                            }
+                        }
                     }
                 }
                 let id = self.polars_function_id(&call.func)?;
                 match (id.name.as_str(), id.module.name().as_str()) {
+                    ("len", "polars.functions.len") => Some(ExprValue::Dtype(PolarsDType::UInt32)),
                     ("col", "polars.functions.col") => {
                         let [arg] = &call.arguments.args[..] else {
                             return None;
@@ -1327,11 +1383,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             };
                             return Some(Name::new(s.value.to_str()));
                         }
+                        method if Reducer::parse(method).is_some() => {
+                            return self.polars_expr_output_name(&attr.value);
+                        }
                         _ => {}
                     }
                 }
                 let id = self.polars_function_id(&call.func)?;
                 match (id.name.as_str(), id.module.name().as_str()) {
+                    ("len", "polars.functions.len") => Some(Name::new("len")),
                     ("col", "polars.functions.col") => {
                         let [arg] = &call.arguments.args[..] else {
                             return None;

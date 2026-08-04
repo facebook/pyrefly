@@ -97,6 +97,17 @@ class Expr:
     def alias(self, name: str) -> "Expr": ...
     def cast(self, dtype: Any, *, strict: bool = True) -> "Expr": ...
     def sum(self) -> "Expr": ...
+    def mean(self) -> "Expr": ...
+    def median(self) -> "Expr": ...
+    def std(self, ddof: int = 1) -> "Expr": ...
+    def var(self, ddof: int = 1) -> "Expr": ...
+    def min(self) -> "Expr": ...
+    def max(self) -> "Expr": ...
+    def first(self) -> "Expr": ...
+    def last(self) -> "Expr": ...
+    def product(self) -> "Expr": ...
+    def count(self) -> "Expr": ...
+    def n_unique(self) -> "Expr": ...
 "#,
     );
     env.add_with_path(
@@ -115,6 +126,14 @@ from polars.expr.expr import Expr
 def lit(value: object, dtype: object = None) -> Expr: ...
 "#,
     );
+    env.add_with_path(
+        "polars.functions.len",
+        "polars/functions/len.pyi",
+        r#"
+from polars.expr.expr import Expr
+def len() -> Expr: ...
+"#,
+    );
     env.add(
         "polars",
         r#"
@@ -123,6 +142,7 @@ from polars.series.series import Series as Series
 from polars.functions.eager import concat as concat
 from polars.functions.col import col as col
 from polars.functions.lit import lit as lit
+from polars.functions.len import len as len
 from polars.expr.expr import Expr as Expr
 class Int8: ...
 class Int16: ...
@@ -2558,13 +2578,14 @@ reveal_type(df.with_columns(z="*"))  # E: revealed type: DataFrame[a: Int64, z: 
 );
 
 testcase!(
-    test_with_columns_namespace_method_falls_back,
+    test_with_columns_keyword_unresolved_value_is_unknown,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.with_columns(b=pl.col("a").sum()))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+s = pl.col("a")
+reveal_type(df.with_columns(b=s))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
 "#,
 );
 
@@ -4191,5 +4212,38 @@ df = pl.DataFrame({"a": [1]})
 other = pl.DataFrame({"a": [2]})
 df.extend(other)
 df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_select_expr_reducer_sum_keeps_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"x": [1, 2]})
+reveal_type(df.select(pl.col("x").sum()))  # E: revealed type: DataFrame[x: Int64]
+"#,
+);
+
+testcase!(
+    test_with_columns_reducer_mean_promotes,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"x": [1, 2]})
+reveal_type(df.with_columns(m=pl.col("x").mean()))  # E: revealed type: DataFrame[x: Int64, m: Float64]
+"#,
+);
+
+testcase!(
+    test_select_expr_len_is_uint32,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"x": [1, 2]})
+reveal_type(df.select(pl.len()))  # E: revealed type: DataFrame[len: UInt32]
 "#,
 );
