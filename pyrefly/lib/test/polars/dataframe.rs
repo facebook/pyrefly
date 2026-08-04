@@ -4984,3 +4984,53 @@ df.insert_column(1, pl.Series("b", [2]))
 reveal_type(df.to_series())  # E: revealed type: Series
 "#,
 );
+
+testcase!(
+    test_fp_rename_then_read_new_name,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+renamed = df.rename({"a": "z"})
+renamed["z"]
+renamed["b"]
+renamed["a"]  # E: Column `a` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_fp_with_columns_added_then_read,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+wc = df.with_columns(c=pl.col("a") + 1)
+wc["c"]
+wc["a"]
+wc["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_fp_drop_then_read_remaining,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+dropped = df.drop("a")
+dropped["b"]
+dropped["a"]  # E: Column `a` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_fp_select_then_read_kept,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+narrowed = df.select("a")
+narrowed["a"]
+narrowed["b"]  # E: Column `b` is not in the DataFrame schema
+"#,
+);
