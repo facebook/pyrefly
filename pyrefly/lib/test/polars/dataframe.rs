@@ -319,9 +319,10 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-x: int = 1
-reveal_type(pl.DataFrame({"a": [x]}))  # E: revealed type: DataFrame[a: Unknown]
-def g() -> int: ...
+class Custom: ...
+c: Custom = Custom()
+reveal_type(pl.DataFrame({"a": [c]}))  # E: revealed type: DataFrame[a: Unknown]
+def g() -> Custom: ...
 reveal_type(pl.DataFrame({"b": [g()]}))  # E: revealed type: DataFrame[b: Unknown]
 "#,
 );
@@ -722,9 +723,9 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-# A shadowed `date` must not fabricate a temporal dtype.
+# A shadowed `date` returning `str` builds a String column, never a fabricated temporal dtype.
 def date() -> str: ...
-reveal_type(pl.DataFrame({"a": [date()]}))  # E: revealed type: DataFrame[a: Unknown]
+reveal_type(pl.DataFrame({"a": [date()]}))  # E: revealed type: DataFrame[a: String]
 "#,
 );
 
@@ -857,9 +858,10 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-x: int = 1
-reveal_type(pl.DataFrame({"a": [1, x]}))  # E: revealed type: DataFrame[a: Unknown]
-def g() -> int: ...
+class Custom: ...
+c: Custom = Custom()
+reveal_type(pl.DataFrame({"a": [1, c]}))  # E: revealed type: DataFrame[a: Unknown]
+def g() -> Custom: ...
 reveal_type(pl.DataFrame({"b": [2, g()]}))  # E: revealed type: DataFrame[b: Unknown]
 "#,
 );
@@ -3195,7 +3197,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 def g() -> int: ...
-reveal_type(pl.DataFrame([{"a": 1, "b": g()}, {"a": 2, "b": 3}]))  # E: revealed type: DataFrame[a: Int64, b: Unknown]
+reveal_type(pl.DataFrame([{"a": 1, "b": g()}, {"a": 2, "b": 3}]))  # E: revealed type: DataFrame[a: Int64, b: Int64]
 "#,
 );
 
@@ -5248,5 +5250,40 @@ from typing import reveal_type
 def take(df: pl.DataFrame) -> None:
     reveal_type(df)  # E: revealed type: DataFrame
 take(pl.DataFrame({"a": [1]}))
+"#,
+);
+
+testcase!(
+    test_construct_variable_element_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+x: int = 1
+y: str = "a"
+reveal_type(pl.DataFrame({"a": [x], "b": [y]}))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_construct_call_result_element_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def f() -> float: ...
+reveal_type(pl.DataFrame({"a": [f()]}))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_construct_unmodeled_variable_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+class Custom: ...
+c: Custom = Custom()
+reveal_type(pl.DataFrame({"a": [c]}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );

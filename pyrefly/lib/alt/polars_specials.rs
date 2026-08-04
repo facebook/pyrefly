@@ -1303,22 +1303,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // `None` is `Null` in Polars only; pandas coerces it (int-with-`None` → `float64`),
             // which we do not model, so fall back there.
             Expr::NoneLiteral(_) if kind == DataFrameKind::Polars => Some(PolarsDType::Null),
-            // Resolve the callee class, not the element type: a variable typed `date` may hold a
-            // `datetime` subclass at runtime, so only a direct constructor call pins the dtype.
-            Expr::Call(call) if kind == DataFrameKind::Polars => {
-                match self.expr_infer(&call.func, &self.error_swallower()) {
-                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "date") => {
-                        Some(PolarsDType::Date)
+            // A datetime-constructor call resolves by its callee class, not the element type, because a
+            // variable typed `date` may hold a `datetime` subclass at runtime and so does not pin the
+            // dtype. Any other non-literal element in a Polars frame contributes its inferred scalar type.
+            _ if kind == DataFrameKind::Polars => {
+                if let Expr::Call(call) = e {
+                    let temporal = match self.expr_infer(&call.func, &self.error_swallower()) {
+                        Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "date") => {
+                            Some(PolarsDType::Date)
+                        }
+                        Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "datetime") => {
+                            Some(PolarsDType::Datetime)
+                        }
+                        Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "time") => {
+                            Some(PolarsDType::Time)
+                        }
+                        Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "timedelta") => {
+                            Some(PolarsDType::Duration)
+                        }
+                        _ => None,
+                    };
+                    if temporal.is_some() {
+                        return temporal;
                     }
-                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "datetime") => {
-                        Some(PolarsDType::Datetime)
-                    }
-                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "time") => {
-                        Some(PolarsDType::Time)
-                    }
-                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "timedelta") => {
-                        Some(PolarsDType::Duration)
-                    }
+                }
+                // Only the primitive scalar types map to a dtype; anything else falls back.
+                match self.expr_infer(e, &self.error_swallower()) {
+                    Type::ClassType(cls) if cls.is_builtin("bool") => Some(PolarsDType::Boolean),
+                    Type::ClassType(cls) if cls.is_builtin("int") => Some(PolarsDType::Int64),
+                    Type::ClassType(cls) if cls.is_builtin("float") => Some(PolarsDType::Float64),
+                    Type::ClassType(cls) if cls.is_builtin("str") => Some(PolarsDType::String),
+                    Type::ClassType(cls) if cls.is_builtin("bytes") => Some(PolarsDType::Binary),
                     _ => None,
                 }
             }
