@@ -969,48 +969,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // receiver is reused for ordinary callee inference rather than inferred again.
         let callee_ty = if let Expr::Attribute(func) = &*x.func {
             let base = self.expr_infer_impl(&func.value, None, errors);
-            if let Some(ty) = self.polars_select(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_drop(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_rename(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_with_columns(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_row_transform(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_row_append(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_cast(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_lazy_collect(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_join(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_hstack(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_group_by_agg(func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) =
-                self.polars_in_place_column_mutation(base.ty(), func, &x.arguments, errors)
-            {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_get_column(base.ty(), func, &x.arguments, errors) {
-                return PreparedExprCall::Resolved(ty);
-            }
-            if let Some(ty) = self.polars_to_series(base.ty(), func, &x.arguments, errors) {
+            if let Some(ty) = self.polars_method_call(base.ty(), func, &x.arguments, errors) {
                 return PreparedExprCall::Resolved(ty);
             }
             let attr = self.attr_access_infer(func, &base, errors);

@@ -635,6 +635,55 @@ impl Reducer {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    pub(crate) fn polars_method_call(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        if let Some(ty) = self.polars_select(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_drop(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_rename(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_with_columns(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_row_transform(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_row_append(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_cast(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_lazy_collect(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_join(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_hstack(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_group_by_agg(func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_in_place_column_mutation(base, func, args, errors) {
+            return Some(ty);
+        }
+        if let Some(ty) = self.polars_get_column(base, func, args, errors) {
+            return Some(ty);
+        }
+        self.polars_to_series(base, func, args, errors)
+    }
+
     pub(crate) fn infer_polars_call_specialization(
         &self,
         callee: &Type,
