@@ -392,12 +392,6 @@ fn unpack_list_or_tuple_literal(arg: &Expr) -> &[Expr] {
     }
 }
 
-/// Whether a `pl.col` name is a selector (`"*"` or `"^regex$"`) rather than an exact name.
-fn is_polars_selector_name(name: &Name) -> bool {
-    let value = name.as_str();
-    value == "*" || (value.starts_with('^') && value.ends_with('$'))
-}
-
 /// A resolved Polars expression, either a pinned dtype or a flexible numeric literal that adapts to
 /// the operand it meets. Only a literal stays flexible.
 #[derive(Clone, Copy)]
@@ -776,6 +770,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         (!columns.is_empty()).then_some(columns)
     }
 
+    /// Whether an expression's type is a string (a `Literal[str]`, `LiteralString`, or `str`). For
+    /// disambiguating a `pl.Series` first positional slot, where a string is the name and anything
+    /// else is the values, so a name held in a variable is recognized like a bare string.
+    fn is_string_typed(&self, expr: &Expr) -> bool {
+        // Swallow errors here, since a fallback call path re-infers the argument.
+        let ty = self.expr_infer(expr, &self.error_swallower());
+        ty.is_literal_string() || polars_dtype_from_scalar_type(&ty) == Some(PolarsDType::String)
+    }
+
     /// Reduce a `pl.Series(...)` call to a `SeriesConstruct`, or `None` to fall back to the opaque
     /// Series. Positional slots are `(name, values, dtype)`, but a non-string first slot is itself the
     /// values. An ambiguous name slot, a positional-plus-keyword clash, or an unrecognized keyword
@@ -799,12 +802,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => return None,
             }
         }
+        // The first positional slot is the Series name when its type is a string; otherwise it is the
+        // values. Reading the type means a name held in a variable is recognized like a bare string.
         let (values_positional, dtype_positional) = match &arguments.args[..] {
             [] => (None, None),
-            [Expr::StringLiteral(_)] => (None, None),
+            [first] if self.is_string_typed(first) => (None, None),
             [values] => (Some(values), None),
-            [Expr::StringLiteral(_), values] => (Some(values), None),
-            [Expr::StringLiteral(_), values, dtype] => (Some(values), Some(dtype)),
+            [first, values] if self.is_string_typed(first) => (Some(values), None),
+            [first, values, dtype] if self.is_string_typed(first) => (Some(values), Some(dtype)),
             _ => return None,
         };
         let values = match (values_positional, values_keyword) {
@@ -1789,11 +1794,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let [arg] = &call.arguments.args[..] else {
                             return None;
                         };
-                        let name = self.polars_column_name(arg)?;
                         // `"*"` and a regex select many columns whose names are data-dependent.
-                        if is_polars_selector_name(&name) {
+                        let ColumnArg::Named(name) = self.polars_column_arg(arg) else {
                             return None;
-                        }
+                        };
                         resolve_column(schema, &name, arg.range(), errors).map(ExprValue::Dtype)
                     }
                     ("lit", "polars.functions.lit") => {
@@ -1858,10 +1862,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match attr.attr.id.as_str() {
                         "cast" => return self.polars_expr_output_name(&attr.value),
                         "alias" => {
-                            let [Expr::StringLiteral(s)] = &call.arguments.args[..] else {
+                            let [arg] = &call.arguments.args[..] else {
                                 return None;
                             };
-                            return Some(Name::new(s.value.to_str()));
+                            // The alias name resolves through its type, so a `Final`/`Literal[str]`
+                            // renames the output like a bare string. An alias is a literal output name,
+                            // not a selector, so no selector filtering applies.
+                            return self.polars_string_literal(arg).map(Name::new);
                         }
                         method if Reducer::parse(method).is_some() => {
                             return self.polars_expr_output_name(&attr.value);
@@ -1876,11 +1883,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let [arg] = &call.arguments.args[..] else {
                             return None;
                         };
-                        let name = self.polars_column_name(arg)?;
-                        // A `"*"` or a regex selects many columns whose names are data-dependent.
-                        if is_polars_selector_name(&name) {
+                        // The column name resolves through its type, so a `Final`/`Literal[str]` names
+                        // a column like a bare string, while a `"*"` or regex selects a data-dependent
+                        // set and falls back.
+                        let ColumnArg::Named(name) = self.polars_column_arg(arg) else {
                             return None;
-                        }
+                        };
                         Some(name)
                     }
                     ("lit", "polars.functions.lit") => {

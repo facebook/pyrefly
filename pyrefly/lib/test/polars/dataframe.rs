@@ -5722,3 +5722,38 @@ d2 = pl.DataFrame({"a": [2]})
 reveal_type(pl.concat([d1, d2], how=HOW))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
+
+testcase!(
+    test_select_col_final_name,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+A: Final = "a"
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col(A)))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_select_alias_final_name,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Final, reveal_type
+OUT: Final = "c"
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("a").alias(OUT)))  # E: revealed type: DataFrame[c: Int64]
+"#,
+);
+
+testcase!(
+    test_series_name_variable,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+n = "s"
+reveal_type(pl.Series(n, [1, 2, 3]))  # E: revealed type: Series[Int64]
+"#,
+);
