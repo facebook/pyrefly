@@ -205,6 +205,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         CallTarget::Any(AnyStyle::Error)
     }
 
+    /// Resolve `__new__` while rejecting a target that directly re-enters this constructor.
+    fn dunder_new_call_target(
+        &self,
+        ty: Type,
+        cls: &ClassType,
+        range: TextRange,
+        errors: &ErrorCollector,
+        dunder_new_errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> CallTarget {
+        let call_target = self.as_call_target_or_error(
+            ty,
+            CallStyle::Method(&dunder::NEW),
+            range,
+            errors,
+            context,
+        );
+        // Calling the class itself as its `__new__` re-enters its constructor forever.
+        if matches!(
+            &call_target,
+            CallTarget::Class(new_cls, ..) if new_cls.class_object() == cls.class_object()
+        ) {
+            self.error_call_target(
+                dunder_new_errors,
+                range,
+                format!(
+                    "`__new__` on `{}` resolves back to the same class, creating infinite recursion at runtime",
+                    cls.name()
+                ),
+                ErrorKind::NotCallable,
+                context,
+            )
+        } else {
+            call_target
+        }
+    }
+
     fn proxy_method_call_error(&self, ty: &Type) -> Option<NoAccessReason> {
         match ty {
             Type::ClassType(cls) | Type::SelfType(cls) => {
@@ -1048,11 +1085,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect::<Vec<_>>();
                 let dunder_new_errors = self.error_collector();
                 let ret = self.call_infer(
-                    self.as_call_target_or_error(
+                    self.dunder_new_call_target(
                         new_method.clone(),
-                        CallStyle::Method(&dunder::NEW),
+                        &cls,
                         arguments_range,
                         &errors,
+                        &dunder_new_errors,
                         context,
                     ),
                     &full_args,
