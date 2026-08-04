@@ -482,6 +482,49 @@ obj.method(5, "world")
     );
 }
 
+fn parameter_name_hint_labels(code: &str, assert_zero_errors: bool) -> Vec<String> {
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, assert_zero_errors);
+    let handle = handles.get("main").unwrap();
+    state
+        .transaction()
+        .inlay_hints(
+            handle,
+            InlayHintConfig {
+                call_argument_names: AllOffPartial::All,
+                variable_types: false,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .flat_map(|hint| hint.label_parts.into_iter().map(|(text, _)| text))
+        .filter(|text| text.ends_with("= "))
+        .collect()
+}
+
+#[test]
+fn test_parameter_name_hint_after_keyword_argument() {
+    let code = r#"
+def test(a: str, b: str) -> None:
+    pass
+
+test(a="a", "b")
+"#;
+    assert_eq!(parameter_name_hint_labels(code, false), vec!["b= "]);
+}
+
+#[test]
+fn test_parameter_name_hints_for_multiple_positional_arguments() {
+    let code = r#"
+def test(a: str, b: str) -> None:
+    pass
+
+test("a", "b")
+"#;
+    assert_eq!(parameter_name_hint_labels(code, true), vec!["a= ", "b= "]);
+}
+
 #[test]
 fn test_parameter_name_hints_with_varargs() {
     let code = r#"
