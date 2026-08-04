@@ -2354,6 +2354,29 @@ When set to `true`, parameter list compatibility is checked strictly even when
 - Default: `false`
 - Flag equivalent: `--strict-callable-subtyping`
 
+### `treat-all-caps-as-final`
+
+Treat `ALL_CAPS` names as final after their first assignment, in any scope
+(module, class, or function body). When enabled, assigning to the same constant
+name again emits a `bad-assignment` error, similar to writing an explicit
+`Final` annotation.
+
+```python
+FOO = 1
+FOO = 2  # error
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2  # error
+```
+
+Names inside function bodies and non-constant names are unaffected.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--treat-all-caps-as-final`
+- Equivalent configs: `reportConstantRedefinition` in Pyright
+
 ### `untyped-def-behavior` (deprecated)
 
 :::warning
@@ -3868,6 +3891,16 @@ def two_elems() -> tuple:
   return (1, "two")
 
 a, b, c = two_elems()
+```
+
+## column-schema-mismatch
+
+A Polars DataFrame's data columns do not name exactly the columns declared by its `schema=`. A declared `schema` is the authoritative column set, so a data column that is missing from it or absent from the data raises `ValueError` or `KeyError` at runtime.
+
+```python
+import polars as pl
+
+pl.DataFrame({"x": [1]}, schema={"a": pl.Int64})  # data column `x` is not in the schema, and `a` has no data
 ```
 
 ## column-type-mismatch
