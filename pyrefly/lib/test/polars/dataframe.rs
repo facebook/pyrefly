@@ -5156,3 +5156,56 @@ reveal_type(df.lazy().collect(engine="streaming"))  # E: revealed type: DataFram
 reveal_type(df.lazy().collect(engine="bad"))  # E: revealed type: DataFrame[a: Int64, b: String] # E: not assignable to parameter `engine`
 "#,
 );
+
+testcase!(
+    test_schema_class_construction,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+class MySchema:
+    price: pl.Float64
+    asset: pl.String
+reveal_type(pl.DataFrame(schema=MySchema))  # E: revealed type: DataFrame[price: Float64, asset: String]
+"#,
+);
+
+testcase!(
+    test_schema_class_ignores_non_dtype_fields,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+class MySchema:
+    price: int
+reveal_type(pl.DataFrame(schema=MySchema))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_dataframe_schema_annotation,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+class MySchema:
+    price: pl.Float64
+    asset: pl.String
+def f(df: pl.DataFrame[MySchema]) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[price: Float64, asset: String]
+"#,
+);
+
+testcase!(
+    test_dataframe_schema_annotation_reads_columns,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+class MySchema:
+    price: pl.Float64
+def f(df: pl.DataFrame[MySchema]) -> None:
+    reveal_type(df["price"])  # E: revealed type: Series
+    df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);

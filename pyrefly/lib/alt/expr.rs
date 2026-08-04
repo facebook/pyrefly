@@ -3037,6 +3037,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         allow_type_level_dsl,
                     ))
                 }
+                // A `pl.DataFrame[Schema]` annotation carries the schema class's columns as the
+                // frame's schema, so an annotated parameter is checked like a constructed frame.
+                Type::ClassDef(ref cls)
+                    if let [arg] = xs
+                        && let Some(df) = self.polars_dataframe_schema_annotation(cls, arg) =>
+                {
+                    Type::type_of(df)
+                }
                 Type::ClassDef(ref cls) if self.is_int_tuple_class(cls) => {
                     self.parse_int_tuple_type(xs, errors)
                 }

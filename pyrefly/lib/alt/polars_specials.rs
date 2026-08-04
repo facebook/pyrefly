@@ -825,6 +825,66 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(entries)
     }
 
+    /// Build the `Type::DataFrame` for a `pl.DataFrame[Schema]` annotation, or `None` when `base` is
+    /// not the Polars DataFrame class or `arg` is not a schema class. The schema is Complete because
+    /// an annotation states the full column set, and it stands for a real DataFrame instance so
+    /// unmodeled behavior still resolves against the class.
+    pub fn polars_dataframe_schema_annotation(&self, base: &Class, arg: &Expr) -> Option<Type> {
+        if !is_polars_dataframe(base) {
+            return None;
+        }
+        // Swallow errors here, since a bad annotation is reported by the ordinary subscript path.
+        let ty = self.expr_infer(arg, &self.error_swallower());
+        let Type::ClassDef(schema_cls) = &ty else {
+            return None;
+        };
+        let columns = self.schema_class_columns(schema_cls)?;
+        let Type::ClassType(underlying) = self.promote_silently(base) else {
+            return None;
+        };
+        Some(
+            DataFrameSchema {
+                underlying,
+                columns,
+                completeness: SchemaCompleteness::Complete,
+                kind: DataFrameKind::Polars,
+            }
+            .to_type(),
+        )
+    }
+
+    /// Read a class named by `schema=` as an ordered column list, one column per `field: pl.<DType>`
+    /// annotation, the way patito and dataframely model classes declare a frame's schema. A field
+    /// whose annotation is not a modeled Polars dtype falls back, so a non-schema class is never misread.
+    fn schema_class_entries(&self, expr: &Expr) -> Option<Vec<(Name, Option<PolarsDType>)>> {
+        // Swallow errors here, since the fallback call path re-infers this and is the sole reporter.
+        let ty = self.expr_infer(expr, &self.error_swallower());
+        let Type::ClassDef(cls) = &ty else {
+            return None;
+        };
+        Some(
+            self.schema_class_columns(cls)?
+                .into_iter()
+                .map(|(name, dtype)| (name, Some(dtype)))
+                .collect(),
+        )
+    }
+
+    /// Read a schema class's columns as `(name, dtype)` in declaration order, one per
+    /// `field: pl.<DType>` annotation. A field whose annotation is not a modeled Polars dtype
+    /// falls back, so a non-schema class is never misread as an empty or partial schema.
+    fn schema_class_columns(&self, cls: &Class) -> Option<Vec<(Name, PolarsDType)>> {
+        let fields = self.get_class_field_map(cls);
+        if fields.is_empty() {
+            return None;
+        }
+        let mut columns = Vec::with_capacity(fields.len());
+        for (name, field) in &fields {
+            columns.push((name.clone(), polars_dtype_from_type(&field.ty())?));
+        }
+        Some(columns)
+    }
+
     /// Infer a column schema for a DataFrame constructor call, or `None` to fall back to plain
     /// construction. Purely syntactic; never infers the element expressions.
     ///
@@ -1130,6 +1190,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let schema = match schema_expr {
             None | Some(Expr::NoneLiteral(_)) => None,
+            Some(expr) if let Some(entries) = self.schema_class_entries(expr) => Some(entries),
             Some(expr) => {
                 let (form, dict) = self.schema_literal_dict(expr)?;
                 Some(self.schema_dict_entries(form, dict)?)
