@@ -64,6 +64,7 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
+use crate::types::callable::params_are_gradual_variadic;
 use crate::types::class::ClassType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
@@ -142,27 +143,29 @@ fn is_int_class_type(cls: &ClassType) -> bool {
     cls.has_qname("shape_extensions", "Int")
 }
 
-/// Check if a param list has both `*args: Any` and `**kwargs: Any`
-fn has_any_args_and_kwargs(args: &[Param]) -> bool {
-    let has_vararg_any = args
-        .iter()
-        .any(|p| matches!(p, Param::Varargs(_, Type::Any(_))));
-    let has_kwargs_any = args
-        .iter()
-        .any(|p| matches!(p, Param::Kwargs(_, Type::Any(_))));
-    has_vararg_any && has_kwargs_any
-}
-
 fn params_have_any_args_and_kwargs(params: &Params) -> bool {
     match params {
-        Params::List(args) | Params::Partial(args) => has_any_args_and_kwargs(args.items()),
+        Params::List(args) | Params::Partial(args) => params_are_gradual_variadic(args.items()),
         Params::Ellipsis | Params::Materialization => false,
         Params::ParamSpec(_prefix, pspec) => {
             matches!(
                 pspec,
-                Type::ParamSpecValue(args) if has_any_args_and_kwargs(args.items())
+                Type::ParamSpecValue(args) if params_are_gradual_variadic(args.items())
             )
         }
+    }
+}
+
+/// Whether a callable-typed value should be treated as having gradual (`...`) parameters
+/// because its definition had both `*args` and `**kwargs` typed `Any`. For a `Function` we
+/// trust the definition-time flag, so an `Any` introduced by type-parameter substitution (e.g.
+/// `Proto[Any]` over `*args: T, **kwargs: T`) does not count. A bare `Callable` has no such
+/// metadata, so we fall back to inspecting its params.
+fn sig_is_gradual_variadic(ty: &Type) -> bool {
+    match ty {
+        Type::Function(f) => f.metadata.flags.has_gradual_variadic_params,
+        Type::Callable(c) => params_have_any_args_and_kwargs(&c.params),
+        _ => false,
     }
 }
 
@@ -220,16 +223,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         &mut self,
         l_args: &[Param],
         u_args: &[Param],
+        l_gradual: bool,
+        u_gradual: bool,
     ) -> Result<(), SubsetError> {
         // Don't short-circuit because we may want to pin/solve variables
         let result = self.is_subset_param_list_impl(l_args, u_args);
         match result {
-            Err(_)
-                if !self.solver.strict_callable_subtyping
-                    && (has_any_args_and_kwargs(l_args) || has_any_args_and_kwargs(u_args)) =>
-            {
-                Ok(())
-            }
+            Err(_) if !self.solver.strict_callable_subtyping && (l_gradual || u_gradual) => Ok(()),
             _ => result,
         }
     }
@@ -591,6 +591,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         &mut self,
         l_params: &Params,
         u_params: &Params,
+        l_gradual: bool,
+        u_gradual: bool,
     ) -> Result<(), SubsetError> {
         let result = match (l_params, u_params) {
             (Params::Ellipsis, Params::ParamSpec(_, pspec)) => {
@@ -611,7 +613,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (
                 Params::List(l_args) | Params::Partial(l_args),
                 Params::List(u_args) | Params::Partial(u_args),
-            ) => self.is_subset_param_list(l_args.items(), u_args.items()),
+            ) => self.is_subset_param_list(l_args.items(), u_args.items(), l_gradual, u_gradual),
             (Params::List(ls) | Params::Partial(ls), Params::ParamSpec(args, pspec)) => {
                 self.is_paramlist_subset_of_paramspec(ls, args, pspec)
             }
@@ -623,17 +625,17 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
             (Params::Materialization, _) => Err(SubsetError::Other),
             (_, Params::Materialization) => {
-                self.is_subset_params(l_params, &Params::List(ParamList::everything()))
+                // `everything()` is the gradual `*args: Any, **kwargs: Any` list.
+                self.is_subset_params(
+                    l_params,
+                    &Params::List(ParamList::everything()),
+                    l_gradual,
+                    true,
+                )
             }
         };
         match result {
-            Err(_)
-                if !self.solver.strict_callable_subtyping
-                    && (params_have_any_args_and_kwargs(l_params)
-                        || params_have_any_args_and_kwargs(u_params)) =>
-            {
-                Ok(())
-            }
+            Err(_) if !self.solver.strict_callable_subtyping && (l_gradual || u_gradual) => Ok(()),
             _ => result,
         }
     }
@@ -1041,7 +1043,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         // (e.g. Pos("a", int) vs Pos("self", K) fails, but PosOnly matches any name).
         let args: Vec<Param> = want_ts.iter().map(|p| p.to_param_preserve_name()).collect();
         let (pre, post) = got.items().split_at(args.len());
-        self.is_subset_param_list(pre, &args)?;
+        self.is_subset_param_list(
+            pre,
+            &args,
+            params_are_gradual_variadic(pre),
+            params_are_gradual_variadic(&args),
+        )?;
         self.is_subset_eq(
             &self
                 .solver
@@ -1062,7 +1069,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         }
         let args: Vec<Param> = got_ts.iter().map(|p| p.to_param_preserve_name()).collect();
         let (pre, post) = want.items().split_at(args.len());
-        self.is_subset_param_list(&args, pre)?;
+        self.is_subset_param_list(
+            &args,
+            pre,
+            params_are_gradual_variadic(&args),
+            params_are_gradual_variadic(pre),
+        )?;
         self.is_subset_eq(
             got_pspec,
             &self
@@ -2000,30 +2012,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
             }
             (l, Type::Overload(overload)) => {
-                let has_any_args_kwargs = match l {
-                    Type::Callable(c) => {
-                        if let Params::List(params) = &c.params {
-                            has_any_args_and_kwargs(params.items())
-                        } else {
-                            false
-                        }
-                    }
-                    Type::Function(f) => {
-                        if let Params::List(params) = &f.signature.params {
-                            has_any_args_and_kwargs(params.items())
-                        } else {
-                            false
-                        }
-                    }
-                    _ => false,
-                };
+                let l_gradual = sig_is_gradual_variadic(l);
                 let result = all(overload.signatures.iter(), |u| {
                     self.is_subset_eq(l, &u.as_type())
                 });
                 match result {
-                    Err(_) if !self.solver.strict_callable_subtyping && has_any_args_kwargs => {
-                        Ok(())
-                    }
+                    Err(_) if !self.solver.strict_callable_subtyping && l_gradual => Ok(()),
                     _ => result,
                 }
             }
@@ -2125,12 +2119,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Type::Function(f) => &f.signature,
                     _ => unreachable!("guarded by pattern above"),
                 };
+                let l_gradual = sig_is_gradual_variadic(got);
+                let u_gradual = sig_is_gradual_variadic(want);
                 let argument_side = self.active_call_context.argument_side();
                 self.with_active_call_context(
                     self.active_call_context
                         .clone()
                         .with_argument_side(argument_side.negated()),
-                    |me| me.is_subset_params(&l_sig.params, &u_sig.params),
+                    |me| me.is_subset_params(&l_sig.params, &u_sig.params, l_gradual, u_gradual),
                 )?;
                 self.is_subset_eq(&l_sig.ret, &u_sig.ret)
             }
@@ -2680,9 +2676,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             ),
             (Type::Ellipsis, Type::ParamSpecValue(_) | Type::Concatenate(_, _))
             | (Type::ParamSpecValue(_) | Type::Concatenate(_, _), Type::Ellipsis) => Ok(()),
-            (Type::ParamSpecValue(ls), Type::ParamSpecValue(us)) => {
-                self.is_subset_param_list(ls.items(), us.items())
-            }
+            (Type::ParamSpecValue(ls), Type::ParamSpecValue(us)) => self.is_subset_param_list(
+                ls.items(),
+                us.items(),
+                params_are_gradual_variadic(ls.items()),
+                params_are_gradual_variadic(us.items()),
+            ),
             (Type::ParamSpecValue(ls), Type::Concatenate(us, u_pspec)) => {
                 self.is_paramlist_subset_of_paramspec(ls, us, u_pspec)
             }

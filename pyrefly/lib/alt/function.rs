@@ -87,6 +87,7 @@ use crate::types::callable::PrefixParam;
 use crate::types::callable::PropertyMetadata;
 use crate::types::callable::PropertyRole;
 use crate::types::callable::Required;
+use crate::types::callable::params_are_gradual_variadic;
 use crate::types::class::ClassKind;
 use crate::types::keywords::DataclassTransformMetadata;
 use crate::types::types::CalleeKind;
@@ -760,6 +761,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
+        flags.has_gradual_variadic_params = params_are_gradual_variadic(&params);
         let metadata = FuncMetadata { kind, flags };
 
         Arc::new(UndecoratedFunction {

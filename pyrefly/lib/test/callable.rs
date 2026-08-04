@@ -1933,3 +1933,34 @@ if TYPE_CHECKING:
         pass
     "#,
 );
+
+// A `*args: Any, **kwargs: Any` signature written in a definition is gradual (equivalent to
+// `...`), but an `Any` that only arises from substituting a type parameter is not: the
+// signature stays strict.
+testcase!(
+    test_gradual_variadic_params_annotation_vs_substitution,
+    r#"
+from typing import Any, ParamSpec, Protocol, TypeVar
+P = ParamSpec("P")
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Gradual(Protocol):
+    def __call__(self, *args: Any, **kwargs: Any) -> None: ...
+
+# `*args`/`**kwargs` typed via a TypeVar, specialized with `Any`.
+class Subst(Protocol[T_contra]):
+    def __call__(self, *args: T_contra, **kwargs: T_contra) -> None: ...
+
+# `*args`/`**kwargs` typed via a ParamSpec, specialized with `...`.
+class SubstP(Protocol[P]):
+    def __call__(self, a: int, *args: P.args, **kwargs: P.kwargs) -> None: ...
+
+class NoArgs(Protocol):
+    def __call__(self) -> None: ...
+
+def f(n: NoArgs) -> None:
+    ok: Gradual = n        # a gradual target accepts a stricter callable
+    err1: Subst[Any] = n   # E: `NoArgs` is not assignable to `Subst[Any]`
+    err2: SubstP[...] = n  # E: `NoArgs` is not assignable to `SubstP[Ellipsis]`
+    "#,
+);

@@ -15,9 +15,7 @@
   "annotations_generators.py": [],
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
-  "callables_annotation.py": [
-    "Line 159: Expected 1 errors"
-  ],
+  "callables_annotation.py": [],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
   "callables_subtyping.py": [],

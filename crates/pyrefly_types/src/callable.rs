@@ -378,6 +378,19 @@ impl ParamList {
     }
 }
 
+/// True if `params` has both a `*args` and a `**kwargs` parameter and both are typed `Any`
+/// (explicitly, or implicitly because they are unannotated). Per the typing spec such a
+/// signature is equivalent to `...`.
+pub fn params_are_gradual_variadic(params: &[Param]) -> bool {
+    let has_vararg_any = params
+        .iter()
+        .any(|p| matches!(p, Param::Varargs(_, Type::Any(_))));
+    let has_kwargs_any = params
+        .iter()
+        .any(|p| matches!(p, Param::Kwargs(_, Type::Any(_))));
+    has_vararg_any && has_kwargs_any
+}
+
 fn write_indent<O: TypeOutput>(output: &mut O, indent: usize) -> fmt::Result {
     for _ in 0..indent {
         output.write_str(" ")?;
@@ -784,6 +797,13 @@ pub struct FuncFlags {
     /// A method directly inside a `Protocol` class.
     pub is_in_protocol_class: bool,
     pub is_in_type_checking_block: bool,
+    /// Set when the definition has both `*args` and `**kwargs` and both are typed
+    /// `Any` — explicitly, or implicitly because they are unannotated. Per the
+    /// typing spec such a signature is equivalent to `...`. Captured at definition
+    /// time so that an `Any` introduced later by type-parameter substitution (e.g.
+    /// `Proto[Any]` where the params are `*args: T, **kwargs: T`) is not mistaken
+    /// for a gradual signature.
+    pub has_gradual_variadic_params: bool,
 }
 
 impl FuncFlags {
