@@ -1786,6 +1786,287 @@ reveal_type(df.select(b="x"))  # E: revealed type: DataFrame
 );
 
 testcase!(
+    test_select_expr_col_alias_renames,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(pl.col("a").alias("c")))  # E: revealed type: DataFrame[c: Int64]
+"#,
+);
+
+testcase!(
+    test_select_expr_col_bare_keeps_name,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(pl.col("a")))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_select_expr_cast_keeps_name_changes_dtype,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(pl.col("a").cast(pl.Float64)))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_select_expr_cast_then_alias,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(pl.col("a").cast(pl.Float64).alias("c2")))  # E: revealed type: DataFrame[c2: Float64]
+"#,
+);
+
+testcase!(
+    test_select_expr_outer_alias_wins,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(pl.col("a").alias("m").alias("n")))  # E: revealed type: DataFrame[n: Int64]
+"#,
+);
+
+testcase!(
+    test_select_expr_binop_takes_left_root,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "c": [1.0]})
+reveal_type(df.select(pl.col("a") + pl.col("c")))  # E: revealed type: DataFrame[a: Float64]
+reveal_type(df.select(pl.col("c") + pl.col("a")))  # E: revealed type: DataFrame[c: Float64]
+"#,
+);
+
+testcase!(
+    test_select_expr_binop_scalar_literal_left_names_literal,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(1 + pl.col("a")))  # E: revealed type: DataFrame[literal: Int64]
+"#,
+);
+
+testcase!(
+    test_select_expr_left_alias_propagates,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "c": [1.0]})
+reveal_type(df.select(pl.col("a").alias("z") + pl.col("c")))  # E: revealed type: DataFrame[z: Float64]
+"#,
+);
+
+testcase!(
+    test_select_expr_right_alias_ignored,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "c": [1.0]})
+reveal_type(df.select(pl.col("a") + pl.col("c").alias("z")))  # E: revealed type: DataFrame[a: Float64]
+"#,
+);
+
+testcase!(
+    test_select_expr_comparison_is_boolean_under_left_name,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(pl.col("a") > 0))  # E: revealed type: DataFrame[a: Boolean]
+"#,
+);
+
+testcase!(
+    test_select_expr_comparison_scalar_left_reflects_to_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# Python reflects `0 < col` to `col > 0`, so Polars names the output after the column, not the scalar.
+reveal_type(df.select(0 < pl.col("a")))  # E: revealed type: DataFrame[a: Boolean]
+reveal_type(df.select(5 >= pl.col("a")))  # E: revealed type: DataFrame[a: Boolean]
+df.select(0 < pl.col("a")).select("a")
+"#,
+);
+
+testcase!(
+    test_select_expr_comparison_variable_scalar_left_reflects,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# A scalar held in a variable reflects at runtime just like a literal, so reflection is decided by the
+# operand's type, not its syntax: the output is named after the column, not left as an opaque frame.
+x = 0
+reveal_type(df.select(x < pl.col("a")))  # E: revealed type: DataFrame[a: Unknown]
+"#,
+);
+
+testcase!(
+    test_select_expr_comparison_variable_expr_left_no_reflection,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# The left operand is a Polars expression in a variable, so there is no reflection; its output name
+# cannot be resolved from the variable, so the whole select falls back.
+e = pl.col("a")
+reveal_type(df.select(e > 0))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_expr_comparison_lit_left_stays_literal,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# `pl.lit(5)` is already an expression, so there is no reflection and the output stays `literal`.
+reveal_type(df.select(pl.lit(5) < pl.col("a")))  # E: revealed type: DataFrame[literal: Boolean]
+"#,
+);
+
+testcase!(
+    test_select_expr_lit_series_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+# `pl.lit(series)` takes the series name, which is not statically knowable, so fall back to the opaque frame.
+res = df.select(pl.lit(pl.Series("foo", [1])))
+reveal_type(res)  # E: revealed type: DataFrame
+res["foo"]
+"#,
+);
+
+testcase!(
+    test_select_expr_lit_names_literal,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(pl.lit(5)))  # E: revealed type: DataFrame[literal: Int32]
+reveal_type(df.select(pl.lit(5).alias("z")))  # E: revealed type: DataFrame[z: Int32]
+"#,
+);
+
+testcase!(
+    test_select_expr_bare_scalar_names_literal,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(5))  # E: revealed type: DataFrame[literal: Int32]
+"#,
+);
+
+testcase!(
+    test_select_expr_mixed_string_and_expr,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select("a", pl.col("b").alias("bb")))  # E: revealed type: DataFrame[a: Int64, bb: String]
+"#,
+);
+
+testcase!(
+    test_select_expr_unknown_column_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(pl.col("missing")))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[missing: Unknown]
+"#,
+);
+
+testcase!(
+    test_select_expr_duplicate_output_name_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("a"), pl.col("b").alias("a")))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_expr_multi_name_col_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("a", "b")))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_expr_wildcard_col_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("*")))  # E: revealed type: DataFrame
+reveal_type(df.select(pl.col("^a$")))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_expr_non_literal_alias_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+k = "c"
+reveal_type(df.select(pl.col("a").alias(k)))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_expr_unmodeled_method_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.select(pl.col("a").sum()))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
     test_drop_method_removes_column_preserves_order,
     env_with_polars_stubs(),
     r#"

@@ -11,6 +11,8 @@
 //! `Type::DataFrame` carrying an inferred column schema when a DataFrame is built
 //! from a dict literal. This is the entry point for column-aware checking.
 
+use std::sync::Arc;
+
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
 use pyrefly_types::data_frame::SchemaCompleteness;
@@ -38,6 +40,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
+use crate::types::callable::FuncId;
 use crate::types::callable::FunctionKind;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
@@ -48,6 +51,10 @@ pub fn is_polars_dataframe(cls: &Class) -> bool {
 
 pub fn is_polars_series(cls: &Class) -> bool {
     cls.has_toplevel_qname("polars.series.series", "Series")
+}
+
+fn is_polars_expr(cls: &Class) -> bool {
+    cls.has_toplevel_qname("polars.expr.expr", "Expr")
 }
 
 /// The receiver schema for a column transform whose method takes only positional
@@ -995,9 +1002,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Model `df.select("a", "b")` as a new schema with the named columns in argument order. A lone
-    /// `"*"` keeps the schema unchanged since it selects every column. Falls back with `None` unless
-    /// every argument is a positional string literal.
+    /// Model `df.select(...)` as a new schema from the positional arguments in order. A string names
+    /// a column, an expression contributes its output name and inferred dtype, and a lone `"*"` keeps
+    /// the schema. Falls back if an output name is unknowable or two collide.
     pub fn polars_select(
         &self,
         base: &Type,
@@ -1018,7 +1025,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if args.args.iter().any(is_polars_selector_string) {
             return None;
         }
-        self.polars_select_columns(schema, &args.args, errors)
+        // Resolve every output name first without emitting errors. A missing or duplicate name returns
+        // `None`, so ordinary call checking validates the arguments and reports any errors.
+        let mut names = Vec::with_capacity(args.args.len());
+        let mut seen = SmallSet::new();
+        for arg in &args.args {
+            let name = match arg {
+                Expr::StringLiteral(s) => Name::new(s.value.to_str()),
+                _ => self.polars_expr_output_name(arg)?,
+            };
+            if !seen.insert(name.clone()) {
+                return None;
+            }
+            names.push(name);
+        }
+        // Once every output name is known, resolve each dtype and report errors here because returning
+        // a schema bypasses ordinary call checking.
+        let mut columns = Vec::with_capacity(names.len());
+        for (name, arg) in names.into_iter().zip(&args.args) {
+            match arg {
+                // A plain string names a column, and an absent one is reported and dropped.
+                Expr::StringLiteral(_) => {
+                    if let Some(dtype) = resolve_column(schema, &name, arg.range(), errors) {
+                        columns.push((name, dtype));
+                    }
+                }
+                // An expression yields one output column. Infer it so type errors surface, and degrade
+                // its dtype to `Unknown` when unresolved, like `with_columns`.
+                _ => {
+                    self.expr_infer(arg, errors);
+                    let dtype = self
+                        .eval_polars_expr(arg, schema, errors)
+                        .map_or(PolarsDType::Unknown, ExprValue::dtype);
+                    columns.push((name, dtype));
+                }
+            }
+        }
+        Some(
+            DataFrameSchema {
+                underlying: schema.underlying.clone(),
+                columns,
+                completeness: schema.completeness.clone(),
+                kind: schema.kind.clone(),
+            }
+            .to_type(),
+        )
     }
 
     /// Model `df.drop("a", "b")` as a new schema with the named columns removed, order preserved.
@@ -1173,12 +1224,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => {}
                     }
                 }
-                let Some(CalleeKind::Function(FunctionKind::Def(id))) = self
-                    .expr_infer(&call.func, &self.error_swallower())
-                    .callee_kind()
-                else {
-                    return None;
-                };
+                let id = self.polars_function_id(&call.func)?;
                 match (id.name.as_str(), id.module.name().as_str()) {
                     ("col", "polars.functions.col") => {
                         let [arg] = &call.arguments.args[..] else {
@@ -1233,6 +1279,95 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             _ => literal_value(expr),
         }
+    }
+
+    /// The `FuncId` of a call whose callee resolves to a top-level function, or `None`. Inference
+    /// swallows errors since each caller reports through its own path.
+    fn polars_function_id(&self, func: &Expr) -> Option<Arc<FuncId>> {
+        match self.expr_infer(func, &self.error_swallower()).callee_kind() {
+            Some(CalleeKind::Function(FunctionKind::Def(id))) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The output column name Polars gives a `select` expression, which is its leftmost leaf column
+    /// overridden by the outermost `.alias(<literal>)`, with a bare `lit` named `"literal"`. Returns
+    /// `None` for any data-dependent or unmodeled form so the whole `select` falls back.
+    fn polars_expr_output_name(&self, expr: &Expr) -> Option<Name> {
+        match expr {
+            Expr::Call(call) => {
+                if let Expr::Attribute(attr) = &*call.func {
+                    match attr.attr.id.as_str() {
+                        "cast" => return self.polars_expr_output_name(&attr.value),
+                        "alias" => {
+                            let [Expr::StringLiteral(s)] = &call.arguments.args[..] else {
+                                return None;
+                            };
+                            return Some(Name::new(s.value.to_str()));
+                        }
+                        _ => {}
+                    }
+                }
+                let id = self.polars_function_id(&call.func)?;
+                match (id.name.as_str(), id.module.name().as_str()) {
+                    ("col", "polars.functions.col") => {
+                        let [arg] = &call.arguments.args[..] else {
+                            return None;
+                        };
+                        let Expr::StringLiteral(s) = arg else {
+                            return None;
+                        };
+                        // A `"*"` or a regex selects many columns whose names are data-dependent.
+                        if is_polars_selector_string(arg) {
+                            return None;
+                        }
+                        Some(Name::new(s.value.to_str()))
+                    }
+                    ("lit", "polars.functions.lit") => {
+                        let [value] = &call.arguments.args[..] else {
+                            return None;
+                        };
+                        // Only `pl.lit(scalar)` is named "literal". A `pl.lit(series)` takes the
+                        // series name, which is not statically knowable, so fall back.
+                        literal_value(value).map(|_| Name::new("literal"))
+                    }
+                    _ => None,
+                }
+            }
+            Expr::BinOp(binop) => self.polars_expr_output_name(&binop.left),
+            Expr::UnaryOp(unary) => self.polars_expr_output_name(&unary.operand),
+            Expr::Compare(cmp) => {
+                let ([_], [right]) = (&*cmp.ops, &*cmp.comparators) else {
+                    return None;
+                };
+                // Python reflects a comparison when the left operand is a Python scalar rather than a
+                // Polars expression, so the right expression becomes the leftmost leaf and names the
+                // output. Decide by the operand's inferred type, since a scalar can be held in a
+                // variable, not only written as a literal.
+                if self.is_polars_expr_value(&cmp.left) {
+                    self.polars_expr_output_name(&cmp.left)
+                } else {
+                    self.polars_expr_output_name(right)
+                }
+            }
+            // A bare Python scalar literal is promoted to a `lit`, which Polars names `"literal"`.
+            // Every other form is unmodeled, so fall back rather than guess an output name.
+            Expr::NumberLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::NoneLiteral(_) => literal_value(expr).map(|_| Name::new("literal")),
+            _ => None,
+        }
+    }
+
+    /// Whether `expr` infers to a Polars `Expr` instance rather than a Python scalar, so a comparison
+    /// against it does not reflect. Errors are swallowed since the caller reports through its own path.
+    fn is_polars_expr_value(&self, expr: &Expr) -> bool {
+        matches!(
+            self.expr_infer(expr, &self.error_swallower()),
+            Type::ClassType(cls) if is_polars_expr(cls.class_object())
+        )
     }
 
     /// Model `df.with_columns(x=..., y=...)` as a new schema, overwriting or appending each named
