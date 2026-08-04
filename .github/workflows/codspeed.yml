@@ -3,6 +3,10 @@ on:
   push:
     branches: [ main ]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
+  # A daily run keeps a recent walltime measurement of main on file.
+  schedule:
+    - cron: '0 6 * * *'
   # workflow_dispatch lets CodSpeed trigger backtest runs to seed baseline data.
   workflow_dispatch:
 permissions:
@@ -41,12 +45,23 @@ jobs:
   # start past any reasonable timeout). Walltime mode tolerates threads, I/O, and
   # long cold starts.
   #
-  # Disabled on pull requests: flame-graph generation fails on nearly every run,
-  # so CodSpeed leaves an "Unable to generate the flame graphs" comment on PRs
-  # that have nothing to do with performance. Still runnable by hand.
+  # Opt-in only: put `#bench` in the PR description, or run the workflow by hand.
+  # They are far too expensive to run on every PR, so the default is off. The daily
+  # schedule is the exception, and it is what makes the opt-in useful: nothing else
+  # measures walltime on main, so without it CodSpeed would have no base run to
+  # compare an opted-in PR against.
+  #
+  # `facebook-github-bot` authors the PRs exported from the internal monorepo, and
+  # its author_association is not one of the trusted values, so it is named
+  # explicitly; otherwise the opt-in would never fire on an exported PR. The
+  # association check bounds runner spend on everything else — a fork PR already
+  # runs its own code in `simulation`, but without it any drive-by PR could bill
+  # us for the walltime suite.
   walltime:
     name: PyTorch benchmarks (walltime)
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || contains(github.event.pull_request.body, '#bench')
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
@@ -67,6 +82,10 @@ jobs:
       run: cargo codspeed build -m walltime -p pyrefly --bench pytorch
     - name: run benchmarks
       uses: CodSpeedHQ/action@v5.0.1
+      env:
+        # Flame graphs fail to generate on nearly every walltime run, leaving an
+        # "Unable to generate the flame graphs" comment behind.
+        CODSPEED_PERF_ENABLED: false
       with:
         mode: walltime
         run: cargo codspeed run -p pyrefly --bench pytorch
