@@ -37,11 +37,11 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
-use crate::alt::polars_specials::PolarsMutationKind;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::expr::Usage;
+use crate::binding::polars::PolarsMutationKind;
 use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;

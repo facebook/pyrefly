@@ -30,7 +30,6 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 
-use crate::alt::polars_specials::polars_column_mutation;
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
@@ -58,6 +57,7 @@ use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::polars::polars_column_mutation;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
