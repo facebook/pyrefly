@@ -5287,3 +5287,62 @@ c: Custom = Custom()
 reveal_type(pl.DataFrame({"a": [c]}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
+
+testcase!(
+    test_construct_typed_dict_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import TypedDict, reveal_type
+class Cols(TypedDict):
+    a: list[int]
+    b: list[str]
+td: Cols = {"a": [1], "b": ["x"]}
+reveal_type(pl.DataFrame(data=td))  # E: revealed type: DataFrame[a: Int64, b: String]
+reveal_type(pl.DataFrame(data=td, schema_overrides={"a": pl.Float64}))  # E: revealed type: DataFrame[a: Float64, b: String]
+"#,
+);
+
+testcase!(
+    test_construct_typed_dict_sequence_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from collections.abc import Sequence
+from typing import TypedDict, reveal_type
+class Cols(TypedDict):
+    a: Sequence[int]
+    b: Sequence[str]
+td: Cols = {"a": range(3), "b": ("x", "y", "z")}
+reveal_type(pl.DataFrame(data=td))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_construct_typed_dict_optional_field_is_partial,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import NotRequired, TypedDict, reveal_type
+class Cols(TypedDict):
+    required: list[int]
+    optional: NotRequired[list[str]]
+td: Cols = {"required": [1]}
+df = pl.DataFrame(data=td)
+reveal_type(df)  # E: revealed type: DataFrame[required: Int64, ...]
+df["optional"]
+"#,
+);
+
+testcase!(
+    test_construct_typed_dict_non_sequence_field_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import TypedDict, reveal_type
+class Cols(TypedDict):
+    a: int
+td: Cols = {"a": 1}
+reveal_type(pl.DataFrame(data=td))  # E: revealed type: DataFrame
+"#,
+);

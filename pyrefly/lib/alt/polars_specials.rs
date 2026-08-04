@@ -221,6 +221,27 @@ fn is_polars_dataframe_type(ty: &Type) -> bool {
     }
 }
 
+/// Map a Python scalar value type to its Polars construction dtype, e.g. `int` to `Int64`. A `bool`
+/// is exact and distinct from `int`. Returns `None` for any other type so the caller degrades.
+fn polars_dtype_from_scalar_type(ty: &Type) -> Option<PolarsDType> {
+    let Type::ClassType(cls) = ty else {
+        return None;
+    };
+    Some(if cls.is_builtin("bool") {
+        PolarsDType::Boolean
+    } else if cls.is_builtin("int") {
+        PolarsDType::Int64
+    } else if cls.is_builtin("float") {
+        PolarsDType::Float64
+    } else if cls.is_builtin("str") {
+        PolarsDType::String
+    } else if cls.is_builtin("bytes") {
+        PolarsDType::Binary
+    } else {
+        return None;
+    })
+}
+
 /// Map a resolved Polars dtype class or instance to its modeled dtype, or `None` otherwise.
 fn polars_dtype_from_type(ty: &Type) -> Option<PolarsDType> {
     let cls = match ty {
@@ -275,15 +296,19 @@ enum ConcatHow {
 }
 
 /// A dict-of-columns literal with its resolved columns and source range.
+#[derive(Clone)]
 struct PolarsDictData<'b> {
     columns: SmallMap<Name, &'b Expr>,
     range: TextRange,
 }
 
-/// The two data shapes column inference models: a dict-of-columns or list-of-dict rows.
+/// The data shapes column inference models: a dict-of-columns literal, list-of-dict rows, or a value
+/// whose type is a TypedDict, whose already-resolved columns ride inline.
+#[derive(Clone)]
 enum PolarsData<'b> {
     Dict(PolarsDictData<'b>),
     Records(SmallMap<Name, Vec<&'b Expr>>),
+    TypedDict(Vec<(Name, PolarsDType)>, SchemaCompleteness),
 }
 
 /// A DataFrame constructor call reduced to the pieces column inference needs.
@@ -885,6 +910,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(columns)
     }
 
+    /// Read the required columns of a `data=` value whose type is a TypedDict. Each required field
+    /// must be a `Sequence` of a primitive scalar, unwrapped to the column dtype (`Sequence[int]`
+    /// gives Int64). Optional fields are omitted and make the schema Partial because they may be
+    /// present at runtime. A non-TypedDict value, an empty TypedDict, or an unmodeled required field
+    /// falls back with `None`.
+    fn typed_dict_data_columns(
+        &self,
+        expr: &Expr,
+    ) -> Option<(Vec<(Name, PolarsDType)>, SchemaCompleteness)> {
+        // Swallow errors here, since the fallback call path re-infers this and is the sole reporter.
+        let ty = self.expr_infer(expr, &self.error_swallower());
+        let Type::TypedDict(typed_dict) = &ty else {
+            return None;
+        };
+        let fields = self.typed_dict_fields(typed_dict);
+        if fields.is_empty() {
+            return None;
+        }
+        let completeness = if fields.values().all(|field| field.required) {
+            SchemaCompleteness::Complete
+        } else {
+            SchemaCompleteness::Partial
+        };
+        let sequence = self.stdlib.sequence(Type::any_implicit());
+        let mut columns = Vec::with_capacity(fields.len());
+        for (name, field) in fields.iter().filter(|(_, field)| field.required) {
+            let Type::ClassType(cls) = &field.ty else {
+                return None;
+            };
+            let sequence = self
+                .type_order()
+                .as_superclass(cls, sequence.class_object())?;
+            let [element] = sequence.targs().as_slice() else {
+                return None;
+            };
+            columns.push((name.clone(), polars_dtype_from_scalar_type(element)?));
+        }
+        Some((columns, completeness))
+    }
+
     /// Infer a column schema for a DataFrame constructor call, or `None` to fall back to plain
     /// construction. Purely syntactic; never infers the element expressions.
     ///
@@ -897,7 +962,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         construct: &PolarsConstruct,
         kind: DataFrameKind,
         errors: &ErrorCollector,
-    ) -> Option<Vec<(Name, PolarsDType)>> {
+    ) -> Option<(Vec<(Name, PolarsDType)>, SchemaCompleteness)> {
         // `columns=` is a pandas-only selector; a Polars call with it is a runtime error, so fall back.
         if construct.columns.is_some() && kind != DataFrameKind::Pandas {
             return None;
@@ -908,11 +973,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Some(PolarsData::Records(records)), None) => {
                 self.infer_dataframe_records_schema(records, construct, kind, errors)
             }
+            // TypedDict data carries resolved columns, but combining it with `schema=` is not modeled.
+            (Some(PolarsData::TypedDict(_, _)), Some(_)) => None,
+            (Some(PolarsData::TypedDict(columns, completeness)), None) => {
+                self.infer_dataframe_typed_dict_schema(columns, completeness, construct, kind)
+            }
             (Some(PolarsData::Dict(data)), _) => {
                 self.infer_dataframe_dict_schema(Some(data), construct, kind, errors)
             }
             (None, _) => self.infer_dataframe_dict_schema(None, construct, kind, errors),
         }
+    }
+
+    fn infer_dataframe_typed_dict_schema(
+        &self,
+        columns: &[(Name, PolarsDType)],
+        completeness: &SchemaCompleteness,
+        construct: &PolarsConstruct,
+        kind: DataFrameKind,
+    ) -> Option<(Vec<(Name, PolarsDType)>, SchemaCompleteness)> {
+        if kind != DataFrameKind::Polars {
+            return None;
+        }
+        Some((
+            columns
+                .iter()
+                .map(|(name, dtype)| {
+                    (
+                        name.clone(),
+                        construct.overrides.get(name).copied().unwrap_or(*dtype),
+                    )
+                })
+                .collect(),
+            completeness.clone(),
+        ))
     }
 
     /// Infer a Polars list-of-dicts after parsing it into per-column row values.
@@ -922,11 +1016,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         construct: &PolarsConstruct,
         kind: DataFrameKind,
         errors: &ErrorCollector,
-    ) -> Option<Vec<(Name, PolarsDType)>> {
+    ) -> Option<(Vec<(Name, PolarsDType)>, SchemaCompleteness)> {
         if kind != DataFrameKind::Polars {
             return None;
         }
-        Some(
+        Some((
             records
                 .iter()
                 .map(|(name, values)| {
@@ -945,7 +1039,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     (name.clone(), element)
                 })
                 .collect(),
-        )
+            SchemaCompleteness::Complete,
+        ))
     }
 
     /// Infer column-oriented dict data, or a schema-only construction when `data` is absent.
@@ -955,7 +1050,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         construct: &PolarsConstruct,
         kind: DataFrameKind,
         errors: &ErrorCollector,
-    ) -> Option<Vec<(Name, PolarsDType)>> {
+    ) -> Option<(Vec<(Name, PolarsDType)>, SchemaCompleteness)> {
+        let completeness = if kind == DataFrameKind::Polars {
+            SchemaCompleteness::Complete
+        } else {
+            SchemaCompleteness::Partial
+        };
         // Only list literals have modeled dtypes.
         let element_from_data = |name: &Name, value: &Expr| match value {
             Expr::List(ExprList { elts, .. }) => self.dataframe_list_element_type(
@@ -989,7 +1089,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 result.push((name.clone(), element));
             }
-            return Some(result);
+            return Some((result, completeness));
         };
         if kind != DataFrameKind::Polars {
             return None;
@@ -1048,7 +1148,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 (name.clone(), element)
             })
             .collect();
-        Some(columns)
+        Some((columns, completeness))
     }
 
     /// The single expression for a constructor parameter from its positional and keyword slots.
@@ -1186,7 +1286,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range: dict.range(),
             })),
             Some(Expr::List(list)) => Some(PolarsData::Records(dataframe_records_map(list)?)),
-            Some(_) => return None,
+            // A non-literal `data=` whose type is a TypedDict names its columns through its fields.
+            Some(expr) => {
+                let (columns, completeness) = self.typed_dict_data_columns(expr)?;
+                Some(PolarsData::TypedDict(columns, completeness))
+            }
         };
         let schema = match schema_expr {
             None | Some(Expr::NoneLiteral(_)) => None,
@@ -1328,14 +1432,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 // Only the primitive scalar types map to a dtype; anything else falls back.
-                match self.expr_infer(e, &self.error_swallower()) {
-                    Type::ClassType(cls) if cls.is_builtin("bool") => Some(PolarsDType::Boolean),
-                    Type::ClassType(cls) if cls.is_builtin("int") => Some(PolarsDType::Int64),
-                    Type::ClassType(cls) if cls.is_builtin("float") => Some(PolarsDType::Float64),
-                    Type::ClassType(cls) if cls.is_builtin("str") => Some(PolarsDType::String),
-                    Type::ClassType(cls) if cls.is_builtin("bytes") => Some(PolarsDType::Binary),
-                    _ => None,
-                }
+                polars_dtype_from_scalar_type(&self.expr_infer(e, &self.error_swallower()))
             }
             _ => None,
         };

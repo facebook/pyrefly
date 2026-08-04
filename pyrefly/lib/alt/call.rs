@@ -2186,19 +2186,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        // A pandas frame is mutable so columns can be added after construction, which leaves
-        // its schema Partial. A Polars frame is immutable so its schema is Complete.
+        // Constructor inference determines completeness: pandas schemas are Partial, while Polars
+        // schemas are Complete unless optional TypedDict fields leave the runtime column set open.
         let dataframe_schema = if let Type::ClassDef(cls) = &callee_ty
             && (is_polars_dataframe(cls) || is_pandas_dataframe(cls))
             && let Some(construct) = self.polars_construct_options(&x.arguments)
         {
-            let (kind, completeness) = if is_polars_dataframe(cls) {
-                (DataFrameKind::Polars, SchemaCompleteness::Complete)
+            let kind = if is_polars_dataframe(cls) {
+                DataFrameKind::Polars
             } else {
-                (DataFrameKind::Pandas, SchemaCompleteness::Partial)
+                DataFrameKind::Pandas
             };
             self.infer_dataframe_schema(&construct, kind.clone(), errors)
-                .map(|c| (c, kind, completeness))
+                .map(|(c, completeness)| (c, kind, completeness))
         } else if is_polars_concat(&callee_ty) {
             // A concat of frames is always a Polars, Complete frame reusing the elements' schemas.
             self.infer_polars_concat(&x.arguments)
