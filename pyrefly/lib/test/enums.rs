@@ -720,6 +720,18 @@ def bad_key(cls: type[Enum]) -> None:
 );
 
 testcase!(
+    test_enum_type_getitem_after_issubclass_narrow,
+    r#"
+from enum import Enum
+
+def get_as[T](name: str, expected_type: type[T]) -> T:
+    if issubclass(expected_type, Enum):
+        return expected_type[name]
+    raise NotImplementedError()
+"#,
+);
+
+testcase!(
     test_mixin_datatype,
     r#"
 from enum import Enum
