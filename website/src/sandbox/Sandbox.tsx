@@ -128,6 +128,7 @@ export default function Sandbox({
     const [isHovered, setIsHovered] = useState(false);
     const [pythonVersion, setPythonVersion] = useState('3.12');
     const [showParameterHints, setShowParameterHints] = useState(false);
+    const [pyreflyVersion, setPyreflyVersion] = useState<string | null>(null);
     // Absolute pixel height for the editor pane (null = not yet initialized)
     const [editorHeight, setEditorHeight] = useState<number | null>(null);
     const [isResizing, setIsResizing] = useState(false);
@@ -564,6 +565,11 @@ export default function Sandbox({
                 />
                 Parameter hints
             </label>
+            {pyreflyVersion && (
+                <span id="pyrefly-version" {...stylex.props(styles.version)}>
+                    {`Pyrefly ${pyreflyVersion}`}
+                </span>
+            )}
         </div>
     );
 
@@ -670,6 +676,7 @@ export default function Sandbox({
         pyreflyWasmInitializedPromise
             .then((pyrefly) => {
                 try {
+                    setPyreflyVersion(pyrefly.version());
                     setPyreService(new pyrefly.State(pythonVersion));
                     setLoading(false);
                     setInternalError('');
@@ -1675,6 +1682,13 @@ const styles = stylex.create({
         cursor: 'pointer',
         whiteSpace: 'nowrap',
         userSelect: 'none',
+    }
+    version: {
+        color: 'var(--color-text-secondary)',
+        fontSize: '12px',
+        marginLeft: 'auto',
+        padding: '7px 15px',
+        whiteSpace: 'nowrap',
     },
     actionButton: {
         border: 'none',

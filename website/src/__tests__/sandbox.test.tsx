@@ -31,6 +31,9 @@ describe('Sandbox Component', () => {
             DEFAULT_SANDBOX_PROGRAM,
             false
         );
+        expect(container.querySelector('#pyrefly-version')).toHaveTextContent(
+            'Pyrefly 1.2.3-test'
+        );
 
         // Run test with --update-snapshot to update the snapshot if the test is failing after
         // you made a intentional change to the home page
