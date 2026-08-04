@@ -17,6 +17,7 @@ use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
 use pyrefly_types::data_frame::SchemaCompleteness;
 use pyrefly_types::polars_dtype::PolarsDType;
+use pyrefly_types::series::SeriesSchema;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Arguments;
@@ -39,6 +40,8 @@ use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::callable::CallArg;
+use crate::alt::callable::CallKeyword;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::callable::FuncId;
@@ -529,6 +532,80 @@ fn literal_value(expr: &Expr) -> Option<ExprValue> {
         Expr::StringLiteral(_) => Some(ExprValue::Dtype(PolarsDType::String)),
         Expr::BytesLiteral(_) => Some(ExprValue::Dtype(PolarsDType::Binary)),
         Expr::NoneLiteral(_) => Some(ExprValue::Dtype(PolarsDType::Null)),
+        _ => None,
+    }
+}
+
+/// A `Series`-returning DataFrame method, modeled only on a Complete Polars schema where a column
+/// proves its exact dtype. `None` for a Partial schema or a pandas frame.
+fn series_method_schema<'b>(
+    base: &'b Type,
+    func: &ExprAttribute,
+    method: &str,
+) -> Option<&'b DataFrameSchema> {
+    let Type::DataFrame(schema) = base else {
+        return None;
+    };
+    (func.attr.id.as_str() == method
+        && schema.kind == DataFrameKind::Polars
+        && schema.completeness == SchemaCompleteness::Complete)
+        .then_some(&**schema)
+}
+
+/// The sole column-name argument of a `get_column` call, positional or `name=`, or `None` to fall
+/// back. A `default=`, a name supplied both ways, extra positionals, or any other keyword falls back.
+fn get_column_name_arg(args: &Arguments) -> Option<&Expr> {
+    let mut name_keyword = None;
+    for kw in &args.keywords {
+        match kw.arg.as_ref()?.id.as_str() {
+            "name" => name_keyword = Some(&kw.value),
+            _ => return None,
+        }
+    }
+    let name_positional = match &args.args[..] {
+        [] => None,
+        [name] => Some(name),
+        _ => return None,
+    };
+    match (name_positional, name_keyword) {
+        (Some(_), Some(_)) => None,
+        (e, None) | (None, e) => e,
+    }
+}
+
+/// The static index of a `to_series` call. An absent argument means `0`, otherwise one integer
+/// literal, positional or `index=`. A non-integer, extra positionals, both ways, or any other keyword
+/// falls back with `None`.
+fn to_series_index(args: &Arguments) -> Option<i128> {
+    let mut index_keyword = None;
+    for kw in &args.keywords {
+        match kw.arg.as_ref()?.id.as_str() {
+            "index" => index_keyword = Some(&kw.value),
+            _ => return None,
+        }
+    }
+    let index_positional = match &args.args[..] {
+        [] => None,
+        [index] => Some(index),
+        _ => return None,
+    };
+    match (index_positional, index_keyword) {
+        (Some(_), Some(_)) => None,
+        (None, None) => Some(0),
+        (Some(e), None) | (None, Some(e)) => integer_literal(e),
+    }
+}
+
+/// An integer literal's value, possibly behind a unary `+`/`-`, or `None` otherwise. Negative
+/// indexing means `-1` must resolve to its signed value.
+fn integer_literal(expr: &Expr) -> Option<i128> {
+    match expr {
+        Expr::NumberLiteral(ExprNumberLiteral {
+            value: Number::Int(i),
+            ..
+        }) => i.to_string().parse::<i128>().ok(),
+        Expr::UnaryOp(u) if u.op == UnaryOp::USub => integer_literal(&u.operand).map(|v| -v),
+        Expr::UnaryOp(u) if u.op == UnaryOp::UAdd => integer_literal(&u.operand),
         _ => None,
     }
 }
@@ -2091,5 +2168,92 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if cls.has_toplevel_qname("polars.series.series", "Series")
                     || cls.has_toplevel_qname("polars.dataframe.frame", "Series")
         )
+    }
+
+    /// Model `df.get_column("a")` as `Series[dtype]` of the named column. Only a single string-literal
+    /// name with no `default=` is modeled, and anything else falls back. A column absent from the
+    /// Complete schema is reported and keeps the opaque `Series`.
+    pub fn polars_get_column(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let schema = series_method_schema(base, func, "get_column")?;
+        let name_expr = get_column_name_arg(args)?;
+        let Expr::StringLiteral(s) = name_expr else {
+            return None;
+        };
+        let dtype = resolve_column(
+            schema,
+            &Name::new(s.value.to_str()),
+            name_expr.range(),
+            errors,
+        );
+        Some(self.wrap_series_method(schema, func, args, dtype, errors))
+    }
+
+    /// Model `df.to_series(i)` as `Series[dtype]` of the column at position `i`, with negative indexing.
+    /// Only a static integer index is modeled, and anything else falls back. An index out of the
+    /// column count raises `IndexError` at runtime, so it is reported and keeps the opaque `Series`.
+    pub fn polars_to_series(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let schema = series_method_schema(base, func, "to_series")?;
+        let index = to_series_index(args)?;
+        let len = schema.columns.len() as i128;
+        let resolved = if index < 0 { index + len } else { index };
+        let dtype = if (0..len).contains(&resolved) {
+            Some(schema.columns[resolved as usize].1)
+        } else {
+            errors
+                .error_builder(
+                    args.range(),
+                    ErrorKind::UnknownColumn,
+                    format!("Index {index} is out of bounds for a DataFrame with {len} columns"),
+                )
+                .emit();
+            None
+        };
+        Some(self.wrap_series_method(schema, func, args, dtype, errors))
+    }
+
+    /// Call a `Series`-returning method on the opaque underlying frame so argument errors surface,
+    /// wrapping the result as `Series[dtype]` when the column resolved. An unresolved column keeps the
+    /// opaque `Series`.
+    fn wrap_series_method(
+        &self,
+        schema: &DataFrameSchema,
+        func: &ExprAttribute,
+        args: &Arguments,
+        dtype: Option<PolarsDType>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let call_args: Vec<CallArg> = args.args.iter().map(CallArg::expr_maybe_starred).collect();
+        let call_kws: Vec<CallKeyword> = args.keywords.iter().map(CallKeyword::new).collect();
+        let result = self.call_method_or_error(
+            &schema.underlying_type(),
+            &func.attr.id,
+            func.range(),
+            &call_args,
+            &call_kws,
+            errors,
+            None,
+        );
+        match (dtype, result) {
+            (Some(dtype), Type::ClassType(cls)) if is_polars_series(cls.class_object()) => {
+                SeriesSchema {
+                    underlying: cls,
+                    dtype,
+                }
+                .to_type()
+            }
+            (_, result) => result,
+        }
     }
 }

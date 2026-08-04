@@ -41,6 +41,8 @@ class DataFrame:
     def __getitem__(self, key: list[str] | list[int]) -> "DataFrame": ...
     def __iter__(self) -> Iterator[Series]: ...
     def __contains__(self, key: str) -> bool: ...
+    def get_column(self, name: str, *, default: object = None) -> Series: ...
+    def to_series(self, index: int = 0) -> Series: ...
     def head(self, n: int = 5) -> "DataFrame": ...
     def select(self, *exprs: object, **named_exprs: object) -> "DataFrame": ...
     def drop(self, *columns: object, strict: bool = True) -> "DataFrame": ...
@@ -4667,5 +4669,162 @@ testcase!(
 import defs
 from typing import reveal_type
 reveal_type(defs.s)  # E: revealed type: Series[Int64]
+"#,
+);
+
+// Section G: `df.get_column(name)` and `df.to_series(index)`, which read one column and return a typed Series.
+
+testcase!(
+    test_get_column_typed,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
+reveal_type(df.get_column("a"))  # E: revealed type: Series[Int64]
+reveal_type(df.get_column("b"))  # E: revealed type: Series[String]
+reveal_type(df.get_column(name="c"))  # E: revealed type: Series[Float64]
+"#,
+);
+
+testcase!(
+    test_get_column_unknown_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.get_column("zzz"))  # E: Column `zzz` is not in the DataFrame schema # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_get_column_scalar_is_unknown,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": 1})
+reveal_type(df.get_column("a"))  # E: revealed type: Series[Unknown]
+"#,
+);
+
+testcase!(
+    test_get_column_default_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# A `default=` makes the return `Series | Any` and suppresses the raise, so we do not model it.
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.get_column("zzz", default=None))  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_get_column_non_literal_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+n: str = "a"
+reveal_type(df.get_column(n))  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_get_column_partial_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
+reveal_type(df.get_column("a"))  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_get_column_cross_file,
+    env_cross_file(),
+    r#"
+from defs import df
+from typing import reveal_type
+reveal_type(df.get_column("a"))  # E: revealed type: Series[Int64]
+reveal_type(df.get_column("b"))  # E: revealed type: Series[String]
+"#,
+);
+
+testcase!(
+    test_to_series_index,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
+reveal_type(df.to_series())  # E: revealed type: Series[Int64]
+reveal_type(df.to_series(0))  # E: revealed type: Series[Int64]
+reveal_type(df.to_series(1))  # E: revealed type: Series[String]
+reveal_type(df.to_series(index=2))  # E: revealed type: Series[Float64]
+"#,
+);
+
+testcase!(
+    test_to_series_negative_index,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
+reveal_type(df.to_series(-1))  # E: revealed type: Series[Float64]
+reveal_type(df.to_series(-3))  # E: revealed type: Series[Int64]
+"#,
+);
+
+testcase!(
+    test_to_series_out_of_range_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
+reveal_type(df.to_series(5))  # E: Index 5 is out of bounds for a DataFrame with 3 columns # E: revealed type: Series
+reveal_type(df.to_series(-5))  # E: Index -5 is out of bounds for a DataFrame with 3 columns # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_to_series_non_literal_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+i: int = 0
+reveal_type(df.to_series(i))  # E: revealed type: Series
+"#,
+);
+
+testcase!(
+    test_to_series_scalar_is_unknown,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": 1})
+reveal_type(df.to_series())  # E: revealed type: Series[Unknown]
+"#,
+);
+
+testcase!(
+    test_to_series_partial_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+df.insert_column(1, pl.Series("b", [2]))
+reveal_type(df.to_series())  # E: revealed type: Series
 "#,
 );
