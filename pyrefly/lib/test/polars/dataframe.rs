@@ -1639,6 +1639,18 @@ reveal_type(df.select("c", "a"))  # E: revealed type: DataFrame[c: Float64, a: I
 );
 
 testcase!(
+    test_select_method_literal_list_and_tuple_arguments,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
+reveal_type(df.select(["c", "a"]))  # E: revealed type: DataFrame[c: Float64, a: Int64]
+reveal_type(df.select((pl.col("b"), pl.col("a").alias("x"))))  # E: revealed type: DataFrame[b: String, x: Int64]
+"#,
+);
+
+testcase!(
     test_select_method_leaves_original_schema_unchanged,
     env_with_polars_stubs(),
     r#"
@@ -1660,6 +1672,7 @@ df = pl.DataFrame({"a": [1], "b": ["x"]})
 k = "a"
 reveal_type(df.select(k))  # E: revealed type: DataFrame
 reveal_type(df.select("a", k))  # E: revealed type: DataFrame
+reveal_type(df.select([k]))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -2098,6 +2111,7 @@ df = pl.DataFrame({"a": [1], "b": ["x"]})
 k = "a"
 reveal_type(df.drop(k))  # E: revealed type: DataFrame
 reveal_type(df.drop("a", k))  # E: revealed type: DataFrame
+reveal_type(df.drop((k,)))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -2160,14 +2174,14 @@ reveal_type(df.drop())  # E: revealed type: DataFrame[a: Int64, b: String, c: Fl
 );
 
 testcase!(
-    test_drop_method_list_argument_falls_back,
+    test_drop_method_literal_list_and_tuple_arguments,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"], "c": [1.0]})
-# An iterable argument is not a bare string literal, so we under-report rather than guess.
-reveal_type(df.drop(["a", "b"]))  # E: revealed type: DataFrame
+reveal_type(df.drop(["a", "b"]))  # E: revealed type: DataFrame[c: Float64]
+reveal_type(df.drop(("a", "c")))  # E: revealed type: DataFrame[b: String]
 "#,
 );
 

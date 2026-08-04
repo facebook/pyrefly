@@ -394,6 +394,15 @@ fn join_key_names(on: &Expr) -> Option<Vec<(Name, TextRange)>> {
         .collect()
 }
 
+/// Return a list or tuple literal's elements, or `arg` as a one-element slice.
+fn unpack_list_or_tuple_literal(arg: &Expr) -> &[Expr] {
+    match arg {
+        Expr::List(list) => &list.elts,
+        Expr::Tuple(tuple) => &tuple.elts,
+        _ => std::slice::from_ref(arg),
+    }
+}
+
 /// Whether a `select`/`drop` string is a `pl.col` selector (`"*"` or `"^regex$"`) rather than an
 /// exact column name.
 fn is_polars_selector_string(arg: &Expr) -> bool {
@@ -1002,9 +1011,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Model `df.select(...)` as a new schema from the positional arguments in order. A string names
-    /// a column, an expression contributes its output name and inferred dtype, and a lone `"*"` keeps
-    /// the schema. Falls back if an output name is unknowable or two collide.
+    /// Model `df.select(...)` as a new schema from the positional arguments in order, unpacking list
+    /// and tuple literals. A string names a column, an expression contributes its output name and
+    /// inferred dtype, and a lone `"*"` keeps the schema. Falls back if an output name is unknowable
+    /// or two collide.
     pub fn polars_select(
         &self,
         base: &Type,
@@ -1017,19 +1027,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        if let [Expr::StringLiteral(s)] = &args.args[..]
+        let positional = args
+            .args
+            .iter()
+            .flat_map(unpack_list_or_tuple_literal)
+            .collect::<Vec<_>>();
+        if positional.len() == 1
+            && let Expr::StringLiteral(s) = positional[0]
             && s.value.to_str() == "*"
         {
             return Some(base.clone());
         }
-        if args.args.iter().any(is_polars_selector_string) {
+        if positional.iter().copied().any(is_polars_selector_string) {
             return None;
         }
         // Resolve every output name first without emitting errors. A missing or duplicate name returns
         // `None`, so ordinary call checking validates the arguments and reports any errors.
-        let mut names = Vec::with_capacity(args.args.len());
+        let mut names = Vec::with_capacity(positional.len());
         let mut seen = SmallSet::new();
-        for arg in &args.args {
+        for &arg in &positional {
             let name = match arg {
                 Expr::StringLiteral(s) => Name::new(s.value.to_str()),
                 _ => self.polars_expr_output_name(arg)?,
@@ -1042,7 +1058,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Once every output name is known, resolve each dtype and report errors here because returning
         // a schema bypasses ordinary call checking.
         let mut columns = Vec::with_capacity(names.len());
-        for (name, arg) in names.into_iter().zip(&args.args) {
+        for (name, arg) in names.into_iter().zip(positional) {
             match arg {
                 // A plain string names a column, and an absent one is reported and dropped.
                 Expr::StringLiteral(_) => {
@@ -1072,9 +1088,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Model `df.drop("a", "b")` as a new schema with the named columns removed, order preserved.
-    /// Falls back with `None` unless every argument is a positional string literal, and an unknown
-    /// name errors only after a schema is committed. Duplicate names are de-duplicated, unlike `select`.
+    /// Model `df.drop("a", "b")` as a new schema with the named columns removed, order preserved,
+    /// unpacking list and tuple literals. Falls back with `None` unless every element is a string
+    /// literal, and an unknown name errors only after a schema is committed. Duplicate names are
+    /// de-duplicated, unlike `select`.
     pub fn polars_drop(
         &self,
         base: &Type,
@@ -1087,12 +1104,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        if args.args.iter().any(is_polars_selector_string) {
+        let positional = args
+            .args
+            .iter()
+            .flat_map(unpack_list_or_tuple_literal)
+            .collect::<Vec<_>>();
+        if positional.iter().copied().any(is_polars_selector_string) {
             return None;
         }
-        let mut dropped: Vec<(Name, TextRange)> = Vec::with_capacity(args.args.len());
+        let mut dropped: Vec<(Name, TextRange)> = Vec::with_capacity(positional.len());
         let mut seen = SmallSet::new();
-        for arg in &args.args {
+        for arg in positional {
             let Expr::StringLiteral(key) = arg else {
                 return None;
             };
