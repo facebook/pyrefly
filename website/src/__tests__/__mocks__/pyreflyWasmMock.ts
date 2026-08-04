@@ -87,5 +87,6 @@ class MockState {
 module.exports = {
     __esModule: true,
     default: (): Promise<void> => Promise.resolve(),
+    version: (): string => '1.2.3-test',
     State: MockState,
 };

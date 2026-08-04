@@ -16,6 +16,12 @@ use wasm_bindgen::prelude::*;
 
 extern crate console_error_panic_hook;
 
+/// Return the version of Pyrefly embedded in this WASM module.
+#[wasm_bindgen]
+pub fn version() -> String {
+    pyrefly::VERSION.to_owned()
+}
+
 #[wasm_bindgen]
 pub struct State(Playground);
 
