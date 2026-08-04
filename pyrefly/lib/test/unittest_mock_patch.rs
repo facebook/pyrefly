@@ -30,13 +30,93 @@ with patch("main.foo"):  # E: No attribute `foo` in module `main`
 "#,
 );
 
+// `mock.patch` adds `create=True` for us when patching a builtin name on a module, so these
+// targets are legal despite `other` defining neither name.
 testcase!(
-    test_builtin_name_checked,
+    test_builtin_name_on_module_skipped,
     TestEnv::one("other", ""),
     r#"
 from unittest.mock import patch
 
-with patch("other.open"):  # E: No attribute `open` in module `other`
+with patch("other.open"):
+    pass
+
+with patch("other.ValueError"):
+    pass
+"#,
+);
+
+testcase!(
+    test_implicit_builtin_reexport_checked,
+    TestEnv::one("other", ""),
+    r#"
+from unittest.mock import patch
+
+with patch("other.sys"):  # E: No attribute `sys` in module `other`
+    pass
+"#,
+);
+
+// Mirrors the shape seen in the wild (mkdocs, flake8): decorator form, with a replacement passed
+// positionally.
+testcase!(
+    test_builtin_name_on_module_decorator_skipped,
+    TestEnv::one("other", ""),
+    r#"
+from unittest.mock import mock_open, patch
+
+@patch("other.open", mock_open(read_data="x"))
+def test() -> None:
+    pass
+"#,
+);
+
+testcase!(
+    test_decorator_target_checked,
+    TestEnv::one("other", ""),
+    r#"
+from unittest.mock import patch
+
+@patch("other.foo")  # E: No attribute `foo` in module `other`
+def test() -> None:
+    pass
+"#,
+);
+
+// `create=True` is forced regardless of what the caller passed, so an explicit `create=False`
+// does not bring the check back.
+testcase!(
+    test_builtin_name_with_create_false_skipped,
+    TestEnv::one("other", ""),
+    r#"
+from unittest.mock import patch
+
+with patch("other.open", create=False):
+    pass
+"#,
+);
+
+// The rule applies only when the patch target is a module, not a class.
+testcase!(
+    test_builtin_name_on_class_checked,
+    TestEnv::one("other", "class C:\n    existing = 0"),
+    r#"
+from unittest.mock import patch
+
+with patch("other.C.open"):  # E: Class `C` has no class attribute `open`
+    pass
+"#,
+);
+
+// Only the final component is fetched with `getattr`; intermediate ones are imported, so a
+// builtin name in the middle of a target gets no exemption.
+testcase!(
+    test_builtin_name_as_intermediate_checked,
+    TestEnv::one("other", ""),
+    r#"
+from unittest.mock import patch
+
+with patch("other.open.write"):  # E: No attribute `open` in module `other`
     pass
 "#,
 );

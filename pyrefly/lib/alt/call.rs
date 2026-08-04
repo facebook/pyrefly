@@ -2504,11 +2504,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         };
 
+        let attrs = &parts[module_prefix_len..];
         let mut base_ty = ModuleType::new_as(module).to_type(self.heap);
-        for attr in &parts[module_prefix_len..] {
+        for (i, attr) in attrs.iter().enumerate() {
+            let name = Name::new(*attr);
+            // Patching a public builtin name on a module always succeeds: `mock.patch` sets
+            // `create=True` itself in that case, overriding whatever the caller passed. So
+            // `patch("mod.open")` is legal even when `mod` defines no `open` of its own.
+            // Documented at
+            // https://docs.python.org/3/library/unittest.mock.html#unittest.mock.patch ("If you
+            // are patching builtins in a module then you don't need to pass `create=True`").
+            if i + 1 == attrs.len()
+                && base_ty.as_module().is_some()
+                && !attr.starts_with('_')
+                && self.exports.export_exists(ModuleName::builtins(), &name)
+                && !self
+                    .exports
+                    .is_implicit_reexport(ModuleName::builtins(), &name)
+            {
+                return;
+            }
             base_ty = self.type_of_attr_get(
                 &base_ty,
-                &Name::new(*attr),
+                &name,
                 range,
                 errors,
                 None,
