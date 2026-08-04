@@ -1075,7 +1075,7 @@ class A[T]:
 testcase!(
     test_new_returns_concrete_inside_method,
     r#"
-from typing import Self, reveal_type
+from typing import Self, assert_type, reveal_type
 
 class C:
     def __new__(cls) -> "C": ...
@@ -1087,14 +1087,14 @@ class C:
 class D(C): ...
 
 def check_subclass(d: D) -> None:
-    reveal_type(type(d)())  # E: revealed type: C
+    assert_type(type(d)(), C)
     "#,
 );
 
 testcase!(
     test_new_returns_list_self_inside_method,
     r#"
-from typing import Self, reveal_type
+from typing import Self, assert_type, reveal_type
 
 class C:
     def __new__(cls) -> list[Self]: ...
@@ -1106,7 +1106,7 @@ class C:
 class D(C): ...
 
 def check_subclass(d: D) -> None:
-    reveal_type(type(d)())  # E: revealed type: list[D]
+    assert_type(type(d)(), list[D])
     "#,
 );
 

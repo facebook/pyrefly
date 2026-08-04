@@ -2375,11 +2375,11 @@ def test(x: tuple[int, int], y: tuple[int, *tuple[int, ...], int], z: tuple[int,
 testcase!(
     test_dict_literal_key_isinstance_narrowing,
     r#"
-from typing import Literal, reveal_type
+from typing import Literal, assert_type
 def get_value(x: dict[Literal["value"], int] | int) -> int | None:
     if isinstance(x, dict):
         return x.get("value")
-    reveal_type(x) # E: revealed type: int
+    assert_type(x, int)
     return x
     "#,
 );
@@ -3762,25 +3762,25 @@ def f(value: TypeForm[object]):
 testcase!(
     test_isinstance_custom_metaclass_preserved,
     r#"
-from typing import reveal_type
+from typing import assert_type
 class Meta(type):
     meta_attr: int
 def f(value: object):
     if isinstance(value, Meta):
-        reveal_type(value)  # E: revealed type: Meta
-        reveal_type(value.meta_attr)  # E: revealed type: int
+        assert_type(value, Meta)
+        assert_type(value.meta_attr, int)
 "#,
 );
 
 testcase!(
     test_isinstance_type_else_keeps_non_class,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def f(value: type[int] | str):
     if isinstance(value, type):
-        reveal_type(value)  # E: revealed type: type[int]
+        assert_type(value, type[int])
     else:
-        reveal_type(value)  # E: revealed type: str
+        assert_type(value, str)
 "#,
 );
 

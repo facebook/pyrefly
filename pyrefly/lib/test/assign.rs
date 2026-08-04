@@ -126,7 +126,7 @@ d: list[Any] = ["test"]
 testcase!(
     test_assign_list_concat_with_contextual_hint,
     r#"
-from typing import assert_type, reveal_type
+from typing import assert_type
 
 class Base: ...
 class A(Base): ...
@@ -141,8 +141,8 @@ l2: list[Base] = [A()] + [B()]
 # List concatenation with list comprehension operands
 l3: list[Base] = [A() for _ in range(1)] + [B()]
 
-# Without contextual hint, reveal_type should show the inferred union type
-reveal_type([A()] + [B()])  # E: revealed type: list[A | B]
+# Without contextual hint, the concatenation infers the union type.
+assert_type([A()] + [B()], list[A | B])
 
 # Non-fresh operands (variables) should NOT be coerced
 xs: list[A] = [A()]
@@ -862,12 +862,12 @@ reveal_type(x) # E: revealed type: Unknown
 testcase!(
     test_reveal_type_assign,
     r#"
-from typing import reveal_type
+from typing import Literal, assert_type
 
 def f(x):
     x = 3
     x = "None"
-    reveal_type(x) # E: revealed type: Literal['None']
+    assert_type(x, Literal['None'])
 
 def f(x):
     x = 3
@@ -1275,7 +1275,7 @@ def test(x: int | None) -> None:
 testcase!(
     test_class_rebind_conditional_incompatible,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1288,7 +1288,7 @@ if b():
     Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
@@ -1358,7 +1358,7 @@ assert_type(Real, type[Real])
 testcase!(
     test_class_rebind_repeated_writes_in_one_flow,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1369,14 +1369,14 @@ Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type 
 Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
 testcase!(
     test_class_rebind_repeated_writes_after_join,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1392,7 +1392,7 @@ if b():
     Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
@@ -1424,7 +1424,7 @@ Real().fresh_only()  # E: Object of class `Real` has no attribute `fresh_only`
 testcase!(
     test_class_rebind_compatible_subclass,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1437,7 +1437,7 @@ class Dummy: ...
 def b() -> bool: ...
 
 Real = SubReal
-reveal_type(Real)  # E: revealed type: type[SubReal]
+assert_type(Real, type[SubReal])
 
 if b():
     Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
@@ -1510,7 +1510,7 @@ class Container:
 testcase!(
     test_class_rebind_multi_target,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1523,14 +1523,14 @@ if b():
     other = Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
 testcase!(
     test_class_rebind_unpacked,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1543,6 +1543,6 @@ if b():
     Real, _ = (Dummy, 0)  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );

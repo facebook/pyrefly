@@ -691,11 +691,11 @@ testcase!(
     test_return_hint_not_used_if_detrimental,
     r#"
 from collections.abc import Callable
-from typing import reveal_type
+from typing import assert_type
 
 def first[T](items: list[T], matcher: Callable[[T], bool]) -> T | None: ...
 def foo(items: list[int]) -> int | None:
-    return first(items, lambda i: reveal_type(i) == 3)  # E: revealed type: int
+    return first(items, lambda i: assert_type(i, int) == 3)
     "#,
 );
 

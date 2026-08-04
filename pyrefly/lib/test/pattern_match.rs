@@ -1289,7 +1289,7 @@ testcase!(
     test_match_alias_no_leak_when_no_narrowing_subject,
     r#"
 from enum import Enum
-from typing import reveal_type
+from typing import assert_type
 
 class Color(Enum):
     RED = 1
@@ -1301,7 +1301,7 @@ def f(y: Color) -> None:
     match make_color():  # E: Missing cases: Color.GREEN
         case Color.RED as y:
             return
-    reveal_type(y)  # E: revealed type: Color
+    assert_type(y, Color)
 "#,
 );
 
@@ -1688,7 +1688,7 @@ def f(t: tuple[object, int] | tuple[object, str]) -> None:
 testcase!(
     test_match_sequence_literal_element,
     r#"
-from typing import Literal, reveal_type
+from typing import Literal, Never, assert_type
 type MyUnion = Literal["a"] | tuple[Literal["b"], int] | tuple[Literal["c"], int]
 def exhaustive(value: MyUnion) -> str:
     match value:
@@ -1698,7 +1698,7 @@ def exhaustive(value: MyUnion) -> str:
             return "b"
         case "c", v:
             return "c"
-    reveal_type(value)  # E: revealed type: Never
+    assert_type(value, Never)
 "#,
 );
 
@@ -1706,13 +1706,13 @@ def exhaustive(value: MyUnion) -> str:
 testcase!(
     test_match_mapping_pattern_else_narrow,
     r#"
-from typing import reveal_type
+from typing import assert_type, reveal_type
 def empty_pattern(x: dict | int) -> None:
     match x:
         case {}:
             reveal_type(x)  # E: revealed type: dict[Unknown, Unknown]
         case _:
-            reveal_type(x)  # E: revealed type: int
+            assert_type(x, int)
 def keyed_pattern_does_not_narrow_else(x: dict | int) -> None:
     # `case {"k": _}` is refutable on key presence: a dict without `"k"` falls through, so
     # the `else` must keep `dict` (only `{}` / `{**rest}` match every mapping).

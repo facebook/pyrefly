@@ -37,15 +37,15 @@ async def test() -> None:
 testcase!(
     test_await_union,
     r#"
-from typing import Never, Any, Awaitable, reveal_type
+from typing import Never, Any, Awaitable, assert_type
 def union_any0() -> Any | Awaitable[int]: ...
 def union_any1() -> Awaitable[int] | Any: ...
 def union_int_str() -> Awaitable[int] | Awaitable[str]: ...
 async def test() -> None:
     z = await union_any0()
-    reveal_type(z)  # E: revealed type: int | Any
+    assert_type(z, int | Any)
     z = await union_any1()
-    reveal_type(z)  # E: revealed type: int | Any
+    assert_type(z, int | Any)
     z = await union_int_str()
 "#,
 );

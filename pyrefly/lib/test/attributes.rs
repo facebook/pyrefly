@@ -2882,7 +2882,7 @@ def f5(e: E):
 testcase!(
     test_none_union_conditional_initialization,
     r#"
-from typing import reveal_type
+from typing import assert_type, reveal_type
 
 class A:
     def __init__(self, x: None | int):
@@ -2899,7 +2899,7 @@ class B:
         else:
             self._x = x
 def f2(b: B):
-    reveal_type(b._x)  # E: revealed type: int | None
+    assert_type(b._x, int | None)
 
 class C:
     def __init__(self, x: None | int):
@@ -2908,7 +2908,7 @@ class C:
         else:
             self._y = x
 def f3(c: C):
-    reveal_type(c._y)  # E: revealed type: int | None
+    assert_type(c._y, int | None)
     "#,
 );
 
@@ -2925,7 +2925,7 @@ class A:
         self.val = "string"
 def f(a: A):
     assert_type(a.val, Literal[1, 'string'])
-    reveal_type(A.val)  # E: revealed type: Literal['string', 1]
+    assert_type(A.val, Literal['string', 1])
 
 class B:
     def __init__(self):
@@ -2935,14 +2935,14 @@ class B:
         return super().__new__(cls)
 def g(b: B):
     assert_type(b.val, Literal['string', 1])
-    reveal_type(B.val)  # E: revealed type: Literal['string', 1]
+    assert_type(B.val, Literal['string', 1])
     "#,
 );
 
 testcase!(
     test_class_body_with_method_definition,
     r#"
-from typing import reveal_type, assert_type, Literal
+from typing import Literal, assert_type
 
 class A:
     val = 0
@@ -2952,8 +2952,8 @@ class A:
     def __init__(self):
         self.val = "string"  # E: `Literal['string']` is not assignable to attribute `val` with type `int`
 def f(a: A):
-    reveal_type(a.val)  # E: revealed type: int
-    reveal_type(A.val)  # E: revealed type: int
+    assert_type(a.val, int)
+    assert_type(A.val, int)
 
 class B:
     val: int | str = 0
@@ -2964,8 +2964,8 @@ class B:
         self.val = "string"
         assert_type(self.val, Literal["string"])
 def g(b: B):
-    reveal_type(b.val)  # E: revealed type: int | str
-    reveal_type(B.val)  # E: revealed type: int | str
+    assert_type(b.val, int | str)
+    assert_type(B.val, int | str)
     "#,
 );
 

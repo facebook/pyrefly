@@ -108,14 +108,14 @@ assert_type(y, Literal["bar"])
 testcase!(
     test_parameter_type_inferred_from_decorator,
     r#"
-from typing import Callable, reveal_type
+from typing import Callable, assert_type
 
 def enforce_int_arg(func: Callable[[int], None]) -> Callable[[int], None]:
     return func
 
 @enforce_int_arg
 def takes_inferred(i) -> None:
-    reveal_type(i)  # E: revealed type: int
+    assert_type(i, int)
     "#,
 );
 

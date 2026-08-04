@@ -484,45 +484,45 @@ def test[*Ts](x1: tuple[int, *tuple[str, ...]], x2: tuple[*Ts]) -> None:
 testcase!(
     test_unpack_typevar_bound_to_tuple,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def f[Z: tuple[str, int]](x: Z):
     u, v = x
-    reveal_type(u)  # E: revealed type: str
-    reveal_type(v)  # E: revealed type: int
+    assert_type(u, str)
+    assert_type(v, int)
 "#,
 );
 
 testcase!(
     test_unpack_typevar_bound_to_tuple_three_elements,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def f[Z: tuple[str, int, bytes]](x: Z):
     a, b, c = x
-    reveal_type(a)  # E: revealed type: str
-    reveal_type(b)  # E: revealed type: int
-    reveal_type(c)  # E: revealed type: bytes
+    assert_type(a, str)
+    assert_type(b, int)
+    assert_type(c, bytes)
 "#,
 );
 
 testcase!(
     test_unpack_typevar_bound_to_unbounded_tuple,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def f[Z: tuple[int, ...]](x: Z):
     a, b = x
-    reveal_type(a)  # E: revealed type: int
-    reveal_type(b)  # E: revealed type: int
+    assert_type(a, int)
+    assert_type(b, int)
 "#,
 );
 
 testcase!(
     test_unpack_typevar_bound_to_tuple_starred,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def f[Z: tuple[str, int, bytes]](x: Z):
     a, *b = x
-    reveal_type(a)  # E: revealed type: str
-    reveal_type(b)  # E: revealed type: list[bytes | int]
+    assert_type(a, str)
+    assert_type(b, list[bytes | int])
 "#,
 );
 
@@ -542,12 +542,12 @@ def f(x: tuple[str, *tuple[int, ...]]) -> str:
 testcase!(
     test_unpack_constrained_typevar_tuple,
     r#"
-from typing import TypeVar, reveal_type
+from typing import TypeVar, assert_type
 Z = TypeVar("Z", tuple[str, int], tuple[bool, bytes])
 def f(x: Z):
     a, b = x
-    reveal_type(a)  # E: revealed type: bool | str
-    reveal_type(b)  # E: revealed type: bytes | int
+    assert_type(a, bool | str)
+    assert_type(b, bytes | int)
 "#,
 );
 

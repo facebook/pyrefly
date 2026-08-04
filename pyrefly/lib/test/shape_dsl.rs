@@ -2374,7 +2374,7 @@ testcase!(
     test_shaped_array_tuple_carrier_generic_return_literal_tuple_widens,
     shaped_array_env(),
     r#"
-from typing import reveal_type
+from typing import assert_type
 from shape_extensions import shaped_array
 
 @shaped_array(shape="Shape")
@@ -2383,7 +2383,7 @@ class Array[Shape, DType]: ...
 def make_array[S](shape: S) -> Array[S, float]: ...
 
 def f() -> None:
-    reveal_type(make_array((2, 3)))  # E: revealed type: Array[[int, int], float]
+    assert_type(make_array((2, 3)), Array[[int, int], float])
 "#,
 );
 
@@ -2692,7 +2692,7 @@ def use(cond: bool, i: int, s: Int[int], s3: Int[3], s4: Int[4], lit3: Literal[3
     take_int3(i)  # E: Argument `int` is not assignable to parameter `x` with type `Int[3]`
 
     inferred_union = i if cond else s
-    reveal_type(inferred_union)  # E: revealed type: int | Int[int]
+    assert_type(inferred_union, int | Int[int])
 "#,
 );
 

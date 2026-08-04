@@ -300,9 +300,9 @@ class MyEnum(Enum):
     def C(self) -> None: pass
     def D(self) -> None: pass
 
-reveal_type(MyEnum.A)  # E: revealed type: Literal[MyEnum.A]
-reveal_type(MyEnum.B)  # E: revealed type: int
-reveal_type(MyEnum.C)  # E: revealed type: Literal[MyEnum.C]
+assert_type(MyEnum.A, Literal[MyEnum.A])
+assert_type(MyEnum.B, int)
+assert_type(MyEnum.C, Literal[MyEnum.C])
 reveal_type(MyEnum.D)  # E: revealed type: (self: MyEnum) -> None
 "#,
 );
@@ -1231,7 +1231,7 @@ A.where(True, A.x, A.y)
 testcase!(
     test_enum_conflicting_metaclass_no_iter,
     r#"
-from typing import reveal_type
+from typing import Literal, assert_type, reveal_type
 from enum import Enum
 
 class MyMeta(type):
@@ -1242,7 +1242,7 @@ class E(Enum, metaclass=MyMeta):  # E: Class `E` has metaclass `MyMeta` which is
     B = 2
     C = 3
 
-reveal_type(E.A)  # E: revealed type: Literal[E.A]
+assert_type(E.A, Literal[E.A])
 
 for x in E:  # E: Type `type[E]` is not iterable
     reveal_type(x)  # E: revealed type: Unknown

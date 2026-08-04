@@ -370,7 +370,7 @@ except (ValueError, *EXTRA_ERRORS) as e:
 testcase!(
     test_exception_group_handler,
     r#"
-from typing import reveal_type
+from typing import assert_type, reveal_type
 
 class Exception1(Exception): pass
 class Exception2(Exception): pass
@@ -380,13 +380,13 @@ try:
 except* int as e1:  # E: Invalid exception class
     reveal_type(e1)  # E: revealed type: ExceptionGroup[int]
 except* Exception as e2:
-    reveal_type(e2)  # E: revealed type: ExceptionGroup
+    assert_type(e2, ExceptionGroup)
 except* ExceptionGroup as e3:  # E: Exception handler annotation in `except*` clause may not extend `BaseExceptionGroup`
-    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup]
+    assert_type(e3, ExceptionGroup[ExceptionGroup])
 except* (Exception1, Exception2) as e4:
-    reveal_type(e4)  # E: ExceptionGroup[Exception1 | Exception2]
+    assert_type(e4, ExceptionGroup[Exception1 | Exception2])
 except* Exception1 as e5:
-    reveal_type(e5)  # E: ExceptionGroup[Exception1]
+    assert_type(e5, ExceptionGroup[Exception1])
 "#,
 );
 
@@ -1334,7 +1334,7 @@ except as r: # E: Parse error: Expected one or more exception types
 testcase!(
     test_narrows_in_flow_merge_when_not_in_base_flow,
     r#"
-from typing import reveal_type
+from typing import assert_type
 class A: pass
 class B(A): pass
 class C(A): pass
@@ -1347,8 +1347,8 @@ def f():
     elif isinstance(x, C):
         assert isinstance(y, C)
         pass
-    reveal_type(x)  # E: revealed type: A
-    reveal_type(y)  # E: revealed type: A
+    assert_type(x, A)
+    assert_type(y, A)
 "#,
 );
 

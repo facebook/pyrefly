@@ -812,7 +812,7 @@ class B[T: A]:
 testcase!(
     test_overloaded_descriptor_get_preserves_specialized_owner,
     r#"
-from typing import Any, Generic, Literal, TypeAlias, TypeVar, overload, reveal_type
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, assert_type, overload
 
 Storage: TypeAlias = Literal["python", "pyarrow"]
 StorageT = TypeVar("StorageT", bound=Storage)
@@ -832,7 +832,7 @@ class Cat(Generic[_StorageT]):
     storage = _CatStorageDescriptor()
 
 def main(cat: Cat[Literal["pyarrow"]]) -> None:
-    reveal_type(cat.storage)  # E: revealed type: Literal['pyarrow']
+    assert_type(cat.storage, Literal["pyarrow"])
     "#,
 );
 

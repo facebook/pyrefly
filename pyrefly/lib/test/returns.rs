@@ -38,14 +38,14 @@ assert_type(f(), None)
 testcase!(
     test_infer_return_in_for_loop,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class A:
     def f(self, x):
         for y in x:
             pass
 
-reveal_type(A().f(0))  # E: revealed type: None
+assert_type(A().f(0), None)
 "#,
 );
 
