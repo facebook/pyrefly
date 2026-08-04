@@ -194,6 +194,11 @@ fn is_string_type(ty: &Type) -> bool {
     ty.is_literal_string() || polars_dtype_from_scalar_type(ty) == Some(PolarsDType::String)
 }
 
+fn is_polars_selector_name(name: &Name) -> bool {
+    let name = name.as_str();
+    name == "*" || (name.starts_with('^') && name.ends_with('$'))
+}
+
 /// Map a resolved type to the Polars dtype it names, e.g. the `pl.Float64` class to `Float64`.
 /// Only the modeled scalar dtypes from the `polars` package are recognized; anything else is `None`.
 fn polars_dtype_from_type(ty: &Type) -> Option<PolarsDType> {
@@ -764,20 +769,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         polars_dtype_from_type(&ty)
     }
 
-    /// Classify a column argument without reporting inference errors.
+    /// Classify a column argument without reporting inference errors. Callers that return a schema
+    /// must infer the argument again with their collector.
     fn polars_column_arg(&self, expr: &Expr) -> ColumnArg {
         let ty = self.expr_infer(expr, &self.error_swallower());
         if let Type::Literal(lit) = &ty
             && let Lit::Str(value) = &lit.value
         {
-            let value = value.as_str();
-            // A `"*"` or `"^regex$"` string is a `pl.col` selector, not an exact name.
-            if value == "*" || (value.starts_with('^') && value.ends_with('$')) {
+            let name = Name::new(value.as_str());
+            if is_polars_selector_name(&name) {
                 return ColumnArg::Opaque;
             }
-            return ColumnArg::Named(Name::new(value));
+            return ColumnArg::Named(name);
         }
-        // Any other string type is a name or selector we cannot pin to a single column.
         if is_string_type(&ty) {
             return ColumnArg::Opaque;
         }
@@ -1577,7 +1581,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             names.push((name, elt.range()));
         }
-        // Committed to a schema, so report the argument errors swallowed by name resolution.
         for elt in elts {
             self.expr_infer(elt, errors);
         }
@@ -1617,7 +1620,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Lit::Str(value) = &lit.value
             && value.as_str() == "*"
         {
-            // Committed to a schema, so report the argument errors swallowed by name resolution.
             self.expr_infer(arg, errors);
             return Some(base.clone());
         }
@@ -1628,7 +1630,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for &arg in &positional {
             let (name, is_column) = match self.polars_column_arg(arg) {
                 ColumnArg::Named(name) => (name, true),
-                // A selector or wider `str` names columns whose identity is data-dependent.
                 ColumnArg::Opaque => return None,
                 ColumnArg::Expr => (self.polars_expr_output_name(arg)?, false),
             };
@@ -1637,19 +1638,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             names.push((name, is_column));
         }
-        // Once every output name is known, resolve each dtype here and report the argument errors
-        // swallowed by name resolution.
         let mut columns = Vec::with_capacity(names.len());
         for ((name, is_column), arg) in names.into_iter().zip(positional) {
             self.expr_infer(arg, errors);
             if is_column {
-                // A name reference selects a column, and an absent one is reported and dropped.
                 if let Some(dtype) = resolve_column(schema, &name, arg.range(), errors) {
                     columns.push((name, dtype));
                 }
             } else {
-                // An expression yields one output column, degrading its dtype to `Unknown` when
-                // unresolved, like `with_columns`.
                 let dtype = self
                     .eval_polars_expr(arg, schema, errors)
                     .map_or(PolarsDType::Unknown, ExprValue::dtype);
@@ -1690,7 +1686,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 dropped.push((name, arg.range()));
             }
         }
-        // Committed to a schema, so report the argument errors swallowed by name resolution.
         for arg in &args.args {
             self.expr_infer(arg, errors);
         }
@@ -1753,7 +1748,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return None;
             }
         }
-        // Committed to a schema, so report the argument errors swallowed by name resolution.
         for (key, value) in name_exprs {
             self.expr_infer(key, errors);
             self.expr_infer(value, errors);
@@ -1806,7 +1800,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let [arg] = &call.arguments.args[..] else {
                             return None;
                         };
-                        // `"*"` and a regex select many columns whose names are data-dependent.
                         let ColumnArg::Named(name) = self.polars_column_arg(arg) else {
                             return None;
                         };
@@ -1895,9 +1888,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let [arg] = &call.arguments.args[..] else {
                             return None;
                         };
-                        // The column name resolves through its type, so a `Final`/`Literal[str]` names
-                        // a column like a bare string, while a `"*"` or regex selects a data-dependent
-                        // set and falls back.
                         let ColumnArg::Named(name) = self.polars_column_arg(arg) else {
                             return None;
                         };
@@ -1987,12 +1977,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // reporter of column errors and uses only the receiver schema.
             self.expr_infer(value, errors);
             let dtype = match self.polars_column_arg(value) {
-                // A string keyword value names a column to copy.
                 ColumnArg::Named(name) => resolve_column(schema, &name, value.range(), errors),
-                // A regex, wildcard, or wider `str` selects a data-dependent column set, so fall back
-                // rather than report the selector as a missing column.
                 ColumnArg::Opaque => None,
-                // A string inside an expression is a literal; any other value is a Polars expression.
                 ColumnArg::Expr => self
                     .eval_polars_expr(value, schema, errors)
                     .map(ExprValue::dtype),
@@ -2119,6 +2105,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<PolarsDType> {
         match self.polars_column_arg(expr) {
             ColumnArg::Named(name) => {
+                // The aggregated list dtype is unmodeled.
                 self.expr_infer(expr, errors);
                 resolve_column(schema, &name, expr.range(), errors);
                 Some(PolarsDType::Unknown)
@@ -2447,8 +2434,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
             return None;
         }
-        // Committed to a schema, so report the errors inside `other` and the `on=` keys; returning
-        // here bypasses the ordinary call-checking that would otherwise report them.
+        // Returning a schema bypasses ordinary call checking, so infer these expressions again to
+        // report their errors.
         self.expr_infer(other_expr, errors);
         if let Some(on) = on {
             self.expr_infer(on, errors);
