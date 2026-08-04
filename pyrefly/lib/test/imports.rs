@@ -773,10 +773,7 @@ from typing import reveal_type
 
 def test():
     i = Interpret()
-    # Deliberately don't specify the type of i.x, as sometimes
-    # it works out to None, sometimes Unknown.
-    # Plenty of errors here.
-    reveal_type(i.x) # E:
+    reveal_type(i.x) # E: revealed type: Unknown
 "#,
 );
 

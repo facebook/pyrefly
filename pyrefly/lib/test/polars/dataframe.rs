@@ -992,7 +992,7 @@ testcase!(
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1]}, None))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"a": [1]}, None))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
@@ -1505,7 +1505,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": 2})
-reveal_type(df["b"])  # E: revealed type: Series
+reveal_type(df["b"])  # E: revealed type: Series[Unknown]
 df["z"]  # E: Column `z` is not in the DataFrame schema
 df.select("z")  # E: Column `z` is not in the DataFrame schema
 "#,
@@ -1646,7 +1646,7 @@ from typing import reveal_type
 # `insert_column` degrades the frame to Partial, so a known column can no longer prove its dtype.
 df = pl.DataFrame({"a": [1]})
 df.insert_column(1, pl.Series("b", [2]))
-reveal_type(df["a"])  # E: revealed type: Series
+reveal_type(df["a"])  # E: revealed type: Series[Int64]
 "#,
 );
 
@@ -2399,7 +2399,7 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 k = "c"
-reveal_type(df.select(pl.col("a").alias(k)))  # E: revealed type: DataFrame
+reveal_type(df.select(pl.col("a").alias(k)))  # E: revealed type: DataFrame[c: Int64]
 "#,
 );
 
@@ -2410,7 +2410,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.select(pl.col("a").sum()))  # E: revealed type: DataFrame
+reveal_type(df.select(pl.col("a").sum()))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
@@ -3987,7 +3987,7 @@ from typing import reveal_type
 d1 = pl.DataFrame(schema={"k": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Int64})
 how = "inner"
-reveal_type(d1.join(d2, on="k", how=how))  # E: revealed type: DataFrame
+reveal_type(d1.join(d2, on="k", how=how))  # E: revealed type: DataFrame[k: Int64]
 "#,
 );
 
@@ -4244,7 +4244,7 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 other = pl.DataFrame({"b": [2.0]})
-reveal_type(df.hstack(other, in_place=True))  # E: revealed type: DataFrame
+reveal_type(df.hstack(other, in_place=True))  # E: revealed type: DataFrame[a: Int64, ...]
 "#,
 );
 
@@ -4411,7 +4411,7 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 df.insert_column(1, pl.Series("b", [2]))
-reveal_type(df["a"])  # E: revealed type: Series
+reveal_type(df["a"])  # E: revealed type: Series[Int64]
 "#,
 );
 
@@ -5045,7 +5045,7 @@ from typing import reveal_type
 xs = [1, 2, 3]
 reveal_type(pl.Series("a", xs))  # E: revealed type: Series
 reveal_type(pl.Series("a", range(3)))  # E: revealed type: Series
-reveal_type(pl.Series("a", [10**19]))  # E: revealed type: Series
+reveal_type(pl.Series("a", [10**19]))  # E: revealed type: Series[Int64]
 reveal_type(pl.Series("a", [[1, 2], [3]]))  # E: revealed type: Series
 "#,
 );
@@ -5129,7 +5129,7 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 df.insert_column(1, pl.Series("b", [2]))
-reveal_type(df.get_column("a"))  # E: revealed type: Series
+reveal_type(df.get_column("a"))  # E: revealed type: Series[Int64]
 "#,
 );
 
@@ -5213,7 +5213,7 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 df.insert_column(1, pl.Series("b", [2]))
-reveal_type(df.to_series())  # E: revealed type: Series
+reveal_type(df.to_series())  # E: revealed type: Series[Int64]
 "#,
 );
 
@@ -5385,7 +5385,7 @@ from typing import reveal_type
 class MySchema:
     price: pl.Float64
 def f(df: pl.DataFrame[MySchema]) -> None:
-    reveal_type(df["price"])  # E: revealed type: Series
+    reveal_type(df["price"])  # E: revealed type: Series[Float64]
     df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
@@ -5414,7 +5414,7 @@ from typing import reveal_type
 class MySchema:
     price: pl.Float64
 def use(df: pl.DataFrame[MySchema]) -> None:
-    reveal_type(df["price"])  # E: revealed type: Series
+    reveal_type(df["price"])  # E: revealed type: Series[Float64]
     df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );

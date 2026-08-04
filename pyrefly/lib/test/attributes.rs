@@ -1911,7 +1911,7 @@ class A[T]:
     @overload
     def f(self, x: T | None) -> T: ...
     def f(self, x=None) -> Any: ...
-reveal_type(A.f) # E: revealed type: Overload[\n  [T](self: A[T]) -> T\n  [T](self: A[T], x: T | None) -> T\n]
+reveal_type(A.f) # E: revealed type: Overload[ [T](self: A[T]) -> T [T](self: A[T], x: T | None) -> T ]
 assert_type(A.f(A[int]()), int)
     "#,
 );
@@ -1929,7 +1929,7 @@ class A[T]:
     def f(x: T) -> T: ...
     @staticmethod
     def f(x = None) -> Any: ...
-reveal_type(A.f) # E: revealed type: Overload[\n  (x: None = ...) -> None\n  [T](x: T) -> T\n]
+reveal_type(A.f) # E: revealed type: Overload[ (x: None = ...) -> None [T](x: T) -> T ]
 assert_type(A.f(), None)
 assert_type(A.f(0), int)
     "#,
@@ -2267,7 +2267,7 @@ def get_type_t[T]() -> type[T]:
     return cast(type[T], 0)
 def foo[T](x: type[T]):
     # mypy reveals the same thing we do (the type of `type.__new__`), while pyright reveals `Unknown`.
-    reveal_type(get_type_t().__new__)  # E: Overload[\n  [Self@type: type](cls: type[Self@type], o: object, /) -> type[Any]\n  [Self](cls: type[Self], name: str, bases: tuple[type[Any], ...], namespace: dict[str, Any], /, **kwds: Any) -> Self\n]
+    reveal_type(get_type_t().__new__)  # E: Overload[ [Self@type: type](cls: type[Self@type], o: object, /) -> type[Any] [Self](cls: type[Self], name: str, bases: tuple[type[Any], ...], namespace: dict[str, Any], /, **kwds: Any) -> Self ]
     "#,
 );
 

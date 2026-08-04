@@ -130,7 +130,7 @@ class C:
 def f(c: C):
     assert_type(c.foo, int)
     c.foo = "42"
-    reveal_type(C.foo)  # E: revealed type: (self: C, value: str)
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: str) -> None
     "#,
 );
 
@@ -187,7 +187,7 @@ class C:
 def f(c: C) -> None:
     assert_type(c.foo, int)
     c.foo = 1
-    reveal_type(C.foo)  # E: revealed type: (self: C, value: int)
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: int) -> None
     del c.foo
     "#,
 );
@@ -890,7 +890,7 @@ def f(c: C):
     assert_type(c.foo, int)
     c.foo = "42"
     c.foo = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str`
-    reveal_type(C.foo)  # E: revealed type: (self: C, value: str)
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: str) -> None
     "#,
 );
 

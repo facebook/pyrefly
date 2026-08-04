@@ -43,11 +43,9 @@ def union_any1() -> Awaitable[int] | Any: ...
 def union_int_str() -> Awaitable[int] | Awaitable[str]: ...
 async def test() -> None:
     z = await union_any0()
-    reveal_type(z)  # E: revealed type: int
+    reveal_type(z)  # E: revealed type: int | Any
     z = await union_any1()
-    reveal_type(z)  # E: revealed type: int
-    # (This one is a backtracking bug: we pin the var to int, then fail the
-    #  str check because the upper bound has mutated and is no longer a var).
+    reveal_type(z)  # E: revealed type: int | Any
     z = await union_int_str()
 "#,
 );

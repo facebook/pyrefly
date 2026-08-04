@@ -1980,9 +1980,9 @@ def annotations(concrete: Array[[2, 3], int], scalar: Array[[], int], shapeless:
     reveal_type(concrete[0].dtype())  # E: revealed type: int
     scalar[0]  # E: Cannot index scalar tensor (rank 0)
     reveal_type(shapeless)  # E: revealed type: Array
-    reveal_type(shapeless[0])  # E: revealed type: Array
-    reveal_type(shapeless[None])  # E: revealed type: Array
-    reveal_type(shapeless[None, ...])  # E: revealed type: Array
+    reveal_type(shapeless[0])  # E: revealed type: Array[tuple[Unknown, ...], Unknown]
+    reveal_type(shapeless[None])  # E: revealed type: Array[[1, *tuple[int, ...]], Unknown]
+    reveal_type(shapeless[None, ...])  # E: revealed type: Array[[1, *tuple[int, ...]], Unknown]
 
 def accepts_precise(x: Array[[2, 3], int]) -> None:
     pass
@@ -1992,8 +1992,8 @@ def shapeless_is_gradual(shapeless: Array) -> None:
 
 def values() -> None:
     value = Array()
-    reveal_type(value)  # E: revealed type: Array
-    reveal_type(value[0])  # E: revealed type: Array
+    reveal_type(value)  # E: revealed type: Array[Unknown, Unknown]
+    reveal_type(value[0])  # E: revealed type: Array[tuple[Unknown, ...], Unknown]
 
 def index_preserves_dtype(concrete: Array[[2, 3], int]) -> Array[[3], int]:
     return concrete[0]
@@ -2065,7 +2065,7 @@ def f(
     reveal_type(x[gradual_list])  # E: revealed type: Array[[int, 20, 30, 40], int]
     reveal_type(x[[*gradual_list]])  # E: revealed type: Array[[int, 20, 30, 40], int]
     reveal_type(x[tuple_key])  # E: revealed type: Array[[1, 3, 20, 30, 40], int]
-    reveal_type(x[unbounded])  # E: revealed type: Array
+    reveal_type(x[unbounded])  # E: revealed type: Array[tuple[Unknown, ...], int]
     reveal_type(x[(unbounded,)])  # E: revealed type: Array[[int, 20, 30, 40], int]
     reveal_type(x[gradual_list, grid])  # E: revealed type: Array[[2, int, 30, 40], int]
     reveal_type(x[unbounded, grid])  # E: revealed type: Array[[2, int, 30, 40], int]
@@ -2128,31 +2128,31 @@ def fallbacks[T, *Ts](
     none_index: None,
 ) -> None:
     reveal_type(x[integer_index])  # E: revealed type: Array[[3, 20, 30, 40], int]
-    reveal_type(x[index_with_device])  # E: revealed type: Array
-    reveal_type(x[bool_index])  # E: revealed type: Array
-    reveal_type(x[float_index])  # E: revealed type: Array
-    reveal_type(x[str_index])  # E: revealed type: Array
-    reveal_type(x[any_dtype_index])  # E: revealed type: Array
-    reveal_type(x[unsupported_index])  # E: revealed type: Array
-    reveal_type(x[any_index])  # E: revealed type: Array
-    reveal_type(x[mixed])  # E: revealed type: Array
-    reveal_type(x[strings])  # E: revealed type: Array
-    reveal_type(x[[*strings]])  # E: revealed type: Array
-    reveal_type(x[anys])  # E: revealed type: Array
-    reveal_type(x[bools])  # E: revealed type: Array
-    reveal_type(x[raw])  # E: revealed type: Array
-    reveal_type(x[nested])  # E: revealed type: Array
-    reveal_type(x[True])  # E: revealed type: Array
-    reveal_type(x[bool_literal])  # E: revealed type: Array
-    reveal_type(x[unpacked])  # E: revealed type: Array
-    reveal_type(x[(unpacked,)])  # E: revealed type: Array
-    reveal_type(x[unconstrained])  # E: revealed type: Array
-    reveal_type(x[stored_slice])  # E: revealed type: Array
-    reveal_type(x[stored_ellipsis])  # E: revealed type: Array
-    reveal_type(x[0, stored_slice])  # E: revealed type: Array
-    reveal_type(x[0, stored_ellipsis])  # E: revealed type: Array
-    reveal_type(x[slice_key])  # E: revealed type: Array
-    reveal_type(x[ellipsis_key])  # E: revealed type: Array
+    reveal_type(x[index_with_device])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[bool_index])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[float_index])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[str_index])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[any_dtype_index])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[unsupported_index])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[any_index])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[mixed])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[strings])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[[*strings]])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[anys])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[bools])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[raw])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[nested])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[True])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[bool_literal])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[unpacked])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[(unpacked,)])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[unconstrained])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[stored_slice])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[stored_ellipsis])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[0, stored_slice])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[0, stored_ellipsis])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[slice_key])  # E: revealed type: Array[tuple[Unknown, ...], int]
+    reveal_type(x[ellipsis_key])  # E: revealed type: Array[tuple[Unknown, ...], int]
     reveal_type(x[none_index])  # E: revealed type: Array[[1, 10, 20, 30, 40], int]
 
 def int_sequence[N: IntVar](
@@ -2246,9 +2246,9 @@ class Array[Shape, DType]:
 # array (no diagnostic), and crucially `.shape` must NOT stale-read `S` after the
 # operation -- the carrier is rewritten to the shapeless form.
 def g[S](x: Array[S, int]) -> None:
-    reveal_type(x[0])  # E: revealed type: Array
+    reveal_type(x[0])  # E: revealed type: Array[tuple[Unknown, ...], int]
     reveal_type(x[0].shape)  # E: revealed type: IntTuple
-    reveal_type(x[:])  # E: revealed type: Array
+    reveal_type(x[:])  # E: revealed type: Array[tuple[Unknown, ...], int]
     reveal_type(x[:].shape)  # E: revealed type: IntTuple
 "#,
 );
@@ -2383,7 +2383,7 @@ class Array[Shape, DType]: ...
 def make_array[S](shape: S) -> Array[S, float]: ...
 
 def f() -> None:
-    reveal_type(make_array((2, 3)))  # E: revealed type: Array
+    reveal_type(make_array((2, 3)))  # E: revealed type: Array[[int, int], float]
 "#,
 );
 
@@ -2534,9 +2534,9 @@ from typing import reveal_type
 from torch import Tensor
 
 def f(x: Tensor[2, 3], y: Tensor) -> None:  # E: Expected a type form, got instance of `Literal[2]`  # E: Expected a type form, got instance of `Literal[3]`
-    reveal_type(x)  # E: revealed type: Tensor
-    reveal_type(x[0])  # E: revealed type: Tensor
-    reveal_type(y)  # E: revealed type: Tensor
+    reveal_type(x)  # E: revealed type: Tensor[Unknown, Unknown]
+    reveal_type(x[0])  # E: revealed type: Tensor[Unknown, Unknown]
+    reveal_type(y)  # E: revealed type: Tensor[*tuple[Unknown, ...]]
 "#,
 );
 
@@ -2692,7 +2692,7 @@ def use(cond: bool, i: int, s: Int[int], s3: Int[3], s4: Int[4], lit3: Literal[3
     take_int3(i)  # E: Argument `int` is not assignable to parameter `x` with type `Int[3]`
 
     inferred_union = i if cond else s
-    reveal_type(inferred_union)  # E: revealed type: int
+    reveal_type(inferred_union)  # E: revealed type: int | Int[int]
 "#,
 );
 
@@ -3378,7 +3378,7 @@ def f(x: Tensor[[2, 3]], y: Tensor) -> None:
     reveal_type(x)  # E: revealed type: Tensor[[2, 3]]
     reveal_type(y)  # E: revealed type: Tensor
     reveal_type(x[0])  # E: revealed type: Tensor[[3]]
-    reveal_type(y[0])  # E: revealed type: Tensor
+    reveal_type(y[0])  # E: revealed type: Tensor[tuple[Unknown, ...]]
 "#,
 );
 
@@ -3519,9 +3519,9 @@ def f(
     y: Float[Tensor, 123],
     z: Float[Tensor, "shape metadata", 123],
 ) -> None:
-    reveal_type(x)  # E: revealed type: Tensor
-    reveal_type(y)  # E: revealed type: Tensor
-    reveal_type(z)  # E: revealed type: Tensor
+    reveal_type(x)  # E: revealed type: Tensor[*tuple[Unknown, ...]]
+    reveal_type(y)  # E: revealed type: Tensor[*tuple[Unknown, ...]]
+    reveal_type(z)  # E: revealed type: Tensor[*tuple[Unknown, ...]]
 "#,
 );
 

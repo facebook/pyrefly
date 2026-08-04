@@ -438,7 +438,7 @@ def multi(x: str) -> int: ...  # E: Overload return type `int` is not assignable
 def multi(*args, **kwargs): ...
 
 result = transform(multi)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (x: int, y: str) -> bool (x: str) -> int ]
 assert_type(result(1, "ok"), bool)
 result("ok")
 "#,
@@ -458,7 +458,7 @@ def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to 
 def f(x): ...
 
 result = identity(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (x: int) -> str (x: str) -> int ]
 assert_type(result(1), str)
 result("ok")
 "#,
@@ -478,7 +478,7 @@ def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to 
 def f(x): ...
 
 result = identity(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> str (str) -> int ]
 assert_type(result(1), str)
 result("ok")
 "#,
@@ -498,7 +498,7 @@ def f(x: str, y: int) -> bytes: ...  # E: Overload return type `bytes` is not as
 def f(x, y): ...
 
 result = identity(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int, str) -> bool (str, int) -> bytes ]
 assert_type(result(1, "ok"), bool)
 result("x", "ok")  # E: No matching overload found for function `typing.overload` called with arguments: (Literal['x'], Literal['ok'])
 result(1, 1)  # E: No matching overload found for function `typing.overload` called with arguments: (Literal[1], Literal[1])
@@ -518,7 +518,7 @@ def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to 
 def f(x): ...
 
 result = higher_order(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (list[int]) -> str (list[str]) -> int ]
 assert_type(result([1]), str)
 assert_type(result(["ok"]), int)
 "#,
@@ -537,7 +537,7 @@ def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to 
 def f(x): ...
 
 result = higher_order(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> list[str] (str) -> list[int] ]
 assert_type(result(1), list[str])
 assert_type(result("ok"), list[int])
 "#,
@@ -559,7 +559,7 @@ def f(x: bytes) -> bytes: ...  # E: Overload return type `bytes` is not assignab
 def f(x): ...
 
 result = project(f, object())
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> object (str) -> object (bytes) -> object ]
 "#,
 );
 
@@ -656,7 +656,7 @@ def f(x: bytes) -> str: ...  # E: Overload return type `str` is not assignable t
 def f(x): ...
 
 result = project(f, 1)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> int (str) -> int ]
 assert_type(result(1), int)
 assert_type(result("ok"), int)
 "#,
@@ -678,7 +678,7 @@ def f(x) -> str: ...
 # Both branches return str, so S=str is compatible with all branches.
 # No pruning occurs; the result should be a full overload.
 result = project(f, "ok")
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> str (bytes) -> str ]
 assert_type(result(1), str)
 assert_type(result(b"ok"), str)
 "#,
@@ -718,7 +718,7 @@ def f(x: str) -> int: ...
 def f(x) -> str | int: ...
 
 result = identity(identity)(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> str (str) -> int ]
 assert_type(result(1), str)
 assert_type(result("ok"), int)
 "#,
@@ -743,7 +743,7 @@ def f(x: str) -> int: ...
 def f(x) -> str | int: ...
 
 wrapper = Wrapper(f)
-reveal_type(wrapper.fn)  # E: revealed type: Overload[
+reveal_type(wrapper.fn)  # E: revealed type: Overload[ (int) -> str (str) -> int ]
 assert_type(wrapper(1), str)
 assert_type(wrapper("ok"), int)
 "#,

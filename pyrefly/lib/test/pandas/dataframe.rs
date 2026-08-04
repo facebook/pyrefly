@@ -158,7 +158,7 @@ testcase!(
     r#"
 import pandas as pd
 from typing import reveal_type
-reveal_type(pd.DataFrame(data={"a": [1]}, columns=["a"]))  # E: revealed type: DataFrame
+reveal_type(pd.DataFrame(data={"a": [1]}, columns=["a"]))  # E: revealed type: DataFrame[a: Int64, ...]
 "#,
 );
 

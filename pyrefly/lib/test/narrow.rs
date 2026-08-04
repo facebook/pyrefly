@@ -204,6 +204,7 @@ def foo(bar: Bar) -> Iterable[int]:
 );
 
 testcase!(
+    bug = "Negative narrowing fails",
     test_ellipsis_is,
     r#"
 from typing import reveal_type
@@ -213,15 +214,16 @@ def f(x: int | EllipsisType):
     if x is ...:
         reveal_type(x)  # E: Ellipsis
     else:
-        reveal_type(x)  # E: int
+        reveal_type(x)  # E: EllipsisType | int
     if x is not ...:
-        reveal_type(x)  # E: int
+        reveal_type(x)  # E: EllipsisType | int
     else:
         reveal_type(x)  # E: Ellipsis
     "#,
 );
 
 testcase!(
+    bug = "Negative narrowing fails",
     test_ellipsis_eq,
     r#"
 from typing import reveal_type
@@ -231,9 +233,9 @@ def f(x: int | EllipsisType):
     if x == ...:
         reveal_type(x)  # E: Ellipsis
     else:
-        reveal_type(x)  # E: int
+        reveal_type(x)  # E: EllipsisType | int
     if x != ...:
-        reveal_type(x)  # E: int
+        reveal_type(x)  # E: EllipsisType | int
     else:
         reveal_type(x)  # E: Ellipsis
     "#,
