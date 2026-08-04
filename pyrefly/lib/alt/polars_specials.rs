@@ -271,11 +271,16 @@ enum ConcatHow {
     VerticalRelaxed,
 }
 
+/// A dict-of-columns literal with its resolved columns and source range.
+struct PolarsDictData<'b> {
+    columns: SmallMap<Name, &'b Expr>,
+    range: TextRange,
+}
+
 /// The two data shapes column inference models: a dict-of-columns or list-of-dict rows.
-#[derive(Clone, Copy)]
 enum PolarsData<'b> {
-    Dict(&'b ExprDict),
-    Records(&'b ExprList),
+    Dict(PolarsDictData<'b>),
+    Records(SmallMap<Name, Vec<&'b Expr>>),
 }
 
 /// A DataFrame constructor call reduced to the pieces column inference needs.
@@ -377,9 +382,21 @@ fn dataframe_records_map(list: &ExprList) -> Option<SmallMap<Name, Vec<&Expr>>> 
     (!columns.is_empty()).then_some(columns)
 }
 
-/// A `schema=` dict literal as an ordered column list, each pinned to a `pl.<DType>` or `None`
-/// to defer to data inference. `None` (fall back) for an empty dict or an unrecognized entry.
-fn schema_dict_entries(dict: &ExprDict) -> Option<Vec<(Name, Option<PolarsDType>)>> {
+/// How a `schema=` was written: a bare dict literal treats a `None` value as "defer to data
+/// inference", but an inline `pl.Schema({...})` forbids `None` (runtime error). They diverge on `None`.
+#[derive(Clone, Copy, PartialEq)]
+enum SchemaForm {
+    Dict,
+    SchemaClass,
+}
+
+/// A `schema=` dict literal as an ordered column list, each pinned to a `pl.<DType>` or `None` to
+/// defer to data inference. Returns `None` to fall back for an empty dict, an unrecognized entry, or
+/// a `None` under the `pl.Schema` form, which forbids it.
+fn schema_dict_entries(
+    form: SchemaForm,
+    dict: &ExprDict,
+) -> Option<Vec<(Name, Option<PolarsDType>)>> {
     if dict.items.is_empty() {
         return None;
     }
@@ -394,7 +411,8 @@ fn schema_dict_entries(dict: &ExprDict) -> Option<Vec<(Name, Option<PolarsDType>
             return None;
         }
         let dtype = match &item.value {
-            Expr::NoneLiteral(_) => None,
+            Expr::NoneLiteral(_) if form == SchemaForm::Dict => None,
+            Expr::NoneLiteral(_) => return None,
             value => Some(polars_dtype_from_expr(value)?),
         };
         entries.push((name, dtype));
@@ -796,44 +814,69 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// construction. Purely syntactic; never infers the element expressions.
     ///
     /// With `schema=` the column set is authoritative and ordered: each column takes its
-    /// `schema_overrides` dtype, else its schema dtype, else defers to data inference. Data must
-    /// name the same columns. Without `schema=`, data order defines the columns.
+    /// `schema_overrides` dtype, else its schema dtype, else defers to data inference. Data must name
+    /// the same columns, else we report the mismatch and fall back. Without `schema=`, data order
+    /// defines the columns.
     pub fn infer_dataframe_schema(
         &self,
         construct: &PolarsConstruct,
         kind: DataFrameKind,
         errors: &ErrorCollector,
     ) -> Option<Vec<(Name, PolarsDType)>> {
-        let data = match construct.data {
-            Some(PolarsData::Dict(dict)) => Some(dataframe_data_map(dict)?),
-            None => None,
-            // Records fold the supertype over each column's per-row values (as if strict=False), so a
-            // column never errors. Polars-only, and records with a `schema=` are not modeled: fall back.
-            Some(PolarsData::Records(list)) => {
-                if kind != DataFrameKind::Polars || construct.schema.is_some() {
-                    return None;
-                }
-                let columns = dataframe_records_map(list)?
-                    .into_iter()
-                    .map(|(name, values)| {
-                        let element = match construct.overrides.get(&name) {
-                            Some(dtype) => *dtype,
-                            None => self
-                                .dataframe_list_element_type(
-                                    &name,
-                                    values.iter().copied(),
-                                    kind.clone(),
-                                    false,
-                                    errors,
-                                )
-                                .unwrap_or(PolarsDType::Unknown),
-                        };
-                        (name, element)
-                    })
-                    .collect();
-                return Some(columns);
+        match (&construct.data, &construct.schema) {
+            // Record schemas do not follow the exact-name rules for column-oriented dict data.
+            (Some(PolarsData::Records(_)), Some(_)) => None,
+            (Some(PolarsData::Records(records)), None) => {
+                self.infer_dataframe_records_schema(records, construct, kind, errors)
             }
-        };
+            (Some(PolarsData::Dict(data)), _) => {
+                self.infer_dataframe_dict_schema(Some(data), construct, kind, errors)
+            }
+            (None, _) => self.infer_dataframe_dict_schema(None, construct, kind, errors),
+        }
+    }
+
+    /// Infer a Polars list-of-dicts after parsing it into per-column row values.
+    fn infer_dataframe_records_schema(
+        &self,
+        records: &SmallMap<Name, Vec<&Expr>>,
+        construct: &PolarsConstruct,
+        kind: DataFrameKind,
+        errors: &ErrorCollector,
+    ) -> Option<Vec<(Name, PolarsDType)>> {
+        if kind != DataFrameKind::Polars {
+            return None;
+        }
+        Some(
+            records
+                .iter()
+                .map(|(name, values)| {
+                    let element = match construct.overrides.get(name) {
+                        Some(dtype) => *dtype,
+                        None => self
+                            .dataframe_list_element_type(
+                                name,
+                                values.iter().copied(),
+                                kind.clone(),
+                                false,
+                                errors,
+                            )
+                            .unwrap_or(PolarsDType::Unknown),
+                    };
+                    (name.clone(), element)
+                })
+                .collect(),
+        )
+    }
+
+    /// Infer column-oriented dict data, or a schema-only construction when `data` is absent.
+    fn infer_dataframe_dict_schema(
+        &self,
+        data: Option<&PolarsDictData>,
+        construct: &PolarsConstruct,
+        kind: DataFrameKind,
+        errors: &ErrorCollector,
+    ) -> Option<Vec<(Name, PolarsDType)>> {
         // Only list literals have modeled dtypes.
         let element_from_data = |name: &Name, value: &Expr| match value {
             Expr::List(ExprList { elts, .. }) => self.dataframe_list_element_type(
@@ -847,8 +890,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let Some(schema) = &construct.schema else {
             let data = data?;
-            let mut columns = Vec::with_capacity(data.len());
-            for (name, value) in &data {
+            let mut columns = Vec::with_capacity(data.columns.len());
+            for (name, value) in &data.columns {
                 let element = if let Some(dtype) = construct.overrides.get(name) {
                     *dtype
                 } else {
@@ -865,11 +908,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if kind != DataFrameKind::Polars {
             return None;
         }
-        // Data and schema must name the same columns at runtime.
-        if let Some(data) = &data
-            && (data.len() != schema.len() || schema.iter().any(|(n, _)| !data.contains_key(n)))
-        {
-            return None;
+        // Declared schemas require the exact runtime column set.
+        if let Some(data) = &data {
+            let missing: Vec<&Name> = schema
+                .iter()
+                .map(|(n, _)| n)
+                .filter(|n| !data.columns.contains_key(*n))
+                .collect();
+            let unexpected: Vec<&Name> = data
+                .columns
+                .keys()
+                .filter(|n| !schema.iter().any(|(s, _)| s == *n))
+                .collect();
+            if !missing.is_empty() || !unexpected.is_empty() {
+                let show = |ns: &[&Name]| {
+                    ns.iter()
+                        .map(|n| format!("`{n}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let detail = [
+                    (!missing.is_empty()).then(|| format!("missing {}", show(&missing))),
+                    (!unexpected.is_empty()).then(|| format!("unexpected {}", show(&unexpected))),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(", ");
+                self.error(
+                    errors,
+                    data.range,
+                    ErrorKind::ColumnSchemaMismatch,
+                    format!("DataFrame data columns do not match the declared schema ({detail})"),
+                );
+                return None;
+            }
         }
         let columns = schema
             .iter()
@@ -879,7 +952,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if let Some(dtype) = dtype {
                     *dtype
                 } else {
-                    match data.as_ref().and_then(|m| m.get(name).copied()) {
+                    match data.and_then(|d| d.columns.get(name).copied()) {
                         Some(value) => {
                             element_from_data(name, value).unwrap_or(PolarsDType::Unknown)
                         }
@@ -902,6 +975,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match (positional, keyword) {
             (Some(_), Some(_)) => None,
             (e, None) | (None, e) => Some(e),
+        }
+    }
+
+    /// The dict literal a `schema=` reduces to, tagged with its form: a bare dict literal or an inline
+    /// call to `polars.schema.Schema`. A bound value, non-dict, or list form is not a static column set.
+    fn schema_literal_dict<'b>(&self, expr: &'b Expr) -> Option<(SchemaForm, &'b ExprDict)> {
+        match expr {
+            Expr::Dict(dict) => Some((SchemaForm::Dict, dict)),
+            Expr::Call(call) => {
+                let [Expr::Dict(dict)] = &call.arguments.args[..] else {
+                    return None;
+                };
+                if !call.arguments.keywords.is_empty() {
+                    return None;
+                }
+                match self.expr_infer(&call.func, &self.error_swallower()) {
+                    Type::ClassDef(cls) if cls.has_toplevel_qname("polars.schema", "Schema") => {
+                        Some((SchemaForm::SchemaClass, dict))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 
@@ -929,8 +1025,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Reduce a DataFrame constructor call to a `PolarsConstruct`, or `None` to fall back to plain
-    /// construction. `data` and `schema` each come from their positional slot or keyword, not both.
+    /// A DataFrame constructor call reduced to the pieces column inference needs, or `None` to fall
+    /// back to plain construction. `data` and `schema` each come from their positional slot or keyword,
+    /// not both.
     pub fn polars_construct_options<'b>(
         &self,
         arguments: &'b Arguments,
@@ -979,14 +1076,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let data = match data_expr {
             None | Some(Expr::NoneLiteral(_)) => None,
             Some(Expr::Dict(dict)) if dict.items.is_empty() => None,
-            Some(Expr::Dict(dict)) => Some(PolarsData::Dict(dict)),
-            Some(Expr::List(list)) => Some(PolarsData::Records(list)),
+            Some(Expr::Dict(dict)) => Some(PolarsData::Dict(PolarsDictData {
+                columns: dataframe_data_map(dict)?,
+                range: dict.range(),
+            })),
+            Some(Expr::List(list)) => Some(PolarsData::Records(dataframe_records_map(list)?)),
             Some(_) => return None,
         };
         let schema = match schema_expr {
             None | Some(Expr::NoneLiteral(_)) => None,
-            Some(Expr::Dict(dict)) => Some(schema_dict_entries(dict)?),
-            Some(_) => return None,
+            Some(expr) => {
+                let (form, dict) = self.schema_literal_dict(expr)?;
+                Some(schema_dict_entries(form, dict)?)
+            }
         };
         Some(PolarsConstruct {
             data,

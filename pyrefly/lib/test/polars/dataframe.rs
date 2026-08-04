@@ -139,6 +139,14 @@ from polars.expr.expr import Expr
 def len() -> Expr: ...
 "#,
     );
+    env.add_with_path(
+        "polars.schema",
+        "polars/schema.pyi",
+        r#"
+class Schema:
+    def __init__(self, schema: object = None) -> None: ...
+"#,
+    );
     env.add(
         "polars",
         r#"
@@ -149,6 +157,7 @@ from polars.functions.col import col as col
 from polars.functions.lit import lit as lit
 from polars.functions.len import len as len
 from polars.expr.expr import Expr as Expr
+from polars.schema import Schema as Schema
 class Int8: ...
 class Int16: ...
 class Int32: ...
@@ -161,6 +170,13 @@ class Float32: ...
 class Float64: ...
 class String: ...
 class Boolean: ...
+"#,
+    );
+    env.add(
+        "mymod",
+        r#"
+class Schema:
+    def __init__(self, schema: object = None) -> None: ...
 "#,
     );
     env
@@ -178,6 +194,7 @@ df = pl.DataFrame({"a": [1], "b": ["x"]})
 df_kw = pl.DataFrame(data={"a": [1], "b": ["x"]})
 df_schema = pl.DataFrame(schema={"a": pl.Int64, "b": pl.String})
 df_records = pl.DataFrame([{"a": 1}, {"b": 2}])
+my_schema = pl.Schema({"a": pl.Int64})
 s = pl.Series("a", [1])
 "#,
     );
@@ -1148,32 +1165,170 @@ reveal_type(frame.sort(*columns))  # E: revealed type: DataFrame[a: Int64, b: In
 );
 
 testcase!(
-    test_fallback_schema_name_mismatch,
+    test_schema_rename_mismatch_errors,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"x": [1, 2]}, schema={"a": pl.Int64}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"x": [1, 2]}, schema={"a": pl.Int64}))  # E: revealed type: DataFrame # E: do not match the declared schema (missing `a`, unexpected `x`)
 "#,
 );
 
 testcase!(
-    test_fallback_schema_subset_of_data,
+    test_schema_data_superset_errors,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1], "b": [2]}, schema={"a": pl.Int64}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"a": [1], "b": [2]}, schema={"a": pl.Int64}))  # E: revealed type: DataFrame # E: do not match the declared schema (unexpected `b`)
 "#,
 );
 
 testcase!(
-    test_fallback_schema_superset_of_data,
+    test_schema_data_subset_errors,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int64, "b": pl.String}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int64, "b": pl.String}))  # E: revealed type: DataFrame # E: do not match the declared schema (missing `b`)
+"#,
+);
+
+testcase!(
+    test_schema_class_inline_matching_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1], "b": ["x"]}, schema=pl.Schema({"a": pl.Int64, "b": pl.String})))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_schema_class_inline_no_data,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(schema=pl.Schema({"a": pl.Int64, "b": pl.String})))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_schema_class_imported_alias,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from polars import Schema as RenamedSchema
+from typing import reveal_type
+reveal_type(pl.DataFrame(schema=RenamedSchema({"a": pl.Int64})))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_unrelated_schema_attribute_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import mymod
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame(schema=mymod.Schema({"a": pl.Int64})))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_schema_class_inline_mismatch_errors,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"x": [1]}, schema=pl.Schema({"a": pl.Int64})))  # E: revealed type: DataFrame # E: do not match the declared schema (missing `a`, unexpected `x`)
+"#,
+);
+
+testcase!(
+    test_schema_class_matches_dict_literal,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, schema=pl.Schema({"a": pl.Int8})))  # E: revealed type: DataFrame[a: Int8]
+reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int8}))  # E: revealed type: DataFrame[a: Int8]
+"#,
+);
+
+testcase!(
+    test_schema_class_output_follows_schema_order,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"b": [1], "a": [2]}, schema=pl.Schema({"a": pl.Int64, "b": pl.Int64})))  # E: revealed type: DataFrame[a: Int64, b: Int64]
+"#,
+);
+
+testcase!(
+    test_schema_class_none_value_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# pl.Schema forbids a None value and always raises at runtime, unlike a bare dict which defers to
+# data inference, so we fall back rather than infer a concrete frame from broken code.
+reveal_type(pl.DataFrame(schema=pl.Schema({"a": None})))  # E: revealed type: DataFrame # !E: DataFrame[
+"#,
+);
+
+testcase!(
+    test_schema_class_none_value_with_data_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, schema=pl.Schema({"a": None})))  # E: revealed type: DataFrame # !E: DataFrame[
+"#,
+);
+
+testcase!(
+    test_schema_class_mixed_none_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1], "b": [2]}, schema=pl.Schema({"a": pl.Int64, "b": None})))  # E: revealed type: DataFrame # !E: DataFrame[
+"#,
+);
+
+testcase!(
+    test_schema_dtype_coercion_not_validated,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+# Whether the data coerces to the pinned dtype is value-dependent, so no error is emitted here.
+reveal_type(pl.DataFrame({"a": [1.5]}, schema={"a": pl.Int64}))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_schema_bound_name_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+MySchema = pl.Schema({"a": pl.Int64})
+reveal_type(pl.DataFrame({"a": [1]}, schema=MySchema))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_schema_class_cross_file_falls_back,
+    env_cross_file(),
+    r#"
+import polars as pl
+from defs import my_schema
+from typing import reveal_type
+reveal_type(pl.DataFrame({"a": [1]}, schema=my_schema))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -3096,6 +3251,7 @@ from typing import reveal_type
 # Records combined with an explicit `schema=` are not yet modeled, so we fall back rather than
 # apply the dict-path exact-match rules that records do not obey.
 reveal_type(pl.DataFrame([{"a": 1}], schema={"a": pl.Int64}))  # E: revealed type: DataFrame
+reveal_type(pl.DataFrame([{"x": 1}], schema={"a": pl.Int64}))  # E: revealed type: DataFrame
 "#,
 );
 

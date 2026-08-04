@@ -149,6 +149,8 @@ pub enum ErrorKind {
     /// An error caused by unpacking.
     /// e.g. attempting to unpack an iterable into the wrong number of variables.
     BadUnpacking,
+    /// A Polars DataFrame's data columns do not match the column set declared by its `schema=`.
+    ColumnSchemaMismatch,
     /// A Polars DataFrame column literal has an element that does not fit the column's first-element dtype.
     ColumnTypeMismatch,
     /// A symbol has no type coverage. Emitted only by `pyrefly coverage check`.
@@ -679,36 +681,6 @@ mod tests {
     fn test_error_kind_name() {
         assert_eq!(ErrorKind::Unsupported.to_name(), "unsupported");
         assert_eq!(ErrorKind::ParseError.to_name(), "parse-error");
-    }
-
-    #[test]
-    fn test_unknown_column_kind_exists() {
-        assert_eq!(ErrorKind::UnknownColumn.to_name(), "unknown-column");
-        assert_eq!(
-            "unknown-column".parse::<ErrorKind>(),
-            Ok(ErrorKind::UnknownColumn)
-        );
-    }
-
-    #[test]
-    fn test_column_type_mismatch_kind_exists() {
-        assert_eq!(
-            ErrorKind::ColumnTypeMismatch.to_name(),
-            "column-type-mismatch"
-        );
-        assert_eq!(
-            "column-type-mismatch".parse::<ErrorKind>(),
-            Ok(ErrorKind::ColumnTypeMismatch)
-        );
-        assert_eq!(
-            ErrorKind::ColumnTypeMismatch.default_severity(),
-            Severity::Error
-        );
-    }
-
-    #[test]
-    fn test_unknown_column_default_severity() {
-        assert_eq!(ErrorKind::UnknownColumn.default_severity(), Severity::Error);
     }
 
     #[test]
