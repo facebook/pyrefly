@@ -163,3 +163,10 @@ assuming a fixed layout. Extra lines in the header shift every reported line num
 - Keep `bug = "..."` on one line, with no blank lines in the header.
 - `rustfmt` re-splits a `bug = ` line past 100 cols, so keep the message short
   enough to fit; put longer detail in a comment above the macro.
+
+### Prefer `assert_type` over `reveal_type`
+
+`assert_type` checks for type equivalence, whereas `reveal_type` expectations
+do a more fragile text-based match. Prefer to use `assert_type` when possible.
+It's acceptable to use `reveal_type` in cases in which the expected type cannot
+be expressed in a type annotation - for example, a complex function signature.
