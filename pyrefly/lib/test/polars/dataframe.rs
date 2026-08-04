@@ -5209,3 +5209,44 @@ def f(df: pl.DataFrame[MySchema]) -> None:
     df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
+
+testcase!(
+    test_schema_flows_through_return_annotation,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+class MySchema:
+    price: pl.Float64
+    asset: pl.String
+def load() -> pl.DataFrame[MySchema]: ...
+reveal_type(load())  # E: revealed type: DataFrame[price: Float64, asset: String]
+load()["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_schema_flows_through_parameter_annotation,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+class MySchema:
+    price: pl.Float64
+def use(df: pl.DataFrame[MySchema]) -> None:
+    reveal_type(df["price"])  # E: revealed type: Series
+    df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_plain_annotation_erases_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+def take(df: pl.DataFrame) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame
+take(pl.DataFrame({"a": [1]}))
+"#,
+);
