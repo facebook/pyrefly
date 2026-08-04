@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Special handling for Polars `DataFrame` construction.
+//! Schema-aware handling for Polars and pandas `DataFrame` values.
 //!
-//! Polars' stubs type a `DataFrame` as one opaque blob, so we synthesize a
-//! `Type::DataFrame` carrying an inferred column schema when a DataFrame is built
-//! from a dict literal. This is the entry point for column-aware checking.
+//! Their stubs type a `DataFrame` as one opaque blob, so construction synthesizes a
+//! `Type::DataFrame` carrying an inferred column schema. Modeled operations then
+//! preserve or refine that schema for column-aware checking.
 
 use std::sync::Arc;
 
@@ -80,6 +80,20 @@ fn column_transform_schema<'b>(
     (func.attr.id.as_str() == method && args.keywords.is_empty()).then_some(&**schema)
 }
 
+/// Copy a DataFrame schema while replacing only its ordered columns.
+fn dataframe_type_with_columns(
+    schema: &DataFrameSchema,
+    columns: Vec<(Name, PolarsDType)>,
+) -> Type {
+    DataFrameSchema {
+        underlying: schema.underlying.clone(),
+        columns,
+        completeness: schema.completeness.clone(),
+        kind: schema.kind.clone(),
+    }
+    .to_type()
+}
+
 pub fn is_pandas_dataframe(cls: &Class) -> bool {
     cls.has_toplevel_qname("pandas.core.frame", "DataFrame")
 }
@@ -99,8 +113,8 @@ pub enum PolarsMutationKind {
     Add,
     /// Overwrites a column at an index we cannot map to a name.
     Replace,
-    /// May insert a statically-known column name at a known index. The callee is resolved before the
-    /// column set stays exhaustive.
+    /// May insert a statically-known column name at a known index. The column set stays exhaustive
+    /// only after the callee resolves to `pl.Series`.
     Insert(Name, usize, Box<Expr>),
 }
 
@@ -226,13 +240,13 @@ fn is_polars_dataframe_type(ty: &Type) -> bool {
 fn polars_dtype_from_scalar_type(ty: &Type) -> Option<PolarsDType> {
     // Integers past i64 have a data-shape-dependent runtime dtype, so do not claim Int64.
     if let Type::Literal(lit) = ty {
-        return Some(match &lit.value {
-            Lit::Int(i) => return i.as_i64().map(|_| PolarsDType::Int64),
-            Lit::Bool(_) => PolarsDType::Boolean,
-            Lit::Str(_) => PolarsDType::String,
-            Lit::Bytes(_) => PolarsDType::Binary,
-            Lit::Enum(_) => return None,
-        });
+        return match &lit.value {
+            Lit::Int(i) => i.as_i64().map(|_| PolarsDType::Int64),
+            Lit::Bool(_) => Some(PolarsDType::Boolean),
+            Lit::Str(_) => Some(PolarsDType::String),
+            Lit::Bytes(_) => Some(PolarsDType::Binary),
+            Lit::Enum(_) => None,
+        };
     }
     let Type::ClassType(cls) = ty else {
         return None;
@@ -252,7 +266,13 @@ fn polars_dtype_from_scalar_type(ty: &Type) -> Option<PolarsDType> {
     })
 }
 
-/// Map a resolved Polars dtype class or instance to its modeled dtype, or `None` otherwise.
+/// Whether a resolved type is a string (a `Literal[str]`, `LiteralString`, or `str`).
+fn is_string_type(ty: &Type) -> bool {
+    ty.is_literal_string() || polars_dtype_from_scalar_type(ty) == Some(PolarsDType::String)
+}
+
+/// Map a resolved type to the Polars dtype it names, e.g. the `pl.Float64` class to `Float64`.
+/// Only the modeled scalar dtypes from the `polars` package are recognized; anything else is `None`.
 fn polars_dtype_from_type(ty: &Type) -> Option<PolarsDType> {
     let cls = match ty {
         Type::ClassDef(cls) => cls,
@@ -287,7 +307,8 @@ fn polars_dtype_from_type(ty: &Type) -> Option<PolarsDType> {
     })
 }
 
-/// Recognize module-level `polars.concat` through callable wrappers.
+/// Whether a callee is the module-level `polars.concat`, seen through any `Forall`/`Overload`
+/// wrapper via `callee_kind`.
 pub fn is_polars_concat(callee: &Type) -> bool {
     matches!(
         callee.callee_kind(),
@@ -475,8 +496,8 @@ fn series_method_schema<'b>(
     };
     (func.attr.id.as_str() == method
         && schema.kind == DataFrameKind::Polars
-        && schema.completeness == SchemaCompleteness::Complete)
-        .then_some(&**schema)
+        && schema.is_complete())
+    .then_some(&**schema)
 }
 
 /// The sole column-name argument of a `get_column` call, positional or `name=`, or `None` to fall
@@ -512,7 +533,7 @@ fn resolve_column(
     match schema.columns.iter().find(|(c, _)| c == name) {
         Some((_, ty)) => Some(*ty),
         None => {
-            if schema.completeness == SchemaCompleteness::Complete {
+            if schema.is_complete() {
                 errors
                     .error_builder(
                         range,
@@ -705,8 +726,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return ColumnArg::Named(Name::new(value));
         }
         // Any other string type is a name or selector we cannot pin to a single column.
-        if ty.is_literal_string() || polars_dtype_from_scalar_type(&ty) == Some(PolarsDType::String)
-        {
+        if is_string_type(&ty) {
             return ColumnArg::Opaque;
         }
         ColumnArg::Expr
@@ -714,17 +734,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// A statically known column name. Selector-shaped strings remain literal in name-only contexts.
     pub fn polars_column_name(&self, expr: &Expr) -> Option<Name> {
-        let ty = self.expr_infer(expr, &self.error_swallower());
-        if let Type::Literal(lit) = &ty
-            && let Lit::Str(value) = &lit.value
-        {
-            return Some(Name::new(value.as_str()));
-        }
-        None
+        self.polars_string_literal(expr).map(Name::new)
     }
 
     /// The boolean an expression resolves to, from its inferred `Literal[bool]`, or `None` for any
-    /// wider type.
+    /// wider type. This lets a `Final`/`Literal[bool]` keyword option such as `strict=` behave like a
+    /// bare `True`/`False`.
     fn polars_bool_literal(&self, expr: &Expr) -> Option<bool> {
         // Swallow errors here, since a fallback call path re-infers the argument as the sole reporter.
         let ty = self.expr_infer(expr, &self.error_swallower());
@@ -790,7 +805,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn is_string_typed(&self, expr: &Expr) -> bool {
         // Swallow errors here, since a fallback call path re-infers the argument.
         let ty = self.expr_infer(expr, &self.error_swallower());
-        ty.is_literal_string() || polars_dtype_from_scalar_type(&ty) == Some(PolarsDType::String)
+        is_string_type(&ty)
     }
 
     /// Reduce a `pl.Series(...)` call to a `SeriesConstruct`, or `None` to fall back to the opaque
@@ -968,7 +983,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Infer a column schema for a DataFrame constructor call, or `None` to fall back to plain
-    /// construction. Purely syntactic; never infers the element expressions.
+    /// construction.
     ///
     /// With `schema=` the column set is authoritative and ordered: each column takes its
     /// `schema_overrides` dtype, else its schema dtype, else defers to data inference. Data must name
@@ -1516,35 +1531,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let columns = names
             .into_iter()
-            .filter_map(
-                |(name, range)| match schema.columns.iter().find(|(c, _)| *c == name) {
-                    Some((_, ty)) => Some((name, *ty)),
-                    None => {
-                        // Only a Complete schema can prove a column absent, since a Partial one may
-                        // hold it untracked.
-                        if schema.is_complete() {
-                            errors
-                                .error_builder(
-                                    range,
-                                    ErrorKind::UnknownColumn,
-                                    format!("Column `{name}` is not in the DataFrame schema"),
-                                )
-                                .emit();
-                        }
-                        None
-                    }
-                },
-            )
+            .filter_map(|(name, range)| {
+                resolve_column(schema, &name, range, errors).map(|ty| (name, ty))
+            })
             .collect();
-        Some(
-            DataFrameSchema {
-                underlying: schema.underlying.clone(),
-                columns,
-                completeness: schema.completeness.clone(),
-                kind: schema.kind.clone(),
-            }
-            .to_type(),
-        )
+        Some(dataframe_type_with_columns(schema, columns))
     }
 
     /// Model `df.select(...)` as a new schema from the positional arguments in order, unpacking list
@@ -1613,15 +1604,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 columns.push((name, dtype));
             }
         }
-        Some(
-            DataFrameSchema {
-                underlying: schema.underlying.clone(),
-                columns,
-                completeness: schema.completeness.clone(),
-                kind: schema.kind.clone(),
-            }
-            .to_type(),
-        )
+        Some(dataframe_type_with_columns(schema, columns))
     }
 
     /// Model `df.drop("a", "b")` as a new schema with the named columns removed, order preserved,
@@ -1660,15 +1643,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.expr_infer(arg, errors);
         }
         for (name, range) in &dropped {
-            if !schema.has_column(name) && schema.is_complete() {
-                errors
-                    .error_builder(
-                        *range,
-                        ErrorKind::UnknownColumn,
-                        format!("Column `{name}` is not in the DataFrame schema"),
-                    )
-                    .emit();
-            }
+            let _ = resolve_column(schema, name, *range, errors);
         }
         let columns = schema
             .columns
@@ -1676,20 +1651,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .filter(|(c, _)| !seen.contains(c))
             .cloned()
             .collect();
-        Some(
-            DataFrameSchema {
-                underlying: schema.underlying.clone(),
-                columns,
-                completeness: schema.completeness.clone(),
-                kind: schema.kind.clone(),
-            }
-            .to_type(),
-        )
+        Some(dataframe_type_with_columns(schema, columns))
     }
 
     /// Model `df.rename({"a": "b"})` as a new schema whose renamed columns keep their type and order.
-    /// Falls back with `None` unless the sole argument is a dict literal of string-literal pairs, or if
-    /// the rename would collide two columns. An unknown source name errors only after a schema is committed.
+    /// Falls back with `None` unless the sole argument is a dict literal whose keys and values resolve
+    /// to column names, or if the rename would collide two columns. An unknown source name errors only
+    /// after a schema is committed.
     pub fn polars_rename(
         &self,
         base: &Type,
@@ -1739,30 +1707,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.expr_infer(value, errors);
         }
         for (source, (_, range)) in &renames {
-            if !schema.has_column(source) && schema.is_complete() {
-                errors
-                    .error_builder(
-                        *range,
-                        ErrorKind::UnknownColumn,
-                        format!("Column `{source}` is not in the DataFrame schema"),
-                    )
-                    .emit();
-            }
+            let _ = resolve_column(schema, source, *range, errors);
         }
         let columns = schema
             .columns
             .iter()
             .map(|(name, ty)| (target(name), *ty))
             .collect();
-        Some(
-            DataFrameSchema {
-                underlying: schema.underlying.clone(),
-                columns,
-                completeness: schema.completeness.clone(),
-                kind: schema.kind.clone(),
-            }
-            .to_type(),
-        )
+        Some(dataframe_type_with_columns(schema, columns))
     }
 
     /// Resolve a Polars expression to an `ExprValue` against the receiver schema, or `None` to leave
@@ -1999,15 +1951,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => columns.push((name, dtype)),
             }
         }
-        Some(
-            DataFrameSchema {
-                underlying: schema.underlying.clone(),
-                columns,
-                completeness: schema.completeness.clone(),
-                kind: schema.kind.clone(),
-            }
-            .to_type(),
-        )
+        Some(dataframe_type_with_columns(schema, columns))
     }
 
     /// A bound `GroupBy` does not expose its receiver schema, so only an inline chain is modeled.
@@ -2088,15 +2032,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some((name, dtype))
             })
             .collect::<Option<Vec<_>>>()?;
-        Some(
-            DataFrameSchema {
-                underlying: schema.underlying.clone(),
-                columns,
-                completeness: schema.completeness.clone(),
-                kind: schema.kind.clone(),
-            }
-            .to_type(),
-        )
+        Some(dataframe_type_with_columns(&schema, columns))
     }
 
     fn polars_group_output_name(&self, expr: &Expr) -> Option<Name> {
@@ -2318,15 +2254,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     casts.insert(name, (key.range(), self.polars_dtype_from_expr(value)?));
                 }
                 for (name, (range, _)) in &casts {
-                    if !schema.has_column(name) && schema.is_complete() {
-                        errors
-                            .error_builder(
-                                *range,
-                                ErrorKind::UnknownColumn,
-                                format!("Column `{name}` is not in the DataFrame schema"),
-                            )
-                            .emit();
-                    }
+                    let _ = resolve_column(schema, name, *range, errors);
                 }
                 schema
                     .columns
@@ -2343,15 +2271,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect()
             }
         };
-        Some(
-            DataFrameSchema {
-                underlying: schema.underlying.clone(),
-                columns,
-                completeness: schema.completeness.clone(),
-                kind: schema.kind.clone(),
-            }
-            .to_type(),
-        )
+        Some(dataframe_type_with_columns(schema, columns))
     }
 
     /// The key names and ranges from a single name or a list/tuple literal of names.
@@ -2481,15 +2401,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(on) = on {
             self.expr_infer(on, errors);
         }
-        Some(
-            DataFrameSchema {
-                underlying: schema.underlying.clone(),
-                columns,
-                completeness: schema.completeness.clone(),
-                kind: schema.kind.clone(),
-            }
-            .to_type(),
-        )
+        Some(dataframe_type_with_columns(schema, columns))
     }
 
     /// Model `df.hstack(other)` as the receiver columns followed by `other`'s (dtypes copy from each
@@ -2527,15 +2439,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Now committed to a schema, so infer `other` with real errors as the sole reporter of any
         // error inside it, since returning here bypasses ordinary call-checking.
         self.expr_infer(other_expr, errors);
-        Some(
-            DataFrameSchema {
-                underlying: schema.underlying.clone(),
-                columns,
-                completeness: schema.completeness.clone(),
-                kind: schema.kind.clone(),
-            }
-            .to_type(),
-        )
+        Some(dataframe_type_with_columns(schema, columns))
     }
 
     /// Model an in-place column mutation as the receiver schema degraded for that mutation. The frame
@@ -2575,9 +2479,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Model `df.get_column("a")` as `Series[dtype]` of the named column. Only a single string-literal
-    /// name with no `default=` is modeled, and anything else falls back. A column absent from the
-    /// Complete schema is reported and keeps the opaque `Series`.
+    /// Model `df.get_column("a")` as `Series[dtype]` of the named column. Only a single argument that
+    /// resolves to a column name, with no `default=`, is modeled; anything else falls back. A column
+    /// absent from the Complete schema is reported and keeps the opaque `Series`.
     pub fn polars_get_column(
         &self,
         base: &Type,
