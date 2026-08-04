@@ -2686,6 +2686,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
                 base = self.heap.mk_type_of(self.heap.mk_special_form(SpecialForm::Tuple));
             }
+            // Unwrap `Type::Type(box Intersect(...))` produced by
+            // `issubclass` narrowing (e.g. `type[T]` narrowed by
+            // `issubclass(T, enum.Enum)` becomes `type[Enum & T]`).
+            let base_ty = base.clone();
+            if let Type::Type(inner) = base_ty {
+                match *inner {
+                    Type::Intersect(x) => base = Type::Intersect(x),
+                    _ => {}
+                }
+            }
             if let Type::Intersect(x) = base {
                 // TODO: Handle subscription of intersections properly.
                 base = x.1;
