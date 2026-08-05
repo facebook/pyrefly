@@ -3228,9 +3228,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::DataFrame(schema) => {
                     if let Expr::List(ExprList { elts, .. }) = slice
                         && schema.kind == DataFrameKind::Polars
-                        && let Some(narrowed) = self.polars_select_columns(&schema, elts, errors)
                     {
-                        return narrowed;
+                        if elts.is_empty() {
+                            return Type::DataFrame(schema);
+                        }
+                        if let Some(narrowed) =
+                            self.polars_select_columns(&schema, elts, errors)
+                        {
+                            return narrowed;
+                        }
                     }
                     let mut column_dtype = None;
                     if schema.is_complete()

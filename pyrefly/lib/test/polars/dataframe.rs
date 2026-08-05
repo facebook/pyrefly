@@ -2104,13 +2104,15 @@ reveal_type(df[["a", "a"]])  # E: revealed type: DataFrame
 );
 
 testcase!(
-    test_select_empty_list_narrows_to_empty,
+    test_select_empty_list_preserves_schema,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df[[]])  # E: revealed type: DataFrame[]
+result = df[[]]
+reveal_type(result)  # E: revealed type: DataFrame[a: Int64]
+reveal_type(result["a"])  # E: revealed type: Series[Int64]
 "#,
 );
 
