@@ -23,7 +23,7 @@ ruff_notebook = "0.0.6"
 ruff_python_ast = "0.0.6"
 ruff_python_parser = "0.0.6"
 ruff_text_size = "0.0.6"
-serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 starlark_map = "0.14.2"
 static_interner = { version = "0.1.3", features = ["dupe"] }
 thin-vec = "0.2.18"

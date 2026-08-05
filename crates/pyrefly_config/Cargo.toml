@@ -23,7 +23,7 @@ pyrefly_python = { path = "../pyrefly_python" }
 pyrefly_util = { path = "../pyrefly_util" }
 regex = "1.13.1"
 regex-syntax = "0.7.5"
-serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_jsonrc = "0.1"
 serde_with = { version = "3.20.0", features = ["hex", "json", "macros"], default-features = false }
