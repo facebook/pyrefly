@@ -239,6 +239,18 @@ impl<'a, R: lsp_types::request::Request> ServerRequestHandle<'a, R> {
     pub fn send_response(self, result: Value) {
         self.client.send_response::<R>(self.id, result)
     }
+
+    pub fn send_response_error(self, code: i32, message: &str) {
+        self.client.send_message(Message::Response(Response {
+            id: self.id,
+            result: None,
+            error: Some(ResponseError {
+                code,
+                message: message.to_owned(),
+                data: None,
+            }),
+        }));
+    }
 }
 
 impl<'a> ServerRequestHandle<'a, WorkspaceConfiguration> {

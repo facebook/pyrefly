@@ -14,12 +14,14 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 
+use lsp_server::ErrorCode;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeWorkspaceFolders;
 use lsp_types::request::WorkspaceConfiguration;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use pyrefly_util::fs_anyhow::write;
+use serde_json::Value;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -508,6 +510,78 @@ fn test_disable_language_services_default_workspace() {
         .expect("Failed to receive expected response");
 
     interaction.shutdown().expect("Failed to shutdown");
+}
+
+enum HeldDefinition {
+    Target,
+    Suppressed,
+}
+
+/// Manual handshake: `initialize` answers the configuration request, which these tests must defer.
+fn assert_definition_held_until_configuration(
+    configuration_response: Result<Value, &str>,
+    expected: HeldDefinition,
+) {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+
+    let client = &interaction.client;
+    client.send_initialize(client.get_initialize_params(&InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+        // Advertises the `workspace/configuration` capability, without which nothing is held.
+        configuration: Some(None),
+        ..Default::default()
+    }));
+    client.expect_any_message().expect("Failed to initialize");
+    client.send_initialized();
+    let configuration_request = client
+        .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request");
+
+    client.did_open("foo.py");
+    let definition = client.definition("foo.py", 6, 16);
+    match configuration_response {
+        Ok(settings) => configuration_request.send_configuration_response(settings),
+        Err(message) => {
+            configuration_request.send_response_error(ErrorCode::InternalError as i32, message)
+        }
+    }
+
+    let expected = match expected {
+        HeldDefinition::Target => json!({
+            "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
+            "range": {
+                "start": {"line": 6, "character": 6},
+                "end": {"line": 6, "character": 9}
+            }
+        }),
+        HeldDefinition::Suppressed => json!(null),
+    };
+    definition
+        .expect_response(expected)
+        .expect("Held request must resolve from the client's settings, not the defaults");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+#[test]
+fn test_request_before_initial_configuration_honors_disable_language_services() {
+    assert_definition_held_until_configuration(
+        Ok(json!([{"pyrefly": {"disableLanguageServices": true}}])),
+        HeldDefinition::Suppressed,
+    );
+}
+
+/// Reachable: the VS Code middleware forwards a `ResponseError` from the underlying handler.
+#[test]
+fn test_failed_initial_configuration_still_responds_to_held_requests() {
+    assert_definition_held_until_configuration(
+        Err("configuration handler failed"),
+        HeldDefinition::Target,
+    );
 }
 
 #[test]
