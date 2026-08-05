@@ -18,7 +18,7 @@ use crate::types::Type;
 
 /// Whether `columns` is exhaustive.
 #[derive(
-    Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
+    Debug, PartialOrd, Ord, Clone, Copy, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
 )]
 pub enum SchemaCompleteness {
     Complete,
@@ -26,7 +26,7 @@ pub enum SchemaCompleteness {
 }
 
 #[derive(
-    Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
+    Debug, PartialOrd, Ord, Clone, Copy, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
 )]
 pub enum DataFrameKind {
     Polars,
