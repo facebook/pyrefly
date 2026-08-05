@@ -1142,9 +1142,9 @@ impl Query {
                     (Some(String::from("property")), ty)
                 }
                 Type::ClassType(c)
-                    if c.name() == "classproperty" || c.name() == "cached_classproperty" =>
+                    if (c.name() == "classproperty" || c.name() == "cached_classproperty")
+                        && let Some(result_ty) = c.targs().as_slice().first() =>
                 {
-                    let result_ty = c.targs().as_slice().first().unwrap();
                     (Some(String::from("property")), result_ty)
                 }
                 _ => (None, ty),
