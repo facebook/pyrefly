@@ -250,11 +250,16 @@ fn polars_dtype_from_type(ty: &Type) -> Option<PolarsDType> {
 enum PolarsFunction {
     Col,
     Concat,
+    Csv(PolarsCsvFunction),
     Len,
     Lit,
-    ReadCsv,
-    ScanCsv,
     Unmodeled,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PolarsCsvFunction {
+    Read,
+    Scan,
 }
 
 #[derive(Clone, Copy)]
@@ -316,8 +321,8 @@ impl PolarsFunction {
             ("concat", "polars.functions.eager") => Self::Concat,
             ("len", "polars.functions.len") => Self::Len,
             ("lit", "polars.functions.lit") => Self::Lit,
-            ("read_csv", "polars.io.csv.functions") => Self::ReadCsv,
-            ("scan_csv", "polars.io.csv.functions") => Self::ScanCsv,
+            ("read_csv", "polars.io.csv.functions") => Self::Csv(PolarsCsvFunction::Read),
+            ("scan_csv", "polars.io.csv.functions") => Self::Csv(PolarsCsvFunction::Scan),
             _ => Self::Unmodeled,
         }
     }
@@ -341,14 +346,45 @@ enum CsvColumnSelection {
     Indices(SmallSet<usize>),
 }
 
-struct PolarsCsvOptions<'b> {
-    schema: &'b Expr,
-    overrides: Option<&'b Expr>,
-    selection: Option<&'b Expr>,
-    new_columns: Option<&'b Expr>,
-    row_index_name: Option<&'b Expr>,
-    with_column_names: Option<&'b Expr>,
-    include_file_paths: Option<&'b Expr>,
+enum CsvDtypeOverrides {
+    Unchanged,
+    Sequence(Vec<PolarsDType>),
+}
+
+impl CsvDtypeOverrides {
+    /// A complete schema changes only for positional dtype overrides.
+    fn parse(
+        expr: Option<&Expr>,
+        parse_dtype: impl FnMut(&Expr) -> Option<PolarsDType>,
+    ) -> Option<Self> {
+        Some(match expr {
+            None | Some(Expr::NoneLiteral(_) | Expr::Dict(_)) => Self::Unchanged,
+            Some(expr) => Self::Sequence(
+                literal_sequence(expr)?
+                    .iter()
+                    .map(parse_dtype)
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+        })
+    }
+}
+
+struct PolarsCsvCommonOptions {
+    schema: Vec<(Name, PolarsDType)>,
+    overrides: CsvDtypeOverrides,
+    new_columns: Vec<Name>,
+    row_index_name: Option<Name>,
+}
+
+enum PolarsCsvOptions {
+    Read {
+        common: PolarsCsvCommonOptions,
+        selection: CsvColumnSelection,
+    },
+    Scan {
+        common: PolarsCsvCommonOptions,
+        include_file_paths: Option<Name>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -898,7 +934,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         match PolarsFunction::from_callee(callee) {
-            Some(function @ (PolarsFunction::ReadCsv | PolarsFunction::ScanCsv)) => {
+            Some(PolarsFunction::Csv(function)) => {
                 return self
                     .infer_polars_csv_schema(arguments, function)
                     .map(|columns| PolarsCallSpecialization::DataFrame {
@@ -1011,11 +1047,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    fn polars_csv_names(&self, expr: &Expr) -> Option<Vec<Name>> {
+    /// Parse optional new column names and treat absence as an empty rename set.
+    fn polars_csv_names(&self, expr: Option<&Expr>) -> Option<Vec<Name>> {
+        let Some(expr) = Self::non_none_csv_option(expr) else {
+            return Some(Vec::new());
+        };
         literal_sequence(expr)?
             .iter()
             .map(|expr| self.polars_column_name(expr))
             .collect()
+    }
+
+    /// Distinguish an absent name from a name that cannot be resolved.
+    fn polars_optional_csv_name(&self, expr: Option<&Expr>) -> Option<Option<Name>> {
+        let expr = Self::non_none_csv_option(expr);
+        let name = expr.and_then(|expr| self.polars_column_name(expr));
+        (expr.is_none() || name.is_some()).then_some(name)
     }
 
     /// Parse static projections; an empty sequence selects every column.
@@ -1051,91 +1098,83 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect()
     }
 
-    /// Add the UInt32 row-index column when requested.
-    fn apply_polars_csv_row_index(
-        &self,
-        columns: &mut Vec<(Name, PolarsDType)>,
-        row_index_name: Option<&Expr>,
-    ) -> Option<()> {
-        let row_index_name = match row_index_name {
-            Some(row_index_name) if !matches!(row_index_name, Expr::NoneLiteral(_)) => {
-                row_index_name
-            }
-            _ => return Some(()),
-        };
-        let name = self.polars_column_name(row_index_name)?;
-        if columns.iter().any(|(column, _)| *column == name) {
-            return None;
+    /// An omitted option and explicit `None` both represent semantic absence.
+    fn non_none_csv_option(expr: Option<&Expr>) -> Option<&Expr> {
+        match expr {
+            None | Some(Expr::NoneLiteral(_)) => None,
+            Some(expr) => Some(expr),
         }
-        columns.insert(0, (name, PolarsDType::UInt32));
-        Some(())
     }
 
-    fn apply_polars_csv_sequence_overrides(
-        &self,
-        columns: &mut [(Name, PolarsDType)],
-        overrides: Option<&Expr>,
-    ) -> Option<()> {
-        let Some(overrides) = overrides else {
-            return Some(());
+    /// The requested row index is prepended with the UInt32 dtype.
+    fn apply_polars_csv_row_index(
+        columns: &mut Vec<(Name, PolarsDType)>,
+        row_index_name: Option<Name>,
+    ) -> bool {
+        let Some(name) = row_index_name else {
+            return true;
         };
-        if matches!(overrides, Expr::NoneLiteral(_) | Expr::Dict(_)) {
-            return Some(());
+        if columns.iter().any(|(column, _)| *column == name) {
+            return false;
         }
-        let dtypes = literal_sequence(overrides)?
-            .iter()
-            .map(|expr| self.polars_dtype_from_expr(expr))
-            .collect::<Option<Vec<_>>>()?;
+        columns.insert(0, (name, PolarsDType::UInt32));
+        true
+    }
+
+    /// Positional dtypes replace leading column dtypes unless the sequence is too large.
+    fn apply_polars_csv_sequence_overrides(
+        columns: &mut [(Name, PolarsDType)],
+        overrides: CsvDtypeOverrides,
+    ) -> bool {
+        let CsvDtypeOverrides::Sequence(dtypes) = overrides else {
+            return true;
+        };
         if dtypes.len() > columns.len() {
-            return None;
+            return false;
         }
         for ((_, dtype), override_dtype) in columns.iter_mut().zip(dtypes) {
             *dtype = override_dtype;
         }
-        Some(())
+        true
     }
 
+    /// New names replace leading columns unless they exceed the width or create duplicates.
     fn apply_polars_csv_new_columns(
-        &self,
         columns: &mut [(Name, PolarsDType)],
-        new_columns: Option<&Expr>,
-    ) -> Option<()> {
-        let Some(new_columns) = new_columns else {
-            return Some(());
-        };
-        if matches!(new_columns, Expr::NoneLiteral(_)) {
-            return Some(());
+        new_columns: Vec<Name>,
+    ) -> bool {
+        if new_columns.len() > columns.len() {
+            return false;
         }
-        let names = self.polars_csv_names(new_columns)?;
-        if names.len() > columns.len() {
-            return None;
-        }
-        for ((name, _), replacement) in columns.iter_mut().zip(names) {
+        for ((name, _), replacement) in columns.iter_mut().zip(new_columns) {
             *name = replacement;
         }
         let mut seen = SmallSet::new();
-        if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
-            return None;
-        }
-        Some(())
+        !columns.iter().any(|(name, _)| !seen.insert(name.clone()))
     }
 
     fn infer_polars_csv_schema(
         &self,
         arguments: &Arguments,
-        function: PolarsFunction,
+        function: PolarsCsvFunction,
     ) -> Option<Vec<(Name, PolarsDType)>> {
-        let options = Self::polars_csv_options(arguments)?;
-        let columns = self.polars_csv_schema(options.schema)?;
-        match function {
-            PolarsFunction::ReadCsv => self.infer_read_csv_schema(columns, &options),
-            PolarsFunction::ScanCsv => self.infer_scan_csv_schema(columns, &options),
-            _ => unreachable!("CSV schema inference only receives CSV readers"),
+        match self.polars_csv_options(arguments, function)? {
+            PolarsCsvOptions::Read { common, selection } => {
+                self.infer_read_csv_schema(common, selection)
+            }
+            PolarsCsvOptions::Scan {
+                common,
+                include_file_paths,
+            } => self.infer_scan_csv_schema(common, include_file_paths),
         }
     }
 
-    /// Extract CSV arguments that can affect a declared schema.
-    fn polars_csv_options<'b>(arguments: &'b Arguments) -> Option<PolarsCsvOptions<'b>> {
+    /// This parser converts CSV arguments into their schema transformations.
+    fn polars_csv_options(
+        &self,
+        arguments: &Arguments,
+        function: PolarsCsvFunction,
+    ) -> Option<PolarsCsvOptions> {
         let mut source_keyword = false;
         let mut schema = None;
         let mut overrides = None;
@@ -1174,36 +1213,60 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             [_] if !source_keyword => {}
             _ => return None,
         }
-        Some(PolarsCsvOptions {
-            schema: schema?,
+
+        let schema = self.polars_csv_schema(schema?)?;
+        let overrides =
+            CsvDtypeOverrides::parse(overrides, |expr| self.polars_dtype_from_expr(expr))?;
+        let new_columns = self.polars_csv_names(new_columns)?;
+        let row_index_name = self.polars_optional_csv_name(row_index_name)?;
+        let common = PolarsCsvCommonOptions {
+            schema,
             overrides,
-            selection,
             new_columns,
             row_index_name,
-            with_column_names,
-            include_file_paths,
+        };
+
+        Some(match function {
+            PolarsCsvFunction::Read => {
+                let selection = match Self::non_none_csv_option(selection) {
+                    None => CsvColumnSelection::All,
+                    Some(expr) => self.polars_csv_selection(expr, common.schema.len())?,
+                };
+                PolarsCsvOptions::Read { common, selection }
+            }
+            PolarsCsvFunction::Scan => {
+                if Self::non_none_csv_option(with_column_names).is_some() {
+                    return None;
+                }
+                let include_file_paths = self.polars_optional_csv_name(include_file_paths)?;
+                PolarsCsvOptions::Scan {
+                    common,
+                    include_file_paths,
+                }
+            }
         })
     }
 
-    /// Apply eager projection and renaming in source order, with positional overrides.
+    /// Eager CSV inference applies overrides before projection and inserts the row index before renaming.
     fn infer_read_csv_schema(
         &self,
-        mut columns: Vec<(Name, PolarsDType)>,
-        options: &PolarsCsvOptions,
+        common: PolarsCsvCommonOptions,
+        selection: CsvColumnSelection,
     ) -> Option<Vec<(Name, PolarsDType)>> {
-        let selection = match options.selection {
-            Some(selection) if !matches!(selection, Expr::NoneLiteral(_)) => {
-                self.polars_csv_selection(selection, columns.len())?
-            }
-            _ => CsvColumnSelection::All,
-        };
-        if let Some(overrides) = options.overrides
-            && !matches!(overrides, Expr::NoneLiteral(_) | Expr::Dict(_))
+        let PolarsCsvCommonOptions {
+            schema: mut columns,
+            overrides,
+            new_columns,
+            row_index_name,
+        } = common;
+        if matches!(&overrides, CsvDtypeOverrides::Sequence(_))
             && !matches!(selection, CsvColumnSelection::All)
         {
             return None;
         }
-        self.apply_polars_csv_sequence_overrides(&mut columns, options.overrides)?;
+        if !Self::apply_polars_csv_sequence_overrides(&mut columns, overrides) {
+            return None;
+        }
         if !matches!(selection, CsvColumnSelection::All) {
             if let CsvColumnSelection::Names(names) = &selection
                 && !names
@@ -1223,30 +1286,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .map(|(_, column)| column)
                 .collect();
         }
-        self.apply_polars_csv_row_index(&mut columns, options.row_index_name)?;
-        self.apply_polars_csv_new_columns(&mut columns, options.new_columns)?;
-        Some(columns)
-    }
-
-    /// Apply lazy row-index and file-path additions.
-    fn infer_scan_csv_schema(
-        &self,
-        mut columns: Vec<(Name, PolarsDType)>,
-        options: &PolarsCsvOptions,
-    ) -> Option<Vec<(Name, PolarsDType)>> {
-        if options
-            .with_column_names
-            .is_some_and(|expr| !matches!(expr, Expr::NoneLiteral(_)))
+        if !Self::apply_polars_csv_row_index(&mut columns, row_index_name)
+            || !Self::apply_polars_csv_new_columns(&mut columns, new_columns)
         {
             return None;
         }
-        self.apply_polars_csv_sequence_overrides(&mut columns, options.overrides)?;
-        self.apply_polars_csv_row_index(&mut columns, options.row_index_name)?;
-        self.apply_polars_csv_new_columns(&mut columns, options.new_columns)?;
-        if let Some(include_file_paths) = options.include_file_paths
-            && !matches!(include_file_paths, Expr::NoneLiteral(_))
+        Some(columns)
+    }
+
+    /// Lazy CSV inference applies overrides before inserting the row index.
+    /// It renames columns before adding the file path.
+    fn infer_scan_csv_schema(
+        &self,
+        common: PolarsCsvCommonOptions,
+        include_file_paths: Option<Name>,
+    ) -> Option<Vec<(Name, PolarsDType)>> {
+        let PolarsCsvCommonOptions {
+            schema: mut columns,
+            overrides,
+            new_columns,
+            row_index_name,
+        } = common;
+        if !Self::apply_polars_csv_sequence_overrides(&mut columns, overrides)
+            || !Self::apply_polars_csv_row_index(&mut columns, row_index_name)
+            || !Self::apply_polars_csv_new_columns(&mut columns, new_columns)
         {
-            let name = self.polars_column_name(include_file_paths)?;
+            return None;
+        }
+        if let Some(name) = include_file_paths {
             if columns.iter().any(|(column, _)| *column == name) {
                 return None;
             }
@@ -2185,10 +2252,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         };
                         literal_value(value)
                     }
-                    PolarsFunction::Concat
-                    | PolarsFunction::ReadCsv
-                    | PolarsFunction::ScanCsv
-                    | PolarsFunction::Unmodeled => None,
+                    PolarsFunction::Concat | PolarsFunction::Csv(_) | PolarsFunction::Unmodeled => {
+                        None
+                    }
                 }
             }
             Expr::BinOp(binop) => {
@@ -2299,10 +2365,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // `pl.lit(series)` takes the runtime Series name.
                         literal_value(value).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
                     }
-                    PolarsFunction::Concat
-                    | PolarsFunction::ReadCsv
-                    | PolarsFunction::ScanCsv
-                    | PolarsFunction::Unmodeled => None,
+                    PolarsFunction::Concat | PolarsFunction::Csv(_) | PolarsFunction::Unmodeled => {
+                        None
+                    }
                 }
             }
             Expr::BinOp(binop) => {

@@ -475,6 +475,18 @@ reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}, row_
 );
 
 testcase!(
+    test_csv_none_options_are_absent,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64}, schema_overrides=None, columns=None, new_columns=None, row_index_name=None))  # E: revealed type: DataFrame[a: Int64]
+reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64}, schema_overrides=None, new_columns=None, row_index_name=None, with_column_names=None, include_file_paths=None))  # E: revealed type: LazyFrame[a: Int64]
+"#,
+);
+
+testcase!(
     test_csv_dynamic_schema_inputs_fall_back,
     env_with_polars_stubs(),
     r#"
