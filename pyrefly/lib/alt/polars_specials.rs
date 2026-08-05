@@ -562,6 +562,42 @@ impl<'b> ArgumentValue<'b> {
     }
 }
 
+/// Extract the last named form or its positional form and reject conflicts.
+fn extract_argument<'b>(
+    arguments: &'b Arguments,
+    position: usize,
+    name: &str,
+) -> Option<ArgumentValue<'b>> {
+    let positional = arguments.args.get(position);
+    let keyword = arguments
+        .keywords
+        .iter()
+        .rev()
+        .find(|kw| kw.arg.as_ref().is_some_and(|arg| arg.id.as_str() == name))
+        .map(|kw| &kw.value);
+    match (positional, keyword) {
+        (Some(_), Some(_)) => None,
+        (Some(expr), None) | (None, Some(expr)) => Some(ArgumentValue::Present(expr)),
+        (None, None) => Some(ArgumentValue::Missing),
+    }
+}
+
+/// Check positional arity and optionally restrict keyword names.
+fn arguments_are_valid(
+    arguments: &Arguments,
+    max_positional: usize,
+    allowed_keywords: Option<&[&str]>,
+) -> bool {
+    arguments.args.len() <= max_positional
+        && allowed_keywords.is_none_or(|allowed| {
+            arguments.keywords.iter().all(|kw| {
+                kw.arg
+                    .as_ref()
+                    .is_some_and(|arg| allowed.contains(&arg.id.as_str()))
+            })
+        })
+}
+
 impl ExprValue {
     fn dtype(self) -> PolarsDType {
         match self {
@@ -621,22 +657,10 @@ fn series_method_schema(base: &Type) -> Option<&DataFrameSchema> {
 }
 
 fn get_column_name_arg(args: &Arguments) -> Option<&Expr> {
-    let mut name_keyword = None;
-    for kw in &args.keywords {
-        match kw.arg.as_ref()?.id.as_str() {
-            "name" => name_keyword = Some(&kw.value),
-            _ => return None,
-        }
+    if !arguments_are_valid(args, 1, Some(&["name"])) {
+        return None;
     }
-    let name_positional = match &args.args[..] {
-        [] => None,
-        [name] => Some(name),
-        _ => return None,
-    };
-    match (name_positional, name_keyword) {
-        (Some(_), Some(_)) => None,
-        (e, None) | (None, e) => e,
-    }
+    extract_argument(args, 0, "name")?.into_option()
 }
 
 fn resolve_column(
@@ -1208,10 +1232,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return None;
             }
         }
-        match &arguments.args[..] {
-            [] if source_keyword => {}
-            [_] if !source_keyword => {}
-            _ => return None,
+        if !arguments_are_valid(arguments, 1, None)
+            || !matches!(
+                extract_argument(arguments, 0, "source")?,
+                ArgumentValue::Present(_)
+            )
+        {
+            return None;
         }
 
         let schema = self.polars_csv_schema(schema?)?;
@@ -1355,31 +1382,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn polars_series_options<'b>(&self, arguments: &'b Arguments) -> Option<SeriesConstruct<'b>> {
-        let mut values_keyword: Option<&Expr> = None;
-        let mut dtype_keyword: Option<&Expr> = None;
         let mut strict = true;
         for kw in &arguments.keywords {
             let Some(arg) = &kw.arg else {
                 return None;
             };
             match arg.id.as_str() {
-                "name" | "nan_to_null" => {}
-                "values" => values_keyword = Some(&kw.value),
-                "dtype" => dtype_keyword = Some(&kw.value),
+                "name" | "values" | "dtype" | "nan_to_null" => {}
                 "strict" => strict = self.polars_bool_literal(&kw.value)?,
                 _ => return None,
             }
         }
-        let (values_positional, dtype_positional) = match &arguments.args[..] {
-            [] => (None, None),
-            [first] if self.is_string_typed(first) => (None, None),
-            [values] => (Some(values), None),
-            [first, values] if self.is_string_typed(first) => (Some(values), None),
-            [first, values, dtype] if self.is_string_typed(first) => (Some(values), Some(dtype)),
+        let values_position = match &arguments.args[..] {
+            [first] | [first, _] | [first, _, _] if self.is_string_typed(first) => 1,
+            [] | [_] => 0,
             _ => return None,
         };
-        let values = Self::positional_or_keyword(values_positional, values_keyword)?.into_option();
-        let dtype = match Self::positional_or_keyword(dtype_positional, dtype_keyword)? {
+        let values = extract_argument(arguments, values_position, "values")?.into_option();
+        let dtype = match extract_argument(arguments, values_position + 1, "dtype")? {
             ArgumentValue::Present(expr) => Some(self.polars_dtype_from_expr(expr)?),
             ArgumentValue::Missing => None,
         };
@@ -1683,17 +1703,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some((columns, completeness))
     }
 
-    fn positional_or_keyword<'b>(
-        positional: Option<&'b Expr>,
-        keyword: Option<&'b Expr>,
-    ) -> Option<ArgumentValue<'b>> {
-        match (positional, keyword) {
-            (Some(_), Some(_)) => None,
-            (Some(expr), None) | (None, Some(expr)) => Some(ArgumentValue::Present(expr)),
-            (None, None) => Some(ArgumentValue::Missing),
-        }
-    }
-
     /// Recognize a dict literal or an inline call resolving to `polars.Schema`.
     fn schema_literal_dict<'b>(&self, expr: &'b Expr) -> Option<(SchemaForm, &'b ExprDict)> {
         match expr {
@@ -1743,16 +1752,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<PolarsConstruct<'b>> {
         let mut overrides = SmallMap::new();
         let mut strict = true;
-        let mut data_keyword: Option<&Expr> = None;
-        let mut schema_keyword: Option<&Expr> = None;
         let mut columns = None;
         for kw in &arguments.keywords {
             let Some(arg) = &kw.arg else {
                 return None;
             };
             match arg.id.as_str() {
-                "data" => data_keyword = Some(&kw.value),
-                "schema" => schema_keyword = Some(&kw.value),
+                "data" | "schema" => {}
                 "columns" => {
                     let Expr::List(list) = &kw.value else {
                         return None;
@@ -1785,15 +1791,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => return None,
             }
         }
-        let (data_positional, schema_positional) = match &arguments.args[..] {
-            [] => (None, None),
-            [data] => (Some(data), None),
-            [data, schema] => (Some(data), Some(schema)),
-            _ => return None,
-        };
-        let data_expr = Self::positional_or_keyword(data_positional, data_keyword)?.into_option();
-        let schema_expr =
-            Self::positional_or_keyword(schema_positional, schema_keyword)?.into_option();
+        if !arguments_are_valid(arguments, 2, None) {
+            return None;
+        }
+        let data_expr = extract_argument(arguments, 0, "data")?.into_option();
+        let schema_expr = extract_argument(arguments, 1, "schema")?.into_option();
         let data = match data_expr {
             None | Some(Expr::NoneLiteral(_)) => None,
             Some(Expr::Dict(dict)) if dict.items.is_empty() => None,
@@ -3037,19 +3039,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn to_series_index(&self, args: &Arguments) -> Option<i128> {
-        let mut index_keyword = None;
-        for kw in &args.keywords {
-            match kw.arg.as_ref()?.id.as_str() {
-                "index" => index_keyword = Some(&kw.value),
-                _ => return None,
-            }
+        if !arguments_are_valid(args, 1, Some(&["index"])) {
+            return None;
         }
-        let index_positional = match &args.args[..] {
-            [] => None,
-            [index] => Some(index),
-            _ => return None,
-        };
-        match Self::positional_or_keyword(index_positional, index_keyword)? {
+        match extract_argument(args, 0, "index")? {
             ArgumentValue::Missing => Some(0),
             ArgumentValue::Present(expr) => self.polars_int_literal(expr).map(i128::from),
         }
