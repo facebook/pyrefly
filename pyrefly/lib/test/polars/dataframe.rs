@@ -51,7 +51,7 @@ class DataFrame:
     def with_columns(self, *exprs: object, **named_exprs: object) -> "DataFrame": ...
     def filter(self, *predicates: object, **constraints: object) -> "DataFrame": ...
     def sort(self, by: object, *more: object, descending: bool = False) -> "DataFrame": ...
-    def fill_null(self, value: object = None) -> "DataFrame": ...
+    def fill_null(self, value: object = None, strategy: str | None = None, limit: int | None = None, *, matches_supertype: bool = True) -> "DataFrame": ...
     def slice(self, offset: int, length: int | None = None) -> "DataFrame": ...
     def unique(self, subset: object = None, *, keep: str = "any", maintain_order: bool = False) -> "DataFrame": ...
     def drop_nulls(self, subset: object = None) -> "DataFrame": ...
@@ -3131,6 +3131,62 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 reveal_type(df.fill_null(0))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_fill_null_float_widens_integer_columns,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+
+df = pl.DataFrame(
+    {"i": [1], "u": [1], "f32": [1.0], "f64": [1.0], "s": ["x"]},
+    schema={"i": pl.Int64, "u": pl.UInt8, "f32": pl.Float32, "f64": pl.Float64, "s": pl.String},
+)
+value: float = 0.0
+reveal_type(df.fill_null(value))  # E: revealed type: DataFrame[i: Float64, u: Float64, f32: Float32, f64: Float64, s: String]
+reveal_type(df.fill_null(value, matches_supertype=False))  # E: revealed type: DataFrame[i: Int64, u: UInt8, f32: Float32, f64: Float64, s: String]
+"#,
+);
+
+testcase!(
+    test_fill_null_dynamic_options_preserve_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import TypedDict, reveal_type
+
+class FillNullOptions(TypedDict, total=False):
+    matches_supertype: bool
+
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+value: float = 0.0
+flag: bool = True
+options: FillNullOptions = {"matches_supertype": flag}
+reveal_type(df.fill_null(value, matches_supertype=flag))  # E: revealed type: DataFrame[a: Int64, b: String]
+reveal_type(df.fill_null(value, **options))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_fill_null_infers_unmodeled_arguments,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+
+df = pl.DataFrame({"a": [1]})
+result = df.fill_null(0.0, matches_supertype=missing_flag)  # E: Could not find name `missing_flag`
+reveal_type(result)  # E: revealed type: DataFrame[a: Int64]
+multiple = df.fill_null(missing_positional, 0.0)  # E: Could not find name `missing_positional`
+reveal_type(multiple)  # E: revealed type: DataFrame[a: Int64]
+duplicate = df.fill_null(0.0, value=0.0)
+reveal_type(duplicate)  # E: revealed type: DataFrame[a: Int64]
+unknown = df.fill_null(0.0, unknown=missing_keyword)  # E: Could not find name `missing_keyword`
+reveal_type(unknown)  # E: revealed type: DataFrame[a: Int64]
+df.fill_null(0.0, **missing_kwargs)  # E: Could not find name `missing_kwargs`
 "#,
 );
 

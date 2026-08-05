@@ -680,6 +680,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ty) = self.polars_with_columns(base, func, args, errors) {
             return Some(ty);
         }
+        if let Some(ty) = self.polars_fill_null(base, func, args, errors) {
+            return Some(ty);
+        }
         if let Some(ty) = self.polars_row_transform(base, func, args, errors) {
             return Some(ty);
         }
@@ -2160,8 +2163,93 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Model the deterministic dtype widening performed by `DataFrame.fill_null`.
+    fn polars_fill_null(
+        &self,
+        base: &Type,
+        func: &ExprAttribute,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if func.attr.id.as_str() != "fill_null" || schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        let mut can_widen = args.args.len() <= 1;
+        let mut value_type = None;
+        for arg in &args.args {
+            let ty = match arg {
+                Expr::Starred(starred) => {
+                    can_widen = false;
+                    self.expr_infer(&starred.value, errors)
+                }
+                _ => self.expr_infer(arg, errors),
+            };
+            if args.args.len() == 1 && !matches!(arg, Expr::Starred(_)) {
+                value_type = Some(ty);
+            }
+        }
+        let mut matches_supertype = true;
+        let mut seen_matches_supertype = false;
+        for kw in &args.keywords {
+            let ty = self.expr_infer(&kw.value, errors);
+            let Some(arg) = &kw.arg else {
+                can_widen = false;
+                continue;
+            };
+            match arg.id.as_str() {
+                "value" => {
+                    if value_type.is_some() {
+                        can_widen = false;
+                    } else {
+                        value_type = Some(ty);
+                    }
+                }
+                "strategy" | "limit" => {}
+                "matches_supertype" => {
+                    if seen_matches_supertype {
+                        can_widen = false;
+                    }
+                    seen_matches_supertype = true;
+                    match &ty {
+                        Type::Literal(lit) => match &lit.value {
+                            Lit::Bool(value) => matches_supertype = *value,
+                            _ => can_widen = false,
+                        },
+                        _ => can_widen = false,
+                    }
+                }
+                _ => can_widen = false,
+            }
+        }
+        if !can_widen
+            || !matches_supertype
+            || value_type.as_ref().and_then(polars_dtype_from_scalar_type)
+                != Some(PolarsDType::Float64)
+        {
+            return Some(base.clone());
+        }
+        let columns = schema
+            .columns
+            .iter()
+            .map(|(name, dtype)| {
+                (
+                    name.clone(),
+                    if dtype.is_integer() {
+                        PolarsDType::Float64
+                    } else {
+                        *dtype
+                    },
+                )
+            })
+            .collect();
+        Some(dataframe_type_with_columns(schema, columns))
+    }
+
     /// Model row-only transforms as returning the receiver's schema unchanged; they drop, reorder,
-    /// deduplicate, window, or replace rows without touching the column set. `None` if no schema.
+    /// deduplicate, or window rows without touching the column set. `None` if no schema.
     pub fn polars_row_transform(
         &self,
         base: &Type,
@@ -2174,7 +2262,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         if !matches!(
             func.attr.id.as_str(),
-            "filter" | "sort" | "fill_null" | "head" | "slice" | "unique" | "drop_nulls"
+            "filter" | "sort" | "head" | "slice" | "unique" | "drop_nulls"
         ) {
             return None;
         }
