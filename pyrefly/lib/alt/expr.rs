@@ -2794,6 +2794,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .members
                 .iter()
                 .all(|variant| self.is_enum_class_type(variant)),
+            Type::Intersect(f) => f.0.iter().any(|conjunct| self.is_enum_class_type(conjunct)),
             _ => false,
         }
     }
