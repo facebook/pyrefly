@@ -564,6 +564,21 @@ fn float_lit_with_dtype(d: PolarsDType) -> Option<ExprValue> {
     }
 }
 
+fn pow(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
+    if !a.is_numeric() || !b.is_numeric() {
+        return None;
+    }
+    let left = a.dtype();
+    let right = b.dtype();
+    Some(ExprValue::Dtype(if left.is_float() {
+        left
+    } else if right.is_float() {
+        right
+    } else {
+        left
+    }))
+}
+
 fn combine_binop(op: Operator, a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     use ExprValue::*;
     match op {
@@ -587,12 +602,10 @@ fn combine_binop(op: Operator, a: ExprValue, b: ExprValue) -> Option<ExprValue> 
                 None
             }
         }
-        Operator::Add
-        | Operator::Sub
-        | Operator::Mult
-        | Operator::FloorDiv
-        | Operator::Mod
-        | Operator::Pow => arith(a, b),
+        Operator::Add | Operator::Sub | Operator::Mult | Operator::FloorDiv | Operator::Mod => {
+            arith(a, b)
+        }
+        Operator::Pow => pow(a, b),
         Operator::LShift | Operator::RShift | Operator::MatMult => None,
     }
 }
@@ -2775,6 +2788,99 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .to_type()
             }
             (_, result) => result,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pow_dtype(left: PolarsDType, right: PolarsDType) -> Option<PolarsDType> {
+        pow(ExprValue::Dtype(left), ExprValue::Dtype(right)).map(ExprValue::dtype)
+    }
+
+    #[test]
+    fn test_pow_dtype_matrix_matches_polars_runtime() {
+        use PolarsDType::*;
+
+        let dtypes = [
+            Int8, Int16, Int32, Int64, Int128, UInt8, UInt16, UInt32, UInt64, UInt128, Float32,
+            Float64,
+        ];
+        let expected = [
+            [
+                Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Float32, Float64,
+            ],
+            [
+                Int16, Int16, Int16, Int16, Int16, Int16, Int16, Int16, Int16, Int16, Float32,
+                Float64,
+            ],
+            [
+                Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Float32,
+                Float64,
+            ],
+            [
+                Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, Float32,
+                Float64,
+            ],
+            [
+                Int128, Int128, Int128, Int128, Int128, Int128, Int128, Int128, Int128, Int128,
+                Float32, Float64,
+            ],
+            [
+                UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, Float32,
+                Float64,
+            ],
+            [
+                UInt16, UInt16, UInt16, UInt16, UInt16, UInt16, UInt16, UInt16, UInt16, UInt16,
+                Float32, Float64,
+            ],
+            [
+                UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32,
+                Float32, Float64,
+            ],
+            [
+                UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64,
+                Float32, Float64,
+            ],
+            [
+                UInt128, UInt128, UInt128, UInt128, UInt128, UInt128, UInt128, UInt128, UInt128,
+                UInt128, Float32, Float64,
+            ],
+            [
+                Float32, Float32, Float32, Float32, Float32, Float32, Float32, Float32, Float32,
+                Float32, Float32, Float32,
+            ],
+            [
+                Float64, Float64, Float64, Float64, Float64, Float64, Float64, Float64, Float64,
+                Float64, Float64, Float64,
+            ],
+        ];
+
+        for (left, expected_row) in dtypes.into_iter().zip(expected) {
+            for (right, expected_dtype) in dtypes.into_iter().zip(expected_row) {
+                assert_eq!(
+                    pow_dtype(left, right),
+                    Some(expected_dtype),
+                    "{} ** {}",
+                    left.name(),
+                    right.name(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_pow_rejects_every_nonnumeric_dtype() {
+        use PolarsDType::*;
+
+        let nonnumeric = [
+            Boolean, String, Binary, Date, Datetime, Duration, Time, Null, Unknown,
+        ];
+        for dtype in nonnumeric {
+            assert_eq!(pow_dtype(dtype, Int8), None);
+            assert_eq!(pow_dtype(Int8, dtype), None);
         }
     }
 }

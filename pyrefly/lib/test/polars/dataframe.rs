@@ -116,6 +116,7 @@ class Expr:
     def __floordiv__(self, other: Any) -> "Expr": ...
     def __mod__(self, other: Any) -> "Expr": ...
     def __pow__(self, other: Any) -> "Expr": ...
+    def __rpow__(self, other: Any) -> "Expr": ...
     def __and__(self, other: Any) -> "Expr": ...
     def __or__(self, other: Any) -> "Expr": ...
     def __xor__(self, other: Any) -> "Expr": ...
@@ -2410,6 +2411,43 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 reveal_type(df.select(1 + pl.col("a")))  # E: revealed type: DataFrame[literal: Int64]
+"#,
+);
+
+testcase!(
+    test_select_expr_power_uses_runtime_dtype_rules,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame(schema={"i8": pl.Int8, "u8": pl.UInt8, "i64": pl.Int64, "f32": pl.Float32, "f64": pl.Float64})
+result = df.select(
+    (pl.col("i8") ** pl.col("u8")).alias("ints"),
+    (pl.col("f32") ** pl.col("f64")).alias("floats"),
+    (pl.lit(2) ** pl.col("i64")).alias("literal"),
+    (pl.col("i64") ** pl.col("f32")).alias("float_exponent"),
+)
+reveal_type(result)  # E: revealed type: DataFrame[ints: Int8, floats: Float32, literal: Int32, float_exponent: Float32]
+"#,
+);
+
+testcase!(
+    test_select_expr_power_evaluates_transformed_operands,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame(schema={"i8": pl.Int8, "u8": pl.UInt8, "i64": pl.Int64, "f32": pl.Float32, "f64": pl.Float64})
+result = df.select(
+    (pl.col("i64").cast(pl.Float32) ** pl.col("i8")).alias("cast_base"),
+    (pl.col("i8") ** (pl.col("u8") + 1)).alias("nested_exponent"),
+    (pl.col("i8").sum() ** pl.col("f64")).alias("reduced_base"),
+    (pl.col("i8").alias("base") ** pl.lit(2)).alias("aliased_base"),
+    (pl.col("i8") ** 2).alias("scalar_exponent"),
+    (pl.col("i8") ** 0.5).alias("float_scalar_exponent"),
+    (2 ** pl.col("i64")).alias("scalar_base"),
+)
+reveal_type(result)  # E: revealed type: DataFrame[cast_base: Float32, nested_exponent: Int8, reduced_base: Float64, aliased_base: Int8, scalar_exponent: Int8, float_scalar_exponent: Float64, scalar_base: Int32]
 "#,
 );
 
