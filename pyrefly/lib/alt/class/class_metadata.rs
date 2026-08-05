@@ -243,8 +243,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // gradual types (e.g. Any) to avoid cascading errors from bare TypeVars.
         // We do a targeted substitution inside each targ so that e.g. Meta[list[T]]
         // becomes Meta[list[Any]] rather than Meta[Any].
-        if let Some(metaclass) = calculated_metaclass.get_mut() {
-            for targ in metaclass.targs_mut().as_mut().iter_mut() {
+        if let Some(metaclass) = &mut calculated_metaclass {
+            for targ in metaclass.get_mut().targs_mut().as_mut().iter_mut() {
                 if targ.contains_type_variable() {
                     targ.transform_mut(&mut |ty| match ty {
                         Type::Quantified(q) => *ty = q.as_gradual_type(),
@@ -268,7 +268,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
-        let metaclass = calculated_metaclass.get();
+        let metaclass = calculated_metaclass.as_ref().map(|m| m.get());
         // Compute base classes with metadata.
         let bases_with_metadata = self.bases_with_metadata(parsed_results, is_new_type, errors);
         self.check_init_subclass_keywords(cls, &bases_with_metadata, metaclass, keywords, errors);
@@ -1850,7 +1850,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         direct_metaclass: Option<ClassType>,
         base_metaclasses: &[(&Name, &ClassType)],
         errors: &ErrorCollector,
-    ) -> Metaclass {
+    ) -> Option<Metaclass> {
         // Attempt to find a metaclass that is assignable to all candidate metaclasses from the current class and base classes.
         // It is a runtime error if one does not exist.
         let mut candidate = direct_metaclass
@@ -1890,24 +1890,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 candidate = Some((Some(base_name), base_metaclass_type));
             }
         }
-        match candidate {
-            Some((candidate_name, Type::ClassType(candidate_metaclass))) => {
-                if candidate_name.is_some() {
-                    Metaclass::Inherited {
-                        metaclass: candidate_metaclass,
-                        is_explicitly_abstract: direct_metaclass.is_some_and(|direct_metaclass| {
-                            direct_metaclass
-                                .class_object()
-                                .has_toplevel_qname("abc", "ABCMeta")
-                        }),
-                    }
-                } else {
-                    Metaclass::Direct(candidate_metaclass)
-                }
-            }
-            Some(_) => unreachable!("Metaclass must be a ClassType"),
-            None => Metaclass::None,
-        }
+        candidate.map(
+            |(_, candidate_metaclass_type)| match candidate_metaclass_type {
+                Type::ClassType(metaclass) => Metaclass::new(
+                    metaclass,
+                    direct_metaclass.is_some_and(|direct_metaclass| {
+                        direct_metaclass
+                            .class_object()
+                            .has_toplevel_qname("abc", "ABCMeta")
+                    }),
+                ),
+                _ => unreachable!("Metaclass must be a ClassType"),
+            },
+        )
     }
 
     fn direct_metaclass(

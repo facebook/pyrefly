@@ -82,7 +82,7 @@ impl ExplicitSlots {
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ClassMetadata {
-    metaclass: Metaclass,
+    metaclass: Option<Metaclass>,
     keywords: Keywords,
     typed_dict_metadata: Option<TypedDictMetadata>,
     named_tuple_metadata: Option<NamedTupleMetadata>,
@@ -126,8 +126,8 @@ impl VisitMut<Type> for ClassMetadata {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
         // Class metadata is exported cross-module, so every embedded type position must
         // be traversed to allow export-time forcing/sanitization.
-        if let Some(metaclass) = self.metaclass.get_mut() {
-            metaclass.visit_mut(f);
+        if let Some(metaclass) = &mut self.metaclass {
+            metaclass.get_mut().visit_mut(f);
         }
         for (_name, ty) in &mut self.keywords.0 {
             ty.visit_mut(f);
@@ -151,8 +151,8 @@ impl VisitMut<Type> for ClassMetadata {
 
 impl VisitTrait<Type> for ClassMetadata {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
-        if let Some(metaclass) = self.metaclass.get() {
-            metaclass.visit(f);
+        if let Some(metaclass) = &self.metaclass {
+            metaclass.get().visit(f);
         }
         for (_name, ty) in &self.keywords.0 {
             ty.visit(f);
@@ -176,14 +176,18 @@ impl VisitTrait<Type> for ClassMetadata {
 
 impl Display for ClassMetadata {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "ClassMetadata(metaclass={})", self.metaclass)
+        let metaclass = self
+            .metaclass
+            .as_ref()
+            .map_or("type".to_owned(), |m| format!("{m}"));
+        write!(f, "ClassMetadata(metaclass={metaclass})")
     }
 }
 
 impl ClassMetadata {
     pub fn new(
         bases: Vec<Class>,
-        metaclass: Metaclass,
+        metaclass: Option<Metaclass>,
         keywords: Vec<(Name, Type)>,
         typed_dict_metadata: Option<TypedDictMetadata>,
         named_tuple_metadata: Option<NamedTupleMetadata>,
@@ -243,7 +247,7 @@ impl ClassMetadata {
 
     pub fn recursive() -> Self {
         ClassMetadata {
-            metaclass: Metaclass::default(),
+            metaclass: None,
             keywords: Keywords::default(),
             typed_dict_metadata: None,
             named_tuple_metadata: None,
@@ -275,7 +279,7 @@ impl ClassMetadata {
 
     /// The class's custom (non-`type`) metaclass, if it has one.
     pub fn custom_metaclass(&self) -> Option<&ClassType> {
-        self.metaclass.get()
+        self.metaclass.as_ref().map(|m| m.get())
     }
 
     /// The class's metaclass.
@@ -337,16 +341,9 @@ impl ClassMetadata {
                 return true;
             }
         }
-        match &self.metaclass {
-            Metaclass::Direct(metaclass) => metaclass
-                .class_object()
-                .has_toplevel_qname("abc", "ABCMeta"),
-            Metaclass::Inherited {
-                is_explicitly_abstract,
-                ..
-            } => *is_explicitly_abstract,
-            Metaclass::None => false,
-        }
+        self.metaclass
+            .as_ref()
+            .is_some_and(|metaclass| metaclass.is_explicitly_abstract)
     }
 
     pub fn deprecation(&self) -> Option<&Deprecation> {
@@ -536,49 +533,37 @@ impl Display for ClassSynthesizedFields {
     }
 }
 
-/// A struct representing a class's metaclass. A value of `None` indicates
-/// no explicit metaclass, in which case the default metaclass is `type`.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
-pub enum Metaclass {
-    Direct(ClassType),
-    Inherited {
-        /// The actual metaclass, which is inherited from a parent.
-        metaclass: ClassType,
-        /// Whether the class has a `metaclass=...` declaration that marks the class as explicitly
-        /// abstract. Note that in this case the declared metaclass did *not* end up being the
-        /// class's resolved metaclass, but we still use it to determine intended abstract-ness.
-        is_explicitly_abstract: bool,
-    },
-    #[default]
-    None,
+/// A struct representing a class's metaclass.
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub struct Metaclass {
+    // The class's metaclass.
+    metaclass: ClassType,
+    /// Whether the class has a `metaclass=...` declaration that marks the class as explicitly
+    /// abstract. Note that regardless of whether the declared metaclass ends up being the
+    /// class's resolved metaclass, we use the declaration to determine intended abstract-ness.
+    is_explicitly_abstract: bool,
 }
 
 impl Display for Metaclass {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match &self {
-            Self::Direct(metaclass) => write!(f, "{metaclass}"),
-            Self::Inherited { metaclass, .. } => write!(f, "inherited({metaclass})"),
-            Self::None => write!(f, "type"),
-        }
+        write!(f, "{}", self.metaclass)
     }
 }
 
 impl Metaclass {
-    /// Convenience function to get the metaclass as a ClassType, regardless of its origin
-    pub fn get(&self) -> Option<&ClassType> {
-        match self {
-            Self::Direct(metaclass) => Some(metaclass),
-            Self::Inherited { metaclass, .. } => Some(metaclass),
-            Self::None => None,
+    pub fn new(metaclass: ClassType, is_explicitly_abstract: bool) -> Self {
+        Self {
+            metaclass,
+            is_explicitly_abstract,
         }
     }
 
-    pub fn get_mut(&mut self) -> Option<&mut ClassType> {
-        match self {
-            Self::Direct(metaclass) => Some(metaclass),
-            Self::Inherited { metaclass, .. } => Some(metaclass),
-            Self::None => None,
-        }
+    pub fn get(&self) -> &ClassType {
+        &self.metaclass
+    }
+
+    pub fn get_mut(&mut self) -> &mut ClassType {
+        &mut self.metaclass
     }
 }
 
