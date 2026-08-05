@@ -264,6 +264,118 @@ class DataFrame:
 }
 
 testcase!(
+    test_missing_polars_only_reports_import,
+    TestEnv::new(),
+    r#"
+import polars as pl  # E: Cannot find module `polars`
+
+df = pl.DataFrame({"a": [1]})
+df.select("missing")
+df.drop("missing")
+df.with_columns(b=pl.col("missing"))
+df.get_column("missing")
+"#,
+);
+
+testcase!(
+    test_missing_polars_constructors_stay_unknown,
+    TestEnv::new(),
+    r#"
+import polars as pl  # E: Cannot find module `polars`
+from typing import reveal_type
+
+reveal_type(pl.DataFrame(data={"a": [1]}, schema={"a": pl.Int64}, schema_overrides={"a": pl.String}))  # E: revealed type: Unknown
+reveal_type(pl.Series("a", [1], dtype=pl.Int64))  # E: revealed type: Unknown
+reveal_type(pl.concat([pl.DataFrame({"a": [1]}), pl.DataFrame({"a": [2]})], how="vertical_relaxed"))  # E: revealed type: Unknown
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64}))  # E: revealed type: Unknown
+reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64}))  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
+    test_missing_polars_chained_operations_stay_unknown,
+    TestEnv::new(),
+    r#"
+import polars as pl  # E: Cannot find module `polars`
+from typing import reveal_type
+
+result = (
+    pl.DataFrame({"group": ["a"], "value": [1]})
+    .lazy()
+    .with_columns(double=pl.col("value") * pl.lit(2))
+    .filter(pl.col("missing") > 0)
+    .group_by("not_a_column")
+    .agg(pl.col("also_missing").sum().alias("total"))
+    .collect()
+    .join(pl.DataFrame({"key": [1]}), on="unknown")
+    .select("still_missing")
+)
+reveal_type(result)  # E: revealed type: Unknown
+result["missing"]
+result.drop("missing").rename({"missing": "other"}).get_column("other")
+"#,
+);
+
+testcase!(
+    test_missing_polars_aliases_and_unpacking_stay_unknown,
+    TestEnv::new(),
+    r#"
+import polars as pl  # E: Cannot find module `polars`
+from typing import reveal_type
+
+Frame = pl.DataFrame
+column = pl.col
+args = ({"a": [1]},)
+kwargs = {"schema": {"a": pl.Int64}}
+df = Frame(*args, **kwargs)
+exprs = [column("missing").sum(), pl.lit(1).alias("one")]
+reveal_type(df.select(*exprs, named=column("other")))  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
+    test_missing_polars_annotations_stay_unknown,
+    TestEnv::new(),
+    r#"
+import polars as pl  # E: Cannot find module `polars`
+from typing import reveal_type
+
+class InputSchema:
+    a: pl.Int64
+
+def transform(df: pl.DataFrame[InputSchema]) -> pl.LazyFrame:
+    return df.lazy().select("missing")
+
+reveal_type(transform(pl.DataFrame({"a": [1]})))  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
+    test_missing_polars_mutation_and_control_flow_stay_unknown,
+    TestEnv::new(),
+    r#"
+import polars as pl  # E: Cannot find module `polars`
+from typing import reveal_type
+
+def update(flag: bool):
+    df = pl.DataFrame({"a": [1]})
+    df["new"] = pl.Series("new", [2])
+    df.insert_column(0, pl.Series("first", [0]))
+    df.replace_column(1, pl.Series("replacement", [3]))
+    if flag:
+        df = df.with_columns(pl.col("missing").alias("derived"))
+    else:
+        df = df.drop("also_missing")
+    for name in ["x", "y"]:
+        df = df.rename({name: f"{name}_renamed"})
+    return df
+
+reveal_type(update(True))  # E: revealed type: Unknown
+update(False)["never_known"]
+"#,
+);
+
+testcase!(
     test_construct_int_and_str_columns,
     env_with_polars_stubs(),
     r#"
