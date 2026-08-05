@@ -527,6 +527,11 @@ impl Errors {
                         .and_then(|m| m.get(applies_to_line))
                         .cloned()
                         .unwrap_or_default();
+                    let comment_start = module.lined_buffer().line_start(supp.comment_line())
+                        + TextSize::try_from(supp.comment_offset())
+                            .expect("Python source offsets fit in TextSize");
+                    let comment_range =
+                        TextRange::new(comment_start, comment_start + TextSize::new(1));
 
                     // For Tool::Pyre, error code filtering is not enforced
                     // (any Pyre suppression suppresses all errors on the line),
@@ -536,12 +541,9 @@ impl Errors {
                         if !used_codes.is_empty() {
                             continue; // Pyre suppression is used
                         }
-                        let comment_line = supp.comment_line();
-                        let line_start = module.lined_buffer().line_start(comment_line);
-                        let range = TextRange::new(line_start, line_start + TextSize::new(1));
                         unused_errors.push(Error::new(
                             module.dupe(),
-                            range,
+                            comment_range,
                             "Unused pyre-fixme comment".to_owned(),
                             Vec::new(),
                             ErrorKind::UnusedIgnore,
@@ -554,12 +556,9 @@ impl Errors {
                         if !used_codes.is_empty() {
                             continue; // type: ignore is used
                         }
-                        let comment_line = supp.comment_line();
-                        let line_start = module.lined_buffer().line_start(comment_line);
-                        let range = TextRange::new(line_start, line_start + TextSize::new(1));
                         unused_errors.push(Error::new(
                             module.dupe(),
-                            range,
+                            comment_range,
                             "Unused `# type: ignore` comment".to_owned(),
                             Vec::new(),
                             ErrorKind::UnusedTypeIgnore,
@@ -593,10 +592,6 @@ impl Errors {
                     };
 
                     // Create an error for the unused suppression
-                    let comment_line = supp.comment_line();
-                    let line_start = module.lined_buffer().line_start(comment_line);
-                    let range = TextRange::new(line_start, line_start + TextSize::new(1));
-
                     let msg = if declared_codes.is_empty() {
                         "Unused `# pyrefly: ignore` comment".to_owned()
                     } else if unused_codes.len() == declared_codes.len() {
@@ -613,7 +608,7 @@ impl Errors {
 
                     unused_errors.push(Error::new(
                         module.dupe(),
-                        range,
+                        comment_range,
                         msg,
                         Vec::new(),
                         ErrorKind::UnusedIgnore,
@@ -686,6 +681,7 @@ impl Errors {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -698,10 +694,12 @@ mod tests {
     use pyrefly_util::fs_anyhow;
     use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use regex::Regex;
+    use ruff_text_size::Ranged;
     use tempfile::TempDir;
 
     use crate::config::config::ConfigFile;
     use crate::config::finder::ConfigFinder;
+    use crate::error::error::ErrorRenderer;
     use crate::state::errors::Errors;
     use crate::state::load::FileContents;
     use crate::state::require::Require;
@@ -887,6 +885,19 @@ def f() -> int:
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("type: ignore"));
+    }
+
+    #[test]
+    fn test_unused_type_ignore_after_multibyte_character_renders() {
+        let contents = "あ = '' # type: ignore\n";
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert_eq!(unused[0].lined_buffer().code_at(unused[0].range()), "#");
+
+        let mut renderer = ErrorRenderer::plain(Vec::new());
+        renderer.write(&unused[0], Path::new(""), true).unwrap();
     }
 
     #[test]
