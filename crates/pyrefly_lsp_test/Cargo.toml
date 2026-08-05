@@ -17,4 +17,4 @@ lsp-types = { git = "https://github.com/yangdanny97/lsp-types", rev = "395d6bfcd
 pretty_assertions = { version = "1.4.1", features = ["alloc"], default-features = false }
 pyrefly = { path = "../../pyrefly" }
 pyrefly_util = { path = "../pyrefly_util" }
-serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
+serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }

@@ -68,7 +68,7 @@ ruff_python_parser = "0.0.6"
 ruff_source_file = "0.0.6"
 ruff_text_size = "0.0.6"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
+serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_repr = "0.1.21"
 starlark_map = "0.14.2"
 static_assertions = "1.1.0"
