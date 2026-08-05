@@ -284,7 +284,6 @@ with patch.multiple("other.missing", attribute=DEFAULT):
 
 // https://github.com/facebook/pyrefly/issues/3913
 testcase!(
-    bug = "Mock assertions do not check the target signature",
     test_assert_called_with_checks_target_signature,
     TestEnv::one("other", "def foo(x: int, *, y: str) -> None: ..."),
     r#"
@@ -292,8 +291,8 @@ from unittest.mock import patch
 
 with patch("other.foo") as mock_foo:
     mock_foo.assert_called_with(1, y="ok")
-    mock_foo.assert_called_once_with("bad", y="ok")  # BUG: This should report that x requires int, not str.
-    mock_foo.assert_any_call(1, y=2)  # BUG: This should report that y requires str, not int.
+    mock_foo.assert_called_once_with("bad", y="ok")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `other.foo`
+    mock_foo.assert_any_call(1, y=2)  # E: Argument `Literal[2]` is not assignable to parameter `y` with type `str` in function `other.foo`
 "#,
 );
 
@@ -311,7 +310,6 @@ with patch("typing.assert_type") as mock_assert_type:
 
 // https://github.com/facebook/pyrefly/issues/3913
 testcase!(
-    bug = "Mock assertions do not check the target signature",
     test_patch_start_checks_target_signature,
     TestEnv::one("other", "def foo(x: int) -> None: ..."),
     r#"
@@ -319,14 +317,13 @@ from unittest.mock import patch
 
 patcher = patch("other.foo")
 mock_foo = patcher.start()
-mock_foo.assert_called_with("bad")  # BUG: This should report that x requires int, not str.
+mock_foo.assert_called_with("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `other.foo`
 patcher.stop()
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/3913
 testcase!(
-    bug = "Mock assertions do not check the target signature",
     test_async_patch_checks_await_assertion,
     TestEnv::one("other", "async def foo(x: int) -> None: ..."),
     r#"
@@ -334,13 +331,12 @@ from unittest.mock import patch
 
 with patch("other.foo") as mock_foo:
     mock_foo.assert_awaited_with(1)
-    mock_foo.assert_awaited_once_with("bad")  # BUG: This should report that x requires int, not str.
+    mock_foo.assert_awaited_once_with("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `other.foo`
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/3913
 testcase!(
-    bug = "Mock assertions do not check the target signature",
     test_patch_bound_method_checks_bound_signature,
     TestEnv::one(
         "other",
@@ -350,7 +346,7 @@ testcase!(
 from unittest.mock import patch
 
 with patch("other.instance.method") as mock_method:
-    mock_method.assert_called_once_with("bad")  # BUG: This should report that x requires int, not str.
+    mock_method.assert_called_once_with("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `other.C.method`
 "#,
 );
 
