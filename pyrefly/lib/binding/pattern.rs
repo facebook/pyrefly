@@ -846,7 +846,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn stmt_match(&mut self, mut x: StmtMatch, parent: &NestingContext) {
-        let mut subject = self.declare_current_idx(Key::Anon(x.subject.range()));
+        let mut subject = self.declare_current_idx(Key::MatchSubject(x.subject.range()));
         self.ensure_expr(&mut x.subject, subject.usage());
         let subject_expr = x.subject.clone();
         let subject_idx =
