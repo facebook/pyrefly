@@ -239,6 +239,8 @@ enum PolarsFunction {
     Concat,
     Len,
     Lit,
+    ReadCsv,
+    ScanCsv,
     Unmodeled,
 }
 
@@ -249,7 +251,16 @@ impl PolarsFunction {
             ("concat", "polars.functions.eager") => Self::Concat,
             ("len", "polars.functions.len") => Self::Len,
             ("lit", "polars.functions.lit") => Self::Lit,
+            ("read_csv", "polars.io.csv.functions") => Self::ReadCsv,
+            ("scan_csv", "polars.io.csv.functions") => Self::ScanCsv,
             _ => Self::Unmodeled,
+        }
+    }
+
+    fn from_callee(callee: &Type) -> Option<Self> {
+        match callee.callee_kind() {
+            Some(CalleeKind::Function(FunctionKind::Def(id))) => Some(Self::from_id(&id)),
+            _ => None,
         }
     }
 }
@@ -257,11 +268,17 @@ impl PolarsFunction {
 /// Whether a callee is the module-level `polars.concat`, seen through any `Forall`/`Overload`
 /// wrapper via `callee_kind`.
 pub fn is_polars_concat(callee: &Type) -> bool {
-    matches!(
-        callee.callee_kind(),
-        Some(CalleeKind::Function(FunctionKind::Def(id)))
-            if PolarsFunction::from_id(&id) == PolarsFunction::Concat
-    )
+    PolarsFunction::from_callee(callee) == Some(PolarsFunction::Concat)
+}
+
+struct PolarsCsvOptions<'b> {
+    schema: &'b Expr,
+    overrides: Option<&'b Expr>,
+    selection: Option<&'b Expr>,
+    new_columns: Option<&'b Expr>,
+    row_index_name: Option<&'b Expr>,
+    with_column_names: Option<&'b Expr>,
+    include_file_paths: Option<&'b Expr>,
 }
 
 /// The two `pl.concat` strategies column inference models. `Vertical` requires identical schemas;
@@ -738,6 +755,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     },
                 );
         }
+        if matches!(
+            PolarsFunction::from_callee(callee),
+            Some(PolarsFunction::ReadCsv | PolarsFunction::ScanCsv)
+        ) {
+            return self.infer_polars_csv_schema(arguments).map(|columns| {
+                PolarsCallSpecialization::DataFrame {
+                    columns,
+                    kind: DataFrameKind::Polars,
+                    completeness: SchemaCompleteness::Complete,
+                }
+            });
+        }
         if is_polars_concat(callee) {
             return self.infer_polars_concat(arguments).map(|columns| {
                 PolarsCallSpecialization::DataFrame {
@@ -844,6 +873,87 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             _ => None,
         }
+    }
+
+    fn polars_csv_schema(&self, expr: &Expr) -> Option<Vec<(Name, PolarsDType)>> {
+        let (form, dict) = self.schema_literal_dict(expr)?;
+        if dict.items.is_empty() {
+            return Some(Vec::new());
+        }
+        self.schema_dict_entries(form, dict)?
+            .into_iter()
+            .map(|(name, dtype)| Some((name, dtype?)))
+            .collect()
+    }
+
+    fn infer_polars_csv_schema(&self, arguments: &Arguments) -> Option<Vec<(Name, PolarsDType)>> {
+        let options = Self::polars_csv_options(arguments)?;
+        if [
+            options.overrides,
+            options.selection,
+            options.new_columns,
+            options.row_index_name,
+            options.with_column_names,
+            options.include_file_paths,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|expr| !matches!(expr, Expr::NoneLiteral(_)))
+        {
+            return None;
+        }
+        self.polars_csv_schema(options.schema)
+    }
+
+    /// Extract CSV arguments that can affect a declared schema.
+    fn polars_csv_options<'b>(arguments: &'b Arguments) -> Option<PolarsCsvOptions<'b>> {
+        let mut source_keyword = false;
+        let mut schema = None;
+        let mut overrides = None;
+        let mut selection = None;
+        let mut new_columns = None;
+        let mut row_index_name = None;
+        let mut with_column_names = None;
+        let mut include_file_paths = None;
+        for kw in &arguments.keywords {
+            let Some(arg) = &kw.arg else {
+                return None;
+            };
+            let slot = match arg.id.as_str() {
+                "source" => {
+                    if source_keyword {
+                        return None;
+                    }
+                    source_keyword = true;
+                    continue;
+                }
+                "schema" => &mut schema,
+                "schema_overrides" => &mut overrides,
+                "columns" => &mut selection,
+                "new_columns" => &mut new_columns,
+                "row_index_name" => &mut row_index_name,
+                "with_column_names" => &mut with_column_names,
+                "include_file_paths" => &mut include_file_paths,
+                _ => continue,
+            };
+            if slot.replace(&kw.value).is_some() {
+                return None;
+            }
+        }
+        match &arguments.args[..] {
+            [] if source_keyword => {}
+            [_] if !source_keyword => {}
+            _ => return None,
+        }
+        Some(PolarsCsvOptions {
+            schema: schema?,
+            overrides,
+            selection,
+            new_columns,
+            row_index_name,
+            with_column_names,
+            include_file_paths,
+        })
     }
 
     /// A data dict literal as an order-preserving name-to-value map, or `None` if a key does not
@@ -1841,7 +1951,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         };
                         literal_value(value)
                     }
-                    PolarsFunction::Concat | PolarsFunction::Unmodeled => None,
+                    PolarsFunction::Concat
+                    | PolarsFunction::ReadCsv
+                    | PolarsFunction::ScanCsv
+                    | PolarsFunction::Unmodeled => None,
                 }
             }
             Expr::BinOp(binop) => {
@@ -1922,7 +2035,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // series name, which is not statically knowable, so fall back.
                         literal_value(value).map(|_| Name::new("literal"))
                     }
-                    PolarsFunction::Concat | PolarsFunction::Unmodeled => None,
+                    PolarsFunction::Concat
+                    | PolarsFunction::ReadCsv
+                    | PolarsFunction::ScanCsv
+                    | PolarsFunction::Unmodeled => None,
                 }
             }
             Expr::BinOp(binop) => self.polars_expr_output_name(&binop.left),

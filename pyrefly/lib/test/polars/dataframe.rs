@@ -94,6 +94,16 @@ def concat(items: Iterable[DataFrame], *, how: str = "vertical", rechunk: bool =
 "#,
     );
     env.add_with_path(
+        "polars.io.csv.functions",
+        "polars/io/csv/functions.pyi",
+        r#"
+from polars.dataframe.frame import DataFrame
+from polars.lazyframe.frame import LazyFrame
+def read_csv(source: object, *, schema: object = None, schema_overrides: object = None, columns: object = None, new_columns: object = None, row_index_name: str | None = None, **kwargs: object) -> DataFrame: ...
+def scan_csv(source: object, *, schema: object = None, schema_overrides: object = None, new_columns: object = None, row_index_name: str | None = None, with_column_names: object = None, include_file_paths: str | None = None, **kwargs: object) -> LazyFrame: ...
+"#,
+    );
+    env.add_with_path(
         "polars.expr.expr",
         "polars/expr/expr.pyi",
         r#"
@@ -175,6 +185,7 @@ from polars.functions.eager import concat as concat
 from polars.functions.col import col as col
 from polars.functions.lit import lit as lit
 from polars.functions.len import len as len
+from polars.io.csv.functions import read_csv as read_csv, scan_csv as scan_csv
 from polars.expr.expr import Expr as Expr
 from polars.schema import Schema as Schema
 class Int8: ...
@@ -274,6 +285,8 @@ df.select("missing")
 df.drop("missing")
 df.with_columns(b=pl.col("missing"))
 df.get_column("missing")
+pl.read_csv("data.csv", schema={"a": object()})
+pl.scan_csv("data.csv", schema={"a": object()})
 "#,
 );
 
@@ -403,6 +416,45 @@ from typing import reveal_type
 class DataFrame:
     def __init__(self, data: object = None) -> None: ...
 reveal_type(DataFrame({"a": [1]}))  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_csv_explicit_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from polars import read_csv as load_csv
+from typing import reveal_type
+
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}))  # E: revealed type: DataFrame[a: Int64, b: String]
+reveal_type(load_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}))  # E: revealed type: DataFrame[a: Int64, b: String]
+reveal_type(pl.read_csv(source="data.csv", schema=pl.Schema({"a": pl.Int64, "b": pl.String})))  # E: revealed type: DataFrame[a: Int64, b: String]
+reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}))  # E: revealed type: LazyFrame[a: Int64, b: String]
+reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}).collect())  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+testcase!(
+    test_csv_dynamic_schema_inputs_fall_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+
+def names() -> list[str]: ...
+
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64}, columns=names()))  # E: revealed type: DataFrame
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64}, columns=["missing"]))  # E: revealed type: DataFrame
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64}, columns=["a"], schema_overrides=[pl.String]))  # E: revealed type: DataFrame
+reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64}, with_column_names=lambda xs: xs))  # E: revealed type: LazyFrame
+reveal_type(pl.read_csv("data.csv", schema={"a": None}))  # E: revealed type: DataFrame
+reveal_type(pl.scan_csv("data.csv", schema={}))  # E: revealed type: LazyFrame[]
+reveal_type(pl.read_csv("data.csv", schema_overrides={"a": pl.String}))  # E: revealed type: DataFrame
+reveal_type(pl.scan_csv("data.csv", schema_overrides={"a": pl.String}))  # E: revealed type: LazyFrame
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64}, row_index_name="a"))  # E: revealed type: DataFrame
+reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64}, include_file_paths="a"))  # E: revealed type: LazyFrame
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64}, new_columns=["x", "y"]))  # E: revealed type: DataFrame
 "#,
 );
 
