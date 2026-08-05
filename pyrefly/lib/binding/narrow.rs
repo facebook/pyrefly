@@ -114,8 +114,7 @@ pub enum AtomicNarrowOp {
     /// when that name evaluates to a truthy or falsy value.
     IsTruthy,
     IsFalsy,
-    /// A Polars in-place column mutation degraded the name's DataFrame schema. It is bound
-    /// unconditionally at the mutating statement, not as a boolean guard, so its negation is never taken.
+    /// An unconditional in-place DataFrame schema mutation.
     PolarsColumnMutation(PolarsMutationKind),
     /// An operation that might be true or false, but does not narrow the name
     /// currently under consideration (for example, if we are modeling the

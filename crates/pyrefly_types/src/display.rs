@@ -811,7 +811,6 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str(": ")?;
                     output.write_str(dtype.name())?;
                 }
-                // A Partial schema carries unknown extra columns, shown as a trailing "...".
                 if schema.completeness == SchemaCompleteness::Partial {
                     if !schema.columns.is_empty() {
                         output.write_str(", ")?;

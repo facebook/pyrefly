@@ -8,8 +8,7 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
-/// A minimal Polars stub: `DataFrame` is defined in `polars.dataframe.frame` and
-/// re-exported from `polars`, and its column-access methods return an opaque type.
+/// Minimal stubs with the real Polars qualified names.
 fn env_with_polars_stubs() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path(
@@ -212,8 +211,7 @@ class Schema:
     env
 }
 
-/// Polars stubs plus a module whose top-level `df` carries an inferred schema, so
-/// tests can pin that the schema survives the import boundary.
+/// Polars stubs with a schema-carrying frame in another module.
 fn env_cross_file() -> TestEnv {
     let mut env = env_with_polars_stubs();
     env.add(
@@ -231,8 +229,7 @@ s = pl.Series("a", [1])
     env
 }
 
-/// A minimal pandas stub: `DataFrame` lives in `pandas.core.frame` and is re-exported
-/// from `pandas`. A pandas frame is mutable, so its inferred schema is Partial.
+/// Minimal stubs with the real pandas qualified names.
 fn env_with_pandas_stubs() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path(
@@ -252,8 +249,7 @@ from pandas.core.frame import DataFrame as DataFrame
     env
 }
 
-/// Polars stubs plus a pandas `DataFrame` at its real qname, so tests can pin cross-library
-/// behavior where a pandas frame is passed to a Polars method.
+/// Polars and pandas stubs for cross-library calls.
 fn env_with_polars_and_pandas_stubs() -> TestEnv {
     let mut env = env_with_polars_stubs();
     env.add_with_path(
@@ -5189,8 +5185,6 @@ reveal_type(defs.df.group_by("b").agg(pl.col("a").sum()))  # E: revealed type: D
 "#,
 );
 
-// Section F: `pl.Series(...)` construction, which reuses the DataFrame column fold for its element dtype.
-
 testcase!(
     test_series_construct_int,
     env_with_polars_stubs(),
@@ -5330,8 +5324,6 @@ from typing import reveal_type
 reveal_type(defs.s)  # E: revealed type: Series[Int64]
 "#,
 );
-
-// Section G: `df.get_column(name)` and `df.to_series(index)`, which read one column and return a typed Series.
 
 testcase!(
     test_get_column_typed,

@@ -2205,11 +2205,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 &Type::ClassType(got.class.clone()),
                 &Type::ClassType(want.class.clone()),
             ),
-            // A DataFrame delegates subtyping to its underlying instance type in
-            // both directions.
             (Type::DataFrame(schema), _) => self.is_subset_eq(&schema.underlying_type(), want),
             (_, Type::DataFrame(schema)) => self.is_subset_eq(got, &schema.underlying_type()),
-            // A Series delegates subtyping to its underlying instance type in both directions.
             (Type::Series(schema), _) => self.is_subset_eq(&schema.underlying_type(), want),
             (_, Type::Series(schema)) => self.is_subset_eq(got, &schema.underlying_type()),
             // Any Int expression represents an integer dimension value, whether it is a

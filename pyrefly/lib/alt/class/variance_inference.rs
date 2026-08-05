@@ -258,13 +258,9 @@ fn on_type(
             }
         }
         Type::DataFrame(schema) => {
-            // Delegate to the underlying instance; columns are Polars dtypes, not types, so
-            // they carry no type variables.
             on_type(variance, inj, &schema.underlying_type(), on_edge, on_var);
         }
         Type::Series(schema) => {
-            // Delegate to the underlying instance; the dtype is a Polars dtype, not a type, so
-            // it carries no type variables.
             on_type(variance, inj, &schema.underlying_type(), on_edge, on_var);
         }
         Type::Tuple(t) => {

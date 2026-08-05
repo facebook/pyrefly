@@ -964,9 +964,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ty) = self.synthesized_functional_class_type(x) {
             return PreparedExprCall::Resolved(ty);
         }
-        // Infer a method call's receiver once. A Polars column-algebra transform is a
-        // pure function of the receiver schema and is dispatched here; any other
-        // receiver is reused for ordinary callee inference rather than inferred again.
+        // Reuse the inferred receiver when schema specialization does not apply.
         let callee_ty = if let Expr::Attribute(func) = &*x.func {
             let base = self.expr_infer_impl(&func.value, None, errors);
             if let Some(ty) = self.polars_method_call(base.ty(), func, &x.arguments, errors) {
@@ -2998,8 +2996,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         allow_type_level_dsl,
                     ))
                 }
-                // A `pl.DataFrame[Schema]` annotation carries the schema class's columns as the
-                // frame's schema, so an annotated parameter is checked like a constructed frame.
                 Type::ClassDef(ref cls)
                     if let [arg] = xs
                         && let Some(df) = self.polars_dataframe_schema_annotation(cls, arg) =>
@@ -3230,8 +3226,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
                 Type::DataFrame(schema) => {
-                    // A list key selects columns and stays a DataFrame, so handle it before the
-                    // single-column read path below.
                     if let Expr::List(ExprList { elts, .. }) = slice
                         && schema.kind == DataFrameKind::Polars
                         && let Some(narrowed) = self.polars_select_columns(&schema, elts, errors)
@@ -3265,8 +3259,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         key_present,
                     );
-                    // Only wrap when the stub hands back a plain `pl.Series`, keeping that class as
-                    // the single source of truth for the Series `ClassType`.
+                    // Preserve the stub's Series class when attaching an element dtype.
                     match (column_dtype, result) {
                         (Some(dtype), Type::ClassType(cls))
                             if is_polars_series(cls.class_object()) =>
@@ -3280,8 +3273,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         (_, result) => result,
                     }
                 }
-                // Indexing a Series delegates to its opaque class, which resolves the
-                // real `__getitem__`; the element dtype is not carried through.
                 Type::Series(schema) => self.subscript_infer_for_type_with_key_present(
                     &schema.underlying_type(),
                     slice,

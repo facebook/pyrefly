@@ -5,11 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Element-dtype representation for Series values.
-//!
-//! A `SeriesSchema` records the element dtype of an otherwise-opaque Series
-//! instance, so a column read can return a typed Series. Every type-machinery
-//! site delegates to `underlying`.
+//! Element dtypes attached to otherwise-opaque Series instances.
 
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
@@ -20,17 +16,11 @@ use crate::polars_dtype::PolarsDType;
 use crate::types::Type;
 
 /// A Series instance carrying its element dtype.
-///
-/// There is no `kind` field: a Series has no column-algebra transforms to gate,
-/// and its library is derivable from `underlying`'s qname when needed.
 #[derive(
     Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
 )]
 pub struct SeriesSchema {
-    /// The opaque Series class instance (e.g. `pl.Series`). All behavior
-    /// delegates here.
     pub underlying: ClassType,
-    /// The dtype of the Series elements.
     pub dtype: PolarsDType,
 }
 
@@ -39,7 +29,6 @@ impl SeriesSchema {
         Type::Series(Box::new(self))
     }
 
-    /// The underlying instance as a `Type`, for delegating behavior to it.
     pub fn underlying_type(&self) -> Type {
         Type::ClassType(self.underlying.clone())
     }
@@ -104,14 +93,12 @@ mod tests {
             series(PolarsDType::Int64).to_type().strip_library_schemas(),
             underlying
         );
-        // The strip recurses into nested positions and leaves other types untouched.
         let optional = Type::optional(series(PolarsDType::String).to_type());
         assert_eq!(optional.strip_library_schemas(), Type::optional(underlying));
     }
 
     #[test]
     fn traversal_preserves_underlying() {
-        // The dtype is a plain `PolarsDType`, not a `Type`, so traversal reaches only `underlying`.
         let s = series(PolarsDType::Int64).to_type();
         let Type::Series(schema) = s else {
             unreachable!("to_type produces the Series variant")

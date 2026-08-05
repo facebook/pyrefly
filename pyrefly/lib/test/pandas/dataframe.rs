@@ -8,8 +8,7 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
-/// Creates a test environment with corrected pandas stubs.
-/// The `index` method has position-only markers (`/`) matching `list.index`.
+/// Pandas stubs with the corrected `SequenceNotStr.index` signature.
 fn env_with_fixed_pandas_stubs() -> TestEnv {
     let mut env = TestEnv::new();
     env.add(
@@ -27,7 +26,6 @@ class SequenceNotStr(Protocol[_T_co]):
     def __contains__(self, value: object, /) -> bool: ...
     def __len__(self) -> int: ...
     def __iter__(self) -> Iterator[_T_co]: ...
-    # FIXED: All parameters position-only to match list.index
     def index(self, value: Any, start: int = ..., stop: int = ..., /) -> int: ...
     def count(self, value: Any, /) -> int: ...
     def __reversed__(self) -> Iterator[_T_co]: ...
@@ -38,9 +36,7 @@ class SequenceNotStr(Protocol[_T_co]):
     env
 }
 
-/// Creates a test environment with broken pandas 2.x stubs.
-/// The `index` method is missing position-only markers, which doesn't match `list.index`.
-/// This tests that the SequenceNotStr-specific hack in `is_subset_protocol` works.
+/// Pandas 2.x stubs whose `SequenceNotStr.index` omits positional-only markers.
 fn env_with_broken_pandas_stubs() -> TestEnv {
     let mut env = TestEnv::new();
     env.add(
@@ -97,9 +93,7 @@ fn add_pandas_init(env: &mut TestEnv) {
     );
 }
 
-/// A pandas stub whose `DataFrame` lives at the real qname `pandas.core.frame` and
-/// whose column-access methods return opaque types, so col-infer can pin that a pandas
-/// frame carries a Partial schema yet falls back to these stubs for every transform.
+/// Minimal stubs with the real pandas qualified names.
 fn env_with_pandas_frame_stubs() -> TestEnv {
     let mut env = TestEnv::new();
     env.add(
@@ -272,7 +266,6 @@ testcase!(
     r#"
 import pandas as pd
 from typing import reveal_type
-# Pandas `filter` selects columns, unlike Polars, so the row-transform must not fire here.
 df = pd.DataFrame({"a": [1]})
 reveal_type(df.filter(items=["a"]))  # E: revealed type: DataFrame
 "#,
@@ -283,7 +276,6 @@ testcase!(
     env_with_pandas_frame_stubs(),
     r#"
 import pandas as pd
-# Pandas has no `vstack`, so the row-transform must not fire and swallow the real error.
 df = pd.DataFrame({"a": [1]})
 df.vstack(df)  # E: Object of class `DataFrame` has no attribute `vstack`
 "#,
@@ -294,7 +286,6 @@ testcase!(
     env_with_pandas_frame_stubs(),
     r#"
 import pandas as pd
-# Pandas has no `hstack`, so the column append must not fire and swallow the real error.
 df = pd.DataFrame({"a": [1]})
 df.hstack(df)  # E: Object of class `DataFrame` has no attribute `hstack`
 "#,
@@ -353,7 +344,6 @@ testcase!(
     r#"
 import pandas as pd
 
-# This should work: passing list[str] for columns
 df = pd.DataFrame([[1, 2, 3], [4, 5, 6]], columns=["A", "B", "C"])
 "#,
 );
@@ -364,7 +354,6 @@ testcase!(
     r#"
 import pandas as pd
 
-# Test list[str] for both columns and index
 df = pd.DataFrame(
     [[1, 2, 3], [4, 5, 6]],
     columns=["A", "B", "C"],
@@ -373,16 +362,12 @@ df = pd.DataFrame(
 "#,
 );
 
-// Test with BROKEN pandas 2.x stubs (without position-only markers)
-// This demonstrates the SequenceNotStr-specific hack in is_subset_protocol works
 testcase!(
     test_dataframe_with_broken_stubs,
     env_with_broken_pandas_stubs(),
     r#"
 import pandas as pd
 
-# This should work even with broken stubs: list[str] satisfies SequenceNotStr[Any]
-# because we have a specific hack in is_subset_protocol for pandas SequenceNotStr
 df = pd.DataFrame([[1, 2, 3], [4, 5, 6]], columns=["A", "B", "C"])
 "#,
 );

@@ -818,11 +818,9 @@ pub enum Type {
     /// Wraps a ClassType + field map of init args, enabling DSL forward
     /// functions to access shape-relevant constructor parameters directly.
     NNModule(Box<NNModuleType>),
-    /// DataFrame instance with an inferred column schema.
-    /// Wraps an underlying DataFrame instance type and an ordered column schema;
-    /// all behavior delegates to the underlying type.
+    /// DataFrame instance with an ordered column schema.
     DataFrame(Box<DataFrameSchema>),
-    /// A Series instance carrying its element dtype; behavior delegates to the underlying type.
+    /// Series instance carrying its element dtype.
     Series(Box<SeriesSchema>),
     /// Dimension value type - represents values that satisfy Dim bound
     /// Examples:

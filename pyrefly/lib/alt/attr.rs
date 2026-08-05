@@ -2380,14 +2380,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // NNModule delegates attribute access to its underlying class
                 acc.push(AttributeBase1::ClassInstance(module.class.clone()))
             }
-            Type::DataFrame(schema) => {
-                // A DataFrame delegates attribute access to its underlying instance type.
-                self.as_attribute_base1(schema.underlying_type(), acc)
-            }
-            Type::Series(schema) => {
-                // A Series delegates attribute access to its underlying instance type.
-                self.as_attribute_base1(schema.underlying_type(), acc)
-            }
+            Type::DataFrame(schema) => self.as_attribute_base1(schema.underlying_type(), acc),
+            Type::Series(schema) => self.as_attribute_base1(schema.underlying_type(), acc),
             Type::Int(_) => {
                 // Dimension values behave like int for attribute access
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))

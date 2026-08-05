@@ -1683,8 +1683,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Expr(mut x) => {
                 let mut current = self.declare_current_idx(Key::StmtExpr(x.value.range()));
                 self.ensure_expr(&mut x.value, current.usage());
-                // A Polars in-place mutation on a bare name rebinds it to the degraded schema, so a
-                // discarded return value still degrades the frame.
+                // Rebind bare-name receivers after in-place column mutations.
                 let mutated_receiver = if let Expr::Call(call) = &*x.value
                     && let Expr::Attribute(func) = &*call.func
                     && let Expr::Name(receiver) = &*func.value

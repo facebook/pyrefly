@@ -16,17 +16,14 @@ use ruff_python_ast::name::Name;
 /// How an in-place mutation changes a Polars frame's tracked column set.
 #[derive(Clone, Debug)]
 pub enum PolarsMutationKind {
-    /// Adds a column with an unknowable name, so every known column survives but exhaustiveness is lost.
+    /// Preserve known columns but make the schema partial.
     Add,
-    /// Overwrites a column at an index we cannot map to a name.
+    /// Discard the schema because the replaced column is unknown.
     Replace,
-    /// May insert a statically-known column name at a known index. The column set stays exhaustive
-    /// only after the callee resolves to `pl.Series`.
+    /// Insert a known name and index after resolving the callee as `pl.Series`.
     Insert(Name, usize, Box<Expr>),
 }
 
-/// The literal name, index, and unresolved callee of an `insert_column` candidate. The callee is kept
-/// so schema application can verify it is `pl.Series`; `None` when the call shape is not static.
 fn insert_column_spec(args: &Arguments) -> Option<(Name, usize, Box<Expr>)> {
     let [index_expr, column_expr] = &args.args[..] else {
         return None;
@@ -45,8 +42,6 @@ fn insert_column_spec(args: &Arguments) -> Option<(Name, usize, Box<Expr>)> {
     Some((name, i.to_string().parse::<usize>().ok()?, callee))
 }
 
-/// The literal `name` and unresolved callee of a possible `pl.Series` call, or `None` when it is not a
-/// call with a string-literal name. The callee is resolved when the mutation is applied.
 fn series_literal_name(expr: &Expr) -> Option<(Name, Box<Expr>)> {
     let Expr::Call(call) = expr else {
         return None;
@@ -70,9 +65,7 @@ fn series_literal_name(expr: &Expr) -> Option<(Name, Box<Expr>)> {
     Some((name, call.func.clone()))
 }
 
-/// Classify an in-place column-mutation method, or `None` for anything else. `insert_column` with a
-/// literal index and `pl.Series` name inserts that exact column; otherwise it only adds an unknowable
-/// one. `hstack` counts only when an `in_place` keyword is present and not the literal `False`.
+/// Classify mutations that may change a bound frame's columns.
 pub fn polars_column_mutation(method: &str, args: &Arguments) -> Option<PolarsMutationKind> {
     match method {
         "insert_column" => Some(match insert_column_spec(args) {

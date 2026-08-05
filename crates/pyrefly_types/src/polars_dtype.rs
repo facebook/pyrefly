@@ -5,13 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Polars data types and their supertype relation.
-//!
-//! A DataFrame column carries a Polars dtype rather than a Python scalar type, so the
-//! checker can reason about the numeric widening Polars performs when it coerces values
-//! (in `strict=False` construction, `concat`, arithmetic, `when/then`, ...). The supertype
-//! rules mirror `get_supertype` in polars-core; this module has no checker behavior on its
-//! own and is consumed by later column-inference logic.
+//! Polars scalar dtypes and their runtime supertype relation.
 
 use std::fmt;
 
@@ -19,9 +13,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 
-/// A Polars column data type. Scalar dtypes only for now; nested dtypes (`List`, `Struct`)
-/// are added when column inference needs them. `Unknown` marks a column whose dtype we
-/// cannot determine (for example a column added by `with_columns`).
+/// A scalar column dtype. `Unknown` represents a column whose dtype cannot be determined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum PolarsDType {
@@ -49,7 +41,6 @@ pub enum PolarsDType {
 }
 
 impl PolarsDType {
-    /// The Polars name of the dtype, as shown in a schema display.
     pub fn name(self) -> &'static str {
         match self {
             PolarsDType::Boolean => "Boolean",
@@ -76,7 +67,6 @@ impl PolarsDType {
         }
     }
 
-    /// The signed-int bit width, if this is a signed int.
     fn signed_width(self) -> Option<u16> {
         match self {
             PolarsDType::Int8 => Some(8),
@@ -88,7 +78,6 @@ impl PolarsDType {
         }
     }
 
-    /// The unsigned-int bit width, if this is an unsigned int.
     fn unsigned_width(self) -> Option<u16> {
         match self {
             PolarsDType::UInt8 => Some(8),
@@ -115,19 +104,15 @@ impl PolarsDType {
         matches!(self, PolarsDType::Float32 | PolarsDType::Float64)
     }
 
-    /// Whether this is any integer dtype, signed or unsigned.
     pub fn is_integer(self) -> bool {
         self.signed_width().is_some() || self.unsigned_width().is_some()
     }
 
-    /// Whether this is a signed integer dtype, the dtypes for which unary negation is valid.
     pub fn is_signed_int(self) -> bool {
         self.signed_width().is_some()
     }
 
-    /// The inclusive value range an integer dtype holds, as `i128`, or `None` for a non-integer.
-    /// `UInt128`'s real max exceeds `i128::MAX`, but any `i128` literal fits below it, so the bound
-    /// never over-rejects.
+    /// `UInt128` is capped at `i128::MAX`, which still contains every representable literal.
     pub fn int_bounds(self) -> Option<(i128, i128)> {
         use PolarsDType::*;
         Some(match self {
@@ -145,18 +130,12 @@ impl PolarsDType {
         })
     }
 
-    /// The common supertype of `self` and `other`, or `None` when the two cannot be combined
-    /// without an explicit cast. Mirrors `get_supertype` in polars-core for the modeled
-    /// dtypes: numeric widening follows numpy (a signed and unsigned pair widens to the next
-    /// signed that holds both, capped at `Int128`, and a `UInt64` with no `Int128` partner
-    /// promotes to `Float64`); a `bool` joins the numeric tower; `Null` takes the other side;
-    /// unrelated dtypes yield `None` so the caller falls back rather than inventing a cast.
+    /// The modeled subset of `polars-core`'s `get_supertype` relation.
     pub fn supertype(self, other: PolarsDType) -> Option<PolarsDType> {
         use PolarsDType::*;
         if self == other {
             return Some(self);
         }
-        // An unknown dtype absorbs, since we cannot prove anything about the combination.
         if self == Unknown || other == Unknown {
             return Some(Unknown);
         }
@@ -166,19 +145,15 @@ impl PolarsDType {
         if other == Null {
             return Some(self);
         }
-        // Boolean joins the numeric tower as the smallest member.
         if self == Boolean && (other.is_numeric()) {
             return Some(other);
         }
         if other == Boolean && self.is_numeric() {
             return Some(self);
         }
-        // Only two numeric dtypes have a supertype beyond the bool and null cases above.
-        // An unrelated dtype such as a String, Binary, or temporal falls back rather than coercing.
         if !self.is_numeric() || !other.is_numeric() {
             return None;
         }
-        // A float on either side wins, widened to whichever float holds the other operand exactly.
         if self.is_float() || other.is_float() {
             return Some(Self::float_supertype(self, other));
         }
@@ -195,8 +170,7 @@ impl PolarsDType {
                 other => unreachable!("unexpected unsigned int width {other}"),
             });
         }
-        // A signed and unsigned pair widens to the smallest signed that holds the unsigned range.
-        // A UInt64 needs Int128 or it falls back to Float64, and Polars caps a UInt128 pair at Int128.
+        // Polars caps a UInt128 pair at Int128, while UInt64 promotes to Float64 without Int128.
         let signed_unsigned = match (self.signed_width(), other.unsigned_width()) {
             (Some(s), Some(u)) => Some((s, u)),
             _ => match (other.signed_width(), self.unsigned_width()) {
@@ -221,11 +195,9 @@ impl PolarsDType {
 
     fn float_supertype(a: PolarsDType, b: PolarsDType) -> PolarsDType {
         use PolarsDType::*;
-        // Float64 on either side, or an operand Float32 cannot hold exactly, gives Float64.
         if a == Float64 || b == Float64 {
             return Float64;
         }
-        // With one side Float32, the result stays Float32 only when the other operand fits in it.
         let other = if a == Float32 { b } else { a };
         match other {
             Float32 | Boolean | Int8 | Int16 | UInt8 | UInt16 => Float32,
@@ -291,7 +263,6 @@ mod tests {
 
     #[test]
     fn supertype_int128_holds_wider_unsigned() {
-        // Int128 holds a UInt64, and Polars caps any UInt128 pair at Int128.
         assert_eq!(Int128.supertype(UInt64), Some(Int128));
         assert_eq!(Int128.supertype(UInt32), Some(Int128));
         assert_eq!(Int8.supertype(UInt128), Some(Int128));
@@ -327,7 +298,6 @@ mod tests {
         assert_eq!(Int64.supertype(String), None);
         assert_eq!(String.supertype(Binary), None);
         assert_eq!(Date.supertype(Int64), None);
-        // A float against a non-numeric dtype has no supertype; it must not coerce to Float64.
         assert_eq!(Float32.supertype(String), None);
         assert_eq!(Float64.supertype(Date), None);
         assert_eq!(Float32.supertype(Binary), None);

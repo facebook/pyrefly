@@ -561,11 +561,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 .with_error_type(|_| Type::NNModule(module))
             }
-            // A DataFrame delegates call dispatch to its underlying instance type.
             Type::DataFrame(schema) => self
                 .as_call_target_impl(schema.underlying_type(), quantified)
                 .with_error_type(|_| Type::DataFrame(schema)),
-            // A Series delegates call dispatch to its underlying instance type.
             Type::Series(schema) => self
                 .as_call_target_impl(schema.underlying_type(), quantified)
                 .with_error_type(|_| Type::Series(schema)),
