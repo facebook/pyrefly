@@ -220,3 +220,12 @@ assert_type(X.x, int)
 assert_type(Y.x, int)
     "#,
 );
+
+testcase!(
+    test_redundant_type_metaclass_is_ok,
+    r#"
+from typing import Any
+class A(metaclass=type): ...
+class B(metaclass=type[Any]): ...
+    "#,
+);
