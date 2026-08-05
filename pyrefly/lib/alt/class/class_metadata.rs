@@ -2104,6 +2104,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn calculate_abstract_members(&self, cls: &Class) -> AbstractClassMembers {
+        if cls.has_toplevel_qname(
+            ModuleName::type_checker_internals().as_str(),
+            "TypedDictFallback",
+        ) {
+            // TypedDictFallback is a fake base for TypedDict classes. Typeshed models it as
+            // inheriting from Mapping for convenience, but it should not get Mapping's
+            // unimplemented abstract methods.
+            return AbstractClassMembers::new(SmallSet::new());
+        }
         let metadata = self.get_metadata_for_class(cls);
         let mut fields_to_check: SmallSet<Name>;
         if metadata.extends_abc() || metadata.is_protocol() {
@@ -2116,12 +2125,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         // Check inherited abstract methods + all fields defined in the current class
         for base_class in metadata.base_class_objects() {
-            let base_class_metadata = self.get_metadata_for_class(base_class);
-            // For now, skip any non-protocols base classes that don't extend `ABC` or have metaclass `ABCMeta`
-            // Consider adding a stricter check in the future
-            if !base_class_metadata.extends_abc() && !base_class_metadata.is_protocol() {
-                continue;
-            }
             let base_class_abstract_members = self.get_abstract_members_for_class(base_class);
             fields_to_check.extend(
                 base_class_abstract_members

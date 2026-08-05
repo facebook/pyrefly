@@ -609,6 +609,62 @@ A()  # E: Cannot instantiate `A`
     "#,
 );
 
+testcase!(
+    bug = "Unimplemented abstract method `__getitem__` is missing",
+    test_final_class_with_unimplemented_sequence_methods,
+    r#"
+from typing import final
+from collections.abc import Sequence
+@final
+class A[T](Sequence[T]): # E: cannot have unimplemented abstract members: `__len__`
+    ...
+    "#,
+);
+
+testcase!(
+    test_final_class_with_unimplemented_collection_and_reversible_methods,
+    r#"
+from typing import final
+from collections.abc import Collection, Reversible
+@final
+class B[T](Collection[T], Reversible[T]): # E: cannot have unimplemented abstract members: `__len__`, `__iter__`, `__contains__`, `__reversed__`
+    ...
+    "#,
+);
+
+testcase!(
+    test_final_class_with_unimplemented_abstract_methods,
+    r#"
+from typing import final
+from abc import ABC, abstractmethod
+
+class A1(ABC):
+    @abstractmethod
+    def a(): ...
+
+class B1(ABC):
+    @abstractmethod
+    def b(): ...
+
+class C(A1, B1): ...
+
+@final
+class D(C): ... # E: cannot have unimplemented abstract members: `a`, `b`
+    "#,
+);
+
+// Even though a TypedDict's fake TypedDictFallback base inherits from Mapping, which has abstract
+// methods, we must never consider a TypedDict to have unimplemented abstract methods.
+testcase!(
+    test_typed_dict_is_not_abstract,
+    r#"
+from typing import TypedDict, final
+@final
+class FinalTD(TypedDict):
+    year: int
+"#,
+);
+
 // Tests for invalid-abstract-method: @abstractmethod in a non-abstract class.
 
 testcase!(
@@ -725,6 +781,17 @@ class Base(ABC):
 class Child(Base):
     # Child only inherits the abstract method, does not define its own @abstractmethod
     pass
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_tuple_child_is_not_abstract,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+class A(tuple):
+    @abstractmethod
+    def f(self): ...  # E: `A` is not an abstract class
 "#,
 );
 
