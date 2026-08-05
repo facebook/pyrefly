@@ -83,6 +83,51 @@ test(C())
 );
 
 testcase!(
+    test_any_bound_attribute_access,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+class Concrete: ...
+
+def pep695_bound[T: Any](arg: T) -> T:
+    assert_type(arg.method(), Any)
+    return arg
+
+LegacyT = TypeVar("LegacyT", bound=Any)
+def legacy_bound(arg: LegacyT) -> LegacyT:
+    assert_type(arg.method(), Any)
+    return arg
+
+assert_type(pep695_bound(Concrete()), Concrete)
+assert_type(legacy_bound(Concrete()), Concrete)
+
+class Base:
+    def method(self) -> int: ...
+    @classmethod
+    def class_method(cls) -> int: ...
+class Inherited(Base): ...
+
+def union_bound[T: Any | Inherited](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    arg.missing()  # E: Object of class `Inherited` has no attribute `missing`
+    return arg
+
+def constrained[T: (Any, Inherited)](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    return arg
+
+def class_bound[T: Any](arg: type[T]) -> type[T]:
+    assert_type(arg.__name__, str)
+    assert_type(arg.class_method(), Any)
+    return arg
+
+def class_constrained[T: (Any, Inherited)](arg: type[T]) -> type[T]:
+    arg.class_method()
+    return arg
+ "#,
+);
+
+testcase!(
     test_base_class_bound,
     r#"
 class A: pass

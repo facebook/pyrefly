@@ -58,6 +58,18 @@ $ echo "x: str = 0" > $TMPDIR/oops.py && echo "errors = { bad-assignment = false
 [0]
 ```
 
+## Replaced imports remain dynamic when used as TypeVar bounds
+
+```scrut {output_stream: stderr}
+$ mkdir $TMPDIR/replace_bound && \
+> printf 'replace-imports-with-any = ["module.*"]\n' > $TMPDIR/replace_bound/pyrefly.toml && \
+> printf 'class Foo: ...\n' > $TMPDIR/replace_bound/module.py && \
+> printf 'from typing import TypeVar\nfrom module import Foo\n\nT = TypeVar("T", bound=Foo)\n\ndef f(arg: T) -> T:\n    arg.method()\n    return arg\n' > $TMPDIR/replace_bound/main.py && \
+> $PYREFLY check -c $TMPDIR/replace_bound/pyrefly.toml --output-format=min-text $TMPDIR/replace_bound/main.py
+ INFO 0 errors
+[0]
+```
+
 ## Error in implicit config (project mode)
 
 ```scrut {output_stream: stderr}

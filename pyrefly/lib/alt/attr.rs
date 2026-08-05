@@ -2279,6 +2279,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bound: AttributeBase1,
     ) -> Option<AttributeBase1> {
         match bound {
+            AttributeBase1::Any(style) => Some(AttributeBase1::Any(style)),
             AttributeBase1::ClassObject(ClassBase::ClassDef(cls) | ClassBase::ClassType(cls)) => {
                 Some(AttributeBase1::ClassObject(ClassBase::Quantified(
                     quantified, cls,
@@ -2287,6 +2288,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => self
                 .quantified_bound_class(bound)
                 .map(|cls| AttributeBase1::Quantified(quantified, cls)),
+        }
+    }
+
+    /// Construct the attribute base for the `type[T]` path of a bounded quantified.
+    /// Preserve `type[Any]` for an `Any` bound; concrete bounds use quantified class lookup.
+    fn attribute_base_for_type_of_bounded_quantified(
+        &self,
+        quantified: Quantified,
+        bound: AttributeBase1,
+    ) -> Option<AttributeBase1> {
+        match bound {
+            AttributeBase1::Any(style) => Some(AttributeBase1::TypeAny(style)),
+            _ => self
+                .quantified_bound_class(bound)
+                .map(|cls| AttributeBase1::ClassObject(ClassBase::Quantified(quantified, cls))),
         }
     }
 
@@ -2644,11 +2660,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut use_fallback = false;
                     if let Some(base) = self.as_attribute_base(ty.clone()) {
                         for base1 in base.0 {
-                            if let Some(cls) = self.quantified_bound_class(base1) {
-                                acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
+                            if let Some(quantified_base) = self
+                                .attribute_base_for_type_of_bounded_quantified(
                                     (*quantified).clone(),
-                                    cls,
-                                )));
+                                    base1,
+                                )
+                            {
+                                acc.push(quantified_base);
                             } else {
                                 use_fallback = true;
                             }
@@ -2666,11 +2684,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for ty in constraints {
                         if let Some(base) = self.as_attribute_base(ty.clone()) {
                             for base1 in base.0 {
-                                if let Some(cls) = self.quantified_bound_class(base1) {
-                                    acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
+                                if let Some(quantified_base) = self
+                                    .attribute_base_for_type_of_bounded_quantified(
                                         (*quantified).clone(),
-                                        cls,
-                                    )));
+                                        base1,
+                                    )
+                                {
+                                    acc.push(quantified_base);
                                 } else {
                                     use_fallback = true;
                                 }
