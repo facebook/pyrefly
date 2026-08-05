@@ -281,3 +281,69 @@ with patch.multiple("other.missing", attribute=DEFAULT):
     pass
 "#,
 );
+
+testcase!(
+    test_assert_called_with_checks_target_signature,
+    TestEnv::one("other", "def foo(x: int, *, y: str) -> None: ..."),
+    r#"
+from unittest.mock import patch
+
+with patch("other.foo") as mock_foo:
+    mock_foo.assert_called_with(1, y="ok")
+    mock_foo.assert_called_once_with("bad", y="ok")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `other.foo`
+    mock_foo.assert_any_call(1, y=2)  # E: Argument `Literal[2]` is not assignable to parameter `y` with type `str` in function `other.foo`
+"#,
+);
+
+testcase!(
+    test_patch_start_checks_target_signature,
+    TestEnv::one("other", "def foo(x: int) -> None: ..."),
+    r#"
+from unittest.mock import patch
+
+patcher = patch("other.foo")
+mock_foo = patcher.start()
+mock_foo.assert_called_with("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `other.foo`
+patcher.stop()
+"#,
+);
+
+testcase!(
+    test_async_patch_checks_await_assertion,
+    TestEnv::one("other", "async def foo(x: int) -> None: ..."),
+    r#"
+from unittest.mock import patch
+
+with patch("other.foo") as mock_foo:
+    mock_foo.assert_awaited_with(1)
+    mock_foo.assert_awaited_once_with("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `other.foo`
+"#,
+);
+
+testcase!(
+    test_patch_bound_method_checks_bound_signature,
+    TestEnv::one(
+        "other",
+        "class C:\n    def method(self, x: int) -> None: ...\ninstance = C()",
+    ),
+    r#"
+from unittest.mock import patch
+
+with patch("other.instance.method") as mock_method:
+    mock_method.assert_called_once_with("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `other.C.method`
+"#,
+);
+
+testcase!(
+    test_patch_new_callable_keeps_declared_result,
+    TestEnv::one("other", "def foo(x: int) -> None: ..."),
+    r#"
+from unittest.mock import patch
+
+class Replacement:
+    marker: str
+
+with patch("other.foo", new_callable=Replacement) as replacement:
+    replacement.marker = "ok"
+"#,
+);
