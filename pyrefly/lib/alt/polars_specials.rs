@@ -2335,12 +2335,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        let mut can_widen = args.args.len() <= 1;
+        let mut arguments_are_static = args.args.len() <= 1;
         let mut value_type = None;
         for arg in &args.args {
             let ty = match arg {
                 Expr::Starred(starred) => {
-                    can_widen = false;
+                    arguments_are_static = false;
                     self.expr_infer(&starred.value, errors)
                 }
                 _ => self.expr_infer(arg, errors),
@@ -2349,18 +2349,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 value_type = Some(ty);
             }
         }
-        let mut matches_supertype = true;
+        let mut matches_supertype = Some(true);
         let mut seen_matches_supertype = false;
         for kw in &args.keywords {
             let ty = self.expr_infer(&kw.value, errors);
             let Some(arg) = &kw.arg else {
-                can_widen = false;
+                arguments_are_static = false;
                 continue;
             };
             match arg.id.as_str() {
                 "value" => {
                     if value_type.is_some() {
-                        can_widen = false;
+                        arguments_are_static = false;
                     } else {
                         value_type = Some(ty);
                     }
@@ -2368,21 +2368,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "strategy" | "limit" => {}
                 "matches_supertype" => {
                     if seen_matches_supertype {
-                        can_widen = false;
+                        arguments_are_static = false;
                     }
                     seen_matches_supertype = true;
                     match &ty {
                         Type::Literal(lit) => match &lit.value {
-                            Lit::Bool(value) => matches_supertype = *value,
-                            _ => can_widen = false,
+                            Lit::Bool(value) => matches_supertype = Some(*value),
+                            _ => matches_supertype = None,
                         },
-                        _ => can_widen = false,
+                        _ => matches_supertype = None,
                     }
                 }
-                _ => can_widen = false,
+                _ => arguments_are_static = false,
             }
         }
-        if !can_widen || !matches_supertype {
+        if !arguments_are_static || matches_supertype.is_none() {
+            return Some(schema.underlying_type());
+        }
+        if matches_supertype == Some(false) {
             return Some(base.clone());
         }
         let Some(value_type) = value_type.as_ref() else {

@@ -3297,7 +3297,7 @@ reveal_type(wide.fill_null(18446744073709551616))  # E: revealed type: DataFrame
 );
 
 testcase!(
-    test_fill_null_dynamic_options_preserve_schema,
+    test_fill_null_dynamic_options_degrade_schema,
     env_with_polars_stubs(),
     r#"
 import polars as pl
@@ -3310,8 +3310,8 @@ df = pl.DataFrame({"a": [1], "b": ["x"]})
 value: float = 0.0
 flag: bool = True
 options: FillNullOptions = {"matches_supertype": flag}
-reveal_type(df.fill_null(value, matches_supertype=flag))  # E: revealed type: DataFrame[a: Int64, b: String]
-reveal_type(df.fill_null(value, **options))  # E: revealed type: DataFrame[a: Int64, b: String]
+reveal_type(df.fill_null(value, matches_supertype=flag))  # E: revealed type: DataFrame
+reveal_type(df.fill_null(value, **options))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -3324,13 +3324,13 @@ from typing import reveal_type
 
 df = pl.DataFrame({"a": [1]})
 result = df.fill_null(0.0, matches_supertype=missing_flag)  # E: Could not find name `missing_flag`
-reveal_type(result)  # E: revealed type: DataFrame[a: Int64]
+reveal_type(result)  # E: revealed type: DataFrame
 multiple = df.fill_null(missing_positional, 0.0)  # E: Could not find name `missing_positional`
-reveal_type(multiple)  # E: revealed type: DataFrame[a: Int64]
+reveal_type(multiple)  # E: revealed type: DataFrame
 duplicate = df.fill_null(0.0, value=0.0)
-reveal_type(duplicate)  # E: revealed type: DataFrame[a: Int64]
+reveal_type(duplicate)  # E: revealed type: DataFrame
 unknown = df.fill_null(0.0, unknown=missing_keyword)  # E: Could not find name `missing_keyword`
-reveal_type(unknown)  # E: revealed type: DataFrame[a: Int64]
+reveal_type(unknown)  # E: revealed type: DataFrame
 df.fill_null(0.0, **missing_kwargs)  # E: Could not find name `missing_kwargs`
 "#,
 );
