@@ -2,9 +2,9 @@
   "errors": [
     {
       "line": 6,
-      "column": 1,
+      "column": 8,
       "stop_line": 6,
-      "stop_column": 2,
+      "stop_column": 9,
       "path": "bad.py",
       "code": -2,
       "name": "unused-type-ignore",
