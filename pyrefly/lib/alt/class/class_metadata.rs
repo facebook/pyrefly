@@ -2130,7 +2130,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .filter(|field_name| !self.is_implemented_in_class(cls, field_name))
             .cloned()
             .collect::<SmallSet<_>>();
-        if (metadata.extends_abc() || metadata.is_protocol())
+        // Ideally, we would only check `extends_abc` here. What complicates things is that a class
+        // can implicitly extend ABC by inheriting from `Protocol`, because `_ProtocolMeta`
+        // inherits from `ABCMeta`. Stub files do not accurately mark classes that are protocols at
+        // runtime, so we cannot reliably follow `extends_abc` for protocols in stub files.
+        // Instead, we apply the following rules:
+        // * If a class is a protocol, we respect its abstract methods.
+        // * If a class inherits unimplemented abstract methods, it also inherits the judgment that
+        //   abstract methods are respected.
+        // Crucially, this means that if all inherited abstract methods have been implemented, we
+        // do not treat the class as abstract. So, for example, `typing.Sequence` is abstract
+        // because it inherits an unimplemented abstract `__len__` method from `Collection`, but
+        // `tuple` implements all of the abstract methods it inherits from `Sequence`, so `tuple`
+        // and its subclasses are not abstract.
+        if (metadata.extends_abc() || metadata.is_protocol() || !abstract_members.is_empty())
             && let Some(fields) = self.get_class_fields(cls)
         {
             abstract_members.extend(
