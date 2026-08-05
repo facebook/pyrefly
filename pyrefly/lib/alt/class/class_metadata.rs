@@ -2114,29 +2114,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return AbstractClassMembers::new(SmallSet::new());
         }
         let metadata = self.get_metadata_for_class(cls);
-        let mut fields_to_check: SmallSet<Name>;
-        if metadata.extends_abc() || metadata.is_protocol() {
-            fields_to_check = self
-                .get_class_fields(cls)
-                .map(|f| SmallSet::from_iter(f.names().cloned()))
-                .unwrap_or_default();
-        } else {
-            fields_to_check = SmallSet::new();
-        }
         // Check inherited abstract methods + all fields defined in the current class
+        let mut inherited_fields_to_check = SmallSet::new();
         for base_class in metadata.base_class_objects() {
             let base_class_abstract_members = self.get_abstract_members_for_class(base_class);
-            fields_to_check.extend(
+            inherited_fields_to_check.extend(
                 base_class_abstract_members
                     .unimplemented_abstract_methods()
                     .iter()
                     .cloned(),
             );
         }
-        let abstract_members = fields_to_check
-            .into_iter()
+        let mut abstract_members = inherited_fields_to_check
+            .iter()
             .filter(|field_name| !self.is_implemented_in_class(cls, field_name))
-            .collect();
+            .cloned()
+            .collect::<SmallSet<_>>();
+        if (metadata.extends_abc() || metadata.is_protocol())
+            && let Some(fields) = self.get_class_fields(cls)
+        {
+            abstract_members.extend(
+                fields
+                    .names()
+                    .filter(|field_name| {
+                        !inherited_fields_to_check.contains(*field_name)
+                            && !self.is_implemented_in_class(cls, field_name)
+                    })
+                    .cloned(),
+            )
+        }
         AbstractClassMembers::new(abstract_members)
     }
 

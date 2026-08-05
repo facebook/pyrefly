@@ -627,7 +627,7 @@ testcase!(
 from typing import final
 from collections.abc import Collection, Reversible
 @final
-class B[T](Collection[T], Reversible[T]): # E: cannot have unimplemented abstract members: `__len__`, `__iter__`, `__contains__`, `__reversed__`
+class B[T](Collection[T], Reversible[T]): # E: cannot have unimplemented abstract members: `__iter__`, `__contains__`, `__len__`, `__reversed__`
     ...
     "#,
 );
