@@ -424,3 +424,38 @@ class C:
         "Expected two constructor callees for C(), got: {callees:?}"
     );
 }
+
+#[test]
+fn test_get_attributes_non_generic_classproperty() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    // A non-generic class named `classproperty` has no type arguments, so the
+    // `classproperty` match arm must not assume one is present.
+    let code = r#"class classproperty:
+    def __init__(self, f):
+        self.f = f
+    def __get__(self, obj, owner):
+        return self.f(owner)
+
+class Config:
+    @classproperty
+    def name(cls) -> str:
+        return "cfg"
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let attributes = query
+        .get_attributes(module_name, path, "Config")
+        .expect("expected attributes for Config");
+    assert!(
+        attributes.iter().any(|a| a.name == "name"),
+        "expected an attribute named `name`"
+    );
+}
+
