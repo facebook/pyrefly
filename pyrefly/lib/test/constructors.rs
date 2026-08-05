@@ -8,6 +8,23 @@
 use crate::testcase;
 
 testcase!(
+    test_generic_decorator_on_dunder_new,
+    r#"
+from collections.abc import Callable
+
+def fn[T](c: Callable[[T], None]) -> T:  # E: missing an explicit `return`
+    pass
+
+class C:
+    @fn  # E: is not assignable to parameter `c`
+    def __new__(cls):
+        pass
+
+C()  # E: `__new__` on `C` resolves back to the same class
+"#,
+);
+
+testcase!(
     test_class_init,
     r#"
 from typing import assert_type
