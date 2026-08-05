@@ -1094,6 +1094,63 @@ fn test_diagnostics_file_in_excludes() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
+/// `pyrefly.extraProjectExcludes` lets a client push its own notion of excluded
+/// directories down to the server without writing a `pyrefly.toml`. It is
+/// additive: the config file's `project-excludes` still applies.
+#[test]
+fn test_client_project_excludes() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("client_project_excludes");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Url::from_file_path(&root_path).unwrap(),
+            )]),
+            // The glob is relative to the workspace folder, mirroring how an
+            // editor reports its excluded content roots.
+            initialization_options: Some(json!({
+                "pyrefly": {
+                    "displayTypeErrors": "force-on",
+                    "extraProjectExcludes": ["generated"]
+                }
+            })),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("included.py");
+    interaction.client.did_open("excluded_by_config.py");
+    interaction
+        .client
+        .did_open("generated/excluded_by_client.py");
+
+    interaction
+        .client
+        .diagnostic("included.py")
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
+
+    interaction
+        .client
+        .diagnostic("generated/excluded_by_client.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    // The client's excludes are appended to the config's, not substituted for
+    // them, so a file the project itself excluded stays excluded.
+    interaction
+        .client
+        .diagnostic("excluded_by_config.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
 #[test]
 fn test_initialization_options_respected() {
     let test_files_root = get_test_files_root();
