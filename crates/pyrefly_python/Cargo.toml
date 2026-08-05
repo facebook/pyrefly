@@ -27,7 +27,7 @@ serde = { version = "1.0.229", features = ["derive", "rc"] }
 starlark_map = "0.14.2"
 static_interner = { version = "0.1.3", features = ["dupe"] }
 thin-vec = "0.2.18"
-thiserror = "2.0.18"
+thiserror = "2.0.19"
 vec1 = { version = "1.12.1", features = ["serde"] }
 
 [dev-dependencies]
