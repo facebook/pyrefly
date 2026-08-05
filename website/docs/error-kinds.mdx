@@ -515,6 +515,17 @@ y = 10 // 0  # error: division by zero
 z = 10 % 0   # error: division by zero
 ```
 
+## duplicate-column
+
+A Polars projection produces more than one column with the same name. Polars rejects duplicate output names when an eager projection runs or a lazy projection is collected.
+
+```python
+import polars as pl
+
+df = pl.DataFrame({"a": [1]})
+df.select("a", "a")
+```
+
 ## empty-body
 
 Default severity: `ignore`

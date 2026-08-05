@@ -241,6 +241,7 @@ fn env_with_pandas_stubs() -> TestEnv {
         r#"
 class DataFrame:
     def __init__(self, data: object = None, index: object = None, columns: object = None) -> None: ...
+    def __getitem__(self, key: object) -> "DataFrame": ...
 "#,
     );
     env.add(
@@ -2099,6 +2100,27 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df[["a", "a"]])  # E: Projection produces duplicate column `a` # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_list_missing_columns_are_not_duplicates,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df[["missing", "missing"]]  # E: Column `missing` is not in the DataFrame schema # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_pandas_select_list_allows_duplicates,
+    env_with_pandas_stubs(),
+    r#"
+import pandas as pd
+from typing import reveal_type
+df = pd.DataFrame({"a": [1]})
 reveal_type(df[["a", "a"]])  # E: revealed type: DataFrame
 "#,
 );
@@ -2244,7 +2266,103 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.select("a", "a"))  # E: revealed type: DataFrame
+reveal_type(df.select("a", "a"))  # E: Projection produces duplicate column `a` # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_method_duplicate_is_suppressible,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.select("a", "a")  # pyrefly: ignore[duplicate-column]
+"#,
+);
+
+testcase!(
+    test_select_method_reports_duplicate_and_later_unknown_column,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+result = df.select(
+    1,
+    2,  # E: Projection produces duplicate column `literal`
+    "d",  # E: Column `d` is not in the DataFrame schema
+)
+reveal_type(result)  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_method_missing_columns_are_not_duplicates,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.select(
+    "missing",  # E: Column `missing` is not in the DataFrame schema
+    "missing",  # E: Column `missing` is not in the DataFrame schema
+)
+df.select(
+    pl.col("missing").alias("x"),  # E: Column `missing` is not in the DataFrame schema
+    pl.col("a").alias("x"),
+)
+"#,
+);
+
+testcase!(
+    test_select_method_reports_each_repeated_output,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1]})
+df.select(
+    1,
+    2,  # E: Projection produces duplicate column `literal`
+    3,  # E: Projection produces duplicate column `literal`
+)
+"#,
+);
+
+testcase!(
+    test_select_method_opaque_expr_still_checks_later_outputs,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+expr = pl.col("a")
+result = df.select(
+    expr,
+    1,
+    2,  # E: Projection produces duplicate column `literal`
+    "missing",  # E: Column `missing` is not in the DataFrame schema
+)
+reveal_type(result)  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_select_method_partial_schema_reports_only_duplicate,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import NotRequired, TypedDict, reveal_type
+class Cols(TypedDict):
+    a: list[int]
+    optional: NotRequired[list[str]]
+td: Cols = {"a": [1]}
+df = pl.DataFrame(td)
+result = df.select(
+    1,
+    2,  # E: Projection produces duplicate column `literal`
+    "missing",
+)
+reveal_type(result)  # E: revealed type: DataFrame
+df.select("missing", "missing")
 "#,
 );
 
@@ -2606,7 +2724,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.select(pl.col("a"), pl.col("b").alias("a")))  # E: revealed type: DataFrame
+reveal_type(df.select(pl.col("a"), pl.col("b").alias("a")))  # E: Projection produces duplicate column `a` # E: revealed type: DataFrame
 "#,
 );
 
@@ -2618,6 +2736,10 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 reveal_type(df.select(pl.col("a", "b")))  # E: revealed type: DataFrame
+reveal_type(df.select(pl.col("a", "b").alias("x")))  # E: revealed type: DataFrame
+reveal_type(df.select(pl.col("a") + pl.col("a", "b")))  # E: revealed type: DataFrame
+reveal_type(df.select((pl.col("a") + pl.col("a", "b")).alias("x")))  # E: revealed type: DataFrame
+reveal_type(df.select(pl.col("a") < pl.col("a", "b")))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -5677,6 +5799,21 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 reveal_type(df.lazy().select("a"))  # E: revealed type: LazyFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_lazy_select_duplicate_preserves_receiver_class,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+result = df.lazy().select(
+    "a",
+    "a",  # E: Projection produces duplicate column `a`
+)
+reveal_type(result)  # E: revealed type: LazyFrame
 "#,
 );
 

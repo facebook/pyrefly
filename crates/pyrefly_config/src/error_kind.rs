@@ -164,6 +164,8 @@ pub enum ErrorKind {
     DirectAbstractBaseInstantiation,
     /// Division, floor division, or modulo by a literal zero value.
     DivisionByZero,
+    /// A Polars projection produces more than one column with the same name.
+    DuplicateColumn,
     /// A function has an empty body despite declaring a non-None return type.
     EmptyBody,
     /// Explicit usage of `typing.Any` in an annotation.
@@ -687,6 +689,19 @@ mod tests {
     fn test_error_kind_name() {
         assert_eq!(ErrorKind::Unsupported.to_name(), "unsupported");
         assert_eq!(ErrorKind::ParseError.to_name(), "parse-error");
+    }
+
+    #[test]
+    fn test_duplicate_column_kind_exists() {
+        assert_eq!(ErrorKind::DuplicateColumn.to_name(), "duplicate-column");
+        assert_eq!(
+            "duplicate-column".parse::<ErrorKind>(),
+            Ok(ErrorKind::DuplicateColumn)
+        );
+        assert_eq!(
+            ErrorKind::DuplicateColumn.default_severity(),
+            Severity::Error
+        );
     }
 
     #[test]

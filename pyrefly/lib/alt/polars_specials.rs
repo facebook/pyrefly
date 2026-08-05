@@ -538,6 +538,16 @@ fn resolve_column(
     }
 }
 
+fn report_duplicate_column(name: &Name, range: TextRange, errors: &ErrorCollector) {
+    errors
+        .error_builder(
+            range,
+            ErrorKind::DuplicateColumn,
+            format!("Projection produces duplicate column `{name}`"),
+        )
+        .emit();
+}
+
 fn arith(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     use ExprValue::*;
     match (a, b) {
@@ -1827,27 +1837,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         let mut names = Vec::with_capacity(elts.len());
-        let mut seen = SmallSet::new();
+        let mut output_names = SmallSet::new();
+        let mut has_repeated_name = false;
         for elt in elts {
             let name = self.polars_column_name(elt)?;
-            if !seen.insert(name.clone()) {
-                return None;
+            if !output_names.insert(name.clone()) {
+                has_repeated_name = true;
             }
             names.push((name, elt.range()));
         }
         for elt in elts {
             self.expr_infer(elt, errors);
         }
-        let columns = names
-            .into_iter()
-            .filter_map(|(name, range)| {
-                resolve_column(schema, &name, range, errors).map(|ty| (name, ty))
-            })
-            .collect();
-        Some(dataframe_type_with_columns(schema, columns))
+        let mut columns = Vec::with_capacity(names.len());
+        let mut resolved_names = SmallSet::new();
+        for (name, range) in names {
+            let Some(dtype) = resolve_column(schema, &name, range, errors) else {
+                continue;
+            };
+            if !resolved_names.insert(name.clone()) {
+                report_duplicate_column(&name, range, errors);
+            }
+            columns.push((name, dtype));
+        }
+        if has_repeated_name {
+            Some(schema.underlying_type())
+        } else {
+            Some(dataframe_type_with_columns(schema, columns))
+        }
     }
 
-    /// Infer the ordered output columns of `DataFrame.select`.
+    /// Infer the ordered output columns of a Polars `select` call.
     fn polars_select(
         &self,
         base: &Type,
@@ -1871,35 +1891,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.expr_infer(arg, errors);
             return Some(base.clone());
         }
-        // Validate every output name before emitting diagnostics.
         let mut names = Vec::with_capacity(positional.len());
-        let mut seen = SmallSet::new();
+        let mut output_names = SmallSet::new();
+        let mut has_opaque = false;
+        let mut has_repeated_name = false;
         for &arg in &positional {
-            let (name, is_column) = match self.polars_column_arg(arg) {
-                ColumnArg::Named(name) => (name, true),
-                ColumnArg::Opaque => return None,
-                ColumnArg::Expr => (self.polars_expr_output_name(arg)?, false),
+            let output = match self.polars_column_arg(arg) {
+                ColumnArg::Named(name) => Some((name, true)),
+                ColumnArg::Opaque => None,
+                ColumnArg::Expr => self.polars_expr_output_name(arg).map(|name| (name, false)),
             };
-            if !seen.insert(name.clone()) {
-                return None;
+            let Some((name, is_column)) = output else {
+                has_opaque = true;
+                names.push(None);
+                continue;
+            };
+            if !output_names.insert(name.clone()) {
+                has_repeated_name = true;
             }
-            names.push((name, is_column));
+            names.push(Some((name, is_column)));
         }
         let mut columns = Vec::with_capacity(names.len());
-        for ((name, is_column), arg) in names.into_iter().zip(positional) {
-            self.expr_infer(arg, errors);
-            if is_column {
-                if let Some(dtype) = resolve_column(schema, &name, arg.range(), errors) {
-                    columns.push((name, dtype));
-                }
+        let mut resolved_names = SmallSet::new();
+        for (output, arg) in names.iter().zip(positional) {
+            let Some((name, is_column)) = output else {
+                continue;
+            };
+            let resolved = if *is_column {
+                resolve_column(schema, name, arg.range(), errors)
             } else {
-                let dtype = self
-                    .eval_polars_expr(arg, schema, errors)
-                    .map_or(PolarsDType::Unknown, ExprValue::dtype);
-                columns.push((name, dtype));
+                self.eval_polars_expr(arg, schema, errors)
+                    .map(ExprValue::dtype)
+            };
+            if resolved.is_some() && !resolved_names.insert(name.clone()) {
+                report_duplicate_column(name, arg.range(), errors);
+            }
+            if let Some(dtype) = resolved {
+                columns.push((name.clone(), dtype));
+            } else if !*is_column {
+                columns.push((name.clone(), PolarsDType::Unknown));
             }
         }
-        Some(dataframe_type_with_columns(schema, columns))
+        if has_opaque {
+            None
+        } else {
+            for arg in &args.args {
+                self.expr_infer(arg, errors);
+            }
+            if !has_repeated_name {
+                return Some(dataframe_type_with_columns(schema, columns));
+            }
+            Some(schema.underlying_type())
+        }
     }
 
     /// Remove statically named columns while preserving order.
@@ -2084,6 +2127,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         PolarsFunction::from_callee(&self.expr_infer(func, &self.error_swallower()))
     }
 
+    /// Prove an expression produces one column, so its output name is well-defined.
+    fn polars_expr_has_single_output(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Call(call) => {
+                if let Expr::Attribute(attr) = &*call.func
+                    && (matches!(attr.attr.id.as_str(), "alias" | "cast")
+                        || Reducer::parse(attr.attr.id.as_str()).is_some())
+                {
+                    return self.polars_expr_has_single_output(&attr.value);
+                }
+                match self.polars_function(&call.func) {
+                    Some(PolarsFunction::Len) => true,
+                    Some(PolarsFunction::Col) => {
+                        matches!(&call.arguments.args[..], [arg] if matches!(self.polars_column_arg(arg), ColumnArg::Named(_)))
+                    }
+                    Some(PolarsFunction::Lit) => matches!(&call.arguments.args[..], [_]),
+                    _ => false,
+                }
+            }
+            Expr::BinOp(binop) => {
+                self.polars_expr_has_single_output(&binop.left)
+                    && self.polars_expr_has_single_output(&binop.right)
+            }
+            Expr::UnaryOp(unary) => self.polars_expr_has_single_output(&unary.operand),
+            Expr::Compare(cmp) => {
+                matches!((&*cmp.ops, &*cmp.comparators), ([_], [right]) if self.polars_expr_has_single_output(&cmp.left) && self.polars_expr_has_single_output(right))
+            }
+            Expr::NumberLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::NoneLiteral(_) => true,
+            _ => !self.is_polars_expr_value(expr),
+        }
+    }
+
     /// Follow Polars' leftmost-leaf naming, overridden by an outer `alias`.
     fn polars_expr_output_name(&self, expr: &Expr) -> Option<Name> {
         match expr {
@@ -2092,6 +2171,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match attr.attr.id.as_str() {
                         "cast" => return self.polars_expr_output_name(&attr.value),
                         "alias" => {
+                            if !self.polars_expr_has_single_output(&attr.value) {
+                                return None;
+                            }
                             let [arg] = &call.arguments.args[..] else {
                                 return None;
                             };
@@ -2127,12 +2209,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | PolarsFunction::Unmodeled => None,
                 }
             }
-            Expr::BinOp(binop) => self.polars_expr_output_name(&binop.left),
+            Expr::BinOp(binop) => {
+                if !self.polars_expr_has_single_output(expr) {
+                    return None;
+                }
+                self.polars_expr_output_name(&binop.left)
+            }
             Expr::UnaryOp(unary) => self.polars_expr_output_name(&unary.operand),
             Expr::Compare(cmp) => {
                 let ([_], [right]) = (&*cmp.ops, &*cmp.comparators) else {
                     return None;
                 };
+                if !self.polars_expr_has_single_output(expr) {
+                    return None;
+                }
                 // Python reflects comparisons whose left operand is not a Polars expression.
                 if self.is_polars_expr_value(&cmp.left) {
                     self.polars_expr_output_name(&cmp.left)
