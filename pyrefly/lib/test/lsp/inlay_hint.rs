@@ -64,7 +64,7 @@ def f(xs: list[int]) -> None:
         .find(|h| h.label_parts.iter().any(|(text, _)| text.contains("int")))
         .expect("expected an inferred-type hint for the `head` capture");
     assert!(
-        !head_hint.insertable,
+        head_hint.edits.is_none(),
         "capture inlay hints must not be insertable"
     );
 }
@@ -143,7 +143,7 @@ x = N
         .inlay_hints(handle, Default::default())
         .unwrap();
     assert_eq!(hints.len(), 1);
-    assert!(!hints[0].insertable);
+    assert!(hints[0].edits.is_none());
 }
 
 /// Test that we handle invalid `NewType`s gracefully when generating inlay hints.
@@ -650,19 +650,19 @@ x, y = get_tuple()
     // First hint is for 'result' - should be insertable
     let result_hint = &hints[0];
     assert!(
-        result_hint.insertable,
+        result_hint.edits.is_some(),
         "Regular variable 'result' should be insertable"
     );
 
     let x_hint = &hints[1];
     assert!(
-        !x_hint.insertable,
+        x_hint.edits.is_none(),
         "Unpacked variable 'x' should NOT be insertable"
     );
 
     let y_hint = &hints[2];
     assert!(
-        !y_hint.insertable,
+        y_hint.edits.is_none(),
         "Unpacked variable 'y' should NOT be insertable"
     );
 }
@@ -713,14 +713,15 @@ value = choose(True)
     let hint = hints
         .iter()
         .find(|hint| {
-            hint.text_edit
-                .as_ref()
-                .is_some_and(|text| text.contains("foo.Foo") && text.contains("bar.Bar"))
+            hint.edits.as_ref().is_some_and(|edits| {
+                edits.annotation.contains("foo.Foo") && edits.annotation.contains("bar.Bar")
+            })
         })
         .expect("expected an insertable union hint");
 
-    assert_eq!(hint.import_edits.len(), 1);
-    assert_eq!(hint.import_edits[0].1, "import bar\nimport foo\n");
+    let edits = hint.edits.as_ref().unwrap();
+    assert_eq!(edits.imports.len(), 1);
+    assert_eq!(edits.imports[0].1, "import bar\nimport foo\n");
 }
 
 #[test]
@@ -883,5 +884,5 @@ class MyClass:
         .unwrap();
     assert_eq!(hints.len(), 1);
     // NewType is a callable alias, so `type[N]` is not a valid annotation to insert.
-    assert!(!hints[0].insertable);
+    assert!(hints[0].edits.is_none());
 }

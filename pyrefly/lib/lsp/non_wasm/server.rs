@@ -5288,25 +5288,21 @@ impl Server {
                             .collect(),
                     );
 
-                    let text_edits = if hint_data.insertable {
-                        hint_data.text_edit.map(|text_edit| {
-                            let mut edits = Vec::with_capacity(1 + hint_data.import_edits.len());
+                    let text_edits = hint_data.edits.map(|hint_edits| {
+                        let mut edits = Vec::with_capacity(1 + hint_edits.imports.len());
+                        edits.push(TextEdit {
+                            range: Range::new(position, position),
+                            new_text: hint_edits.annotation,
+                        });
+                        for (offset, import_text) in hint_edits.imports {
+                            let insert_position = info.to_lsp_position(offset);
                             edits.push(TextEdit {
-                                range: Range::new(position, position),
-                                new_text: text_edit,
+                                range: Range::new(insert_position, insert_position),
+                                new_text: import_text,
                             });
-                            for (offset, import_text) in hint_data.import_edits {
-                                let insert_position = info.to_lsp_position(offset);
-                                edits.push(TextEdit {
-                                    range: Range::new(insert_position, insert_position),
-                                    new_text: import_text,
-                                });
-                            }
-                            edits
-                        })
-                    } else {
-                        None
-                    };
+                        }
+                        edits
+                    });
                     Some(InlayHint {
                         position,
                         label,

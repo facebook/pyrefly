@@ -50,16 +50,13 @@ pub struct InlayHintData {
     pub position: TextSize,
     /// Label parts with optional location info for click-to-navigate
     pub label_parts: Vec<(String, Option<TextRangeWithModule>)>,
-    /// Whether double-clicking should insert the type annotation.
-    pub insertable: bool,
-    /// Text to insert for the hint, plus any imports needed by that inserted text.
-    pub text_edit: Option<String>,
-    pub import_edits: Vec<(TextSize, String)>,
+    /// Edits to apply when inserting the hint, or `None` when it is display-only.
+    pub edits: Option<InlayHintEdits>,
 }
 
-struct RenderedTypeHint {
-    text: String,
-    import_edits: Vec<(TextSize, String)>,
+pub struct InlayHintEdits {
+    pub annotation: String,
+    pub imports: Vec<(TextSize, String)>,
 }
 
 #[derive(Debug)]
@@ -105,12 +102,13 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
 impl<'a> Transaction<'a> {
     fn render_type_hint(
         &self,
+        prefix: &str,
         ty: &Type,
         handle: &Handle,
         tracker: Option<&ImportTracker>,
         ast: Option<&ModModule>,
         stdlib: &Stdlib,
-    ) -> RenderedTypeHint {
+    ) -> InlayHintEdits {
         let parts = ty.get_annotation_parts(Some(stdlib));
         let empty_tracker = ImportTracker::default();
         let tracker = tracker.unwrap_or(&empty_tracker);
@@ -134,7 +132,10 @@ impl<'a> Transaction<'a> {
         } else {
             Vec::new()
         };
-        RenderedTypeHint { text, import_edits }
+        InlayHintEdits {
+            annotation: format!("{prefix}{text}"),
+            imports: import_edits,
+        }
     }
 
     /// NewType values are callable aliases, not class objects, so `type[N]` is
@@ -214,19 +215,20 @@ impl<'a> Transaction<'a> {
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
                 let type_parts = ty.get_types_with_locations(Some(&stdlib));
                 let label_parts = once((prefix.to_owned(), None)).chain(type_parts).collect();
-                let rendered = insertable.then(|| {
-                    self.render_type_hint(ty, handle, import_tracker.as_ref(), ast_ref, &stdlib)
+                let edits = insertable.then(|| {
+                    self.render_type_hint(
+                        prefix,
+                        ty,
+                        handle,
+                        import_tracker.as_ref(),
+                        ast_ref,
+                        &stdlib,
+                    )
                 });
-                let text_edit = rendered
-                    .as_ref()
-                    .map(|rendered| format!("{prefix}{}", rendered.text));
-                let import_edits = rendered.map_or_else(Vec::new, |rendered| rendered.import_edits);
                 InlayHintData {
                     position,
                     label_parts,
-                    insertable,
-                    text_edit,
-                    import_edits,
+                    edits,
                 }
             };
         let mut res = Vec::new();
@@ -390,9 +392,10 @@ impl<'a> Transaction<'a> {
                     .map(|(pos, text)| InlayHintData {
                         position: pos,
                         label_parts: vec![(text.clone(), None)],
-                        insertable: true,
-                        text_edit: Some(text),
-                        import_edits: Vec::new(),
+                        edits: Some(InlayHintEdits {
+                            annotation: text,
+                            imports: Vec::new(),
+                        }),
                     }),
             );
         }
