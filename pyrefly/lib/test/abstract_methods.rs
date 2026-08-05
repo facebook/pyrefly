@@ -610,13 +610,12 @@ A()  # E: Cannot instantiate `A`
 );
 
 testcase!(
-    bug = "Unimplemented abstract method `__getitem__` is missing",
     test_final_class_with_unimplemented_sequence_methods,
     r#"
 from typing import final
 from collections.abc import Sequence
 @final
-class A[T](Sequence[T]): # E: cannot have unimplemented abstract members: `__len__`
+class A[T](Sequence[T]): # E: cannot have unimplemented abstract members: `__len__`, `__getitem__`
     ...
     "#,
 );
