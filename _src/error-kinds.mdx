@@ -1229,6 +1229,20 @@ os.jongleur()  # missing-attribute
 
 Note that objects with type `Any` will never raise this error.
 
+## missing-attribute-patch-target
+
+Default severity: `warn`
+
+The attribute targeted by a `unittest.mock.patch` call does not exist. Example:
+
+```python
+from unittest import mock
+@mock.patch("dep.nonexistent_attr")  # missing-attribute-patch-target
+def f(): ...
+```
+
+This is a sub-kind of [missing-attribute](#missing-attribute): suppressing `missing-attribute` also suppresses this error.
+
 ## missing-import
 
 A module could not be found.
