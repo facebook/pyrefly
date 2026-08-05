@@ -436,6 +436,33 @@ reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}).coll
 );
 
 testcase!(
+    test_read_csv_schema_overrides,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+
+schema = {"a": pl.Int64, "b": pl.Int64, "c": pl.String}
+reveal_type(pl.read_csv("data.csv", schema=schema))  # E: revealed type: DataFrame
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64, "b": pl.Int64, "c": pl.String}, schema_overrides={"a": pl.String}))  # E: revealed type: DataFrame[a: Int64, b: Int64, c: String]
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64, "b": pl.Int64, "c": pl.String}, schema_overrides=[pl.String, pl.Float32]))  # E: revealed type: DataFrame[a: String, b: Float32, c: String]
+"#,
+);
+
+testcase!(
+    test_read_csv_output_columns,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64, "b": pl.Float64, "c": pl.String}, columns=["c", "a"]))  # E: revealed type: DataFrame[a: Int64, c: String]
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64, "b": pl.Float64, "c": pl.String}, columns=[2, 0]))  # E: revealed type: DataFrame[a: Int64, c: String]
+reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64, "b": pl.Float64, "c": pl.String}, columns=[], row_index_name="idx", new_columns=["row", "first"]))  # E: revealed type: DataFrame[row: UInt32, first: Int64, b: Float64, c: String]
+"#,
+);
+
+testcase!(
     test_csv_dynamic_schema_inputs_fall_back,
     env_with_polars_stubs(),
     r#"

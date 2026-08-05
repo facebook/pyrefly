@@ -281,6 +281,11 @@ struct PolarsCsvOptions<'b> {
     include_file_paths: Option<&'b Expr>,
 }
 
+enum CsvColumnSelection {
+    Names(SmallSet<Name>),
+    Indices(SmallSet<usize>),
+}
+
 /// The two `pl.concat` strategies column inference models. `Vertical` requires identical schemas;
 /// `VerticalRelaxed` requires the same ordered names and folds `supertype()` per column.
 #[derive(Clone, Copy)]
@@ -755,17 +760,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     },
                 );
         }
-        if matches!(
-            PolarsFunction::from_callee(callee),
-            Some(PolarsFunction::ReadCsv | PolarsFunction::ScanCsv)
-        ) {
-            return self.infer_polars_csv_schema(arguments).map(|columns| {
-                PolarsCallSpecialization::DataFrame {
+        if let Some(function @ (PolarsFunction::ReadCsv | PolarsFunction::ScanCsv)) =
+            PolarsFunction::from_callee(callee)
+        {
+            return self
+                .infer_polars_csv_schema(arguments, function)
+                .map(|columns| PolarsCallSpecialization::DataFrame {
                     columns,
                     kind: DataFrameKind::Polars,
                     completeness: SchemaCompleteness::Complete,
-                }
-            });
+                });
         }
         if is_polars_concat(callee) {
             return self.infer_polars_concat(arguments).map(|columns| {
@@ -875,6 +879,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn polars_int_literal(&self, expr: &Expr) -> Option<i64> {
+        let ty = self.expr_infer(expr, &self.error_swallower());
+        match &ty {
+            Type::Literal(lit) => match &lit.value {
+                Lit::Int(value) => value.as_i64(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn literal_sequence(expr: &Expr) -> Option<&[Expr]> {
+        match expr {
+            Expr::List(list) => Some(&list.elts),
+            Expr::Tuple(tuple) => Some(&tuple.elts),
+            _ => None,
+        }
+    }
+
+    fn polars_csv_names(&self, expr: &Expr) -> Option<Vec<Name>> {
+        Self::literal_sequence(expr)?
+            .iter()
+            .map(|expr| self.polars_column_name(expr))
+            .collect()
+    }
+
+    /// Parse static projections; an empty sequence selects every column.
+    fn polars_csv_selection(
+        &self,
+        expr: &Expr,
+        width: usize,
+    ) -> Option<Option<CsvColumnSelection>> {
+        let values = Self::literal_sequence(expr)?;
+        if values.is_empty() {
+            return Some(None);
+        }
+        if let Some(names) = values
+            .iter()
+            .map(|expr| self.polars_column_name(expr))
+            .collect::<Option<SmallSet<_>>>()
+            && names.len() == values.len()
+        {
+            return Some(Some(CsvColumnSelection::Names(names)));
+        }
+        let indices = values
+            .iter()
+            .map(|expr| usize::try_from(self.polars_int_literal(expr)?).ok())
+            .collect::<Option<SmallSet<_>>>()?;
+        (indices.len() == values.len() && indices.iter().all(|index| *index < width))
+            .then_some(Some(CsvColumnSelection::Indices(indices)))
+    }
+
     fn polars_csv_schema(&self, expr: &Expr) -> Option<Vec<(Name, PolarsDType)>> {
         let (form, dict) = self.schema_literal_dict(expr)?;
         if dict.items.is_empty() {
@@ -886,23 +942,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect()
     }
 
-    fn infer_polars_csv_schema(&self, arguments: &Arguments) -> Option<Vec<(Name, PolarsDType)>> {
-        let options = Self::polars_csv_options(arguments)?;
-        if [
-            options.overrides,
-            options.selection,
-            options.new_columns,
-            options.row_index_name,
-            options.with_column_names,
-            options.include_file_paths,
-        ]
-        .into_iter()
-        .flatten()
-        .any(|expr| !matches!(expr, Expr::NoneLiteral(_)))
-        {
+    /// Add the UInt32 row-index column when requested.
+    fn apply_polars_csv_row_index(
+        &self,
+        columns: &mut Vec<(Name, PolarsDType)>,
+        row_index_name: Option<&Expr>,
+    ) -> Option<()> {
+        let row_index_name = match row_index_name {
+            Some(row_index_name) if !matches!(row_index_name, Expr::NoneLiteral(_)) => {
+                row_index_name
+            }
+            _ => return Some(()),
+        };
+        let name = self.polars_column_name(row_index_name)?;
+        if columns.iter().any(|(column, _)| *column == name) {
             return None;
         }
-        self.polars_csv_schema(options.schema)
+        columns.insert(0, (name, PolarsDType::UInt32));
+        Some(())
+    }
+
+    fn infer_polars_csv_schema(
+        &self,
+        arguments: &Arguments,
+        function: PolarsFunction,
+    ) -> Option<Vec<(Name, PolarsDType)>> {
+        let options = Self::polars_csv_options(arguments)?;
+        let columns = self.polars_csv_schema(options.schema)?;
+        match function {
+            PolarsFunction::ReadCsv => self.infer_read_csv_schema(columns, &options),
+            PolarsFunction::ScanCsv => {
+                if [
+                    options.overrides,
+                    options.selection,
+                    options.new_columns,
+                    options.row_index_name,
+                    options.with_column_names,
+                    options.include_file_paths,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|expr| !matches!(expr, Expr::NoneLiteral(_)))
+                {
+                    return None;
+                }
+                Some(columns)
+            }
+            _ => unreachable!("CSV schema inference only receives CSV readers"),
+        }
     }
 
     /// Extract CSV arguments that can affect a declared schema.
@@ -954,6 +1041,72 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             with_column_names,
             include_file_paths,
         })
+    }
+
+    /// Apply eager projection and renaming in source order, with positional overrides.
+    fn infer_read_csv_schema(
+        &self,
+        mut columns: Vec<(Name, PolarsDType)>,
+        options: &PolarsCsvOptions,
+    ) -> Option<Vec<(Name, PolarsDType)>> {
+        let selection = match options.selection {
+            Some(selection) if !matches!(selection, Expr::NoneLiteral(_)) => {
+                self.polars_csv_selection(selection, columns.len())?
+            }
+            _ => None,
+        };
+        if let Some(overrides) = options.overrides
+            && !matches!(overrides, Expr::NoneLiteral(_) | Expr::Dict(_))
+        {
+            if selection.is_some() {
+                return None;
+            }
+            let dtypes = Self::literal_sequence(overrides)?
+                .iter()
+                .map(|expr| self.polars_dtype_from_expr(expr))
+                .collect::<Option<Vec<_>>>()?;
+            if dtypes.len() > columns.len() {
+                return None;
+            }
+            for ((_, dtype), override_dtype) in columns.iter_mut().zip(dtypes) {
+                *dtype = override_dtype;
+            }
+        }
+        if let Some(selection) = selection {
+            if let CsvColumnSelection::Names(names) = &selection
+                && !names
+                    .iter()
+                    .all(|name| columns.iter().any(|(column, _)| column == name))
+            {
+                return None;
+            }
+            columns = columns
+                .into_iter()
+                .enumerate()
+                .filter(|(index, (name, _))| match &selection {
+                    CsvColumnSelection::Names(names) => names.contains(name),
+                    CsvColumnSelection::Indices(indices) => indices.contains(index),
+                })
+                .map(|(_, column)| column)
+                .collect();
+        }
+        self.apply_polars_csv_row_index(&mut columns, options.row_index_name)?;
+        if let Some(new_columns) = options.new_columns
+            && !matches!(new_columns, Expr::NoneLiteral(_))
+        {
+            let names = self.polars_csv_names(new_columns)?;
+            if names.len() > columns.len() {
+                return None;
+            }
+            for ((name, _), replacement) in columns.iter_mut().zip(names) {
+                *name = replacement;
+            }
+            let mut seen = SmallSet::new();
+            if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
+                return None;
+            }
+        }
+        Some(columns)
     }
 
     /// A data dict literal as an order-preserving name-to-value map, or `None` if a key does not
