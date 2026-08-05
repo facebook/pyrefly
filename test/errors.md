@@ -200,3 +200,15 @@ $ touch $TMPDIR/pyrefly.toml && \
 </testsuites>
 [1]
 ```
+
+## `--output-format sarif` emits a complete SARIF report
+
+```scrut
+$ SARIF_TEST=$(dirname $TEST_PY)/test/sarif && \
+> ($PYREFLY check --python-version 3.13.0 --output-format sarif --relative-to "$SARIF_TEST" \
+>     "$SARIF_TEST/diagnostics.py" > $TMPDIR/diagnostics.raw.sarif 2>/dev/null; test $? -eq 1) && \
+> $JQ '.runs[0].tool.driver.version = "0.0.0"' $TMPDIR/diagnostics.raw.sarif > $TMPDIR/actual.sarif && \
+> $JQ . "$SARIF_TEST/diagnostics.expected.sarif" > $TMPDIR/expected.sarif && \
+> diff -u $TMPDIR/expected.sarif $TMPDIR/actual.sarif
+[0]
+```

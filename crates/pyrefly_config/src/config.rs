@@ -207,6 +207,8 @@ pub enum OutputFormat {
     JunitXml,
     /// Emit CodeClimate issues in a JSON array (e.g. for GitLab Code Quality reports)
     CodeClimate,
+    /// Emit SARIF
+    Sarif,
     /// Only show error count, omitting individual errors
     OmitErrors,
 }
@@ -2534,6 +2536,13 @@ output-format = "omit-errors"
         let config_str = r#"output-format = "junit-xml""#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(config.output_format, Some(OutputFormat::JunitXml));
+    }
+
+    #[test]
+    fn test_output_format_sarif_config_parsing() {
+        let config_str = r#"output-format = "sarif""#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert_eq!(config.output_format, Some(OutputFormat::Sarif));
     }
 
     #[test]

@@ -57,6 +57,7 @@ pub struct SuppressArgs {
 impl SuppressArgs {
     pub fn run(
         &self,
+        version: &str,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
@@ -94,7 +95,13 @@ impl SuppressArgs {
                     "omit-errors",
                     remove_unused_flag,
                 ]);
-                check_args.run_once(files_to_check, config_finder, upsell, thread_count)?;
+                check_args.run_once(
+                    version,
+                    files_to_check,
+                    config_finder,
+                    upsell,
+                    thread_count,
+                )?;
                 return Ok(CommandExitStatus::Success);
             };
 
@@ -119,8 +126,13 @@ impl SuppressArgs {
                     .resolve(self.config_override.clone(), wrapper)?;
 
                 let check_args = CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
-                let (_, errors, _check_result) =
-                    check_args.run_once(files_to_check, config_finder, upsell, thread_count)?;
+                let (_, errors, _check_result) = check_args.run_once(
+                    version,
+                    files_to_check,
+                    config_finder,
+                    upsell,
+                    thread_count,
+                )?;
 
                 // Convert to SerializedErrors for all user-visible errors,
                 // excluding directives (e.g. reveal_type) and UnusedIgnore

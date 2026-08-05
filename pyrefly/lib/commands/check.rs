@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+mod sarif;
+
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
@@ -62,6 +64,8 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
 
+use self::sarif::write_error_sarif_to_console;
+use self::sarif::write_error_sarif_to_file;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::files::UpsellDecision;
@@ -137,6 +141,7 @@ pub struct FullCheckArgs {
 impl FullCheckArgs {
     pub async fn run(
         self,
+        version: &str,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
@@ -145,6 +150,7 @@ impl FullCheckArgs {
             self.files.resolve(self.config_override, wrapper)?;
         run_check(
             self.args,
+            version,
             self.watch,
             files_to_check,
             config_finder,
@@ -165,6 +171,7 @@ fn resolve_relative_to(relative_to: Option<&String>) -> PathBuf {
 
 async fn run_check(
     args: CheckArgs,
+    version: &str,
     watch: bool,
     files_to_check: Box<dyn Includes>,
     config_finder: ConfigFinder,
@@ -178,12 +185,19 @@ async fn run_check(
             display::intersperse_iter(";", || roots.iter().map(|p| p.display()))
         );
         let watcher = Watcher::notify(&roots)?;
-        args.run_watch(watcher, files_to_check, config_finder, upsell, thread_count)
-            .await?;
+        args.run_watch(
+            watcher,
+            version,
+            files_to_check,
+            config_finder,
+            upsell,
+            thread_count,
+        )
+        .await?;
         Ok((CommandExitStatus::Success, None))
     } else {
         let (status, _, check_result) =
-            args.run_once(files_to_check, config_finder, upsell, thread_count)?;
+            args.run_once(version, files_to_check, config_finder, upsell, thread_count)?;
         Ok((status, Some(check_result)))
     }
 }
@@ -225,6 +239,7 @@ pub struct SnippetCheckArgs {
 impl SnippetCheckArgs {
     pub async fn run(
         self,
+        version: &str,
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
         let config_finder = get_config_finder_for_snippet(self.config, self.config_override)?;
@@ -239,7 +254,7 @@ impl SnippetCheckArgs {
             },
         };
         let (status, check_result) =
-            check_args.run_once_with_snippet(self.code, config_finder, thread_count)?;
+            check_args.run_once_with_snippet(self.code, version, config_finder, thread_count)?;
         Ok((status, Some(check_result)))
     }
 }
@@ -436,6 +451,7 @@ struct BehaviorArgs {
 fn write_errors_to_file(
     format: OutputFormat,
     path: &Path,
+    version: &str,
     relative_to: &Path,
     errors: &[Error],
 ) -> anyhow::Result<()> {
@@ -449,12 +465,14 @@ fn write_errors_to_file(
         OutputFormat::Github => write_error_github_to_file(path, errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_file(path, relative_to, errors),
         OutputFormat::CodeClimate => write_error_codeclimate_to_file(path, relative_to, errors),
+        OutputFormat::Sarif => write_error_sarif_to_file(path, version, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
 
 pub(crate) fn write_errors_to_console(
     format: OutputFormat,
+    version: &str,
     relative_to: &Path,
     errors: &[Error],
 ) -> anyhow::Result<()> {
@@ -468,6 +486,7 @@ pub(crate) fn write_errors_to_console(
         OutputFormat::Github => write_error_github_to_console(errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_console(relative_to, errors),
         OutputFormat::CodeClimate => write_error_codeclimate_to_console(relative_to, errors),
+        OutputFormat::Sarif => write_error_sarif_to_console(version, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -1042,6 +1061,7 @@ impl CheckArgs {
     /// and a `CheckResult` suitable for telemetry logging.
     pub fn run_once(
         mut self,
+        version: &str,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
         upsell: UpsellDecision,
@@ -1094,6 +1114,7 @@ impl CheckArgs {
         let (status, errors) = self.run_inner(
             timings,
             transaction.as_mut(),
+            version,
             &loaded_handles,
             sourcedb_errors,
             require_levels.specified,
@@ -1106,6 +1127,7 @@ impl CheckArgs {
     pub fn run_once_with_snippet(
         mut self,
         code: String,
+        version: &str,
         config_finder: ConfigFinder,
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, CheckResult)> {
@@ -1150,6 +1172,7 @@ impl CheckArgs {
         let (status, errors) = self.run_inner(
             Timings::new(),
             transaction.as_mut(),
+            version,
             &[handle],
             vec![],
             require_levels.specified,
@@ -1162,6 +1185,7 @@ impl CheckArgs {
     pub async fn run_watch(
         mut self,
         mut watcher: Watcher,
+        version: &str,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
         mut upsell: UpsellDecision,
@@ -1211,6 +1235,7 @@ impl CheckArgs {
             let res = self.run_inner(
                 timings,
                 mut_transaction,
+                version,
                 &loaded_handles,
                 sourcedb_errors,
                 require_levels.specified,
@@ -1268,6 +1293,7 @@ impl CheckArgs {
         &self,
         mut timings: Timings,
         transaction: &mut Transaction,
+        version: &str,
         handles: &[Handle],
         mut sourcedb_errors: Vec<ConfigError>,
         require: Require,
@@ -1447,9 +1473,20 @@ impl CheckArgs {
         });
 
         if let Some(path) = &self.output.output {
-            write_errors_to_file(output_format, path, relative_to.as_path(), &output_errors)?;
+            write_errors_to_file(
+                output_format,
+                path,
+                version,
+                relative_to.as_path(),
+                &output_errors,
+            )?;
         } else {
-            write_errors_to_console(output_format, relative_to.as_path(), &output_errors)?;
+            write_errors_to_console(
+                output_format,
+                version,
+                relative_to.as_path(),
+                &output_errors,
+            )?;
         }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {

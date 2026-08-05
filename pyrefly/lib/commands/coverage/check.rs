@@ -56,6 +56,7 @@ pub struct CheckArgs {
 impl CheckArgs {
     pub fn run(
         self,
+        version: &str,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
@@ -103,7 +104,7 @@ impl CheckArgs {
         );
 
         let root = std::env::current_dir().unwrap_or_default();
-        write_errors_to_console(self.output_format, &root, &errors)?;
+        write_errors_to_console(self.output_format, version, &root, &errors)?;
 
         if coverage + 1e-9 >= self.fail_under {
             eprintln!("{} {summary}", Severity::Info.painted());

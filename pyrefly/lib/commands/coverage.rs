@@ -31,12 +31,15 @@ pub enum CoverageCommand {
 impl CoverageCommand {
     pub fn run(
         self,
+        version: &str,
         config_configurer_wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         match self {
             CoverageCommand::Report(args) => args.run(config_configurer_wrapper, thread_count),
-            CoverageCommand::Check(args) => args.run(config_configurer_wrapper, thread_count),
+            CoverageCommand::Check(args) => {
+                args.run(version, config_configurer_wrapper, thread_count)
+            }
         }
     }
 }
