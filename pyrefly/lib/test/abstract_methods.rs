@@ -511,6 +511,18 @@ class B(A, metaclass=ABCMeta):
 );
 
 testcase!(
+    test_inherited_abcmeta_is_implicitly_abstract,
+    TestEnv::new().enable_implicit_abstract_class_error(),
+    r#"
+from abc import ABCMeta, abstractmethod
+class M(ABCMeta): ...
+class A(metaclass=M):  # E: has unimplemented abstract members: `f`
+    @abstractmethod
+    def f(self) -> None: ...
+    "#,
+);
+
+testcase!(
     test_uninit_classvar_abc,
     r#"
 # To align with mypy and pyright, we do not consider uninitialized class vars on abstract classes to be abstract
