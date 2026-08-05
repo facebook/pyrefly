@@ -157,6 +157,7 @@ pub struct TypeDisplayContext<'a> {
     render_self_type_as_self: bool,
     /// Render a `DataFrame` as its plain underlying class rather than the schema form.
     strip_library_schemas: bool,
+    render_unknown_as_any: bool,
     /// Optional stdlib reference for resolving builtin type locations
     stdlib: Option<&'a Stdlib>,
     /// Stack of identities of type variables currently bound by enclosing Foralls.
@@ -1467,6 +1468,9 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Ellipsis => output.write_str("Ellipsis"),
             Type::Any(style) => match style {
                 AnyStyle::Explicit => self.maybe_fmt_with_module("typing", "Any", output),
+                AnyStyle::Implicit | AnyStyle::Error if self.render_unknown_as_any => {
+                    self.maybe_fmt_with_module("typing", "Any", output)
+                }
                 AnyStyle::Implicit | AnyStyle::Error => output.write_str("Unknown"),
             },
             Type::TypeAlias(ta) => match &**ta {
@@ -1662,6 +1666,7 @@ impl Type {
     /// Render an annotation while preserving semantic module references.
     pub fn get_annotation_parts(&self, stdlib: Option<&Stdlib>) -> Vec<AnnotationPart> {
         let mut ctx = source_annotation_context(self, stdlib);
+        ctx.render_unknown_as_any = true;
         ctx.always_display_module_name_except_builtins();
         let mut output = AnnotationOutput::new(&ctx);
         ctx.fmt_helper_generic(self, false, &mut output).unwrap();
@@ -2259,6 +2264,14 @@ pub mod tests {
                 },
                 AnnotationPart::Text("]".to_owned()),
             ]
+        );
+
+        assert_eq!(
+            Type::any_implicit().get_annotation_parts(None),
+            vec![AnnotationPart::Reference {
+                module: ModuleName::from_str("typing"),
+                name: "Any".to_owned(),
+            }]
         );
     }
 

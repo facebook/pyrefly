@@ -725,6 +725,40 @@ value = choose(True)
 }
 
 #[test]
+fn test_insertable_hint_renders_unknown_as_any() {
+    let files = [
+        (
+            "producer",
+            r#"
+def make_values():
+    return []
+"#,
+        ),
+        (
+            "main",
+            r#"
+from producer import make_values
+
+values = make_values()
+"#,
+        ),
+    ];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
+    let hints = state
+        .transaction()
+        .inlay_hints(handles.get("main").unwrap(), Default::default())
+        .unwrap();
+    let edits = hints
+        .iter()
+        .find_map(|hint| hint.edits.as_ref())
+        .expect("expected an insertable hint");
+
+    assert_eq!(edits.annotation, ": list[typing.Any]");
+    assert_eq!(edits.imports.len(), 1);
+    assert_eq!(edits.imports[0].1, "import typing\n");
+}
+
+#[test]
 fn test_class_attribute_inlay_hint() {
     let code = r#"
 def make_list() -> list[int]:
