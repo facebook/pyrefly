@@ -30,7 +30,7 @@ harness = false
 
 [dependencies]
 anstream = "0.6.11"
-anyhow = "1.0.103"
+anyhow = "1.0.104"
 arc-swap = { version = "1.9.2", features = ["weak"] }
 blake3 = { version = "=1.8.2", features = ["mmap", "rayon", "traits-preview"] }
 capnp = "0.25.6"
