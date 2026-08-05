@@ -62,43 +62,39 @@ pub struct InlayHintEdits {
 struct TypeHintRenderer<'a, 'state> {
     transaction: &'a Transaction<'state>,
     handle: &'a Handle,
-    tracker: Option<&'a ImportTracker>,
-    ast: Option<&'a ModModule>,
+    tracker: ImportTracker,
+    ast: Arc<ModModule>,
     stdlib: &'a Stdlib,
 }
 
 impl TypeHintRenderer<'_, '_> {
     fn render(&self, prefix: &str, ty: &Type) -> InlayHintEdits {
         let parts = ty.get_annotation_parts(Some(self.stdlib));
-        let empty_tracker = ImportTracker::default();
-        let tracker = self.tracker.unwrap_or(&empty_tracker);
-        let (text, missing) = tracker.resolve_annotation(&parts, self.handle.module());
-        let import_edits = if let Some(ast) = self.ast {
-            let mut missing = missing.into_iter().collect::<Vec<_>>();
-            missing.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-            let mut import_edit = None;
-            for module in missing {
-                if let Some(handle_to_import) = self
-                    .transaction
-                    .import_handle(self.handle, module, None)
-                    .finding()
-                {
-                    let (position, insert_text, _) =
-                        import_regular_import_edit(ast, handle_to_import, None);
-                    let (_, combined) = import_edit.get_or_insert((position, String::new()));
-                    combined.push_str(&insert_text);
-                }
+        let (text, missing) = self
+            .tracker
+            .resolve_annotation(&parts, self.handle.module());
+        let mut missing = missing.into_iter().collect::<Vec<_>>();
+        missing.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        let mut import_edit = None;
+        for module in missing {
+            if let Some(handle_to_import) = self
+                .transaction
+                .import_handle(self.handle, module, None)
+                .finding()
+            {
+                let (position, insert_text, _) =
+                    import_regular_import_edit(self.ast.as_ref(), handle_to_import, None);
+                let (_, combined) = import_edit.get_or_insert((position, String::new()));
+                combined.push_str(&insert_text);
             }
-            match import_edit {
-                Some(import_edit) => vec![import_edit],
-                None => Vec::new(),
-            }
-        } else {
-            Vec::new()
+        }
+        let imports = match import_edit {
+            Some(import_edit) => vec![import_edit],
+            None => Vec::new(),
         };
         InlayHintEdits {
             annotation: format!("{prefix}{text}"),
-            imports: import_edits,
+            imports,
         }
     }
 }
@@ -213,22 +209,28 @@ impl<'a> Transaction<'a> {
         };
         let bindings = self.get_bindings(handle)?;
         let stdlib = self.get_stdlib(handle);
-        let ast_arc = self.get_ast(handle);
-        let ast_ref = ast_arc.as_deref();
-        let import_tracker = ast_ref
-            .map(|ast| ImportTracker::from_ast(ast, handle.module(), handle.path().is_init()));
-        let renderer = TypeHintRenderer {
+        let renderer = self.get_ast(handle).map(|ast| TypeHintRenderer {
             transaction: self,
             handle,
-            tracker: import_tracker.as_ref(),
-            ast: ast_ref,
+            tracker: ImportTracker::from_ast(
+                ast.as_ref(),
+                handle.module(),
+                handle.path().is_init(),
+            ),
+            ast,
             stdlib: &stdlib,
-        };
+        });
         let make_type_hint =
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
                 let type_parts = ty.get_types_with_locations(Some(&stdlib));
                 let label_parts = once((prefix.to_owned(), None)).chain(type_parts).collect();
-                let edits = insertable.then(|| renderer.render(prefix, ty));
+                let edits = if insertable {
+                    renderer
+                        .as_ref()
+                        .map(|renderer| renderer.render(prefix, ty))
+                } else {
+                    None
+                };
                 InlayHintData {
                     position,
                     label_parts,
