@@ -61,6 +61,7 @@ use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::NarrowSource;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
+use crate::binding::scope::TerminationKind;
 use crate::binding::scope::is_constant_name;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
@@ -1081,8 +1082,14 @@ impl<'a> BindingsBuilder<'a> {
                 ) {
                     x.recurse_mut(&mut |x| self.ensure_expr(x, usage));
                     // Control flow doesn't proceed after sys.exit(),
-                    // exit(), quit(), or os._exit().
-                    self.scopes.mark_flow_termination(false);
+                    // exit(), quit(), or os._exit(). The first three raise `SystemExit`,
+                    // which an enclosing `with` can swallow; `os._exit()` does not.
+                    let kind = if special == Some(SpecialExport::OsExit) {
+                        TerminationKind::Jump
+                    } else {
+                        TerminationKind::Raise
+                    };
+                    self.scopes.mark_flow_termination(kind);
                     return;
                 }
                 // Default: recurse into children as for any other expr.

@@ -976,6 +976,8 @@ pub enum Key {
     Delete(TextRange),
     /// Match statement or if/elif chain that needs type-based exhaustiveness checking
     Exhaustive(ExhaustivenessKind, TextRange),
+    /// A `with` statement whose body terminated, which needs type-based reachability checking
+    SuppressedException(TextRange),
 }
 
 impl Ranged for Key {
@@ -1011,6 +1013,7 @@ impl Ranged for Key {
             Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
+            Self::SuppressedException(r) => *r,
         }
     }
 }
@@ -1056,6 +1059,9 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
             Self::Exhaustive(kind, r) => {
                 write!(f, "Key::Exhaustive({:?}, {})", kind, ctx.display(r))
+            }
+            Self::SuppressedException(r) => {
+                write!(f, "Key::SuppressedException({})", ctx.display(r))
             }
         }
     }
@@ -2250,6 +2256,20 @@ pub struct ExhaustiveBinding {
     pub narrow_entries: Vec<(Idx<Key>, Box<NarrowOp>, TextRange)>,
 }
 
+/// Data for the reachability of the code following a `with` statement whose body
+/// terminated with a `raise`
+#[derive(Clone, Debug)]
+pub struct SuppressedException {
+    /// The context expressions of the `with` items, outermost first. Any one of them
+    /// suppressing the exception is enough for control flow to resume.
+    pub contexts: Box<[Idx<Key>]>,
+    pub kind: IsAsync,
+    /// Set when the body did not syntactically terminate but ended in an expression
+    /// that may have type `Never` (e.g. a `NoReturn` call or a nested `with`). The body
+    /// only terminates if this solves to `Never`.
+    pub body: Option<Idx<Key>>,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LambdaParamId(pub u32);
 
@@ -2503,6 +2523,11 @@ pub enum Binding {
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
+    /// The code following a `with` statement whose body terminated. An exception
+    /// raised in the body may be suppressed by the context manager, in which case
+    /// control flow resumes after the `with`.
+    /// Resolves to `Never` if the body terminates and no context manager suppresses.
+    SuppressedException(Box<SuppressedException>),
     Sentinel(
         Box<(
             Option<Idx<KeyAnnotation>>,
@@ -2828,6 +2853,20 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, "])")
             }
+            Self::SuppressedException(x) => {
+                write!(f, "SuppressedException([")?;
+                for (i, idx) in x.contexts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ctx.display(*idx))?;
+                }
+                write!(f, "], {:?}, ", x.kind)?;
+                match x.body {
+                    Some(body) => write!(f, "{})", ctx.display(body)),
+                    None => write!(f, "terminated)"),
+                }
+            }
         }
     }
 }
@@ -2918,7 +2957,8 @@ impl Binding {
             | Binding::AssignToSubscript(_)
             | Binding::Delete(_)
             | Binding::ClassBodyUnknownName(_)
-            | Binding::Exhaustive(_) => None,
+            | Binding::Exhaustive(_)
+            | Binding::SuppressedException(_) => None,
         }
     }
 }

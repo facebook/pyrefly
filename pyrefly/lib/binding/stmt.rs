@@ -49,6 +49,7 @@ use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
+use crate::binding::binding::SuppressedException;
 use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::bindings::BindingsBuilder;
@@ -61,6 +62,7 @@ use crate::binding::polars::polars_column_mutation;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
+use crate::binding::scope::TerminationKind;
 use crate::config::error_kind::ErrorKind;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::special::SpecialExport;
@@ -181,7 +183,8 @@ impl<'a> BindingsBuilder<'a> {
             &Usage::NonPinningValue(None),
         );
         if let Some(false) = static_test {
-            self.scopes.mark_flow_termination(true);
+            self.scopes
+                .mark_flow_termination(TerminationKind::StaticTest);
         }
     }
 
@@ -690,7 +693,7 @@ impl<'a> BindingsBuilder<'a> {
                 "Invalid `return` outside of a function".to_owned(),
             );
         }
-        self.scopes.mark_flow_termination(false);
+        self.scopes.mark_flow_termination(TerminationKind::Jump);
     }
 
     /// Evaluate the statements and update the bindings.
@@ -1373,6 +1376,12 @@ impl<'a> BindingsBuilder<'a> {
                     );
                 }
                 let kind = IsAsync::new(x.is_async);
+                let with_range = x.range();
+                // Whether the `with` itself is reachable, which we must record before
+                // visiting the body: a terminator in the body marks the flow dead, and
+                // we must not resurrect a flow that was already dead beforehand.
+                let reachable = !self.scopes.is_definitely_unreachable();
+                let mut contexts = Vec::with_capacity(x.items.len());
                 for mut item in x.items {
                     let item_range = item.range();
                     let expr_range = item.context_expr.range();
@@ -1382,6 +1391,7 @@ impl<'a> BindingsBuilder<'a> {
                         context,
                         Binding::Expr(None, Box::new(item.context_expr)),
                     );
+                    contexts.push(context_idx);
                     if let Some(mut opts) = item.optional_vars {
                         let make_binding =
                             |ann| Binding::ContextValue(ann, context_idx, expr_range, kind);
@@ -1396,6 +1406,35 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.enter_with();
                 self.stmts(x.body, parent);
                 self.scopes.exit_with();
+                // An exception raised in the body may be suppressed by the context
+                // manager, in which case control flow resumes after the `with`. That
+                // depends on the type of `__exit__`, so defer the decision to solving.
+                // A `return`/`break`/`continue` also runs `__exit__`, but its return
+                // value is ignored for those, so they always leave the `with`.
+                let terminated = self.scopes.has_terminated();
+                // A body that did not terminate syntactically may still end in a `Never`
+                // expression, e.g. a `NoReturn` call, which raises or diverges.
+                let body = if terminated {
+                    None
+                } else {
+                    self.scopes.last_stmt_expr()
+                };
+                let suppressible = if terminated {
+                    self.scopes.terminated_by_raise()
+                } else {
+                    body.is_some()
+                };
+                if reachable && suppressible {
+                    let key = self.insert_binding(
+                        Key::SuppressedException(with_range),
+                        Binding::SuppressedException(Box::new(SuppressedException {
+                            contexts: contexts.into_boxed_slice(),
+                            kind,
+                            body,
+                        })),
+                    );
+                    self.scopes.resume_after_with(key);
+                }
             }
             Stmt::Match(x) => {
                 self.stmt_match(x, parent);
@@ -1421,7 +1460,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     // If there's no exception raised, don't bother checking the cause.
                 }
-                self.scopes.mark_flow_termination(false);
+                self.scopes.mark_flow_termination(TerminationKind::Raise);
             }
             Stmt::Try(x) => {
                 self.start_fork_and_branch(x.range);

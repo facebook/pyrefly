@@ -566,6 +566,27 @@ impl Static {
     }
 }
 
+/// How control flow left a point in the program. Only an exception can be swallowed
+/// by an enclosing `with`: `__exit__` also runs for `return`/`break`/`continue`, but
+/// its return value is ignored, so those always leave the `with`.
+#[derive(Copy, Clone, Debug)]
+pub enum TerminationKind {
+    /// A `raise`, or a call that raises (e.g. `sys.exit()`).
+    Raise,
+    /// A `return`, `break`, or `continue`.
+    Jump,
+    /// A statically-failing test, e.g. `assert sys.version_info >= (3, 12)`. It
+    /// raises, but the code after it runs in other environments, so it is not
+    /// unreachable in all cases.
+    StaticTest,
+}
+
+impl TerminationKind {
+    fn raises(self) -> bool {
+        matches!(self, Self::Raise | Self::StaticTest)
+    }
+}
+
 /// Flow-sensitive information about a name.
 #[derive(Default, Clone, Debug)]
 pub struct Flow {
@@ -575,6 +596,9 @@ pub struct Flow {
     // We continue to analyze the rest of the code after a flow terminates, but
     // we don't include terminated flows when merging after loops and branches.
     has_terminated: bool,
+    /// Whether any path that terminated this flow did so by raising. Only those can
+    /// be swallowed by an enclosing `with`. Meaningless unless `has_terminated`.
+    terminated_by_raise: bool,
     // This flag is set in a subset of cases when has_terminated is set; it's more conservative so it can be used for error reporting.
     // The key differences are as follows:
     // - Static tests based on stuff like sys.version_info don't exclude branches at runtime, since the program may execute in different environments
@@ -2619,6 +2643,7 @@ impl Scopes {
         if let Some(innermost) = scope.loops.last_mut() {
             innermost.exits.push((exit, flow));
             scope.flow.has_terminated = true;
+            scope.flow.terminated_by_raise = false;
             scope.flow.is_definitely_unreachable = true;
             true
         } else {
@@ -2634,10 +2659,13 @@ impl Scopes {
     pub fn swap_current_flow_with(&mut self, flow: &mut Flow) {
         mem::swap(&mut self.current_mut().flow, flow);
     }
-    pub fn mark_flow_termination(&mut self, from_static_test: bool) {
-        self.current_mut().flow.has_terminated = true;
-        if self.current_mut().with_depth == 0 && !from_static_test {
-            self.current_mut().flow.is_definitely_unreachable = true;
+    pub fn mark_flow_termination(&mut self, kind: TerminationKind) {
+        let inside_with = self.current().with_depth > 0;
+        let flow = &mut self.current_mut().flow;
+        flow.has_terminated = true;
+        flow.terminated_by_raise = kind.raises();
+        if !inside_with && !matches!(kind, TerminationKind::StaticTest) {
+            flow.is_definitely_unreachable = true;
         }
     }
 
@@ -2666,6 +2694,31 @@ impl Scopes {
     /// Should be set to Some(key) for StmtExpr, and None for other statements.
     pub fn set_last_stmt_expr(&mut self, key: Option<Idx<Key>>) {
         self.current_mut().flow.last_stmt_expr = key;
+    }
+
+    pub fn last_stmt_expr(&self) -> Option<Idx<Key>> {
+        self.current().flow.last_stmt_expr
+    }
+
+    pub fn has_terminated(&self) -> bool {
+        self.current().flow.has_terminated
+    }
+
+    /// Whether the current flow terminated by raising, as opposed to `return`/`break`/
+    /// `continue`. Only a raise can be swallowed by an enclosing `with`.
+    pub fn terminated_by_raise(&self) -> bool {
+        self.current().flow.terminated_by_raise
+    }
+
+    /// Control flow leaving a `with` body may resume after the `with` if the context
+    /// manager suppresses the exception, which we only know once we know the type of
+    /// `__exit__`. Make the flow live again, deferring termination calculation to
+    /// the solving stage.
+    pub fn resume_after_with(&mut self, last_statement_key: Idx<Key>) {
+        let flow = &mut self.current_mut().flow;
+        flow.has_terminated = false;
+        flow.terminated_by_raise = false;
+        flow.last_stmt_expr = Some(last_statement_key);
     }
 
     /// Whenever we enter the scope of a method *and* we see a matching
@@ -3748,6 +3801,9 @@ impl<'a> BindingsBuilder<'a> {
         let (terminated_branches, live_branches): (Vec<_>, Vec<_>) =
             branches.into_iter().partition(|flow| flow.has_terminated);
         let has_terminated = live_branches.is_empty() && !merge_style.is_loop();
+        // An enclosing `with` can only resume the merged flow if at least one of the
+        // paths that terminated it raised.
+        let any_terminated_by_raise = terminated_branches.iter().any(|f| f.terminated_by_raise);
         let flows = if has_terminated {
             terminated_branches
         } else {
@@ -3837,6 +3893,7 @@ impl<'a> BindingsBuilder<'a> {
         let flow = Flow {
             info: merged_flow_infos,
             has_terminated,
+            terminated_by_raise: has_terminated && any_terminated_by_raise,
             is_definitely_unreachable: all_are_unreachable,
             last_stmt_expr: None,
         };

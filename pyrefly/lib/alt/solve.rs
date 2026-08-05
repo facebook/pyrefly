@@ -4147,20 +4147,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Whether an exception raised inside a `with` body may be suppressed by the
+    /// context manager, per
+    /// https://typing.python.org/en/latest/spec/exceptions.html#context-managers.
+    fn context_manager_suppresses(&self, context_manager_type: &Type, kind: IsAsync) -> bool {
+        let exit = self.context_value_exit(
+            context_manager_type,
+            kind,
+            TextRange::default(),
+            &self.error_swallower(),
+            None,
+        );
+        match &exit {
+            Type::Literal(lit) if let Lit::Bool(b) = lit.value => b,
+            Type::ClassType(cls) => cls == self.stdlib.bool(),
+            _ => false, // Default to assuming exceptions are not suppressed
+        }
+    }
+
     /// Handle `Binding::ReturnImplicit` - compute the implicit return type.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
     fn binding_to_type_return_implicit(&self, x: &ReturnImplicit) -> Type {
-        // Would context have caught something:
-        // https://typing.python.org/en/latest/spec/exceptions.html#context-managers.
-        let context_catch = |x: &Type| -> bool {
-            match x {
-                Type::Literal(lit) if let Lit::Bool(b) = lit.value => b,
-                Type::ClassType(cls) => cls == self.stdlib.bool(),
-                _ => false, // Default to assuming exceptions are not suppressed
-            }
-        };
-
         if self.module().path().is_interface() {
             self.heap.mk_any_implicit() // .pyi file, functions don't have bodies
         } else if x.last_exprs.as_ref().is_some_and(|xs| {
@@ -4168,16 +4176,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let e = self.get_idx(*k);
                 match last {
                     LastStmt::Expr => e.ty().is_never(),
-                    LastStmt::With(kind) => {
-                        let res = self.context_value_exit(
-                            e.ty(),
-                            *kind,
-                            TextRange::default(),
-                            &self.error_swallower(),
-                            None,
-                        );
-                        !context_catch(&res)
-                    }
+                    LastStmt::With(kind) => !self.context_manager_suppresses(e.ty(), *kind),
                     LastStmt::Exhaustive(_, _) => {
                         // Check if the Exhaustive binding at this range resolved to Never
                         e.ty().is_never()
@@ -5784,6 +5783,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_class_body_unknown_name(x.0, &x.1, &x.2, errors)
             }
             Binding::Exhaustive(x) => self.binding_to_type_exhaustive(&x.narrow_entries),
+            Binding::SuppressedException(x) => {
+                let body_terminates = x.body.is_none_or(|body| self.get_idx(body).ty().is_never());
+                if body_terminates
+                    && !x.contexts.iter().any(|context| {
+                        self.context_manager_suppresses(self.get_idx(*context).ty(), x.kind)
+                    })
+                {
+                    self.heap.mk_never()
+                } else {
+                    self.heap.mk_none()
+                }
+            }
             Binding::Expr(ann, e) => self.binding_to_type_expr(*ann, e, errors),
             Binding::StmtExpr(e, special_export) => {
                 self.binding_to_type_stmt_expr(e, *special_export, errors)

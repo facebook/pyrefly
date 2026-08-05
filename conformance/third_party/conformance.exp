@@ -5510,30 +5510,7 @@
       "stop_line": 151
     }
   ],
-  "exceptions_context_managers.py": [
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(str, int | str) failed",
-      "description": "assert_type(str, int | str) failed",
-      "line": 50,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 50
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(str, int | str) failed",
-      "description": "assert_type(str, int | str) failed",
-      "line": 57,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 57
-    }
-  ],
+  "exceptions_context_managers.py": [],
   "generics_base_class.py": [
     {
       "code": -2,
