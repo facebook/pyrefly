@@ -82,6 +82,11 @@ let docsSidebar = [
             },
             {
                 type: 'doc' as const,
+                id: 'dataframes',
+                label: 'DataFrames (polars, pandas)',
+            },
+            {
+                type: 'doc' as const,
                 id: 'attrs',
                 label: 'attrs Support',
             },
