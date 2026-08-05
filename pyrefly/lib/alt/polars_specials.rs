@@ -905,6 +905,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(())
     }
 
+    fn apply_polars_csv_sequence_overrides(
+        &self,
+        columns: &mut [(Name, PolarsDType)],
+        overrides: Option<&Expr>,
+    ) -> Option<()> {
+        let Some(overrides) = overrides else {
+            return Some(());
+        };
+        if matches!(overrides, Expr::NoneLiteral(_) | Expr::Dict(_)) {
+            return Some(());
+        }
+        let dtypes = literal_sequence(overrides)?
+            .iter()
+            .map(|expr| self.polars_dtype_from_expr(expr))
+            .collect::<Option<Vec<_>>>()?;
+        if dtypes.len() > columns.len() {
+            return None;
+        }
+        for ((_, dtype), override_dtype) in columns.iter_mut().zip(dtypes) {
+            *dtype = override_dtype;
+        }
+        Some(())
+    }
+
+    fn apply_polars_csv_new_columns(
+        &self,
+        columns: &mut [(Name, PolarsDType)],
+        new_columns: Option<&Expr>,
+    ) -> Option<()> {
+        let Some(new_columns) = new_columns else {
+            return Some(());
+        };
+        if matches!(new_columns, Expr::NoneLiteral(_)) {
+            return Some(());
+        }
+        let names = self.polars_csv_names(new_columns)?;
+        if names.len() > columns.len() {
+            return None;
+        }
+        for ((name, _), replacement) in columns.iter_mut().zip(names) {
+            *name = replacement;
+        }
+        let mut seen = SmallSet::new();
+        if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
+            return None;
+        }
+        Some(())
+    }
+
     fn infer_polars_csv_schema(
         &self,
         arguments: &Arguments,
@@ -984,21 +1033,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         if let Some(overrides) = options.overrides
             && !matches!(overrides, Expr::NoneLiteral(_) | Expr::Dict(_))
+            && selection.is_some()
         {
-            if selection.is_some() {
-                return None;
-            }
-            let dtypes = literal_sequence(overrides)?
-                .iter()
-                .map(|expr| self.polars_dtype_from_expr(expr))
-                .collect::<Option<Vec<_>>>()?;
-            if dtypes.len() > columns.len() {
-                return None;
-            }
-            for ((_, dtype), override_dtype) in columns.iter_mut().zip(dtypes) {
-                *dtype = override_dtype;
-            }
+            return None;
         }
+        self.apply_polars_csv_sequence_overrides(&mut columns, options.overrides)?;
         if let Some(selection) = selection {
             if let CsvColumnSelection::Names(names) = &selection
                 && !names
@@ -1018,21 +1057,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .collect();
         }
         self.apply_polars_csv_row_index(&mut columns, options.row_index_name)?;
-        if let Some(new_columns) = options.new_columns
-            && !matches!(new_columns, Expr::NoneLiteral(_))
-        {
-            let names = self.polars_csv_names(new_columns)?;
-            if names.len() > columns.len() {
-                return None;
-            }
-            for ((name, _), replacement) in columns.iter_mut().zip(names) {
-                *name = replacement;
-            }
-            let mut seen = SmallSet::new();
-            if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
-                return None;
-            }
-        }
+        self.apply_polars_csv_new_columns(&mut columns, options.new_columns)?;
         Some(columns)
     }
 
@@ -1042,19 +1067,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut columns: Vec<(Name, PolarsDType)>,
         options: &PolarsCsvOptions,
     ) -> Option<Vec<(Name, PolarsDType)>> {
-        if [
-            options.overrides,
-            options.selection,
-            options.new_columns,
-            options.with_column_names,
-        ]
-        .into_iter()
-        .flatten()
-        .any(|expr| !matches!(expr, Expr::NoneLiteral(_)))
+        if options
+            .with_column_names
+            .is_some_and(|expr| !matches!(expr, Expr::NoneLiteral(_)))
         {
             return None;
         }
+        self.apply_polars_csv_sequence_overrides(&mut columns, options.overrides)?;
         self.apply_polars_csv_row_index(&mut columns, options.row_index_name)?;
+        self.apply_polars_csv_new_columns(&mut columns, options.new_columns)?;
         if let Some(include_file_paths) = options.include_file_paths
             && !matches!(include_file_paths, Expr::NoneLiteral(_))
         {
