@@ -168,8 +168,9 @@ pub enum ErrorKind {
     EmptyBody,
     /// Explicit usage of `typing.Any` in an annotation.
     ExplicitAny,
-    /// Raised when a class implicitly becomes abstract by defining abstract members without
-    /// inheriting from `abc.ABC` or using `abc.ABCMeta`.
+    /// Raised when a class that inherits from an abstract class but is not itself explicitly
+    /// abstract (for example, it does not directly inherit from abc.ABC or use abc.ABCMeta) has
+    /// unimplemented abstract members.
     ImplicitAbstractClass,
     /// Umbrella error kind for cases where Pyrefly infers an implicit `Any`.
     /// Most concrete sites emit one of the more specific sub-kinds below;
