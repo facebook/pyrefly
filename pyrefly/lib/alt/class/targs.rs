@@ -39,6 +39,7 @@ use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedIdentity;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::quantified::QuantifiedOrigin;
+use crate::types::quantified::substitute_tparam_defaults;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
@@ -750,25 +751,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name_to_idx: &SmallMap<&Name, usize>,
     ) -> Type {
         if let Some(default) = param.default() {
-            default.clone().transform(&mut |default| {
-                let typevar_name = match default {
-                    Type::TypeVar(t) => Some(t.qname().id()),
-                    Type::TypeVarTuple(t) => Some(t.qname().id()),
-                    Type::ParamSpec(p) => Some(p.qname().id()),
-                    Type::Quantified(q) => Some(q.name()),
-                    _ => None,
-                };
-                if let Some(typevar_name) = typevar_name {
-                    *default = if let Some(i) = name_to_idx.get(typevar_name) {
+            substitute_tparam_defaults(
+                default.clone(),
+                &|name| {
+                    name_to_idx.get(name).map(|i| {
                         // The default of this TypeVar contains the value of a previous TypeVar.
                         checked_targs[*i].clone()
-                    } else {
-                        // The default refers to the value of a TypeVar that isn't in scope. We've
-                        // already logged an error in TParams::new(); return a sensible default.
-                        self.heap.mk_any_implicit()
-                    }
-                }
-            })
+                    })
+                },
+                // The default may refer to the value of a TypeVar that isn't in scope. We've
+                // already logged an error in TParams::new(); return a sensible default.
+                self.heap.mk_any_implicit(),
+            )
         } else {
             param.as_gradual_type()
         }
