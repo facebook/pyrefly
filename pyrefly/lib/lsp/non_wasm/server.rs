@@ -2008,7 +2008,23 @@ impl Server {
                     if let Some((request, response)) =
                         as_request_response_pair::<WorkspaceConfiguration>(&request, &x)
                     {
-                        self.workspace_configuration_response(&request, &response, telemetry_event);
+                        match response {
+                            Ok(response) => {
+                                self.workspace_configuration_response(
+                                    &request,
+                                    &response,
+                                    telemetry_event,
+                                );
+                            }
+                            Err(err) => {
+                                warn!("Ignoring invalid workspace/configuration response: {err}");
+                                self.workspace_configuration_response(
+                                    &request,
+                                    &[],
+                                    telemetry_event,
+                                );
+                            }
+                        }
                     }
                 } else {
                     info!("Response for unknown request: {x:?}");

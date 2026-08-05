@@ -49,6 +49,35 @@ fn test_did_change_configuration() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
+#[test]
+fn test_invalid_workspace_configuration_response_does_not_crash() {
+    let root = get_test_files_root();
+    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    let settings = InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+        configuration: Some(None),
+        ..Default::default()
+    };
+
+    interaction
+        .client
+        .send_initialize(interaction.client.get_initialize_params(&settings));
+    interaction
+        .client
+        .expect_any_message()
+        .expect("Failed to initialize");
+    interaction.client.send_initialized();
+    interaction
+        .client
+        .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
+        .send_unchecked_response(json!("not-a-list"));
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
 #[cfg(unix)]
 fn setup_dummy_interpreter(custom_interpreter_path: &Path) -> PathBuf {
     // Create a mock Python interpreter script that returns the environment info
