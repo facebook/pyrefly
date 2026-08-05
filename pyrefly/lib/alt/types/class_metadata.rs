@@ -278,10 +278,6 @@ impl ClassMetadata {
         self.metaclass.get()
     }
 
-    pub fn custom_metaclass_raw(&self) -> &Metaclass {
-        &self.metaclass
-    }
-
     /// The class's metaclass.
     pub fn metaclass<'a>(&'a self, stdlib: &'a Stdlib) -> &'a ClassType {
         self.custom_metaclass()
@@ -341,15 +337,16 @@ impl ClassMetadata {
                 return true;
             }
         }
-        // Only check the metaclass if it's directly specified on this class
-        if let Metaclass::Direct(metaclass) = self.custom_metaclass_raw()
-            && metaclass
+        match &self.metaclass {
+            Metaclass::Direct(metaclass) => metaclass
                 .class_object()
-                .has_toplevel_qname("abc", "ABCMeta")
-        {
-            return true;
+                .has_toplevel_qname("abc", "ABCMeta"),
+            Metaclass::Inherited {
+                is_explicitly_abstract,
+                ..
+            } => *is_explicitly_abstract,
+            Metaclass::None => false,
         }
-        false
     }
 
     pub fn deprecation(&self) -> Option<&Deprecation> {
@@ -544,7 +541,14 @@ impl Display for ClassSynthesizedFields {
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
 pub enum Metaclass {
     Direct(ClassType),
-    Inherited(ClassType),
+    Inherited {
+        /// The actual metaclass, which is inherited from a parent.
+        metaclass: ClassType,
+        /// Whether the class has a `metaclass=...` declaration that marks the class as explicitly
+        /// abstract. Note that in this case the declared metaclass did *not* end up being the
+        /// class's resolved metaclass, but we still use it to determine intended abstract-ness.
+        is_explicitly_abstract: bool,
+    },
     #[default]
     None,
 }
@@ -553,7 +557,7 @@ impl Display for Metaclass {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match &self {
             Self::Direct(metaclass) => write!(f, "{metaclass}"),
-            Self::Inherited(metaclass) => write!(f, "inherited({metaclass})"),
+            Self::Inherited { metaclass, .. } => write!(f, "inherited({metaclass})"),
             Self::None => write!(f, "type"),
         }
     }
@@ -564,7 +568,7 @@ impl Metaclass {
     pub fn get(&self) -> Option<&ClassType> {
         match self {
             Self::Direct(metaclass) => Some(metaclass),
-            Self::Inherited(metaclass) => Some(metaclass),
+            Self::Inherited { metaclass, .. } => Some(metaclass),
             Self::None => None,
         }
     }
@@ -572,7 +576,7 @@ impl Metaclass {
     pub fn get_mut(&mut self) -> Option<&mut ClassType> {
         match self {
             Self::Direct(metaclass) => Some(metaclass),
-            Self::Inherited(metaclass) => Some(metaclass),
+            Self::Inherited { metaclass, .. } => Some(metaclass),
             Self::None => None,
         }
     }

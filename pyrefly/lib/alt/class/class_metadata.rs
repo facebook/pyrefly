@@ -185,8 +185,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             errors,
         );
 
-        // Compute base classes with metadata.
-        let bases_with_metadata = self.bases_with_metadata(parsed_results, is_new_type, errors);
+        let protocol_base_name = Name::new_static("Protocol");
+        let base_metaclasses = bases
+            .iter()
+            .zip(&parsed_results)
+            .filter_map(|(base, parsed)| match (base, parsed) {
+                (
+                    BaseClass::Generic(BaseClassGeneric {
+                        kind: BaseClassGenericKind::Protocol,
+                        ..
+                    }),
+                    _,
+                ) if !self.module().path().is_interface() => {
+                    // `Protocol` has metaclass `_ProtocolMeta`. `Protocol` is a special form in typeshed,
+                    // so we inject the metaclass here so that metaclass-driven checks work. Stubs often
+                    // model things as protocols even when they aren't at runtime, so we can be confident
+                    // that the class has `_ProtocolMeta` only when it is defined in a source (.py) file.
+                    Some((&protocol_base_name, self.stdlib.protocol_meta()))
+                }
+                (_, BaseClassParseResult::Parsed(parsed)) => parsed
+                    .metadata
+                    .custom_metaclass()
+                    .map(|metaclass| (parsed.class_object.name(), metaclass)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         // Compute class keywords, including the metaclass.
         let (metaclasses, keyword_annotations): (Vec<_>, Vec<(_, _)>) =
@@ -196,40 +219,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
         let keyword_annotations = keyword_annotations.into_map(|(name, annot)| (name.id, annot));
 
-        let protocol_base_name = Name::new_static("Protocol");
-        let mut base_metaclasses = bases_with_metadata
-            .iter()
-            .filter_map(|(b, metadata)| metadata.custom_metaclass().map(|m| (b.name(), m)))
-            .collect::<Vec<_>>();
-        if protocol_metadata.is_some() && !self.module().path().is_interface() {
-            // `Protocol` has metaclass `_ProtocolMeta`. `Protocol` is a special form in typeshed,
-            // so we inject the metaclass here so that metaclass-driven checks work. Stubs often
-            // model things as protocols even when they aren't at runtime, so we can be confident
-            // that the class has `_ProtocolMeta` only when it is defined in a source (.py) file.
-            base_metaclasses.push((&protocol_base_name, self.stdlib.protocol_meta()));
-        }
-        let mut calculated_metaclass = self.calculate_metaclass(
-            cls,
-            metaclasses.into_iter().next(),
-            &base_metaclasses,
-            errors,
-        );
-        if let Some(metaclass) = calculated_metaclass.get() {
-            self.check_base_class_metaclasses(cls, metaclass, &base_metaclasses, errors);
-            if metaclass
+        let direct_metaclass = metaclasses
+            .into_iter()
+            .next()
+            .and_then(|x| self.direct_metaclass(cls, x, errors));
+        if let Some(metaclass) = &direct_metaclass
+            && metaclass
                 .targs()
                 .as_slice()
                 .iter()
                 .any(|targ| targ.contains_type_variable())
-            {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::InvalidInheritance,
-                    "Metaclass may not be an unbound generic".to_owned(),
-                );
-            }
+        {
+            self.error(
+                errors,
+                cls.range(),
+                ErrorKind::InvalidInheritance,
+                "Metaclass may not be an unbound generic".to_owned(),
+            );
         }
+        let mut calculated_metaclass =
+            self.calculate_metaclass(cls, direct_metaclass, &base_metaclasses, errors);
         // If the metaclass has unresolved type variables, replace them with their
         // gradual types (e.g. Any) to avoid cascading errors from bare TypeVars.
         // We do a targeted substitution inside each targ so that e.g. Meta[list[T]]
@@ -260,6 +269,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         let metaclass = calculated_metaclass.get();
+        // Compute base classes with metadata.
+        let bases_with_metadata = self.bases_with_metadata(parsed_results, is_new_type, errors);
         self.check_init_subclass_keywords(cls, &bases_with_metadata, metaclass, keywords, errors);
 
         let mut directly_inherits_model = false;
@@ -1836,61 +1847,66 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn calculate_metaclass(
         &self,
         cls: &Class,
-        raw_metaclass: Option<&Expr>,
+        direct_metaclass: Option<ClassType>,
         base_metaclasses: &[(&Name, &ClassType)],
         errors: &ErrorCollector,
     ) -> Metaclass {
-        let direct_meta = raw_metaclass.and_then(|x| self.direct_metaclass(cls, x, errors));
-
-        if let Some(metaclass) = direct_meta {
-            Metaclass::Direct(metaclass)
-        } else {
-            let mut inherited_meta: Option<ClassType> = None;
-            for (_, m) in base_metaclasses {
-                let m = (*m).clone();
-                let accept_m = match &inherited_meta {
-                    None => true,
-                    Some(inherited) => self.is_subset_eq(
-                        &self.heap.mk_class_type(m.clone()),
-                        &self.heap.mk_class_type(inherited.clone()),
-                    ),
-                };
-                if accept_m {
-                    inherited_meta = Some(m);
+        // Attempt to find a metaclass that is assignable to all candidate metaclasses from the current class and base classes.
+        // It is a runtime error if one does not exist.
+        let mut candidate = direct_metaclass
+            .as_ref()
+            .map(|m| (None, self.heap.mk_class_type(m.clone())));
+        for (base_name, base_metaclass) in base_metaclasses {
+            let base_metaclass_type = self.heap.mk_class_type((*base_metaclass).clone());
+            if let Some((candidate_name, candidate_metaclass_type)) = &candidate {
+                if self.is_subset_eq(candidate_metaclass_type, &base_metaclass_type) {
+                    // Keep the current candidate.
+                } else if self.is_subset_eq(&base_metaclass_type, candidate_metaclass_type) {
+                    candidate = Some((Some(base_name), base_metaclass_type));
+                } else {
+                    let origin = |base_name| {
+                        if let Some(name) = base_name {
+                            format!(" from base class `{name}`")
+                        } else {
+                            "".to_owned()
+                        }
+                    };
+                    self.error(errors,
+                        cls.range(),
+                        ErrorKind::InvalidInheritance,
+                        format!(
+                            "Class `{}` has metaclass `{}`{} which is not compatible with metaclass `{}`{}",
+                            cls.name(),
+                            self.for_display(candidate_metaclass_type.clone()),
+                            origin(*candidate_name),
+                            self.for_display(base_metaclass_type),
+                            origin(Some(base_name)),
+                        ),
+                    );
+                    break;
+                }
+            } else {
+                // All custom metaclasses are subclasses of `type`.
+                candidate = Some((Some(base_name), base_metaclass_type));
+            }
+        }
+        match candidate {
+            Some((candidate_name, Type::ClassType(candidate_metaclass))) => {
+                if candidate_name.is_some() {
+                    Metaclass::Inherited {
+                        metaclass: candidate_metaclass,
+                        is_explicitly_abstract: direct_metaclass.is_some_and(|direct_metaclass| {
+                            direct_metaclass
+                                .class_object()
+                                .has_toplevel_qname("abc", "ABCMeta")
+                        }),
+                    }
+                } else {
+                    Metaclass::Direct(candidate_metaclass)
                 }
             }
-            inherited_meta
-                .map(Metaclass::Inherited)
-                .unwrap_or(Metaclass::None)
-        }
-    }
-
-    fn check_base_class_metaclasses(
-        &self,
-        cls: &Class,
-        metaclass: &ClassType,
-        base_metaclasses: &[(&Name, &ClassType)],
-        errors: &ErrorCollector,
-    ) {
-        // It is a runtime error to define a class whose metaclass (whether
-        // specified directly or through inheritance) is not a subtype of all
-        // base class metaclasses.
-        let metaclass_type = self.heap.mk_class_type(metaclass.clone());
-        for (base_name, m) in base_metaclasses {
-            let base_metaclass_type = self.heap.mk_class_type((*m).clone());
-            if !self.is_subset_eq(&metaclass_type, &base_metaclass_type) {
-                self.error(errors,
-                    cls.range(),
-                    ErrorKind::InvalidInheritance,
-                    format!(
-                        "Class `{}` has metaclass `{}` which is not a subclass of metaclass `{}` from base class `{}`",
-                        cls.name(),
-                        self.for_display(metaclass_type.clone()),
-                        self.for_display(base_metaclass_type),
-                        base_name,
-                    ),
-                );
-            }
+            Some(_) => unreachable!("Metaclass must be a ClassType"),
+            None => Metaclass::None,
         }
     }
 
