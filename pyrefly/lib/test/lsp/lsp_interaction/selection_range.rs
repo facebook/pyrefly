@@ -10,6 +10,7 @@ use lsp_types::Range;
 use lsp_types::SelectionRange;
 use lsp_types::Url;
 use lsp_types::request::SelectionRangeRequest;
+use pyrefly_lsp_test::object_model::CellKind;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -77,6 +78,36 @@ result = outer()
                 })
                 .is_some()
         })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn selection_range_returns_null_for_cell_magic_notebook_cell() {
+    let root = TempDir::new().unwrap();
+    let root_uri = Url::from_file_path(root.path()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), root_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.open_notebook_with_kinds(
+        "notebook.ipynb",
+        vec![(CellKind::Code, "%%bash\necho hi\n")],
+    );
+
+    let uri = interaction.cell_uri("notebook.ipynb", "cell1");
+    interaction
+        .client
+        .send_request::<SelectionRangeRequest>(json!({
+            "textDocument": {"uri": uri},
+            "positions": [{"line": 1, "character": 0}],
+        }))
+        .expect_response(json!(null))
         .unwrap();
 
     interaction.shutdown().unwrap();

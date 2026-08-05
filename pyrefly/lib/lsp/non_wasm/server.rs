@@ -5707,13 +5707,14 @@ impl Server {
             .ok_or(EmptyResponseReason::AstNotFound)?;
         let notebook_cell = self.maybe_get_code_cell_index(uri);
         let document_range = if let Some(cell) = notebook_cell {
-            module
+            let notebook = module
                 .notebook()
-                .expect("a notebook cell URI should map to a notebook module")
+                .ok_or(EmptyResponseReason::NotebookNotSupported)?;
+            notebook
                 .cell_offsets()
                 .content_ranges()
                 .nth(cell)
-                .expect("a notebook cell URI should have a matching code cell")
+                .ok_or(EmptyResponseReason::NotebookNotSupported)?
         } else {
             TextRange::up_to(TextSize::of(module.lined_buffer().contents().as_str()))
         };
