@@ -11,8 +11,6 @@
 //! `Type::DataFrame` carrying an inferred column schema. Modeled operations then
 //! preserve or refine that schema for column-aware checking.
 
-use std::sync::Arc;
-
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
 use pyrefly_types::data_frame::SchemaCompleteness;
@@ -235,14 +233,34 @@ fn polars_dtype_from_type(ty: &Type) -> Option<PolarsDType> {
     })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PolarsFunction {
+    Col,
+    Concat,
+    Len,
+    Lit,
+    Unmodeled,
+}
+
+impl PolarsFunction {
+    fn from_id(id: &FuncId) -> Self {
+        match (id.name.as_str(), id.module.name().as_str()) {
+            ("col", "polars.functions.col") => Self::Col,
+            ("concat", "polars.functions.eager") => Self::Concat,
+            ("len", "polars.functions.len") => Self::Len,
+            ("lit", "polars.functions.lit") => Self::Lit,
+            _ => Self::Unmodeled,
+        }
+    }
+}
+
 /// Whether a callee is the module-level `polars.concat`, seen through any `Forall`/`Overload`
 /// wrapper via `callee_kind`.
 pub fn is_polars_concat(callee: &Type) -> bool {
     matches!(
         callee.callee_kind(),
         Some(CalleeKind::Function(FunctionKind::Def(id)))
-            if id.name.as_str() == "concat"
-                && id.module.name().as_str() == "polars.functions.eager"
+            if PolarsFunction::from_id(&id) == PolarsFunction::Concat
     )
 }
 
@@ -1793,10 +1811,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 }
-                let id = self.polars_function_id(&call.func)?;
-                match (id.name.as_str(), id.module.name().as_str()) {
-                    ("len", "polars.functions.len") => Some(ExprValue::Dtype(PolarsDType::UInt32)),
-                    ("col", "polars.functions.col") => {
+                match self.polars_function(&call.func)? {
+                    PolarsFunction::Len => Some(ExprValue::Dtype(PolarsDType::UInt32)),
+                    PolarsFunction::Col => {
                         let [arg] = &call.arguments.args[..] else {
                             return None;
                         };
@@ -1805,7 +1822,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         };
                         resolve_column(schema, &name, arg.range(), errors).map(ExprValue::Dtype)
                     }
-                    ("lit", "polars.functions.lit") => {
+                    PolarsFunction::Lit => {
                         for kw in &call.arguments.keywords {
                             if kw.arg.as_ref().is_some_and(|a| a.id.as_str() == "dtype") {
                                 return self
@@ -1818,7 +1835,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         };
                         literal_value(value)
                     }
-                    _ => None,
+                    PolarsFunction::Concat | PolarsFunction::Unmodeled => None,
                 }
             }
             Expr::BinOp(binop) => {
@@ -1848,11 +1865,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// The `FuncId` of a call whose callee resolves to a top-level function, or `None`. Inference
-    /// swallows errors since each caller reports through its own path.
-    fn polars_function_id(&self, func: &Expr) -> Option<Arc<FuncId>> {
+    /// Classify a callee that resolves to a top-level function without reporting errors.
+    fn polars_function(&self, func: &Expr) -> Option<PolarsFunction> {
         match self.expr_infer(func, &self.error_swallower()).callee_kind() {
-            Some(CalleeKind::Function(FunctionKind::Def(id))) => Some(id),
+            Some(CalleeKind::Function(FunctionKind::Def(id))) => Some(PolarsFunction::from_id(&id)),
             _ => None,
         }
     }
@@ -1881,10 +1897,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => {}
                     }
                 }
-                let id = self.polars_function_id(&call.func)?;
-                match (id.name.as_str(), id.module.name().as_str()) {
-                    ("len", "polars.functions.len") => Some(Name::new("len")),
-                    ("col", "polars.functions.col") => {
+                match self.polars_function(&call.func)? {
+                    PolarsFunction::Len => Some(Name::new("len")),
+                    PolarsFunction::Col => {
                         let [arg] = &call.arguments.args[..] else {
                             return None;
                         };
@@ -1893,7 +1908,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         };
                         Some(name)
                     }
-                    ("lit", "polars.functions.lit") => {
+                    PolarsFunction::Lit => {
                         let [value] = &call.arguments.args[..] else {
                             return None;
                         };
@@ -1901,7 +1916,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // series name, which is not statically knowable, so fall back.
                         literal_value(value).map(|_| Name::new("literal"))
                     }
-                    _ => None,
+                    PolarsFunction::Concat | PolarsFunction::Unmodeled => None,
                 }
             }
             Expr::BinOp(binop) => self.polars_expr_output_name(&binop.left),
@@ -2130,9 +2145,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Expr::Call(call) = expr else {
             return false;
         };
-        if let Some(id) = self.polars_function_id(&call.func) {
-            return id.name.as_str() == "len"
-                && id.module.name().as_str() == "polars.functions.len";
+        if let Some(function) = self.polars_function(&call.func) {
+            return function == PolarsFunction::Len;
         }
         match &*call.func {
             Expr::Attribute(attr) => match attr.attr.id.as_str() {

@@ -130,7 +130,8 @@ class Expr:
     def last(self) -> "Expr": ...
     def product(self) -> "Expr": ...
     def count(self) -> "Expr": ...
-    def n_unique(self) -> "Expr": ...
+    @staticmethod
+    def n_unique() -> "Expr": ...
 "#,
     );
     env.add_with_path(
@@ -4792,6 +4793,17 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"g": ["a"], "x": [1]})
 reveal_type(df.group_by("g").agg(pl.col("x")))  # E: revealed type: DataFrame[g: String, x: Unknown]
+"#,
+);
+
+testcase!(
+    test_group_by_agg_static_reducer_name_is_unknown,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"g": ["a"], "x": [1]})
+reveal_type(df.group_by("g").agg(pl.col("x").n_unique()))  # E: revealed type: DataFrame[g: String, x: Unknown]
 "#,
 );
 
