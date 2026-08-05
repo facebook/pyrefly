@@ -41,6 +41,34 @@ pub enum PolarsDType {
 }
 
 impl PolarsDType {
+    const POLARS_NAMED_DTYPES: [Self; 19] = [
+        Self::Boolean,
+        Self::Int8,
+        Self::Int16,
+        Self::Int32,
+        Self::Int64,
+        Self::Int128,
+        Self::UInt8,
+        Self::UInt16,
+        Self::UInt32,
+        Self::UInt64,
+        Self::UInt128,
+        Self::Float32,
+        Self::Float64,
+        Self::String,
+        Self::Binary,
+        Self::Date,
+        Self::Datetime,
+        Self::Duration,
+        Self::Time,
+    ];
+
+    pub fn from_polars_name(name: &str) -> Option<Self> {
+        Self::POLARS_NAMED_DTYPES
+            .into_iter()
+            .find(|dtype| dtype.name() == name)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             PolarsDType::Boolean => "Boolean",
@@ -214,6 +242,7 @@ impl fmt::Display for PolarsDType {
 
 #[cfg(test)]
 mod tests {
+    use super::PolarsDType;
     use super::PolarsDType::*;
 
     #[test]
@@ -223,6 +252,16 @@ mod tests {
         assert_eq!(UInt8.to_string(), "UInt8");
         assert_eq!(String.to_string(), "String");
         assert_eq!(Datetime.to_string(), "Datetime");
+    }
+
+    #[test]
+    fn polars_names_round_trip() {
+        for dtype in PolarsDType::POLARS_NAMED_DTYPES {
+            assert_eq!(PolarsDType::from_polars_name(dtype.name()), Some(dtype));
+        }
+        assert_eq!(PolarsDType::from_polars_name(Null.name()), None);
+        assert_eq!(PolarsDType::from_polars_name(Unknown.name()), None);
+        assert_eq!(PolarsDType::from_polars_name("not-a-dtype"), None);
     }
 
     #[test]

@@ -37,6 +37,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::binding::polars::PolarsMutationKind;
+use crate::binding::polars::PolarsMutationMethod;
 use crate::binding::polars::polars_column_mutation;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -45,20 +46,64 @@ use crate::types::callable::FunctionKind;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 
+const POLARS_MODULE: &str = "polars";
+const POLARS_MODULE_PREFIX: &str = "polars.";
+const POLARS_ALL_COLUMNS: &str = "*";
+const POLARS_DEFAULT_INFER_SCHEMA_LENGTH: usize = 100;
+const POLARS_DEFAULT_JOIN_SUFFIX: &str = "_right";
+const POLARS_LEN_OUTPUT_NAME: &str = "len";
+const POLARS_LITERAL_OUTPUT_NAME: &str = "literal";
+
+#[derive(Clone, Copy)]
+enum RuntimeClass {
+    PolarsDataFrame,
+    PolarsSeries,
+    PolarsDataFrameSeries,
+    PolarsExpr,
+    PolarsLazyFrame,
+    PolarsCol,
+    PolarsSchema,
+    PandasDataFrame,
+    Date,
+    Datetime,
+    Time,
+    Timedelta,
+}
+
+impl RuntimeClass {
+    fn matches(self, cls: &Class) -> bool {
+        let (module, name) = match self {
+            Self::PolarsDataFrame => ("polars.dataframe.frame", "DataFrame"),
+            Self::PolarsSeries => ("polars.series.series", "Series"),
+            Self::PolarsDataFrameSeries => ("polars.dataframe.frame", "Series"),
+            Self::PolarsExpr => ("polars.expr.expr", "Expr"),
+            Self::PolarsLazyFrame => ("polars.lazyframe.frame", "LazyFrame"),
+            Self::PolarsCol => ("polars.functions.col", "Col"),
+            Self::PolarsSchema => ("polars.schema", "Schema"),
+            Self::PandasDataFrame => ("pandas.core.frame", "DataFrame"),
+            Self::Date => ("datetime", "date"),
+            Self::Datetime => ("datetime", "datetime"),
+            Self::Time => ("datetime", "time"),
+            Self::Timedelta => ("datetime", "timedelta"),
+        };
+        cls.has_toplevel_qname(module, name)
+    }
+}
+
 fn is_polars_dataframe(cls: &Class) -> bool {
-    cls.has_toplevel_qname("polars.dataframe.frame", "DataFrame")
+    RuntimeClass::PolarsDataFrame.matches(cls)
 }
 
 pub fn is_polars_series(cls: &Class) -> bool {
-    cls.has_toplevel_qname("polars.series.series", "Series")
+    RuntimeClass::PolarsSeries.matches(cls)
 }
 
 fn is_polars_expr(cls: &Class) -> bool {
-    cls.has_toplevel_qname("polars.expr.expr", "Expr")
+    RuntimeClass::PolarsExpr.matches(cls)
 }
 
 fn is_polars_lazyframe(cls: &Class) -> bool {
-    cls.has_toplevel_qname("polars.lazyframe.frame", "LazyFrame")
+    RuntimeClass::PolarsLazyFrame.matches(cls)
 }
 
 fn column_transform_schema<'b>(base: &'b Type, args: &Arguments) -> Option<&'b DataFrameSchema> {
@@ -90,7 +135,7 @@ fn dataframe_type_with_columns_and_completeness(
 }
 
 fn is_pandas_dataframe(cls: &Class) -> bool {
-    cls.has_toplevel_qname("pandas.core.frame", "DataFrame")
+    RuntimeClass::PandasDataFrame.matches(cls)
 }
 
 /// Methods whose arguments may contain column references.
@@ -183,7 +228,7 @@ fn is_string_type(ty: &Type) -> bool {
 
 fn is_polars_selector_name(name: &Name) -> bool {
     let name = name.as_str();
-    name == "*" || (name.starts_with('^') && name.ends_with('$'))
+    name == POLARS_ALL_COLUMNS || (name.starts_with('^') && name.ends_with('$'))
 }
 
 /// Map a resolved type to the Polars dtype it names, e.g. the `pl.Float64` class to `Float64`.
@@ -195,31 +240,10 @@ fn polars_dtype_from_type(ty: &Type) -> Option<PolarsDType> {
         _ => return None,
     };
     let module = cls.module_name();
-    if module.as_str() != "polars" && !module.as_str().starts_with("polars.") {
+    if module.as_str() != POLARS_MODULE && !module.as_str().starts_with(POLARS_MODULE_PREFIX) {
         return None;
     }
-    Some(match cls.name().as_str() {
-        "Int8" => PolarsDType::Int8,
-        "Int16" => PolarsDType::Int16,
-        "Int32" => PolarsDType::Int32,
-        "Int64" => PolarsDType::Int64,
-        "Int128" => PolarsDType::Int128,
-        "UInt8" => PolarsDType::UInt8,
-        "UInt16" => PolarsDType::UInt16,
-        "UInt32" => PolarsDType::UInt32,
-        "UInt64" => PolarsDType::UInt64,
-        "UInt128" => PolarsDType::UInt128,
-        "Float32" => PolarsDType::Float32,
-        "Float64" => PolarsDType::Float64,
-        "Boolean" => PolarsDType::Boolean,
-        "String" => PolarsDType::String,
-        "Binary" => PolarsDType::Binary,
-        "Date" => PolarsDType::Date,
-        "Datetime" => PolarsDType::Datetime,
-        "Duration" => PolarsDType::Duration,
-        "Time" => PolarsDType::Time,
-        _ => return None,
-    })
+    PolarsDType::from_polars_name(cls.name().as_str())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -266,12 +290,15 @@ impl PolarsMethod {
             "lazy" => Self::FrameConversion(PolarsFrameConversion::Lazy),
             "collect" => Self::FrameConversion(PolarsFrameConversion::Collect),
             "join" => Self::Join,
-            "hstack" => Self::Hstack,
             "agg" => Self::GroupByAgg,
-            "insert_column" | "replace_column" => Self::InPlaceMutation,
             "get_column" => Self::GetColumn,
             "to_series" => Self::ToSeries,
-            _ => return None,
+            name => match PolarsMutationMethod::parse(name)? {
+                PolarsMutationMethod::InsertColumn | PolarsMutationMethod::ReplaceColumn => {
+                    Self::InPlaceMutation
+                }
+                PolarsMutationMethod::Hstack => Self::Hstack,
+            },
         })
     }
 }
@@ -297,9 +324,7 @@ impl PolarsFunction {
 
     fn from_callee(callee: &Type) -> Option<Self> {
         if let Type::ClassType(cls) = callee
-            && cls
-                .class_object()
-                .has_toplevel_qname("polars.functions.col", "Col")
+            && RuntimeClass::PolarsCol.matches(cls.class_object())
         {
             return Some(Self::Col);
         }
@@ -308,6 +333,12 @@ impl PolarsFunction {
             _ => None,
         }
     }
+}
+
+enum CsvColumnSelection {
+    All,
+    Names(SmallSet<Name>),
+    Indices(SmallSet<usize>),
 }
 
 struct PolarsCsvOptions<'b> {
@@ -320,15 +351,20 @@ struct PolarsCsvOptions<'b> {
     include_file_paths: Option<&'b Expr>,
 }
 
-enum CsvColumnSelection {
-    Names(SmallSet<Name>),
-    Indices(SmallSet<usize>),
-}
-
 #[derive(Clone, Copy)]
 enum ConcatHow {
     Vertical,
     VerticalRelaxed,
+}
+
+impl ConcatHow {
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "vertical" => Self::Vertical,
+            "vertical_relaxed" => Self::VerticalRelaxed,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -425,10 +461,69 @@ enum ExprValue {
     FloatLit,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FillNullValue {
+    IntegerLiteral(i128),
+    /// The literal exceeds the i128 range used by inference.
+    IntegerOutsideModel,
+    Float,
+    /// The integer value is not statically known.
+    DynamicInteger,
+    /// The value does not change an integer column dtype.
+    Other,
+}
+
+impl FillNullValue {
+    fn from_type(ty: &Type) -> Self {
+        if let Type::Literal(lit) = ty
+            && let Lit::Int(value) = &lit.value
+        {
+            return value
+                .to_string()
+                .parse::<i128>()
+                .map_or(Self::IntegerOutsideModel, Self::IntegerLiteral);
+        }
+        match polars_dtype_from_scalar_type(ty) {
+            Some(PolarsDType::Float64) => Self::Float,
+            Some(PolarsDType::Int64) => Self::DynamicInteger,
+            _ => Self::Other,
+        }
+    }
+
+    fn widen_integer(self, dtype: PolarsDType) -> PolarsDType {
+        if !dtype.is_integer() {
+            return dtype;
+        }
+        match self {
+            Self::Float => PolarsDType::Float64,
+            Self::IntegerLiteral(value) => {
+                integer_dtype_with_literal(dtype, value).unwrap_or(PolarsDType::Unknown)
+            }
+            Self::DynamicInteger => PolarsDType::Unknown,
+            Self::IntegerOutsideModel | Self::Other => dtype,
+        }
+    }
+}
+
 enum ColumnArg {
     Named(Name),
     Opaque,
     Expr,
+}
+
+#[derive(Clone, Copy)]
+enum ArgumentValue<'b> {
+    Missing,
+    Present(&'b Expr),
+}
+
+impl<'b> ArgumentValue<'b> {
+    fn into_option(self) -> Option<&'b Expr> {
+        match self {
+            Self::Missing => None,
+            Self::Present(expr) => Some(expr),
+        }
+    }
 }
 
 impl ExprValue {
@@ -482,18 +577,11 @@ fn literal_value(expr: &Expr) -> Option<ExprValue> {
     }
 }
 
-fn series_method_schema<'b>(
-    base: &'b Type,
-    func: &ExprAttribute,
-    method: &str,
-) -> Option<&'b DataFrameSchema> {
+fn series_method_schema(base: &Type) -> Option<&DataFrameSchema> {
     let Type::DataFrame(schema) = base else {
         return None;
     };
-    (func.attr.id.as_str() == method
-        && schema.kind == DataFrameKind::Polars
-        && schema.is_complete())
-    .then_some(&**schema)
+    (schema.kind == DataFrameKind::Polars && schema.is_complete()).then_some(&**schema)
 }
 
 fn get_column_name_arg(args: &Arguments) -> Option<&Expr> {
@@ -733,6 +821,23 @@ impl Reducer {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PolarsExprMethod {
+    Alias,
+    Cast,
+    Reducer(Reducer),
+}
+
+impl PolarsExprMethod {
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "alias" => Some(Self::Alias),
+            "cast" => Some(Self::Cast),
+            name => Reducer::parse(name).map(Self::Reducer),
+        }
+    }
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(crate) fn polars_method_call(
         &self,
@@ -914,14 +1019,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Parse static projections; an empty sequence selects every column.
-    fn polars_csv_selection(
-        &self,
-        expr: &Expr,
-        width: usize,
-    ) -> Option<Option<CsvColumnSelection>> {
+    fn polars_csv_selection(&self, expr: &Expr, width: usize) -> Option<CsvColumnSelection> {
         let values = literal_sequence(expr)?;
         if values.is_empty() {
-            return Some(None);
+            return Some(CsvColumnSelection::All);
         }
         if let Some(names) = values
             .iter()
@@ -929,14 +1030,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect::<Option<SmallSet<_>>>()
             && names.len() == values.len()
         {
-            return Some(Some(CsvColumnSelection::Names(names)));
+            return Some(CsvColumnSelection::Names(names));
         }
         let indices = values
             .iter()
             .map(|expr| usize::try_from(self.polars_int_literal(expr)?).ok())
             .collect::<Option<SmallSet<_>>>()?;
         (indices.len() == values.len() && indices.iter().all(|index| *index < width))
-            .then_some(Some(CsvColumnSelection::Indices(indices)))
+            .then_some(CsvColumnSelection::Indices(indices))
     }
 
     fn polars_csv_schema(&self, expr: &Expr) -> Option<Vec<(Name, PolarsDType)>> {
@@ -1094,16 +1195,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(selection) if !matches!(selection, Expr::NoneLiteral(_)) => {
                 self.polars_csv_selection(selection, columns.len())?
             }
-            _ => None,
+            _ => CsvColumnSelection::All,
         };
         if let Some(overrides) = options.overrides
             && !matches!(overrides, Expr::NoneLiteral(_) | Expr::Dict(_))
-            && selection.is_some()
+            && !matches!(selection, CsvColumnSelection::All)
         {
             return None;
         }
         self.apply_polars_csv_sequence_overrides(&mut columns, options.overrides)?;
-        if let Some(selection) = selection {
+        if !matches!(selection, CsvColumnSelection::All) {
             if let CsvColumnSelection::Names(names) = &selection
                 && !names
                     .iter()
@@ -1115,6 +1216,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .into_iter()
                 .enumerate()
                 .filter(|(index, (name, _))| match &selection {
+                    CsvColumnSelection::All => true,
                     CsvColumnSelection::Names(names) => names.contains(name),
                     CsvColumnSelection::Indices(indices) => indices.contains(index),
                 })
@@ -1164,13 +1266,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(map)
     }
 
-    /// Reads 100 rows, matching Polars' default `infer_schema_length`.
     fn dataframe_records_map<'b>(
         &self,
         list: &'b ExprList,
     ) -> Option<SmallMap<Name, Vec<&'b Expr>>> {
         let mut columns: SmallMap<Name, Vec<&Expr>> = SmallMap::new();
-        for elt in list.elts.iter().take(100) {
+        for elt in list.elts.iter().take(POLARS_DEFAULT_INFER_SCHEMA_LENGTH) {
             let Expr::Dict(dict) = elt else {
                 return None;
             };
@@ -1210,10 +1311,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             [first, values, dtype] if self.is_string_typed(first) => (Some(values), Some(dtype)),
             _ => return None,
         };
-        let values = Self::positional_or_keyword(values_positional, values_keyword)?;
+        let values = Self::positional_or_keyword(values_positional, values_keyword)?.into_option();
         let dtype = match Self::positional_or_keyword(dtype_positional, dtype_keyword)? {
-            Some(expr) => Some(self.polars_dtype_from_expr(expr)?),
-            None => None,
+            ArgumentValue::Present(expr) => Some(self.polars_dtype_from_expr(expr)?),
+            ArgumentValue::Missing => None,
         };
         Some(SeriesConstruct {
             values,
@@ -1518,10 +1619,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn positional_or_keyword<'b>(
         positional: Option<&'b Expr>,
         keyword: Option<&'b Expr>,
-    ) -> Option<Option<&'b Expr>> {
+    ) -> Option<ArgumentValue<'b>> {
         match (positional, keyword) {
             (Some(_), Some(_)) => None,
-            (e, None) | (None, e) => Some(e),
+            (Some(expr), None) | (None, Some(expr)) => Some(ArgumentValue::Present(expr)),
+            (None, None) => Some(ArgumentValue::Missing),
         }
     }
 
@@ -1537,7 +1639,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return None;
                 }
                 match self.expr_infer(&call.func, &self.error_swallower()) {
-                    Type::ClassDef(cls) if cls.has_toplevel_qname("polars.schema", "Schema") => {
+                    Type::ClassDef(cls) if RuntimeClass::PolarsSchema.matches(&cls) => {
                         Some((SchemaForm::SchemaClass, dict))
                     }
                     _ => None,
@@ -1622,8 +1724,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             [data, schema] => (Some(data), Some(schema)),
             _ => return None,
         };
-        let data_expr = Self::positional_or_keyword(data_positional, data_keyword)?;
-        let schema_expr = Self::positional_or_keyword(schema_positional, schema_keyword)?;
+        let data_expr = Self::positional_or_keyword(data_positional, data_keyword)?.into_option();
+        let schema_expr =
+            Self::positional_or_keyword(schema_positional, schema_keyword)?.into_option();
         let data = match data_expr {
             None | Some(Expr::NoneLiteral(_)) => None,
             Some(Expr::Dict(dict)) if dict.items.is_empty() => None,
@@ -1659,11 +1762,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for kw in keywords {
             let arg = kw.arg.as_ref()?;
             if arg.id.as_str() == "how" {
-                how = match self.polars_string_literal(&kw.value)?.as_str() {
-                    "vertical" => ConcatHow::Vertical,
-                    "vertical_relaxed" => ConcatHow::VerticalRelaxed,
-                    _ => return None,
-                };
+                how = ConcatHow::parse(self.polars_string_literal(&kw.value)?.as_str())?;
             }
         }
         Some(how)
@@ -1691,14 +1790,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => None,
             })
             .collect::<Option<Vec<_>>>()?;
-        let completeness = if schemas
+        let completeness = schemas
             .iter()
-            .all(|(_, completeness)| *completeness == SchemaCompleteness::Complete)
-        {
-            SchemaCompleteness::Complete
-        } else {
-            SchemaCompleteness::Partial
-        };
+            .fold(SchemaCompleteness::Complete, |completeness, (_, next)| {
+                completeness.combine(*next)
+            });
         let (first, rest) = schemas.split_first()?;
         let columns = match how {
             ConcatHow::Vertical => rest
@@ -1764,16 +1860,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // dtype. Only a direct constructor call is specific enough.
             if let Expr::Call(call) = e {
                 let temporal = match self.expr_infer(&call.func, &self.error_swallower()) {
-                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "date") => {
+                    Type::ClassDef(cls) if RuntimeClass::Date.matches(&cls) => {
                         Some(PolarsDType::Date)
                     }
-                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "datetime") => {
+                    Type::ClassDef(cls) if RuntimeClass::Datetime.matches(&cls) => {
                         Some(PolarsDType::Datetime)
                     }
-                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "time") => {
+                    Type::ClassDef(cls) if RuntimeClass::Time.matches(&cls) => {
                         Some(PolarsDType::Time)
                     }
-                    Type::ClassDef(cls) if cls.has_toplevel_qname("datetime", "timedelta") => {
+                    Type::ClassDef(cls) if RuntimeClass::Timedelta.matches(&cls) => {
                         Some(PolarsDType::Duration)
                     }
                     _ => None,
@@ -1886,7 +1982,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let [arg] = &positional[..]
             && let Type::Literal(lit) = &self.expr_infer(arg, &self.error_swallower())
             && let Lit::Str(value) = &lit.value
-            && value.as_str() == "*"
+            && value.as_str() == POLARS_ALL_COLUMNS
         {
             self.expr_infer(arg, errors);
             return Some(base.clone());
@@ -2047,23 +2143,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match expr {
             Expr::Call(call) => {
                 if let Expr::Attribute(attr) = &*call.func {
-                    match attr.attr.id.as_str() {
-                        "cast" => {
+                    match PolarsExprMethod::parse(attr.attr.id.as_str()) {
+                        Some(PolarsExprMethod::Cast) => {
                             self.eval_polars_expr(&attr.value, schema, errors)?;
                             let [target] = &call.arguments.args[..] else {
                                 return None;
                             };
                             return self.polars_dtype_from_expr(target).map(ExprValue::Dtype);
                         }
-                        "alias" => return self.eval_polars_expr(&attr.value, schema, errors),
-                        method => {
-                            if let Some(reducer) = Reducer::parse(method) {
-                                let inner = self.eval_polars_expr(&attr.value, schema, errors)?;
-                                return Some(ExprValue::Dtype(
-                                    reducer.output_dtype(inner.dtype())?,
-                                ));
-                            }
+                        Some(PolarsExprMethod::Alias) => {
+                            return self.eval_polars_expr(&attr.value, schema, errors);
                         }
+                        Some(PolarsExprMethod::Reducer(reducer)) => {
+                            let inner = self.eval_polars_expr(&attr.value, schema, errors)?;
+                            return Some(ExprValue::Dtype(reducer.output_dtype(inner.dtype())?));
+                        }
+                        None => {}
                     }
                 }
                 match self.polars_function(&call.func)? {
@@ -2132,8 +2227,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match expr {
             Expr::Call(call) => {
                 if let Expr::Attribute(attr) = &*call.func
-                    && (matches!(attr.attr.id.as_str(), "alias" | "cast")
-                        || Reducer::parse(attr.attr.id.as_str()).is_some())
+                    && PolarsExprMethod::parse(attr.attr.id.as_str()).is_some()
                 {
                     return self.polars_expr_has_single_output(&attr.value);
                 }
@@ -2168,9 +2262,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match expr {
             Expr::Call(call) => {
                 if let Expr::Attribute(attr) = &*call.func {
-                    match attr.attr.id.as_str() {
-                        "cast" => return self.polars_expr_output_name(&attr.value),
-                        "alias" => {
+                    match PolarsExprMethod::parse(attr.attr.id.as_str()) {
+                        Some(PolarsExprMethod::Cast) => {
+                            return self.polars_expr_output_name(&attr.value);
+                        }
+                        Some(PolarsExprMethod::Alias) => {
                             if !self.polars_expr_has_single_output(&attr.value) {
                                 return None;
                             }
@@ -2179,14 +2275,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             };
                             return self.polars_string_literal(arg).map(Name::new);
                         }
-                        method if Reducer::parse(method).is_some() => {
+                        Some(PolarsExprMethod::Reducer(_)) => {
                             return self.polars_expr_output_name(&attr.value);
                         }
-                        _ => {}
+                        None => {}
                     }
                 }
                 match self.polars_function(&call.func)? {
-                    PolarsFunction::Len => Some(Name::new("len")),
+                    PolarsFunction::Len => Some(Name::new_static(POLARS_LEN_OUTPUT_NAME)),
                     PolarsFunction::Col => {
                         let [arg] = &call.arguments.args[..] else {
                             return None;
@@ -2201,7 +2297,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             return None;
                         };
                         // `pl.lit(series)` takes the runtime Series name.
-                        literal_value(value).map(|_| Name::new("literal"))
+                        literal_value(value).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
                     }
                     PolarsFunction::Concat
                     | PolarsFunction::ReadCsv
@@ -2234,7 +2330,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::BooleanLiteral(_)
             | Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)
-            | Expr::NoneLiteral(_) => literal_value(expr).map(|_| Name::new("literal")),
+            | Expr::NoneLiteral(_) => {
+                literal_value(expr).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
+            }
             _ => None,
         }
     }
@@ -2429,9 +2527,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return function == PolarsFunction::Len;
         }
         match &*call.func {
-            Expr::Attribute(attr) => match attr.attr.id.as_str() {
-                "alias" | "cast" => self.polars_expr_aggregates(&attr.value),
-                method => Reducer::parse(method).is_some(),
+            Expr::Attribute(attr) => match PolarsExprMethod::parse(attr.attr.id.as_str()) {
+                Some(PolarsExprMethod::Alias | PolarsExprMethod::Cast) => {
+                    self.polars_expr_aggregates(&attr.value)
+                }
+                Some(PolarsExprMethod::Reducer(_)) => true,
+                None => false,
             },
             _ => false,
         }
@@ -2506,34 +2607,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Some(value_type) = value_type.as_ref() else {
             return Some(base.clone());
         };
-        let integer_literal = match value_type {
-            Type::Literal(lit) => match &lit.value {
-                Lit::Int(value) => Some(value.to_string().parse::<i128>().ok()),
-                _ => None,
-            },
-            _ => None,
-        };
-        if integer_literal == Some(None) {
+        let value = FillNullValue::from_type(value_type);
+        if value == FillNullValue::IntegerOutsideModel {
             return Some(base.clone());
         }
-        let scalar = polars_dtype_from_scalar_type(value_type);
         let columns = schema
             .columns
             .iter()
-            .map(|(name, dtype)| {
-                let dtype = if !dtype.is_integer() {
-                    *dtype
-                } else if scalar == Some(PolarsDType::Float64) {
-                    PolarsDType::Float64
-                } else if let Some(Some(value)) = integer_literal {
-                    integer_dtype_with_literal(*dtype, value).unwrap_or(PolarsDType::Unknown)
-                } else if scalar == Some(PolarsDType::Int64) {
-                    PolarsDType::Unknown
-                } else {
-                    *dtype
-                };
-                (name.clone(), dtype)
-            })
+            .map(|(name, dtype)| (name.clone(), value.widen_integer(*dtype)))
             .collect();
         Some(dataframe_type_with_columns(schema, columns))
     }
@@ -2776,19 +2857,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let completeness = match how {
             JoinHow::Semi | JoinHow::Anti => schema.completeness,
-            _ if schema.completeness == SchemaCompleteness::Complete
-                && other.completeness == SchemaCompleteness::Complete =>
-            {
-                SchemaCompleteness::Complete
-            }
-            _ => SchemaCompleteness::Partial,
+            _ => schema.completeness.combine(other.completeness),
         };
         let base_names: SmallSet<Name> =
             base_columns.iter().map(|(name, _)| name.clone()).collect();
         let mut columns = base_columns;
         for (name, ty) in other_columns {
             let out = if base_names.contains(&name) {
-                Name::new(format!("{name}_right"))
+                Name::new(format!("{name}{POLARS_DEFAULT_JOIN_SUFFIX}"))
             } else {
                 name
             };
@@ -2838,13 +2914,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
         self.expr_infer(other_expr, errors);
-        let completeness = if schema.completeness == SchemaCompleteness::Complete
-            && other.completeness == SchemaCompleteness::Complete
-        {
-            SchemaCompleteness::Complete
-        } else {
-            SchemaCompleteness::Partial
-        };
+        let completeness = schema.completeness.combine(other.completeness);
         Some(dataframe_type_with_columns_and_completeness(
             schema,
             columns,
@@ -2882,8 +2952,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         matches!(
             self.expr_infer(callee, &self.error_swallower()),
             Type::ClassDef(cls)
-                if cls.has_toplevel_qname("polars.series.series", "Series")
-                    || cls.has_toplevel_qname("polars.dataframe.frame", "Series")
+                if is_polars_series(&cls) || RuntimeClass::PolarsDataFrameSeries.matches(&cls)
         )
     }
 
@@ -2895,7 +2964,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &Arguments,
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let schema = series_method_schema(base, func, "get_column")?;
+        let schema = series_method_schema(base)?;
         let name_expr = get_column_name_arg(args)?;
         let name = self.polars_column_name(name_expr)?;
         let dtype = resolve_column(schema, &name, name_expr.range(), errors);
@@ -2916,8 +2985,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => return None,
         };
         match Self::positional_or_keyword(index_positional, index_keyword)? {
-            None => Some(0),
-            Some(expr) => self.polars_int_literal(expr).map(i128::from),
+            ArgumentValue::Missing => Some(0),
+            ArgumentValue::Present(expr) => self.polars_int_literal(expr).map(i128::from),
         }
     }
 
@@ -2929,7 +2998,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &Arguments,
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let schema = series_method_schema(base, func, "to_series")?;
+        let schema = series_method_schema(base)?;
         let index = self.to_series_index(args)?;
         let len = schema.columns.len() as i128;
         let resolved = if index < 0 { index + len } else { index };

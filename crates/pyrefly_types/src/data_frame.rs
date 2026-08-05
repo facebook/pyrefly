@@ -25,6 +25,15 @@ pub enum SchemaCompleteness {
     Partial,
 }
 
+impl SchemaCompleteness {
+    pub fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Complete, Self::Complete) => Self::Complete,
+            _ => Self::Partial,
+        }
+    }
+}
+
 #[derive(
     Debug, PartialOrd, Ord, Clone, Copy, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
 )]
@@ -181,6 +190,26 @@ mod tests {
         );
         assert_ne!(complete, partial);
         assert!(!complete.type_eq(&partial, &mut TypeEqCtx::default()));
+    }
+
+    #[test]
+    fn combining_completeness_requires_both_schemas_to_be_complete() {
+        assert_eq!(
+            SchemaCompleteness::Complete.combine(SchemaCompleteness::Complete),
+            SchemaCompleteness::Complete
+        );
+        assert_eq!(
+            SchemaCompleteness::Complete.combine(SchemaCompleteness::Partial),
+            SchemaCompleteness::Partial
+        );
+        assert_eq!(
+            SchemaCompleteness::Partial.combine(SchemaCompleteness::Complete),
+            SchemaCompleteness::Partial
+        );
+        assert_eq!(
+            SchemaCompleteness::Partial.combine(SchemaCompleteness::Partial),
+            SchemaCompleteness::Partial
+        );
     }
 
     #[test]
