@@ -2082,6 +2082,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .any(|name| !inherited_slot_names.contains(name))
     }
 
+    fn is_implemented_in_class(&self, cls: &Class, field_name: &Name) -> bool {
+        // If the class has a synthesized concrete implementation (e.g., `__dataclass_fields__`
+        // from @dataclass), that satisfies any protocol requirement for this field.
+        if self
+            .get_class_member(cls, field_name)
+            .is_some_and(|f| !f.is_abstract() && !f.is_uninit_class_var())
+        {
+            return true;
+        }
+        if let Some(field) =
+            self.get_non_synthesized_class_member_and_defining_class(cls, field_name)
+            && (field.value.is_abstract() ||
+                // Uninitialized class vars in protocols are considered abstract, unless it is in a stub file
+                (!cls.module().path().is_interface() && field.value.is_uninit_class_var() &&
+                self.get_metadata_for_class(&field.defining_class).is_protocol()))
+        {
+            return false;
+        }
+        true
+    }
+
     pub fn calculate_abstract_members(&self, cls: &Class) -> AbstractClassMembers {
         let metadata = self.get_metadata_for_class(cls);
         let mut fields_to_check: SmallSet<Name>;
@@ -2109,27 +2130,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .cloned(),
             );
         }
-
-        let mut abstract_members = SmallSet::new();
-        for field_name in fields_to_check {
-            // If the class has a synthesized concrete implementation (e.g., `__dataclass_fields__`
-            // from @dataclass), that satisfies any protocol requirement for this field.
-            if self
-                .get_class_member(cls, &field_name)
-                .is_some_and(|f| !f.is_abstract() && !f.is_uninit_class_var())
-            {
-                continue;
-            }
-            if let Some(field) =
-                self.get_non_synthesized_class_member_and_defining_class(cls, &field_name)
-                && (field.value.is_abstract() ||
-                // Uninitialized class vars in protocols are considered absract, unless it is in a stub file
-                (!cls.module().path().is_interface() && field.value.is_uninit_class_var() &&
-                self.get_metadata_for_class(&field.defining_class).is_protocol()))
-            {
-                abstract_members.insert(field_name.clone());
-            }
-        }
+        let abstract_members = fields_to_check
+            .into_iter()
+            .filter(|field_name| !self.is_implemented_in_class(cls, field_name))
+            .collect();
         AbstractClassMembers::new(abstract_members)
     }
 
