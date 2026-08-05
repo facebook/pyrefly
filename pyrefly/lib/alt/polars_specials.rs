@@ -665,6 +665,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &Arguments,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        if matches!(base, Type::DataFrame(schema) if schema.kind == DataFrameKind::Pandas) {
+            return None;
+        }
         if let Some(ty) = self.polars_select(base, func, args, errors) {
             return Some(ty);
         }

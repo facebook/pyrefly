@@ -95,16 +95,15 @@ static SHARED_STATE: LazyLock<State> = LazyLock::new(|| {
     state
 });
 
-/// Run a type check on the given Python code and return the error count.
-fn check_code(code: Arc<FileContents>) -> usize {
+fn check_module(code: Arc<FileContents>, module: &str, path: &str) -> usize {
     let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::default());
     let h = Handle::new(
-        ModuleName::from_str("bench"),
-        ModulePath::memory(PathBuf::from(BENCH_FILE)),
+        ModuleName::from_str(module),
+        ModulePath::memory(PathBuf::from(path)),
         sys_info,
     );
     let mut t = SHARED_STATE.transaction();
-    t.set_memory(vec![(PathBuf::from(BENCH_FILE), Some(code))]);
+    t.set_memory(vec![(PathBuf::from(path), Some(code))]);
     t.run(&[h.dupe()], Require::Errors, None);
     let errors = t.get_errors([&h]);
     errors.collect_errors().ordinary.len()
@@ -304,14 +303,14 @@ result: Base[object] = {expression}
 /// `count` reassignments through a user method returning its own class. Every call walks the Polars
 /// dispatch chain but falls through on a `ClassType` receiver, the primary gate that schema tracking
 /// costs ordinary method calls nothing.
-fn user_method_burst(count: usize) -> String {
+fn user_method_calls(count: usize) -> String {
     let calls = joined(count, "\n", |_| "c = c.m()".to_owned());
     format!("class C:\n    def m(self) -> \"C\":\n        return self\nc = C()\n{calls}")
 }
 
 /// `count` reassignments through builtin `str` methods, exercising the same dispatch chain on a
 /// builtin receiver with no errors.
-fn builtin_method_burst(count: usize) -> String {
+fn builtin_method_calls(count: usize) -> String {
     const METHODS: [&str; 4] = ["upper", "lower", "strip", "title"];
     let calls = joined(count, "\n", |i| {
         format!("s = s.{}()", METHODS[i % METHODS.len()])
@@ -321,7 +320,7 @@ fn builtin_method_burst(count: usize) -> String {
 
 /// A class whose method names collide with Polars DataFrame methods, called `count` times. The
 /// receiver is a `ClassType`, never a `DataFrame`, so every Polars guard returns `None`.
-fn method_name_collision_burst(count: usize) -> String {
+fn method_name_collision_calls(count: usize) -> String {
     let methods = joined(4, "\n", |i| {
         let name = ["select", "filter", "agg", "group_by"][i];
         format!("    def {name}(self, x: str) -> \"Fake\": return self")
@@ -336,9 +335,19 @@ fn method_name_collision_burst(count: usize) -> String {
 
 /// `count` instantiations of a trivial class, exercising the constructor-call dispatch in `call.rs`
 /// with no errors.
-fn constructor_burst(count: usize) -> String {
+fn constructor_calls(count: usize) -> String {
     let calls = joined(count, "\n", |_| "k = K()".to_owned());
     format!("class K: ...\n{calls}")
+}
+
+fn pandas_method_calls(count: usize) -> String {
+    const METHODS: [&str; 4] = ["head", "drop", "rename", "copy"];
+    let calls = joined(count, "\n", |i| {
+        format!("df.{}()", METHODS[i % METHODS.len()])
+    });
+    format!(
+        "class DataFrame:\n    def __init__(self, data: object = None) -> None: ...\n    def head(self) -> \"DataFrame\": ...\n    def drop(self) -> \"DataFrame\": ...\n    def rename(self) -> \"DataFrame\": ...\n    def copy(self) -> \"DataFrame\": ...\n\ndf = DataFrame({{\"a\": [1]}})\n{calls}"
+    )
 }
 
 /// Type-check `source` once to assert it produces `expected_errors`, then
@@ -346,13 +355,24 @@ fn constructor_burst(count: usize) -> String {
 /// guards against a scenario silently drifting to a different error count (and
 /// therefore measuring something other than intended).
 fn measure(c: &mut Criterion, name: &str, source: String, expected_errors: usize) {
+    measure_module(c, name, source, expected_errors, "bench", BENCH_FILE);
+}
+
+fn measure_module(
+    c: &mut Criterion,
+    name: &str,
+    source: String,
+    expected_errors: usize,
+    module: &str,
+    path: &str,
+) {
     let code = Arc::new(FileContents::from_source(source));
     assert_eq!(
-        check_code(code.dupe()),
+        check_module(code.dupe(), module, path),
         expected_errors,
         "benchmark `{name}` produced an unexpected error count"
     );
-    c.bench_function(name, |b| b.iter(|| check_code(code.dupe())));
+    c.bench_function(name, |b| b.iter(|| check_module(code.dupe(), module, path)));
 }
 
 /// Smoke benchmark validating the harness end-to-end.
@@ -417,26 +437,36 @@ fn nested_generic_constructor(c: &mut Criterion) {
 }
 
 fn user_method_dispatch(c: &mut Criterion) {
-    measure(c, "user_method_burst_256", user_method_burst(256), 0);
+    measure(c, "user_method_calls_256", user_method_calls(256), 0);
 }
 
 fn builtin_method_dispatch(c: &mut Criterion) {
-    measure(c, "builtin_method_burst_256", builtin_method_burst(256), 0);
+    measure(c, "builtin_method_calls_256", builtin_method_calls(256), 0);
 }
 
 fn method_name_collision(c: &mut Criterion) {
     measure(
         c,
-        "method_name_collision_burst_256",
-        method_name_collision_burst(256),
+        "method_name_collision_calls_256",
+        method_name_collision_calls(256),
         0,
     );
 }
 
 fn constructor_dispatch(c: &mut Criterion) {
-    measure(c, "constructor_burst_256", constructor_burst(256), 0);
+    measure(c, "constructor_calls_256", constructor_calls(256), 0);
 }
 
+fn pandas_method_dispatch(c: &mut Criterion) {
+    measure_module(
+        c,
+        "pandas_method_calls_256",
+        pandas_method_calls(256),
+        0,
+        "pandas.core.frame",
+        "pandas/core/frame.py",
+    );
+}
 criterion_group!(
     benches,
     smoke,
@@ -454,5 +484,6 @@ criterion_group!(
     builtin_method_dispatch,
     method_name_collision,
     constructor_dispatch,
+    pandas_method_dispatch,
 );
 criterion_main!(benches);
