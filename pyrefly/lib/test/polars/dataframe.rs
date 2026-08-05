@@ -148,7 +148,9 @@ class Expr:
         "polars/functions/col.pyi",
         r#"
 from polars.expr.expr import Expr
-def col(*names: str) -> Expr: ...
+class Col:
+    def __call__(self, *names: str) -> Expr: ...
+col: Col
 "#,
     );
     env.add_with_path(

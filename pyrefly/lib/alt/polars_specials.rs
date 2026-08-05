@@ -288,6 +288,13 @@ impl PolarsFunction {
     }
 
     fn from_callee(callee: &Type) -> Option<Self> {
+        if let Type::ClassType(cls) = callee
+            && cls
+                .class_object()
+                .has_toplevel_qname("polars.functions.col", "Col")
+        {
+            return Some(Self::Col);
+        }
         match callee.callee_kind() {
             Some(CalleeKind::Function(FunctionKind::Def(id))) => Some(Self::from_id(&id)),
             _ => None,
