@@ -632,6 +632,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     field_name,
                     range,
                     &self.error_swallower(),
+                    ErrorKind::MissingAttribute,
                     None,
                     "is_data_protocol",
                 );

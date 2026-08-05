@@ -287,6 +287,9 @@ pub enum ErrorKind {
     MissingArgument,
     /// Attempting to access an attribute that does not exist.
     MissingAttribute,
+    /// A `unittest.mock.patch` target names an attribute that does not exist.
+    /// This is a sub-kind of [MissingAttribute].
+    MissingAttributePatchTarget,
     /// Failed to import a module.
     MissingImport,
     /// Accessing an attribute that does not exist on a module.
@@ -500,6 +503,7 @@ impl ErrorKind {
             | ErrorKind::ImplicitAnyLambda
             | ErrorKind::ImplicitAnyParameter
             | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
+            ErrorKind::MissingAttributePatchTarget => Some(ErrorKind::MissingAttribute),
             ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
                 Some(ErrorKind::NoAnyReturn)
             }
@@ -551,6 +555,7 @@ impl ErrorKind {
             ErrorKind::InvalidCast => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
             ErrorKind::MisplacedIgnore => Severity::Warn,
+            ErrorKind::MissingAttributePatchTarget => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSuperCall => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,

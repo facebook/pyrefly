@@ -588,6 +588,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         attr_name: &Name,
         range: TextRange,
         errors: &ErrorCollector,
+        error_kind: ErrorKind,
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) -> Type {
@@ -652,7 +653,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 details.push(format!("Did you mean `{suggestion}`?"));
             }
             errors
-                .error_builder(range, ErrorKind::MissingAttribute, header)
+                .error_builder(range, error_kind, header)
                 .with_details(details)
                 .with_context(context)
                 .emit();

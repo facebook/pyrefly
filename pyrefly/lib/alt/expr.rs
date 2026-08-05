@@ -2088,6 +2088,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             attr_name,
             range,
             errors,
+            ErrorKind::MissingAttribute,
             context,
             "Expr::attr_infer_for_type",
         )

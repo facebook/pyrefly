@@ -799,8 +799,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
-        let callee_ty =
-            self.type_of_attr_get(ty, method_name, range, errors, context, "Expr::call_method");
+        let callee_ty = self.type_of_attr_get(
+            ty,
+            method_name,
+            range,
+            errors,
+            ErrorKind::MissingAttribute,
+            context,
+            "Expr::call_method",
+        );
         self.record_resolved_trace(range, &callee_ty);
         self.make_call_target_and_call(
             callee_ty,
@@ -2529,6 +2536,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &name,
                 range,
                 errors,
+                ErrorKind::MissingAttributePatchTarget,
                 None,
                 "unittest.mock.patch target",
             );
