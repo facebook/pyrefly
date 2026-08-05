@@ -1937,6 +1937,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None
                 }
             }
+            Type::Type(inner) if inner.is_any() => None, // redundant but legal
             ty => {
                 self.error(
                     errors,
