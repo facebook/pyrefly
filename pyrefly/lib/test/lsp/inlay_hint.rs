@@ -25,7 +25,7 @@ fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> Strin
         let handle = handles.get(name).unwrap();
         for hint_data in state
             .transaction()
-            .inlay_hints(handle, hint_config)
+            .inlay_hints(handle, hint_config, Default::default())
             .unwrap()
         {
             let pos = hint_data.position;
@@ -57,7 +57,7 @@ def f(xs: list[int]) -> None:
     let handle = handles.get("main").unwrap();
     let hints = state
         .transaction()
-        .inlay_hints(handle, InlayHintConfig::default())
+        .inlay_hints(handle, InlayHintConfig::default(), Default::default())
         .unwrap();
     let head_hint = hints
         .iter()
@@ -140,7 +140,7 @@ x = N
     let handle = handles.get("main").unwrap();
     let hints = state
         .transaction()
-        .inlay_hints(handle, Default::default())
+        .inlay_hints(handle, Default::default(), Default::default())
         .unwrap();
     assert_eq!(hints.len(), 1);
     assert!(hints[0].edits.is_none());
@@ -159,7 +159,7 @@ x = Bad
     let handle = handles.get("main").unwrap();
     let hints = state
         .transaction()
-        .inlay_hints(handle, Default::default())
+        .inlay_hints(handle, Default::default(), Default::default())
         .unwrap();
     assert_eq!(hints.len(), 1);
 }
@@ -495,6 +495,7 @@ fn parameter_name_hint_labels(code: &str, assert_zero_errors: bool) -> Vec<Strin
                 variable_types: false,
                 ..Default::default()
             },
+            Default::default(),
         )
         .unwrap()
         .into_iter()
@@ -581,6 +582,7 @@ result = my_function(MyType(), "hello")
                 variable_types: false,
                 ..Default::default()
             },
+            Default::default(),
         )
         .unwrap();
 
@@ -641,7 +643,7 @@ x, y = get_tuple()
 
     let hints = state
         .transaction()
-        .inlay_hints(handle, Default::default())
+        .inlay_hints(handle, Default::default(), Default::default())
         .unwrap();
 
     // Should have 3 hints: result, x, and y
@@ -708,20 +710,363 @@ value = choose(True)
     let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
     let hints = state
         .transaction()
-        .inlay_hints(handles.get("main").unwrap(), Default::default())
+        .inlay_hints(
+            handles.get("main").unwrap(),
+            Default::default(),
+            Default::default(),
+        )
         .unwrap();
     let hint = hints
         .iter()
         .find(|hint| {
-            hint.edits.as_ref().is_some_and(|edits| {
-                edits.annotation.contains("foo.Foo") && edits.annotation.contains("bar.Bar")
-            })
+            hint.edits
+                .as_ref()
+                .is_some_and(|edits| edits.annotation.starts_with(": "))
         })
         .expect("expected an insertable union hint");
 
     let edits = hint.edits.as_ref().unwrap();
+    assert_eq!(edits.annotation, ": Bar | Foo");
     assert_eq!(edits.imports.len(), 1);
-    assert_eq!(edits.imports[0].1, "import bar\nimport foo\n");
+    assert_eq!(
+        edits.imports[0].1,
+        "from bar import Bar\nfrom foo import Foo\n"
+    );
+}
+
+/// A module whose exports are referenced by the annotations under test.
+const LIB: (&str, &str) = (
+    "lib",
+    r#"
+class Value:
+    class Inner:
+        pass
+
+class Other:
+    pass
+
+def make() -> Value:
+    return Value()
+
+def make_inner() -> Value.Inner:
+    return Value.Inner()
+"#,
+);
+
+/// The annotation text and combined import text of the single insertable hint
+/// in `main`.
+fn insertable_hint(files: &[(&'static str, &str)]) -> (String, String) {
+    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Exports);
+    let hints = state
+        .transaction()
+        .inlay_hints(
+            handles.get("main").unwrap(),
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap();
+    let edits = hints
+        .iter()
+        .filter_map(|hint| hint.edits.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(edits.len(), 1, "expected exactly one insertable hint");
+    let imports = edits[0]
+        .imports
+        .iter()
+        .map(|(_, text)| text.as_str())
+        .collect::<String>();
+    (edits[0].annotation.clone(), imports)
+}
+
+#[test]
+fn test_insertable_hint_prefers_from_import() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "main",
+            r#"
+from lib import make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": Value");
+    assert_eq!(imports, "from lib import Value\n");
+}
+
+#[test]
+fn test_insertable_hint_keeps_existing_module_import() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "main",
+            r#"
+import lib
+from lib import make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": lib.Value");
+    assert_eq!(imports, "");
+}
+
+#[test]
+fn test_insertable_hint_keeps_existing_module_alias() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "main",
+            r#"
+import lib as l
+from lib import make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": l.Value");
+    assert_eq!(imports, "");
+}
+
+#[test]
+fn test_insertable_hint_uses_existing_from_import() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "main",
+            r#"
+from lib import Value, make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": Value");
+    assert_eq!(imports, "");
+}
+
+#[test]
+fn test_insertable_hint_uses_existing_from_import_alias() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "main",
+            r#"
+from lib import Value as V, make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": V");
+    assert_eq!(imports, "");
+}
+
+#[test]
+fn test_insertable_hint_imports_head_of_nested_name() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "main",
+            r#"
+from lib import make_inner
+
+value = make_inner()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": Value.Inner");
+    assert_eq!(imports, "from lib import Value\n");
+}
+
+#[test]
+fn test_insertable_hint_groups_names_from_one_module() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "pair",
+            r#"
+import lib
+
+def make() -> lib.Value | lib.Other:
+    return lib.Value()
+"#,
+        ),
+        (
+            "main",
+            r#"
+from pair import make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": Other | Value");
+    assert_eq!(imports, "from lib import Other, Value\n");
+}
+
+#[test]
+fn test_insertable_hint_qualifies_name_used_by_two_modules() {
+    // Importing `Value` from one module would leave the other reference
+    // indistinguishable from it, so both stay qualified.
+    let (annotation, imports) = insertable_hint(&[
+        (
+            "left",
+            r#"
+class Value:
+    pass
+"#,
+        ),
+        (
+            "right",
+            r#"
+class Value:
+    pass
+"#,
+        ),
+        (
+            "both",
+            r#"
+import left
+import right
+
+def make() -> left.Value | right.Value:
+    return left.Value()
+"#,
+        ),
+        (
+            "main",
+            r#"
+from both import make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": left.Value | right.Value");
+    assert_eq!(imports, "import left\nimport right\n");
+}
+
+#[test]
+fn test_insertable_hint_qualifies_name_bound_by_another_import() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "other",
+            r#"
+class Value:
+    pass
+"#,
+        ),
+        (
+            "main",
+            r#"
+from lib import make
+from other import Value
+
+x: Value = Value()
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": lib.Value");
+    assert_eq!(imports, "import lib\n");
+}
+
+#[test]
+fn test_insertable_hint_qualifies_name_bound_at_module_scope() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "main",
+            r#"
+from lib import make
+
+class Value:
+    pass
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": lib.Value");
+    assert_eq!(imports, "import lib\n");
+}
+
+#[test]
+fn test_insertable_hint_qualifies_name_shadowing_builtin() {
+    // `from shadow import filter` would change what `filter` means for the
+    // whole file, not just inside the annotation.
+    let (annotation, imports) = insertable_hint(&[
+        (
+            "shadow",
+            r#"
+class filter:
+    pass
+
+def make() -> filter:
+    return filter()
+"#,
+        ),
+        (
+            "main",
+            r#"
+from shadow import make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": shadow.filter");
+    assert_eq!(imports, "import shadow\n");
+}
+
+#[test]
+fn test_insertable_hint_orders_plain_imports_before_from_imports() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "left",
+            r#"
+class Value:
+    pass
+"#,
+        ),
+        (
+            "right",
+            r#"
+class Value:
+    pass
+"#,
+        ),
+        (
+            "mixed",
+            r#"
+import left
+import lib
+import right
+
+def make() -> left.Value | right.Value | lib.Other:
+    return left.Value()
+"#,
+        ),
+        (
+            "main",
+            r#"
+from mixed import make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": Other | left.Value | right.Value");
+    assert_eq!(
+        imports,
+        "import left\nimport right\nfrom lib import Other\n"
+    );
 }
 
 #[test]
@@ -746,16 +1091,20 @@ values = make_values()
     let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
     let hints = state
         .transaction()
-        .inlay_hints(handles.get("main").unwrap(), Default::default())
+        .inlay_hints(
+            handles.get("main").unwrap(),
+            Default::default(),
+            Default::default(),
+        )
         .unwrap();
     let edits = hints
         .iter()
         .find_map(|hint| hint.edits.as_ref())
         .expect("expected an insertable hint");
 
-    assert_eq!(edits.annotation, ": list[typing.Any]");
+    assert_eq!(edits.annotation, ": list[Any]");
     assert_eq!(edits.imports.len(), 1);
-    assert_eq!(edits.imports[0].1, "import typing\n");
+    assert_eq!(edits.imports[0].1, "from typing import Any\n");
 }
 
 #[test]
@@ -914,7 +1263,7 @@ class MyClass:
     let handle = handles.get("main").unwrap();
     let hints = state
         .transaction()
-        .inlay_hints(handle, Default::default())
+        .inlay_hints(handle, Default::default(), Default::default())
         .unwrap();
     assert_eq!(hints.len(), 1);
     // NewType is a callable alias, so `type[N]` is not a valid annotation to insert.

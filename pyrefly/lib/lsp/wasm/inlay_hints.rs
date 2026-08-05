@@ -8,10 +8,12 @@
 use std::iter::once;
 use std::sync::Arc;
 
+use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::Lit;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -25,6 +27,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::small_map::SmallMap;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::ClassFieldDefinition;
@@ -33,11 +36,14 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
+use crate::export::exports::ExportLocation;
 use crate::state::ide::import_regular_import_edit;
+use crate::state::ide::insert_import_edit;
 use crate::state::import_tracker::ImportTracker;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::AnnotationKind;
 use crate::state::lsp::DefinitionMetadata;
+use crate::state::lsp::ImportFormat;
 use crate::state::lsp::InlayHintConfig;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
@@ -59,20 +65,84 @@ pub struct InlayHintEdits {
     pub imports: Vec<(TextSize, String)>,
 }
 
+struct DirectImport {
+    module: ModuleName,
+    handle: Handle,
+    heads: Vec<String>,
+}
+
 struct TypeHintRenderer<'a, 'state> {
     transaction: &'a Transaction<'state>,
     handle: &'a Handle,
     tracker: ImportTracker,
     ast: Arc<ModModule>,
     stdlib: &'a Stdlib,
+    import_format: ImportFormat,
+    builtins: Option<Arc<SmallMap<Name, ExportLocation>>>,
 }
 
 impl TypeHintRenderer<'_, '_> {
     fn render(&self, prefix: &str, ty: &Type) -> InlayHintEdits {
         let parts = ty.get_annotation_parts(Some(self.stdlib));
-        let (text, missing) = self
+
+        // Approve `from <module> import <head>` only when the module resolves and
+        // actually exports `head`, and when `head` is not a builtin: importing a
+        // name that shadows one would change what that name means file-wide. Only
+        // names `builtins` defines count, not the ones it re-imports (`Any` and
+        // friends), which bind to the same object either way.
+        let shadows_builtin = |name: &Name| {
+            self.builtins.as_ref().is_some_and(|exports| {
+                matches!(exports.get(name), Some(ExportLocation::ThisModule(_)))
+            })
+        };
+        let mut direct = Vec::<DirectImport>::new();
+        for (module, head) in self
             .tracker
-            .resolve_annotation(&parts, self.handle.module());
+            .direct_import_candidates(&parts, self.handle.module())
+        {
+            let Some(module_handle) = self
+                .transaction
+                .import_handle(self.handle, module, None)
+                .finding()
+            else {
+                continue;
+            };
+            let name = Name::new(&head);
+            if !self
+                .transaction
+                .get_exports(&module_handle)
+                .contains_key(&name)
+                || shadows_builtin(&name)
+            {
+                continue;
+            }
+            match direct.iter_mut().find(|import| import.module == module) {
+                Some(import) => import.heads.push(head),
+                None => direct.push(DirectImport {
+                    module,
+                    handle: module_handle,
+                    heads: vec![head],
+                }),
+            }
+        }
+        direct.sort_by(|left, right| left.module.as_str().cmp(right.module.as_str()));
+        for import in &mut direct {
+            import.heads.sort();
+        }
+
+        let direct_imports = direct
+            .iter()
+            .flat_map(|import| {
+                import
+                    .heads
+                    .iter()
+                    .map(|head| (import.module, head.as_str()))
+            })
+            .collect::<Vec<_>>();
+        let (text, missing) =
+            self.tracker
+                .resolve_annotation(&parts, self.handle.module(), &direct_imports);
+
         let mut missing = missing.into_iter().collect::<Vec<_>>();
         missing.sort_by(|left, right| left.as_str().cmp(right.as_str()));
         let mut import_edit = None;
@@ -87,6 +157,18 @@ impl TypeHintRenderer<'_, '_> {
                 let (_, combined) = import_edit.get_or_insert((position, String::new()));
                 combined.push_str(&insert_text);
             }
+        }
+        for import in direct {
+            let edit = insert_import_edit(
+                self.ast.as_ref(),
+                self.transaction.config_finder(),
+                self.handle.dupe(),
+                import.handle,
+                &import.heads.join(", "),
+                self.import_format,
+            );
+            let (_, combined) = import_edit.get_or_insert((edit.range.start(), String::new()));
+            combined.push_str(&edit.insert_text);
         }
         let imports = match import_edit {
             Some(import_edit) => vec![import_edit],
@@ -166,6 +248,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         inlay_hint_config: InlayHintConfig,
+        import_format: ImportFormat,
     ) -> Option<Vec<InlayHintData>> {
         let is_interesting = |e: &Expr, ty: &Type, class_name: Option<&Name>| {
             !ty.is_any()
@@ -219,6 +302,11 @@ impl<'a> Transaction<'a> {
             ),
             ast,
             stdlib: &stdlib,
+            import_format,
+            builtins: self
+                .import_handle(handle, ModuleName::builtins(), None)
+                .finding()
+                .map(|builtins| self.get_exports(&builtins)),
         });
         let make_type_hint =
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {

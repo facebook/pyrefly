@@ -5255,6 +5255,9 @@ impl Server {
             lsp_analysis_config
                 .and_then(|c| c.inlay_hints)
                 .unwrap_or_default(),
+            lsp_analysis_config
+                .and_then(|c| c.import_format)
+                .unwrap_or_default(),
         ) else {
             return Ok(None);
         };
