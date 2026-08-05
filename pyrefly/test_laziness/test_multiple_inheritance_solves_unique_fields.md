@@ -74,6 +74,8 @@ a -> c::KeyClassField(ClassDefIndex(0), Name("shared"))
 a -> b::KeyClassField(ClassDefIndex(0), Name("shared"))
 a -> b::KeyClassDisjointBase(ClassDefIndex(0))
 a -> c::KeyClassDisjointBase(ClassDefIndex(0))
+a -> b::KeyAbstractClassCheck(ClassDefIndex(0))
+a -> c::KeyAbstractClassCheck(ClassDefIndex(0))
 a -> b::KeyClassSynthesizedFields(ClassDefIndex(0))
 a -> c::KeyClassSynthesizedFields(ClassDefIndex(0))
 ```
