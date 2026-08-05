@@ -3921,6 +3921,25 @@ reveal_type(pl.concat([d1, d1]))  # E: revealed type: DataFrame[a: Int64]
 );
 
 testcase!(
+    test_concat_partial_inputs_keep_partial_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import NotRequired, TypedDict, reveal_type
+
+class Row(TypedDict):
+    a: list[int]
+    extra: NotRequired[list[str]]
+
+first_data: Row = {"a": [1], "extra": ["x"]}
+second_data: Row = {"a": [2], "extra": ["y"]}
+result = pl.concat([pl.DataFrame(first_data), pl.DataFrame(second_data)])
+reveal_type(result)  # E: revealed type: DataFrame[a: Int64, ...]
+result["extra"]
+"#,
+);
+
+testcase!(
     test_concat_vertical_dtype_mismatch_falls_back,
     env_with_polars_stubs(),
     r#"
@@ -4057,6 +4076,26 @@ testcase!(
 from frames import left, right
 from typing import reveal_type
 reveal_type(left.join(right, on="k", how="left"))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_partial_input_keeps_partial_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import NotRequired, TypedDict, reveal_type
+
+class Right(TypedDict):
+    k: list[int]
+    b: list[str]
+    extra: NotRequired[list[bool]]
+
+right_data: Right = {"k": [1], "b": ["x"], "extra": [True]}
+left = pl.DataFrame({"k": [1], "a": [2]})
+result = left.join(pl.DataFrame(right_data), on="k", how="left")
+reveal_type(result)  # E: revealed type: DataFrame[k: Int64, a: Int64, b: String, ...]
+result["extra"]
 "#,
 );
 
@@ -4510,6 +4549,24 @@ a = pl.DataFrame({"a": [1]})
 b = pl.DataFrame({"b": [1.0]})
 c = pl.DataFrame({"c": [True]})
 reveal_type(a.hstack(b).hstack(c))  # E: revealed type: DataFrame[a: Int64, b: Float64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_hstack_partial_input_keeps_partial_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import NotRequired, TypedDict, reveal_type
+
+class Other(TypedDict):
+    b: list[str]
+    extra: NotRequired[list[bool]]
+
+other_data: Other = {"b": ["x"], "extra": [True]}
+result = pl.DataFrame({"a": [1]}).hstack(pl.DataFrame(other_data))
+reveal_type(result)  # E: revealed type: DataFrame[a: Int64, b: String, ...]
+result["extra"]
 "#,
 );
 

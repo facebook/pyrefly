@@ -72,11 +72,19 @@ fn dataframe_type_with_columns(
     schema: &DataFrameSchema,
     columns: Vec<(Name, PolarsDType)>,
 ) -> Type {
+    dataframe_type_with_columns_and_completeness(schema, columns, schema.completeness)
+}
+
+fn dataframe_type_with_columns_and_completeness(
+    schema: &DataFrameSchema,
+    columns: Vec<(Name, PolarsDType)>,
+    completeness: SchemaCompleteness,
+) -> Type {
     DataFrameSchema {
         underlying: schema.underlying.clone(),
         columns,
-        completeness: schema.completeness,
-        kind: schema.kind,
+        completeness,
+        ..schema.clone()
     }
     .to_type()
 }
@@ -785,13 +793,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     });
             }
             Some(PolarsFunction::Concat) => {
-                return self.infer_polars_concat(arguments).map(|columns| {
-                    PolarsCallSpecialization::DataFrame {
-                        columns,
-                        kind: DataFrameKind::Polars,
-                        completeness: SchemaCompleteness::Complete,
-                    }
-                });
+                return self
+                    .infer_polars_concat(arguments)
+                    .map(
+                        |(columns, completeness)| PolarsCallSpecialization::DataFrame {
+                            columns,
+                            kind: DataFrameKind::Polars,
+                            completeness,
+                        },
+                    );
             }
             _ => {}
         }
@@ -1649,7 +1659,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(how)
     }
 
-    fn infer_polars_concat(&self, arguments: &Arguments) -> Option<Vec<(Name, PolarsDType)>> {
+    fn infer_polars_concat(
+        &self,
+        arguments: &Arguments,
+    ) -> Option<(Vec<(Name, PolarsDType)>, SchemaCompleteness)> {
         let [items] = &arguments.args[..] else {
             return None;
         };
@@ -1662,36 +1675,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let schemas = elts
             .iter()
             .map(|e| match self.expr_infer(e, &self.error_swallower()) {
-                Type::DataFrame(schema) => Some(schema.columns),
+                Type::DataFrame(schema) if schema.kind == DataFrameKind::Polars => {
+                    Some((schema.columns, schema.completeness))
+                }
                 _ => None,
             })
             .collect::<Option<Vec<_>>>()?;
+        let completeness = if schemas
+            .iter()
+            .all(|(_, completeness)| *completeness == SchemaCompleteness::Complete)
+        {
+            SchemaCompleteness::Complete
+        } else {
+            SchemaCompleteness::Partial
+        };
         let (first, rest) = schemas.split_first()?;
-        match how {
+        let columns = match how {
             ConcatHow::Vertical => rest
                 .iter()
-                .all(|columns| columns == first)
-                .then(|| first.clone()),
+                .all(|(columns, _)| columns == &first.0)
+                .then(|| first.0.clone())?,
             ConcatHow::VerticalRelaxed => {
-                let names_match = rest.iter().all(|columns| {
-                    columns.len() == first.len()
-                        && columns.iter().zip(first).all(|((n, _), (m, _))| n == m)
+                let names_match = rest.iter().all(|(columns, _)| {
+                    columns.len() == first.0.len()
+                        && columns.iter().zip(&first.0).all(|((n, _), (m, _))| n == m)
                 });
                 if !names_match {
                     return None;
                 }
                 first
+                    .0
                     .iter()
                     .enumerate()
                     .map(|(i, (name, dtype))| {
                         let folded = rest
                             .iter()
-                            .try_fold(*dtype, |acc, columns| acc.supertype(columns[i].1))?;
+                            .try_fold(*dtype, |acc, (columns, _)| acc.supertype(columns[i].1))?;
                         Some((name.clone(), folded))
                     })
-                    .collect()
+                    .collect::<Option<Vec<_>>>()?
             }
-        }
+        };
+        Some((columns, completeness))
     }
 
     /// Anchors on the first non-null element; only Polars reports later mismatches.
@@ -2659,6 +2684,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 other.columns.clone(),
             ),
         };
+        let completeness = match how {
+            JoinHow::Semi | JoinHow::Anti => schema.completeness,
+            _ if schema.completeness == SchemaCompleteness::Complete
+                && other.completeness == SchemaCompleteness::Complete =>
+            {
+                SchemaCompleteness::Complete
+            }
+            _ => SchemaCompleteness::Partial,
+        };
         let base_names: SmallSet<Name> =
             base_columns.iter().map(|(name, _)| name.clone()).collect();
         let mut columns = base_columns;
@@ -2680,7 +2714,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(on) = on {
             self.expr_infer(on, errors);
         }
-        Some(dataframe_type_with_columns(schema, columns))
+        Some(dataframe_type_with_columns_and_completeness(
+            schema,
+            columns,
+            completeness,
+        ))
     }
 
     /// Append another Polars frame's non-overlapping columns.
@@ -2710,7 +2748,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
         self.expr_infer(other_expr, errors);
-        Some(dataframe_type_with_columns(schema, columns))
+        let completeness = if schema.completeness == SchemaCompleteness::Complete
+            && other.completeness == SchemaCompleteness::Complete
+        {
+            SchemaCompleteness::Complete
+        } else {
+            SchemaCompleteness::Partial
+        };
+        Some(dataframe_type_with_columns_and_completeness(
+            schema,
+            columns,
+            completeness,
+        ))
     }
 
     /// Apply a binding-time column mutation to the receiver schema.
