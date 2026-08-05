@@ -769,6 +769,18 @@ fn test_named_tuple_in_assert() {
     );
 }
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4459
+#[test]
+fn test_named_tuple_in_match_subject() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nmatch NamedTuple('\n",
+        file!(),
+        line!(),
+    );
+}
+
 testcase!(
     test_named_tuple_dynamic_fields,
     r#"
