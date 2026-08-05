@@ -188,6 +188,18 @@ assert_type(C(), C[Any]) # Correct, because invalid metaclass.
 );
 
 testcase!(
+    test_metaclass_invalid_losing_direct_generic,
+    r#"
+from typing import Any
+
+class Meta1[T](type): ...
+class Meta2[T](Meta1[T]): ...
+class A(metaclass=Meta2[Any]): ...
+class B[T](A, metaclass=Meta1[T]): ...  # E: Metaclass may not be an unbound generic
+    "#,
+);
+
+testcase!(
     test_init_subclass_class_keywords,
     r#"
 class Foo:

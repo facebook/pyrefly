@@ -67,8 +67,8 @@ from typing import Protocol
 class M(type): ...
 class P(Protocol): ...
 
-class A(P, metaclass=M): ...  # E: has metaclass `M` which is not a subclass of metaclass `_ProtocolMeta`
-class E(Enum, P): ...  # E: has metaclass `EnumMeta` which is not a subclass of metaclass `_ProtocolMeta`
+class A(P, metaclass=M): ...  # E: has metaclass `M` which is not compatible with metaclass `_ProtocolMeta`
+class E(Enum, P): ...  # E: has metaclass `EnumMeta` from base class `Enum` which is not compatible with metaclass `_ProtocolMeta` from base class `P`
     "#,
 );
 

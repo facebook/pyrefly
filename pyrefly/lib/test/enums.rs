@@ -1210,7 +1210,7 @@ class MyMeta(type):
     def __getitem__(cls, item) -> str: ...
     def __len__(cls) -> int: ...
 
-class Base(Enum, metaclass=MyMeta):  # E: Class `Base` has metaclass `MyMeta` which is not a subclass of metaclass `EnumMeta` from base class `Enum`
+class Base(Enum, metaclass=MyMeta):  # E: Class `Base` has metaclass `MyMeta` which is not compatible with metaclass `EnumMeta` from base class `Enum`
     @classmethod
     def where(cls, pred: bool, a: Self, b: Self) -> Self: ...
 
@@ -1237,7 +1237,7 @@ from enum import Enum
 class MyMeta(type):
     pass
 
-class E(Enum, metaclass=MyMeta):  # E: Class `E` has metaclass `MyMeta` which is not a subclass of metaclass `EnumMeta` from base class `Enum`
+class E(Enum, metaclass=MyMeta):  # E: Class `E` has metaclass `MyMeta` which is not compatible with metaclass `EnumMeta` from base class `Enum`
     A = 1
     B = 2
     C = 3
