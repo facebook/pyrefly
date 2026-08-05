@@ -2393,7 +2393,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 )
         } else {
             self.expand_mut(&mut callee_ty);
-            self.check_unittest_mock_patch_target(&callee_ty, &x.arguments, errors);
+            let unittest_mock_patch_target =
+                self.check_unittest_mock_patch_target(&callee_ty, &x.arguments, errors);
 
             let call = CallWithTypes::new();
             let (args, kws) = if callee_ty.is_union() {
@@ -2425,6 +2426,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     );
                 }
                 match ty.callee_kind() {
+                _ if ty.toplevel_func_metadata().is_some_and(|metadata| metadata.flags.unittest_mock_type.is_some()) =>
+                    self.freeform_call_infer(
+                        ty.clone(),
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range(),
+                        hint,
+                        errors,
+                    ),
                 Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                     .call_assert_type(
                         &x.arguments.args,
@@ -2649,12 +2660,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
             }});
             // TypeIs and TypeGuard functions return bool at runtime
-            match result {
+            let result = match result {
                 Type::TypeIs(_) | Type::TypeGuard(_) => {
                     self.heap.mk_class_type(self.stdlib.bool().clone())
                 }
                 other => other,
-            }
+            };
+            let uses_default_mock = x.arguments.find_keyword("new").is_none()
+                && x.arguments.find_keyword("new_callable").is_none();
+            self.specialize_unittest_mock_patch(
+                result,
+                unittest_mock_patch_target.filter(|_| uses_default_mock),
+            )
         };
 
         self.apply_polars_call_specialization(result, polars_call)
@@ -2665,33 +2682,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         callee_ty: &Type,
         arguments: &Arguments,
         errors: &ErrorCollector,
-    ) {
+    ) -> Option<Type> {
         let Type::ClassType(cls) = callee_ty else {
-            return;
+            return None;
         };
         if !cls.has_qname("unittest.mock", "_patcher") {
-            return;
+            return None;
         }
         if arguments.args.len() > 1 || arguments.keywords.iter().any(|kw| kw.arg.is_none()) {
-            return;
+            return None;
         }
         if arguments
             .find_keyword("create")
             .is_some_and(|kw| !matches!(&kw.value, Expr::BooleanLiteral(lit) if !lit.value))
         {
-            return;
+            return None;
         }
-        let Some(target_expr) = arguments.find_argument_value("target", 0) else {
-            return;
-        };
+        let target_expr = arguments.find_argument_value("target", 0)?;
         let Expr::StringLiteral(ExprStringLiteral { value, .. }) = target_expr else {
-            return;
+            return None;
         };
         let range = target_expr.range();
         let target = value.to_str();
         let parts: Vec<&str> = target.split('.').collect();
         if parts.len() < 2 || parts.iter().any(|p| p.is_empty()) {
-            return;
+            return None;
         }
 
         let Some((module_prefix_len, module)) = (1..parts.len()).rev().find_map(|i| {
@@ -2702,7 +2717,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }) else {
             // The target may be resolved dynamically at runtime, so only check paths rooted in a
             // module that is available in the current environment.
-            return;
+            return None;
         };
 
         let attrs = &parts[module_prefix_len..];
@@ -2723,7 +2738,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .exports
                     .is_implicit_reexport(ModuleName::builtins(), &name)
             {
-                return;
+                return None;
             }
             base_ty = self.type_of_attr_get(
                 &base_ty,
@@ -2735,6 +2750,48 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 "unittest.mock.patch target",
             );
         }
+        Some(base_ty)
+    }
+
+    /// Retain a resolved patch target's signature on its generated mock result.
+    fn specialize_unittest_mock_patch(&self, result: Type, target: Option<Type>) -> Type {
+        let Some(mut target) = target else {
+            return result;
+        };
+        let Some(metadata) = target.toplevel_func_metadata_mut() else {
+            return result;
+        };
+        let is_async = metadata.flags.is_async;
+        let Type::ClassType(mut patcher) = result else {
+            return result;
+        };
+        if !patcher.has_qname("unittest.mock", "_patch_pass_arg") {
+            return Type::ClassType(patcher);
+        }
+        let [mock] = patcher.targs_mut().as_mut() else {
+            unreachable!("unittest.mock._patch_pass_arg has exactly one type argument")
+        };
+        let Type::Union(mock_union) = mock else {
+            unreachable!("the default unittest.mock.patch result is a union of mock types")
+        };
+        let mock_type = mock_union
+            .members
+            .iter()
+            .find(|ty| {
+                matches!(
+                    ty,
+                    Type::ClassType(cls)
+                        if cls.has_qname(
+                            "unittest.mock",
+                            if is_async { "AsyncMock" } else { "MagicMock" },
+                        )
+                )
+            })
+            .cloned()
+            .expect("the default patch result contains MagicMock and AsyncMock");
+        metadata.flags.unittest_mock_type = Some(Box::new(mock_type));
+        *mock = target;
+        Type::ClassType(patcher)
     }
 
     pub fn freeform_call_infer(

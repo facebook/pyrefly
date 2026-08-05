@@ -600,6 +600,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) -> Type {
+        if let Some(signature) = self.unittest_mock_assertion_signature(base, attr_name) {
+            return signature;
+        }
         let attr_base = self.as_attribute_base(base.clone());
         let lookup_result = attr_base.clone().map_or_else(
             || LookupResult::internal_error(InternalError::AttributeBaseUndefined(base.clone())),
@@ -682,6 +685,34 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             self.heap.mk_any_error() // we've encountered internal errors (already logged above)
         }
+    }
+
+    /// Check call assertions against the signature retained from a `mock.patch` target.
+    fn unittest_mock_assertion_signature(&self, base: &Type, attr_name: &Name) -> Option<Type> {
+        if !matches!(
+            attr_name.as_str(),
+            "assert_called_with"
+                | "assert_called_once_with"
+                | "assert_any_call"
+                | "assert_awaited_with"
+                | "assert_awaited_once_with"
+                | "assert_any_await"
+        ) {
+            return None;
+        }
+        let mock = base
+            .toplevel_func_metadata()?
+            .flags
+            .unittest_mock_type
+            .clone()?;
+        if attr_name.as_str().contains("await")
+            && !matches!(*mock, Type::ClassType(cls) if cls.has_qname("unittest.mock", "AsyncMock"))
+        {
+            return None;
+        }
+        let mut target = base.clone();
+        target.transform_toplevel_callable_signatures(|callable, _| callable.ret = Type::None);
+        Some(target)
     }
 
     fn add_class_fields(&self, class: &Class, candidates: &mut SmallSet<Name>) {
@@ -2443,6 +2474,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn as_attribute_base1(&self, ty: Type, acc: &mut Vec<AttributeBase1>) {
+        // A patched callable keeps its signature but delegates attributes to the generated mock.
+        if let Some(mock) = ty
+            .toplevel_func_metadata()
+            .and_then(|metadata| metadata.flags.unittest_mock_type.clone())
+        {
+            self.as_attribute_base1(*mock, acc);
+            return;
+        }
         match ty {
             Type::ClassType(class_type) => {
                 if let Some(shaped_array) =
