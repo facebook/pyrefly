@@ -3279,6 +3279,24 @@ reveal_type(df.fill_null(value, matches_supertype=False))  # E: revealed type: D
 );
 
 testcase!(
+    test_fill_null_integer_literal_uses_runtime_width,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+
+df = pl.DataFrame(schema={"i8": pl.Int8, "u8": pl.UInt8})
+reveal_type(df.fill_null(128))  # E: revealed type: DataFrame[i8: Int16, u8: UInt8]
+reveal_type(df.fill_null(-1))  # E: revealed type: DataFrame[i8: Int8, u8: Int16]
+reveal_type(df.fill_null(300))  # E: revealed type: DataFrame[i8: Int16, u8: UInt16]
+wide = pl.DataFrame(schema={"i64": pl.Int64, "u64": pl.UInt64, "u128": pl.UInt128})
+reveal_type(wide.fill_null(-1))  # E: revealed type: DataFrame[i64: Int64, u64: Int64, u128: UInt128]
+reveal_type(wide.fill_null(9223372036854775808))  # E: revealed type: DataFrame[i64: Float64, u64: UInt64, u128: UInt128]
+reveal_type(wide.fill_null(18446744073709551616))  # E: revealed type: DataFrame[i64: Int64, u64: UInt64, u128: UInt128]
+"#,
+);
+
+testcase!(
     test_fill_null_dynamic_options_preserve_schema,
     env_with_polars_stubs(),
     r#"

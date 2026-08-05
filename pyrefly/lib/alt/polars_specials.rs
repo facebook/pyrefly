@@ -579,6 +579,38 @@ fn pow(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     }))
 }
 
+fn integer_dtype_with_literal(dtype: PolarsDType, value: i128) -> Option<PolarsDType> {
+    use PolarsDType::*;
+    let (lower, upper) = dtype.int_bounds()?;
+    if (lower..=upper).contains(&value)
+        || value < i64::MIN as i128
+        || value > u64::MAX as i128
+        || dtype == UInt128
+    {
+        return Some(dtype);
+    }
+    if dtype == UInt64 && value < 0 {
+        return Some(Int64);
+    }
+    let smallest = |candidates: [PolarsDType; 4]| {
+        candidates.into_iter().find(|candidate| {
+            candidate
+                .int_bounds()
+                .is_some_and(|(lower, upper)| (lower..=upper).contains(&value))
+        })
+    };
+    let literal = if value < 0 {
+        smallest([Int8, Int16, Int32, Int64])
+            .expect("negative literal within i64 bounds must fit Int64")
+    } else if dtype.is_signed_int() {
+        smallest([Int8, Int16, Int32, Int64]).unwrap_or(UInt64)
+    } else {
+        smallest([UInt8, UInt16, UInt32, UInt64])
+            .expect("nonnegative literal within u64 bounds must fit UInt64")
+    };
+    dtype.supertype(literal)
+}
+
 fn combine_binop(op: Operator, a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     use ExprValue::*;
     match op {
@@ -2350,25 +2382,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => can_widen = false,
             }
         }
-        if !can_widen
-            || !matches_supertype
-            || value_type.as_ref().and_then(polars_dtype_from_scalar_type)
-                != Some(PolarsDType::Float64)
-        {
+        if !can_widen || !matches_supertype {
             return Some(base.clone());
         }
+        let Some(value_type) = value_type.as_ref() else {
+            return Some(base.clone());
+        };
+        let integer_literal = match value_type {
+            Type::Literal(lit) => match &lit.value {
+                Lit::Int(value) => Some(value.to_string().parse::<i128>().ok()),
+                _ => None,
+            },
+            _ => None,
+        };
+        if integer_literal == Some(None) {
+            return Some(base.clone());
+        }
+        let scalar = polars_dtype_from_scalar_type(value_type);
         let columns = schema
             .columns
             .iter()
             .map(|(name, dtype)| {
-                (
-                    name.clone(),
-                    if dtype.is_integer() {
-                        PolarsDType::Float64
-                    } else {
-                        *dtype
-                    },
-                )
+                let dtype = if !dtype.is_integer() {
+                    *dtype
+                } else if scalar == Some(PolarsDType::Float64) {
+                    PolarsDType::Float64
+                } else if let Some(Some(value)) = integer_literal {
+                    integer_dtype_with_literal(*dtype, value).unwrap_or(PolarsDType::Unknown)
+                } else if scalar == Some(PolarsDType::Int64) {
+                    PolarsDType::Unknown
+                } else {
+                    *dtype
+                };
+                (name.clone(), dtype)
             })
             .collect();
         Some(dataframe_type_with_columns(schema, columns))
