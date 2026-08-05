@@ -177,7 +177,7 @@ class A:
         r#"
 # main.py
 3 |     def __new__(cls, x: int | None = None):
-                                              ^ inlay-hint: ` -> Self@A`
+                                              ^ inlay-hint: ` -> Self`
 "#
         .trim(),
         generate_inlay_hint_report(code, Default::default()).trim()
@@ -665,6 +665,62 @@ x, y = get_tuple()
         !y_hint.insertable,
         "Unpacked variable 'y' should NOT be insertable"
     );
+}
+
+#[test]
+fn test_insertable_hint_combines_multiple_imports() {
+    let files = [
+        (
+            "foo",
+            r#"
+class Foo:
+    pass
+
+def make_foo() -> Foo:
+    return Foo()
+"#,
+        ),
+        (
+            "bar",
+            r#"
+class Bar:
+    pass
+
+def make_bar() -> Bar:
+    return Bar()
+"#,
+        ),
+        (
+            "main",
+            r#"
+from foo import make_foo
+from bar import make_bar
+
+def choose(flag: bool):
+    if flag:
+        return make_foo()
+    return make_bar()
+
+value = choose(True)
+"#,
+        ),
+    ];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
+    let hints = state
+        .transaction()
+        .inlay_hints(handles.get("main").unwrap(), Default::default())
+        .unwrap();
+    let hint = hints
+        .iter()
+        .find(|hint| {
+            hint.text_edit
+                .as_ref()
+                .is_some_and(|text| text.contains("foo.Foo") && text.contains("bar.Bar"))
+        })
+        .expect("expected an insertable union hint");
+
+    assert_eq!(hint.import_edits.len(), 1);
+    assert_eq!(hint.import_edits[0].1, "import bar\nimport foo\n");
 }
 
 #[test]

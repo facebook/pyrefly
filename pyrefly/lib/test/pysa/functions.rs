@@ -1659,7 +1659,7 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
                         FunctionParameter::Pos {
                             name: "_cls".into(),
                             annotation: PysaType::new(
-                                "builtins.type[test.MyTuple]".to_owned(),
+                                "type[test.MyTuple]".to_owned(),
                                 ClassNamesFromType::from_class(
                                     &get_class("test", "MyTuple", context),
                                     context,

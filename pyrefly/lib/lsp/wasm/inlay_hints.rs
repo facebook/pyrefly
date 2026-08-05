@@ -33,6 +33,8 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
+use crate::state::ide::import_regular_import_edit;
+use crate::state::import_tracker::ImportTracker;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::AnnotationKind;
 use crate::state::lsp::DefinitionMetadata;
@@ -41,6 +43,7 @@ use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::callable::Params;
+use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 
 pub struct InlayHintData {
@@ -49,6 +52,14 @@ pub struct InlayHintData {
     pub label_parts: Vec<(String, Option<TextRangeWithModule>)>,
     /// Whether double-clicking should insert the type annotation.
     pub insertable: bool,
+    /// Text to insert for the hint, plus any imports needed by that inserted text.
+    pub text_edit: Option<String>,
+    pub import_edits: Vec<(TextSize, String)>,
+}
+
+struct RenderedTypeHint {
+    text: String,
+    import_edits: Vec<(TextSize, String)>,
 }
 
 #[derive(Debug)]
@@ -92,6 +103,40 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
 }
 
 impl<'a> Transaction<'a> {
+    fn render_type_hint(
+        &self,
+        ty: &Type,
+        handle: &Handle,
+        tracker: Option<&ImportTracker>,
+        ast: Option<&ModModule>,
+        stdlib: &Stdlib,
+    ) -> RenderedTypeHint {
+        let parts = ty.get_annotation_parts(Some(stdlib));
+        let empty_tracker = ImportTracker::default();
+        let tracker = tracker.unwrap_or(&empty_tracker);
+        let (text, missing) = tracker.resolve_annotation(&parts, handle.module());
+        let import_edits = if let Some(ast) = ast {
+            let mut missing = missing.into_iter().collect::<Vec<_>>();
+            missing.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+            let mut import_edit = None;
+            for module in missing {
+                if let Some(handle_to_import) = self.import_handle(handle, module, None).finding() {
+                    let (position, insert_text, _) =
+                        import_regular_import_edit(ast, handle_to_import, None);
+                    let (_, combined) = import_edit.get_or_insert((position, String::new()));
+                    combined.push_str(&insert_text);
+                }
+            }
+            match import_edit {
+                Some(import_edit) => vec![import_edit],
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        RenderedTypeHint { text, import_edits }
+    }
+
     /// NewType values are callable aliases, not class objects, so `type[N]` is
     /// not a valid annotation. If `ty` is a NewType, returns its constructor
     /// signature to display in place of `type[N]`; callers should then avoid
@@ -161,20 +206,27 @@ impl<'a> Transaction<'a> {
         };
         let bindings = self.get_bindings(handle)?;
         let stdlib = self.get_stdlib(handle);
+        let ast_arc = self.get_ast(handle);
+        let ast_ref = ast_arc.as_deref();
+        let import_tracker = ast_ref
+            .map(|ast| ImportTracker::from_ast(ast, handle.module(), handle.path().is_init()));
         let make_type_hint =
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
                 let type_parts = ty.get_types_with_locations(Some(&stdlib));
-                let label_parts = once((prefix.to_owned(), None))
-                    .chain(
-                        type_parts
-                            .iter()
-                            .map(|(text, loc)| (text.clone(), loc.clone())),
-                    )
-                    .collect();
+                let label_parts = once((prefix.to_owned(), None)).chain(type_parts).collect();
+                let rendered = insertable.then(|| {
+                    self.render_type_hint(ty, handle, import_tracker.as_ref(), ast_ref, &stdlib)
+                });
+                let text_edit = rendered
+                    .as_ref()
+                    .map(|rendered| format!("{prefix}{}", rendered.text));
+                let import_edits = rendered.map_or_else(Vec::new, |rendered| rendered.import_edits);
                 InlayHintData {
                     position,
                     label_parts,
                     insertable,
+                    text_edit,
+                    import_edits,
                 }
             };
         let mut res = Vec::new();
@@ -337,8 +389,10 @@ impl<'a> Transaction<'a> {
                     .into_iter()
                     .map(|(pos, text)| InlayHintData {
                         position: pos,
-                        label_parts: vec![(text, None)],
+                        label_parts: vec![(text.clone(), None)],
                         insertable: true,
+                        text_edit: Some(text),
+                        import_edits: Vec::new(),
                     }),
             );
         }
