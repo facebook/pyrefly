@@ -971,23 +971,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let columns = self.polars_csv_schema(options.schema)?;
         match function {
             PolarsFunction::ReadCsv => self.infer_read_csv_schema(columns, &options),
-            PolarsFunction::ScanCsv => {
-                if [
-                    options.overrides,
-                    options.selection,
-                    options.new_columns,
-                    options.row_index_name,
-                    options.with_column_names,
-                    options.include_file_paths,
-                ]
-                .into_iter()
-                .flatten()
-                .any(|expr| !matches!(expr, Expr::NoneLiteral(_)))
-                {
-                    return None;
-                }
-                Some(columns)
-            }
+            PolarsFunction::ScanCsv => self.infer_scan_csv_schema(columns, &options),
             _ => unreachable!("CSV schema inference only receives CSV readers"),
         }
     }
@@ -1105,6 +1089,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
                 return None;
             }
+        }
+        Some(columns)
+    }
+
+    /// Apply lazy row-index and file-path additions.
+    fn infer_scan_csv_schema(
+        &self,
+        mut columns: Vec<(Name, PolarsDType)>,
+        options: &PolarsCsvOptions,
+    ) -> Option<Vec<(Name, PolarsDType)>> {
+        if [
+            options.overrides,
+            options.selection,
+            options.new_columns,
+            options.with_column_names,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|expr| !matches!(expr, Expr::NoneLiteral(_)))
+        {
+            return None;
+        }
+        self.apply_polars_csv_row_index(&mut columns, options.row_index_name)?;
+        if let Some(include_file_paths) = options.include_file_paths
+            && !matches!(include_file_paths, Expr::NoneLiteral(_))
+        {
+            let name = self.polars_column_name(include_file_paths)?;
+            if columns.iter().any(|(column, _)| *column == name) {
+                return None;
+            }
+            columns.push((name, PolarsDType::String));
         }
         Some(columns)
     }

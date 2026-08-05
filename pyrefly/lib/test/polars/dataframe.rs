@@ -463,6 +463,18 @@ reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64, "b": pl.Float64, "c":
 );
 
 testcase!(
+    test_scan_csv_output_columns,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+
+reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}, schema_overrides=[pl.String], new_columns=["x"]))  # E: revealed type: LazyFrame
+reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}, row_index_name="idx", include_file_paths="path"))  # E: revealed type: LazyFrame[idx: UInt32, a: Int64, b: String, path: String]
+"#,
+);
+
+testcase!(
     test_csv_dynamic_schema_inputs_fall_back,
     env_with_polars_stubs(),
     r#"
