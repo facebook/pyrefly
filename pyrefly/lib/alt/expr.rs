@@ -989,10 +989,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
-        let callee_ty = match prepared {
+        let mut callee_ty = match prepared {
             PreparedExprCall::Resolved(ty) => return ty,
             PreparedExprCall::Callee(callee_ty) => callee_ty,
         };
+
+        // Instantiating a subscripted generic whose type argument is an out-of-scope legacy
+        // TypeVar (e.g. `list[T]()` at module scope) is an error: `T` is not bound by any
+        // enclosing generic scope. Only subscript callees can introduce such a raw TypeVar.
+        if matches!(&*x.func, Expr::Subscript(_)) {
+            self.check_legacy_typevar_scoping(&mut callee_ty, x.func.range(), errors);
+        }
 
         self.check_pytorch_tensor_item_call(x, &callee_ty, errors);
         self.check_pytorch_tensor_cuda_call(x, &callee_ty, errors);

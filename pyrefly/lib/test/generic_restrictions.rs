@@ -1212,7 +1212,6 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug = "conformance: Should error on unbound TypeVars in expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1243,7 +1242,7 @@ class Outer(Generic[T]):
 # Unbound TypeVars at global scope
 global_var1: T  # E: Type variable `T` is not in scope
 global_var2: list[T] = []  # E: Type variable `T` is not in scope
-list[T]()  # should error
+list[T]()  # E: Type variable `T` is not in scope
 "#,
 );
 
@@ -1321,6 +1320,32 @@ class Outer(Generic[T]):
     # A method may still use the class's type parameter.
     def m(self, x: T) -> T:
         return x
+"#,
+);
+
+testcase!(
+    test_out_of_scope_typevar_in_expression,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+# Instantiating a generic subscripted with an out-of-scope TypeVar is an error.
+list[T]()  # E: Type variable `T` is not in scope
+
+# But a TypeVar may appear as a value (it is a runtime object), and a subscripted generic
+# may be used as an implicit type alias.
+x = T  # OK
+alias = list[T]  # OK
+
+def f(a: T) -> T:
+    # Inside a generic function the TypeVar is in scope.
+    b = list[T]()  # OK
+    return a
+
+class C(Generic[T]):
+    def m(self) -> None:
+        list[T]()  # OK: T is in scope in a method of the generic class
 "#,
 );
 

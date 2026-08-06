@@ -6640,6 +6640,17 @@
       "severity": "error",
       "stop_column": 21,
       "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Type variable `T` is not in scope",
+      "description": "Type variable `T` is not in scope",
+      "line": 107,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 107
     }
   ],
   "generics_self_advanced.py": [],
