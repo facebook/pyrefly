@@ -1455,7 +1455,7 @@ mod tests {
         #[test]
         fn project_excludes_are_rooted_at_the_workspace() {
             let root = PathBuf::from("/projects/my_project");
-            let workspaces = Workspaces::new(Workspace::new(), &[root.clone()]);
+            let workspaces = Workspaces::new(Workspace::new(), std::slice::from_ref(&root));
             let mut modified = false;
             workspaces.apply_client_configuration(
                 &mut modified,
