@@ -3817,34 +3817,60 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         options: ReferenceOptions,
     ) -> Vec<TextRange> {
-        self.find_definition(
+        self.find_local_references_with_preference(
             handle,
             position,
             FindPreference {
                 import_behavior: ImportBehavior::StopAtRenamedImports,
                 ..Default::default()
             },
+            options,
         )
-        .map(Vec1::into_vec)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(
-            |FindDefinitionItemWithDocstring {
-                 metadata,
-                 definition_range,
-                 module,
-                 ..
-             }| {
-                self.local_references_from_definition(
-                    handle,
-                    metadata,
-                    definition_range,
-                    &module,
-                    options,
-                )
+    }
+
+    /// Finds textual occurrences of the symbol at `position` without resolving class calls
+    /// through their constructor dunders.
+    pub fn find_local_occurrences(&self, handle: &Handle, position: TextSize) -> Vec<TextRange> {
+        self.find_local_references_with_preference(
+            handle,
+            position,
+            FindPreference {
+                import_behavior: ImportBehavior::StopAtRenamedImports,
+                resolve_call_dunders: false,
+                ..Default::default()
             },
+            ReferenceOptions::textual_only(true),
         )
-        .concat()
+    }
+
+    fn find_local_references_with_preference(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        preference: FindPreference,
+        options: ReferenceOptions,
+    ) -> Vec<TextRange> {
+        self.find_definition(handle, position, preference)
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(
+                |FindDefinitionItemWithDocstring {
+                     metadata,
+                     definition_range,
+                     module,
+                     ..
+                 }| {
+                    self.local_references_from_definition(
+                        handle,
+                        metadata,
+                        definition_range,
+                        &module,
+                        options,
+                    )
+                },
+            )
+            .concat()
     }
 
     /// Find references to an external definition within the given handle's module.

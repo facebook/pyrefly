@@ -4860,7 +4860,7 @@ impl Server {
             self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         Ok(Some(
             transaction
-                .find_local_references(&handle, position, ReferenceOptions::all(true))
+                .find_local_occurrences(&handle, position)
                 .into_map(|range| DocumentHighlight {
                     range: info.to_lsp_range(range),
                     kind: Some(match transaction.identifier_at(&handle, range.start()) {
