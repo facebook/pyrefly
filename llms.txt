@@ -5,6 +5,7 @@
 - [attrs Support](attrs): Pyrefly support for the attrs library.
 - [Infer](autotype): Automatically add type annotations to your code with the Pyrefly infer feature.
 - [Configuration](configuration): Configure Pyrefly settings and options
+- [DataFrames](dataframes): Pyrefly support for Polars and pandas DataFrames, including column and dtype inference.
 - [Django Support](django): Pyrefly support for Django ORM.
 - [Pyrefly Error Kinds](error-kinds): Pyrefly error categories and suppression codes
 - [Pyrefly Error Suppressions](error-suppressions): Learn how to suppress type check errors in Pyrefly with code comments and baseline files.

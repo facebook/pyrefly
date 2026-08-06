@@ -515,6 +515,17 @@ y = 10 // 0  # error: division by zero
 z = 10 % 0   # error: division by zero
 ```
 
+## duplicate-column
+
+A Polars projection produces more than one column with the same name. Polars rejects duplicate output names when an eager projection runs or a lazy projection is collected.
+
+```python
+import polars as pl
+
+df = pl.DataFrame({"a": [1]})
+df.select("a", "a")
+```
+
 ## empty-body
 
 Default severity: `ignore`
@@ -1660,7 +1671,7 @@ Default severity: `ignore`
 
 Calling `.cuda()` on a `torch.Tensor` hard-codes the target device to CUDA. Use `.to(device)` instead so your code works on any accelerator (CUDA, XPU, MPS, etc.).
 
-Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+This is a sub-kind of [pytorch-efficiency-lints](#pytorch-efficiency-lints): enabling `pytorch-efficiency-lints` also enables this error.
 
 ```python
 import torch
@@ -1676,7 +1687,7 @@ Default severity: `ignore`
 
 Calling `.item()` on a `torch.Tensor` forces GPU-to-CPU synchronization, blocking the training loop until all pending GPU operations complete. This can reduce GPU utilization from over 90% to under 50%. Prefer `tensor[0]` for scalar tensors, accumulate values on the GPU with `torch.sum()`, or defer `.item()` to outside the training loop.
 
-Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+This is a sub-kind of [pytorch-efficiency-lints](#pytorch-efficiency-lints): enabling `pytorch-efficiency-lints` also enables this error.
 
 ```python
 import torch
@@ -1691,7 +1702,7 @@ Default severity: `ignore`
 
 Passing a `torch.Tensor` to `print()` triggers `Tensor.__repr__()`, which forces GPU-to-CPU synchronization and blocks until all pending GPU operations complete. Use `print(tensor.shape)` to inspect metadata without synchronizing, or guard with `if DEBUG: print(tensor)`.
 
-Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+This is a sub-kind of [pytorch-efficiency-lints](#pytorch-efficiency-lints): enabling `pytorch-efficiency-lints` also enables this error.
 
 ```python
 import torch
@@ -1707,7 +1718,7 @@ Default severity: `ignore`
 
 Calling `.to(device)` on a tensor returned by a factory function like `torch.zeros()` allocates the tensor on CPU first, then copies it to the target device. Pass `device=` directly to the factory function instead to avoid the redundant allocation and copy.
 
-Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+This is a sub-kind of [pytorch-efficiency-lints](#pytorch-efficiency-lints): enabling `pytorch-efficiency-lints` also enables this error.
 
 ```python
 import torch
@@ -1716,6 +1727,19 @@ device = torch.device("cuda")
 x = torch.zeros(3, 4).to(device)  # pytorch-efficiency-lint-redundant-to-call
 # Fix: x = torch.zeros(3, 4, device=device)
 ```
+
+## pytorch-efficiency-lints
+
+Default severity: `ignore`
+
+Umbrella error code for PyTorch GPU performance anti-patterns. Suppressing or enabling `pytorch-efficiency-lints` cascades to every sub-kind — useful when you want to surface (or silence) all of them without listing them individually.
+
+All concrete diagnostics are emitted under one of the more specific sub-kinds:
+
+- [`pytorch-efficiency-lint-cuda-call`](#pytorch-efficiency-lint-cuda-call)
+- [`pytorch-efficiency-lint-item-call`](#pytorch-efficiency-lint-item-call)
+- [`pytorch-efficiency-lint-print-tensor`](#pytorch-efficiency-lint-print-tensor)
+- [`pytorch-efficiency-lint-redundant-to-call`](#pytorch-efficiency-lint-redundant-to-call)
 
 ## read-only
 
