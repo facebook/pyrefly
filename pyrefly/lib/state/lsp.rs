@@ -290,6 +290,40 @@ impl Default for FindPreference {
     }
 }
 
+/// A predicate for "this candidate denotes the definition at `definition_range`". Exact byte
+/// ranges can disagree (e.g. CRLF/LF differences between the on-disk and in-memory copies of a
+/// file), so it falls back to the symbol name and line number, which are encoding-invariant.
+/// The definition's own name and line are resolved once, not per candidate.
+fn definition_matcher(
+    module: &Module,
+    definition_range: TextRange,
+) -> impl Fn(TextRange, &str) -> bool + use<'_> {
+    let definition_line = module.to_lsp_position(definition_range.start()).line;
+    let definition_name = module.code_at(definition_range);
+    move |candidate_range, candidate_name| {
+        candidate_range == definition_range
+            || (candidate_name == definition_name
+                && module.to_lsp_position(candidate_range.start()).line == definition_line)
+    }
+}
+
+/// The references in `references_by_module` that point at the definition at `definition_range`
+/// in `module`.
+fn recorded_references(
+    references_by_module: &SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
+    module: &Module,
+    definition_range: TextRange,
+) -> Vec<TextRange> {
+    let matches_definition = definition_matcher(module, definition_range);
+    references_by_module
+        .get(module.path())
+        .into_iter()
+        .flatten()
+        .filter(|(def_range, _)| matches_definition(*def_range, module.code_at(*def_range)))
+        .map(|(_, ref_range)| *ref_range)
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 pub enum DefinitionMetadata {
     Attribute,
@@ -3780,8 +3814,6 @@ impl<'a> Transaction<'a> {
     }
 
     /// Find references to an external definition within the given handle's module.
-    /// When the exact byte-range comparison fails (e.g. CRLF/LF differences), fall back to
-    /// comparing symbol names and line numbers, which are encoding-invariant.
     fn local_references_from_external_definition(
         &self,
         handle: &Handle,
@@ -3792,13 +3824,7 @@ impl<'a> Transaction<'a> {
         let index = index.lock();
         let mut references = Vec::new();
 
-        let definition_line = module.to_lsp_position(definition_range.start()).line;
-        let definition_name = module.code_at(definition_range);
-        let matches_definition = |candidate_range: TextRange, candidate_name: &str| {
-            candidate_range == definition_range
-                || (candidate_name == definition_name
-                    && module.to_lsp_position(candidate_range.start()).line == definition_line)
-        };
+        let matches_definition = definition_matcher(module, definition_range);
 
         for ((imported_module_name, imported_name), ranges) in index
             .externally_defined_variable_references
@@ -3816,17 +3842,11 @@ impl<'a> Transaction<'a> {
                 references.extend(ranges.iter().copied());
             }
         }
-        for (attribute_module_path, def_and_ref_ranges) in
-            &index.externally_defined_attribute_references
-        {
-            if attribute_module_path == module.path() {
-                for (def_range, ref_range) in def_and_ref_ranges {
-                    if matches_definition(*def_range, module.code_at(*def_range)) {
-                        references.push(*ref_range);
-                    }
-                }
-            }
-        }
+        references.extend(recorded_references(
+            &index.externally_defined_attribute_references,
+            module,
+            definition_range,
+        ));
         Some(references)
     }
 
