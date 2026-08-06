@@ -315,6 +315,67 @@ fn test_rename_kwarg_across_files() {
     interaction.shutdown().unwrap();
 }
 
+/// Constructor call-site ranges spell the class name, so treating them as textual references
+/// causes rename to corrupt `Person(...)` calls in other files.
+#[test]
+fn test_rename_dunder_init_skips_constructor_call_sites_across_files() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("constructor_references");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let person = root_path.join("person.py");
+    let usage = root_path.join("usage.py");
+
+    interaction.client.did_open("person.py");
+    interaction.client.did_open("usage.py");
+
+    interaction
+        .client
+        .send_request::<Rename>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&person).unwrap().to_string()
+            },
+            "position": {
+                "line": 7,
+                "character": 10
+            },
+            "newName": "__init2__"
+        }))
+        .expect_response(json!({
+            "changes": {
+                Url::from_file_path(&person).unwrap().to_string(): [
+                    {
+                        "newText":"__init2__",
+                        "range":{"start":{"line":7,"character":8},"end":{"line":7,"character":16}}
+                    },
+                ],
+                Url::from_file_path(&usage).unwrap().to_string(): [
+                    {
+                        "newText":"__init2__",
+                        "range":{"start":{"line":7,"character":5},"end":{"line":7,"character":11}}
+                    },
+                    {
+                        "newText":"__init2__",
+                        "range":{"start":{"line":8,"character":5},"end":{"line":8,"character":11}}
+                    },
+                ]
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_rename() {
     let root = get_test_files_root();
