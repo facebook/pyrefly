@@ -4778,6 +4778,19 @@ foo()
 }
 
 #[test]
+fn safe_delete_rejects_called_constructor() {
+    let code = r#"
+class Foo:
+    def __init__(self) -> None:
+    #       ^
+        pass
+
+Foo()
+"#;
+    assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
 fn safe_delete_type_alias_no_refs() {
     let code = r#"
 type MyType = int

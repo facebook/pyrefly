@@ -327,7 +327,6 @@ References:
     );
 }
 
-// TODO: references on constructors
 #[test]
 fn dunder_init() {
     let code = r#"
@@ -348,6 +347,8 @@ Foo()
 References:
 3 |     def __init__(self): ...
             ^^^^^^^^
+6 | Foo()
+    ^^^
 "#
         .trim(),
         report.trim(),

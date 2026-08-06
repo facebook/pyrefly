@@ -1215,17 +1215,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                         docstring_range: _,
                     } => match reference_kind {
-                        AttributeReferenceKind::ConstructorCall => {
-                            if cls.module_path() != self.bindings().module().path() {
-                                index
-                                    .lock()
-                                    .constructor_references
-                                    .entry(cls.module_path().dupe())
-                                    .or_default()
-                                    .push((range, attribute_reference_range))
-                            }
-                        }
+                        AttributeReferenceKind::ConstructorCall => index
+                            .lock()
+                            .constructor_references
+                            .entry(cls.module_path().dupe())
+                            .or_default()
+                            .push((range, attribute_reference_range)),
                         AttributeReferenceKind::Textual => {
+                            // Textual references to an attribute defined in this module are
+                            // recovered by scanning the AST for `<expr>.<name>`, so only
+                            // out-of-module definitions need an index entry.
                             if cls.module_path() != self.bindings().module().path() {
                                 index
                                     .lock()

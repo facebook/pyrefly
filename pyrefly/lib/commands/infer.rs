@@ -645,6 +645,30 @@ def foo() -> str:
     }
 
     #[test]
+    fn test_constructor_parameter() -> anyhow::Result<()> {
+        let mut flags = InferFlags::default();
+        flags.return_types = Some(false);
+        assert_annotations(
+            r#"
+class Example:
+    def __init__(self, value):
+        self.value = value
+
+Example(42)
+"#,
+            r#"
+class Example:
+    def __init__(self, value: int):
+        self.value = value
+
+Example(42)
+"#,
+            Some(flags),
+        );
+        Ok(())
+    }
+
+    #[test]
 
     fn test_parameter_unions() -> anyhow::Result<()> {
         assert_annotations(
