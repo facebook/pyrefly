@@ -25,6 +25,7 @@ use anstream::eprintln;
 use anstream::stderr;
 use anstream::stdout;
 use anyhow::Context as _;
+use anyhow::bail;
 use clap::Parser;
 use clap::ValueEnum;
 use dupe::Dupe as _;
@@ -43,6 +44,7 @@ use pyrefly_config::migration::run::MigratedFromKind;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::args::clap_env;
 use pyrefly_util::demand_tree::DemandCollector;
@@ -264,10 +266,11 @@ impl SnippetCheckArgs {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 struct OutputArgs {
-    /// Write the errors to a file, instead of printing them.
-    #[arg(long, short = 'o', value_name = "OUTPUT_FILE")]
-    output: Option<PathBuf>,
-    /// Set the error output format.
+    /// Write errors to an output destination. Repeat for multiple outputs.
+    /// Use `-` as the destination for stdout. Prefix a destination with `FORMAT:` to override `--output-format`.
+    #[arg(long, short = 'o', value_name = "[FORMAT:]DESTINATION")]
+    output: Vec<ErrorOutput>,
+    /// Set the default error output format.
     #[arg(long, value_enum)]
     output_format: Option<OutputFormat>,
     /// Produce debugging information about the type checking process.
@@ -385,7 +388,79 @@ struct OutputArgs {
     min_severity: Option<Severity>,
 }
 
+/// A diagnostic output format and destination requested on the CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ErrorOutput {
+    /// An explicit format override, or `None` to use the default output format.
+    format: Option<OutputFormat>,
+    /// Where to write the formatted diagnostics.
+    destination: ErrorOutputDestination,
+}
+
+/// A destination for formatted diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ErrorOutputDestination {
+    /// Standard output.
+    Stdout,
+    /// A file created or replaced by the check.
+    File(PathBuf),
+}
+
+impl FromStr for ErrorOutput {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (format, destination) = match value.split_once(':') {
+            Some((prefix, destination)) => {
+                match <OutputFormat as ValueEnum>::from_str(prefix, false) {
+                    Ok(format) => (Some(format), destination),
+                    // An unrecognized prefix is part of the path. This preserves paths
+                    // containing `:`, including absolute Windows paths.
+                    Err(_) => (None, value),
+                }
+            }
+            None => (None, value),
+        };
+        if destination.is_empty() {
+            return Err("output destination cannot be empty".to_owned());
+        }
+        Ok(Self {
+            format,
+            destination: if destination == "-" {
+                ErrorOutputDestination::Stdout
+            } else {
+                ErrorOutputDestination::File(PathBuf::from(destination))
+            },
+        })
+    }
+}
+
 impl OutputArgs {
+    /// Validate invariants across all requested output destinations.
+    fn validate_outputs(&self) -> anyhow::Result<()> {
+        let mut has_stdout = false;
+        let mut files = HashSet::new();
+        for output in &self.output {
+            match &output.destination {
+                ErrorOutputDestination::Stdout => {
+                    if has_stdout {
+                        bail!("standard output may only be specified once");
+                    }
+                    has_stdout = true;
+                }
+                ErrorOutputDestination::File(path) => {
+                    if !files.insert(path.absolutize()) {
+                        bail!(
+                            "output destination `{}` may only be specified once",
+                            path.display()
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn inherit_defaults_from_config(&mut self, config: &ConfigFile) {
         if self.baseline.is_none() {
             self.baseline = config.baseline.clone();
@@ -1080,6 +1155,7 @@ impl CheckArgs {
         upsell: UpsellDecision,
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>, CheckResult)> {
+        self.output.validate_outputs()?;
         let mut timings = Timings::new();
         let list_files_start = Instant::now();
         let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
@@ -1144,6 +1220,7 @@ impl CheckArgs {
         config_finder: ConfigFinder,
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, CheckResult)> {
+        self.output.validate_outputs()?;
         // Create a virtual module path for the snippet
         let path = PathBuf::from_str("snippet")?;
         let module_path = ModulePath::memory(path);
@@ -1204,6 +1281,7 @@ impl CheckArgs {
         mut upsell: UpsellDecision,
         thread_count: ThreadCount,
     ) -> anyhow::Result<()> {
+        self.output.validate_outputs()?;
         // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
         // - Config search is stable across incremental runs.
         let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
@@ -1485,21 +1563,32 @@ impl CheckArgs {
             )
         });
 
-        if let Some(path) = &self.output.output {
-            write_errors_to_file(
-                output_format,
-                path,
-                version,
-                relative_to.as_path(),
-                &output_errors,
-            )?;
-        } else {
+        if self.output.output.is_empty() {
             write_errors_to_console(
                 output_format,
                 version,
                 relative_to.as_path(),
                 &output_errors,
             )?;
+        } else {
+            for output in &self.output.output {
+                let format = output.format.unwrap_or(output_format);
+                match &output.destination {
+                    ErrorOutputDestination::Stdout => write_errors_to_console(
+                        format,
+                        version,
+                        relative_to.as_path(),
+                        &output_errors,
+                    )?,
+                    ErrorOutputDestination::File(path) => write_errors_to_file(
+                        format,
+                        path,
+                        version,
+                        relative_to.as_path(),
+                        &output_errors,
+                    )?,
+                }
+            }
         }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
@@ -1820,6 +1909,109 @@ mod tests {
     }
 
     #[test]
+    fn output_args_parse_multiple_destinations() {
+        let output = OutputArgs::parse_from([
+            "pyrefly-check",
+            "--output",
+            "full-text:-",
+            "--output=json:diagnostics.json",
+            "--output",
+            "sarif:diagnostics.sarif",
+        ]);
+
+        assert_eq!(
+            output.output,
+            vec![
+                ErrorOutput {
+                    format: Some(OutputFormat::FullText),
+                    destination: ErrorOutputDestination::Stdout,
+                },
+                ErrorOutput {
+                    format: Some(OutputFormat::Json),
+                    destination: ErrorOutputDestination::File(PathBuf::from("diagnostics.json")),
+                },
+                ErrorOutput {
+                    format: Some(OutputFormat::Sarif),
+                    destination: ErrorOutputDestination::File(PathBuf::from("diagnostics.sarif",)),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn output_args_preserve_colons_and_literal_dash_paths() {
+        let output = OutputArgs::parse_from([
+            "pyrefly-check",
+            "--output",
+            r"C:\tmp\report.json",
+            "--output",
+            "full-text:json:report.txt",
+            "--output",
+            "./-",
+        ]);
+
+        assert_eq!(
+            output.output,
+            vec![
+                ErrorOutput {
+                    format: None,
+                    destination: ErrorOutputDestination::File(
+                        PathBuf::from(r"C:\tmp\report.json",)
+                    ),
+                },
+                ErrorOutput {
+                    format: Some(OutputFormat::FullText),
+                    destination: ErrorOutputDestination::File(PathBuf::from("json:report.txt")),
+                },
+                ErrorOutput {
+                    format: None,
+                    destination: ErrorOutputDestination::File(PathBuf::from("./-")),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn output_args_reject_empty_destinations() {
+        for value in ["", "json:"] {
+            let error = OutputArgs::try_parse_from(["pyrefly-check", "--output", value])
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("output destination cannot be empty"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_args_require_unique_destinations() {
+        let duplicate_stdout =
+            OutputArgs::parse_from(["pyrefly-check", "--output=-", "--output=json:-"]);
+        assert_eq!(
+            duplicate_stdout.validate_outputs().unwrap_err().to_string(),
+            "standard output may only be specified once"
+        );
+
+        let duplicate_file = OutputArgs::parse_from([
+            "pyrefly-check",
+            "--output=diagnostics.json",
+            "--output=sarif:./diagnostics.json",
+        ]);
+        assert_eq!(
+            duplicate_file.validate_outputs().unwrap_err().to_string(),
+            "output destination `./diagnostics.json` may only be specified once"
+        );
+
+        let unique = OutputArgs::parse_from([
+            "pyrefly-check",
+            "--output=json:first.json",
+            "--output=json:second.json",
+        ]);
+        unique.validate_outputs().unwrap();
+    }
+
+    #[test]
     fn output_args_inherit_output_format_from_config() {
         let mut output = OutputArgs::parse_from(["pyrefly-check"]);
         let config = ConfigFile {
@@ -1834,7 +2026,12 @@ mod tests {
 
     #[test]
     fn cli_output_format_overrides_config_output_format() {
-        let mut output = OutputArgs::parse_from(["pyrefly-check", "--output-format", "json"]);
+        let mut output = OutputArgs::parse_from([
+            "pyrefly-check",
+            "--output-format",
+            "json",
+            "--output=diagnostics.json",
+        ]);
         let config = ConfigFile {
             output_format: Some(OutputFormat::MinText),
             ..Default::default()
@@ -1843,6 +2040,47 @@ mod tests {
         output.inherit_defaults_from_config(&config);
 
         assert_eq!(output.output_format(), OutputFormat::Json);
+        assert_eq!(
+            output.output[0].format.unwrap_or(output.output_format()),
+            OutputFormat::Json
+        );
+    }
+
+    #[test]
+    fn explicit_output_formats_override_the_reloadable_default() {
+        let mut output = OutputArgs::parse_from([
+            "pyrefly-check",
+            "--output=json:explicit.json",
+            "--output=default.txt",
+        ]);
+        output.inherit_defaults_from_config(&ConfigFile {
+            output_format: Some(OutputFormat::MinText),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            output.output[0].format.unwrap_or(output.output_format()),
+            OutputFormat::Json
+        );
+        assert_eq!(
+            output.output[1].format.unwrap_or(output.output_format()),
+            OutputFormat::MinText
+        );
+
+        // Watch mode resets only the inherited default before loading updated config.
+        output.output_format = None;
+        output.inherit_defaults_from_config(&ConfigFile {
+            output_format: Some(OutputFormat::Sarif),
+            ..Default::default()
+        });
+        assert_eq!(
+            output.output[0].format.unwrap_or(output.output_format()),
+            OutputFormat::Json
+        );
+        assert_eq!(
+            output.output[1].format.unwrap_or(output.output_format()),
+            OutputFormat::Sarif
+        );
     }
 
     #[test]
