@@ -29,14 +29,14 @@ export default function LandingPage(): React.ReactElement {
             description={siteConfig.description}
         >
             <Banner
-                text="🎉 Pyrefly v1.1 is now available!"
+                text="🎉 Pyrefly v1.2 is now available!"
                 dismissible={true}
                 cta={{
                     text: 'Read the blog',
-                    href: '/blog/v1.1',
+                    href: '/blog/v1.2',
                     onClick: () =>
                         log(LoggingEvent.CLICK, {
-                            button_id: 'banner_v1.1_blog',
+                            button_id: 'banner_v1.2_blog',
                             // Use the beacon transport so the event survives the
                             // synchronous navigation that follows this click.
                             transport_type: 'beacon',
