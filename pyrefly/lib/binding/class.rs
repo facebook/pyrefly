@@ -7,17 +7,16 @@
 
 use std::mem;
 use std::sync::Arc;
-use std::sync::LazyLock;
 
 use dupe::Dupe as _;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
-use regex::Regex;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
@@ -1706,51 +1705,4 @@ impl<'a> BindingsBuilder<'a> {
             );
         }
     }
-}
-
-fn is_keyword(name: &str) -> bool {
-    matches!(
-        name,
-        "False"
-            | "None"
-            | "True"
-            | "and"
-            | "as"
-            | "assert"
-            | "async"
-            | "await"
-            | "break"
-            | "class"
-            | "continue"
-            | "def"
-            | "del"
-            | "elif"
-            | "else"
-            | "except"
-            | "finally"
-            | "for"
-            | "from"
-            | "global"
-            | "if"
-            | "import"
-            | "in"
-            | "is"
-            | "lambda"
-            | "nonlocal"
-            | "not"
-            | "or"
-            | "pass"
-            | "raise"
-            | "return"
-            | "try"
-            | "while"
-            | "with"
-            | "yield",
-    )
-}
-
-fn is_valid_identifier(name: &str) -> bool {
-    static IDENTIFIER_REGEX: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new("^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap());
-    !is_keyword(name) && IDENTIFIER_REGEX.is_match(name)
 }

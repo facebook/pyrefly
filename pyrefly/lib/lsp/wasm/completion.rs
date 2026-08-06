@@ -21,6 +21,7 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::keywords::get_expression_keywords;
 use pyrefly_python::keywords::get_keywords;
+use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -171,6 +172,33 @@ pub(crate) fn supports_snippet_completions(capabilities: &lsp_types::ClientCapab
         .and_then(|c| c.completion_item.as_ref())
         .and_then(|ci| ci.snippet_support)
         .unwrap_or(false)
+}
+
+/// Offers `name=` for one keyword argument, deduplicating against `seen`.
+///
+/// Names that cannot be written as a keyword argument are dropped. A functional
+/// `TypedDict` may declare members from arbitrary strings — both directly, as in
+/// `TypedDict("M", {"class": int})`, and via the parameters synthesized for its
+/// constructor — and inserting those would not parse.
+fn push_kwarg_completion(
+    name: &Name,
+    ty: &Type,
+    seen: &mut SmallSet<(String, String)>,
+    completions: &mut Vec<RankedCompletion>,
+) {
+    if !is_valid_identifier(name.as_str()) {
+        return;
+    }
+    let label = format!("{}=", name.as_str());
+    let detail = ty.to_string();
+    if seen.insert((label.clone(), detail.clone())) {
+        completions.push(RankedCompletion::new(CompletionItem {
+            label,
+            detail: Some(detail),
+            kind: Some(CompletionItemKind::VARIABLE),
+            ..Default::default()
+        }));
+    }
 }
 
 impl Transaction<'_> {
@@ -363,17 +391,8 @@ impl Transaction<'_> {
                             | Param::PosOnly(Some(name), ty, _)
                             | Param::KwOnly(name, ty, _)
                             | Param::Varargs(Some(name), ty) => {
-                                let label = format!("{}=", name.as_str());
-                                let detail = ty.to_string();
-                                if name.as_str() != "self"
-                                    && seen.insert((label.clone(), detail.clone()))
-                                {
-                                    completions.push(RankedCompletion::new(CompletionItem {
-                                        label,
-                                        detail: Some(detail),
-                                        kind: Some(CompletionItemKind::VARIABLE),
-                                        ..Default::default()
-                                    }));
+                                if name.as_str() != "self" {
+                                    push_kwarg_completion(&name, &ty, &mut seen, completions);
                                 }
                             }
                             // `**kwargs: Unpack[TypedDict]` accepts each field as a keyword
@@ -390,16 +409,7 @@ impl Transaction<'_> {
                                     .into_iter()
                                     .flatten()
                                 {
-                                    let label = format!("{}=", name.as_str());
-                                    let detail = field.ty.to_string();
-                                    if seen.insert((label.clone(), detail.clone())) {
-                                        completions.push(RankedCompletion::new(CompletionItem {
-                                            label,
-                                            detail: Some(detail),
-                                            kind: Some(CompletionItemKind::VARIABLE),
-                                            ..Default::default()
-                                        }));
-                                    }
+                                    push_kwarg_completion(&name, &field.ty, &mut seen, completions);
                                 }
                             }
                             Param::Varargs(None, _)

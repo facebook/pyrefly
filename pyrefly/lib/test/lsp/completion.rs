@@ -1230,6 +1230,63 @@ Completion Results:
 }
 
 #[test]
+fn kwargs_completion_unpack_typed_dict_skips_unwritable_keys() {
+    // Functional syntax allows arbitrary strings as keys, but only those that are
+    // valid identifiers can be passed as keyword arguments.
+    let code = r#"
+from typing import TypedDict, Unpack
+
+Weird = TypedDict("Weird", {"ok": int, "class": str, "two words": bytes, "": float})
+
+def foo(**kwargs: Unpack[Weird]) -> None: ...
+foo(q
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+7 | foo(q
+         ^
+Completion Results:
+- (Variable) ok=: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn kwargs_completion_typed_dict_constructor_skips_unwritable_keys() {
+    // The synthesized `__init__` carries the raw keys too, so the constructor call
+    // needs the same filtering as the `Unpack` case. `__map` is that constructor's
+    // positional dict-copy parameter, not one of the declared keys.
+    let code = r#"
+from typing import TypedDict
+
+Weird = TypedDict("Weird", {"ok": int, "class": str, "two words": bytes})
+
+Weird(q
+#     ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+6 | Weird(q
+          ^
+Completion Results:
+- (Variable) ok=: int
+- (Variable) __map=: Weird
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn kwargs_completion_plain_kwargs_offers_no_fields() {
     // An ordinary `**kwargs` has no named fields to offer, and `kwargs` itself
     // is not a keyword argument, so only the value completion appears.

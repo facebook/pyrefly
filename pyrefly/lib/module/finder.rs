@@ -261,7 +261,7 @@ const CONFIGERATOR_EXTENSIONS: &[&str] = &["cinc", "cconf", "thrift-cvalidator",
 /// because Python syntax forbids bare keywords as identifiers.
 fn unescape_keyword(component: &str) -> &str {
     if let Some(base) = component.strip_suffix('_')
-        && pyrefly_python::keywords::is_keyword(base)
+        && pyrefly_python::keywords::is_keyword_escaped_dir(base)
     {
         return base;
     }
