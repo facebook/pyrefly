@@ -69,6 +69,7 @@ use crate::alt::answers::Index;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::suppress::detect_line_ending;
@@ -3873,6 +3874,37 @@ impl<'a> Transaction<'a> {
             definition_name,
         ) {
             references.extend(pytest_references);
+        }
+        if let Some(bindings) = self.get_bindings(handle) {
+            let key = Key::Definition(ShortIdentifier::from_text_range(definition_range));
+            if bindings.is_valid_key(&key) {
+                let binding = bindings.get(bindings.key_to_idx(&key));
+                let call = match binding {
+                    Binding::TypeVar(binding) => Some(&binding.2),
+                    Binding::ParamSpec(binding) => Some(&binding.2),
+                    _ => None,
+                };
+                if let Some(call) = call {
+                    let name_expr = call.arguments.args.first().or_else(|| {
+                        call.arguments
+                            .keywords
+                            .iter()
+                            .find(|keyword| {
+                                keyword
+                                    .arg
+                                    .as_ref()
+                                    .is_some_and(|arg| arg.id.as_str() == "name")
+                            })
+                            .map(|keyword| &keyword.value)
+                    });
+                    if let Some(Expr::StringLiteral(literal)) = name_expr
+                        && let Some(literal) = literal.as_single_part_string()
+                        && literal.value.as_ref() == definition_name.as_str()
+                    {
+                        references.push(literal.content_range());
+                    }
+                }
+            }
         }
         if include_declaration {
             references.push(definition_range);

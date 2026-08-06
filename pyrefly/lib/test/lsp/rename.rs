@@ -140,3 +140,36 @@ Rename locations:
         report.trim(),
     );
 }
+
+#[test]
+fn test_rename_legacy_type_parameters_updates_constructor_names() {
+    let code = r#"
+from typing import Callable, ParamSpec, TypeVar
+
+T = TypeVar("T")
+P = ParamSpec(name="P")
+unrelated = "T"
+unrelated_param = "P"
+
+def f(value: T) -> T:
+#             ^
+    return value
+
+def g(func: Callable[P, None]) -> None:
+#                     ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        let transaction = state.transaction();
+        let module_info = transaction.get_module_info(handle).unwrap();
+        let source = module_info.contents();
+        let labels = transaction
+            .find_local_references(handle, position, true)
+            .into_iter()
+            .map(|range| source[range.start().to_usize()..range.end().to_usize()].to_owned())
+            .join(",");
+        format!("Rename locations:\n{labels}")
+    });
+    assert!(report.contains("Rename locations:\nT,T,T,T"), "{report}");
+    assert!(report.contains("Rename locations:\nP,P,P"), "{report}");
+}
