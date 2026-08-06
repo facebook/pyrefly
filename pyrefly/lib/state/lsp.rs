@@ -297,6 +297,11 @@ pub struct ReferenceOptions {
     pub include_declaration: bool,
     /// Include call sites that reach the definition implicitly through the constructor
     /// protocol, e.g. `Foo()` as a reference to `Foo.__init__`.
+    ///
+    /// These ranges spell the class name rather than the definition's own name, so they are
+    /// only meaningful to consumers that *read* ranges (find-references, document highlight,
+    /// call hierarchy). Consumers that *rewrite* them — rename — must set this to false, or
+    /// they would turn `Foo()` into `<new name>()`.
     pub include_constructor_call_sites: bool,
 }
 
@@ -309,7 +314,8 @@ impl ReferenceOptions {
         }
     }
 
-    /// Only edges whose source text is the definition's own name.
+    /// Only edges whose source text is the definition's own name, for consumers that rewrite
+    /// the ranges they are given.
     pub fn textual_only(include_declaration: bool) -> Self {
         Self {
             include_declaration,
@@ -336,7 +342,7 @@ fn definition_matcher(
 }
 
 /// The references in `references_by_module` that point at the definition at `definition_range`
-/// in `module`.
+/// in `module`. Both `Index` reference maps are keyed and shaped alike, so they share this scan.
 fn recorded_references(
     references_by_module: &SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
     module: &Module,
@@ -3850,9 +3856,8 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<TextRange>> {
         let index = self.get_solutions(handle)?.get_index()?;
         let index = index.lock();
-        let mut references = Vec::new();
-
         let matches_definition = definition_matcher(module, definition_range);
+        let mut references = Vec::new();
 
         for ((imported_module_name, imported_name), ranges) in index
             .externally_defined_variable_references
@@ -3950,12 +3955,16 @@ impl<'a> Transaction<'a> {
                 options.include_declaration,
             )?
         };
-        references.extend(self.constructor_references_from_definition(
-            handle,
-            &definition_metadata,
-            definition_range,
-            module,
-        ));
+        // Constructor call sites are indexed separately because the AST scan for
+        // `<expr>.<name>` cannot see them: `Foo()` never spells `__init__`.
+        if options.include_constructor_call_sites {
+            references.extend(self.constructor_references_from_definition(
+                handle,
+                &definition_metadata,
+                definition_range,
+                module,
+            ));
+        }
         // Only callable parameters can be referenced by keyword arguments. Attributes, modules,
         // and other variable kinds are covered by the regular reference indexes above.
         if is_parameter_definition {

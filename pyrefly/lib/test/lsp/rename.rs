@@ -17,7 +17,10 @@ use crate::test::util::get_batched_lsp_operations_report;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let transaction = state.transaction();
-    let ranges = transaction.find_local_references(handle, position, ReferenceOptions::all(true));
+    // Mirror the reference-collection half of `textDocument/rename`: only ranges whose text
+    // is the symbol being renamed, since every returned range is rewritten in place.
+    let ranges =
+        transaction.find_local_references(handle, position, ReferenceOptions::textual_only(true));
     let module_info = transaction.get_module_info(handle).unwrap();
     format!(
         "Rename locations:\n{}",
@@ -136,6 +139,35 @@ Rename locations:
                                        ^^^^
 11 |     result3 = greet(name="Charlie", message="Hey")
                          ^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// Find-references reports `Foo()` as a reference to `Foo.__init__`, but that range spells the
+/// class name. Rename must skip it, or renaming `__init__` would rewrite the constructor call.
+#[test]
+fn test_rename_dunder_init_skips_constructor_call_sites() {
+    let code = r#"
+class Foo:
+    def __init__(self): ...
+    #   ^
+
+Foo()
+Foo().__init__()
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     def __init__(self): ...
+            ^
+Rename locations:
+3 |     def __init__(self): ...
+            ^^^^^^^^
+7 | Foo().__init__()
+          ^^^^^^^^
 "#
         .trim(),
         report.trim(),

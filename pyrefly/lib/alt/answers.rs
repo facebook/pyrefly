@@ -88,6 +88,8 @@ pub struct Index {
     pub externally_defined_attribute_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
     /// A map from (constructor definition module) to a list of pairs of
     /// (range of the constructor definition, range of the call site in the current module).
+    /// The call-site range spells the class name, not the definition's own name, so these are
+    /// gated behind `ReferenceOptions::include_constructor_call_sites`.
     pub constructor_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
     /// A map from (child method range) to a list of parent method definitions (ModulePath, parent method range).
     /// This is used to find reimplementations when doing find-references on parent methods.

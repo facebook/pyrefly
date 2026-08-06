@@ -56,7 +56,7 @@ pub(crate) fn inline_variable_code_actions(
     let references = transaction.find_local_references(
         handle,
         def.definition_range.start(),
-        ReferenceOptions::all(true),
+        ReferenceOptions::textual_only(true),
     );
     if references.is_empty() {
         return None;

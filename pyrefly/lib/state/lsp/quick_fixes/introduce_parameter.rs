@@ -513,7 +513,7 @@ fn build_callsite_edits(
             definition.metadata.clone(),
             definition.definition_range,
             &definition.module,
-            ReferenceOptions::all(true),
+            ReferenceOptions::textual_only(true),
         ) else {
             continue;
         };

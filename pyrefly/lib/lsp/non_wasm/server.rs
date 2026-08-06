@@ -5142,7 +5142,7 @@ impl Server {
                     resolve_call_dunders: false,
                     ..Default::default()
                 },
-                options: ReferenceOptions::all(true),
+                options: ReferenceOptions::textual_only(true),
                 activity_key,
             },
             move |results| {

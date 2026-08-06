@@ -315,8 +315,8 @@ fn test_rename_kwarg_across_files() {
     interaction.shutdown().unwrap();
 }
 
-/// Constructor call-site ranges spell the class name, so treating them as textual references
-/// causes rename to corrupt `Person(...)` calls in other files.
+/// Find-references reports `Person(...)` in usage.py as a reference to `Person.__init__`, but
+/// that range spells the class name. Rename must not rewrite it into the new method name.
 #[test]
 fn test_rename_dunder_init_skips_constructor_call_sites_across_files() {
     let root = get_test_files_root();
@@ -334,7 +334,6 @@ fn test_rename_dunder_init_skips_constructor_call_sites_across_files() {
         .unwrap();
 
     let person = root_path.join("person.py");
-    let usage = root_path.join("usage.py");
 
     interaction.client.did_open("person.py");
     interaction.client.did_open("usage.py");
@@ -357,16 +356,6 @@ fn test_rename_dunder_init_skips_constructor_call_sites_across_files() {
                     {
                         "newText":"__init2__",
                         "range":{"start":{"line":7,"character":8},"end":{"line":7,"character":16}}
-                    },
-                ],
-                Url::from_file_path(&usage).unwrap().to_string(): [
-                    {
-                        "newText":"__init2__",
-                        "range":{"start":{"line":7,"character":5},"end":{"line":7,"character":11}}
-                    },
-                    {
-                        "newText":"__init2__",
-                        "range":{"start":{"line":8,"character":5},"end":{"line":8,"character":11}}
                     },
                 ]
             }
