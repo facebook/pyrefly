@@ -834,3 +834,85 @@ def f(n: int) -> None: ...
 f(**untyped(1))  # E: The type of this argument is unknown
 "#,
 );
+
+// Nesting constructor calls inside container literals used to cost `O(overloads^depth)`
+testcase!(
+    test_nested_overloaded_call_in_list,
+    r#"
+from typing import Any, assert_type, overload
+
+class R: ...
+
+@overload
+def f(x: list[Any], /, *, a: int = 0) -> R: ...
+@overload
+def f(x: list[Any], /, *, b: int = 0) -> R: ...
+@overload
+def f(x: list[Any], /, *, c: int = 0) -> R: ...
+def f(x: list[Any], /, **kw: Any) -> R: ...
+
+y = f([f([f([f([f([f([f([f([None])])])])])])])])
+assert_type(y, R)
+"#,
+);
+
+// Flattening must not regress contextual typing of a container holding a plain call
+testcase!(
+    test_contextual_container_of_calls_still_works,
+    r#"
+class A: ...
+class B(A): ...
+
+xs: list[list[A]] = [[B()]]
+def f(x: list[A]) -> None: ...
+f([B()])
+"#,
+);
+
+// A single `call(container)` level cannot compound, so it must stay deferred.
+// Flattening it would infer the dict with no hint, breaking the test below.
+testcase!(
+    test_contextual_dict_of_call_with_container_arg,
+    r#"
+from typing import Any, Callable
+
+class Marker:
+    def __init__(self, schema: Any) -> None: ...
+class All:
+    def __init__(self, *validators: Any) -> None: ...
+
+def ensure_list(v: Any) -> list[Any]: ...
+def validator(v: Any) -> Any: ...
+def non_empty_string(value: Any) -> str: ...
+
+schema: dict[Marker | str, Callable[[Any], str] | All] = {Marker("name"): non_empty_string}
+schema.update({Marker("device_class"): All(ensure_list, [validator])})
+"#,
+);
+
+// The `{}` default below must not count as a nesting level.
+testcase!(
+    test_contextual_dict_of_call_bottoming_out_on_empty_container,
+    r#"
+from typing import Any
+
+class Marker:
+    def __init__(self, schema: Any, default: Any = None) -> None: ...
+class Optional(Marker): ...
+class Schema:
+    def __init__(self, schema: Any) -> None: ...
+class section:
+    def __init__(self, schema: Any, options: dict[str, Any] | None = None) -> None: ...
+
+user_input: dict[str, Any] = {}
+schema: dict[Marker, Any] = {}
+schema.update(
+    {
+        Optional("api"): section(
+            Schema({Optional("key", default=user_input.get("api", {}).get("key", "")): str}),
+            options={"collapsed": False},
+        ),
+    }
+)
+"#,
+);

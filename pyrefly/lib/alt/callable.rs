@@ -23,6 +23,7 @@ use pyrefly_util::display::pluralize;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
@@ -64,8 +65,34 @@ use crate::types::types::BoundMethodType;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
+const MIN_FLATTEN_CALL_DEPTH: u32 = 2;
+
+fn is_non_empty_container_literal(x: &Expr) -> bool {
+    match x {
+        Expr::Dict(x) => !x.items.is_empty(),
+        Expr::List(x) => !x.elts.is_empty(),
+        Expr::Set(x) => !x.elts.is_empty(),
+        _ => false,
+    }
+}
+
+/// Does `x` nest `depth` repetitions of a call taking a *non-empty* dict/list/set literal argument.
+fn nests_calls_to_depth(x: &Expr, depth: u32) -> bool {
+    if depth == 0 {
+        return true;
+    }
+    let mut found = matches!(x, Expr::Call(c)
+        if c.arguments.iter_source_order().any(|a|
+            is_non_empty_container_literal(a.value())
+                && nests_calls_to_depth(a.value(), depth - 1)));
+    if !found {
+        x.recurse(&mut |child: &Expr| found = found || nests_calls_to_depth(child, depth));
+    }
+    found
+}
+
 /// Structure to turn TypeOrExprs into Types.
-/// This is used to avoid re-inferring types for arguments multiple types.
+/// This is used to avoid re-inferring types for arguments multiple times.
 ///
 /// Implemented by keeping an `Owner` to hand out references to `Type`.
 pub struct CallWithTypes(Owner<Type>);
@@ -82,10 +109,12 @@ impl CallWithTypes {
         errors: &ErrorCollector,
     ) -> TypeOrExpr<'a> {
         match x {
-            TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_))) => {
-                // Hack: don't flatten mutable builtin containers into types before calling a
-                // function, as we know these containers often need to be contextually typed using
-                // the function's parameter types.
+            TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_)))
+                if !nests_calls_to_depth(e, MIN_FLATTEN_CALL_DEPTH) =>
+            {
+                // Hack: keep mutable builtin containers as expressions, since they often need to be
+                // contextually typed against the function's parameter types, unless nesting depth
+                // reaches or exceeds `MIN_FLATTEN_CALL_DEPTH` to avoid exponential blowup.
                 TypeOrExpr::Expr(e)
             }
             TypeOrExpr::Expr(e) => {
