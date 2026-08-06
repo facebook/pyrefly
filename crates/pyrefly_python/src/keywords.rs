@@ -204,4 +204,17 @@ mod tests {
         assert!(!is_keyword_escaped_dir("foo"));
         assert!(!is_keyword_escaped_dir(""));
     }
+
+    #[test]
+    fn test_valid_identifier_excludes_reserved_keywords() {
+        assert!(is_reserved_keyword("class"));
+        assert!(is_reserved_keyword("async"));
+        assert!(!is_valid_identifier("class"));
+        assert!(!is_valid_identifier("two words"));
+
+        for soft_keyword in ["match", "case", "type"] {
+            assert!(!is_reserved_keyword(soft_keyword));
+            assert!(is_valid_identifier(soft_keyword));
+        }
+    }
 }

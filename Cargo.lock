@@ -2376,6 +2376,7 @@ dependencies = [
  "thin-vec",
  "thiserror 2.0.19",
  "toml",
+ "unicode-ident",
  "vec1",
 ]
 

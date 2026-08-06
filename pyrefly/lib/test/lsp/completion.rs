@@ -1141,6 +1141,28 @@ Completion Results:
 }
 
 #[test]
+fn kwargs_completion_allows_unicode_identifier() {
+    let code = r#"
+def foo(a·b: int): ...
+foo(x
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+3 | foo(x
+         ^
+Completion Results:
+- (Variable) a·b=: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn kwargs_completion_unpack_typed_dict() {
     let code = r#"
 from typing import TypedDict, Unpack
