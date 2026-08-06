@@ -1038,9 +1038,10 @@ and values that can be overridden here.
 ### `pytorch-efficiency-lints`
 
 Enable PyTorch efficiency lints that detect common GPU performance anti-patterns
-in training code. When `true`, all `pytorch-efficiency-lint-*` error kinds are
-enabled at `warn` severity. You can override individual lint severities in
-[`[errors]`](#errors).
+in training code. When `true`, this is shorthand for setting the umbrella error
+kind [`pytorch-efficiency-lints`](./error-kinds.mdx#pytorch-efficiency-lints) to
+`warn`, which cascades to every sub-kind below. You can override individual lint
+severities in [`[errors]`](#errors).
 
 - Type: `bool`
 - Default: `false`

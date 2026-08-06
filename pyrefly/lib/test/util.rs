@@ -620,7 +620,7 @@ impl TestEnv {
             errors.set_error_severity(ErrorKind::ImplicitReexport, Severity::Error);
         }
         if self.pytorch_efficiency_lint_error {
-            config.root.pytorch_efficiency_lints = Some(true);
+            errors.set_error_severity(ErrorKind::PytorchEfficiencyLints, Severity::Error);
         }
         if self.incompatible_comparison_error {
             errors.set_error_severity(ErrorKind::IncompatibleComparison, Severity::Error);

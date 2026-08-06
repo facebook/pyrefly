@@ -348,17 +348,26 @@ pub enum ErrorKind {
     ProtocolImplicitlyDefinedAttribute,
     /// Calling `.cuda()` on a `torch.Tensor` hard-codes the target device.
     /// Use `.to(device)` instead for device-agnostic code.
+    /// This is a sub-kind of [PytorchEfficiencyLints].
     PytorchEfficiencyLintCudaCall,
     /// Calling `.item()` on a `torch.Tensor` forces GPU→CPU synchronization,
     /// blocking the training loop until all pending GPU operations complete.
+    /// This is a sub-kind of [PytorchEfficiencyLints].
     PytorchEfficiencyLintItemCall,
     /// Passing a `torch.Tensor` to `print()` triggers `__repr__`, which forces
     /// GPU→CPU synchronization.
+    /// This is a sub-kind of [PytorchEfficiencyLints].
     PytorchEfficiencyLintPrintTensor,
     /// Calling `.to(device)` on a tensor returned by a factory function like
     /// `torch.zeros()` that already accepts a `device=` parameter. Passing
     /// `device=` directly avoids allocating the tensor on CPU first.
+    /// This is a sub-kind of [PytorchEfficiencyLints].
     PytorchEfficiencyLintRedundantToCall,
+    /// Umbrella error kind for PyTorch GPU performance anti-patterns. Every
+    /// concrete site emits one of the more specific sub-kinds above;
+    /// `pytorch-efficiency-lints` itself is reserved for the umbrella
+    /// suppression/config code (suppressing it suppresses every sub-kind).
+    PytorchEfficiencyLints,
     /// The attribute exists but cannot be modified.
     ReadOnly,
     /// Attempting to annotate or redefine a name with a type that conflicts with an existing annotation in scope.
@@ -462,12 +471,6 @@ impl std::str::FromStr for ErrorKind {
 /// Also means we can grab error code names without allocation, which is nice.
 static ERROR_KIND_CACHE: LazyLock<SmallMap<String, ErrorKind>> = LazyLock::new(ErrorKind::cache);
 
-static PYTORCH_EFFICIENCY_LINTS: LazyLock<Vec<ErrorKind>> = LazyLock::new(|| {
-    enum_iterator::all::<ErrorKind>()
-        .filter(|k| k.to_name().starts_with("pytorch-efficiency-lint-"))
-        .collect()
-});
-
 impl ErrorKind {
     fn cache() -> SmallMap<String, ErrorKind> {
         let mut map = SmallMap::new();
@@ -478,11 +481,6 @@ impl ErrorKind {
         }
 
         map
-    }
-
-    /// All error kinds with the `pytorch-efficiency-lint-` prefix.
-    pub fn pytorch_efficiency_lints() -> &'static [ErrorKind] {
-        &PYTORCH_EFFICIENCY_LINTS
     }
 
     pub fn to_name(self) -> &'static str {
@@ -509,6 +507,12 @@ impl ErrorKind {
             ErrorKind::MissingAttributePatchTarget => Some(ErrorKind::MissingAttribute),
             ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
                 Some(ErrorKind::NoAnyReturn)
+            }
+            ErrorKind::PytorchEfficiencyLintCudaCall
+            | ErrorKind::PytorchEfficiencyLintItemCall
+            | ErrorKind::PytorchEfficiencyLintPrintTensor
+            | ErrorKind::PytorchEfficiencyLintRedundantToCall => {
+                Some(ErrorKind::PytorchEfficiencyLints)
             }
             _ => None,
         }
@@ -574,6 +578,7 @@ impl ErrorKind {
             ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintPrintTensor => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintRedundantToCall => Severity::Ignore,
+            ErrorKind::PytorchEfficiencyLints => Severity::Ignore,
             ErrorKind::RedundantCast => Severity::Warn,
             ErrorKind::RedundantCondition => Severity::Warn,
             ErrorKind::RevealType => Severity::Info,
