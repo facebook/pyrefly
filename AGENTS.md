@@ -55,9 +55,6 @@ Coding style: All code must be clean, documented and minimal. That means:
   complicated work at all.
 - If some code looks heavyweight, perhaps with lots of conditionals, then think
   harder for a more elegant way of achieving it.
-- Code should have comments and functions should have docstrings, but both should be
-  concise. The best comments are ones that introduce invariants, or prove that invariants are being upheld, or indicate which invariants the code relies upon. Don't write duplicate comments, overly long comments, or comments for things that are obvious from
-  reading the code.
 - **Unreachable states must panic, not silently degrade.** Do not use defensive
   programming to handle states that should be impossible. If a match arm, Option,
   or Result should never occur given the surrounding invariants, use
@@ -75,6 +72,22 @@ Coding style: All code must be clean, documented and minimal. That means:
   inline qualified paths (e.g., write `use crate::foo::Bar;` and then `Bar`,
   not `crate::foo::Bar` inline). The only exception is when there is a name
   collision between two imports, which is rare.
+
+## Comments and Documentation
+
+- Code should have comments and functions should have docstrings, but both should be
+  concise. The best comments are ones that introduce invariants, or prove that invariants are being upheld, or indicate which invariants the code relies upon. Don't write duplicate comments, overly long comments, or comments for things that are obvious from
+  reading the code.
+- Prioritize readability over brevity. Reduce comments by omitting irrelevant
+  information, not by compressing necessary information into fewer words. Use
+  complete sentences, and do not drop words or use sentence fragments to save
+  space or tokens.
+- Use established, standard terminology. Do not coin new terms or shorthand for
+  concepts, because doing so reduces comprehensibility.
+- Write comments and documentation as statements of current truth. Never narrate
+  corrections, prior framings, or what changed.
+- When adding or modifying configuration options or command line flags, the corresponding
+  docs should be updated.
 
 ## Commit Messages
 
