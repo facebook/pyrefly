@@ -1,9 +1,9 @@
 {
   "total": 140,
-  "pass": 137,
-  "fail": 3,
-  "pass_rate": 0.98,
-  "differences": 5,
+  "pass": 138,
+  "fail": 2,
+  "pass_rate": 0.99,
+  "differences": 4,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -26,6 +26,7 @@
     "constructors_call_metaclass.py",
     "constructors_call_new.py",
     "constructors_call_type.py",
+    "constructors_callable.py",
     "constructors_consistency.py",
     "dataclasses_final.py",
     "dataclasses_frozen.py",
@@ -145,7 +146,6 @@
   ],
   "failing": {
     "annotations_forward_refs.py": 2,
-    "constructors_callable.py": 1,
     "dataclasses_descriptors.py": 2
   },
   "comment": "@generated"

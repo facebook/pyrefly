@@ -2529,6 +2529,74 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    /// Bind `__new__` while keeping class type parameters used by the constructor callable.
+    pub fn bind_dunder_new_for_class_def(&self, t: &Type, cls: ClassType) -> Option<Type> {
+        let class_tparams = self.get_class_tparams(cls.class_object());
+        let mut bound = self.bind_function(
+            t,
+            &self.heap.mk_type_of(self.heap.mk_class_type(cls)),
+            false,
+            &mut |a, b| self.is_subset_eq(a, b),
+        )?;
+        self.expand_mut(&mut bound);
+        fn quantify<T: Visit<Type>>(
+            body: &T,
+            tparams: Option<&TParams>,
+            class_tparams: &TParams,
+        ) -> Arc<TParams> {
+            let mut used = SmallSet::new();
+            body.visit(&mut |ty| ty.collect_quantifieds(&mut used));
+            let mut quantifieds = Vec::new();
+            for q in tparams
+                .iter()
+                .flat_map(|tparams| tparams.iter())
+                .chain(class_tparams.iter())
+            {
+                if used.contains(q) && !quantifieds.contains(q) {
+                    quantifieds.push(q.clone());
+                }
+            }
+            Arc::new(TParams::new(quantifieds))
+        }
+        Some(match bound {
+            Type::Forall(forall) => {
+                let Forall { tparams, body } = *forall;
+                let tparams = quantify(&body, Some(&tparams), &class_tparams);
+                body.forall(tparams)
+            }
+            Type::Overload(Overload {
+                signatures,
+                metadata,
+            }) => {
+                let signatures = signatures.mapped(|sig| {
+                    let (body, tparams) = match sig {
+                        OverloadType::Function(body) => (body, None),
+                        OverloadType::Forall(Forall { tparams, body }) => (body, Some(tparams)),
+                    };
+                    let tparams = quantify(&body, tparams.as_deref(), &class_tparams);
+                    if tparams.is_empty() {
+                        OverloadType::Function(body)
+                    } else {
+                        OverloadType::Forall(Forall { tparams, body })
+                    }
+                });
+                self.heap.mk_overload(Overload {
+                    signatures,
+                    metadata,
+                })
+            }
+            Type::Function(body) => {
+                let tparams = quantify(&*body, None, &class_tparams);
+                Forallable::Function(*body).forall(tparams)
+            }
+            Type::Callable(body) => {
+                let tparams = quantify(&*body, None, &class_tparams);
+                Forallable::Callable(*body).forall(tparams)
+            }
+            bound => bound,
+        })
+    }
+
     /// Bind a `__init__` method for constructor callable conversion.
     /// Strips the first parameter and sets the return type to the first param's type.
     /// Does not instantiate type variables (they should be inferred at the call site).

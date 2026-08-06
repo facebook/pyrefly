@@ -1474,7 +1474,6 @@ def test(p4: Proto4[...], p7: Proto7):
 );
 
 testcase!(
-    bug = "conformance: Constructor to Callable conversion issues with overloads and __new__",
     test_constructor_callable_conversion,
     r#"
 from typing import Callable, ParamSpec, TypeVar, Self, assert_type, overload, Generic
@@ -1508,8 +1507,8 @@ class Class8(Generic[T]):
         return super().__new__(cls)
 
 r8 = accepts_callable(Class8)
-# pyrefly incorrectly errors on this - should be OK
-assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Unknown], Class8[str]) failed
+assert_type(r8([""], [""]), Class8[str])
+r8([1], [""])  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int]`
 "#,
 );
 
@@ -1962,5 +1961,18 @@ def f(n: NoArgs) -> None:
     ok: Gradual = n        # a gradual target accepts a stricter callable
     err1: Subst[Any] = n   # E: `NoArgs` is not assignable to `Subst[Any]`
     err2: SubstP[...] = n  # E: `NoArgs` is not assignable to `SubstP[Ellipsis]`
+    "#,
+);
+
+testcase!(
+    test_defaultdict_frozenset,
+    r#"
+from collections import defaultdict
+from typing import Any, assert_type
+
+class C:
+    def __init__(self):
+        self.x = defaultdict(frozenset)
+        assert_type(self.x, defaultdict[Any, frozenset[Any]])
     "#,
 );
