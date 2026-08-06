@@ -1599,10 +1599,7 @@ impl Display for Type {
     }
 }
 
-fn source_annotation_context<'a>(
-    ty: &'a Type,
-    stdlib: Option<&'a Stdlib>,
-) -> TypeDisplayContext<'a> {
+fn annotation_context<'a>(ty: &'a Type, stdlib: Option<&'a Stdlib>) -> TypeDisplayContext<'a> {
     let mut ctx = TypeDisplayContext::new(&[ty]);
     ctx.render_self_type_as_self();
     ctx.strip_library_schemas();
@@ -1655,8 +1652,7 @@ impl Type {
         &self,
         stdlib: Option<&Stdlib>,
     ) -> Vec<(String, Option<TextRangeWithModule>)> {
-        // Callers insert this as a source annotation.
-        let ctx = source_annotation_context(self, stdlib);
+        let ctx = annotation_context(self, stdlib);
         let mut output = OutputWithLocations::new(&ctx);
         ctx.fmt_helper_generic(self, false, &mut output).unwrap();
         output.parts().to_vec()
@@ -1664,7 +1660,7 @@ impl Type {
 
     /// Render an annotation while preserving semantic module references.
     pub fn get_annotation_parts(&self, stdlib: Option<&Stdlib>) -> Vec<AnnotationPart> {
-        let mut ctx = source_annotation_context(self, stdlib);
+        let mut ctx = annotation_context(self, stdlib);
         ctx.render_unknown_as_any = true;
         ctx.always_display_module_name_except_builtins();
         let mut output = AnnotationOutput::new(&ctx);
@@ -2271,6 +2267,18 @@ pub mod tests {
                 module: ModuleName::from_str("typing"),
                 name: "Any".to_owned(),
             }]
+        );
+        let ty = Type::Tuple(Tuple::Concrete(vec![Type::any_implicit()]));
+        assert_eq!(
+            ty.get_annotation_parts(None),
+            vec![
+                AnnotationPart::Text("tuple[".to_owned()),
+                AnnotationPart::Reference {
+                    module: ModuleName::from_str("typing"),
+                    name: "Any".to_owned(),
+                },
+                AnnotationPart::Text("]".to_owned()),
+            ]
         );
     }
 
