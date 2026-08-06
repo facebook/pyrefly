@@ -1141,6 +1141,120 @@ Completion Results:
 }
 
 #[test]
+fn kwargs_completion_unpack_typed_dict() {
+    let code = r#"
+from typing import TypedDict, Unpack
+
+class Movie(TypedDict):
+    name: str
+    year: int
+
+def foo(**kwargs: Unpack[Movie]) -> None: ...
+foo(
+#  ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Variable) name=: str"), "{report}");
+    assert!(report.contains("- (Variable) year=: int"), "{report}");
+}
+
+#[test]
+fn kwargs_completion_unpack_typed_dict_inherited() {
+    // Inherited and non-total fields are offered alongside the ordinary
+    // parameters. `x` matches no local, so the report is exactly the keyword
+    // completions.
+    let code = r#"
+from typing import NotRequired, TypedDict, Unpack
+
+class Base(TypedDict):
+    name: str
+
+class Movie(Base, total=False):
+    year: int
+    tag: NotRequired[str]
+
+def foo(a: int, **kwargs: Unpack[Movie]) -> None: ...
+foo(x
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+12 | foo(x
+          ^
+Completion Results:
+- (Variable) a=: int
+- (Variable) name=: str
+- (Variable) tag=: str
+- (Variable) year=: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn kwargs_completion_unpack_generic_typed_dict() {
+    // The field type must be instantiated from the `Holder[int]` specialization,
+    // not reported as the bare type parameter.
+    let code = r#"
+from typing import Generic, TypedDict, TypeVar, Unpack
+
+T = TypeVar("T")
+
+class Holder(TypedDict, Generic[T]):
+    item: T
+
+def foo(tag: str, **kwargs: Unpack[Holder[int]]) -> None: ...
+foo(x
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+10 | foo(x
+          ^
+Completion Results:
+- (Variable) item=: int
+- (Variable) tag=: str
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn kwargs_completion_plain_kwargs_offers_no_fields() {
+    // An ordinary `**kwargs` has no named fields to offer, and `kwargs` itself
+    // is not a keyword argument, so only the value completion appears.
+    let code = r#"
+def foo(**kwargs: int) -> None: ...
+xyz = 5
+foo(x
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(x
+         ^
+Completion Results:
+- (Variable) xyz: Literal[5]
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn no_value_completions_after_keyword_argument() {
     // `foo(a=1, x|`: because a keyword argument precedes the cursor, the next
     // argument must be a keyword name (Python forbids a positional after a

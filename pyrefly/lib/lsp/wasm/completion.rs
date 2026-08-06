@@ -376,9 +376,35 @@ impl Transaction<'_> {
                                     }));
                                 }
                             }
+                            // `**kwargs: Unpack[TypedDict]` accepts each field as a keyword
+                            // argument, so offer the fields rather than `kwargs` itself.
+                            Param::Kwargs(_, Type::Unpack(ref inner))
+                                if let Type::TypedDict(typed_dict) = &**inner =>
+                            {
+                                for (name, field) in self
+                                    .ad_hoc_solve(
+                                        handle,
+                                        "completion_typed_dict_kwargs",
+                                        |solver| solver.type_order().typed_dict_fields(typed_dict),
+                                    )
+                                    .into_iter()
+                                    .flatten()
+                                {
+                                    let label = format!("{}=", name.as_str());
+                                    let detail = field.ty.to_string();
+                                    if seen.insert((label.clone(), detail.clone())) {
+                                        completions.push(RankedCompletion::new(CompletionItem {
+                                            label,
+                                            detail: Some(detail),
+                                            kind: Some(CompletionItemKind::VARIABLE),
+                                            ..Default::default()
+                                        }));
+                                    }
+                                }
+                            }
                             Param::Varargs(None, _)
-                            | Param::Kwargs(_, _)
-                            | Param::PosOnly(None, _, _) => {}
+                            | Param::PosOnly(None, _, _)
+                            | Param::Kwargs(..) => {}
                         }
                     }
                 }
