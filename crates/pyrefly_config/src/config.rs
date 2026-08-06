@@ -1684,6 +1684,17 @@ impl ConfigFile {
             };
             config.source = config_source;
 
+            if config.root.pytorch_efficiency_lints.is_some()
+                || config
+                    .sub_configs
+                    .iter()
+                    .any(|sub| sub.settings.pytorch_efficiency_lints.is_some())
+            {
+                errors.push(ConfigError::warn(anyhow!(
+                    "The top-level `pytorch-efficiency-lints` option is deprecated. Set the `pytorch-efficiency-lints` error kind in `[errors]` instead."
+                )));
+            }
+
             if !config.root.extras.0.is_empty() {
                 let extra_keys = config.root.extras.0.keys().join(", ");
                 errors.push(ConfigError::warn(anyhow!(

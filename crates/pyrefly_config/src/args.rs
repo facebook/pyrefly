@@ -315,6 +315,7 @@ pub struct ConfigOverrideArgs {
     /// How to handle when recursion depth limit is exceeded.
     #[arg(long)]
     recursion_overflow_handler: Option<RecursionOverflowHandler>,
+    /// Deprecated: use `--warn=pytorch-efficiency-lints` instead.
     /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
     #[arg(long)]
     pytorch_efficiency_lints: Option<bool>,
@@ -551,6 +552,11 @@ impl ConfigOverrideArgs {
         if self.tensor_shapes.is_some() {
             errors.push(ConfigError::warn(anyhow::anyhow!(
                 "`--tensor-shapes` is deprecated and has no effect. Tensor shape support is enabled when `shape_extensions` is resolvable."
+            )));
+        }
+        if self.pytorch_efficiency_lints.is_some() {
+            errors.push(ConfigError::warn(anyhow::anyhow!(
+                "`--pytorch-efficiency-lints` is deprecated. Set `--warn=pytorch-efficiency-lints` instead."
             )));
         }
         (ArcId::new(config), errors)

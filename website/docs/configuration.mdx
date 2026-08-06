@@ -1035,7 +1035,18 @@ and values that can be overridden here.
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
 
-### `pytorch-efficiency-lints`
+### `pytorch-efficiency-lints` (deprecated)
+
+:::warning
+This option is deprecated. Set the
+[`pytorch-efficiency-lints`](./error-kinds.mdx#pytorch-efficiency-lints) error
+kind in [`[errors]`](#errors) instead:
+
+```toml
+[errors]
+pytorch-efficiency-lints = "warn"
+```
+:::
 
 Enable PyTorch efficiency lints that detect common GPU performance anti-patterns
 in training code. When `true`, this is shorthand for setting the umbrella error
@@ -1045,7 +1056,7 @@ severities in [`[errors]`](#errors).
 
 - Type: `bool`
 - Default: `false`
-- Flag equivalent: `--pytorch-efficiency-lints`
+- Flag equivalent: `--pytorch-efficiency-lints` (also deprecated; use `--warn=pytorch-efficiency-lints`)
 
 The following lints are enabled by this flag:
 

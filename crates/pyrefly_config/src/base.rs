@@ -276,6 +276,7 @@ pub struct ConfigBase {
     /// By default this is enabled.
     pub infer_with_first_use: Option<bool>,
 
+    /// Deprecated: set the `pytorch-efficiency-lints` error kind in `[errors]` instead.
     /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
     /// When true, all `pytorch-efficiency-lint-*` error kinds are set to `Warn` severity
     /// unless individually overridden in `[errors]`.
