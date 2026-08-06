@@ -3702,18 +3702,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return false;
         }
 
-        // TODO(grievejia): In principle we should not really skip `__call__`. But the reality is that
-        // there are too many classes on typeshed whose `__call__` are marked as follows:
-        // ```
-        // def __call__(self, *args: Any, **kwds: Any) -> Any: ...
-        // ```
-        // If we follow our pre-existing subtyping rule, this kind of signature would be non-overridable
-        // -- any overrider must be able to take ANY arguments which can't be practical. We need to either
-        // special-case typeshed or special-case callable subtyping to make `__call__` override check more usable.
-        if field_name == &dunder::CALL {
-            return false;
-        }
-
         // Private attributes should not participate in override checks
         if Ast::is_mangled_attr(field_name) {
             return false;
@@ -3877,6 +3865,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             else {
                 continue;
             };
+            // `__call__` is checked against a Protocol parent only, unless the user
+            // opts in with `@override`. Implementing a callable interface is
+            // ubiquitous - argparse actions, auth handlers, metaclasses - and
+            // treating each one as an override reports a signature mismatch, and a
+            // missing `@override`, on code doing nothing wrong. A Protocol is
+            // different: its members are the contract it exists to state, so an
+            // incompatible `__call__` there is the unsound case, and the parent
+            // signature is written to be implemented rather than inherited.
+            if field_name == &dunder::CALL
+                && !is_explicit_override
+                && !want_field.defining_class.is_protocol()
+            {
+                continue;
+            }
             parent_attr_found = true;
             if want_field.defining_class.is_builtin("object") {
                 parent_attr_is_from_object = true;
