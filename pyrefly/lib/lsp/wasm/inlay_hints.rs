@@ -13,7 +13,6 @@ use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
-use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::Lit;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -64,7 +63,6 @@ pub struct InlayHintEdits {
 }
 
 struct DirectImport {
-    module: ModuleName,
     handle: Handle,
     heads: Vec<String>,
 }
@@ -106,16 +104,23 @@ impl TypeHintRenderer<'_, '_> {
             {
                 continue;
             }
-            match direct.iter_mut().find(|import| import.module == module) {
+            match direct
+                .iter_mut()
+                .find(|import| import.handle.module() == module)
+            {
                 Some(import) => import.heads.push(head),
                 None => direct.push(DirectImport {
-                    module,
                     handle: module_handle,
                     heads: vec![head],
                 }),
             }
         }
-        direct.sort_by(|left, right| left.module.as_str().cmp(right.module.as_str()));
+        direct.sort_by(|left, right| {
+            left.handle
+                .module()
+                .as_str()
+                .cmp(right.handle.module().as_str())
+        });
         for import in &mut direct {
             import.heads.sort();
         }
@@ -126,7 +131,7 @@ impl TypeHintRenderer<'_, '_> {
                 import
                     .heads
                     .iter()
-                    .map(|head| (import.module, head.as_str()))
+                    .map(|head| (import.handle.module(), head.as_str()))
             })
             .collect::<Vec<_>>();
         let (text, missing) =
