@@ -386,7 +386,7 @@ from typing import Self, TypeVar
 
 class B():
     def f(self) -> Self:
-        return self 
+        return self
 class C(B):
     pass
 class D(B):
@@ -1212,7 +1212,7 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug = "conformance: Should error on unbound TypeVars in class bases, TypeAlias, expressions",
+    bug = "conformance: Should error on unbound TypeVars in TypeAlias and expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1233,10 +1233,10 @@ class Bar(Generic[T]):
 
 # Nested class using outer class's TypeVar
 class Outer(Generic[T]):
-    class Bad(Iterable[T]):  # should error: T from outer not in scope
+    class Bad(Iterable[T]):  # E: Type variable `T` is not in scope
         ...
     class AlsoBad:
-        x: list[T]  # should error: T from outer not in scope
+        x: list[T]  # E: Type variable `T` is not in scope
 
     alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
 
@@ -1248,7 +1248,6 @@ list[T]()  # should error
 );
 
 testcase!(
-    bug = "Follow-on errors on TypeVar usages inside nested class that shadows outer TypeVars",
     test_nested_class_independent_typevar_adoption,
     r#"
 from typing import Generic, Type, TypeVar
@@ -1259,15 +1258,78 @@ _Serialized = TypeVar("_Serialized")
 class CustomCoercer(Generic[_Deserialized, _Serialized]):
     # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
     class CoercerMapping(
-        dict[
-            Type[_Deserialized],  # should error: _Deserialized already bound by CustomCoercer
-            Type["CustomCoercer[_Deserialized, _Serialized]"],  # should error: both TypeVars
+        dict[  # E: Type variable `_Deserialized` is not in scope  # E: Type variable `_Serialized` is not in scope
+            Type[_Deserialized],
+            Type["CustomCoercer[_Deserialized, _Serialized]"],
         ]
     ):
+        # A method signature may bind the TypeVars as its own type parameters.
         def __getitem__(
             self,
             key: type[_Deserialized],
         ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
+"#,
+);
+
+testcase!(
+    test_nested_class_outer_legacy_tparam_out_of_scope,
+    r#"
+from typing import Generic, TypeVar
+from collections.abc import Iterable
+
+T = TypeVar("T")
+S = TypeVar("S")
+
+class Outer(Generic[T]):
+    # A method of the enclosing class may use its type parameter.
+    def m(self, x: T) -> T:
+        return x
+
+    # A nested class does not inherit the enclosing class's type parameters, so `T` is out of
+    # scope in its base list and its body.
+    class Bad(Iterable[T]):  # E: Type variable `T` is not in scope
+        ...
+
+    class AlsoBad:
+        x: list[T]  # E: Type variable `T` is not in scope
+
+        # A method signature may still bind `T` as its own type parameter.
+        def method(self, y: T) -> None:
+            ...
+
+    # A nested class may still introduce its own, independent type parameter.
+    class Inner(Iterable[S]):
+        ...
+"#,
+);
+
+// Real-world pattern from
+// https://github.com/PyGithub/PyGithub/blob/main/github/PaginatedList.py: a nested helper class
+// whose methods refer to the enclosing class's legacy TypeVar. The enclosing class's type
+// parameters are out of scope in the nested class, but a method signature may still bind `T` as
+// its own type parameter, so the annotations below are fine. The two remaining errors are
+// unrelated pre-existing bugs: a forward reference to a later-defined nested class, and an
+// attribute whose type comes from a method-scoped TypeVar.
+testcase!(
+    bug = "Nested class forward reference and method-scoped TypeVar attribute are false positives",
+    test_nested_class_method_uses_outer_legacy_tparam,
+    r#"
+from __future__ import annotations
+from collections.abc import Iterator
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class PaginatedListBase(Generic[T]):
+    def __getitem__(self, index: slice) -> _Slice:  # E: Could not find name `_Slice`
+        return self._Slice(self, index)
+
+    class _Slice:
+        def __init__(self, theList: PaginatedListBase[T], theSlice: slice) -> None:
+            self.__list = theList  # E: Attribute `__list` cannot depend on type variable `T`, which is not in the scope of class `_Slice`
+
+        def __iter__(self) -> Iterator[T]:
+            yield from []
 "#,
 );
 

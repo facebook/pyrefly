@@ -257,7 +257,7 @@ impl<'a> BindingsBuilder<'a> {
         let decorators =
             self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list), class_object.usage());
 
-        self.scopes.push(Scope::annotation(x.range));
+        self.scopes.push(Scope::annotation(x.range, true));
 
         let scoped_type_param_names = x
             .type_params

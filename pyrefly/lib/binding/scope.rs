@@ -1206,9 +1206,16 @@ impl ScopeMethod {
 
 #[derive(Clone, Debug)]
 enum ScopeKind {
-    Annotation,
+    /// Scope wrapping the type parameters + (for classes) base list of a class or function
+    /// definition. `class_scope` is true for a class definition — used so that a class's legacy
+    /// type parameters are not visible from within a nested class.
+    Annotation {
+        class_scope: bool,
+    },
     Class(ScopeClass),
-    Comprehension { is_generator: bool },
+    Comprehension {
+        is_generator: bool,
+    },
     Function(ScopeFunction),
     Method(ScopeMethod),
     Module,
@@ -1347,8 +1354,12 @@ impl Scope {
         }
     }
 
-    pub fn annotation(range: TextRange) -> Self {
-        Self::new(range, FlowBarrier::AllowFlowChecked, ScopeKind::Annotation)
+    pub fn annotation(range: TextRange, class_scope: bool) -> Self {
+        Self::new(
+            range,
+            FlowBarrier::AllowFlowChecked,
+            ScopeKind::Annotation { class_scope },
+        )
     }
 
     pub fn type_alias(range: TextRange) -> Self {
@@ -1754,8 +1765,40 @@ impl Scopes {
     pub fn name_shadows_enclosing_annotation_scope(&self, name: &Name) -> bool {
         // Skip the current scope, which we know isn't relevant to the check.
         for scope in self.iter_rev().skip(1) {
-            if matches!(scope.kind, ScopeKind::Annotation) && scope.stat.0.get(name).is_some() {
+            if matches!(scope.kind, ScopeKind::Annotation { .. })
+                && scope.stat.0.get(name).is_some()
+            {
                 return true;
+            }
+        }
+        false
+    }
+
+    /// Returns true if `name` refers to a legacy type parameter of an enclosing class that is out
+    /// of scope at the current position within a nested class. A class's legacy type
+    /// parameters are visible only from the innermost enclosing class-annotation scope, so once the
+    /// walk crosses a class-annotation scope, an outer class's type parameters are out of scope.
+    pub fn legacy_tparam_out_of_scope_in_nested_class(&self, name: &Name) -> bool {
+        let mut crossed_class_annotation = false;
+        for scope in self.iter_rev() {
+            match scope.kind {
+                // A function signature can always bind a legacy TypeVar as its own type parameter,
+                // even one that parameterizes an enclosing class it can no longer see. Only a class
+                // is forbidden from re-adopting an enclosing class's type parameter.
+                ScopeKind::Annotation {
+                    class_scope: false, ..
+                } if !crossed_class_annotation => return false,
+                ScopeKind::Annotation {
+                    class_scope: true, ..
+                } => {
+                    if let Some(info) = scope.stat.0.get(name)
+                        && matches!(info.style, StaticStyle::PossibleLegacyTParam)
+                    {
+                        return crossed_class_annotation;
+                    }
+                    crossed_class_annotation = true;
+                }
+                _ => {}
             }
         }
         false
@@ -3068,7 +3111,7 @@ impl Scopes {
         // Annotation scopes and type alias scopes (PEP 695) can see their enclosing class scope.
         let is_current_scope_annotation_like = matches!(
             self.current().kind,
-            ScopeKind::Annotation | ScopeKind::TypeAlias
+            ScopeKind::Annotation { .. } | ScopeKind::TypeAlias
         );
         for (lookup_depth, scope) in self.iter_rev().enumerate() {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
@@ -3163,8 +3206,14 @@ impl Scopes {
             usage,
             Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
         );
+        // A class's legacy type parameters live in its class-annotation scope and are only in
+        // scope within that class. Track whether the walk has crossed a class-annotation scope so
+        // that a nested class does not resolve an enclosing class's legacy type parameters.
+        let mut crossed_class_annotation = false;
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
+            let is_class_annotation =
+                matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
 
             let flow_info = scope.flow.get_info_hashed(name);
             let is_class_overload = is_class
@@ -3214,6 +3263,16 @@ impl Scopes {
                     return None;
                 }
 
+                // Once we've crossed a class-annotation scope, a legacy type parameter found in an
+                // outer class-annotation scope belongs to an enclosing class and is out of scope
+                // here; skip it so the lookup falls through to the module-level `TypeVar`.
+                if is_class_annotation
+                    && crossed_class_annotation
+                    && matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
+                {
+                    return None;
+                }
+
                 let forward_ref_key = static_info.as_key(name.into_key());
                 return Some(NameReadInfo::Anywhere {
                     key: forward_ref_key,
@@ -3233,6 +3292,11 @@ impl Scopes {
                     is_module_scope: matches!(scope.kind, ScopeKind::Module),
                     implicit_builtin_module: static_info.implicit_builtin_module(),
                 });
+            }
+            // We are moving past this class-annotation scope without resolving the name here, so any
+            // legacy type parameters in outer class-annotation scopes are now out of scope.
+            if is_class_annotation {
+                crossed_class_annotation = true;
             }
             None
         })

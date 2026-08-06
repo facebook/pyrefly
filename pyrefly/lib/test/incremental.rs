@@ -540,50 +540,6 @@ fn test_stale_typed_dict() {
 }
 
 #[test]
-fn test_dueling_typevar() {
-    // TypeVar (and ParamSpec, TypeVarTuple) are implemented in a way that means
-    // grabbing the same value from different modules in conjunction with incremental
-    // updates can lead to equal TypeVar's being considered non-equal.
-    //
-    // Is that a problem? Yes. Is it a real problem? Perhaps no? If you write code
-    // that relies on the equality of a single TypeVar imported through two routes,
-    // you are really confusing the users.
-    //
-    // Why does it occur? Because TypeVar has equality via ArcId, so each created
-    // TypeVar is different from all others. To check for interface stability
-    // we try and find a mapping for equivalent TypeVar values, using TypeEq.
-    // So even though your TypeVar changes, it doesn't invalidate your interface.
-    // But that means you can construct an example where someone else exports
-    // your TypeVar, and they don't invalidate, and then you can have a third
-    // module import both and see a discrepancy.
-    //
-    // How to fix it? Stop TypeVar using ArcId and instead make it identified by
-    // an index within the module and the QName, just like we did for class.
-    //
-    // Should we make that fix? Maybe? But it's not high on the priority list.
-    // And the new generic syntax makes it even less important.
-
-    let mut i = Incremental::new();
-    i.set("foo", "from typing import TypeVar\nT = TypeVar('T')");
-    i.set("bar", "from foo import T");
-    i.set(
-        "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
-    );
-    i.check(&["main"], &["main", "foo", "bar"]);
-
-    i.set("foo", "from typing import TypeVar\nT = TypeVar('T') #");
-    i.check(&["main"], &["foo"]);
-
-    // Observe that foo.T and bar.T are no longer equal.
-    i.set(
-        "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: `TypeVar[T]` is not assignable to `TypeVar[T]`  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
-    );
-    i.check(&["main"], &["main"]);
-}
-
-#[test]
 fn test_incremental_cycle_class() {
     let mut i = Incremental::new();
     i.set("foo", "from bar import Cls");

@@ -986,7 +986,7 @@ impl<'a> BindingsBuilder<'a> {
 
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
-        self.scopes.push(Scope::annotation(x.range));
+        self.scopes.push(Scope::annotation(x.range, false));
         let (return_ann_with_range, legacy_tparams) =
             self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
 

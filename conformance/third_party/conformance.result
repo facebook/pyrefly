@@ -76,8 +76,6 @@
   "generics_paramspec_semantics.py": [],
   "generics_paramspec_specialization.py": [],
   "generics_scoping.py": [
-    "Line 86: Expected 1 errors",
-    "Line 89: Expected 1 errors",
     "Line 98: Expected 1 errors",
     "Line 107: Expected 1 errors"
   ],

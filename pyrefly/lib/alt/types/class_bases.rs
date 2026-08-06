@@ -254,13 +254,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter_map(|x| match x {
                 BaseClass::BaseClassExpr(x) => {
-                    let (ty, base_has_strict) = self.base_class_expr_untype(
+                    let (mut ty, base_has_strict) = self.base_class_expr_untype(
                         x,
                         TypeFormContext::BaseClassList,
                         &fake_error_collector,
                     );
                     if base_has_strict {
                         has_pydantic_strict_metadata = true;
+                    }
+                    // A base class may reference a legacy TypeVar that is out of scope.
+                    // Skip NewType, which reports its own "unbound generic" error for the same type.
+                    if !is_new_type {
+                        self.check_legacy_typevar_scoping(&mut ty, x.range(), errors);
                     }
                     Some((ty, x.range()))
                 }

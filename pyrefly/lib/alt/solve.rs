@@ -558,7 +558,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // later phases as internal errors.
                     ty.subst_self_special_form_mut(&self.heap.mk_any_error());
                 }
-                if let Some(ty) = &ann.ty {
+                if let Some(ty) = &mut ann.ty {
                     self.check_legacy_typevar_scoping(ty, x.range(), errors);
                     if !matches!(target, AnnotationTarget::ClassMember(_))
                         && Self::annotation_may_contain_proxy_method_type(x, ty)
@@ -5606,23 +5606,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tparams
     }
 
-    /// Check that a resolved type does not contain out-of-scope legacy TypeVars.
-    fn check_legacy_typevar_scoping(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
-        let wrapped = self.wrap_callable_legacy_typevars(ty.clone());
-        self.check_raw_legacy_type_variables(&wrapped, range, errors);
-    }
-
-    /// Check for raw legacy type variables in a resolved annotation type.
-    /// Raw legacy TypeVars in annotations indicate out-of-scope usage — in-scope
-    /// TypeVars are replaced with Quantified by LegacyTParamCollector.
-    fn check_raw_legacy_type_variables(
+    /// Check that a resolved type does not contain out-of-scope legacy TypeVars, replacing any it
+    /// finds with `Any` so they do not leak into later phases and produce follow-on errors.
+    ///
+    /// Raw legacy TypeVars indicate out-of-scope usage — in-scope ones are replaced with
+    /// `Quantified` by `LegacyTParamCollector`, and ones a callable annotation implicitly binds are
+    /// promoted by `wrap_callable_legacy_typevars`.
+    pub(crate) fn check_legacy_typevar_scoping(
         &self,
-        ty: &Type,
+        ty: &mut Type,
         range: TextRange,
         errors: &ErrorCollector,
     ) {
+        let wrapped = self.wrap_callable_legacy_typevars(ty.clone());
         let mut names = Vec::new();
-        ty.collect_raw_legacy_type_variables(&mut names);
+        wrapped.collect_raw_legacy_type_variables(&mut names);
+        if names.is_empty() {
+            return;
+        }
         for name in names {
             self.error(
                 errors,
@@ -5631,6 +5632,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("Type variable `{name}` is not in scope"),
             );
         }
+        *ty = wrapped;
+        ty.transform_raw_legacy_type_variables(&mut |t| *t = self.heap.mk_any_error());
     }
 
     fn check_implicit_return_against_annotation(
