@@ -570,8 +570,9 @@ impl<'a> Transaction<'a> {
                         answers.get_type_trace(call.func.range())
                     };
 
-                    if let Some(params) =
-                        callee_type.and_then(normalize_singleton_function_type_into_params)
+                    if let Some(params) = callee_type
+                        .map(|ty| self.coerce_type_to_callable(handle, ty))
+                        .and_then(normalize_singleton_function_type_into_params)
                     {
                         for (arg_idx, arg) in call.arguments.args.iter().enumerate() {
                             // Account for keyword arguments omitted from `args`, including
