@@ -6,7 +6,7 @@
  */
 
 use pyrefly_python::ignore::Tool;
-use pyrefly_types::callable::PropertyRole;
+use pyrefly_types::function::PropertyRole;
 use ruff_text_size::TextRange;
 use serde::Serialize;
 

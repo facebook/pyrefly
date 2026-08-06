@@ -41,9 +41,9 @@ use crate::binding::polars::PolarsMutationMethod;
 use crate::binding::polars::polars_column_mutation;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::types::callable::FuncId;
-use crate::types::callable::FunctionKind;
 use crate::types::class::Class;
+use crate::types::function::FuncId;
+use crate::types::function::FunctionKind;
 use crate::types::literal::Lit;
 
 const POLARS_MODULE: &str = "polars";

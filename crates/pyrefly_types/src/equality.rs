@@ -328,11 +328,11 @@ mod tests {
 
     use super::*;
     use crate::callable::Callable;
-    use crate::callable::FuncFlags;
-    use crate::callable::FuncMetadata;
-    use crate::callable::Function;
-    use crate::callable::FunctionKind;
     use crate::callable::ParamList;
+    use crate::function::FuncFlags;
+    use crate::function::FuncMetadata;
+    use crate::function::Function;
+    use crate::function::FunctionKind;
     use crate::heap::TypeHeap;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;

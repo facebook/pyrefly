@@ -7,12 +7,12 @@
 
 use pyrefly_python::dunder;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FuncMetadata;
-use pyrefly_types::callable::Function;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
 use pyrefly_types::class::Class;
+use pyrefly_types::function::FuncMetadata;
+use pyrefly_types::function::Function;
 use pyrefly_types::types::Type;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;

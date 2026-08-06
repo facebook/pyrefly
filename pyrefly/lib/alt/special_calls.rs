@@ -12,7 +12,7 @@
  */
 
 use pyrefly_python::dunder;
-use pyrefly_types::callable::FuncMetadata;
+use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
@@ -34,9 +34,9 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::unexpected_keyword;
 use crate::types::class::Class;
+use crate::types::function::FunctionKind;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 

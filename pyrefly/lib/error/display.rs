@@ -6,7 +6,7 @@
  */
 
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::function::FunctionKind;
 
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckKind;

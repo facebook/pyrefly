@@ -16,7 +16,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
-use pyrefly_types::callable::Deprecation;
+use pyrefly_types::function::Deprecation;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::commas_iter;

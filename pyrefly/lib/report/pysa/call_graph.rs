@@ -1307,7 +1307,7 @@ fn has_implicit_receiver(
 
 fn extract_function_from_bound_method(
     bound_method: &BoundMethod,
-) -> Vec1<&pyrefly_types::callable::Function> {
+) -> Vec1<&pyrefly_types::function::Function> {
     match &bound_method.func {
         BoundMethodType::Function(function) => Vec1::new(function),
         BoundMethodType::Forall(forall) => Vec1::new(&forall.body),
@@ -1341,7 +1341,7 @@ fn find_class_type_for_new_method(new_method_parameters: &Params) -> Option<&Typ
     })
 }
 
-fn method_name_from_function(function: &pyrefly_types::callable::Function) -> Cow<'_, Name> {
+fn method_name_from_function(function: &pyrefly_types::function::Function) -> Cow<'_, Name> {
     function.metadata.kind.function_name()
 }
 
@@ -1733,7 +1733,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_callable_type(
         &self,
-        function: &pyrefly_types::callable::Function,
+        function: &pyrefly_types::function::Function,
         callee_type: Option<&Type>,
         callee_expr: Option<AnyNodeRef>,
         return_type: ScalarTypeProperties,
@@ -1763,7 +1763,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_callable_metadata(
         &self,
-        function: &pyrefly_types::callable::Function,
+        function: &pyrefly_types::function::Function,
         return_type: ScalarTypeProperties,
         callee_expr_suffix: Option<&str>,
     ) -> Option<PysaCallTarget<FunctionRef>> {
@@ -2002,7 +2002,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_new_method(
         &self,
-        new_method: &pyrefly_types::callable::Function,
+        new_method: &pyrefly_types::function::Function,
         callee_expr: Option<AnyNodeRef>,
         callee_type: Option<&Type>,
         return_type: ScalarTypeProperties,

@@ -9,8 +9,8 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::dimension::ShapeError;
+use pyrefly_types::function::FunctionKind;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;

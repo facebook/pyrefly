@@ -29,6 +29,7 @@ pub mod dimension;
 pub mod display;
 pub mod equality;
 pub mod facet;
+pub mod function;
 pub mod globals;
 pub mod heap;
 pub mod keywords;

@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::Function;
 use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::gradual_size;
+use pyrefly_types::function::Function;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;

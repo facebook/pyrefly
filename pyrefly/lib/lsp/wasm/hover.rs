@@ -1083,8 +1083,8 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_types::callable::Callable;
-    use pyrefly_types::callable::FuncMetadata;
-    use pyrefly_types::callable::Function;
+    use pyrefly_types::function::FuncMetadata;
+    use pyrefly_types::function::Function;
     use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 

@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use pyrefly_python::symbol_kind::SymbolKind;
-use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;

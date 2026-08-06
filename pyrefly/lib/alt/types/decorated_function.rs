@@ -19,10 +19,10 @@ use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::Deprecation;
-use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::callable::Param;
 use pyrefly_types::class::Class;
+use pyrefly_types::function::Deprecation;
+use pyrefly_types::function::FuncDefIndex;
 use pyrefly_types::keywords::TypeMap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
@@ -38,7 +38,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
-use crate::types::callable::FuncMetadata;
+use crate::types::function::FuncMetadata;
 use crate::types::types::Type;
 
 /// Information about the function def before decorators are applied. The metadata stored here

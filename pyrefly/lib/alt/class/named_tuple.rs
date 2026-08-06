@@ -17,13 +17,13 @@ use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::function::FuncMetadata;
+use crate::types::function::Function;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
 

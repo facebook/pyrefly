@@ -41,12 +41,12 @@ use lsp_types::Url;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FuncId;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType as PyreflyClassType;
+use pyrefly_types::function::FuncId;
+use pyrefly_types::function::FunctionKind;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
@@ -1104,12 +1104,12 @@ fn builtin(name: &str) -> TspType {
 #[cfg(test)]
 mod tests {
     use pyrefly_python::module_name::ModuleName;
-    use pyrefly_types::callable::FuncFlags;
-    use pyrefly_types::callable::FuncMetadata;
-    use pyrefly_types::callable::Function;
     use pyrefly_types::callable::Param;
     use pyrefly_types::callable::ParamList;
     use pyrefly_types::callable::Required;
+    use pyrefly_types::function::FuncFlags;
+    use pyrefly_types::function::FuncMetadata;
+    use pyrefly_types::function::Function;
     use pyrefly_types::lit_int::LitInt;
     use pyrefly_types::literal::Lit;
     use pyrefly_types::literal::LitStyle;

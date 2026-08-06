@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use dupe::Dupe;
 use pretty_assertions::assert_eq;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::function::FuncDefIndex;
 use ruff_python_ast::name::Name;
 
 use crate::report::pysa::call_graph::Target;

@@ -24,12 +24,12 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
-use crate::callable::Function;
-use crate::callable::FunctionKind;
 use crate::callable::ParamOverlay;
 use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
 use crate::data_frame::SchemaCompleteness;
+use crate::function::Function;
+use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
@@ -611,7 +611,7 @@ impl<'a> TypeDisplayContext<'a> {
         &self,
         output: &mut impl TypeOutput,
         func_name: &Name,
-        kind: &crate::callable::FunctionKind,
+        kind: &crate::function::FunctionKind,
     ) -> fmt::Result {
         if self.always_display_module_name {
             let module = kind.module_name();
@@ -1704,8 +1704,6 @@ pub mod tests {
     use super::*;
     use crate::callable::Callable;
     use crate::callable::DefaultValue;
-    use crate::callable::FuncMetadata;
-    use crate::callable::Function;
     use crate::callable::Param;
     use crate::callable::ParamList;
     use crate::callable::Params;
@@ -1717,6 +1715,8 @@ pub mod tests {
     use crate::data_frame::DataFrameKind;
     use crate::data_frame::DataFrameSchema;
     use crate::dimension::Int;
+    use crate::function::FuncMetadata;
+    use crate::function::Function;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;

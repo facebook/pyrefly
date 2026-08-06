@@ -23,7 +23,6 @@ use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
 
 use crate::callable::Callable;
-use crate::callable::Function;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
@@ -31,6 +30,7 @@ use crate::callable::PrefixParam;
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::dimension::Int;
+use crate::function::Function;
 use crate::keywords::KwCall;
 use crate::literal::LitStyle;
 use crate::literal::Literal;

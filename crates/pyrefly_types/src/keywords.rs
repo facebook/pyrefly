@@ -12,8 +12,8 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::ordered_map::OrderedMap;
 
-use crate::callable::FuncMetadata;
-use crate::callable::FunctionKind;
+use crate::function::FuncMetadata;
+use crate::function::FunctionKind;
 use crate::literal::Lit;
 use crate::tuple::Tuple;
 use crate::types::CalleeKind;

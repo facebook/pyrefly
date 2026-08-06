@@ -7,7 +7,7 @@
 
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::function::FunctionKind;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
