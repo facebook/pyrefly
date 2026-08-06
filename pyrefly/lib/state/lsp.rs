@@ -290,6 +290,34 @@ impl Default for FindPreference {
     }
 }
 
+/// Which reference edges to collect for a definition.
+#[derive(Clone, Copy, Debug)]
+pub struct ReferenceOptions {
+    /// Include the definition itself in the results.
+    pub include_declaration: bool,
+    /// Include call sites that reach the definition implicitly through the constructor
+    /// protocol, e.g. `Foo()` as a reference to `Foo.__init__`.
+    pub include_constructor_call_sites: bool,
+}
+
+impl ReferenceOptions {
+    /// Every reference edge, for consumers that only read the ranges.
+    pub fn all(include_declaration: bool) -> Self {
+        Self {
+            include_declaration,
+            include_constructor_call_sites: true,
+        }
+    }
+
+    /// Only edges whose source text is the definition's own name.
+    pub fn textual_only(include_declaration: bool) -> Self {
+        Self {
+            include_declaration,
+            include_constructor_call_sites: false,
+        }
+    }
+}
+
 /// A predicate for "this candidate denotes the definition at `definition_range`". Exact byte
 /// ranges can disagree (e.g. CRLF/LF differences between the on-disk and in-memory copies of a
 /// file), so it falls back to the symbol name and line number, which are encoding-invariant.
@@ -3781,7 +3809,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         position: TextSize,
-        include_declaration: bool,
+        options: ReferenceOptions,
     ) -> Vec<TextRange> {
         self.find_definition(
             handle,
@@ -3806,7 +3834,7 @@ impl<'a> Transaction<'a> {
                     metadata,
                     definition_range,
                     &module,
-                    include_declaration,
+                    options,
                 )
             },
         )
@@ -3906,7 +3934,7 @@ impl<'a> Transaction<'a> {
         definition_metadata: DefinitionMetadata,
         definition_range: TextRange,
         module: &Module,
-        include_declaration: bool,
+        options: ReferenceOptions,
     ) -> Option<Vec<TextRange>> {
         let definition_name = Name::new(module.code_at(definition_range));
         let is_parameter_definition =
@@ -3919,7 +3947,7 @@ impl<'a> Transaction<'a> {
                 &definition_metadata,
                 &definition_name,
                 definition_range,
-                include_declaration,
+                options.include_declaration,
             )?
         };
         references.extend(self.constructor_references_from_definition(
@@ -4480,7 +4508,7 @@ trait RdepTransaction {
         definition_kind: DefinitionMetadata,
         range: TextRange,
         module: &Module,
-        include_declaration: bool,
+        options: ReferenceOptions,
     ) -> Option<Vec<TextRange>>;
 }
 
@@ -4509,15 +4537,9 @@ impl<'a> RdepTransaction for Transaction<'a> {
         definition_kind: DefinitionMetadata,
         range: TextRange,
         module: &Module,
-        include_declaration: bool,
+        options: ReferenceOptions,
     ) -> Option<Vec<TextRange>> {
-        self.local_references_from_definition(
-            handle,
-            definition_kind,
-            range,
-            module,
-            include_declaration,
-        )
+        self.local_references_from_definition(handle, definition_kind, range, module, options)
     }
 }
 
@@ -4546,14 +4568,14 @@ impl<'a> RdepTransaction for CancellableTransaction<'a> {
         definition_kind: DefinitionMetadata,
         range: TextRange,
         module: &Module,
-        include_declaration: bool,
+        options: ReferenceOptions,
     ) -> Option<Vec<TextRange>> {
         self.as_ref().local_references_from_definition(
             handle,
             definition_kind,
             range,
             module,
-            include_declaration,
+            options,
         )
     }
 }
@@ -4692,7 +4714,7 @@ fn find_global_references_from_definition_impl<T: RdepTransaction>(
     sys_info: SysInfo,
     definition_kind: DefinitionMetadata,
     definition: TextRangeWithModule,
-    include_declaration: bool,
+    options: ReferenceOptions,
 ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
     let results = process_rdeps_with_definition_impl(
         transaction,
@@ -4707,7 +4729,7 @@ fn find_global_references_from_definition_impl<T: RdepTransaction>(
                     definition_kind.clone(),
                     patched_definition.range,
                     &patched_definition.module,
-                    include_declaration,
+                    options,
                 )
                 .unwrap_or_default();
             if !references.is_empty()
@@ -4768,14 +4790,14 @@ impl<'a> Transaction<'a> {
         sys_info: SysInfo,
         definition_kind: DefinitionMetadata,
         definition: TextRangeWithModule,
-        include_declaration: bool,
+        options: ReferenceOptions,
     ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
         find_global_references_from_definition_impl(
             self,
             sys_info,
             definition_kind,
             definition,
-            include_declaration,
+            options,
         )
     }
 }
@@ -4800,14 +4822,14 @@ impl<'a> CancellableTransaction<'a> {
         sys_info: SysInfo,
         definition_kind: DefinitionMetadata,
         definition: TextRangeWithModule,
-        include_declaration: bool,
+        options: ReferenceOptions,
     ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
         find_global_references_from_definition_impl(
             self,
             sys_info,
             definition_kind,
             definition,
-            include_declaration,
+            options,
         )
     }
 

@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
+use crate::state::lsp::ReferenceOptions;
 use crate::state::state::State;
 use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::get_batched_lsp_operations_report;
@@ -21,7 +22,11 @@ fn get_test_report(
     include_declaration: bool,
 ) -> String {
     let transaction = state.transaction();
-    let ranges = transaction.find_local_references(handle, position, include_declaration);
+    let ranges = transaction.find_local_references(
+        handle,
+        position,
+        ReferenceOptions::all(include_declaration),
+    );
     let module_info = transaction.get_module_info(handle).unwrap();
     format!(
         "References:\n{}",

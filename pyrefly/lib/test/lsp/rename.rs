@@ -10,13 +10,14 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
+use crate::state::lsp::ReferenceOptions;
 use crate::state::state::State;
 use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::get_batched_lsp_operations_report;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let transaction = state.transaction();
-    let ranges = transaction.find_local_references(handle, position, true);
+    let ranges = transaction.find_local_references(handle, position, ReferenceOptions::all(true));
     let module_info = transaction.get_module_info(handle).unwrap();
     format!(
         "Rename locations:\n{}",

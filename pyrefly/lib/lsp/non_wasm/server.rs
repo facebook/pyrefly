@@ -350,6 +350,7 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportBehavior;
 use crate::state::lsp::LocalRefactorCodeAction;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
@@ -384,7 +385,7 @@ struct FindReferencesRequest {
     uri: Url,
     position: Position,
     find_preference: FindPreference,
-    include_declaration: bool,
+    options: ReferenceOptions,
     activity_key: Option<ActivityKey>,
 }
 
@@ -4859,7 +4860,7 @@ impl Server {
             self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         Ok(Some(
             transaction
-                .find_local_references(&handle, position, true)
+                .find_local_references(&handle, position, ReferenceOptions::all(true))
                 .into_map(|range| DocumentHighlight {
                     range: info.to_lsp_range(range),
                     kind: Some(match transaction.identifier_at(&handle, range.start()) {
@@ -4983,7 +4984,7 @@ impl Server {
             uri,
             position,
             find_preference,
-            include_declaration,
+            options,
             activity_key,
         } = request;
         let path_remapper = self.path_remapper.clone();
@@ -5031,7 +5032,7 @@ impl Server {
                         *handle.sys_info(),
                         metadata,
                         TextRangeWithModule::new(module, definition_range),
-                        include_declaration,
+                        options,
                     );
 
                     let external_results = ext_handle.and_then(|h| h.join().ok());
@@ -5101,7 +5102,7 @@ impl Server {
                     import_behavior: ImportBehavior::StopAtRenamedImports,
                     ..Default::default()
                 },
-                include_declaration: params.context.include_declaration,
+                options: ReferenceOptions::all(params.context.include_declaration),
                 activity_key,
             },
             move |results| {
@@ -5141,7 +5142,7 @@ impl Server {
                     resolve_call_dunders: false,
                     ..Default::default()
                 },
-                include_declaration: true,
+                options: ReferenceOptions::all(true),
                 activity_key,
             },
             move |results| {

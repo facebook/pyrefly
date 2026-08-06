@@ -42,6 +42,7 @@ use crate::state::lsp::AnnotationKind;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::InlayHintConfig;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
@@ -717,7 +718,7 @@ impl<'a> Transaction<'a> {
                 *handle.sys_info(),
                 definition_kind,
                 TextRangeWithModule::new(module_info, id.range()),
-                true,
+                ReferenceOptions::all(true),
             ) {
                 return references;
             }

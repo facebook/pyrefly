@@ -21,6 +21,7 @@ use ruff_text_size::TextSize;
 
 use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::IdentifierContext;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::lsp::Transaction;
 use crate::state::lsp::quick_fixes::extract_shared::find_local_definition;
 use crate::state::lsp::quick_fixes::extract_shared::reference_in_disallowed_scope;
@@ -52,7 +53,11 @@ pub(crate) fn inline_variable_code_actions(
     ) {
         return None;
     }
-    let references = transaction.find_local_references(handle, def.definition_range.start(), true);
+    let references = transaction.find_local_references(
+        handle,
+        def.definition_range.start(),
+        ReferenceOptions::all(true),
+    );
     if references.is_empty() {
         return None;
     }
