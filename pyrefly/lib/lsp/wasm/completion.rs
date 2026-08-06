@@ -378,8 +378,8 @@ impl Transaction<'_> {
                             }
                             // `**kwargs: Unpack[TypedDict]` accepts each field as a keyword
                             // argument, so offer the fields rather than `kwargs` itself.
-                            Param::Kwargs(_, Type::Unpack(ref inner))
-                                if let Type::TypedDict(typed_dict) = &**inner =>
+                            Param::Kwargs(_, ref ty)
+                                if let Some(typed_dict) = ty.unpacked_typed_dict() =>
                             {
                                 for (name, field) in self
                                     .ad_hoc_solve(

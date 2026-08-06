@@ -501,19 +501,12 @@ fn collect_typed_dict_fields_for_hover<'a>(
     solver: &AnswersSolver<TransactionHandle<'a>>,
     ty: &Type,
 ) -> Option<Vec<(Name, Type, Required)>> {
-    match ty {
-        Type::Unpack(inner) => match inner.as_ref() {
-            Type::TypedDict(typed_dict) => {
-                let fields = solver.type_order().typed_dict_kw_param_info(typed_dict);
-                if fields.is_empty() {
-                    None
-                } else {
-                    Some(fields)
-                }
-            }
-            _ => None,
-        },
-        _ => None,
+    let typed_dict = ty.unpacked_typed_dict()?;
+    let fields = solver.type_order().typed_dict_kw_param_info(typed_dict);
+    if fields.is_empty() {
+        None
+    } else {
+        Some(fields)
     }
 }
 

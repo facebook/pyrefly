@@ -463,7 +463,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut expanded: Vec<Param> = Vec::with_capacity(params.items().len());
         for param in params.items() {
             match param {
-                Param::Kwargs(_, Type::Unpack(inner)) if let Type::TypedDict(td) = &**inner => {
+                Param::Kwargs(_, ty) if let Some(td) = ty.unpacked_typed_dict() => {
                     for (name, ty, required) in self.typed_dict_kw_param_info(td) {
                         expanded.push(Param::KwOnly(name, ty, required));
                     }

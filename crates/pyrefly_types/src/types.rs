@@ -1189,6 +1189,16 @@ impl Type {
         matches!(self, Type::Unpack(_))
     }
 
+    /// The `TypedDict` of an `Unpack[TypedDict]`, the annotation form a `**kwargs`
+    /// parameter uses to accept each field as a keyword argument. `None` for any
+    /// other type, including `Unpack` of a non-`TypedDict` such as a `TypeVarTuple`.
+    pub fn unpacked_typed_dict(&self) -> Option<&TypedDict> {
+        match self {
+            Type::Unpack(inner) if let Type::TypedDict(typed_dict) = &**inner => Some(typed_dict),
+            _ => None,
+        }
+    }
+
     pub fn callable_concatenate(args: Box<[PrefixParam]>, param_spec: Type, ret: Type) -> Self {
         Type::Callable(Box::new(Callable::concatenate(args, param_spec, ret)))
     }

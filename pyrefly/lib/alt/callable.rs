@@ -1121,7 +1121,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {
                     kwparams.insert(name, (ty, NameOrigin::Param, required));
                 }
-                Param::Kwargs(name, Type::Unpack(f)) if let Type::TypedDict(typed_dict) = &**f => {
+                Param::Kwargs(name, ty) if let Some(typed_dict) = ty.unpacked_typed_dict() => {
                     self.typed_dict_fields(typed_dict).into_iter().for_each(
                         |(field_name, field)| {
                             kwparams.insert(
