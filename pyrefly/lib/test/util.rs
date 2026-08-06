@@ -798,7 +798,20 @@ pub fn mk_multi_file_state(
     default_require_level: Require,
     assert_zero_errors: bool,
 ) -> (HashMap<&'static str, Handle>, State) {
-    let mut test_env = TestEnv::new();
+    mk_multi_file_state_with_env(
+        TestEnv::new(),
+        files,
+        default_require_level,
+        assert_zero_errors,
+    )
+}
+
+pub fn mk_multi_file_state_with_env(
+    mut test_env: TestEnv,
+    files: &[(&'static str, &str)],
+    default_require_level: Require,
+    assert_zero_errors: bool,
+) -> (HashMap<&'static str, Handle>, State) {
     for (name, code) in files {
         test_env.add(name, code);
     }
@@ -810,19 +823,15 @@ pub fn mk_multi_file_state(
         handles.insert(*name, handle(name));
     }
     if assert_zero_errors {
-        assert_eq!(
-            state
-                .transaction()
-                .get_errors(handles.values())
-                .collect_errors()
-                .ordinary
-                .len(),
-            0
+        let errors = state
+            .transaction()
+            .get_errors(handles.values())
+            .collect_errors()
+            .ordinary;
+        assert!(
+            errors.is_empty(),
+            "Expected no errors, but got: {errors:#?}"
         );
-    }
-    let mut handles = HashMap::new();
-    for (name, _) in files {
-        handles.insert(*name, handle(name));
     }
     (handles, state)
 }
