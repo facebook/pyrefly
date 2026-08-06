@@ -73,8 +73,8 @@ use crate::types::types::Forallable;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
-/// The index stores all the references where the definition is external to the current module.
-/// This is useful for fast references computation.
+/// The index stores reference edges that cannot be recovered by scanning the current module's AST.
+/// This includes references to external definitions and implicit constructor-protocol references.
 #[derive(Debug, Default)]
 pub struct Index {
     /// A map from (import specifier (ModuleName), imported symbol (Name)) to all references to it
@@ -86,9 +86,23 @@ pub struct Index {
     /// A map from (attribute definition module) to a list of pairs of
     /// (range of attribute definition in the definition, range of reference in the current module).
     pub externally_defined_attribute_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
+    /// A map from (constructor definition module) to a list of pairs of
+    /// (range of the constructor definition, range of the call site in the current module).
+    pub constructor_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
     /// A map from (child method range) to a list of parent method definitions (ModulePath, parent method range).
     /// This is used to find reimplementations when doing find-references on parent methods.
     pub parent_methods_map: SmallMap<TextRange, Vec<(ModulePath, TextRange)>>,
+}
+
+/// How the source text at a reference range relates to the attribute it resolves to.
+#[derive(Debug, Clone, Copy)]
+pub enum AttributeReferenceKind {
+    /// The reference spells the attribute's own name, as in `x.attr`.
+    Textual,
+    /// The reference is a call site that reaches the attribute implicitly through the
+    /// constructor protocol, as in `Foo()` reaching `Foo.__init__`. Only class construction
+    /// is recorded this way; calling an instance through its `__call__` is not.
+    ConstructorCall,
 }
 
 #[derive(Debug, Clone)]
@@ -1177,11 +1191,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn record_external_attribute_definition_index(
+    pub fn record_attribute_definition_index(
         &self,
         base: &Type,
         attribute_name: &Name,
         attribute_reference_range: TextRange,
+        reference_kind: AttributeReferenceKind,
     ) {
         if let Some(index) = &self.current().index {
             for AttrInfo {
@@ -1197,16 +1212,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         cls,
                         range,
                         docstring_range: _,
-                    } => {
-                        if cls.module_path() != self.bindings().module().path() {
-                            index
-                                .lock()
-                                .externally_defined_attribute_references
-                                .entry(cls.module_path().dupe())
-                                .or_default()
-                                .push((range, attribute_reference_range))
+                    } => match reference_kind {
+                        AttributeReferenceKind::ConstructorCall => {
+                            if cls.module_path() != self.bindings().module().path() {
+                                index
+                                    .lock()
+                                    .constructor_references
+                                    .entry(cls.module_path().dupe())
+                                    .or_default()
+                                    .push((range, attribute_reference_range))
+                            }
                         }
-                    }
+                        AttributeReferenceKind::Textual => {
+                            if cls.module_path() != self.bindings().module().path() {
+                                index
+                                    .lock()
+                                    .externally_defined_attribute_references
+                                    .entry(cls.module_path().dupe())
+                                    .or_default()
+                                    .push((range, attribute_reference_range))
+                            }
+                        }
+                    },
                     AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                         index
                             .lock()

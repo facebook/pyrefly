@@ -36,6 +36,7 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
+use crate::alt::answers::AttributeReferenceKind;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::NoAccessReason;
@@ -1038,10 +1039,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(callee_range) = callee_range
                     && let Some(metaclass) = class_metadata.custom_metaclass()
                 {
-                    self.record_external_attribute_definition_index(
+                    self.record_attribute_definition_index(
                         &self.heap.mk_class_type(metaclass.clone()),
                         &dunder::CALL,
                         callee_range,
+                        AttributeReferenceKind::ConstructorCall,
                     );
                 }
                 self.record_resolved_trace(arguments_range, &metaclass_dunder_call);
@@ -1112,10 +1114,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let has_errors = !dunder_new_errors.is_empty();
                 errors.extend(dunder_new_errors);
                 if let Some(callee_range) = callee_range {
-                    self.record_external_attribute_definition_index(
+                    self.record_attribute_definition_index(
                         &self.heap.mk_class_type(cls.clone()),
                         &dunder::NEW,
                         callee_range,
+                        AttributeReferenceKind::ConstructorCall,
                     );
                 }
                 if !recorded_trace {
@@ -1176,10 +1179,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors.extend(dunder_init_errors);
             }
             if let Some(callee_range) = callee_range {
-                self.record_external_attribute_definition_index(
+                self.record_attribute_definition_index(
                     &self.heap.mk_class_type(cls.clone()),
                     &dunder::INIT,
                     callee_range,
+                    AttributeReferenceKind::ConstructorCall,
                 );
             }
             if !recorded_trace {

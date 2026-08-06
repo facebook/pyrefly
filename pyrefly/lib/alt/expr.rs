@@ -77,6 +77,7 @@ use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 use vec1::vec1;
 
+use crate::alt::answers::AttributeReferenceKind;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
@@ -2107,7 +2108,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         base: &TypeInfo,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        self.record_external_attribute_definition_index(base.ty(), x.attr.id(), x.attr.range);
+        self.record_attribute_definition_index(
+            base.ty(),
+            x.attr.id(),
+            x.attr.range,
+            AttributeReferenceKind::Textual,
+        );
         let attr_type = self.attr_infer(base, &x.attr.id, x.range, errors, None);
         if base.ty().is_literal_string() {
             match attr_type.ty() {

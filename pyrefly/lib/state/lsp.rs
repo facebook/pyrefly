@@ -3853,7 +3853,7 @@ impl<'a> Transaction<'a> {
     fn local_references_from_local_definition(
         &self,
         handle: &Handle,
-        definition_metadata: DefinitionMetadata,
+        definition_metadata: &DefinitionMetadata,
         definition_name: &Name,
         definition_range: TextRange,
         include_declaration: bool,
@@ -3916,12 +3916,18 @@ impl<'a> Transaction<'a> {
         } else {
             self.local_references_from_local_definition(
                 handle,
-                definition_metadata,
+                &definition_metadata,
                 &definition_name,
                 definition_range,
                 include_declaration,
             )?
         };
+        references.extend(self.constructor_references_from_definition(
+            handle,
+            &definition_metadata,
+            definition_range,
+            module,
+        ));
         // Only callable parameters can be referenced by keyword arguments. Attributes, modules,
         // and other variable kinds are covered by the regular reference indexes above.
         if is_parameter_definition {
@@ -3935,6 +3941,35 @@ impl<'a> Transaction<'a> {
         references.sort_by_key(|range| range.start());
         references.dedup();
         Some(references)
+    }
+
+    /// Returns implicit constructor-protocol references to a definition in `handle`.
+    pub(crate) fn constructor_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition_metadata: &DefinitionMetadata,
+        definition_range: TextRange,
+        module: &Module,
+    ) -> Vec<TextRange> {
+        // `find_definition` identifies methods as `Attribute`, while callers that do not have
+        // identifier context may conservatively use `VariableOrAttribute`.
+        if !matches!(
+            definition_metadata,
+            DefinitionMetadata::Attribute | DefinitionMetadata::VariableOrAttribute(_)
+        ) {
+            return Vec::new();
+        }
+        let Some(index) = self
+            .get_solutions(handle)
+            .and_then(|solutions| solutions.get_index())
+        else {
+            return Vec::new();
+        };
+        recorded_references(
+            &index.lock().constructor_references,
+            module,
+            definition_range,
+        )
     }
 
     fn local_attribute_references_from_local_definition(
