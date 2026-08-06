@@ -82,10 +82,20 @@ impl CallWithTypes {
         errors: &ErrorCollector,
     ) -> TypeOrExpr<'a> {
         match x {
-            TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_))) => {
+            TypeOrExpr::Expr(
+                e @ (Expr::Dict(_)
+                | Expr::List(_)
+                | Expr::Set(_)
+                | Expr::ListComp(_)
+                | Expr::SetComp(_)
+                | Expr::DictComp(_)
+                | Expr::Generator(_)),
+            ) => {
                 // Hack: don't flatten mutable builtin containers into types before calling a
                 // function, as we know these containers often need to be contextually typed using
-                // the function's parameter types.
+                // the function's parameter types. Comprehensions and generators are included for
+                // the same reason: their element/key/value types must be inferred against the
+                // parameter hint (e.g. to narrow a literal element) rather than eagerly here.
                 TypeOrExpr::Expr(e)
             }
             TypeOrExpr::Expr(e) => {
@@ -441,6 +451,28 @@ impl CallArgPreEval<'_> {
                     let ty = solver.reproject_tuple_carrier_shape(
                         solver.canonicalize_shape_dsl_type(solver.expr_infer(x, arg_errors)),
                     );
+                    solver.check_type_with_options(
+                        &ty,
+                        hint,
+                        range,
+                        TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
+                    );
+                    solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                    return Some(ty);
+                }
+                if matches!(
+                    x,
+                    Expr::ListComp(_) | Expr::SetComp(_) | Expr::DictComp(_) | Expr::Generator(_)
+                ) && hint
+                    .collect_maybe_placeholder_vars()
+                    .into_iter()
+                    .any(|var| solver.solver().var_is_quantified(var))
+                {
+                    // A generic parameter hint is provisional until all arguments have
+                    // constrained its variables. Inferring a comprehension from that hint can
+                    // widen a known element type (for example, `str` to `object` in `filter`).
+                    // Infer it once without context, then use the result to constrain the generic.
+                    let ty = solver.expr_infer(x, arg_errors);
                     solver.check_type_with_options(
                         &ty,
                         hint,
