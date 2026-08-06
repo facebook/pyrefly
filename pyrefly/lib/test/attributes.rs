@@ -1195,6 +1195,31 @@ def test(stack: ThemeStack) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3958
+testcase!(
+    test_property_returning_bound_method_preserves_signature,
+    r#"
+from typing import reveal_type
+
+class Foo:
+    def bar(
+        self,
+        simple_union: int | str,
+        complex_union: int | str | tuple[int, str] | None = None,
+    ) -> None: ...
+
+class FooManager:
+    def __init__(self) -> None:
+        self.foo = Foo()
+
+    @property
+    def bar(self):
+        return self.foo.bar
+
+reveal_type(FooManager().bar)  # E: revealed type: (simple_union: int | str, complex_union: int | str | tuple[int, str] | None = None) -> None
+"#,
+);
+
 testcase!(
     test_generic_function_as_closure_default_arg,
     r#"
