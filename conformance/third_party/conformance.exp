@@ -6610,6 +6610,17 @@
     },
     {
       "code": -2,
+      "column": 24,
+      "concise_description": "Type variable `T` is not in scope",
+      "description": "Type variable `T` is not in scope",
+      "line": 98,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 31,
+      "stop_line": 98
+    },
+    {
+      "code": -2,
       "column": 14,
       "concise_description": "Type variable `T` is not in scope",
       "description": "Type variable `T` is not in scope",

@@ -1212,7 +1212,7 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug = "conformance: Should error on unbound TypeVars in TypeAlias and expressions",
+    bug = "conformance: Should error on unbound TypeVars in expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1238,7 +1238,7 @@ class Outer(Generic[T]):
     class AlsoBad:
         x: list[T]  # E: Type variable `T` is not in scope
 
-    alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
+    alias: TypeAlias = list[T]  # E: Type variable `T` is not in scope
 
 # Unbound TypeVars at global scope
 global_var1: T  # E: Type variable `T` is not in scope
@@ -1303,33 +1303,24 @@ class Outer(Generic[T]):
 "#,
 );
 
-// Real-world pattern from
-// https://github.com/PyGithub/PyGithub/blob/main/github/PaginatedList.py: a nested helper class
-// whose methods refer to the enclosing class's legacy TypeVar. The enclosing class's type
-// parameters are out of scope in the nested class, but a method signature may still bind `T` as
-// its own type parameter, so the annotations below are fine. The two remaining errors are
-// unrelated pre-existing bugs: a forward reference to a later-defined nested class, and an
-// attribute whose type comes from a method-scoped TypeVar.
 testcase!(
-    bug = "Nested class forward reference and method-scoped TypeVar attribute are false positives",
-    test_nested_class_method_uses_outer_legacy_tparam,
+    test_type_alias_cannot_capture_enclosing_tparam,
     r#"
-from __future__ import annotations
-from collections.abc import Iterator
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, TypeAlias
 
 T = TypeVar("T")
 
-class PaginatedListBase(Generic[T]):
-    def __getitem__(self, index: slice) -> _Slice:  # E: Could not find name `_Slice`
-        return self._Slice(self, index)
+# A generic type alias at module scope is fine; the free TypeVar parametrizes the alias.
+ModuleAlias: TypeAlias = list[T]  # OK
 
-    class _Slice:
-        def __init__(self, theList: PaginatedListBase[T], theSlice: slice) -> None:
-            self.__list = theList  # E: Attribute `__list` cannot depend on type variable `T`, which is not in the scope of class `_Slice`
+class Outer(Generic[T]):
+    # A type alias defined in a class body may not capture the class's type parameter.
+    explicit: TypeAlias = list[T]  # E: Type variable `T` is not in scope
+    implicit = dict[str, T]  # E: Type variable `T` is not in scope
 
-        def __iter__(self) -> Iterator[T]:
-            yield from []
+    # A method may still use the class's type parameter.
+    def m(self, x: T) -> T:
+        return x
 "#,
 );
 

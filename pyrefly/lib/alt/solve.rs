@@ -1750,6 +1750,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.scoped_type_params(scoped_tparams.as_ref(), errors)
             }
         };
+        // A legacy type alias may not capture a type parameter of an enclosing class or function
+        // (e.g. `alias: TypeAlias = list[T]` in a class generic over `T`). Such a parameter is a
+        // `Quantified` bound by the enclosing scope rather than one of the alias's own parameters,
+        // so any leftover `Quantified` in the body is out of scope.
+        if matches!(params, TypeAliasParams::Legacy(_)) {
+            let own: SmallSet<&Quantified> = tparams.iter().collect();
+            let mut out_of_scope: SmallSet<Quantified> = SmallSet::new();
+            ta.as_type().for_each_quantified(&mut |q| {
+                if !own.contains(q) {
+                    out_of_scope.insert(q.clone());
+                }
+            });
+            for q in &out_of_scope {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidTypeVar,
+                    format!("Type variable `{}` is not in scope", q.name()),
+                );
+            }
+        }
         Forallable::TypeAlias(TypeAliasData::Value(ta)).forall(self.validated_tparams(
             range,
             tparams,
