@@ -320,6 +320,23 @@ def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
 );
 
 testcase!(
+    test_classvar_callable_return_bound_method_error,
+    r#"
+from typing import Callable, ClassVar
+
+def integer_factory() -> int:
+    return 1
+
+class A:
+    _factory: ClassVar[Callable[[], int]] = integer_factory
+
+    @property
+    def factory(self) -> Callable[[], int]:
+        return self._factory  # E: Function `_factory` is treated as a method when accessed from an instance, but its signature does not accept a bound `self` argument
+    "#,
+);
+
+testcase!(
     test_bound_classmethod_explicit_targs,
     r#"
 from typing import assert_type
