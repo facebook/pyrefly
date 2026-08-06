@@ -27,7 +27,6 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use starlark_map::small_map::SmallMap;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::ClassFieldDefinition;
@@ -36,7 +35,6 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
-use crate::export::exports::ExportLocation;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::import_tracker::ImportTracker;
@@ -78,23 +76,12 @@ struct TypeHintRenderer<'a, 'state> {
     ast: Arc<ModModule>,
     stdlib: &'a Stdlib,
     import_format: ImportFormat,
-    builtins: Option<Arc<SmallMap<Name, ExportLocation>>>,
 }
 
 impl TypeHintRenderer<'_, '_> {
     fn render(&self, prefix: &str, ty: &Type) -> InlayHintEdits {
         let parts = ty.get_annotation_parts(Some(self.stdlib));
 
-        // Approve `from <module> import <head>` only when the module resolves and
-        // actually exports `head`, and when `head` is not a builtin: importing a
-        // name that shadows one would change what that name means file-wide. Only
-        // names `builtins` defines count, not the ones it re-imports (`Any` and
-        // friends), which bind to the same object either way.
-        let shadows_builtin = |name: &Name| {
-            self.builtins.as_ref().is_some_and(|exports| {
-                matches!(exports.get(name), Some(ExportLocation::ThisModule(_)))
-            })
-        };
         let mut direct = Vec::<DirectImport>::new();
         for (module, head) in self
             .tracker
@@ -112,7 +99,10 @@ impl TypeHintRenderer<'_, '_> {
                 .transaction
                 .get_exports(&module_handle)
                 .contains_key(&name)
-                || shadows_builtin(&name)
+                || self
+                    .transaction
+                    .builtin_module_for_name(self.handle, &name)
+                    .is_some()
             {
                 continue;
             }
@@ -304,10 +294,6 @@ impl<'a> Transaction<'a> {
             ast,
             stdlib: &stdlib,
             import_format,
-            builtins: self
-                .import_handle(handle, ModuleName::builtins(), None)
-                .finding()
-                .map(|builtins| self.get_exports(&builtins)),
         });
         let make_type_hint =
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {

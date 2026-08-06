@@ -101,6 +101,7 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::metadata::BindingsMetadata;
+use crate::binding::scope::builtin_module_for_name;
 use crate::binding::table::TableKeyed;
 use crate::config::config::ConfigFile;
 use crate::config::error_kind::ErrorKind;
@@ -2563,6 +2564,15 @@ impl<'a> Transaction<'a> {
         let module_data = self.get_module(handle);
         self.lookup_export(module_data)
             .exports(&self.lookup(module_data))
+    }
+
+    pub(crate) fn builtin_module_for_name(
+        &self,
+        handle: &Handle,
+        name: &Name,
+    ) -> Option<ModuleName> {
+        let module_data = self.get_module(handle);
+        builtin_module_for_name(&self.lookup(module_data), handle.module(), name)
     }
 
     pub(crate) fn get_exports_data(&self, handle: &Handle) -> Arc<Exports> {

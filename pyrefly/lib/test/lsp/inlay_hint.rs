@@ -915,6 +915,29 @@ value = make()
 }
 
 #[test]
+fn test_insertable_hint_avoids_extra_builtin_name() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "__builtins__",
+            r#"
+class Value: ...
+"#,
+        ),
+        (
+            "main",
+            r#"
+from lib import make
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": lib.Value");
+    assert_eq!(imports, "import lib\n");
+}
+
+#[test]
 fn test_insertable_hint_imports_head_of_nested_name() {
     let (annotation, imports) = insertable_hint(&[
         LIB,
