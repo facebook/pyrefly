@@ -1143,7 +1143,7 @@ value = make()
 
 #[test]
 fn test_insertable_hint_renders_unknown_as_any() {
-    let files = [
+    let (annotation, imports) = insertable_hint(&[
         (
             "producer",
             r#"
@@ -1159,24 +1159,10 @@ from producer import make_values
 values = make_values()
 "#,
         ),
-    ];
-    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
-    let hints = state
-        .transaction()
-        .inlay_hints(
-            handles.get("main").unwrap(),
-            Default::default(),
-            Default::default(),
-        )
-        .unwrap();
-    let edits = hints
-        .iter()
-        .find_map(|hint| hint.edits.as_ref())
-        .expect("expected an insertable hint");
+    ]);
 
-    assert_eq!(edits.annotation, ": list[Any]");
-    assert_eq!(edits.imports.len(), 1);
-    assert_eq!(edits.imports[0].1, "from typing import Any\n");
+    assert_eq!(annotation, ": list[Any]");
+    assert_eq!(imports, "from typing import Any\n");
 }
 
 #[test]
