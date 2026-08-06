@@ -13,7 +13,9 @@
 //! You can also use the name of the linter, e.g. `# pyright: ignore`,
 //! `# pyrefly: ignore`.
 //!
-//! You can specify a specific error code, e.g. `# type: ignore[invalid-type]`.
+//! You can specify a specific error code, e.g. `# pyrefly: ignore[bad-return]`.
+//! For `# type: ignore[...]`, Pyrefly only honors codes prefixed with
+//! `pyrefly:`, e.g. `# type: ignore[pyrefly:bad-return]`.
 //! Note that Pyright will only honor such codes after `# pyright: ignore[code]`.
 //!
 //! You can also use `# mypy: ignore-errors`, `# pyrefly: ignore-errors`
@@ -285,10 +287,23 @@ impl Suppression {
     pub fn tool(&self) -> Tool {
         self.tool
     }
+
+    fn matches_kind(&self, kind: &str) -> bool {
+        match self.tool {
+            Tool::Pyrefly => self.kind.is_empty() || self.kind.iter().any(|x| x == kind),
+            Tool::Type => {
+                self.kind.is_empty()
+                    || self
+                        .kind
+                        .iter()
+                        .any(|x| x.strip_prefix("pyrefly:") == Some(kind))
+            }
+            _ => true,
+        }
+    }
 }
 
-/// Record the position of lines affected by `# type: ignore[valid-type]` suppressions.
-/// For now we don't record the content of the ignore, but we could.
+/// Record the position of lines affected by ignore suppressions.
 #[derive(Debug, Clone, Default)]
 pub struct Ignore {
     /// The line number here represents the line that the suppression applies to,
@@ -386,16 +401,9 @@ impl Ignore {
         enabled_ignores: &SmallSet<Tool>,
     ) -> bool {
         if let Some(suppressions) = self.ignores.get(&start_line)
-            && suppressions.iter().any(|supp| {
-                enabled_ignores.contains(&supp.tool)
-                    && match supp.tool {
-                        // We only check the subkind if they do `# pyrefly: ignore`
-                        Tool::Pyrefly => {
-                            supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind)
-                        }
-                        _ => true,
-                    }
-            })
+            && suppressions
+                .iter()
+                .any(|supp| enabled_ignores.contains(&supp.tool) && supp.matches_kind(kind))
         {
             return true;
         }
@@ -419,14 +427,10 @@ impl Ignore {
         let Some(suppressions) = self.ignores.get(&suppression_line) else {
             return false;
         };
-        if suppressions.iter().any(|supp| {
-            enabled_ignores.contains(&supp.tool)
-                && match supp.tool {
-                    // We only check the subkind if they do `# pyrefly: ignore`
-                    Tool::Pyrefly => supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind),
-                    _ => true,
-                }
-        }) {
+        if suppressions
+            .iter()
+            .any(|supp| enabled_ignores.contains(&supp.tool) && supp.matches_kind(kind))
+        {
             return true;
         }
         false
@@ -827,6 +831,22 @@ x = """
 
         // For a malformed comment, at least do something with it (works well incrementally)
         f("type: ignore[hello", Some(Tool::Type), &["hello"]);
+    }
+
+    #[test]
+    fn test_type_ignore_specific_codes_require_pyrefly_prefix() {
+        let enabled = Tool::default_enabled();
+        let line = LineNumber::from_zero_indexed(0);
+
+        let blanket = Ignore::new("x: int = ''  # type: ignore");
+        assert!(blanket.is_ignored(line, "bad-assignment", &enabled));
+
+        let mypy_code = Ignore::new("x: int = ''  # type: ignore[assignment]");
+        assert!(!mypy_code.is_ignored(line, "bad-assignment", &enabled));
+
+        let pyrefly_code = Ignore::new("x: int = ''  # type: ignore[pyrefly:bad-assignment]");
+        assert!(pyrefly_code.is_ignored(line, "bad-assignment", &enabled));
+        assert!(!pyrefly_code.is_ignored(line, "bad-return", &enabled));
     }
 
     #[test]

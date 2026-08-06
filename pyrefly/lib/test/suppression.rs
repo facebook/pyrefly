@@ -221,6 +221,36 @@ z: int = "3"  # E: `Literal['3']` is not assignable to `int`
 );
 
 testcase!(
+    test_type_ignore_unrecognized_code_does_not_suppress,
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[this-is-not-a-real-error]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_unprefixed_pyrefly_code_does_not_suppress,
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[bad-argument-type]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_pyrefly_prefixed_code_suppresses,
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[pyrefly:bad-argument-type]
+"#,
+);
+
+testcase!(
     test_ignore_attachment,
     r#"
 # type: ignore
