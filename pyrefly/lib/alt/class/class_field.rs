@@ -3764,6 +3764,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return;
         }
+        // Stubs describe signatures, not implementations: a method body in a `.pyi`
+        // is always elided, so it can never call the parent method and the check
+        // would fire on every override.
+        if cls.module_path().is_interface() {
+            return;
+        }
         // If any base derives from `Any`, we can't reliably tell whether the method
         // overrides a concrete parent method, so suppress the check. Gather this
         // across all bases first so the decision is independent of base order.

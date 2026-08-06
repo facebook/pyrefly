@@ -1927,3 +1927,22 @@ class B(A):
         pass
  "#,
 );
+
+testcase!(
+    test_missing_super_call_in_stub,
+    TestEnv::one_with_path(
+        "stub",
+        "stub.pyi",
+        r#"
+class C:
+    def __init__(self) -> None: ...
+
+class D(C):
+    def __init__(self) -> None: ...
+"#,
+    )
+    .enable_missing_super_call_error(),
+    r#"
+from stub import C, D
+    "#,
+);
