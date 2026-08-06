@@ -3859,6 +3859,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             else {
                 continue;
             };
+            // `__call__` is checked against a Protocol parent only, unless the user
+            // opts in with `@override`. Implementing a callable interface is
+            // ubiquitous - argparse actions, auth handlers, metaclasses - and
+            // treating each one as an override reports a signature mismatch, and a
+            // missing `@override`, on code doing nothing wrong. A Protocol is
+            // different: its members are the contract it exists to state, so an
+            // incompatible `__call__` there is the unsound case, and the parent
+            // signature is written to be implemented rather than inherited.
+            if field_name == &dunder::CALL
+                && !is_explicit_override
+                && !want_field.defining_class.is_protocol()
+            {
+                continue;
+            }
             parent_attr_found = true;
             if want_field.defining_class.is_builtin("object") {
                 parent_attr_is_from_object = true;

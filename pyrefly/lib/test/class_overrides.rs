@@ -823,7 +823,11 @@ class C:
     "#,
 );
 
+// Checking `__call__` against every parent reports a missing `@override`, and often a
+// signature mismatch, on the many classes that simply implement a callable interface, so
+// it is checked only against a Protocol parent. See https://github.com/facebook/pyrefly/issues/4220.
 testcase!(
+    bug = "`__call__` inherited from a non-Protocol parent is not checked",
     test_override_dunder_call,
     r#"
 class Base: pass
@@ -833,7 +837,7 @@ class UseBase:
     def __call__(self) -> list[Base]: ...
 
 class UseDerived(UseBase):
-    def __call__(self) -> list[Derived]: ...  # E: Class member `UseDerived.__call__` overrides parent class `UseBase` in an inconsistent manner
+    def __call__(self) -> list[Derived]: ...
     "#,
 );
 
@@ -878,6 +882,29 @@ class UseDerived:
 
 class UseBase(UseDerived):
     def __call__(self, x: Base) -> Derived: ...
+    "#,
+);
+
+// Requiring `@override` on every `__call__` is what makes checking it against all parents
+// unusable: implementing a callable interface is not what the decorator documents, and the
+// demand lands on argparse actions, auth handlers and metaclasses throughout the ecosystem.
+testcase!(
+    test_missing_override_decorator_dunder_call,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import Protocol
+
+class Base:
+    def __call__(self, x: int) -> None: ...
+
+class Concrete(Base):
+    def __call__(self, x: int) -> None: ...
+
+class P(Protocol):
+    def __call__(self, x: int) -> None: ...
+
+class Impl(P):
+    def __call__(self, x: int) -> None: ...  # E: is missing an `@override` decorator
     "#,
 );
 
