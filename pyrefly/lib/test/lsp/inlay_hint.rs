@@ -895,6 +895,26 @@ value = make()
 }
 
 #[test]
+fn test_insertable_hint_avoids_module_scope_for_target() {
+    let (annotation, imports) = insertable_hint(&[
+        LIB,
+        (
+            "main",
+            r#"
+from lib import make
+
+for Value in []:
+    pass
+
+value = make()
+"#,
+        ),
+    ]);
+    assert_eq!(annotation, ": lib.Value");
+    assert_eq!(imports, "import lib\n");
+}
+
+#[test]
 fn test_insertable_hint_imports_head_of_nested_name() {
     let (annotation, imports) = insertable_hint(&[
         LIB,

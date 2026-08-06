@@ -9,13 +9,15 @@
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_output::AnnotationPart;
-use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+
+use crate::export::definitions::Definitions;
 
 /// Split a dotted name into the leading identifier and the rest, e.g.
 /// `Outer.Inner` into `("Outer", Some("Inner"))`. The leading identifier is the
@@ -34,18 +36,27 @@ pub struct ImportTracker {
     canonical_modules: SmallSet<ModuleName>,
     alias_modules: SmallMap<ModuleName, String>,
     imported_names: SmallMap<ModuleName, SmallMap<String, String>>,
-    /// Names bound by top-level imports, definitions, and simple assignments.
+    /// Names bound at module scope.
     /// A generated `from <module> import <head>` binds `head` for the whole file,
-    /// so it must not be generated when `head` is already bound here. Binding
-    /// forms other than the ones walked below (conditional imports, `for`, `with`,
-    /// walrus) are not tracked, so this check is necessary but not sufficient.
+    /// so it must not be generated when `head` is already bound here.
     module_scope_names: SmallSet<String>,
 }
 
 impl ImportTracker {
     /// Build an import tracker from the top-level statements in a module.
-    pub fn from_ast(ast: &ModModule, current_module: ModuleName, is_init: bool) -> Self {
+    pub fn from_ast(
+        ast: &ModModule,
+        current_module: ModuleName,
+        is_init: bool,
+        sys_info: SysInfo,
+    ) -> Self {
         let mut tracker = Self::default();
+        tracker.module_scope_names.extend(
+            Definitions::new(&ast.body, current_module, is_init, sys_info)
+                .definitions
+                .keys()
+                .map(|name| name.as_str().to_owned()),
+        );
         for stmt in &ast.body {
             match stmt {
                 Stmt::Import(stmt_import) => {
@@ -53,13 +64,8 @@ impl ImportTracker {
                         let module = ModuleName::from_str(alias.name.as_str());
                         if let Some(asname) = &alias.asname {
                             tracker.alias_modules.insert(module, asname.id.to_string());
-                            tracker.module_scope_names.insert(asname.id.to_string());
                         } else {
                             tracker.canonical_modules.insert(module);
-                            // `import foo.bar` binds `foo`, not `foo.bar`.
-                            tracker
-                                .module_scope_names
-                                .insert(split_head(module.as_str()).0.to_owned());
                         }
                     }
                 }
@@ -94,33 +100,12 @@ impl ImportTracker {
                                 .as_ref()
                                 .map(|id| id.id.to_string())
                                 .unwrap_or_else(|| name.to_owned());
-                            tracker.module_scope_names.insert(local.clone());
                             tracker
                                 .imported_names
                                 .entry(module)
                                 .or_default()
                                 .insert(name.to_owned(), local);
                         }
-                    }
-                }
-                Stmt::ClassDef(class) => {
-                    tracker.module_scope_names.insert(class.name.id.to_string());
-                }
-                Stmt::FunctionDef(function) => {
-                    tracker
-                        .module_scope_names
-                        .insert(function.name.id.to_string());
-                }
-                Stmt::Assign(assign) => {
-                    for target in &assign.targets {
-                        if let Expr::Name(name) = target {
-                            tracker.module_scope_names.insert(name.id.to_string());
-                        }
-                    }
-                }
-                Stmt::AnnAssign(assign) => {
-                    if let Expr::Name(name) = &*assign.target {
-                        tracker.module_scope_names.insert(name.id.to_string());
                     }
                 }
                 _ => {}
@@ -289,10 +274,14 @@ mod tests {
         }
     }
 
-    fn candidates(source: &str, parts: &[AnnotationPart]) -> Vec<(String, String)> {
+    fn import_tracker(source: &str, current_module: ModuleName) -> ImportTracker {
         let ast = Ast::parse(source, PySourceType::Python).0;
+        ImportTracker::from_ast(&ast, current_module, false, SysInfo::default())
+    }
+
+    fn candidates(source: &str, parts: &[AnnotationPart]) -> Vec<(String, String)> {
         let current_module = ModuleName::from_str("current");
-        ImportTracker::from_ast(&ast, current_module, false)
+        import_tracker(source, current_module)
             .direct_import_candidates(parts, current_module)
             .into_iter()
             .map(|(module, head)| (module.as_str().to_owned(), head))
@@ -370,8 +359,7 @@ mod tests {
 
     #[test]
     fn renders_direct_imports_and_leaves_the_rest_qualified() {
-        let ast = Ast::parse("", PySourceType::Python).0;
-        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("current"), false);
+        let tracker = import_tracker("", ModuleName::from_str("current"));
         let parts = vec![
             reference("foo", "Outer.Inner"),
             AnnotationPart::Text(" | ".to_owned()),
@@ -390,12 +378,10 @@ mod tests {
 
     #[test]
     fn resolves_module_and_imported_name_aliases_without_touching_text() {
-        let ast = Ast::parse(
+        let tracker = import_tracker(
             "import foo as f\nfrom bar import Bar as B\nfrom typing import Literal\n",
-            PySourceType::Python,
-        )
-        .0;
-        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("current"), false);
+            ModuleName::from_str("current"),
+        );
         let parts = vec![
             reference("typing", "Literal"),
             AnnotationPart::Text("['é'] | ".to_owned()),
@@ -412,8 +398,7 @@ mod tests {
 
     #[test]
     fn tracks_missing_modules_per_reference() {
-        let ast = Ast::parse("from foo import Other\n", PySourceType::Python).0;
-        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("current"), false);
+        let tracker = import_tracker("from foo import Other\n", ModuleName::from_str("current"));
         let parts = vec![
             reference("foo", "Foo"),
             AnnotationPart::Text(" | ".to_owned()),
@@ -432,8 +417,10 @@ mod tests {
 
     #[test]
     fn parent_module_imports_do_not_resolve_descendants() {
-        let ast = Ast::parse("import foo as f\nimport bar\n", PySourceType::Python).0;
-        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("current"), false);
+        let tracker = import_tracker(
+            "import foo as f\nimport bar\n",
+            ModuleName::from_str("current"),
+        );
         let parts = vec![
             reference("foo.child", "C"),
             AnnotationPart::Text(" | ".to_owned()),
@@ -450,12 +437,10 @@ mod tests {
 
     #[test]
     fn resolves_submodules_imported_from_their_parent() {
-        let ast = Ast::parse(
+        let tracker = import_tracker(
             "from package import module\nfrom other import child as alias\n",
-            PySourceType::Python,
-        )
-        .0;
-        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("current"), false);
+            ModuleName::from_str("current"),
+        );
         let parts = vec![
             reference("package.module", "Type"),
             AnnotationPart::Text(" | ".to_owned()),
@@ -470,15 +455,13 @@ mod tests {
 
     #[test]
     fn resolves_relative_imports_against_current_module() {
-        let ast = Ast::parse(
+        let current_module = ModuleName::from_str("package.sub.current");
+        let tracker = import_tracker(
             "from .types import Local as L\n\
              from ..shared import Shared\n\
              from absolute import Absolute\n",
-            PySourceType::Python,
-        )
-        .0;
-        let tracker =
-            ImportTracker::from_ast(&ast, ModuleName::from_str("package.sub.current"), false);
+            current_module,
+        );
         let parts = vec![
             reference("package.sub.types", "Local"),
             AnnotationPart::Text(" | ".to_owned()),
@@ -487,22 +470,18 @@ mod tests {
             reference("absolute", "Absolute"),
         ];
 
-        let (text, missing) =
-            tracker.resolve_annotation(&parts, ModuleName::from_str("package.sub.current"), &[]);
+        let (text, missing) = tracker.resolve_annotation(&parts, current_module, &[]);
         assert_eq!(text, "L | Shared | Absolute");
         assert!(missing.is_empty());
     }
 
     #[test]
     fn relative_import_does_not_resolve_same_named_absolute_module() {
-        let ast = Ast::parse("from .foo import Bar\n", PySourceType::Python).0;
-        let tracker = ImportTracker::from_ast(&ast, ModuleName::from_str("package.current"), false);
+        let current_module = ModuleName::from_str("package.current");
+        let tracker = import_tracker("from .foo import Bar\n", current_module);
 
-        let (text, missing) = tracker.resolve_annotation(
-            &[reference("foo", "Bar")],
-            ModuleName::from_str("package.current"),
-            &[],
-        );
+        let (text, missing) =
+            tracker.resolve_annotation(&[reference("foo", "Bar")], current_module, &[]);
         assert_eq!(text, "foo.Bar");
         assert!(missing.contains(&ModuleName::from_str("foo")));
     }

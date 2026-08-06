@@ -299,6 +299,7 @@ impl<'a> Transaction<'a> {
                 ast.as_ref(),
                 handle.module(),
                 handle.path().is_init(),
+                *handle.sys_info(),
             ),
             ast,
             stdlib: &stdlib,
