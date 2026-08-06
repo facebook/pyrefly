@@ -744,7 +744,12 @@ impl Globs {
             // default `**/*.ipynb` include when the user sets
             // `project-excludes = ["**/*.ipynb"]`). Warn so the user knows
             // this pattern is not being used, but don't abort discovery.
-            if filter.is_excluded(pattern.as_path()) {
+            let is_excluded = if pattern.has_no_wildcards() {
+                filter.is_excluded(pattern.as_path())
+            } else {
+                filter.excludes.matches(pattern.as_path())
+            };
+            if is_excluded {
                 warn!(
                     "Skipping include pattern `{}` because it is matched by \
                      `project-excludes` or an ignore file.\n{}",
@@ -2238,6 +2243,32 @@ mod tests {
                 .unwrap()
                 .collect::<Vec<_>>(),
             vec![root.join("ok.py")]
+        );
+    }
+
+    #[test]
+    fn test_gitignore_does_not_match_include_pattern_syntax() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file_with_contents(".gitignore", "?.py\n"),
+                TestPath::dir("src", vec![TestPath::file("module.py")]),
+            ],
+        );
+
+        let includes = Globs::new_with_root(root, vec!["src/**/*.py".to_owned()]).unwrap();
+        let filtered = FilteredGlobs::new(
+            includes,
+            Globs::empty(),
+            Some(root),
+            HiddenDirFilter::Disabled,
+        );
+
+        assert_eq!(
+            filtered.files_iter().unwrap().collect::<Vec<_>>(),
+            vec![root.join("src/module.py")],
         );
     }
 
