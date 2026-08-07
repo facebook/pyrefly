@@ -254,8 +254,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Handle both @dataclass and @dataclass(...) forms
         let is_pydantic_dataclass_metadata = |meta: &FuncMetadata| {
             matches!(&meta.kind, FunctionKind::Def(id)
-                if id.module.name() == ModuleName::pydantic_dataclasses()
-                    && id.name.as_str() == "dataclass")
+                if id.qname.module_name() == ModuleName::pydantic_dataclasses()
+                    && id.qname.id().as_str() == "dataclass")
         };
         let is_pydantic_dataclass = decorators.iter().any(|(decorator, _)| {
             decorator

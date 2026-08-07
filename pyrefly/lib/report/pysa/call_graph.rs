@@ -1775,7 +1775,7 @@ impl<'a> CallGraphVisitor<'a> {
         if func_id.cls.is_some() {
             return None;
         }
-        let module = &func_id.module;
+        let module = func_id.qname.module();
         let def_index = func_id.def_index;
 
         let function_ref = self

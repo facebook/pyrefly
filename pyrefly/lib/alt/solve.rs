@@ -6910,9 +6910,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         matches!(
             callee.callee_kind(),
             Some(CalleeKind::Function(FunctionKind::Def(id)))
-                if id.module.name().as_str() == "shape_extensions"
+                if id.qname.module_name().as_str() == "shape_extensions"
                     && id.cls.is_none()
-                    && id.name.as_str() == "broadcast"
+                    && id.qname.id().as_str() == "broadcast"
         )
     }
 

@@ -21,6 +21,7 @@ use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_python::qname::QName;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
@@ -269,13 +270,9 @@ pub struct FuncDefIndex(pub u32);
 /// Identity of a source-backed function definition.
 #[derive(Debug, Clone)]
 pub struct FuncDefId {
-    pub module: Module,
+    pub qname: QName,
     pub cls: Option<Class>,
-    pub name: Name,
     pub def_index: FuncDefIndex,
-    /// Dot-separated path of enclosing function names (e.g. `"f1"` for a function nested inside `f1`).
-    /// `None` for top-level and class-method functions.
-    pub outer_funcs: Option<Name>,
 }
 
 impl PartialEq for FuncDefId {
@@ -321,20 +318,15 @@ impl Visit<Type> for Arc<FuncDefId> {
 }
 
 impl FuncDefId {
-    /// Identity tuple for equality and hashing. `outer_funcs` is intentionally
-    /// excluded because it is display-only metadata (the dotted path of enclosing
-    /// function names) and does not affect the logical identity of a function.
-    fn key_eq(&self) -> (ModuleName, ModulePath, Option<Class>, &Name, FuncDefIndex) {
+    fn key_eq(&self) -> (ModuleName, ModulePath, FuncDefIndex) {
         (
-            self.module.name(),
-            self.module.path().to_key_eq(),
-            self.cls.clone(),
-            &self.name,
+            self.qname.module_name(),
+            self.qname.module_path().to_key_eq(),
             self.def_index,
         )
     }
 
-    fn key_ord(&self) -> (ModuleName, ModulePath, Option<Class>, &Name, FuncDefIndex) {
+    fn key_ord(&self) -> (ModuleName, ModulePath, FuncDefIndex) {
         self.key_eq()
     }
 }
@@ -454,8 +446,8 @@ pub enum FunctionKind {
     /// `numba.njit()`
     NumbaNjit,
     /// A function whose return type is computed by a shape DSL definition.
-    /// The `FuncDefId` provides identity (module, class, name) for display and
-    /// lookup; the `ShapeDslFunction` carries the parsed DSL IR.
+    /// The `FuncDefId` provides source identity for display and lookup; the
+    /// `ShapeDslFunction` carries the parsed DSL IR.
     ShapeDsl(
         Arc<FuncDefId>,
         Arc<ShapeDslFunction>,
@@ -479,9 +471,9 @@ impl FunctionKind {
         match self {
             Self::Def(func_id) | Self::ShapeDsl(func_id, ..) | Self::TypeShapeDsl(func_id, ..) => {
                 Some(FuncSymbol {
-                    module: func_id.module.dupe(),
+                    module: func_id.qname.module().dupe(),
                     cls: func_id.cls.as_ref().map(Dupe::dupe),
-                    name: func_id.name.clone(),
+                    name: func_id.qname.id().clone(),
                 })
             }
             Self::Synthesized(symbol) => Some((**symbol).clone()),
@@ -497,14 +489,13 @@ impl FunctionKind {
         }
     }
 
-    pub fn from_name(
-        module: Module,
-        cls: Option<Class>,
-        func: &Name,
-        def_index: FuncDefIndex,
-        outer_funcs: Option<Name>,
-    ) -> Self {
-        match (module.name().as_str(), cls.as_ref(), func.as_str()) {
+    pub fn from_definition(id: Arc<FuncDefId>) -> Self {
+        let qname = &id.qname;
+        match (
+            qname.module_name().as_str(),
+            id.cls.as_ref(),
+            qname.id().as_str(),
+        ) {
             ("builtins", None, "isinstance") => Self::IsInstance,
             ("builtins", None, "issubclass") => Self::IsSubclass,
             ("builtins", None, "len") => Self::Len,
@@ -537,13 +528,7 @@ impl FunctionKind {
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
             ("shape_extensions", None, "uses_shape_dsl") => Self::UsesShapeDsl,
             ("shape_extensions", None, "defines_assert_shape") => Self::DefinesAssertShape,
-            _ => Self::Def(Arc::new(FuncDefId {
-                module,
-                cls,
-                name: func.clone(),
-                def_index,
-                outer_funcs,
-            })),
+            _ => Self::Def(id),
         }
     }
 
@@ -580,8 +565,8 @@ impl FunctionKind {
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Synthesized(id) => id.module.name(),
-            Self::Def(func_id) => func_id.module.name().dupe(),
-            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.module.name().dupe(),
+            Self::Def(func_id) => func_id.qname.module_name(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.qname.module_name(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
             Self::DefinesAssertShape => ModuleName::from_str("shape_extensions"),
         }
@@ -620,8 +605,8 @@ impl FunctionKind {
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Synthesized(id) => Cow::Borrowed(&id.name),
-            Self::Def(func_id) => Cow::Borrowed(&func_id.name),
-            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
+            Self::Def(func_id) => Cow::Borrowed(func_id.qname.id()),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => Cow::Borrowed(id.qname.id()),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
             Self::DefinesAssertShape => Cow::Owned(Name::new_static("defines_assert_shape")),
         }
@@ -667,8 +652,9 @@ impl FunctionKind {
         }
     }
 
-    pub fn outer_funcs(&self) -> Option<&Name> {
-        self.as_func_def_id()?.outer_funcs.as_ref()
+    pub fn outer_funcs(&self) -> Option<Name> {
+        let id = self.as_func_def_id()?;
+        id.qname.parent().ancestor_function_path(id.qname.module())
     }
 
     pub fn format(&self, current_module: ModuleName) -> String {
@@ -697,5 +683,104 @@ impl FunctionKind {
             Self::NumbaJit | Self::NumbaNjit | Self::SingleDispatchRegister(_) => true,
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use dupe::Dupe;
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::nesting_context::NestingContext;
+    use pyrefly_python::qname::QName;
+    use pyrefly_python::short_identifier::ShortIdentifier;
+    use ruff_python_ast::Identifier;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+
+    use super::FuncDefId;
+    use super::FuncDefIndex;
+    use super::FunctionKind;
+
+    fn identifier(source: &str, name: &str) -> Identifier {
+        let start = source
+            .find(name)
+            .unwrap_or_else(|| panic!("`{name}` should occur in test source"));
+        Identifier::new(
+            name,
+            TextRange::at(
+                TextSize::new(start as u32),
+                TextSize::new(name.len() as u32),
+            ),
+        )
+    }
+
+    #[test]
+    fn func_def_id_preserves_complete_nesting_without_changing_format() {
+        let source = "Outer factory Inner target";
+        let module = Module::new(
+            ModuleName::from_str("test_module"),
+            ModulePath::memory(PathBuf::from("test_module.py")),
+            Arc::new(source.to_owned()),
+        );
+        let parent = NestingContext::class(
+            ShortIdentifier::new(&identifier(source, "Inner")),
+            NestingContext::function(
+                ShortIdentifier::new(&identifier(source, "factory")),
+                NestingContext::class(
+                    ShortIdentifier::new(&identifier(source, "Outer")),
+                    NestingContext::toplevel(),
+                ),
+            ),
+        );
+        let id = FuncDefId {
+            qname: QName::new(identifier(source, "target"), parent, module.dupe()),
+            cls: None,
+            def_index: FuncDefIndex(0),
+        };
+
+        assert_eq!(
+            id.qname.name_relative_to_module(),
+            "Outer.factory.Inner.target"
+        );
+        assert_eq!(
+            FunctionKind::Def(Arc::new(id)).format(module.name()),
+            "target"
+        );
+    }
+
+    #[test]
+    fn func_def_id_equality_matches_ordering() {
+        let source = "first second";
+        let module = Module::new(
+            ModuleName::from_str("test_module"),
+            ModulePath::memory(PathBuf::from("test_module.py")),
+            Arc::new(source.to_owned()),
+        );
+        let id = FuncDefId {
+            qname: QName::new(
+                identifier(source, "first"),
+                NestingContext::toplevel(),
+                module.dupe(),
+            ),
+            cls: None,
+            def_index: FuncDefIndex(0),
+        };
+        let same_definition = FuncDefId {
+            qname: QName::new(
+                identifier(source, "second"),
+                NestingContext::toplevel(),
+                module,
+            ),
+            cls: None,
+            def_index: FuncDefIndex(0),
+        };
+        assert_eq!(id, same_definition);
+        assert_eq!(id.cmp(&same_definition), Ordering::Equal);
     }
 }

@@ -71,8 +71,11 @@ pub(crate) fn is_attrs_setters_frozen(ty: &Type) -> bool {
     if let Type::Function(f) = ty
         && let FunctionKind::Def(id) = &f.metadata.kind
     {
-        id.name.as_str() == "frozen"
-            && matches!(id.module.name().as_str(), "attr.setters" | "attrs.setters")
+        id.qname.id().as_str() == "frozen"
+            && matches!(
+                id.qname.module_name().as_str(),
+                "attr.setters" | "attrs.setters"
+            )
     } else {
         false
     }
@@ -85,8 +88,11 @@ pub(crate) fn is_attrs_setters_pipe(ty: &Type) -> bool {
     if let Type::Function(f) = ty
         && let FunctionKind::Def(id) = &f.metadata.kind
     {
-        id.name.as_str() == "pipe"
-            && matches!(id.module.name().as_str(), "attr.setters" | "attrs.setters")
+        id.qname.id().as_str() == "pipe"
+            && matches!(
+                id.qname.module_name().as_str(),
+                "attr.setters" | "attrs.setters"
+            )
     } else {
         false
     }
@@ -178,8 +184,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field_specifiers.iter().any(|callee| {
             matches!(callee,
                 CalleeKind::Function(FunctionKind::Def(id))
-                    if id.module.name() == ModuleName::attr()
-                        || id.module.name() == ModuleName::attrs()
+                    if id.qname.module_name() == ModuleName::attr()
+                        || id.qname.module_name() == ModuleName::attrs()
             )
         })
     }
@@ -528,7 +534,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         };
         if !matches!(
-            id.module.name().as_str(),
+            id.qname.module_name().as_str(),
             "attr.converters" | "attrs.converters"
         ) {
             return None;
@@ -540,7 +546,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     hint,
                 ))
             };
-        match id.name.as_str() {
+        match id.qname.id().as_str() {
             // `optional(c)` feeds `c`'s output straight to the field, so its type parameters solve
             // against the annotation.
             "optional" => Some(self.union(first_input(annotated_field_ty)?, self.heap.mk_none())),

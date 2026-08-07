@@ -316,7 +316,7 @@ enum PolarsFrameConversion {
 
 impl PolarsFunction {
     fn from_id(id: &FuncDefId) -> Self {
-        match (id.name.as_str(), id.module.name().as_str()) {
+        match (id.qname.id().as_str(), id.qname.module_name().as_str()) {
             ("col", "polars.functions.col") => Self::Col,
             ("concat", "polars.functions.eager") => Self::Concat,
             ("len", "polars.functions.len") => Self::Len,

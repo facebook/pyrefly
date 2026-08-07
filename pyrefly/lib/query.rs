@@ -683,8 +683,9 @@ impl<'a> CalleesWithLocation<'a> {
         } else {
             // Check if this is a builtins function that needs special casing.
             if let FunctionKind::Def(def) = &metadata.kind
-                && def.module.name().as_str() == "builtins"
-                && def.name == "repr"
+                && def.qname.module_name().as_str() == "builtins"
+                && def.cls.is_none()
+                && def.qname.id() == "repr"
                 && let Some(args) = call_arguments
                 && let Some(callee) = self.repr_from_arguments(args)
             {

@@ -701,14 +701,14 @@ impl TypeConverter<'_> {
         if let Some(func_id) = kind.as_func_def_id()
             && let Some(range) = self.resolve_func_range.and_then(|resolve| resolve(func_id))
         {
-            let lsp_range = func_id.module.to_lsp_range(range);
+            let lsp_range = func_id.qname.module().to_lsp_range(range);
             return Declaration::Regular(RegularDeclaration {
                 category: DeclarationCategory::Function,
                 kind: DeclarationKind::Regular,
-                name: Some(func_id.name.to_string()),
+                name: Some(func_id.qname.id().to_string()),
                 node: Node {
                     range: lsp_range_to_tsp(lsp_range),
-                    uri: path_to_uri(func_id.module.path()),
+                    uri: path_to_uri(func_id.qname.module_path()),
                 },
             });
         }

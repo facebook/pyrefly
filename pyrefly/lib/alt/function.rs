@@ -16,6 +16,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
+use pyrefly_python::qname::QName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::IdentityIgnored;
 use pyrefly_types::callable::Params;
@@ -696,7 +697,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .filter_map(|key| self.get_idx(*key).deref().parameter().cloned());
         tparams.extend(legacy_tparams);
         let tparams = self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
-        let outer_funcs = parent.ancestor_function_path(self.module());
+        let func_id = Arc::new(FuncDefId {
+            qname: QName::new(def.name.clone(), parent.dupe(), self.module().dupe()),
+            cls: defining_cls.clone(),
+            def_index,
+        });
 
         let kind = if let Some(dsl_fn) = shape_dsl_def {
             // Build the transitive closure of helper functions this DSL function calls,
@@ -714,31 +719,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 // Fall back to a normal function — the DSL evaluator must
                 // never run on a program that failed type checking.
-                FunctionKind::from_name(
-                    self.module().dupe(),
-                    defining_cls.clone(),
-                    &def.name.id,
-                    def_index,
-                    outer_funcs,
-                )
+                FunctionKind::from_definition(func_id)
             } else {
-                let func_id = Arc::new(FuncDefId {
-                    module: self.module().dupe(),
-                    cls: defining_cls.clone(),
-                    name: def.name.id.clone(),
-                    def_index,
-                    outer_funcs,
-                });
                 FunctionKind::ShapeDsl(func_id, dsl_fn, IdentityIgnored(fn_closure))
             }
         } else {
-            FunctionKind::from_name(
-                self.module().dupe(),
-                defining_cls.clone(),
-                &def.name.id,
-                def_index,
-                outer_funcs,
-            )
+            FunctionKind::from_definition(func_id)
         };
 
         // Resolve the IR function reference from @uses_shape_dsl(ir_fn) and

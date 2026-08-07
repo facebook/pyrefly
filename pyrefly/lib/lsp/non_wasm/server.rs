@@ -6618,8 +6618,8 @@ impl Server {
         let resolve_func_range = |func_id: &pyrefly_types::function::FuncDefId| {
             let def_index = func_id.def_index;
             let handle = Handle::new(
-                func_id.module.name(),
-                func_id.module.path().dupe(),
+                func_id.qname.module_name(),
+                func_id.qname.module_path().dupe(),
                 source_handle.sys_info().dupe(),
             );
             let bindings = transaction.get_bindings(&handle)?;
