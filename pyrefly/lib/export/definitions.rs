@@ -13,7 +13,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::Deprecation;
+use pyrefly_types::function::Deprecation;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
@@ -772,7 +772,8 @@ impl DefinitionsBuilder {
                         Expr::StringLiteral(lit) => Some(lit.value.to_str()),
                         _ => None,
                     });
-                    let is_wildcard = alias.is_none() || alias == Some("*");
+                    let is_wildcard =
+                        alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
 
                     if is_wildcard {
                         self.inner.import_all.insert(m, func_name.range);

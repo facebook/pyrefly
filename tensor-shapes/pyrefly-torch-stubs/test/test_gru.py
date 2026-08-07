@@ -21,25 +21,25 @@ if TYPE_CHECKING:
 def test_gru_unidirectional():
     """Single-layer unidirectional GRU."""
     gru = nn.GRU(input_size=256, hidden_size=128)
-    x: Tensor[4, 10, 256] = torch.randn(4, 10, 256)
+    x: Tensor[[4, 10, 256]] = torch.randn(4, 10, 256)
     output, h_n = gru(x)
-    assert_type(output, Tensor[4, 10, 128])
-    assert_type(h_n, Tensor[1, 4, 128])
+    assert_type(output, Tensor[[4, 10, 128]])
+    assert_type(h_n, Tensor[[1, 4, 128]])
 
 
 def test_gru_bidirectional():
     """Bidirectional GRU doubles the output hidden dim."""
     gru = nn.GRU(input_size=64, hidden_size=32, bidirectional=True)
-    x: Tensor[8, 5, 64] = torch.randn(8, 5, 64)
+    x: Tensor[[8, 5, 64]] = torch.randn(8, 5, 64)
     output, h_n = gru(x)
-    assert_type(output, Tensor[8, 5, 64])
-    assert_type(h_n, Tensor[2, 8, 32])
+    assert_type(output, Tensor[[8, 5, 64]])
+    assert_type(h_n, Tensor[[2, 8, 32]])
 
 
 def test_gru_multi_layer():
     """Multi-layer GRU: h_n has num_layers stacked."""
     gru = nn.GRU(input_size=128, hidden_size=64, num_layers=3)
-    x: Tensor[2, 20, 128] = torch.randn(2, 20, 128)
+    x: Tensor[[2, 20, 128]] = torch.randn(2, 20, 128)
     output, h_n = gru(x)
-    assert_type(output, Tensor[2, 20, 64])
-    assert_type(h_n, Tensor[3, 2, 64])
+    assert_type(output, Tensor[[2, 20, 64]])
+    assert_type(h_n, Tensor[[3, 2, 64]])

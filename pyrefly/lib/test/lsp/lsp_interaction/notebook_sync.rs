@@ -7,11 +7,12 @@
 
 use lsp_types::Url;
 use lsp_types::notification::DidOpenNotebookDocument;
+use pyrefly_lsp_test::object_model::CellKind;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_notebook_publish_diagnostics() {
@@ -501,8 +502,10 @@ fn test_notebook_did_change_add_cell() {
     );
 
     // Open cells 4 and 5
-    let (cell4, cell4_doc) = interaction.create_notebook_cell("notebook.ipynb", 3, "x += 1");
-    let (cell5, cell5_doc) = interaction.create_notebook_cell("notebook.ipynb", 4, "x += 2");
+    let (cell4, cell4_doc) =
+        interaction.create_notebook_cell("notebook.ipynb", 3, CellKind::Code, "x += 1");
+    let (cell5, cell5_doc) =
+        interaction.create_notebook_cell("notebook.ipynb", 4, CellKind::Code, "x += 2");
 
     interaction.change_notebook(
         "notebook.ipynb",

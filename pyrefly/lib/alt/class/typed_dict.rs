@@ -39,12 +39,12 @@ use crate::error::context::TypeCheckKind;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
+use crate::types::function::FuncMetadata;
+use crate::types::function::Function;
 use crate::types::literal::Lit;
 use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
@@ -71,6 +71,8 @@ const DEFAULT_PARAM: Name = Name::new_static("default");
 const UPDATE_METHOD: Name = Name::new_static("update");
 const ITEMS_METHOD: Name = Name::new_static("items");
 const VALUES_METHOD: Name = Name::new_static("values");
+pub(crate) const REQUIRED_KEYS: Name = Name::new_static("__required_keys__");
+pub(crate) const OPTIONAL_KEYS: Name = Name::new_static("__optional_keys__");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn check_dict_items_against_typed_dict(
@@ -923,12 +925,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_typed_dict_synthesized_fields(&self, cls: &Class) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
         let td = metadata.typed_dict_metadata()?;
+        let keys_type = self.heap.mk_class_type(
+            self.stdlib
+                .frozenset(self.heap.mk_class_type(self.stdlib.str().clone())),
+        );
         let mut fields = smallmap! {
             dunder::INIT => self.get_typed_dict_init(cls, &td.fields),
             ITEMS_METHOD => self.get_typed_dict_items(cls, &td.fields),
             GET_METHOD => self.get_typed_dict_get(cls, &td.fields),
             UPDATE_METHOD => self.get_typed_dict_update(cls, &td.fields),
             VALUES_METHOD => self.get_typed_dict_values(cls, &td.fields),
+            REQUIRED_KEYS => ClassSynthesizedField::new_classvar(keys_type.clone()),
+            OPTIONAL_KEYS => ClassSynthesizedField::new_classvar(keys_type),
         };
         if let Some(m) = self.get_typed_dict_clear(cls, &td.fields) {
             fields.insert(CLEAR_METHOD, m);
@@ -1006,6 +1014,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("`{q}` may not be used for TypedDict members",),
                 );
             }
+        }
+        if annotation
+            .ty
+            .as_ref()
+            .is_some_and(Self::is_proxy_method_type)
+        {
+            self.error(
+                errors,
+                range,
+                ErrorKind::InvalidAnnotation,
+                "`ProxyMethod` cannot be declared in typed dictionaries or named tuples".to_owned(),
+            );
         }
         if let Some(td) = metadata.typed_dict_metadata()
             && let Some(is_total) = td.fields.get(name)

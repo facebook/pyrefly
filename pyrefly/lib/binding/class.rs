@@ -7,17 +7,16 @@
 
 use std::mem;
 use std::sync::Arc;
-use std::sync::LazyLock;
 
 use dupe::Dupe as _;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
-use regex::Regex;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
@@ -257,7 +256,7 @@ impl<'a> BindingsBuilder<'a> {
         let decorators =
             self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list), class_object.usage());
 
-        self.scopes.push(Scope::annotation(x.range));
+        self.scopes.push(Scope::annotation(x.range, true));
 
         let scoped_type_param_names = x
             .type_params
@@ -388,7 +387,7 @@ impl<'a> BindingsBuilder<'a> {
             args.keywords.iter_mut().for_each(|keyword| {
                 if let Some(name) = &keyword.arg {
                     self.ensure_expr(&mut keyword.value, class_object.usage());
-                    keywords.push((name.id.clone(), keyword.value.clone()));
+                    keywords.push((name.clone(), keyword.value.clone()));
                 } else {
                     self.error(
                         keyword.range(),
@@ -452,12 +451,14 @@ impl<'a> BindingsBuilder<'a> {
 
         let django_field_info = self.extract_django_fields_from_class_body(&field_definitions);
         let mut fields = SmallMap::with_capacity(field_definitions.len());
+        let mut django_relation_fields = Vec::new();
         for (name, (definition, range)) in field_definitions.into_iter_hashed() {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = &definition
                 && let ExprOrBinding::Expr(e) = value.as_ref()
             {
                 self.extract_pydantic_config_dict(e, &name, &mut pydantic_config_dict);
             }
+            let is_django_relation_candidate = django_field_info.relation_fields.contains(&name);
             let (is_initialized_on_class, is_annotated, is_defined_in_class_body) =
                 match &definition {
                     ClassFieldDefinition::DefinedInMethod { annotation, .. } => {
@@ -493,8 +494,12 @@ impl<'a> BindingsBuilder<'a> {
                 range,
                 definition,
             };
-            self.insert_binding(key_field, binding);
+            let field_idx = self.insert_binding(key_field, binding);
+            if is_django_relation_candidate {
+                django_relation_fields.push(field_idx);
+            }
         }
+        self.record_django_relation_class(class_indices.class_idx, django_relation_fields);
 
         self.bind_current_as(
             &x.name,
@@ -541,6 +546,7 @@ impl<'a> BindingsBuilder<'a> {
                 def_index: class_indices.def_index,
                 def: ClassDefData::new(x),
                 parent: parent.dupe(),
+                is_protocol: has_protocol_base,
                 tparams_require_binding,
                 docstring_range,
             }),
@@ -747,6 +753,7 @@ impl<'a> BindingsBuilder<'a> {
         use ruff_python_ast::Stmt;
 
         let mut field_docstrings = SmallMap::new();
+        let mut first_function_ranges = SmallMap::new();
         let mut i = 0;
 
         while i < body.len() {
@@ -755,8 +762,14 @@ impl<'a> BindingsBuilder<'a> {
             let is_field = matches!(stmt, Stmt::AnnAssign(_) | Stmt::Assign(_));
 
             if let Stmt::FunctionDef(func_def) = stmt {
+                let first_range = *first_function_ranges
+                    .entry(func_def.name.id.clone())
+                    .or_insert(func_def.name.range);
                 if let Some(docstring_range) = Docstring::range_from_stmts(&func_def.body) {
                     field_docstrings.insert(func_def.name.range, docstring_range);
+                    // Class field metadata points at the first declaration in an overload chain,
+                    // while its documentation belongs to the implementation.
+                    field_docstrings.insert(first_range, docstring_range);
                 }
             } else if let Stmt::ClassDef(class_def) = stmt {
                 if let Some(docstring_range) = Docstring::range_from_stmts(&class_def.body) {
@@ -1143,7 +1156,7 @@ impl<'a> BindingsBuilder<'a> {
         class_indices: ClassIndices,
         parent: &NestingContext,
         base: Option<Expr>,
-        keywords: Box<[(Name, Expr)]>,
+        keywords: Box<[(Identifier, Expr)]>,
         // name, position, annotation, value
         member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         illegal_identifier_handling: IllegalIdentifierHandling,
@@ -1591,8 +1604,12 @@ impl<'a> BindingsBuilder<'a> {
                 (Some(name), _) if name == "extra_items" => Some(name),
                 _ => None,
             };
-            if let Some(kw_name) = recognized_kw {
-                base_class_keywords.push((kw_name.clone(), kw.value.clone()));
+            if recognized_kw.is_some() {
+                let kw_name = kw
+                    .arg
+                    .clone()
+                    .expect("recognized TypedDict keyword must have a name");
+                base_class_keywords.push((kw_name, kw.value.clone()));
             } else {
                 let msg = if let Some(name) = &kw.arg {
                     format!("Unrecognized keyword argument `{name}`")
@@ -1688,51 +1705,4 @@ impl<'a> BindingsBuilder<'a> {
             );
         }
     }
-}
-
-fn is_keyword(name: &str) -> bool {
-    matches!(
-        name,
-        "False"
-            | "None"
-            | "True"
-            | "and"
-            | "as"
-            | "assert"
-            | "async"
-            | "await"
-            | "break"
-            | "class"
-            | "continue"
-            | "def"
-            | "del"
-            | "elif"
-            | "else"
-            | "except"
-            | "finally"
-            | "for"
-            | "from"
-            | "global"
-            | "if"
-            | "import"
-            | "in"
-            | "is"
-            | "lambda"
-            | "nonlocal"
-            | "not"
-            | "or"
-            | "pass"
-            | "raise"
-            | "return"
-            | "try"
-            | "while"
-            | "with"
-            | "yield",
-    )
-}
-
-fn is_valid_identifier(name: &str) -> bool {
-    static IDENTIFIER_REGEX: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new("^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap());
-    !is_keyword(name) && IDENTIFIER_REGEX.is_match(name)
 }

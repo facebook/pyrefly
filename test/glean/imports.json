@@ -17,17 +17,16 @@
   {
     "predicate": "digest.FileDigest.1",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"digest":{"hash":"924f36374da677e27a6887e90ab48def3bbbb346df844b872b3e2e0b8af13d22","size":281}}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"digest":{"hash":"33f395ad2d83655a1b4ada1e5a0ad2f7aa3ef543be830a09790c4db40365d519","size":249}}}
     ]
   },
   {
     "predicate": "python.DeclarationLocation.4",
     "facts": [
-      {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":0,"length":281}}},
+      {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":0,"length":249}}},
       {"id":0,"key":{"declaration":{"imp":{"id":0,"key":{"from_name":{"id":0,"key":"itertools"},"as_name":{"id":0,"key":"imports.it"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":188,"length":9}}},
       {"id":0,"key":{"declaration":{"imp":{"id":0,"key":{"from_name":{"id":0,"key":"os"},"as_name":{"id":0,"key":"imports.os"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":211,"length":2}}},
-      {"id":0,"key":{"declaration":{"imp":{"id":0,"key":{"from_name":{"id":0,"key":"dataclasses.dataclass"},"as_name":{"id":0,"key":"imports.dataclass"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":259,"length":9}}},
-      {"id":0,"key":{"declaration":{"imp":{"id":0,"key":{"from_name":{"id":0,"key":"dataclasses.field"},"as_name":{"id":0,"key":"imports.f"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":270,"length":5}}}
+      {"id":0,"key":{"declaration":{"imp":{"id":0,"key":{"from_name":{"id":0,"key":"dataclasses.field"},"as_name":{"id":0,"key":"imports.f"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":238,"length":5}}}
     ]
   },
   {
@@ -36,20 +35,19 @@
       {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}}}},
       {"id":0,"key":{"declaration":{"imp":{"id":0,"key":{"from_name":{"id":0,"key":"itertools"},"as_name":{"id":0,"key":"imports.it"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}}}},
       {"id":0,"key":{"declaration":{"imp":{"id":0,"key":{"from_name":{"id":0,"key":"os"},"as_name":{"id":0,"key":"imports.os"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}}}},
-      {"id":0,"key":{"declaration":{"imp":{"id":0,"key":{"from_name":{"id":0,"key":"dataclasses.dataclass"},"as_name":{"id":0,"key":"imports.dataclass"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}}}},
       {"id":0,"key":{"declaration":{"imp":{"id":0,"key":{"from_name":{"id":0,"key":"dataclasses.field"},"as_name":{"id":0,"key":"imports.f"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}}}}
     ]
   },
   {
     "predicate": "python.XRefsViaNameByFile.4",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"xrefs":[{"target":{"id":0,"key":"itertools"},"source":{"start":188,"length":9}},{"target":{"id":0,"key":"os"},"source":{"start":211,"length":2}},{"target":{"id":0,"key":"typing"},"source":{"start":214,"length":20}},{"target":{"id":0,"key":"dataclasses"},"source":{"start":240,"length":11}},{"target":{"id":0,"key":"dataclasses.dataclass"},"source":{"start":259,"length":9}},{"target":{"id":0,"key":"dataclasses.field"},"source":{"start":270,"length":5}}]}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"xrefs":[{"target":{"id":0,"key":"itertools"},"source":{"start":188,"length":9}},{"target":{"id":0,"key":"os"},"source":{"start":211,"length":2}},{"target":{"id":0,"key":"dataclasses"},"source":{"start":219,"length":11}},{"target":{"id":0,"key":"dataclasses.field"},"source":{"start":238,"length":5}}]}}
     ]
   },
   {
     "predicate": "src.FileLines.1",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"lengths":[53,2,66,58,1,1,23,10,21,46],"endsInNewline":true,"hasUnicodeOrTabs":false}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"lengths":[53,2,66,58,1,1,23,10,35],"endsInNewline":true,"hasUnicodeOrTabs":false}}
     ]
   },
   {
@@ -67,24 +65,15 @@
       {"id":0,"key":{"id":0,"key":"os"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"os"}}}},
       {"id":0,"key":{"id":0,"key":"imports.os"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"os"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"imports"}}}}}},
       {"id":0,"key":{"id":0,"key":"dataclasses"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"dataclasses"}}}},
-      {"id":0,"key":{"id":0,"key":"dataclasses.dataclass"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"dataclass"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"dataclasses"}}}}}},
-      {"id":0,"key":{"id":0,"key":"imports.dataclass"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"dataclass"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"imports"}}}}}},
       {"id":0,"key":{"id":0,"key":"dataclasses.field"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"field"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"dataclasses"}}}}}},
       {"id":0,"key":{"id":0,"key":"imports.f"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"f"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"imports"}}}}}},
-      {"id":0,"key":{"id":0,"key":"typing"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"typing"}}}},
       {"id":0,"key":{"id":0,"key":""},"value":{"id":0,"key":{"local_name":{"id":0,"key":""}}}}
-    ]
-  },
-  {
-    "predicate": "python.ImportStarLocation.4",
-    "facts": [
-      {"id":0,"key":{"import_star":{"id":0,"key":{"from_name":{"id":0,"key":"typing"},"into_module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":214,"length":20}}}
     ]
   },
   {
     "predicate": "python.DefinitionLocation.4",
     "facts": [
-      {"id":0,"key":{"definition":{"module":{"id":0,"key":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":0,"length":281}}}
+      {"id":0,"key":{"definition":{"module":{"id":0,"key":{"module":{"id":0,"key":{"name":{"id":0,"key":"imports"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"span":{"start":0,"length":249}}}
     ]
   },
   {
@@ -92,10 +81,8 @@
     "facts": [
       {"id":0,"key":{"target":{"id":0,"key":"itertools"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"spans":[{"start":188,"length":9}]}},
       {"id":0,"key":{"target":{"id":0,"key":"os"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"spans":[{"start":211,"length":2}]}},
-      {"id":0,"key":{"target":{"id":0,"key":"typing"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"spans":[{"start":214,"length":20}]}},
-      {"id":0,"key":{"target":{"id":0,"key":"dataclasses"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"spans":[{"start":240,"length":11}]}},
-      {"id":0,"key":{"target":{"id":0,"key":"dataclasses.dataclass"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"spans":[{"start":259,"length":9}]}},
-      {"id":0,"key":{"target":{"id":0,"key":"dataclasses.field"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"spans":[{"start":270,"length":5}]}}
+      {"id":0,"key":{"target":{"id":0,"key":"dataclasses"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"spans":[{"start":219,"length":11}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"dataclasses.field"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/imports.py"},"spans":[{"start":238,"length":5}]}}
     ]
   }
 ]

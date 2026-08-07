@@ -139,6 +139,29 @@ replace(f, z=3)  # E: Unexpected keyword argument `z`
 );
 
 testcase!(
+    test_copy_replace,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import copy
+from copy import replace
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class Foo:
+    x: int
+    y: str
+
+f = Foo(1, "a")
+
+assert_type(copy.replace(f, x=2), Foo)
+replace(f, y="b")
+copy.replace(f, x="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `x` with type `int` in function `Foo.__replace__`
+replace(f, z=3)  # E: Unexpected keyword argument `z`
+    "#,
+);
+
+testcase!(
     test_replace_initvar_default,
     r#"
 from dataclasses import dataclass, field, InitVar, replace
@@ -1227,6 +1250,21 @@ C(0, y="1")  # OK
 C(x=0, y="1")  # OK
 C(0, "1")  # E: Expected argument `y` to be passed by name
 assert_type(C.__match_args__, tuple[Literal["x"]])
+    "#,
+);
+
+testcase!(
+    test_duplicate_kw_only_sentinel,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+
+@dataclass
+class C:
+    x: int
+    first: KW_ONLY
+    y: str
+    second: KW_ONLY  # E: `second` is KW_ONLY, but KW_ONLY has already been specified
+    z: bytes
     "#,
 );
 
@@ -2454,7 +2492,6 @@ C(42)
 
 // https://github.com/facebook/pyrefly/issues/2923
 testcase!(
-    bug = "Should reject @dataclass applied to NamedTuple subclass",
     test_dataclass_on_named_tuple,
     r#"
 from dataclasses import dataclass
@@ -2464,13 +2501,12 @@ class Coord(NamedTuple):
     x: int
     y: int
 
-dataclass(Coord)
+dataclass(Coord)  # E: Cannot apply `@dataclass` to NamedTuple `Coord`
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2921
 testcase!(
-    bug = "Should reject @dataclass applied to Protocol subclass",
     test_dataclass_on_protocol,
     r#"
 from dataclasses import dataclass
@@ -2479,7 +2515,21 @@ from typing import Protocol
 class Printable(Protocol):
     def display(self) -> str: ...
 
-dataclass(Printable)
+dataclass(Printable)  # E: `@dataclass` cannot be applied to Protocol `Printable`
+"#,
+);
+
+testcase!(
+    test_dataclass_on_enum,
+    r#"
+from dataclasses import dataclass
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+dataclass(Color)  # E: Cannot apply `@dataclass` to Enum `Color`
 "#,
 );
 
@@ -2501,6 +2551,28 @@ class DC:
 
 class DC2(Protocol, DC):  # E: If `Protocol` is included as a base class, all other bases must be protocols
     y: int
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    test_dataclass_protocol_fields_in_subclass,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass
+class Base(Protocol):  # E: `@dataclass` cannot be applied to Protocol
+    x: int
+
+@dataclass
+class Child(Base):
+    y: str
+
+Base(0)  # E: Cannot instantiate `Base` because it is a protocol
+Child(x=0, y="ok")
+Child(0, "ok")
+Child("bad", "ok")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `Child.__init__`
 "#,
 );
 

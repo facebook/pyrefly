@@ -61,7 +61,10 @@ pub struct Context<'a, Lookup> {
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
+    pub legacy_overload_expansion: bool,
+    pub treat_all_caps_as_final: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
     /// Pysa context for building PysaSolutions during the Solutions step.
     pub pysa_context: Option<PysaContext<'a>>,
@@ -487,7 +490,9 @@ impl Step {
             ctx.infer_with_first_use,
             ctx.tensor_shapes,
             ctx.strict_callable_subtyping,
+            ctx.strict_partial_subtyping,
             ctx.spec_compliant_overloads,
+            ctx.legacy_overload_expansion,
         );
         let enable_index = ctx.require.keep_index();
         let enable_trace =
@@ -504,6 +509,7 @@ impl Step {
             ctx.check_unannotated_defs,
             ctx.require.keep_index(),
             ctx.infer_return_types,
+            ctx.treat_all_caps_as_final,
         );
         let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
         Arc::new((bindings, Arc::new(answers)))

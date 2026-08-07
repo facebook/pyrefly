@@ -13,6 +13,10 @@ use crate::test::util::TestEnv;
 use crate::test::util::testcase_for_macro;
 use crate::testcase;
 
+fn implicit_bool_env() -> TestEnv {
+    TestEnv::new().enable_implicit_bool_error()
+}
+
 testcase!(
     test_if_simple,
     r#"
@@ -366,7 +370,7 @@ except (ValueError, *EXTRA_ERRORS) as e:
 testcase!(
     test_exception_group_handler,
     r#"
-from typing import reveal_type
+from typing import assert_type, reveal_type
 
 class Exception1(Exception): pass
 class Exception2(Exception): pass
@@ -376,13 +380,13 @@ try:
 except* int as e1:  # E: Invalid exception class
     reveal_type(e1)  # E: revealed type: ExceptionGroup[int]
 except* Exception as e2:
-    reveal_type(e2)  # E: revealed type: ExceptionGroup
+    assert_type(e2, ExceptionGroup)
 except* ExceptionGroup as e3:  # E: Exception handler annotation in `except*` clause may not extend `BaseExceptionGroup`
-    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup]
+    assert_type(e3, ExceptionGroup[ExceptionGroup])
 except* (Exception1, Exception2) as e4:
-    reveal_type(e4)  # E: ExceptionGroup[Exception1 | Exception2]
+    assert_type(e4, ExceptionGroup[Exception1 | Exception2])
 except* Exception1 as e5:
-    reveal_type(e5)  # E: ExceptionGroup[Exception1]
+    assert_type(e5, ExceptionGroup[Exception1])
 "#,
 );
 
@@ -466,7 +470,7 @@ match y:
 testcase!(
     test_match_narrow_len,
     r#"
-from typing import assert_type, Never
+from typing import assert_type
 
 def foo(x: tuple[int, int] | tuple[str]):
     match x:
@@ -479,7 +483,7 @@ def foo(x: tuple[int, int] | tuple[str]):
             assert_type(x0, int)
             assert_type(x1, int)
     match x:
-        # these two cases should be impossible to match
+        # these two cases are impossible to match
         case [str(), str()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
             assert_type(x, tuple[int, int])
         case [int()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
@@ -656,7 +660,6 @@ def test(x: tuple[int, ...] | tuple[int, *tuple[int, ...], int] | tuple[int, int
 );
 
 testcase!(
-    bug = "we don't narrow attributes in a positional pattern",
     test_match_class_union,
     r#"
 from typing import assert_type, assert_never, Literal
@@ -673,17 +676,16 @@ class Bar:
 def test(x: Foo | Bar) -> None:
     match x:
         case Foo(1, "a"):
-            # we should narrow x.x and x.y to literals
             assert_type(x, Foo)
-            assert_type(x.x, int)
-            assert_type(x.y, str)
+            assert_type(x.x, Literal[1])
+            assert_type(x.y, Literal["a"])
         case Foo(x = 1, y = ""):
             assert_type(x, Foo)
             assert_type(x.x, Literal[1])
             assert_type(x.y, Literal[""])
         case Bar("bar"):
             assert_type(x, Bar)
-            assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
+            assert_type(x.x, Literal["bar"])
 
 def test_keyword_irrefutable(x: Foo | Bar) -> None:
     match x:
@@ -999,6 +1001,49 @@ while foo:  # E: Function object `foo` used as condition
 );
 
 testcase!(
+    test_implicit_bool,
+    implicit_bool_env(),
+    r#"
+from typing import Any
+
+def conditions(
+    optional_int: int | None,
+    items: list[int],
+    flag: bool,
+    dynamic: Any,
+) -> None:
+    if optional_int:  # E: Implicit conversion of `int | None` to `bool` is not allowed
+        ...
+    if not optional_int:  # E: Implicit conversion of `int | None` to `bool` is not allowed
+        ...
+    while items:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+        break
+    assert items  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+    [x for x in items if x]  # E: Implicit conversion of `int` to `bool` is not allowed
+    value = 1 if items else 0  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+    fallback = optional_int or 0  # E: Implicit conversion of `int | None` to `bool` is not allowed
+
+    if flag:
+        ...
+    if not flag:
+        ...
+    if bool(items):
+        ...
+    if dynamic:
+        ...
+    "#,
+);
+
+testcase!(
+    test_implicit_bool_disabled_by_default,
+    r#"
+def f(x: int | None) -> None:
+    if x:
+        ...
+    "#,
+);
+
+testcase!(
     test_redundant_condition_class,
     r#"
 class Foo:
@@ -1020,6 +1065,53 @@ if 42:  # E: Integer literal used as condition. It's equivalent to `True`
 while 0:  # E: Integer literal used as condition. It's equivalent to `False`
     ...
 [x for x in range(42) if 42]  # E: Integer literal used as condition
+    "#,
+);
+
+// A statically-falsy literal (`0`, `[]`) makes the guarded block unreachable, so no
+// diagnostic is reported on its condition; a truthy literal (`1`, `[1]`) keeps the block
+// reachable and therefore does report `implicit-bool`.
+testcase!(
+    test_implicit_bool_literal_conditions,
+    implicit_bool_env(),
+    r#"
+if 0:
+    ...
+if 1:  # E: Implicit conversion of `Literal[1]` to `bool` is not allowed # E: Integer literal used as condition
+    ...
+if []:
+    ...
+if [1]:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+    ...
+    "#,
+);
+
+// A chained comparison's overall type reflects the comparison operators' return types, so a
+// non-`bool` result (here `list[int]` from `__lt__`) is flagged when used as a condition.
+testcase!(
+    test_implicit_bool_chained_comparison,
+    implicit_bool_env(),
+    r#"
+class A:
+    def __lt__(self, other: "A") -> list[int]:
+        return []
+
+def f(a: A, b: A, c: A) -> None:
+    if a < b < c:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+        ...
+    "#,
+);
+
+// Match-case guards are truth-tested like `if`/`while` conditions, so a non-`bool` guard
+// is flagged.
+testcase!(
+    test_implicit_bool_match_guard,
+    implicit_bool_env(),
+    r#"
+def f(x: int, items: list[int]) -> None:
+    match x:
+        case _ if items:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+            ...
     "#,
 );
 
@@ -1047,32 +1139,49 @@ if E.A:  # E: Enum literal `E.A` used as condition
 while E.B:  # E: Enum literal `E.B` used as condition
     ...
 [x for x in range(42) if E.C]  # E: Enum literal `E.C` used as condition
+
+def f(e: E):
+    if e:  # E: Instance of `E` used as condition
+        pass
     "#,
 );
 
 testcase!(
     test_redundant_condition_instance_always_truthy,
     r#"
+from typing import final
+
+@final
 class NoBool:
     pass
 
+@final
 class HasBool:
     def __bool__(self) -> bool: ...
 
+@final
 class HasLen:
     def __len__(self) -> int: ...
 
-class InheritsHasBool(HasBool):
+class HasBoolExtendable:
+    def __bool__(self) -> bool: ...
+
+class HasLenExtendable:
+    def __len__(self) -> int: ...
+
+@final
+class InheritsHasBool(HasBoolExtendable):
     pass
 
-class InheritsHasLen(HasLen):
+@final
+class InheritsHasLen(HasLenExtendable):
     pass
 
 def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen) -> None:
     if x:  # E: Instance of `NoBool` used as condition
         ...
     while x:  # E: Instance of `NoBool` used as condition
-        ...
+        break
     [i for i in range(10) if x]  # E: Instance of `NoBool` used as condition
     if y:
         ...
@@ -1088,10 +1197,11 @@ def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen
 testcase!(
     test_redundant_condition_no_false_positives_for_abstract_types,
     r#"
-from typing import Hashable, Iterable
+from typing import Hashable, Iterable, final
 from collections.abc import Sized
 import abc
 
+@final
 class MyABC(abc.ABC):
     pass
 
@@ -1101,10 +1211,15 @@ class MyABC(abc.ABC):
 class MyMixedMeta(abc.ABCMeta):
     pass
 
+@final
 class WithMixedMeta(metaclass=MyMixedMeta):
     pass
 
-class WithMixedMetaSub(WithMixedMeta):
+class WithMixedMetaExtendable(metaclass=MyMixedMeta):
+    pass
+
+@final
+class WithMixedMetaSub(WithMixedMetaExtendable):
     pass
 
 def test(
@@ -1141,16 +1256,21 @@ testcase!(
 from dataclasses import dataclass
 from datetime import datetime
 import asyncio
+from typing import final
 
+@final
 class Descriptor:
     def __get__(self, obj, objtype=None) -> int: ...
 
+@final
 class HasGetattr:
     def __getattr__(self, name: str) -> object: ...
 
+@final
 class HasGetattribute:
     def __getattribute__(self, name: str) -> object: ...
 
+@final
 @dataclass
 class MyData:
     x: int
@@ -1189,6 +1309,18 @@ def test(
 );
 
 testcase!(
+    test_redundant_condition_not_redundant_for_nonfinal_class,
+    r#"
+class A:
+    pass
+def f(a: A):
+    # This condition is not redundant because `a` could be a falsy instance of a subclass of `A`
+    if a:
+        pass
+    "#,
+);
+
+testcase!(
     crash_no_try_type,
     r#"
 # Used to crash, https://github.com/facebook/pyrefly/issues/766
@@ -1202,7 +1334,7 @@ except as r: # E: Parse error: Expected one or more exception types
 testcase!(
     test_narrows_in_flow_merge_when_not_in_base_flow,
     r#"
-from typing import reveal_type
+from typing import assert_type
 class A: pass
 class B(A): pass
 class C(A): pass
@@ -1215,8 +1347,8 @@ def f():
     elif isinstance(x, C):
         assert isinstance(y, C)
         pass
-    reveal_type(x)  # E: revealed type: A
-    reveal_type(y)  # E: revealed type: A
+    assert_type(x, A)
+    assert_type(y, A)
 "#,
 );
 
@@ -1700,8 +1832,7 @@ def main() -> None:
 );
 
 testcase!(
-    bug =
-        "BoolOp laxness causes false negative for walrus in while short-circuit context, see #1251",
+    bug = "BoolOp laxness causes false negative for walrus in short-circuit context, see #1251",
     test_walrus_in_while_bool_op,
     r#"
 def cond() -> bool: ...
