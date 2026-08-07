@@ -329,6 +329,12 @@ impl FuncDefId {
     fn key_ord(&self) -> (ModuleName, ModulePath, FuncDefIndex) {
         self.key_eq()
     }
+
+    pub fn has_toplevel_qname(&self, module: &str, name: &str) -> bool {
+        self.qname.module_name().as_str() == module
+            && self.qname.parent().is_toplevel()
+            && self.qname.id().as_str() == name
+    }
 }
 
 /// A function identified nominally by its module, class, and name.
@@ -491,43 +497,40 @@ impl FunctionKind {
 
     pub fn from_definition(id: Arc<FuncDefId>) -> Self {
         let qname = &id.qname;
-        match (
-            qname.module_name().as_str(),
-            id.cls.as_ref(),
-            qname.id().as_str(),
-        ) {
-            ("builtins", None, "isinstance") => Self::IsInstance,
-            ("builtins", None, "issubclass") => Self::IsSubclass,
-            ("builtins", None, "len") => Self::Len,
-            ("builtins", None, "classmethod") => Self::ClassMethod,
-            ("dataclasses", None, "dataclass") => Self::Dataclass,
-            ("dataclasses", None, "field") => Self::DataclassField,
-            ("dataclasses", None, "replace") => Self::DataclassReplace,
-            ("copy", None, "replace") => Self::CopyReplace,
-            ("dataclasses", None, "asdict") => Self::DataclassAsdict,
-            ("attr" | "attrs", None, "fields") => Self::AttrsFields,
-            ("attr" | "attrs", None, "fields_dict") => Self::AttrsFieldsDict,
-            ("attr" | "attrs", None, "evolve") => Self::AttrsEvolve,
-            ("attr" | "attrs", None, "assoc") => Self::AttrsAssoc,
-            ("typing" | "typing_extensions", None, "overload") => Self::Overload,
-            ("typing" | "typing_extensions", None, "override") => Self::Override,
-            ("typing" | "typing_extensions", None, "cast") => Self::Cast,
-            ("typing" | "typing_extensions", None, "assert_type") => Self::AssertType,
-            ("shape_extensions", None, "assert_shape") => Self::AssertShape,
-            ("typing" | "typing_extensions", None, "reveal_type") => Self::RevealType,
-            ("typing" | "typing_extensions", None, "final") => Self::Final,
-            ("typing" | "typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
-            ("typing" | "typing_extensions", None, "dataclass_transform") => {
-                Self::DataclassTransform
-            }
-            ("abc", None, "abstractmethod") => Self::AbstractMethod,
-            ("typing" | "typing_extensions", None, "no_type_check") => Self::NoTypeCheck,
-            ("functools", None, "total_ordering") => Self::TotalOrdering,
-            ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
-            ("numba.core.decorators", None, "jit") => Self::NumbaJit,
-            ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
-            ("shape_extensions", None, "uses_shape_dsl") => Self::UsesShapeDsl,
-            ("shape_extensions", None, "defines_assert_shape") => Self::DefinesAssertShape,
+        if !qname.parent().is_toplevel() {
+            return Self::Def(id);
+        }
+        match (qname.module_name().as_str(), qname.id().as_str()) {
+            ("builtins", "isinstance") => Self::IsInstance,
+            ("builtins", "issubclass") => Self::IsSubclass,
+            ("builtins", "len") => Self::Len,
+            ("builtins", "classmethod") => Self::ClassMethod,
+            ("dataclasses", "dataclass") => Self::Dataclass,
+            ("dataclasses", "field") => Self::DataclassField,
+            ("dataclasses", "replace") => Self::DataclassReplace,
+            ("copy", "replace") => Self::CopyReplace,
+            ("dataclasses", "asdict") => Self::DataclassAsdict,
+            ("attr" | "attrs", "fields") => Self::AttrsFields,
+            ("attr" | "attrs", "fields_dict") => Self::AttrsFieldsDict,
+            ("attr" | "attrs", "evolve") => Self::AttrsEvolve,
+            ("attr" | "attrs", "assoc") => Self::AttrsAssoc,
+            ("typing" | "typing_extensions", "overload") => Self::Overload,
+            ("typing" | "typing_extensions", "override") => Self::Override,
+            ("typing" | "typing_extensions", "cast") => Self::Cast,
+            ("typing" | "typing_extensions", "assert_type") => Self::AssertType,
+            ("shape_extensions", "assert_shape") => Self::AssertShape,
+            ("typing" | "typing_extensions", "reveal_type") => Self::RevealType,
+            ("typing" | "typing_extensions", "final") => Self::Final,
+            ("typing" | "typing_extensions", "runtime_checkable") => Self::RuntimeCheckable,
+            ("typing" | "typing_extensions", "dataclass_transform") => Self::DataclassTransform,
+            ("abc", "abstractmethod") => Self::AbstractMethod,
+            ("typing" | "typing_extensions", "no_type_check") => Self::NoTypeCheck,
+            ("functools", "total_ordering") => Self::TotalOrdering,
+            ("typing" | "typing_extensions", "disjoint_base") => Self::DisjointBase,
+            ("numba.core.decorators", "jit") => Self::NumbaJit,
+            ("numba.core.decorators", "njit") => Self::NumbaNjit,
+            ("shape_extensions", "uses_shape_dsl") => Self::UsesShapeDsl,
+            ("shape_extensions", "defines_assert_shape") => Self::DefinesAssertShape,
             _ => Self::Def(id),
         }
     }

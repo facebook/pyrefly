@@ -2650,9 +2650,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             || matches!(
                 ty.callee_kind(),
                 Some(CalleeKind::Function(FunctionKind::Def(func)))
-                    if func.qname.module_name().as_str() == "builtins"
-                        && func.cls.is_none()
-                        && func.qname.id().as_str() == "enumerate"
+                    if func.has_toplevel_qname("builtins", "enumerate")
             );
         if !is_enumerate {
             return None;
