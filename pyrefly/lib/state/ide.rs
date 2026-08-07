@@ -383,7 +383,7 @@ pub(crate) fn insert_import_edit_with_forced_import_format(
     }
 }
 
-fn fallback_import_insertion_point(ast: &ModModule) -> TextSize {
+pub(crate) fn fallback_import_insertion_point(ast: &ModModule) -> TextSize {
     ast.body
         .iter()
         .skip_while(|stmt| is_docstring_stmt(stmt))
