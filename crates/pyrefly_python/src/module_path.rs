@@ -309,6 +309,21 @@ impl ModulePath {
     pub fn details(&self) -> &ModulePathDetails {
         &self.0
     }
+
+    /// Whether this module is first-party user code eligible for IDE indexing.
+    /// Excludes bundled typeshed/third-party stubs and site-packages libraries.
+    pub fn is_first_party_for_indexing(&self) -> bool {
+        match &self.0 {
+            ModulePathDetails::BundledTypeshed(_)
+            | ModulePathDetails::BundledTypeshedThirdParty(_)
+            | ModulePathDetails::BundledThirdParty(_) => false,
+            ModulePathDetails::FileSystem(path)
+            | ModulePathDetails::Memory(path)
+            | ModulePathDetails::Namespace(path) => {
+                !path.to_string_lossy().contains("site-packages")
+            }
+        }
+    }
 }
 
 #[cfg(test)]

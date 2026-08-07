@@ -2879,25 +2879,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
     }
 
-    /// Check if a module path should be skipped for indexing purposes.
-    /// Skips typeshed (bundled stdlib and third-party stubs) and site-packages (external libraries).
-    fn should_skip_module_for_indexing(
-        module_path: &pyrefly_python::module_path::ModulePath,
-    ) -> bool {
-        use pyrefly_python::module_path::ModulePathDetails;
-        match module_path.details() {
-            ModulePathDetails::BundledTypeshed(_)
-            | ModulePathDetails::BundledTypeshedThirdParty(_)
-            | ModulePathDetails::BundledThirdParty(_) => true,
-            ModulePathDetails::FileSystem(path)
-            | ModulePathDetails::Memory(path)
-            | ModulePathDetails::Namespace(path) => {
-                // Skip site-packages
-                path.to_string_lossy().contains("site-packages")
-            }
-        }
-    }
-
     /// Populate parent methods map for find-references on reimplementations.
     /// This is done once per class before checking individual fields.
     /// Uses MRO to walk ALL ancestors (not just direct bases).
@@ -2908,7 +2889,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         class_field_map: &SmallMap<Name, Arc<ClassField>>,
     ) {
-        if Self::should_skip_module_for_indexing(cls.module().path()) {
+        if !cls.module().path().is_first_party_for_indexing() {
             return;
         }
 
@@ -2940,7 +2921,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ancestor_fields.and_then(|f| f.field_decl_range(field_name))
                     {
                         let ancestor_module_path = ancestor.class_object().module().path();
-                        if !Self::should_skip_module_for_indexing(ancestor_module_path) {
+                        if ancestor_module_path.is_first_party_for_indexing() {
                             self.current().add_parent_method_mapping(
                                 child_range,
                                 ancestor_module_path.dupe(),
