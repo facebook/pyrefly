@@ -83,6 +83,51 @@ test(C())
 );
 
 testcase!(
+    test_any_bound_attribute_access,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+class Concrete: ...
+
+def pep695_bound[T: Any](arg: T) -> T:
+    assert_type(arg.method(), Any)
+    return arg
+
+LegacyT = TypeVar("LegacyT", bound=Any)
+def legacy_bound(arg: LegacyT) -> LegacyT:
+    assert_type(arg.method(), Any)
+    return arg
+
+assert_type(pep695_bound(Concrete()), Concrete)
+assert_type(legacy_bound(Concrete()), Concrete)
+
+class Base:
+    def method(self) -> int: ...
+    @classmethod
+    def class_method(cls) -> int: ...
+class Inherited(Base): ...
+
+def union_bound[T: Any | Inherited](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    arg.missing()  # E: Object of class `Inherited` has no attribute `missing`
+    return arg
+
+def constrained[T: (Any, Inherited)](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    return arg
+
+def class_bound[T: Any](arg: type[T]) -> type[T]:
+    assert_type(arg.__name__, str)
+    assert_type(arg.class_method(), Any)
+    return arg
+
+def class_constrained[T: (Any, Inherited)](arg: type[T]) -> type[T]:
+    arg.class_method()
+    return arg
+ "#,
+);
+
+testcase!(
     test_base_class_bound,
     r#"
 class A: pass
@@ -341,7 +386,7 @@ from typing import Self, TypeVar
 
 class B():
     def f(self) -> Self:
-        return self 
+        return self
 class C(B):
     pass
 class D(B):
@@ -1167,8 +1212,6 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug =
-        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1189,22 +1232,21 @@ class Bar(Generic[T]):
 
 # Nested class using outer class's TypeVar
 class Outer(Generic[T]):
-    class Bad(Iterable[T]):  # should error: T from outer not in scope
+    class Bad(Iterable[T]):  # E: Type variable `T` is not in scope
         ...
     class AlsoBad:
-        x: list[T]  # should error: T from outer not in scope
+        x: list[T]  # E: Type variable `T` is not in scope
 
-    alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
+    alias: TypeAlias = list[T]  # E: Type variable `T` is not in scope
 
 # Unbound TypeVars at global scope
 global_var1: T  # E: Type variable `T` is not in scope
 global_var2: list[T] = []  # E: Type variable `T` is not in scope
-list[T]()  # should error
+list[T]()  # E: Type variable `T` is not in scope
 "#,
 );
 
 testcase!(
-    bug = "Follow-on errors on TypeVar usages inside nested class that shadows outer TypeVars",
     test_nested_class_independent_typevar_adoption,
     r#"
 from typing import Generic, Type, TypeVar
@@ -1215,15 +1257,95 @@ _Serialized = TypeVar("_Serialized")
 class CustomCoercer(Generic[_Deserialized, _Serialized]):
     # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
     class CoercerMapping(
-        dict[
-            Type[_Deserialized],  # should error: _Deserialized already bound by CustomCoercer
-            Type["CustomCoercer[_Deserialized, _Serialized]"],  # should error: both TypeVars
+        dict[  # E: Type variable `_Deserialized` is not in scope  # E: Type variable `_Serialized` is not in scope
+            Type[_Deserialized],
+            Type["CustomCoercer[_Deserialized, _Serialized]"],
         ]
     ):
+        # A method signature may bind the TypeVars as its own type parameters.
         def __getitem__(
             self,
             key: type[_Deserialized],
         ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
+"#,
+);
+
+testcase!(
+    test_nested_class_outer_legacy_tparam_out_of_scope,
+    r#"
+from typing import Generic, TypeVar
+from collections.abc import Iterable
+
+T = TypeVar("T")
+S = TypeVar("S")
+
+class Outer(Generic[T]):
+    # A method of the enclosing class may use its type parameter.
+    def m(self, x: T) -> T:
+        return x
+
+    # A nested class does not inherit the enclosing class's type parameters, so `T` is out of
+    # scope in its base list and its body.
+    class Bad(Iterable[T]):  # E: Type variable `T` is not in scope
+        ...
+
+    class AlsoBad:
+        x: list[T]  # E: Type variable `T` is not in scope
+
+        # A method signature may still bind `T` as its own type parameter.
+        def method(self, y: T) -> None:
+            ...
+
+    # A nested class may still introduce its own, independent type parameter.
+    class Inner(Iterable[S]):
+        ...
+"#,
+);
+
+testcase!(
+    test_type_alias_cannot_capture_enclosing_tparam,
+    r#"
+from typing import Generic, TypeVar, TypeAlias
+
+T = TypeVar("T")
+
+# A generic type alias at module scope is fine; the free TypeVar parametrizes the alias.
+ModuleAlias: TypeAlias = list[T]  # OK
+
+class Outer(Generic[T]):
+    # A type alias defined in a class body may not capture the class's type parameter.
+    explicit: TypeAlias = list[T]  # E: Type variable `T` is not in scope
+    implicit = dict[str, T]  # E: Type variable `T` is not in scope
+
+    # A method may still use the class's type parameter.
+    def m(self, x: T) -> T:
+        return x
+"#,
+);
+
+testcase!(
+    test_out_of_scope_typevar_in_expression,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+# Instantiating a generic subscripted with an out-of-scope TypeVar is an error.
+list[T]()  # E: Type variable `T` is not in scope
+
+# But a TypeVar may appear as a value (it is a runtime object), and a subscripted generic
+# may be used as an implicit type alias.
+x = T  # OK
+alias = list[T]  # OK
+
+def f(a: T) -> T:
+    # Inside a generic function the TypeVar is in scope.
+    b = list[T]()  # OK
+    return a
+
+class C(Generic[T]):
+    def m(self) -> None:
+        list[T]()  # OK: T is in scope in a method of the generic class
 "#,
 );
 

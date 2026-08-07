@@ -176,6 +176,34 @@ def test() -> None:
 "#,
 );
 
+// SCC restarts must not retain protocol results computed from recursive Answer fallbacks.
+testcase!(
+    test_protocol_cache_ignores_answers_scc,
+    r#"
+from __future__ import annotations
+
+from typing import Any, Generic, Protocol, Self, TypeVar
+
+P = TypeVar("P", bound="ProtoWithFactory")
+
+class ProtoWithFactory(Protocol):
+    @property
+    def factory(self) -> Factory[Self]: ...
+    @factory.setter
+    def factory(self, value: Any) -> None: ...
+
+class Factory(Generic[P]): ...
+
+class Base:
+    factory: Factory[Base]
+
+class Child(Base):
+    factory: Factory[Child]  # type: ignore
+
+class ChildFactory(Factory[Child]): ...
+"#,
+);
+
 // Soundness test for typed_dict_cache with coinductive assumptions.
 //
 // Similar to test_protocol_coinductive_cache_soundness, but the stale cache

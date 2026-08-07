@@ -220,7 +220,7 @@ from typing import Any, Generic, TypeVar, assert_type
 T = TypeVar('T')
 class A(Generic[T]):
     x: T
-def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A[T]`
     assert_type(a.x, Any)
     "#,
 );
@@ -235,7 +235,7 @@ U = TypeVar('U', default=int)
 class A(Generic[T, U]):
     x: T
     y: U
-def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A[T, U]`
     assert_type(a.x, Any)
     assert_type(a.y, int)
     "#,
@@ -289,6 +289,16 @@ from typing import TypeVar, ParamSpec, TypeVarTuple
 T = TypeVar(name = "T")
 P = ParamSpec(name = "P")
 Ts = TypeVarTuple(name = "Ts")
+    "#,
+);
+
+testcase!(
+    test_tvar_bare_call,
+    r#"
+from typing import TypeVar, ParamSpec, TypeVarTuple
+TypeVar("T")  # E: TypeVar must be assigned to a variable
+ParamSpec("P")  # E: ParamSpec must be assigned to a variable
+TypeVarTuple("Ts")  # E: TypeVarTuple must be assigned to a variable
     "#,
 );
 
@@ -596,6 +606,19 @@ def append(x: C[T], y: T):
     pass
 v: C[int] = C()
 append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
+"#,
+);
+
+testcase!(
+    test_legacy_typevar_complex_forward_ref_ranges,
+    TestEnv::one("lib", "from typing import Literal"),
+    r#"
+import lib
+
+class C:
+    def f(self, x: "lib.Literal['\\n']"): ...
+    def g(self, x: "lib.Literal['\\r']"): ...
+    def h(self, x: "tuple[lib.Literal['\\n'], lib.Literal['\\r']]"): ...
 "#,
 );
 
@@ -923,7 +946,6 @@ class A:
 );
 
 testcase!(
-    bug = "We currently create separate narrows for modules that may contain legacy type variables, we need to merge them",
     test_multiple_possible_legacy_tparams,
     TestEnv::one(
         "foo",
@@ -933,22 +955,75 @@ testcase!(
 from typing import Generic, assert_type
 import foo
 
-# Here, the `foo.C` possible-legacy-tparam binding is the one that winds up in scope, we
-# lose track of the `foo.T` one. It probably doesn't matter very much since we at least
-# understand the signature correctly.
+# `foo.T` and `foo.C` are both hosted on the `foo` module and collapse onto a single
+# base-name scope entry. We narrow `foo` at every hosted legacy type parameter's facet
+# (not just the last one added), so references to each resolve to the right Quantified.
 def f(x: foo.T, y: foo.C) -> foo.T:
-    z: foo.T = x  # E: Type variable `T` is not in scope  # E: `T` is not assignable to `TypeVar[T]`
-    return z  # E: Returned type `TypeVar[T]` is not assignable to declared return type `T
+    z: foo.T = x
+    return z
 assert_type(f(1, foo.C()), int)
 
-# The same thing happens here, but it's a much bigger problem because now we forget
-# about the type variable identity for the entire class body, so the signatures come out
-# wrong.
 class MyList(Generic[foo.T], list[tuple[foo.C, foo.T]]):
-    def my_append(self, c: foo.C, t: foo.T):  # E: Type variable `T` is not in scope
-        self.append((c, t))  # E: Argument `tuple[C, TypeVar[T]]` is not assignable to parameter `object` with type `tuple[C, T]` in function `list.append`
+    def my_append(self, c: foo.C, t: foo.T):
+        self.append((c, t))
 my_list: MyList[int] = MyList()
-my_list.my_append(foo.C(), 5)  # E: Argument `Literal[5]` is not assignable to parameter `t` with type `TypeVar[T]` in function `MyList.my_append`
+my_list.my_append(foo.C(), 5)
+    "#,
+);
+
+// Each hosted legacy tparam is reported at its own range, not all at the range of the last one.
+testcase!(
+    test_multiple_possible_legacy_tparams_with_scoped_tparams,
+    TestEnv::one(
+        "foo",
+        "from typing import TypeVar\nT = TypeVar('T')\nS = TypeVar('S')"
+    ),
+    r#"
+import foo
+
+def f[X](
+    a: X,
+    b: foo.T,  # E: Type parameter T is not included in the type parameter list
+    c: foo.S,  # E: Type parameter S is not included in the type parameter list
+) -> None: ...
+    "#,
+);
+
+fn env_with_paramspec_host() -> TestEnv {
+    // `defs` is a source module hosting a legacy ParamSpec and TypeVar; `lib` is a stub whose
+    // generic class is parameterized by those imported legacy type variables and exposes a
+    // ParamSpec-forwarding attribute. This mirrors how modal's stubs are laid out.
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "defs",
+        "defs.py",
+        "from typing import ParamSpec, TypeVar\nP = ParamSpec('P')\nR = TypeVar('R')",
+    );
+    env.add_with_path(
+        "lib",
+        "lib.pyi",
+        "from typing import Generic, ParamSpec, Protocol, TypeVar\n\
+         import defs\n\
+         P2 = ParamSpec('P2')\n\
+         R2 = TypeVar('R2', covariant=True)\n\
+         class _Spec(Protocol[P2, R2]):\n\
+         \x20   def __call__(self, *args: P2.args, **kwargs: P2.kwargs) -> R2: ...\n\
+         class C(Generic[defs.P, defs.R]):\n\
+         \x20   call: _Spec[defs.P, defs.R]\n",
+    );
+    env
+}
+
+// A ParamSpec hosted alongside another legacy type variable must retain its module facet narrow.
+testcase!(
+    test_module_hosted_paramspec_tparam,
+    env_with_paramspec_host(),
+    r#"
+from lib import C
+
+def use(x: C[[str, int], bytes]) -> None:
+    x.call("hello", 3)
+    x.call(123, "wrong")  # E: Argument `Literal[123]` is not assignable to parameter with type `str`  # E: Argument `Literal['wrong']` is not assignable to parameter with type `int`
     "#,
 );
 

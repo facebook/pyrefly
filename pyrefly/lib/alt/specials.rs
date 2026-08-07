@@ -424,11 +424,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.heap
                         .mk_type_of(self.heap.mk_callable_ellipsis(self.heap.mk_any_error()))
                 };
-                let ret = self.expr_untype(
-                    &arguments[1],
-                    TypeFormContext::TypeArgumentCallableReturn,
-                    errors,
-                );
+                let ret = if let Expr::EllipsisLiteral(_) = &arguments[1] {
+                    self.error(
+                        errors,
+                        arguments[1].range(),
+                        ErrorKind::InvalidAnnotation,
+                        "`...` is not a valid return type".to_owned(),
+                    );
+                    self.heap.mk_any_error()
+                } else {
+                    self.expr_untype(
+                        &arguments[1],
+                        TypeFormContext::TypeArgumentCallableReturn,
+                        errors,
+                    )
+                };
                 match &arguments[0] {
                     Expr::List(ExprList { elts, .. }) => {
                         match self.check_args_and_construct_tuple(elts, errors) {

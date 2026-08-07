@@ -53,6 +53,11 @@ bad-return = true
 missing-import = "warn"
 invalid-argument = "error"
 
+# Coverage command include/exclude overrides
+[coverage]
+includes = ["src/**"]
+excludes = ["src/vendored/**"]
+
 # SubConfig example 1: Test files
 [[sub-config]]
 matches = "**/tests/**"

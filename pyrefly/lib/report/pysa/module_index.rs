@@ -9,9 +9,9 @@ use std::collections::HashMap;
 
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FuncDefIndex;
-use pyrefly_types::callable::FunctionKind;
-use pyrefly_types::callable::PropertyRole;
+use pyrefly_types::function::FuncDefIndex;
+use pyrefly_types::function::FunctionKind;
+use pyrefly_types::function::PropertyRole;
 use pyrefly_types::types::Type;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -98,7 +98,7 @@ fn decorator_matches_graphql_ref(ty: &Type, graphql_ref: &GraphQLDecoratorRef) -
         _ => None,
     };
     match func_metadata {
-        Some(pyrefly_types::callable::FuncMetadata {
+        Some(pyrefly_types::function::FuncMetadata {
             kind: FunctionKind::Def(func_id),
             ..
         }) => graphql_ref.matches_decorator_id(func_id.module.name(), &func_id.name),

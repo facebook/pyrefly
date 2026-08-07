@@ -137,7 +137,7 @@ append(v, "test")
 testcase!(
     test_call_hint_does_not_override_arg,
     r#"
-from typing import Any, reveal_type
+from typing import Any, assert_type
 
 class Map[K, V]:
     def set(self, key: K, value: V) -> None: ...
@@ -145,11 +145,11 @@ class Map[K, V]:
 
 d_any: Map[str, Any] = Map()
 
-reveal_type(d_any.get("key", None))  # E: revealed type: Any | None
-result: str = reveal_type(d_any.get("key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+assert_type(d_any.get("key", None), Any | None)
+result: str = assert_type(d_any.get("key", None), Any | None)  # E: `Any | None` is not assignable to `str`
 
 def get[V, T](x: Map[str, V], key: Any, default: T, /) -> V | T: ...
-result2: str = reveal_type(get(d_any, "key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+result2: str = assert_type(get(d_any, "key", None), Any | None)  # E: `Any | None` is not assignable to `str`
 "#,
 );
 
@@ -187,9 +187,9 @@ testcase!(
     r#"
 class C[T]: pass
 
-x: C        # E: Cannot determine the type parameter `T` for generic class `C`
-y: C | int  # E: Cannot determine the type parameter `T` for generic class `C`
-z: list[C]  # E: Cannot determine the type parameter `T` for generic class `C`
+x: C        # E: Cannot determine the type parameter `T` for generic class `C[T]`
+y: C | int  # E: Cannot determine the type parameter `T` for generic class `C[T]`
+z: list[C]  # E: Cannot determine the type parameter `T` for generic class `C[T]`
     "#,
 );
 
@@ -198,7 +198,7 @@ testcase!(
     TestEnv::new().enable_implicit_any_error(),
     r#"
 class C[T]: pass
-class D(C): pass  # E: Cannot determine the type parameter `T` for generic class `C`
+class D(C): pass  # E: Cannot determine the type parameter `T` for generic class `C[T]`
 x: D
     "#,
 );
@@ -635,7 +635,7 @@ testcase!(
 from typing import Callable, Type
 
 def f(
-    x: list,      # E: Cannot determine the type parameter `_T` for generic class `list`
+    x: list,      # E: Cannot determine the type parameter `_T` for generic class `list[_T]`
     y: tuple,     # E: Cannot determine the type parameter for generic class `tuple`
     z: Callable,  # E: Cannot determine the type parameter for generic class `Callable`
     w: Type,      # E: Cannot determine the type parameter for generic class `type`
@@ -702,6 +702,33 @@ assert_type(good(Sub), Sub)
 # T | type[T] should also work — pyrefly should check the type[T] branch
 def bad(x: T | type[T]) -> T: ...
 assert_type(bad(Sub), Sub)
+"#,
+);
+
+testcase!(
+    test_typevar_union_with_type_of_specialized_generic_alias,
+    r#"
+from typing import Generic, Protocol, TypeVar, assert_type, overload
+
+class NBit: ...
+class Bit32(NBit): ...
+class GenericBase: ...
+class SignedInteger[TBit: NBit](GenericBase): ...
+class DType[T: GenericBase]: ...
+class HasDType[T: DType](Protocol):
+    @property
+    def dtype(self) -> T: ...
+
+type DTypeLike[T: GenericBase] = type[T] | DType[T] | HasDType[DType[T]]
+
+@overload
+def array[T: GenericBase](x: object, dtype: DTypeLike[T]) -> list[T]: ...
+@overload
+def array(x: object, dtype: object = ...) -> list[object]: ...
+def array(x: object, dtype: object = None) -> object: ...
+
+Int32 = SignedInteger[Bit32]
+assert_type(array([1], Int32), list[SignedInteger[Bit32]])
 "#,
 );
 
@@ -811,6 +838,15 @@ class A[T]:
 
 assert_type(A(0).f(""), A[int | str])
 "#,
+);
+
+testcase!(
+    test_mapping_of_typevar,
+    r#"
+from typing import assert_type, Mapping
+def f[T](x: T, y: Mapping[str, T]) -> T: ...
+assert_type(f(0, {"x": "y"}), int | str)
+    "#,
 );
 
 testcase!(
