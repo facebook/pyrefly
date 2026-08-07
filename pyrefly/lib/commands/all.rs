@@ -110,7 +110,10 @@ impl Command {
                 args.run(version, config_configurer_wrapper.clone(), thread_count)?,
                 None,
             )),
-            Command::Infer(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
+            Command::Infer(args) => Ok((
+                args.run(version, config_configurer_wrapper, thread_count)?,
+                None,
+            )),
             Command::DumpConfig(args) => Ok((args.run(config_configurer_wrapper)?, None)),
             Command::Coverage { command } => Ok((
                 command.run(version, config_configurer_wrapper, thread_count)?,
