@@ -366,7 +366,7 @@ impl<'a> Transaction<'a> {
             while let Some(ty) = stack.pop() {
                 match ty {
                     Type::TypedDict(td) | Type::PartialTypedDict(td) => {
-                        for (name, field) in solver.type_order().typed_dict_fields(&td) {
+                        for (name, field) in solver.type_order().typed_dict_fields(&td).iter() {
                             map.entry(name.to_string())
                                 .or_insert_with(|| field.ty.clone());
                         }

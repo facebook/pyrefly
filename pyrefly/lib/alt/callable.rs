@@ -839,8 +839,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // We want to work mostly with references, but some things are taken from elsewhere,
         // so have some owners to capture them.
         let param_list_owner = Owner::new();
-        let name_owner = Owner::new();
         let type_owner = Owner::new();
+        let fields_owner = Owner::new();
 
         let error = |errors, range, kind, msg: String| {
             self.error_with_context(
@@ -1227,22 +1227,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     kwparams.insert(name, (ty, NameOrigin::Param, required));
                 }
                 Param::Kwargs(name, ty) if let Some(typed_dict) = ty.unpacked_typed_dict() => {
-                    self.typed_dict_fields(typed_dict).into_iter().for_each(
-                        |(field_name, field)| {
-                            kwparams.insert(
-                                name_owner.push(field_name),
-                                (
-                                    type_owner.push(field.ty),
-                                    NameOrigin::UnpackedKwargs(name.as_ref()),
-                                    if field.required {
-                                        &Required::Required
-                                    } else {
-                                        &Required::Optional(None)
-                                    },
-                                ),
-                            );
-                        },
-                    );
+                    for (field_name, field) in
+                        fields_owner.push(self.typed_dict_fields(typed_dict)).iter()
+                    {
+                        kwparams.insert(
+                            field_name,
+                            (
+                                &field.ty,
+                                NameOrigin::UnpackedKwargs(name.as_ref()),
+                                if field.required {
+                                    &Required::Required
+                                } else {
+                                    &Required::Optional(None)
+                                },
+                            ),
+                        );
+                    }
                     if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict) {
                         kwargs = Some((name.as_ref(), Some(type_owner.push(extra.ty))))
                     } else {
@@ -1296,8 +1296,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ),
                             );
                         }
-                        for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
-                            let name = name_owner.push(name);
+                        for (name, field) in fields_owner
+                            .push(self.typed_dict_fields(&typed_dict))
+                            .iter()
+                        {
                             let mut hint = kwargs.as_ref().and_then(|(_, ty)| *ty);
                             if let Some((ty, _, definitely_seen)) = seen_names.get(name) {
                                 // For Required fields, the conflict is guaranteed, so report

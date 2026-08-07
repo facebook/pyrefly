@@ -927,7 +927,7 @@ impl ClassField {
         }
     }
 
-    pub fn as_typed_dict_field_info(self, required_by_default: bool) -> Option<TypedDictField> {
+    pub fn as_typed_dict_field_info(&self, required_by_default: bool) -> Option<TypedDictField> {
         match &self.0 {
             ClassFieldInner::ClassAttribute {
                 annotation:
@@ -3693,7 +3693,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         metadata
             .typed_dict_metadata()
             .and_then(|typed_dict| typed_dict.fields.get(field_name))
-            .and_then(|is_total| field.clone().as_typed_dict_field_info(*is_total))
+            .and_then(|is_total| field.as_typed_dict_field_info(*is_total))
     }
 
     fn validate_typed_dict_field_override(

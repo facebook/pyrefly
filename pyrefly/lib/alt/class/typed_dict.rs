@@ -61,6 +61,16 @@ use crate::types::types::OverloadType;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
+/// Why a single TypedDict field did or did not materialize. The failure modes differ
+/// only in whether `typed_dict_fields` is allowed to cache the map it built.
+enum FieldOutcome {
+    Field(TypedDictField),
+    /// The member cannot be a field (property, descriptor, no annotation).
+    PermanentlyAbsent,
+    /// Failed for a reason a later call may not hit, such as a stale class mid-update.
+    TransientFailure,
+}
+
 const CLEAR_METHOD: Name = Name::new_static("clear");
 const GET_METHOD: Name = Name::new_static("get");
 const POP_METHOD: Name = Name::new_static("pop");
@@ -207,7 +217,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
         // You can update a TypedDict with a subset of its items. Otherwise, all required fields must be present.
         if !has_expansion && !is_update {
-            for (key, field) in &fields {
+            for (key, field) in fields.iter() {
                 if field.required && !keys.contains(key) {
                     self.error(
                         check_errors,
@@ -242,54 +252,96 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn instantiate_typed_dict_field(
+    /// Instantiates one field, classifying failure so the caller knows whether a map
+    /// missing this field is still cacheable.
+    fn try_instantiate_typed_dict_field(
         &self,
         typed_dict: &TypedDictInner,
         name: &Name,
         is_total: bool,
-    ) -> Option<TypedDictField> {
-        let member = self.get_non_synthesized_class_member(typed_dict.class_object(), name)?;
-        let instantiated_ty = self.instantiate_typed_dict_field_type(typed_dict, name, &member)?;
-        let mut typed_dict_field =
-            Arc::unwrap_or_clone(member).as_typed_dict_field_info(is_total)?;
-        typed_dict_field.ty = instantiated_ty;
-        Some(typed_dict_field)
+    ) -> FieldOutcome {
+        let Some(member) = self.get_non_synthesized_class_member(typed_dict.class_object(), name)
+        else {
+            // Absent member and stale class both arrive as `None`, so assume the transient
+            // case: under-caching is cheap, whereas over-caching loses a real field.
+            return FieldOutcome::TransientFailure;
+        };
+
+        // Permanent: resolves to a `NoAccess`, `Property` or `Descriptor` attribute.
+        let Some(instantiated_ty) =
+            self.instantiate_typed_dict_field_type(typed_dict, name, &member)
+        else {
+            return FieldOutcome::PermanentlyAbsent;
+        };
+
+        // Also permanent: unannotated fields/classmethods/staticmethods have no field info.
+        match member.as_typed_dict_field_info(is_total) {
+            Some(mut field) => {
+                field.ty = instantiated_ty;
+                FieldOutcome::Field(field)
+            }
+            None => FieldOutcome::PermanentlyAbsent,
+        }
     }
 
-    pub fn typed_dict_fields(&self, typed_dict: &TypedDict) -> SmallMap<Name, TypedDictField> {
-        match typed_dict {
-            TypedDict::TypedDict(inner) => {
-                let class = inner.class_object();
-                let metadata = self.get_metadata_for_class(class);
-                match metadata.typed_dict_metadata() {
-                    None => {
-                        // This may happen during incremental update where `class` is stale/outdated
-                        SmallMap::new()
-                    }
-                    Some(typed_dict_metadata) => typed_dict_metadata
-                        .fields
-                        .iter()
-                        .filter_map(|(name, is_total)| {
-                            self.instantiate_typed_dict_field(inner, name, *is_total)
-                                .map(|field| (name.clone(), field))
-                        })
-                        .collect(),
-                }
+    /// Instantiated fields for `typed_dict`, shared via `Arc` so repeat calls do not re-clone
+    /// every field type. Caching an incomplete map would make a transient failure permanent.
+    pub fn typed_dict_fields(&self, typed_dict: &TypedDict) -> Arc<SmallMap<Name, TypedDictField>> {
+        // Anonymous TypedDicts have all fields in hand, and nothing to key a cache on.
+        let inner = match typed_dict {
+            TypedDict::TypedDict(inner) => inner,
+            TypedDict::Anonymous(inner) => {
+                return Arc::new(inner.fields.iter().cloned().collect());
             }
-            TypedDict::Anonymous(inner) => inner.fields.iter().cloned().collect(),
+        };
+        let cacheable = typed_dict.is_context_independent();
+        if cacheable && let Some(hit) = self.solver().check_typed_dict_fields_cache(typed_dict) {
+            return hit;
         }
+        let metadata = self.get_metadata_for_class(inner.class_object());
+        // Absent during an incremental update where the class is stale.
+        let Some(typed_dict_metadata) = metadata.typed_dict_metadata() else {
+            return Arc::new(SmallMap::new());
+        };
+        let mut map = SmallMap::new();
+        let mut complete = true;
+        for (name, is_total) in &typed_dict_metadata.fields {
+            match self.try_instantiate_typed_dict_field(inner, name, *is_total) {
+                FieldOutcome::Field(field) => {
+                    map.insert(name.clone(), field);
+                }
+                FieldOutcome::PermanentlyAbsent => {}
+                FieldOutcome::TransientFailure => complete = false,
+            }
+        }
+        let fields = Arc::new(map);
+        if cacheable && complete {
+            self.solver()
+                .store_typed_dict_fields_cache(typed_dict, &fields, self.type_order());
+        }
+        fields
     }
 
     pub fn typed_dict_field(&self, typed_dict: &TypedDict, name: &Name) -> Option<TypedDictField> {
         match typed_dict {
             TypedDict::TypedDict(inner) => {
-                let class = inner.class_object();
-                let metadata = self.get_metadata_for_class(class);
+                // A cached map is complete, so an absent name is genuinely not a field. Never
+                // build one here: that costs more than the single lookup it would answer.
+                if typed_dict.is_context_independent()
+                    && let Some(fields) = self.solver().check_typed_dict_fields_cache(typed_dict)
+                {
+                    return fields.get(name).cloned();
+                }
+                let metadata = self.get_metadata_for_class(inner.class_object());
                 metadata
                     .typed_dict_metadata()
                     .and_then(|typed_dict_metadata| {
                         typed_dict_metadata.fields.get(name).and_then(|is_total| {
-                            self.instantiate_typed_dict_field(inner, name, *is_total)
+                            match self.try_instantiate_typed_dict_field(inner, name, *is_total) {
+                                FieldOutcome::Field(field) => Some(field),
+                                FieldOutcome::PermanentlyAbsent
+                                | FieldOutcome::TransientFailure => None,
+                            }
                         })
                     })
             }
@@ -308,13 +360,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &'b Class,
         fields: &'b SmallMap<Name, bool>,
     ) -> impl Iterator<Item = (&'b Name, TypedDictField)> + 'b {
+        // Unlike `typed_dict_fields`, this does not substitute type arguments: callers synthesize
+        // methods on the class itself, where there is no `TypedDictInner` to instantiate against.
         // TODO(stroxler): Look into whether we can re-wire the code so that it is not possible to
         // have the typed dict think a field exists that cannot be converted to a `TypedDictField`
-        // (this can happen for any unannotated field - e.g. a classmethod or staticmethod).
+        // (see `FieldOutcome::PermanentlyAbsent`).
         fields.iter().filter_map(|(name, is_total)| {
             self.get_non_synthesized_class_member(cls, name)
                 .and_then(|member| {
-                    Arc::unwrap_or_clone(member)
+                    member
                         .as_typed_dict_field_info(*is_total)
                         .map(|field| (name, field))
                 })
@@ -998,14 +1052,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
 
-        let annotation = match annotation {
+        let mut annotation = match annotation {
             None => {
                 return ClassField::invalid_typed_dict_field(self.heap);
             }
             Some(idx) => self.get_idx(*idx).annotation.clone(),
         };
 
-        for q in &[Qualifier::Final, Qualifier::ClassVar] {
+        for q in &[Qualifier::Final, Qualifier::ClassVar, Qualifier::InitVar] {
             if annotation.has_qualifier(q) {
                 self.error(
                     errors,
@@ -1015,6 +1069,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
+        // Unlike the other rejected qualifiers, `InitVar` also hides the member from the MRO walk
+        // (see `ClassField::is_init_var`), so strip it to keep the field from vanishing.
+        annotation.qualifiers.retain(|q| q != &Qualifier::InitVar);
         if annotation
             .ty
             .as_ref()

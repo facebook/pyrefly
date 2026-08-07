@@ -443,11 +443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let Type::TypedDict(td) = ty else {
                         return None;
                     };
-                    names.extend(
-                        self.typed_dict_fields(&td)
-                            .into_iter()
-                            .map(|(name, _)| name),
-                    );
+                    names.extend(self.typed_dict_fields(&td).keys().cloned());
                 }
             }
         }
