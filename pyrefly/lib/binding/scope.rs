@@ -37,6 +37,7 @@ use starlark_map::Hashed;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use thin_vec::ThinVec;
 use vec1::Vec1;
 
 use crate::binding::binding::Binding;
@@ -48,13 +49,14 @@ use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassBaseType;
+use crate::binding::binding::KeyClassChecks;
+use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
-use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyVariance;
-use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::MethodSelfKind;
@@ -97,9 +99,48 @@ pub enum NameReadInfo {
         key: Key,
         initialized: InitializedInFlow,
         is_module_scope: bool,
+        implicit_builtin_module: Option<ModuleName>,
     },
-    /// No such name is defined in the current scope stack.
+    /// No such name is defined in the current scope stack, but it resolves to an implicit
+    /// builtin defined by `module` (e.g. `len` from `builtins`). The binding has not been
+    /// materialized yet; a caller that wants to use it must do so explicitly (see
+    /// `BindingsBuilder::materialize_implicit_builtin_name`). Callers that only care about
+    /// lexically-defined names should treat this the same as `NotFound`.
+    ImplicitBuiltin { module: ModuleName },
+    /// No such name is defined in the current scope stack, and it is not a builtin.
     NotFound,
+}
+
+/// The modules consulted, in priority order, when a name is absent from lexical scope.
+///
+/// The user-provided `__builtins__` (extra builtins) shadows the stdlib `builtins`,
+/// matching the rule "user customization overrides the default". The `builtins` module
+/// itself has no fallback (it defines the builtins), and a module never falls back to
+/// itself. This is the single source of truth for builtin-fallback precedence; every
+/// site that resolves an implicit builtin (name resolution, special-export detection,
+/// explicit global capture, and did-you-mean suggestions) must consult it so they agree
+/// by construction.
+pub(crate) fn fallback_builtin_modules(
+    current_module: ModuleName,
+) -> impl Iterator<Item = ModuleName> {
+    let has_fallback = current_module != ModuleName::builtins();
+    [ModuleName::extra_builtins(), ModuleName::builtins()]
+        .into_iter()
+        .filter(move |module| has_fallback && *module != current_module)
+}
+
+/// The builtin module, if any, that defines `name` as a fallback for the module
+/// `current_module`. Follows `fallback_builtin_modules` precedence.
+pub(crate) fn builtin_module_for_name(
+    lookup: &dyn LookupExport,
+    current_module: ModuleName,
+    name: &Name,
+) -> Option<ModuleName> {
+    fallback_builtin_modules(current_module).find(|module| {
+        lookup
+            .get_wildcard(*module)
+            .is_some_and(|wildcard| wildcard.contains(name))
+    })
 }
 
 /// The result of a successful lookup of a name for a write operation.
@@ -206,6 +247,8 @@ enum StaticStyle {
     Delete,
     /// I am either a module import, like `import foo`, or a name defined by a wildcard import
     MergeableImport,
+    /// I am an implicit fallback import from `builtins` or `__builtins__`.
+    ImplicitBuiltinImport(ModuleName),
     /// I am a name that might be a scoped legacy type parameter.
     PossibleLegacyTParam,
 }
@@ -259,6 +302,7 @@ impl StaticStyle {
             Self::Delete
             | Self::ImplicitGlobal
             | Self::MergeableImport
+            | Self::ImplicitBuiltinImport(_)
             | Self::PossibleLegacyTParam => None,
         }
     }
@@ -267,6 +311,8 @@ impl StaticStyle {
         name: Hashed<&Name>,
         definition: Definition,
         scopes: Option<&Scopes>,
+        lookup: &dyn LookupExport,
+        current_module: ModuleName,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
     ) -> Self {
         if definition.needs_anywhere {
@@ -275,9 +321,14 @@ impl StaticStyle {
             match &definition.style {
                 DefinitionStyle::Delete => Self::Delete,
                 DefinitionStyle::MutableCapture(kind) => {
-                    let original = scopes
-                        .map_or(Result::Err(MutableCaptureError::NotFound), |scopes| {
-                            scopes.look_up_name_for_mutable_capture(name, *kind)
+                    let original =
+                        scopes.map_or(Result::Err(MutableCaptureError::NotFound), |scopes| {
+                            scopes.look_up_name_for_mutable_capture(
+                                name,
+                                *kind,
+                                lookup,
+                                current_module,
+                            )
                         });
                     Self::MutableCapture(MutableCapture {
                         kind: *kind,
@@ -316,10 +367,19 @@ impl StaticInfo {
             StaticStyle::Anywhere(..) => Key::Anywhere(Box::new((name.clone(), self.range))),
             StaticStyle::Delete => Key::Delete(self.range),
             StaticStyle::MutableCapture(..) => Key::MutableCapture(short_identifier()),
-            StaticStyle::MergeableImport => Key::Import(Box::new((name.clone(), self.range))),
+            StaticStyle::MergeableImport | StaticStyle::ImplicitBuiltinImport(_) => {
+                Key::Import(Box::new((name.clone(), self.range)))
+            }
             StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(Box::new(name.clone())),
             StaticStyle::SingleDef(..) => Key::Definition(short_identifier()),
             StaticStyle::PossibleLegacyTParam => Key::PossibleLegacyTParam(self.range),
+        }
+    }
+
+    fn implicit_builtin_module(&self) -> Option<ModuleName> {
+        match self.style {
+            StaticStyle::ImplicitBuiltinImport(module) => Some(module),
+            _ => None,
         }
     }
 
@@ -403,8 +463,9 @@ impl Static {
     }
 
     /// Populate static definitions from a list of statements.
-    /// Returns the set of implicit captures (names read but not locally defined)
-    /// and a map of Final variable string values.
+    /// Returns the set of implicit captures (names read but not locally defined),
+    /// the fallback builtins shadowed by module definitions, the set of all Final
+    /// names, and a map of Final variable string values.
     fn stmts(
         &mut self,
         x: &[Stmt],
@@ -414,7 +475,12 @@ impl Static {
         sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
         scopes: Option<&Scopes>,
-    ) -> (SmallSet<Name>, SmallMap<Name, String>) {
+    ) -> (
+        SmallSet<Name>,
+        SmallMap<Name, ModuleName>,
+        SmallSet<Name>,
+        SmallMap<Name, String>,
+    ) {
         let mut d = Definitions::new(
             x,
             module_info.name(),
@@ -422,13 +488,11 @@ impl Static {
             sys_info,
         );
         if top_level {
-            if module_info.name() != ModuleName::builtins() {
-                d.inject_builtins();
-            }
             d.inject_implicit_globals();
         }
 
         let implicit_captures = d.implicit_captures();
+        let mut shadowed_implicit_builtins = SmallMap::new();
 
         let mut all_wildcards = Vec::with_capacity(d.import_all.len());
         for (m, range) in d.import_all {
@@ -443,12 +507,24 @@ impl Static {
         self.0.reserve(((capacity_guess * 5) / 4) + 25);
 
         for (name, definition) in d.definitions.into_iter_hashed() {
+            if top_level
+                && let Some(module) =
+                    builtin_module_for_name(lookup, module_info.name(), name.key())
+            {
+                shadowed_implicit_builtins.insert(name.key().clone(), module);
+            }
             // Note that this really is an upsert: there might already be a parameter of the
             // same name in this scope.
             let range = definition.range;
             let last_range = definition.last_range;
-            let style =
-                StaticStyle::of_definition(name.as_ref(), definition, scopes, get_annotation_idx);
+            let style = StaticStyle::of_definition(
+                name.as_ref(),
+                definition,
+                scopes,
+                lookup,
+                module_info.name(),
+                get_annotation_idx,
+            );
             self.upsert(name, range, style, last_range);
         }
         for (module, range, wildcard) in all_wildcards {
@@ -463,12 +539,18 @@ impl Static {
                 self.upsert(name.cloned(), range, StaticStyle::MergeableImport, range)
             }
         }
+        let final_names = d.final_names.keys().cloned().collect();
         let final_string_values = d
             .final_names
             .into_iter()
             .filter_map(|(name, value)| value.map(|v| (name, v)))
             .collect();
-        (implicit_captures, final_string_values)
+        (
+            implicit_captures,
+            shadowed_implicit_builtins,
+            final_names,
+            final_string_values,
+        )
     }
 
     fn expr_lvalue(&mut self, x: &Expr) {
@@ -484,6 +566,27 @@ impl Static {
     }
 }
 
+/// How control flow left a point in the program. Only an exception can be swallowed
+/// by an enclosing `with`: `__exit__` also runs for `return`/`break`/`continue`, but
+/// its return value is ignored, so those always leave the `with`.
+#[derive(Copy, Clone, Debug)]
+pub enum TerminationKind {
+    /// A `raise`, or a call that raises (e.g. `sys.exit()`).
+    Raise,
+    /// A `return`, `break`, or `continue`.
+    Jump,
+    /// A statically-failing test, e.g. `assert sys.version_info >= (3, 12)`. It
+    /// raises, but the code after it runs in other environments, so it is not
+    /// unreachable in all cases.
+    StaticTest,
+}
+
+impl TerminationKind {
+    fn raises(self) -> bool {
+        matches!(self, Self::Raise | Self::StaticTest)
+    }
+}
+
 /// Flow-sensitive information about a name.
 #[derive(Default, Clone, Debug)]
 pub struct Flow {
@@ -493,6 +596,9 @@ pub struct Flow {
     // We continue to analyze the rest of the code after a flow terminates, but
     // we don't include terminated flows when merging after loops and branches.
     has_terminated: bool,
+    /// Whether any path that terminated this flow did so by raising. Only those can
+    /// be swallowed by an enclosing `with`. Meaningless unless `has_terminated`.
+    terminated_by_raise: bool,
     // This flag is set in a subset of cases when has_terminated is set; it's more conservative so it can be used for error reporting.
     // The key differences are as follows:
     // - Static tests based on stuff like sys.version_info don't exclude branches at runtime, since the program may execute in different environments
@@ -522,6 +628,26 @@ impl Flow {
 
     fn get_value_mut(&mut self, name: &Name) -> Option<&mut FlowValue> {
         self.info.get_mut(name)?.value_mut()
+    }
+}
+
+/// Copy new or newly-initialized entries from `source` into `target`.
+/// Entries absent from `target` are inserted; entries present but uninitialized
+/// are overwritten when `source` has an initialized binding.
+fn propagate_new_flow_entries(
+    source: &SmallMap<Name, FlowInfo>,
+    target: &mut SmallMap<Name, FlowInfo>,
+) {
+    for (name, info) in source.iter() {
+        if let Some(existing) = target.get(name) {
+            if matches!(existing.initialized(), InitializedInFlow::No)
+                && !matches!(info.initialized(), InitializedInFlow::No)
+            {
+                target.insert(name.clone(), info.clone());
+            }
+        } else {
+            target.insert(name.clone(), info.clone());
+        }
     }
 }
 
@@ -559,6 +685,18 @@ struct FlowInfo {
 /// - Loop recursion bindings in cases where a name was narrowed above a loop; we
 ///   don't know whether the name might be assigned in the loop so we have to assume
 ///   so; in that case we use `FlowStyle::LoopRecursion`
+///
+/// Invariant for the class-bearing style: `idx` is always the most recent
+/// binding key for the name (used to look up the current visible value),
+/// while `FlowStyle::ClassDef { class_idx, .. }` carries the canonical class
+/// identity that future same-scope writes should treat as their implicit
+/// receiver. The two idxs may differ: for example, after `class Real: ...`
+/// followed by `Real = Dummy`, the value `idx` points at the `Real = Dummy`
+/// assignment binding, but `class_idx` still points at the original
+/// `class Real` definition so subsequent writes are still checked against it.
+/// The `pristine` bit on that style records whether `idx` is still the
+/// original class definition (`true`) or a reassignment of the name
+/// (`false`).
 #[derive(Debug, Clone)]
 struct FlowValue {
     idx: Idx<Key>,
@@ -678,8 +816,22 @@ pub enum FlowStyle {
         has_return_annotation: bool,
         is_overload: bool,
     },
-    /// Am I a class definition?
-    ClassDef,
+    /// Am I a name carrying class identity? `class_idx` is the `Idx<Key>` of
+    /// the class's `class_object` binding — the canonical class identity that
+    /// future same-scope writes to this name should use as their implicit
+    /// receiver.
+    ///
+    /// `pristine` records whether the visible binding (i.e. the `idx` on the
+    /// surrounding `FlowValue`) is the original `Binding::ClassDef` itself:
+    /// - `true`: the visible binding is the original class definition.
+    /// - `false`: the name has been reassigned in the same scope; the visible
+    ///   binding is a `Binding::NameAssign` that was checked against
+    ///   `class_idx` as its receiver. The style is sticky across both
+    ///   compatible writes (where the visible type may refine to the RHS
+    ///   class) and incompatible writes (where the visible type falls back
+    ///   to the receiver), so subsequent writes keep checking against the
+    ///   original receiver.
+    ClassDef { class_idx: Idx<Key>, pristine: bool },
     /// The name is possibly uninitialized (perhaps due to merging branches)
     PossiblyUninitialized,
     /// The name may or may not be initialized depending on whether certain branches
@@ -735,6 +887,24 @@ impl FlowStyle {
                 (FlowStyle::MaybeInitialized(keys), FlowStyle::MaybeInitialized(other_keys)) => {
                     keys.extend(other_keys);
                 }
+                // Class-bearing styles stay sticky only when their canonical
+                // class identity matches. The `pristine` bit AND-merges: if
+                // any reachable branch saw a reassignment, the merged value
+                // is no longer pristine. Differing `class_idx` payloads fall
+                // back to `Other`: two genuinely distinct classes cannot be
+                // merged into a single canonical identity.
+                (
+                    FlowStyle::ClassDef {
+                        class_idx: l_idx,
+                        pristine: l_pristine,
+                    },
+                    FlowStyle::ClassDef {
+                        class_idx: r_idx,
+                        pristine: r_pristine,
+                    },
+                ) if *l_idx == r_idx => {
+                    *l_pristine = *l_pristine && r_pristine;
+                }
                 // MaybeInitialized + a fully initialized style: keep the MaybeInitialized
                 // keys since those paths still need verification at solve time.
                 (FlowStyle::MaybeInitialized(keys), _) => {
@@ -786,13 +956,26 @@ impl FlowStyle {
             | FlowStyle::ImportAs(_)
             | FlowStyle::MergeableImport(_)
             | FlowStyle::FunctionDef { .. }
-            | FlowStyle::ClassDef
+            | FlowStyle::ClassDef { .. }
             | FlowStyle::ClassField { .. }
             | FlowStyle::LoopRecursion
             | FlowStyle::Other => self,
             FlowStyle::Uninitialized
             | FlowStyle::PossiblyUninitialized
             | FlowStyle::MaybeInitialized { .. } => FlowStyle::Other,
+        }
+    }
+
+    /// Returns the canonical class-object idx for a flow style that should
+    /// behave as if it has an implicit class-typed receiver, or `None` if the
+    /// style is not class-bearing.
+    ///
+    /// This is the entry point for deciding whether a same-scope assignment
+    /// should be bound as a receiver-constrained `NameAssign`.
+    pub fn canonical_class_receiver_idx(&self) -> Option<Idx<Key>> {
+        match self {
+            FlowStyle::ClassDef { class_idx, .. } => Some(*class_idx),
+            _ => None,
         }
     }
 }
@@ -814,11 +997,12 @@ pub struct ClassIndices {
     pub base_type_idx: Idx<KeyClassBaseType>,
     pub metadata_idx: Idx<KeyClassMetadata>,
     pub mro_idx: Idx<KeyClassMro>,
+    pub disjoint_base_idx: Idx<KeyClassDisjointBase>,
     pub synthesized_fields_idx: Idx<KeyClassSynthesizedFields>,
     pub variance_idx: Idx<KeyVariance>,
-    pub variance_check_idx: Idx<KeyVarianceCheck>,
-    pub consistent_override_check_idx: Idx<KeyConsistentOverrideCheck>,
+    pub class_checks_idx: Idx<KeyClassChecks>,
     pub abstract_class_check_idx: Idx<KeyAbstractClassCheck>,
+    pub subscript_symmetry_idx: Idx<KeyClassSubscriptSymmetry>,
 }
 
 #[derive(Clone, Debug)]
@@ -858,10 +1042,10 @@ impl ScopeClass {
     /// Produces triples (hashed_attr_name, MethodThatSetsAttr, attribute) for all assignments
     /// to `self.<attr_name>` in methods.
     ///
-    /// We iterate recognized methods first, which - assuming that the first result is the one
-    /// used in our class logic, which is the case - ensures both that we don't produce
-    /// unnecessary errors about attributes implicitly defined in unrecognized methods
-    /// and that the types inferred from recognized methods take precedence.
+    /// We iterate recognized methods first, which ensures constructor prioritization is
+    /// established before unrecognized helper methods are processed. This ensures both
+    /// that we don't produce unnecessary errors about attributes implicitly defined in
+    /// unrecognized methods, and that constructors take precedence.
     pub fn method_defined_attributes(
         self,
     ) -> impl Iterator<Item = (Hashed<Name>, MethodThatSetsAttr, InstanceAttribute)> {
@@ -930,7 +1114,7 @@ pub struct YieldsAndReturns {
 
 #[derive(Clone, Debug)]
 pub struct InstanceAttribute(
-    pub ExprOrBinding,
+    pub Vec<ExprOrBinding>,
     pub Option<Idx<KeyAnnotation>>,
     pub TextRange,
     pub MethodSelfKind,
@@ -1022,9 +1206,16 @@ impl ScopeMethod {
 
 #[derive(Clone, Debug)]
 enum ScopeKind {
-    Annotation,
+    /// Scope wrapping the type parameters + (for classes) base list of a class or function
+    /// definition. `class_scope` is true for a class definition — used so that a class's legacy
+    /// type parameters are not visible from within a nested class.
+    Annotation {
+        class_scope: bool,
+    },
     Class(ScopeClass),
-    Comprehension { is_generator: bool },
+    Comprehension {
+        is_generator: bool,
+    },
     Function(ScopeFunction),
     Method(ScopeMethod),
     Module,
@@ -1127,9 +1318,17 @@ pub struct Scope {
     /// from enclosing scopes. Populated during `init_current_static` from the
     /// `Definitions` phase. Used to seed flow entries for captured variables.
     implicit_captures: SmallSet<Name>,
+    /// Module definitions whose names overlap fallback builtins. These start in flow as implicit
+    /// builtin imports, matching eager builtin injection without changing their static style.
+    shadowed_implicit_builtins: SmallMap<Name, ModuleName>,
+    /// All names marked `Final` in this scope. Used to prevent literal
+    /// promotion so that `Final` variables preserve their literal types.
+    final_names: SmallSet<Name>,
     /// Names marked `Final` with string literal values, e.g. `X: Final = "x"`.
     /// Used to resolve Final variable references in synthesized class field names.
     final_string_values: SmallMap<Name, String>,
+    /// Names removed by a `del NAME` statement in this scope.
+    deleted_names: SmallSet<Name>,
 }
 
 impl Scope {
@@ -1148,12 +1347,19 @@ impl Scope {
             finally_depth: 0,
             with_depth: 0,
             implicit_captures: SmallSet::new(),
+            shadowed_implicit_builtins: SmallMap::new(),
+            final_names: SmallSet::new(),
             final_string_values: SmallMap::new(),
+            deleted_names: SmallSet::new(),
         }
     }
 
-    pub fn annotation(range: TextRange) -> Self {
-        Self::new(range, FlowBarrier::AllowFlowChecked, ScopeKind::Annotation)
+    pub fn annotation(range: TextRange, class_scope: bool) -> Self {
+        Self::new(
+            range,
+            FlowBarrier::AllowFlowChecked,
+            ScopeKind::Annotation { class_scope },
+        )
     }
 
     pub fn type_alias(range: TextRange) -> Self {
@@ -1216,12 +1422,9 @@ impl Scope {
         }
     }
 
-    fn class_and_metadata_keys(&self) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
+    fn class_key(&self) -> Option<Idx<KeyClass>> {
         match &self.kind {
-            ScopeKind::Class(class_scope) => Some((
-                class_scope.indices.class_idx,
-                class_scope.indices.metadata_idx,
-            )),
+            ScopeKind::Class(class_scope) => Some(class_scope.indices.class_idx),
             _ => None,
         }
     }
@@ -1416,6 +1619,14 @@ impl Scopes {
         }
     }
 
+    /// The `ClassDefIndex` of the current class body, if the innermost scope is one.
+    pub fn current_class_def_index(&self) -> Option<ClassDefIndex> {
+        match &self.current().kind {
+            ScopeKind::Class(c) => Some(c.indices.def_index),
+            _ => None,
+        }
+    }
+
     pub fn in_function_scope(&self) -> bool {
         self.iter_rev()
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
@@ -1443,6 +1654,29 @@ impl Scopes {
 
     pub fn current_static_contains(&self, name: &Name) -> bool {
         self.current().stat.0.contains_key(name)
+    }
+
+    pub(crate) fn is_implicit_builtin_name(&self, name: &Name) -> bool {
+        // Implicit builtins are only ever materialized into the module (outermost) scope, so
+        // fast-reject any name that isn't one there before walking the scope stack. This is the
+        // common case (most merged names are ordinary locals).
+        if self
+            .scopes
+            .first()
+            .scope
+            .stat
+            .0
+            .get(name)
+            .is_none_or(|info| info.implicit_builtin_module().is_none())
+        {
+            return false;
+        }
+        // The module scope has it as an implicit builtin, but a nearer non-module scope may shadow
+        // it with a real local (whose assignment puts the name in that scope's static); then it is
+        // not an implicit builtin here.
+        !self.iter_rev().any(|scope| {
+            !matches!(scope.kind, ScopeKind::Module) && scope.stat.0.contains_key(name)
+        })
     }
 
     /// Enter a with block.
@@ -1483,24 +1717,9 @@ impl Scopes {
             .is_some_and(|l| l.finally_depth == self.current().finally_depth)
     }
 
-    /// Are we currently in a class body. If so, return the keys for the class and its metadata.
-    pub fn current_class_and_metadata_keys(
-        &self,
-    ) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
-        self.current().class_and_metadata_keys()
-    }
-
-    /// Are we anywhere inside a class? If so, return the keys for the class and its metadata.
-    /// This function looks at enclosing scopes, unlike `current_class_and_metadata_keys`.
-    pub fn enclosing_class_and_metadata_keys(
-        &self,
-    ) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
-        for scope in self.iter_rev() {
-            if let Some(class_and_metadata) = scope.class_and_metadata_keys() {
-                return Some(class_and_metadata);
-            }
-        }
-        None
+    /// Are we currently in a class body. If so, return the key for the class.
+    pub fn current_class_key(&self) -> Option<Idx<KeyClass>> {
+        self.current().class_key()
     }
 
     /// Are we anywhere inside a class? If so, return the class object idx.
@@ -1514,11 +1733,13 @@ impl Scopes {
         None
     }
 
-    /// Check if we're currently in the body of a class with `Protocol` in its base class list
+    /// Check if we're directly in the body of a class with `Protocol` in its base class list
     pub fn is_in_protocol_class(&self) -> bool {
         for scope in self.iter_rev() {
-            if let ScopeKind::Class(class_scope) = &scope.kind {
-                return class_scope.has_protocol_base;
+            match &scope.kind {
+                ScopeKind::Class(class_scope) => return class_scope.has_protocol_base,
+                ScopeKind::Function(_) | ScopeKind::Method(_) => return false,
+                _ => {}
             }
         }
         false
@@ -1544,8 +1765,40 @@ impl Scopes {
     pub fn name_shadows_enclosing_annotation_scope(&self, name: &Name) -> bool {
         // Skip the current scope, which we know isn't relevant to the check.
         for scope in self.iter_rev().skip(1) {
-            if matches!(scope.kind, ScopeKind::Annotation) && scope.stat.0.get(name).is_some() {
+            if matches!(scope.kind, ScopeKind::Annotation { .. })
+                && scope.stat.0.get(name).is_some()
+            {
                 return true;
+            }
+        }
+        false
+    }
+
+    /// Returns true if `name` refers to a legacy type parameter of an enclosing class that is out
+    /// of scope at the current position within a nested class. A class's legacy type
+    /// parameters are visible only from the innermost enclosing class-annotation scope, so once the
+    /// walk crosses a class-annotation scope, an outer class's type parameters are out of scope.
+    pub fn legacy_tparam_out_of_scope_in_nested_class(&self, name: &Name) -> bool {
+        let mut crossed_class_annotation = false;
+        for scope in self.iter_rev() {
+            match scope.kind {
+                // A function signature can always bind a legacy TypeVar as its own type parameter,
+                // even one that parameterizes an enclosing class it can no longer see. Only a class
+                // is forbidden from re-adopting an enclosing class's type parameter.
+                ScopeKind::Annotation {
+                    class_scope: false, ..
+                } if !crossed_class_annotation => return false,
+                ScopeKind::Annotation {
+                    class_scope: true, ..
+                } => {
+                    if let Some(info) = scope.stat.0.get(name)
+                        && matches!(info.style, StaticStyle::PossibleLegacyTParam)
+                    {
+                        return crossed_class_annotation;
+                    }
+                    crossed_class_annotation = true;
+                }
+                _ => {}
             }
         }
         false
@@ -1607,19 +1860,22 @@ impl Scopes {
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
     ) {
         let mut initialize = |scope: &mut Scope, myself: Option<&Self>| {
-            let (implicit_captures, final_string_values) = scope.stat.stmts(
-                x,
-                module_info,
-                top_level,
-                lookup,
-                sys_info,
-                get_annotation_idx,
-                myself,
-            );
+            let (implicit_captures, shadowed_implicit_builtins, final_names, final_string_values) =
+                scope.stat.stmts(
+                    x,
+                    module_info,
+                    top_level,
+                    lookup,
+                    sys_info,
+                    get_annotation_idx,
+                    myself,
+                );
             scope.implicit_captures = implicit_captures;
+            scope.shadowed_implicit_builtins = shadowed_implicit_builtins;
+            scope.final_names = final_names;
             scope.final_string_values = final_string_values;
-            // Presize the flow, as its likely to need as much space as static
-            scope.flow.info.reserve(scope.stat.0.capacity());
+            // Presize the flow, as its likely to need as much space as static.
+            scope.flow.info.reserve(scope.stat.0.len());
         };
         if top_level {
             // If we are in the top-level scope, all `global` / `nonlocal` directives fail, so we can
@@ -1633,6 +1889,16 @@ impl Scopes {
             initialize(&mut current, Some(self));
             self.push(current);
         }
+    }
+
+    /// Check if a name is declared as `Final` at module scope.
+    pub fn is_final_at_module_scope(&self, name: &Name) -> bool {
+        self.scopes.first().scope.final_names.contains(name)
+    }
+
+    /// Check if a name is declared as `Final` in the current (innermost) scope.
+    pub fn is_final_in_current_scope(&self, name: &Name) -> bool {
+        self.current().final_names.contains(name)
     }
 
     /// Look up a Final variable's string literal value in the current scope stack.
@@ -1778,6 +2044,8 @@ impl Scopes {
     /// (like constructors) that we recognize as always being called.
     ///
     /// Returns `true` if the attribute was a self attribute.
+    /// Record a self attribute assignment (e.g., `self.x = value`) inside the current method scope.
+    /// We accumulate all assignments to the same attribute within the method so they can later be unioned.
     pub fn record_self_attr_assign(
         &mut self,
         x: &ExprAttribute,
@@ -1789,13 +2057,21 @@ impl Scopes {
                 && let Some(self_name) = &method_scope.self_name
                 && matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
             {
-                if !method_scope.instance_attributes.contains_key(&x.attr.id) {
+                if let Some(attr) = method_scope.instance_attributes.get_mut(&x.attr.id) {
+                    // Accumulate subsequent assignments in the method.
+                    attr.0.push(value);
+                    // Keep the first type annotation encountered in the method.
+                    if attr.1.is_none() {
+                        attr.1 = annotation;
+                    }
+                } else {
+                    // First time seeing this attribute in this method: record it.
                     method_scope.instance_attributes.insert(
                         x.attr.id.clone(),
                         InstanceAttribute(
-                            value,
+                            vec![value],
                             annotation,
-                            x.attr.range(),
+                            x.attr.range(), // Keep the range of the first assignment as the definition location.
                             method_scope.receiver_kind,
                         ),
                     );
@@ -1977,6 +2253,39 @@ impl Scopes {
         Some(static_info.as_name_write_info())
     }
 
+    /// Add a lazily-discovered builtin to the module's static scope.
+    ///
+    /// The binding is represented as an import so post-binding consumers that
+    /// only inspect bindings can resolve it, but the implicit style lets export
+    /// collection distinguish fallback builtins from real module definitions.
+    pub fn add_implicit_builtin_to_module_static(
+        &mut self,
+        name: Hashed<&Name>,
+        module: ModuleName,
+    ) -> Key {
+        let range = TextRange::default();
+        let module_scope = &mut self.scopes.first_mut().scope;
+        assert!(matches!(module_scope.kind, ScopeKind::Module));
+        module_scope.stat.upsert(
+            name.cloned(),
+            range,
+            StaticStyle::ImplicitBuiltinImport(module),
+            range,
+        );
+        Key::Import(Box::new((name.into_key().clone(), range)))
+    }
+
+    pub fn module_shadowed_implicit_builtins(&self) -> Vec<(Name, ModuleName)> {
+        let module_scope = self.scopes.first();
+        assert!(matches!(module_scope.scope.kind, ScopeKind::Module));
+        module_scope
+            .scope
+            .shadowed_implicit_builtins
+            .iter()
+            .map(|(name, module)| (name.clone(), *module))
+            .collect()
+    }
+
     pub fn get_current_flow_idx(&self, name: &Name) -> Option<Idx<Key>> {
         self.current().flow.get_value(name).map(|v| v.idx)
     }
@@ -2012,9 +2321,11 @@ impl Scopes {
     /// Don't change the type if one is present - downstream we'll emit
     /// uninitialized local errors but keep using our best guess for the type.
     pub fn mark_as_deleted(&mut self, name: &Name) {
-        if let Some(value) = self.current_mut().flow.get_value_mut(name) {
+        let scope = self.current_mut();
+        if let Some(value) = scope.flow.get_value_mut(name) {
             value.style = FlowStyle::Uninitialized;
         }
+        scope.deleted_names.insert(name.clone());
     }
 
     fn get_flow_info(&self, name: &Name) -> Option<&FlowInfo> {
@@ -2025,22 +2336,6 @@ impl Scopes {
             }
         }
         None
-    }
-
-    /// Check if `name` was imported from a module with the given name.
-    /// Traverses all enclosing scopes to find the import.
-    pub fn is_imported_from_module(&self, name: &Name, module_name: &str) -> bool {
-        if let Some(flow_info) = self.get_flow_info(name)
-            && let Some(value) = flow_info.value()
-        {
-            return match &value.style {
-                FlowStyle::Import(m, _)
-                | FlowStyle::ImportAs(m)
-                | FlowStyle::MergeableImport(m) => m.as_str() == module_name,
-                _ => false,
-            };
-        }
-        false
     }
 
     /// Get the flow style for `name` in the current scope.
@@ -2085,19 +2380,21 @@ impl Scopes {
             .forks
             .last_mut()
             .expect("propagate_new_flow_entries_to_fork_base called outside of a fork");
-        for (name, info) in scope.flow.info.iter() {
-            if let Some(existing) = fork.base.info.get(name) {
-                // Update the base entry if it is uninitialized but the branch
-                // has an initialized binding (e.g. walrus targeting `x: int`).
-                if matches!(existing.initialized(), InitializedInFlow::No)
-                    && !matches!(info.initialized(), InitializedInFlow::No)
-                {
-                    fork.base.info.insert(name.clone(), info.clone());
-                }
-            } else {
-                fork.base.info.insert(name.clone(), info.clone());
-            }
-        }
+        propagate_new_flow_entries(&scope.flow.info, &mut fork.base.info);
+    }
+
+    /// Copy walrus-defined names from the current flow into the innermost
+    /// loop's base flow. The while-loop condition always evaluates at least
+    /// once, so any walrus target there is guaranteed to be assigned after the
+    /// loop. Without this propagation, `teardown_loop` sees the name only in
+    /// the loop flow and marks it `PossiblyUninitialized`.
+    pub fn propagate_new_flow_entries_to_loop_base(&mut self) {
+        let scope = self.current_mut();
+        let loop_ = scope
+            .loops
+            .last_mut()
+            .expect("propagate_new_flow_entries_to_loop_base called outside of a loop");
+        propagate_new_flow_entries(&scope.flow.info, &mut loop_.base.info);
     }
 
     /// Return the current binding index and flow style for `name`, if it exists
@@ -2140,26 +2437,43 @@ impl Scopes {
                         .or_else(|| lookup.is_special_export(base_module, name))
                 }
                 FlowStyle::ImportAs(m) => lookup.is_special_export(*m, name),
-                FlowStyle::Import(m, upstream_name) => lookup.is_special_export(*m, upstream_name),
+                FlowStyle::Import(m, upstream_name) => {
+                    lookup.is_special_export(m.append(upstream_name), name)
+                }
                 _ => None,
             }
-        } else {
-            // Check to see whether `name` is a special export; either it must be
-            // defined in the current module, or be an imported name from some other module.
-            let value = self.get_flow_info(name)?.value()?;
+        } else if let Some(flow_info) = self.get_flow_info(name) {
+            // `name` is in local flow. A narrow-only entry (no value binding) is not a special
+            // export: it was never bound here, so we must not let it fall through to the implicit
+            // builtin lookup below (which would treat e.g. a narrowed `len` as the builtin `len`).
+            let value = flow_info.value()?;
             match &value.style {
                 FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
                     lookup.is_special_export(*m, name)
                 }
                 FlowStyle::Import(m, upstream_name) => lookup.is_special_export(*m, upstream_name),
-                _ => {
-                    let special = SpecialExport::new(name)?;
-                    if special.defined_in(current_module) {
-                        Some(special)
-                    } else {
-                        None
-                    }
+                _ => SpecialExport::new(name).filter(|special| special.defined_in(current_module)),
+            }
+        } else {
+            // `name` is absent from lexical scope, so it may resolve to an implicit builtin.
+            match self.look_up_name_for_read(
+                Hashed::new(name),
+                &Usage::NonPinningValue(None),
+                lookup,
+                current_module,
+            ) {
+                // An already-materialized builtin, or a fresh builtin fallback: check whether the
+                // resolving builtin module makes it a special export.
+                NameReadInfo::Anywhere {
+                    implicit_builtin_module: Some(module),
+                    ..
                 }
+                | NameReadInfo::ImplicitBuiltin { module } => {
+                    lookup.is_special_export(module, name)
+                }
+                NameReadInfo::Flow { .. }
+                | NameReadInfo::Anywhere { .. }
+                | NameReadInfo::NotFound => None,
             }
         }
     }
@@ -2372,6 +2686,7 @@ impl Scopes {
         if let Some(innermost) = scope.loops.last_mut() {
             innermost.exits.push((exit, flow));
             scope.flow.has_terminated = true;
+            scope.flow.terminated_by_raise = false;
             scope.flow.is_definitely_unreachable = true;
             true
         } else {
@@ -2387,10 +2702,13 @@ impl Scopes {
     pub fn swap_current_flow_with(&mut self, flow: &mut Flow) {
         mem::swap(&mut self.current_mut().flow, flow);
     }
-    pub fn mark_flow_termination(&mut self, from_static_test: bool) {
-        self.current_mut().flow.has_terminated = true;
-        if self.current_mut().with_depth == 0 && !from_static_test {
-            self.current_mut().flow.is_definitely_unreachable = true;
+    pub fn mark_flow_termination(&mut self, kind: TerminationKind) {
+        let inside_with = self.current().with_depth > 0;
+        let flow = &mut self.current_mut().flow;
+        flow.has_terminated = true;
+        flow.terminated_by_raise = kind.raises();
+        if !inside_with && !matches!(kind, TerminationKind::StaticTest) {
+            flow.is_definitely_unreachable = true;
         }
     }
 
@@ -2419,6 +2737,31 @@ impl Scopes {
     /// Should be set to Some(key) for StmtExpr, and None for other statements.
     pub fn set_last_stmt_expr(&mut self, key: Option<Idx<Key>>) {
         self.current_mut().flow.last_stmt_expr = key;
+    }
+
+    pub fn last_stmt_expr(&self) -> Option<Idx<Key>> {
+        self.current().flow.last_stmt_expr
+    }
+
+    pub fn has_terminated(&self) -> bool {
+        self.current().flow.has_terminated
+    }
+
+    /// Whether the current flow terminated by raising, as opposed to `return`/`break`/
+    /// `continue`. Only a raise can be swallowed by an enclosing `with`.
+    pub fn terminated_by_raise(&self) -> bool {
+        self.current().flow.terminated_by_raise
+    }
+
+    /// Control flow leaving a `with` body may resume after the `with` if the context
+    /// manager suppresses the exception, which we only know once we know the type of
+    /// `__exit__`. Make the flow live again, deferring termination calculation to
+    /// the solving stage.
+    pub fn resume_after_with(&mut self, last_statement_key: Idx<Key>) {
+        let flow = &mut self.current_mut().flow;
+        flow.has_terminated = false;
+        flow.terminated_by_raise = false;
+        flow.last_stmt_expr = Some(last_statement_key);
     }
 
     /// Whenever we enter the scope of a method *and* we see a matching
@@ -2587,8 +2930,18 @@ impl Scopes {
                     } => ClassFieldDefinition::MethodLike {
                         definition: value.idx,
                         has_return_annotation: *has_return_annotation,
+                        annotation: static_info.annotation(),
                     },
-                    FlowStyle::ClassDef => ClassFieldDefinition::NestedClass {
+                    // Only treat pristine class definitions as nested classes.
+                    // A non-pristine `ClassDef` carries the class identity for
+                    // receiver checking but its visible binding is a
+                    // `Binding::NameAssign`, so it must not become a nested
+                    // class. (This case is unreachable in current code because
+                    // class-body assignments always produce `ClassField`, but
+                    // the pattern is restricted here so that lifting that
+                    // restriction in a follow-up does not silently promote
+                    // rebound names to nested-class semantics.)
+                    FlowStyle::ClassDef { pristine: true, .. } => ClassFieldDefinition::NestedClass {
                         definition: value.idx,
                     },
                     FlowStyle::ClassField {
@@ -2630,16 +2983,48 @@ impl Scopes {
                 field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
             }
         });
+        // Merge assignments from different methods.
+        // `method_attrs` yields attributes from recognized constructor methods first (e.g. __init__),
+        // followed by other helper methods.
         method_attrs.into_iter().for_each(
-            |(name, method, InstanceAttribute(value, annotation, range, _))| {
-                if !field_definitions.contains_key_hashed(name.as_ref()) {
+            |(name, method, InstanceAttribute(values, annotation, range, receiver_kind))| {
+                if let Some((
+                    ClassFieldDefinition::DefinedInMethod {
+                        values: existing_values,
+                        annotation: existing_annot,
+                        method: existing_method,
+                        receiver_kind: existing_receiver,
+                    },
+                    _,
+                )) = field_definitions.get_mut(name.key())
+                {
+                    if existing_method.recognized_attribute_defining_method
+                        && !method.recognized_attribute_defining_method
+                    {
+                        // Prioritization: Existing is from a recognized constructor, new is from an
+                        // unrecognized helper method. The constructor wins, so ignore the new assignment.
+                    } else {
+                        // Merge: Either both are constructors (e.g. __new__ and __init__), or both are
+                        // helper methods. We combine all their assignments.
+                        existing_values.extend(values);
+                        if existing_annot.is_none() {
+                            *existing_annot = annotation;
+                        }
+                        // If any constructor is a class method (e.g. __new__), the attribute is visible
+                        // on the class object. Upgrade the receiver kind to Class.
+                        if matches!(receiver_kind, MethodSelfKind::Class) {
+                            *existing_receiver = MethodSelfKind::Class;
+                        }
+                    }
+                } else if !field_definitions.contains_key_hashed(name.as_ref()) {
                     field_definitions.insert_hashed(
                         name,
                         (
                             ClassFieldDefinition::DefinedInMethod {
-                                value: Box::new(value),
+                                values,
                                 annotation,
                                 method,
+                                receiver_kind,
                             },
                             range,
                         ),
@@ -2726,7 +3111,7 @@ impl Scopes {
         // Annotation scopes and type alias scopes (PEP 695) can see their enclosing class scope.
         let is_current_scope_annotation_like = matches!(
             self.current().kind,
-            ScopeKind::Annotation | ScopeKind::TypeAlias
+            ScopeKind::Annotation { .. } | ScopeKind::TypeAlias
         );
         for (lookup_depth, scope) in self.iter_rev().enumerate() {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
@@ -2804,11 +3189,31 @@ impl Scopes {
     ///   different from how name lookup usually works.) In all other cases, if the name of a type
     ///   is locally shadowed by a non-type definition, we error if it is then used in an annotation.
     /// - For other usages: Normal lookup behavior.
-    pub fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
-        let skip_class_overload_function_definitions =
-            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
+    ///
+    /// When the name is not found in any lexical scope, this falls back to implicit builtins and
+    /// reports `NameReadInfo::ImplicitBuiltin` (the builtin is not materialized here; the caller
+    /// decides what to do with it). This is the single name-read entry point: callers match on
+    /// the returned `NameReadInfo` and must consider the `ImplicitBuiltin` case explicitly, so a
+    /// new read site cannot silently forget builtins.
+    pub fn look_up_name_for_read(
+        &self,
+        name: Hashed<&Name>,
+        usage: &Usage,
+        lookup: &dyn LookupExport,
+        current_module: ModuleName,
+    ) -> NameReadInfo {
+        let skip_class_overload_function_definitions = matches!(
+            usage,
+            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
+        );
+        // A class's legacy type parameters live in its class-annotation scope and are only in
+        // scope within that class. Track whether the walk has crossed a class-annotation scope so
+        // that a nested class does not resolve an enclosing class's legacy type parameters.
+        let mut crossed_class_annotation = false;
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
+            let is_class_annotation =
+                matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
 
             let flow_info = scope.flow.get_info_hashed(name);
             let is_class_overload = is_class
@@ -2833,7 +3238,7 @@ impl Scopes {
                 } else {
                     flow_info.initialized()
                 };
-                // Because class body scopes are dynamic, if we know that the the name is
+                // Because class body scopes are dynamic, if we know that the name is
                 // definitely not initialized in the flow, we should skip it.
                 if is_class && matches!(initialized, InitializedInFlow::No) {
                     return None;
@@ -2848,6 +3253,26 @@ impl Scopes {
             // compiler has identified as local shadows enclosing scopes, so we should prefer
             // inner static lookups to outer flow lookups.
             if !is_class && let Some(static_info) = scope.stat.0.get_hashed(name) {
+                // A walrus operator's target is added to the comprehension's
+                // static scope (via `add_lvalue_to_current_static`) before the
+                // walrus write adds it to flow. When reading the name before
+                // that write, skip this scope so visit_scopes continues to the
+                // enclosing scope — which correctly handles class-scope-skipping
+                // and flow barriers.
+                if matches!(scope.kind, ScopeKind::Comprehension { .. }) && flow_info.is_none() {
+                    return None;
+                }
+
+                // Once we've crossed a class-annotation scope, a legacy type parameter found in an
+                // outer class-annotation scope belongs to an enclosing class and is out of scope
+                // here; skip it so the lookup falls through to the module-level `TypeVar`.
+                if is_class_annotation
+                    && crossed_class_annotation
+                    && matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
+                {
+                    return None;
+                }
+
                 let forward_ref_key = static_info.as_key(name.into_key());
                 return Some(NameReadInfo::Anywhere {
                     key: forward_ref_key,
@@ -2856,7 +3281,8 @@ impl Scopes {
                     // exception because they are synthesized scope entries that don't exist at all
                     // in the runtime; we treat them as always initialized to avoid false positives
                     // for uninitialized local checks in class bodies.
-                    initialized: if flow_barrier > FlowBarrier::AllowFlowChecked
+                    initialized: if static_info.implicit_builtin_module().is_some()
+                        || flow_barrier > FlowBarrier::AllowFlowChecked
                         || matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
                     {
                         InitializedInFlow::Yes
@@ -2864,11 +3290,22 @@ impl Scopes {
                         InitializedInFlow::No
                     },
                     is_module_scope: matches!(scope.kind, ScopeKind::Module),
+                    implicit_builtin_module: static_info.implicit_builtin_module(),
                 });
+            }
+            // We are moving past this class-annotation scope without resolving the name here, so any
+            // legacy type parameters in outer class-annotation scopes are now out of scope.
+            if is_class_annotation {
+                crossed_class_annotation = true;
             }
             None
         })
-        .unwrap_or(NameReadInfo::NotFound)
+        .unwrap_or_else(|| {
+            match builtin_module_for_name(lookup, current_module, name.key()) {
+                Some(module) => NameReadInfo::ImplicitBuiltin { module },
+                None => NameReadInfo::NotFound,
+            }
+        })
     }
 
     /// Look up a name for a mutable capture during initialization of static scope.
@@ -2879,6 +3316,8 @@ impl Scopes {
         &self,
         name: Hashed<&Name>,
         kind: MutableCaptureKind,
+        lookup: &dyn LookupExport,
+        current_module: ModuleName,
     ) -> Result<Box<StaticInfo>, MutableCaptureError> {
         let found = match kind {
             MutableCaptureKind::Global => self
@@ -2888,7 +3327,18 @@ impl Scopes {
                 .stat
                 .0
                 .get_hashed(name)
-                .map(|static_info| Result::Ok(Box::new(static_info.clone()))),
+                .map_or_else(
+                    || {
+                        builtin_module_for_name(lookup, current_module, name.key()).map(|module| {
+                            Ok(Box::new(StaticInfo {
+                                range: TextRange::default(),
+                                style: StaticStyle::ImplicitBuiltinImport(module),
+                                last_range: TextRange::default(),
+                            }))
+                        })
+                    },
+                    |static_info| Some(Ok(Box::new(static_info.clone()))),
+                ),
             MutableCaptureKind::Nonlocal => self.iter_rev().find_map(|scope| {
                 if matches!(scope.kind, ScopeKind::Class(..)) {
                     None
@@ -2927,7 +3377,7 @@ impl Scopes {
         &self,
         name: Hashed<&Name>,
         kind: MutableCaptureKind,
-    ) -> Result<Key, MutableCaptureError> {
+    ) -> Result<(Key, Option<ModuleName>), MutableCaptureError> {
         if self.current().flow.get_info_hashed(name).is_some() {
             return match kind {
                 MutableCaptureKind::Global => Err(MutableCaptureError::AssignedBeforeGlobal),
@@ -2938,7 +3388,15 @@ impl Scopes {
             Some(StaticInfo {
                 style: StaticStyle::MutableCapture(capture),
                 ..
-            }) => capture.key_or_error(name.into_key(), kind),
+            }) => {
+                let key = capture.key_or_error(name.into_key(), kind)?;
+                let implicit_builtin_module = capture
+                    .original
+                    .as_ref()
+                    .ok()
+                    .and_then(|static_info| static_info.implicit_builtin_module());
+                Ok((key, implicit_builtin_module))
+            }
             Some(_) | None => Err(MutableCaptureError::NotFound),
         }
     }
@@ -2952,6 +3410,11 @@ impl ScopeTrace {
         &self.0.scope
     }
 
+    /// Names `del`eted at module scope.
+    pub fn module_deletes(&self) -> &SmallSet<Name> {
+        &self.0.scope.deleted_names
+    }
+
     pub fn exportables(&self) -> SmallMap<Name, Exportable> {
         let mut exportables = SmallMap::new();
         let scope = self.toplevel_scope();
@@ -2959,6 +3422,9 @@ impl ScopeTrace {
             // Definitions with empty names are not actually accessible and should not be considered
             // as exported. They are likely syntax errors, which are handled elsewhere.
             if name.as_str() == "" {
+                continue;
+            }
+            if static_info.implicit_builtin_module().is_some() {
                 continue;
             }
 
@@ -3231,7 +3697,7 @@ impl<'a> BindingsBuilder<'a> {
             };
             let branch_idx = flow_info.idx();
 
-            // The BranchInfo always sees the branch_idx, which will will be
+            // The BranchInfo always sees the branch_idx, which will be
             // a narrow if one exists, otherwise the value. Each branch may have a
             // termination key, which potentially causes us to ignore it in the Phi based
             // on Never/NoReturn type information.
@@ -3399,6 +3865,9 @@ impl<'a> BindingsBuilder<'a> {
         let (terminated_branches, live_branches): (Vec<_>, Vec<_>) =
             branches.into_iter().partition(|flow| flow.has_terminated);
         let has_terminated = live_branches.is_empty() && !merge_style.is_loop();
+        // An enclosing `with` can only resume the merged flow if at least one of the
+        // paths that terminated it raised.
+        let any_terminated_by_raise = terminated_branches.iter().any(|f| f.terminated_by_raise);
         let flows = if has_terminated {
             terminated_branches
         } else {
@@ -3474,22 +3943,21 @@ impl<'a> BindingsBuilder<'a> {
         let mut merged_flow_infos = SmallMap::with_capacity(merge_items.len());
         for (name, merge_item) in merge_items.into_iter_hashed() {
             let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.key().clone(), range))));
-            merged_flow_infos.insert_hashed(
-                name,
-                self.merged_flow_info(
-                    merge_item,
-                    phi_idx,
-                    merge_style,
-                    n_branches,
-                    n_branches_with_termination_key,
-                ),
+            let flow_info = self.merged_flow_info(
+                merge_item,
+                phi_idx,
+                merge_style,
+                n_branches,
+                n_branches_with_termination_key,
             );
+            merged_flow_infos.insert_hashed(name, flow_info);
         }
 
         // The resulting flow has terminated only if all branches had terminated.
         let flow = Flow {
             info: merged_flow_infos,
             has_terminated,
+            terminated_by_raise: has_terminated && any_terminated_by_raise,
             is_definitely_unreachable: all_are_unreachable,
             last_stmt_expr: None,
         };
@@ -3550,7 +4018,7 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         range: TextRange,
         narrow_ops: &NarrowOps,
-        orelse: Vec<Stmt>,
+        orelse: ThinVec<Stmt>,
         parent: &NestingContext,
         is_while_true: bool,
         loop_definitely_runs: bool,
@@ -3584,7 +4052,7 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_narrow_ops(
             &narrow_ops.negate(),
             NarrowUseLocation::Span(other_range),
-            &Usage::Narrowing(None),
+            &Usage::NonPinningValue(None),
         );
         self.stmts(orelse, parent);
         // Exiting from a break skips past any `else`, so we merge them after, and the
@@ -3689,7 +4157,7 @@ impl<'a> BindingsBuilder<'a> {
                 negated_prev_ops,
                 // Generate a range that is distinct from other use_ranges of the same narrow.
                 NarrowUseLocation::End(fork.range),
-                &Usage::Narrowing(None),
+                &Usage::NonPinningValue(None),
             );
             if let Some(key) = base_termination_key {
                 self.scopes.current_mut().flow.last_stmt_expr = Some(key);

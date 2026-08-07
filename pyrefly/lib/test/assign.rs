@@ -126,7 +126,7 @@ d: list[Any] = ["test"]
 testcase!(
     test_assign_list_concat_with_contextual_hint,
     r#"
-from typing import assert_type, reveal_type
+from typing import assert_type
 
 class Base: ...
 class A(Base): ...
@@ -141,8 +141,8 @@ l2: list[Base] = [A()] + [B()]
 # List concatenation with list comprehension operands
 l3: list[Base] = [A() for _ in range(1)] + [B()]
 
-# Without contextual hint, reveal_type should show the inferred union type
-reveal_type([A()] + [B()])  # E: revealed type: list[A | B]
+# Without contextual hint, the concatenation infers the union type.
+assert_type([A()] + [B()], list[A | B])
 
 # Non-fresh operands (variables) should NOT be coerced
 xs: list[A] = [A()]
@@ -245,6 +245,26 @@ testcase!(
     r#"
 (a,) = (1, 2)  # E: Cannot unpack tuple[Literal[1], Literal[2]] (of size 2) into 1 value
 () = (1, 2)  # E: Cannot unpack tuple[Literal[1], Literal[2]] (of size 2) into 0 values
+    "#,
+);
+
+testcase!(
+    test_unpack_tuple_with_never_element,
+    r#"
+from typing import NoReturn
+def never() -> NoReturn: ...
+# Unreachable: should not error.
+a, b, c = (never(), 1)
+    "#,
+);
+
+testcase!(
+    test_unpack_never_rhs,
+    r#"
+from typing import NoReturn
+def never() -> NoReturn: ...
+# Unreachable: should not error.
+a, b, c = never()
     "#,
 );
 
@@ -385,26 +405,6 @@ x = 1
 lit1: Literal[1] = x
 x = "oops"  # E: `Literal['oops']` is not assignable to variable `x` with type `int`
 lit2: Literal["oops"] = x  # E: `int` is not assignable to `Literal['oops']`
-    "#,
-);
-
-testcase!(
-    test_type_alias_simple,
-    r#"
-from typing import assert_type
-type X = int
-def f(x: X):
-    assert_type(x, int)
-    "#,
-);
-
-testcase!(
-    test_type_alias_generic,
-    r#"
-from typing import assert_type
-type X[T] = list[T]
-def f(x: X[int]):
-    assert_type(x, list[int])
     "#,
 );
 
@@ -862,12 +862,12 @@ reveal_type(x) # E: revealed type: Unknown
 testcase!(
     test_reveal_type_assign,
     r#"
-from typing import reveal_type
+from typing import Literal, assert_type
 
 def f(x):
     x = 3
     x = "None"
-    reveal_type(x) # E: revealed type: Literal['None']
+    assert_type(x, Literal['None'])
 
 def f(x):
     x = 3
@@ -952,28 +952,54 @@ assert_type(y, str)
 
 // https://github.com/facebook/pyrefly/issues/2928
 testcase!(
-    bug = "Should detect too many values when unpacking a string literal",
     test_unpack_string_too_many,
     r#"
-a, b = "abc"
+a, b = "abc"  # E: Cannot unpack Literal['abc'] (of size 3) into 2 values
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2927
 testcase!(
-    bug = "Should detect too few values when unpacking a single-char string",
     test_unpack_string_too_few,
     r#"
-a, b = "x"
+a, b = "x"  # E: Cannot unpack Literal['x'] (of size 1) into 2 values
 "#,
 );
 
 testcase!(
-    bug = "Should detect zero step size in slice",
+    test_unpack_string_exact,
+    r#"
+a, b, c = "abc"
+"#,
+);
+
+testcase!(
+    test_unpack_string_splat,
+    r#"
+a, *b = "abc"
+x, y, *z = "w"  # E: Cannot unpack Literal['w'] (of size 1) into 2+ values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_too_many,
+    r#"
+a, b = b"abc"  # E: Cannot unpack Literal[b'abc'] (of size 3) into 2 values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_exact,
+    r#"
+a, b, c = b"abc"
+"#,
+);
+
+testcase!(
     test_slice_zero_step,
     r#"
 items = [1, 2, 3, 4]
-bad = items[::0]
+bad = items[::0]  # E: Slice step cannot be zero
 "#,
 );
 
@@ -1232,5 +1258,291 @@ def test(x: int | None) -> None:
     if x is None:
         x = f()
     assert_type(x, int | None)  # E: assert_type(int | Any, int | None) failed
+"#,
+);
+
+// ----------------------------------------------------------------------------
+// Class rebind tests: a same-scope class definition acts as an implicit receiver
+// so that incompatible writes do not change the visible binding. The model is
+// the same one we already use for explicit annotations.
+//
+// Tests below pin both: the motivating class case (currently producing wrong
+// behavior, marked with `bug`) and the annotated analogs that already work.
+// The `bug`-marked tests use `reveal_type` to record the current observable
+// behavior; the call-site errors they currently emit are noted via `# E:`.
+// ----------------------------------------------------------------------------
+
+testcase!(
+    test_class_rebind_conditional_incompatible,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+
+Real("example.com", port=443)
+assert_type(Real, type[Real])
+"#,
+);
+
+testcase!(
+    test_annotated_rebind_conditional_incompatible_pins_semantics,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+# Explicit annotation already implements the model we want for class rebinds:
+# an incompatible write does not change the visible binding.
+real_cls: type[Real] = Real
+if b():
+    real_cls = Dummy  # E: `type[Dummy]` is not assignable to variable `real_cls` with type `type[Real]`
+
+real_cls("example.com", port=443)
+assert_type(real_cls, type[Real])
+"#,
+);
+
+testcase!(
+    bug = "Errored RHS still pollutes the post-join union; same limitation applies to annotated-name rebinds",
+    test_class_rebind_rhs_error,
+    r#"
+from typing import reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = MissingName  # E: Could not find name `MissingName`
+
+# The errored branch contributes `Unknown` to the union, which silences the
+# call-site check below. This matches the annotated-name path's behavior;
+# ideally both would elide errored branches from the join.
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real] | Unknown
+"#,
+);
+
+testcase!(
+    test_class_rebind_self_assign,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = Real
+
+Real("example.com", port=443)
+assert_type(Real, type[Real])
+"#,
+);
+
+testcase!(
+    test_class_rebind_repeated_writes_in_one_flow,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+
+Real("example.com", port=443)
+assert_type(Real, type[Real])
+"#,
+);
+
+testcase!(
+    test_class_rebind_repeated_writes_after_join,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+
+if b():
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+
+Real("example.com", port=443)
+assert_type(Real, type[Real])
+"#,
+);
+
+testcase!(
+    test_class_rebind_fresh_class_in_branch,
+    r#"
+class Real:
+    def real_only(self) -> int: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    class Real:
+        def fresh_only(self) -> int: ...
+else:
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+
+# After the merge `Real` must not silently collapse to either branch's
+# class identity. Both `real_only` (from the original `class Real`) and
+# `fresh_only` (from the branch-local `class Real`) should be missing on
+# the merged value, since neither method is shared by all branches.
+Real().real_only()  # E: Object of class `Real` has no attribute `real_only`
+Real().fresh_only()  # E: Object of class `Real` has no attribute `fresh_only`
+"#,
+);
+
+testcase!(
+    test_class_rebind_compatible_subclass,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class SubReal(Real):
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+Real = SubReal
+assert_type(Real, type[SubReal])
+
+if b():
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+
+Real("example.com", port=443)
+"#,
+);
+
+testcase!(
+    test_annotated_rebind_compatible_subclass_pins_semantics,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class SubReal(Real):
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+real_cls: type[Real] = Real
+real_cls = SubReal
+assert_type(real_cls, type[SubReal])
+
+if b():
+    real_cls = Dummy  # E: `type[Dummy]` is not assignable to variable `real_cls` with type `type[Real]`
+
+real_cls("example.com", port=443)
+"#,
+);
+
+testcase!(
+    bug = "Any RHS leaves an `Any` arm in the post-join union, silencing call-site checks; shared with annotated-name rebinds",
+    test_class_rebind_any_rhs,
+    r#"
+from typing import Any, reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+def f() -> Any: ...
+def b() -> bool: ...
+
+if b():
+    Real = f()
+
+# `type[Real] | Any` silences the call-site check. This already matches the
+# annotated-name path; the desired fix would narrow the gradual arm out at
+# the use site for both paths.
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real] | Any
+"#,
+);
+
+testcase!(
+    test_class_rebind_in_class_body_unchanged,
+    r#"
+class Other: ...
+
+class Container:
+    # Inside class body the rebind path is not active in this patch: it is
+    # treated as a class-field assignment, like today.
+    Real = Other
+"#,
+);
+
+testcase!(
+    test_class_rebind_multi_target,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    other = Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+
+Real("example.com", port=443)
+assert_type(Real, type[Real])
+"#,
+);
+
+testcase!(
+    test_class_rebind_unpacked,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    Real, _ = (Dummy, 0)  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+
+Real("example.com", port=443)
+assert_type(Real, type[Real])
 "#,
 );

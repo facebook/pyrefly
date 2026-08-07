@@ -6,6 +6,7 @@
  */
 
 use std::any::Any;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -21,6 +22,7 @@ use std::sync::OnceLock;
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use fxhash::FxHashMap;
+use fxhash::FxHashSet;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::calculation::ProposalResult;
 use pyrefly_graph::index::Idx;
@@ -32,21 +34,21 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedIdentity;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::quantified::QuantifiedOrigin;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
-use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::AnswerEntry;
 use crate::alt::answers::AnswerTable;
@@ -57,10 +59,12 @@ use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers::TraceSideEffects;
 use crate::alt::traits::Solve;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LambdaParamId;
@@ -73,11 +77,17 @@ use crate::config::base::RecursionOverflowHandler;
 use crate::config::error_kind::ErrorKind;
 use crate::dispatch_anyidx;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
+use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
+use crate::error::error::ErrorQuickFix;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
+use crate::solver::solver::ArgumentSide;
+use crate::solver::solver::CallContext;
+use crate::solver::solver::PinError;
+use crate::solver::solver::SubsetError;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
 use crate::types::class::Class;
@@ -88,6 +98,33 @@ use crate::types::stdlib::Stdlib;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
 use crate::types::types::Var;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum JaxtypingQuantifiedKey {
+    Dim(Name, QuantifiedKind),
+    ShapeCarrier(Name, QuantifiedKind),
+}
+
+pub struct TypeCheckOptions<'a, 'subset> {
+    errors: &'a ErrorCollector,
+    context: &'a dyn Fn() -> TypeCheckContext,
+    call_context: Option<&'a CallContext<'subset>>,
+}
+
+impl<'a, 'subset> TypeCheckOptions<'a, 'subset> {
+    pub fn new(errors: &'a ErrorCollector, context: &'a dyn Fn() -> TypeCheckContext) -> Self {
+        Self {
+            errors,
+            context,
+            call_context: None,
+        }
+    }
+
+    pub fn with_call_context(mut self, call_context: &'a CallContext<'subset>) -> Self {
+        self.call_context = Some(call_context);
+        self
+    }
+}
 
 /// Compactly represents the identity of a binding, for the purposes of
 /// understanding the calculation stack.
@@ -187,6 +224,10 @@ pub struct CalcStack {
     /// hasn't been committed yet. Taken by `get_idx` after each frame completes.
     /// At most one SCC can complete per completion point.
     pending_completed_scc: RefCell<Option<Scc>>,
+    /// Allocates identities that track which calculation, and later iterative
+    /// driver, owns an SCC. Merges preserve the oldest identity so nested
+    /// drivers leave the merged SCC for the suspended outer driver to commit.
+    next_scc_owner: Cell<u64>,
 }
 
 impl CalcStack {
@@ -196,6 +237,7 @@ impl CalcStack {
             scc_stack: RefCell::new(Vec::new()),
             position_of: RefCell::new(FxHashMap::default()),
             pending_completed_scc: RefCell::new(None),
+            next_scc_owner: Cell::new(0),
         }
     }
 
@@ -204,13 +246,10 @@ impl CalcStack {
     /// These two operations are always paired: every `pop` must be followed by
     /// taking and committing the completed SCC.
     ///
-    /// We pop before taking (not after) for two reasons:
-    /// - Lifecycle correctness: committed answers should correspond to fully
-    ///   unwound computations. Popping first ensures the stack no longer
-    ///   contains the completing frame when results are written to Calculation.
-    /// - `pop()` decrements `top_pos_exclusive` on the top SCC. If we took first,
-    ///   the completed SCC would already be gone from `scc_stack`, and `pop()`
-    ///   could incorrectly decrement a parent SCC's top_pos_exclusive instead.
+    /// We pop before taking (not after) for lifecycle correctness: committed
+    /// answers should correspond to fully unwound computations, so the stack
+    /// must no longer contain the completing frame when results are written to
+    /// Calculation.
     ///
     /// Note that the `+ 1` in `on_calculation_finished`'s completion check
     /// (`stack_len <= bottom_pos_inclusive + 1`) is unrelated to this ordering — it
@@ -225,8 +264,8 @@ impl CalcStack {
     ///
     /// This is purely thread-local: it manages the CalcStack and SCC state
     /// without touching the cross-thread Calculation cell. Cycle detection
-    /// uses the thread-local stack exclusively; propose_calculation() is
-    /// called by the caller (get_idx) before push.
+    /// uses the thread-local stack exclusively; the Calculation proposal is
+    /// made by the caller (get_idx) before push.
     fn push(&self, current: CalcId) -> BindingAction {
         let position = {
             let mut stack = self.stack.borrow_mut();
@@ -274,9 +313,6 @@ impl CalcStack {
                     // takes min across all SCCs regardless of which we pass here.
                     let detected_at = sccs_to_merge.first().detected_at.dupe();
                     let mut merged = Scc::merge_many(sccs_to_merge, detected_at);
-                    // Recompute top_pos_exclusive after merge.
-                    merged.top_pos_exclusive = calc_stack_vec.len();
-
                     // Add free-floating CalcStack nodes (between merged SCCs)
                     // to node_state, mirroring merge_sccs.
                     merged.absorb_calc_stack_members(&calc_stack_vec, merged.bottom_pos_inclusive);
@@ -330,9 +366,6 @@ impl CalcStack {
 
     /// Pop a binding frame from the raw binding-level CalcId stack.
     /// - Update both the direct stack and the `position_of` reverse index.
-    /// - Also check whether the popped frame was part of the top Scc in the
-    ///   Scc stack; if so, decrement the top_pos_exclusive to account for the fact
-    ///   that this frame has completed.
     fn pop(&self) -> Option<CalcId> {
         let popped = self.stack.borrow_mut().pop();
         if let Some(ref calc_id) = popped {
@@ -343,12 +376,6 @@ impl CalcStack {
                     // Vec1 only has one element, so remove the entire entry
                     position_of.remove(calc_id);
                 }
-            }
-            let mut scc_stack = self.scc_stack.borrow_mut();
-            if let Some(top_scc) = scc_stack.last_mut()
-                && top_scc.node_state.contains_key(calc_id)
-            {
-                top_scc.top_pos_exclusive = top_scc.top_pos_exclusive.saturating_sub(1);
             }
         }
         popped
@@ -439,53 +466,46 @@ impl CalcStack {
         self.scc_stack.borrow()
     }
 
-    /// Check if an existing SCC overlaps with a newly detected cycle.
+    /// Does the newly detected cycle `new` enclose `existing`?
     ///
-    /// Uses O(1) position arithmetic: if the existing SCC's exclusive upper bound
-    /// (top_pos_exclusive) is greater than the cycle start position,
-    /// the segments overlap and must be merged.
+    /// Only valid when `new.detected_at` belongs to no SCC, i.e. the caller has
+    /// already ruled out membership via `find_scc_containing`. A cycle whose
+    /// back-edge target is an SCC member never reaches here: `push` routes such
+    /// targets through the membership branches before cycle detection runs.
     ///
-    /// This works because segments are contiguous - all frames between bottom_pos_inclusive
-    /// and top_pos_exclusive belong to this SCC.
-    fn check_overlap(existing: &Scc, cycle_start_pos: usize) -> bool {
-        // O(1) overlap check using segment bounds.
-        // If the existing SCC's upper bound <= cycle start, there's no overlap.
-        existing.top_pos_exclusive > cycle_start_pos
+    /// Given that precondition the cycle covers `stack[new.bottom_pos_inclusive..]`,
+    /// a contiguous suffix, so it encloses exactly those SCCs anchored above its
+    /// own anchor. Comparing anchors is therefore an exact containment test, not
+    /// an approximation, and no membership check is needed to complete it.
+    fn encloses(new: &Scc, existing: &Scc) -> bool {
+        new.bottom_pos_inclusive < existing.bottom_pos_inclusive
     }
 
     /// Handle an SCC we just detected.
     ///
     /// When a new SCC overlaps with existing SCCs (shares participants),
     /// we merge them to form a larger SCC.
-    ///
-    /// Optimization: We use stack depth to efficiently find overlapping SCCs.
-    /// The cycle spans CalcStack positions [N, M] where M = stack_depth - 1 and
-    /// N = M - cycle_length + 1. Any SCC with max_stack_depth < N cannot overlap.
-    /// Once we find the first overlapping SCC, all subsequent SCCs must also
-    /// overlap (due to LIFO ordering of the SCC stack).
     #[allow(clippy::mutable_key_type)] // CalcId's Hash impl doesn't depend on mutable parts
     fn on_scc_detected(&self, raw: Vec1<CalcId>) {
         let calc_stack_vec = self.into_vec();
 
         // Create the new SCC
-        let new_scc = Scc::new(raw, &calc_stack_vec);
+        let owner = self.next_scc_owner.get();
+        self.next_scc_owner
+            .set(owner.checked_add(1).expect("SCC ownership token overflow"));
+        let new_scc = Scc::new(raw, &calc_stack_vec, SccOwner::Phase0(owner));
         let detected_at = new_scc.detected_at.dupe();
-        let cycle_start_pos = new_scc.bottom_pos_inclusive;
-
         // Check for overlapping SCCs and merge if needed
         let mut scc_stack = self.scc_stack.borrow_mut();
 
-        // Find the first (oldest) SCC that overlaps with the new cycle.
-        // Overlap is determined by O(1) segment arithmetic: if the existing SCC's
-        // upper bound (top_pos_exclusive) exceeds cycle_start_pos, they overlap.
-        // Due to LIFO ordering, once we find one overlapping SCC, all subsequent ones
-        // on the stack must also overlap.
+        // Find the first (oldest) SCC the new cycle encloses. Due to LIFO ordering,
+        // every SCC above that one is also enclosed.
         let mut first_merge_idx: Option<usize> = None;
 
         for (i, existing) in scc_stack.iter().enumerate() {
-            if Self::check_overlap(existing, cycle_start_pos) {
+            if Self::encloses(&new_scc, existing) {
                 first_merge_idx = Some(i);
-                break; // All subsequent SCCs will also overlap
+                break; // All subsequent SCCs are also enclosed
             }
         }
 
@@ -495,13 +515,7 @@ impl CalcStack {
             let sccs_to_merge = Vec1::from_vec_push(sccs_from_stack, new_scc);
 
             // Use the helper method to merge SCCs
-            let mut merged_scc = Scc::merge_many(sccs_to_merge, detected_at.dupe());
-
-            // After a merge, everything from the merged anchor to the current stack top
-            // is part of this single SCC. Recompute top_pos_exclusive from scratch.
-            merged_scc.top_pos_exclusive = calc_stack_vec.len();
-
-            scc_stack.push(merged_scc);
+            scc_stack.push(Scc::merge_many(sccs_to_merge, detected_at.dupe()));
         } else {
             // No overlap - just push the new SCC
             scc_stack.push(new_scc);
@@ -560,6 +574,7 @@ impl CalcStack {
         let stack_len = self.stack.borrow().len();
         let mut scc_stack = self.scc_stack.borrow_mut();
         if let Some(scc) = scc_stack.last()
+            && matches!(scc.owner, SccOwner::Phase0(_))
             && stack_len <= scc.bottom_pos_inclusive + 1
         {
             let completed = scc_stack.pop().unwrap();
@@ -617,10 +632,6 @@ impl CalcStack {
         let mut merged = Scc::merge_many(sccs_to_merge, detected_at_of_scc.dupe());
         merged.absorb_calc_stack_members(&calc_stack_vec, min_depth);
 
-        // After a merge, everything from the merged anchor to the current stack top
-        // is part of this single SCC. Recompute top_pos_exclusive from scratch.
-        merged.top_pos_exclusive = calc_stack_vec.len();
-
         scc_stack.push(merged);
     }
 
@@ -641,26 +652,22 @@ impl CalcStack {
         None
     }
 
-    /// Merge from the top SCC anchor when a back-edge re-enters from outside
-    /// the top SCC segment.
+    /// Merge from the top SCC anchor when a nonmember caller requests a member.
     ///
     /// A plain top-SCC absorb only handles free-floating nodes and can miss
     /// full SCC merge semantics when SCC fragments are involved. Using
     /// `merge_sccs` here ensures all phase-0 and phase-1+ re-entry paths share
     /// the same merge+absorb behavior and consistent demotion signaling
     /// (`merge_happened`).
-    fn merge_top_scc_on_outside_reentry(&self) {
+    fn merge_top_scc_on_nonmember_reentry(&self) {
         let detected_at = {
-            let stack_len = self.stack.borrow().len();
+            let stack = self.stack.borrow();
             let scc_stack = self.scc_stack.borrow();
-            if let Some(top_scc) = scc_stack.last() {
-                if stack_len > top_scc.top_pos_exclusive {
+            match (scc_stack.last(), stack.iter().rev().nth(1)) {
+                (Some(top_scc), Some(caller)) if !top_scc.node_state.contains_key(caller) => {
                     Some(top_scc.detected_at.dupe())
-                } else {
-                    None
                 }
-            } else {
-                None
+                _ => None,
             }
         };
         if let Some(detected_at) = detected_at {
@@ -670,17 +677,10 @@ impl CalcStack {
 
     /// Shared top-SCC member handling for back-edge re-entry paths in `push`.
     ///
-    /// Ensures outside-segment re-entry merge runs first, then restores
-    /// top_pos_exclusive symmetry with `pop`, then dispatches using the current
-    /// iteration node state.
+    /// Ensures nonmember re-entry merge runs first, then dispatches using the
+    /// current iteration node state.
     fn binding_action_for_top_scc_member(&self, current: &CalcId) -> BindingAction {
-        self.merge_top_scc_on_outside_reentry();
-        // Increment top_pos_exclusive because pop() will decrement
-        // top_pos_exclusive for any node in node_state, so push must
-        // balance it with an increment.
-        if let Some(top_scc) = self.scc_stack.borrow_mut().last_mut() {
-            top_scc.top_pos_exclusive += 1;
-        }
+        self.merge_top_scc_on_nonmember_reentry();
         if let Some(kind) = self.get_iteration_node_state(current) {
             return self.binding_action_for_node_state(current, kind);
         }
@@ -881,22 +881,12 @@ impl CalcStack {
     /// Called when a node's answer differs from its previous-iteration answer,
     /// indicating the fixpoint has not yet converged.
     ///
-    /// Silently does nothing if there is no top SCC. This can occur in the
-    /// LSP when the SCC is prematurely popped from the stack due to a
-    /// stale `bottom_pos_inclusive` (see pyrefly-docs/scc-stack-invariants/v0-doc.md).
-    /// In that case the SCC has already been committed by a nested driver, so
-    /// there is no top SCC left to update and skipping is safe.
+    /// The iterating SCC must remain on the stack throughout the calculation.
     fn mark_iteration_changed(&self) {
         let mut scc_stack = self.scc_stack.borrow_mut();
-        let Some(top_scc) = scc_stack.last_mut() else {
-            // TODO(stroxler): Consider panicking here once we're confident this
-            // path is unreachable in the LSP. The silent no-op may mask bugs.
-            debug_assert!(
-                false,
-                "mark_iteration_changed: no iterating SCC on the stack"
-            );
-            return;
-        };
+        let top_scc = scc_stack
+            .last_mut()
+            .expect("mark_iteration_changed: no iterating SCC on the stack");
         top_scc.iterative.has_changed = true;
     }
 
@@ -973,56 +963,12 @@ impl CalcStack {
             .expect("pop_scc: SCC stack is empty")
     }
 
-    /// Return the `detected_at` of the top SCC on the stack.
-    ///
-    /// Used by the iteration driver for absorption detection: if the top
-    /// SCC's `detected_at` changed, this SCC was merged into an ancestor.
-    ///
-    /// Panics if the SCC stack is empty.
-    fn top_scc_detected_at(&self) -> CalcId {
+    fn top_scc_owner(&self) -> SccOwner {
         self.scc_stack
             .borrow()
             .last()
-            .expect("top_scc_detected_at: SCC stack is empty")
-            .detected_at
-            .dupe()
-    }
-
-    /// Returns true if any SCC exists below the top of the stack.
-    ///
-    /// Used by the absorption check in `iterative_resolve_scc`: when the top
-    /// SCC's `detected_at` has changed (indicating a merge), the driver can
-    /// only return early if an ancestor SCC is still on the stack to own the
-    /// merged SCC. If no ancestor SCC exists, the current driver must continue
-    /// with the merged SCC to avoid orphaning it.
-    fn has_ancestor_scc(&self) -> bool {
-        let scc_stack = self.scc_stack.borrow();
-        // Skip the last element (the top SCC) and check the rest.
-        let len = scc_stack.len();
-        len >= 2
-    }
-
-    /// Returns true if the top SCC's `node_state` contains the given CalcId.
-    /// Returns false if the stack is empty (callers should guard with
-    /// `sccs_is_empty` first).
-    ///
-    /// Used after nested absorption to distinguish two cases:
-    /// - Our SCC was merged into the top SCC (detected_at changed, but our
-    ///   members are in the top SCC's node_state) → continue driving.
-    /// - Our SCC was committed by a nested driver, and a pre-existing SCC
-    ///   (e.g. a Phase 0 SCC that was below us on the stack) is now the top
-    ///   → return.
-    ///
-    /// This works because `detected_at` is always a member of the SCC's
-    /// `node_state`, and merges union the `node_state` maps. Within a single
-    /// thread's `scc_stack`, SCCs are disjoint (overlapping membership
-    /// triggers a merge), so an unrelated SCC will not contain our CalcId.
-    fn top_scc_contains_member(&self, calc_id: &CalcId) -> bool {
-        self.scc_stack
-            .borrow()
-            .last()
-            .map(|scc| scc.node_state.contains_key(calc_id))
-            .unwrap_or(false)
+            .expect("top_scc_owner: SCC stack is empty")
+            .owner
     }
 
     /// Returns true if the top SCC's iteration state has `merge_happened` set.
@@ -1227,6 +1173,27 @@ impl SccNodeState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SccOwner {
+    Phase0(u64),
+    Driver(u64),
+}
+
+impl SccOwner {
+    fn id(self) -> u64 {
+        match self {
+            Self::Phase0(id) | Self::Driver(id) => id,
+        }
+    }
+
+    fn start_driver(self) -> Self {
+        match self {
+            Self::Phase0(id) => Self::Driver(id),
+            Self::Driver(_) => panic!("iterative SCC already has a driver"),
+        }
+    }
+}
+
 /// Represent an SCC (Strongly Connected Component) we are currently solving.
 ///
 /// This simplified model tracks SCC participants with explicit state rather than
@@ -1247,10 +1214,9 @@ pub struct Scc {
     /// When the stack length drops to bottom_pos_inclusive, the SCC is complete.
     /// This enables O(1) completion checking instead of iterating all participants.
     bottom_pos_inclusive: usize,
-    /// Exclusive upper bound of this SCC's segment on the calc stack.
-    /// The segment is [bottom_pos_inclusive, top_pos_exclusive).
-    /// Initially set to the stack length when the SCC is created; updated on merge.
-    top_pos_exclusive: usize,
+    /// Calculation or iterative driver responsible for committing this SCC.
+    /// Merges preserve the oldest owner, which is suspended below newer work.
+    owner: SccOwner,
     /// Iteration state for iterative fixpoint solving.
     /// Invariant: every active SCC has iteration state, initialized to
     /// iteration 0 on creation (Phase 0 discovery), then reset to
@@ -1271,7 +1237,7 @@ impl Display for Scc {
 
 impl Scc {
     #[allow(clippy::mutable_key_type)] // CalcId's Hash impl doesn't depend on mutable parts
-    fn new(raw: Vec1<CalcId>, calc_stack_vec: &[CalcId]) -> Self {
+    fn new(raw: Vec1<CalcId>, calc_stack_vec: &[CalcId], owner: SccOwner) -> Self {
         let detected_at = raw.first().dupe();
 
         // Initialize all nodes as Fresh
@@ -1295,7 +1261,7 @@ impl Scc {
             node_state,
             detected_at,
             bottom_pos_inclusive,
-            top_pos_exclusive: calc_stack_vec.len(),
+            owner,
             iterative: SccIterationState {
                 iteration: 0,
                 previous_answers: BTreeMap::new(),
@@ -1388,10 +1354,9 @@ impl Scc {
         self.detected_at = self.detected_at.min(other.detected_at);
         // Keep the minimum anchor position
         self.bottom_pos_inclusive = self.bottom_pos_inclusive.min(other.bottom_pos_inclusive);
-        // Note: top_pos_exclusive is NOT updated here. After a merge, everything from
-        // the merged anchor to the current stack top is part of this single SCC.
-        // The caller must recompute top_pos_exclusive = stack.len().
-
+        if other.owner.id() < self.owner.id() {
+            self.owner = other.owner;
+        }
         // Merge iteration state. Node states are already merged via `node_state`
         // above; the iteration state only carries metadata (iteration number,
         // previous answers, flags).
@@ -1562,9 +1527,12 @@ pub struct ThreadState {
     /// as the NameAssign's solve_binding can see the partial answer (offset 0 in get_idx,
     /// which checks before pushing its own frame).
     partial_answers: RefCell<FxHashMap<(Idx<Key>, usize), Arc<TypeInfo>>>,
-    /// Solve-time mapping from per-module lambda parameter IDs to the
-    /// thread-local Var that represents that parameter in the current solve.
-    lambda_param_vars: RefCell<FxHashMap<(ModuleName, LambdaParamId), Var>>,
+    /// Solve-time mapping from per-module lambda parameter IDs to their
+    /// contextually inferred types in the current solve.
+    ///
+    /// The `ModulePath` is needed to distinguish the in-memory and on-disk
+    /// versions of the same module, which can coexist in the IDE (issue #3789).
+    lambda_param_types: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Type>>,
     /// Active trace side-effect sink for the current calculation.
     /// Set before `K::solve`, taken after. `None` when tracing is disabled
     /// or between calculations. Saved sinks form a stack to handle recursive
@@ -1575,6 +1543,10 @@ pub struct ThreadState {
     /// is pushed here. When the nested call takes its sink, the previous
     /// one is restored.
     trace_sink_stack: RefCell<Vec<Option<TraceSideEffects>>>,
+    /// `(self_type, self_param)` pairs whose overload-self-type compatibility
+    /// check is currently in progress, used as a coinductive guard against
+    /// self-referential protocols. See `filter_overloads_by_self_type`.
+    overload_self_filter_stack: RefCell<FxHashSet<(Type, Type)>>,
 }
 
 impl ThreadState {
@@ -1584,15 +1556,16 @@ impl ThreadState {
             debug: RefCell::new(false),
             recursion_limit_config,
             partial_answers: RefCell::new(FxHashMap::default()),
-            lambda_param_vars: RefCell::new(FxHashMap::default()),
+            lambda_param_types: RefCell::new(FxHashMap::default()),
             trace_sink: RefCell::new(None),
             trace_sink_stack: RefCell::new(Vec::new()),
+            overload_self_filter_stack: RefCell::new(FxHashSet::default()),
         }
     }
 
     /// Install a fresh trace sink for the current calculation, saving any
     /// existing sink for later restoration.
-    pub(crate) fn install_trace_sink(&self) {
+    fn install_trace_sink(&self) {
         let previous = self.trace_sink.borrow_mut().take();
         self.trace_sink_stack.borrow_mut().push(previous);
         *self.trace_sink.borrow_mut() = Some(TraceSideEffects::default());
@@ -1600,7 +1573,7 @@ impl ThreadState {
 
     /// Take the accumulated trace side effects, restoring any saved sink
     /// from an outer calculation.
-    pub(crate) fn take_trace_sink(&self) -> Option<TraceSideEffects> {
+    fn take_trace_sink(&self) -> Option<TraceSideEffects> {
         let result = self.trace_sink.borrow_mut().take();
         let restored = self.trace_sink_stack.borrow_mut().pop().flatten();
         *self.trace_sink.borrow_mut() = restored;
@@ -1611,6 +1584,13 @@ impl ThreadState {
     pub(crate) fn record_type_trace(&self, loc: TextRange, ty: Arc<Type>) {
         if let Some(sink) = self.trace_sink.borrow_mut().as_mut() {
             sink.types.insert(loc, ty);
+        }
+    }
+
+    /// Append an expected type trace to the active sink. No-op if no sink is installed.
+    pub(crate) fn record_expected_type_trace(&self, loc: TextRange, ty: Arc<Type>) {
+        if let Some(sink) = self.trace_sink.borrow_mut().as_mut() {
+            sink.expected_types.insert(loc, ty);
         }
     }
 
@@ -1679,11 +1659,11 @@ pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     pub recurser: &'a VarRecurser,
     pub stdlib: &'a Stdlib,
     pub heap: &'a TypeHeap,
-    /// Cache for jaxtyping dimension name → Quantified type mappings.
-    /// Module-scoped: the same dimension name always maps to the same Quantified,
+    /// Cache for jaxtyping synthetic quantifieds.
+    /// Module-scoped: the same dimension key always maps to the same Quantified,
     /// which is correct because each function independently wraps its signature
     /// in a Forall (just like legacy TypeVars defined at module scope).
-    jaxtyping_dims: RefCell<FxHashMap<Name, Quantified>>,
+    jaxtyping_dims: RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
 }
 
 /// RAII guard that releases write locks on panic during SCC batch commit.
@@ -1761,28 +1741,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Get or create a Quantified type for a jaxtyping dimension name.
-    /// Cached per module: the same name always returns the same Quantified.
+    /// Cached per module on the `(name, kind)` pair: the same name reused with a
+    /// different `QuantifiedKind` intentionally yields a distinct Quantified.
     pub fn get_or_create_jaxtyping_dim(&self, name: Name, kind: QuantifiedKind) -> Quantified {
         let mut dims = self.jaxtyping_dims.borrow_mut();
-        dims.entry(name.clone())
+        // Jaxtyping dims have no real source location. Use the current map size as a
+        // collision-free ordinal to distinguish synthetic quantifieds at the same
+        // (default) anchor. Shared with `get_or_create_jaxtyping_shape_carrier`, which
+        // uses the same map, so ordinals stay unique across both.
+        let ordinal = dims.len() as u32;
+        dims.entry(JaxtypingQuantifiedKey::Dim(name.clone(), kind))
             .or_insert_with(|| {
-                // Jaxtyping dims have no real source location. Use a hash of the name
-                // as ordinal to distinguish different dims in the same module.
-                // The slot discriminates from other synthetic quantifieds at the same anchor.
-                let ordinal = {
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    name.hash(&mut h);
-                    h.finish() as u32
-                };
                 let identity = QuantifiedIdentity::new(
                     self.module().name(),
                     AnchorIndex::new(TextRange::default(), ordinal),
                     QuantifiedOrigin::SyntheticCallableResidual,
                 );
                 match kind {
-                    QuantifiedKind::TypeVar => Quantified::type_var(
-                        name,
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
                         identity,
+                        name,
+                        kind,
                         None,
                         Restriction::Unrestricted,
                         PreInferenceVariance::Invariant,
@@ -1792,6 +1771,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     QuantifiedKind::ParamSpec => {
                         unreachable!("jaxtyping dimensions cannot be ParamSpec")
+                    }
+                }
+            })
+            .clone()
+    }
+
+    /// Get or create a tuple-carrier TypeVar or IntVar for a jaxtyping variadic shape name.
+    ///
+    /// A variadic jaxtyping shape (`*name`) whose enclosing shaped-array class uses a
+    /// `TypeVar`/`IntVar` (IntTuple) shape parameter needs a carrier bounded by
+    /// `tuple[int, ...]`, rather than the `TypeVarTuple` produced for `*Shape` classes.
+    pub fn get_or_create_jaxtyping_shape_carrier(
+        &self,
+        name: Name,
+        kind: QuantifiedKind,
+    ) -> Quantified {
+        let mut dims = self.jaxtyping_dims.borrow_mut();
+        // See `get_or_create_jaxtyping_dim`: the shared map's size is a collision-free ordinal.
+        let ordinal = dims.len() as u32;
+        dims.entry(JaxtypingQuantifiedKey::ShapeCarrier(name.clone(), kind))
+            .or_insert_with(|| {
+                let identity = QuantifiedIdentity::new(
+                    self.module().name(),
+                    AnchorIndex::new(TextRange::default(), ordinal),
+                    QuantifiedOrigin::SyntheticCallableResidual,
+                );
+                match kind {
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
+                        identity,
+                        name,
+                        kind,
+                        None,
+                        Restriction::Bound(Type::Tuple(Tuple::Unbounded(Box::new(
+                            self.heap.mk_class_type(self.stdlib.int().clone()),
+                        )))),
+                        PreInferenceVariance::Invariant,
+                    ),
+                    QuantifiedKind::TypeVarTuple | QuantifiedKind::ParamSpec => {
+                        unreachable!("jaxtyping shape carriers must be TypeVar or IntVar")
                     }
                 }
             })
@@ -1835,54 +1853,73 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.answers.get_class_fields(cls)
     }
 
-    pub(crate) fn set_lambda_param_var(&self, id: LambdaParamId, var: Var) {
+    pub(crate) fn set_lambda_param_type(&self, id: LambdaParamId, ty: Type) {
         self.thread_state
-            .lambda_param_vars
+            .lambda_param_types
             .borrow_mut()
-            .insert((self.module().name(), id), var);
+            .insert((self.module().name(), self.module().path().dupe(), id), ty);
     }
 
-    pub(crate) fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
+    fn get_lambda_param_type(&self, id: LambdaParamId) -> Option<Type> {
         self.thread_state
-            .lambda_param_vars
+            .lambda_param_types
             .borrow()
-            .get(&(self.module().name(), id))
-            .copied()
+            .get(&(self.module().name(), self.module().path().dupe(), id))
+            .cloned()
     }
 
-    pub(crate) fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
-        if let Some(var) = self.get_lambda_param_var(id) {
-            var
-        } else {
-            let var = self.solver().fresh_unwrap(self.uniques);
-            self.set_lambda_param_var(id, var);
-            var
-        }
-    }
-
-    /// Resolve a lambda parameter Var from thread-local state.
+    /// Resolve a lambda parameter type from thread-local state.
     ///
     /// If owner exists, force owner evaluation first so this binding
     /// participates in the same SCC/fixpoint dynamics as the containing
     /// lambda expression.
-    pub(crate) fn resolve_lambda_param_var(
+    pub(crate) fn resolve_lambda_param_type(
         &self,
         id: LambdaParamId,
         owner: Option<Idx<Key>>,
-    ) -> Var {
+    ) -> Type {
         if let Some(owner_idx) = owner {
             let _ = self.get_idx(owner_idx);
         }
-        self.get_or_create_lambda_param_var(id)
+        self.get_lambda_param_type(id).unwrap_or_else(|| {
+            // Lambda parameter bindings may be solved independently before their lambda
+            // expression has installed a contextual type in this thread state.
+            self.heap.mk_any_implicit()
+        })
     }
 
     pub fn stack(&self) -> &CalcStack {
         &self.thread_state.stack
     }
 
+    pub(crate) fn has_active_scc(&self) -> bool {
+        !self.stack().sccs_is_empty()
+    }
+
+    pub fn django_reverse_relations_index(&self) -> Arc<DjangoReverseRelationIndex> {
+        self.answers
+            .get(
+                self.module().name(),
+                Some(self.module().path()),
+                &KeyDjangoRelations,
+                self.thread_state,
+            )
+            .expect("the current module must be available while solving its Django relations")
+    }
+
     /// Access the thread-local state for trace recording.
     pub(crate) fn trace_state(&self) -> &ThreadState {
         self.thread_state
+    }
+
+    /// Record an expected type trace.
+    pub(crate) fn record_expected_type_trace(&self, loc: TextRange, ty: &Type) {
+        // Guard on the trace sink before cloning: in a normal (non-tracing) check
+        // there is no sink installed, so the clone would be pure waste.
+        if self.current().tracing_enabled() {
+            self.trace_state()
+                .record_expected_type_trace(loc, Arc::new(ty.clone()));
+        }
     }
 
     /// Store a partial answer for inline first-use pinning.
@@ -1920,6 +1957,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .borrow()
             .get(&(def_idx, height))
             .cloned()
+    }
+
+    /// Mark an overload-self-type compatibility check `(self_type, self_param)` as in
+    /// progress. Returns `true` if it was already active, signaling a coinductive cycle
+    /// (a self-referential protocol). See `filter_overloads_by_self_type`.
+    pub(crate) fn enter_overload_self_filter(&self, key: (Type, Type)) -> bool {
+        !self
+            .thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .insert(key)
+    }
+
+    pub(crate) fn exit_overload_self_filter(&self, key: &(Type, Type)) {
+        self.thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .remove(key);
     }
 
     /// Given the target idx of a ForwardToFirstUse binding, find the NameAssign's
@@ -1992,16 +2047,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return result;
         }
 
-        // Register this thread's intent to calculate with the Calculation cell.
-        // answers_solver intentionally ignores Calculation's cycle semantics
-        // (CycleDetected vs Calculatable) and uses the thread-local CalcStack
-        // as the sole source of truth for cycle detection.
-        match calculation.propose_calculation() {
+        // CalcStack is the sole source of truth for cycle detection.
+        // SAFETY: CalcStack::push immediately below detects a repeated CalcId
+        // before any recursive calculation is evaluated.
+        match unsafe { calculation.propose_calculation() } {
             ProposalResult::Calculated(v) => return v,
-            ProposalResult::Calculatable | ProposalResult::CycleDetected => {
-                // Both cases proceed into push, which uses thread-local
-                // CalcStack cycle detection exclusively.
-            }
+            ProposalResult::Calculatable => {}
         }
 
         let mut result = match self.stack().push(current.dupe()) {
@@ -2109,18 +2160,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         };
 
-        // For exported keys, eagerly resolve all type variables in the answer.
-        // This avoids redundant clone+force work in solve_exported_key and post_solve,
-        // which would otherwise repeat this work on every cross-module lookup.
-        // Arc::unwrap_or_clone avoids cloning since the refcount is 1 here.
-        let raw_answer = if K::EXPORTED {
-            let mut forced = Arc::unwrap_or_clone(raw_answer);
-            forced.visit_mut(&mut |x| self.current.solver().deep_force_mut(x));
-            Arc::new(forced)
-        } else {
-            raw_answer
-        };
-
         if self.stack().is_scc_participant(&current) {
             // Became an SCC member during computation: an SCC was discovered by
             // a dependency chain during K::solve above, and this node is now in
@@ -2136,6 +2175,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 raw_answer
             };
+            self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
+            let answer = self.force_exported_answer::<K>(answer);
             // Also store in SccNodeState::Done for SCC-local isolation (the SCC
             // uses these answers via SccLocalAnswer without touching Calculation).
             let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
@@ -2153,6 +2194,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Not an SCC member even after computation: write directly to
             // Calculation. No recursive placeholder can exist because
             // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
+            self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
+            let raw_answer = self.force_exported_answer::<K>(raw_answer);
             let (answer, did_write) = calculation.record_value(raw_answer);
             if did_write {
                 self.base_errors.extend(local_errors);
@@ -2162,6 +2205,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             answer
+        }
+    }
+
+    fn force_exported_answer<K: Solve<Ans>>(&self, answer: Arc<K::Answer>) -> Arc<K::Answer> {
+        if K::EXPORTED {
+            let mut forced = Arc::unwrap_or_clone(answer);
+            forced.visit_mut(&mut |ty| self.current.solver().force_mut(ty));
+            Arc::new(forced)
+        } else {
+            answer
+        }
+    }
+
+    fn sanitize_answer_vars<K: Solve<Ans>>(
+        &self,
+        answer: &K::Answer,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let mut vars = Vec::new();
+        answer.visit(&mut |ty| vars.extend(ty.collect_all_vars()));
+        for error in self.solver().sanitize_vars(vars, true) {
+            self.report_pin_error(error, range, errors);
+        }
+    }
+
+    pub(crate) fn report_pin_error(
+        &self,
+        error: PinError,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        match error {
+            PinError::ImplicitPartialContained(container_range) => errors
+                .error_builder(
+                    container_range,
+                    ErrorKind::ImplicitAnyEmptyContainer,
+                    "Cannot infer type of empty container; it will be treated as containing `Any`"
+                        .to_owned(),
+                )
+                .with_detail(
+                    "Consider adding a type annotation or initializing with a non-empty value"
+                        .to_owned(),
+                )
+                .emit(),
+            PinError::UnfinishedQuantified(q) => {
+                errors.internal_error(range, format!("Unfinished Variable::Quantified: {q}"))
+            }
         }
     }
 
@@ -2218,7 +2309,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Deep-force to resolve all type variables, matching the
                 // invariant that all iterative answers are deep-forced.
                 let mut forced = Arc::unwrap_or_clone(prior_answer);
-                forced.visit_mut(&mut |x| self.current.solver().deep_force_mut(x));
+                forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
                 let answer = Arc::new(forced);
 
                 // Type-erase for storage. The concrete type inside the outer
@@ -2294,11 +2385,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             raw_answer
         };
 
+        self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
+
         // Deep-force the answer to resolve all type variables. This is required
         // for convergence comparisons: without forcing, structurally identical
         // answers can appear different due to unresolved Var IDs.
         let mut forced = Arc::unwrap_or_clone(answer);
-        forced.visit_mut(&mut |x| self.current.solver().deep_force_mut(x));
+        forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
         let answer = Arc::new(forced);
 
         // Type-erase the answer for storage in iteration state.
@@ -2594,14 +2687,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// state is updated (previous answers extracted, fresh state set), and
     /// it is pushed back for the next iteration (pop-mutate-push pattern).
     ///
-    /// Absorption detection: if the top SCC's `detected_at` changes during
-    /// iteration (because this SCC was merged into an ancestor), the driver
-    /// returns without committing if an ancestor SCC still exists on stack to
-    /// own the merged SCC. If no ancestor SCC exists, the current driver
-    /// continues with the updated identity to avoid orphaning.
+    /// If this SCC merges with one owned by an older iterative driver, this
+    /// driver returns without popping or committing it. The older driver is
+    /// suspended lower on the Rust call stack and resumes ownership when the
+    /// nested calculation returns.
     #[allow(clippy::mutable_key_type)]
     fn iterative_resolve_scc(&self, mut scc: Scc) {
-        let mut scc_identity = scc.detected_at.dupe();
+        let owner = scc.owner.start_driver();
+        scc.owner = owner;
         let mut demotions: u32 = 0;
         let mut exceeded_max_iterations = false;
 
@@ -2615,41 +2708,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Drive all fresh members until none remain.
             self.drive_all_iteration_members();
 
-            // Defensive guard: if the SCC stack is empty here, another driver
-            // (via nested absorption) has already committed all members.
-            // We investigated this path during cleanup but could not confirm
-            // it is unreachable, so we keep the defensive return rather than
-            // asserting.
-            if self.stack().sccs_is_empty() {
-                return;
-            }
+            assert!(
+                !self.stack().sccs_is_empty(),
+                "iterative SCC disappeared while its driver was active"
+            );
 
-            // Absorption detection: if the top SCC's detected_at no longer
-            // matches our identity, this SCC was absorbed during iteration.
-            // Three cases:
-            // 1. An ancestor SCC still exists on stack → that owner context
-            //    will handle the merged SCC, so return.
-            // 2. No ancestor, but the top SCC contains our original
-            //    detected_at as a member → our SCC was merged into the top
-            //    SCC (merge changes detected_at to min). Continue driving
-            //    with the updated identity.
-            // 3. No ancestor, and the top SCC does NOT contain our member
-            //    → our SCC was committed by a nested driver, and a
-            //    pre-existing SCC (e.g. Phase 0) remains on top. Return
-            //    to avoid taking ownership of an unrelated SCC.
-            if self.stack().top_scc_detected_at() != scc_identity {
-                if self.stack().has_ancestor_scc() {
-                    return;
-                }
-                if !self.stack().top_scc_contains_member(&scc_identity) {
-                    // The top SCC doesn't contain our member. Our SCC was
-                    // committed by a nested driver; the remaining SCC is
-                    // unrelated.
-                    return;
-                }
-                // The top SCC absorbed our SCC via merge. Continue driving
-                // with the updated identity.
-                scc_identity = self.stack().top_scc_detected_at();
+            // A merge with an SCC owned by an older driver transfers ownership
+            // to that driver. Leave the merged SCC on the stack for it.
+            if self.stack().top_scc_owner() != owner {
+                return;
             }
 
             // Pop the SCC to inspect its iteration outcome.
@@ -2662,7 +2729,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             if demoted {
                 demotions += 1;
-                check_demotion_limit(demotions, &scc_identity);
+                check_demotion_limit(demotions, &scc.detected_at);
                 scc.reset_for_cold_start();
                 continue;
             }
@@ -2838,14 +2905,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         let range = K::range_with(idx, self.bindings());
-        self.base_errors.add(
-            range,
-            ErrorInfo::Kind(ErrorKind::InternalError),
-            vec1![format!(
-                "Recursion depth limit ({}) exceeded; possible stack overflow prevented",
-                limit
-            )],
-        );
+        self.base_errors
+            .error_builder(
+                range,
+                ErrorKind::InternalError,
+                format!(
+                    "Recursion depth limit ({}) exceeded; possible stack overflow prevented",
+                    limit
+                ),
+            )
+            .emit();
         // Return recursive placeholder (same pattern as cycle handling)
         self.attempt_to_unwind_cycle_from_here(current, idx, calculation)
             .unwrap_or_else(|r| Arc::new(K::promote_recursive(self.heap, r)))
@@ -2920,6 +2989,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_from_module(module, path, k).unwrap_or_else(|| {
             panic!("We should have checked Exports before calling this, {module} {k:?}")
         })
+    }
+
+    pub fn try_get_from_export(&self, module: ModuleName, attr: Name) -> Option<Arc<Type>> {
+        self.exports
+            .export_exists(module, &attr)
+            .then(|| self.get_from_export(module, None, &KeyExport(attr)))
     }
 
     /// Might return None if the class is no longer present on the underlying module.
@@ -2997,22 +3072,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Check if `got` matches `want`, returning `want` if the check fails.
-    pub fn check_and_return_type_info(
-        &self,
-        got: TypeInfo,
-        want: &Type,
-        loc: TextRange,
-        errors: &ErrorCollector,
-        tcc: &dyn Fn() -> TypeCheckContext,
-    ) -> TypeInfo {
-        if self.check_type(got.ty(), want, loc, errors, tcc) {
-            got
-        } else {
-            got.with_ty(want.clone())
-        }
-    }
-
-    /// Check if `got` matches `want`, returning `want` if the check fails.
+    /// Convenience wrapper around `check_type_with_options`.
     pub fn check_and_return_type(
         &self,
         got: Type,
@@ -3021,14 +3081,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> Type {
-        if self.check_type(&got, want, loc, errors, tcc) {
+        if self.check_type_with_options(&got, want, loc, TypeCheckOptions::new(errors, tcc)) {
             got
         } else {
             want.clone()
         }
     }
 
-    /// Check if `got` matches `want`, returning `true` on success and `false` on failure.
+    /// Check if `got` matches `want`. Convenience wrapper around `check_type_with_options`.
     pub fn check_type(
         &self,
         got: &Type,
@@ -3037,12 +3097,174 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> bool {
-        match self.is_subset_eq_with_reason(got, want) {
-            Ok(()) => true,
+        self.check_type_with_options(got, want, loc, TypeCheckOptions::new(errors, tcc))
+    }
+
+    /// Check if `got` matches `want`.
+    pub fn check_type_with_options(
+        &self,
+        got: &Type,
+        want: &Type,
+        loc: TextRange,
+        options: TypeCheckOptions<'_, '_>,
+    ) -> bool {
+        // Record expected type for LSP query
+        self.record_expected_type_trace(loc, want);
+
+        let subset_result = match options.call_context {
+            Some(call_context) => {
+                self.solver()
+                    .is_subset_eq(got, want, self.type_order(), Some(call_context))
+            }
+            None => match (options.context)().kind {
+                TypeCheckKind::CallArgument(..)
+                | TypeCheckKind::CallVarArgs(..)
+                | TypeCheckKind::CallKwArgs(..)
+                | TypeCheckKind::CallUnpackKwArg(..) => {
+                    let call_context = CallContext::outside().with_argument_side(ArgumentSide::Got);
+                    self.solver()
+                        .is_subset_eq(got, want, self.type_order(), Some(&call_context))
+                }
+                _ => self.is_subset_eq_with_reason(got, want),
+            },
+        };
+        match subset_result {
+            Ok(()) => {
+                self.check_string_as_iterable(got, want, loc, options.errors);
+                true
+            }
             Err(error) => {
-                self.solver().error(got, want, errors, loc, tcc, error);
+                self.report_type_error(got, want, options.errors, loc, options.context, error);
                 false
             }
+        }
+    }
+
+    /// Check when `str` is passed where `Iterable[str]` or `Sequence[str]` is expected.
+    /// While `str` is technically iterable, iterating by character is rarely intended.
+    fn check_string_as_iterable(
+        &self,
+        got: &Type,
+        want: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if got.is_error() || got.is_any() || want.is_any() {
+            return;
+        }
+        let is_str = matches!(got, Type::ClassType(cls) if cls.is_builtin("str"));
+        if !is_str && !got.is_literal_string() {
+            return;
+        }
+        let want_is_iterable_str = match want {
+            Type::ClassType(cls) => {
+                let cls_object = cls.class_object();
+                let iterable = self.stdlib.iterable(Type::any_implicit());
+                let sequence = self.stdlib.sequence(Type::any_implicit());
+                let is_iterable =
+                    cls_object == iterable.class_object() || cls_object == sequence.class_object();
+                if !is_iterable {
+                    return;
+                }
+                matches!(
+                    cls.targs().as_slice(),
+                    [elem] if matches!(elem, Type::ClassType(elem_cls) if elem_cls.is_builtin("str"))
+                )
+            }
+            _ => false,
+        };
+        if !want_is_iterable_str {
+            return;
+        }
+        let got_display = self
+            .for_display(self.stdlib.str().clone().to_type())
+            .deterministic_printing();
+        let want_display = self.for_display(want.clone()).deterministic_printing();
+        errors
+            .error_builder(
+                range,
+                ErrorKind::StringAsIterable,
+                format!(
+                    "Passing `{}` to `{}` treats the string as an iterable of characters",
+                    got_display, want_display
+                ),
+            )
+            .with_detail("Did you mean to pass an iterable of strings?".to_owned())
+            .emit();
+    }
+
+    fn report_type_error(
+        &self,
+        got: &Type,
+        want: &Type,
+        errors: &ErrorCollector,
+        loc: TextRange,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        error: SubsetError,
+    ) {
+        let mut builder = self
+            .solver()
+            .error_builder(got, want, errors, loc, tcc, error);
+        if let Some(replacement) = self.suggest_enum_member_for_value(got, want) {
+            builder = builder
+                .with_detail(format!("Did you mean `{replacement}`?"))
+                .with_quick_fix(ErrorQuickFix::ReplaceWithEnumMember { replacement });
+        }
+        if Self::type_contains_none(got) && !Self::type_contains_none(want) {
+            let hint = match tcc().kind {
+                TypeCheckKind::ExplicitFunctionReturn
+                | TypeCheckKind::AnnAssign
+                | TypeCheckKind::AnnotatedName(_)
+                    if !got.is_none() =>
+                {
+                    Some(format!(
+                        "Consider narrowing the value with an `is not None` check or changing the declared type to `{} | None`",
+                        self.for_display(want.clone()),
+                    ))
+                }
+                TypeCheckKind::ImplicitFunctionReturn(_) => {
+                    // For implicit returns (missing return statement), the error message
+                    // "Function declared to return X, but one or more paths are missing
+                    // an explicit return" is already clear. Adding a None hint here is
+                    // confusing because the user didn't explicitly return None.
+                    // Skip the hint for implicit returns.
+                    None
+                }
+                TypeCheckKind::Attribute(_)
+                | TypeCheckKind::CallArgument(..)
+                | TypeCheckKind::CallKwArgs(..)
+                | TypeCheckKind::CallUnpackKwArg(..)
+                | TypeCheckKind::CallVarArgs(..) => {
+                    if got.is_none() {
+                        // Skip the hint. Narrowing the value doesn't make sense if there's no
+                        // non-None part to narrow to, and changing the attribute or parameter type
+                        // is often unactionable, since the definition may be in third-party code.
+                        None
+                    } else {
+                        // We only suggest narrowing. Changing the attribute or parameter type is
+                        // often unactionable, since the definition may be in third-party code.
+                        Some("Consider narrowing the value with an `is not None` check".to_owned())
+                    }
+                }
+                _ => Some(format!(
+                    "Consider changing the declared type to `{} | None`",
+                    self.for_display(want.clone())
+                )),
+            };
+            if let Some(hint) = hint {
+                builder = builder
+                    .with_detail(format!("The declared type does not allow `None`. {hint}."));
+            }
+        }
+        builder.emit();
+    }
+
+    /// Returns true if the type is `None` or a union containing `None`.
+    fn type_contains_none(ty: &Type) -> bool {
+        match ty {
+            Type::None => true,
+            Type::Union(u) => u.members.iter().any(|m| matches!(m, Type::None)),
+            _ => false,
         }
     }
 
@@ -3073,12 +3295,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fn go(&mut self, ty: &Type, in_type: bool) {
                 match ty {
                     Type::Never(_) if !in_type => (),
-                    Type::Union(box Union { members, .. }) => {
+                    Type::Union(f) => {
                         self.seen_union = true;
-                        members.iter().for_each(|ty| self.go(ty, in_type))
+                        f.members.iter().for_each(|ty| self.go(ty, in_type))
                     }
-                    Type::Type(box Type::Union(box Union { members, .. })) if !in_type => {
-                        members.iter().for_each(|ty| self.go(ty, true))
+                    Type::Type(f) if !in_type && let Type::Union(u) = &**f => {
+                        u.members.iter().for_each(|ty| self.go(ty, true))
                     }
                     Type::Var(v) if let Some(_guard) = self.me.recurse(*v) => {
                         self.go(&self.me.solver().force_var(*v), in_type)
@@ -3111,14 +3333,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(vec![x, y])
     }
 
+    /// Adds an error and returns Type::Any(Error)
     pub fn error(
         &self,
         errors: &ErrorCollector,
         range: TextRange,
-        info: ErrorInfo,
+        kind: ErrorKind,
         msg: String,
     ) -> Type {
-        errors.add(range, info, vec1![msg]);
+        errors.error_builder(range, kind, msg).emit();
+        self.heap.mk_any_error()
+    }
+
+    /// Adds an error with the given context and returns Type::Any(Error)
+    pub fn error_with_context(
+        &self,
+        errors: &ErrorCollector,
+        range: TextRange,
+        kind: ErrorKind,
+        msg: String,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Type {
+        errors
+            .error_builder(range, kind, msg)
+            .with_context(context)
+            .emit();
         self.heap.mk_any_error()
     }
 
@@ -3134,7 +3373,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ErrorCollector::new(self.module().dupe(), ErrorStyle::Never)
     }
 
-    /// Add an implicit-any error for a generic entity without explicit type arguments.
+    /// Add an `implicit-any-type-argument` error for a generic entity used
+    /// without explicit type arguments.
     pub fn add_implicit_any_error(
         errors: &ErrorCollector,
         range: TextRange,
@@ -3152,14 +3392,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 generic_entity
             )
         };
-        errors.add(
-            range,
-            ErrorInfo::Kind(ErrorKind::ImplicitAny),
-            vec1![
-                msg,
+        errors
+            .error_builder(range, ErrorKind::ImplicitAnyTypeArgument, msg)
+            .with_detail(
                 "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
-            ],
-        );
+            )
+            .emit();
     }
 
     /// Compare two type-erased answers for equality, dispatching through
@@ -3239,11 +3477,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             "result"
         };
-        let mut messages = vec1![format!(
-            "Fixpoint iteration did not converge. \
-             Inferred {} `{}`. Adding annotations may help.",
-            noun, typed_answer,
-        )];
+        let mut builder = member_errors.error_builder(
+            K::range_with(idx, member_bindings),
+            ErrorKind::NonConvergentRecursion,
+            format!(
+                "Fixpoint iteration did not converge. \
+                 Inferred {} `{}`. Adding annotations may help.",
+                noun, typed_answer,
+            ),
+        );
         // If PYREFLY_FIXPOINT_DETAILS=1 is set, we output much more detailed information useful
         // for explaining or debugging nonconvergence in terms of Pyrefly internals.
         if Self::fixpoint_details_enabled() {
@@ -3256,38 +3498,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("{prev_typed:?}")
                 })
                 .unwrap_or_else(|| "<none>".to_owned());
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] key={:?} key_idx={idx:?}",
-                K::to_anyidx(idx),
-            ));
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] module={} path={}",
-                member_bindings.module().name(),
-                member_bindings.module().path(),
-            ));
-            messages.push(format!("[PYREFLY_FIXPOINT_DETAILS] binding={binding:?}",));
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] answer_type={}",
-                std::any::type_name::<K::Answer>(),
-            ));
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] previous={previous_debug}",
-            ));
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] current={typed_answer:?}",
-            ));
+            builder = builder.with_details(vec![
+                format!(
+                    "[PYREFLY_FIXPOINT_DETAILS] key={:?} key_idx={idx:?}",
+                    K::to_anyidx(idx),
+                ),
+                format!(
+                    "[PYREFLY_FIXPOINT_DETAILS] module={} path={}",
+                    member_bindings.module().name(),
+                    member_bindings.module().path(),
+                ),
+                format!("[PYREFLY_FIXPOINT_DETAILS] binding={binding:?}"),
+                format!(
+                    "[PYREFLY_FIXPOINT_DETAILS] answer_type={}",
+                    std::any::type_name::<K::Answer>(),
+                ),
+                format!("[PYREFLY_FIXPOINT_DETAILS] previous={previous_debug}"),
+                format!("[PYREFLY_FIXPOINT_DETAILS] current={typed_answer:?}"),
+            ]);
         }
-        let range = K::range_with(idx, member_bindings);
-        member_errors.add(
-            range,
-            ErrorInfo::Kind(ErrorKind::NonConvergentRecursion),
-            messages,
-        );
+        builder.emit();
     }
 }
 
 #[cfg(test)]
 mod scc_tests {
+    use vec1::vec1;
+
     use super::*;
 
     /// Create a dummy `SccNodeState::Done` for testing.
@@ -3303,23 +3540,17 @@ mod scc_tests {
     ///
     /// This bypasses the normal Scc::new constructor to allow direct construction
     /// for testing merge logic.
-    ///
-    /// Note: top_pos_exclusive is set to bottom_pos_inclusive + node_state.len()
-    /// which approximates the segment span. In production, top_pos_exclusive may
-    /// differ from bottom_pos_inclusive + participant count due to duplicate
-    /// CalcIds during cycle breaking.
     #[allow(clippy::mutable_key_type)]
     fn make_test_scc(
         node_state: BTreeMap<CalcId, SccNodeState>,
         detected_at: CalcId,
         bottom_pos_inclusive: usize,
     ) -> Scc {
-        let top_pos_exclusive = bottom_pos_inclusive + node_state.len();
         Scc {
             node_state,
             detected_at,
             bottom_pos_inclusive,
-            top_pos_exclusive,
+            owner: SccOwner::Phase0(0),
             iterative: SccIterationState {
                 iteration: 0,
                 previous_answers: BTreeMap::new(),
@@ -3346,6 +3577,20 @@ mod scc_tests {
         ids.iter()
             .map(|id| (id.dupe(), SccNodeState::Fresh))
             .collect()
+    }
+
+    #[test]
+    fn test_scc_encloses() {
+        let a = CalcId::for_test("m", 0);
+        let b = CalcId::for_test("m", 1);
+        let c = CalcId::for_test("m", 2);
+        let existing = make_test_scc(fresh_nodes(&[a, b.dupe()]), b, 2);
+
+        let enclosing = make_test_scc(fresh_nodes(&[c.dupe()]), c.dupe(), 1);
+        assert!(CalcStack::encloses(&enclosing, &existing));
+
+        let disjoint = make_test_scc(fresh_nodes(&[c.dupe()]), c, 3);
+        assert!(!CalcStack::encloses(&disjoint, &existing));
     }
 
     #[test]
@@ -3406,90 +3651,10 @@ mod scc_tests {
     }
 
     #[test]
-    fn test_subcycle_within_active_cycle() {
-        // Setup: CalcStack = [M0, M1, M2, M3], existing SCC with {M0, M1, M2, M3}
-        // New cycle detected: [M3, M2, M1] (sub-cycle within the existing SCC)
-        // Expected: Merged into same SCC
-        let a = CalcId::for_test("m", 0);
-        let b = CalcId::for_test("m", 1);
-        let c = CalcId::for_test("m", 2);
-        let d = CalcId::for_test("m", 3);
-
-        let calc_stack = make_calc_stack(&[a.dupe(), b.dupe(), c.dupe(), d.dupe()]);
-
-        // Create initial SCC with A, B, C, D
-        let initial_cycle = vec1![d.dupe(), c.dupe(), b.dupe(), a.dupe()];
-        calc_stack.on_scc_detected(initial_cycle);
-
-        // Now detect sub-cycle D -> B
-        let sub_cycle = vec1![d.dupe(), c.dupe(), b.dupe()];
-        calc_stack.on_scc_detected(sub_cycle);
-
-        // The sub-cycle overlaps with existing SCC, so they merge
-        let stack = calc_stack.borrow_scc_stack();
-        assert_eq!(
-            stack.len(),
-            1,
-            "Should still have exactly one SCC after merging"
-        );
-
-        // All nodes should be in the merged SCC
-        let scc = &stack[0];
-        assert!(scc.node_state.contains_key(&a));
-        assert!(scc.node_state.contains_key(&b));
-        assert!(scc.node_state.contains_key(&c));
-        assert!(scc.node_state.contains_key(&d));
-    }
-
-    #[test]
-    fn test_back_edge_into_existing_cycle() {
-        // CalcStack: [M0, M1, M2, M3, M4, M5]
-        // Existing SCC: {M1, M2, M3}
-        // New cycle: [M5, M4, M3, M2] (back-edge from M5 to M2)
-        // Expected: Merge creates SCC with {M1, M2, M3, M4, M5}
-        let a = CalcId::for_test("m", 0);
-        let b = CalcId::for_test("m", 1);
-        let c = CalcId::for_test("m", 2);
-        let d = CalcId::for_test("m", 3);
-        let e = CalcId::for_test("m", 4);
-        let f = CalcId::for_test("m", 5);
-
-        let calc_stack =
-            make_calc_stack(&[a.dupe(), b.dupe(), c.dupe(), d.dupe(), e.dupe(), f.dupe()]);
-
-        // Create initial SCC with B, C, D (detected from D going back to B)
-        let initial_cycle = vec1![d.dupe(), c.dupe(), b.dupe()];
-        calc_stack.on_scc_detected(initial_cycle);
-
-        // Verify initial state
-        {
-            let stack = calc_stack.borrow_scc_stack();
-            assert_eq!(stack.len(), 1);
-            assert_eq!(stack[0].node_state.len(), 3);
-        }
-
-        // Now detect cycle [F, E, D, C] - overlaps with existing at C and D
-        let new_cycle = vec1![f.dupe(), e.dupe(), d.dupe(), c.dupe()];
-        calc_stack.on_scc_detected(new_cycle);
-
-        // Should merge because new cycle overlaps with existing SCC
-        let stack = calc_stack.borrow_scc_stack();
-        assert_eq!(stack.len(), 1, "Should have merged into one SCC");
-
-        let scc = &stack[0];
-        // B, C, D, E, F should all be in the merged SCC
-        assert!(scc.node_state.contains_key(&b));
-        assert!(scc.node_state.contains_key(&c));
-        assert!(scc.node_state.contains_key(&d));
-        assert!(scc.node_state.contains_key(&e));
-        assert!(scc.node_state.contains_key(&f));
-    }
-
-    #[test]
     fn test_back_edge_before_existing_cycle() {
         // CalcStack: [M0, M1, M2, M3, M4, M5]
         // Existing SCC: {M1, M2, M3}
-        // New cycle: [M5, M4, M3, M2, M1, M0] (back-edge from M5 to M0)
+        // New cycle is a back-edge from M5 to M0
         // Expected: Merge creates SCC with {M0, M1, M2, M3, M4, M5}
         let a = CalcId::for_test("m", 0);
         let b = CalcId::for_test("m", 1);
@@ -3502,11 +3667,11 @@ mod scc_tests {
             make_calc_stack(&[a.dupe(), b.dupe(), c.dupe(), d.dupe(), e.dupe(), f.dupe()]);
 
         // Create initial SCC with B, C, D
-        let initial_cycle = vec1![d.dupe(), c.dupe(), b.dupe()];
+        let initial_cycle = vec1![b.dupe(), d.dupe(), c.dupe()];
         calc_stack.on_scc_detected(initial_cycle);
 
-        // Now detect cycle [F, E, D, C, B, A] - includes everything from A to F
-        let new_cycle = vec1![f.dupe(), e.dupe(), d.dupe(), c.dupe(), b.dupe(), a.dupe()];
+        // The cycle is in recency order, starting with the repeated target A.
+        let new_cycle = vec1![a.dupe(), f.dupe(), e.dupe(), d.dupe(), c.dupe(), b.dupe()];
         calc_stack.on_scc_detected(new_cycle);
 
         // Should merge because new cycle contains the existing SCC
@@ -3635,14 +3800,53 @@ mod scc_tests {
     }
 
     #[test]
+    fn test_iterating_scc_is_not_completed_by_stack_position() {
+        let a = CalcId::for_test("m", 0);
+        let calc_stack = make_calc_stack(&[a.dupe()]);
+        let mut scc = make_test_scc(fresh_nodes(&[a.dupe()]), a.dupe(), 0);
+        scc.iterative.iteration = 1;
+        scc.owner = SccOwner::Driver(0);
+        calc_stack.scc_stack.borrow_mut().push(scc);
+
+        let answer: Arc<dyn Any + Send + Sync> = Arc::new(Arc::new(42usize));
+        let _ = calc_stack.on_calculation_finished(&a, answer, None, None);
+
+        assert_eq!(calc_stack.borrow_scc_stack().len(), 1);
+        assert!(calc_stack.pending_completed_scc.borrow().is_none());
+    }
+
+    #[test]
+    fn test_merge_preserves_oldest_owner() {
+        let a = CalcId::for_test("m", 0);
+        let b = CalcId::for_test("m", 1);
+        let mut outer = make_test_scc(fresh_nodes(&[a.dupe()]), a.dupe(), 0);
+        let mut inner = make_test_scc(fresh_nodes(&[b.dupe()]), b.dupe(), 1);
+        outer.owner = SccOwner::Phase0(3);
+        inner.owner = SccOwner::Driver(7);
+
+        let merged = Scc::merge_many(vec1![inner, outer], b.dupe());
+
+        assert_eq!(merged.owner, SccOwner::Phase0(3));
+
+        let mut outer = make_test_scc(fresh_nodes(&[a.dupe()]), a, 0);
+        let mut inner = make_test_scc(fresh_nodes(&[b.dupe()]), b.dupe(), 1);
+        outer.owner = SccOwner::Driver(3);
+        inner.owner = SccOwner::Phase0(7);
+
+        let merged = Scc::merge_many(vec1![inner, outer], b);
+
+        assert_eq!(merged.owner, SccOwner::Driver(3));
+    }
+
+    #[test]
     fn test_stale_calculation_panic() {
         // Reproduces the panic where Calculation has stale state but CalcStack is fresh.
         let calc_id = CalcId::for_test("m", 0);
         let calculation: Calculation<usize> = Calculation::new();
 
-        // 1. Simulate stale state: propose calculation on this thread.
-        // This sets the thread bit in calculation.
-        match calculation.propose_calculation() {
+        // 1. Simulate stale state by leaving the calculation in progress.
+        // SAFETY: The test does not evaluate dependencies or recurse after proposing.
+        match unsafe { calculation.propose_calculation() } {
             ProposalResult::Calculatable => {}
             _ => panic!("Expected Calculatable"),
         }
@@ -3698,7 +3902,7 @@ mod scc_tests {
                 node_state,
                 detected_at: a.dupe(),
                 bottom_pos_inclusive: 0,
-                top_pos_exclusive: 2,
+                owner: SccOwner::Driver(0),
                 iterative: SccIterationState {
                     iteration: 2,
                     previous_answers: BTreeMap::new(),
@@ -3719,7 +3923,7 @@ mod scc_tests {
                 node_state,
                 detected_at: d.dupe(),
                 bottom_pos_inclusive: 3,
-                top_pos_exclusive: 5,
+                owner: SccOwner::Driver(1),
                 iterative: SccIterationState {
                     iteration: 1,
                     previous_answers: BTreeMap::new(),
@@ -3800,151 +4004,26 @@ mod scc_tests {
     }
 
     #[test]
-    #[allow(clippy::mutable_key_type)]
-    fn test_absorption_detection() {
-        // Verify the absorption detection mechanism used by iterative_resolve_scc:
-        // when an iterating inner SCC is merged into an ancestor SCC during
-        // iteration, top_scc_detected_at() changes, allowing the driver to
-        // detect that absorption occurred and return without committing.
-        //
-        // Setup:
-        //   CalcStack = [A, B, C, D, E]
-        //   SCC_outer (ancestor): members {A, B}, detected_at = A, iterating at iteration 2
-        //   SCC_inner (top):      members {D, E}, detected_at = D, iterating at iteration 1
-        //   C is between the two SCCs but not a member of either.
-        //
-        // The iterative_resolve_scc driver for SCC_inner would have saved
-        // scc_identity = D (the inner SCC's detected_at) before pushing it
-        // onto the stack and driving members.
-        //
-        // Action: push(A, ...) -- simulates a dependency on A discovered during
-        //   driving of SCC_inner. A is a member of SCC_outer, triggering a
-        //   membership back-edge merge that absorbs SCC_inner into SCC_outer.
-        //
-        // Expected:
-        //   - After merge, only one SCC remains on the stack.
-        //   - top_scc_detected_at() returns A (the ancestor's detected_at),
-        //     NOT D (the inner SCC's original detected_at).
-        //   - This mismatch (top_scc_detected_at() != scc_identity) is the
-        //     absorption detection condition in iterative_resolve_scc.
-        let a = CalcId::for_test("m", 0);
-        let b = CalcId::for_test("m", 1);
-        let c = CalcId::for_test("m", 2);
-        let d = CalcId::for_test("m", 3);
-        let e = CalcId::for_test("m", 4);
+    fn test_nonmember_caller_is_absorbed() {
+        let member = CalcId::for_test("m", 0);
+        let caller = CalcId::for_test("m", 1);
+        let calc_stack = make_calc_stack(&[member.dupe(), caller.dupe()]);
+        let mut scc = make_test_scc(fresh_nodes(&[member.dupe()]), member.dupe(), 0);
+        scc.owner = SccOwner::Driver(0);
+        scc.iterative.iteration = 1;
+        calc_stack.scc_stack.borrow_mut().push(scc);
 
-        // Build the iterative CalcStack with [A, B, C, D, E].
-        let calc_stack = make_calc_stack(&[a.dupe(), b.dupe(), c.dupe(), d.dupe(), e.dupe()]);
+        let action = calc_stack.push(member);
 
-        // Manually construct SCC_outer (ancestor) with iterative state at iteration 2.
-        let scc_outer = {
-            let mut node_state = BTreeMap::new();
-            node_state.insert(a.dupe(), SccNodeState::Fresh);
-            node_state.insert(b.dupe(), SccNodeState::Fresh);
-            Scc {
-                node_state,
-                detected_at: a.dupe(),
-                bottom_pos_inclusive: 0,
-                top_pos_exclusive: 2,
-                iterative: SccIterationState {
-                    iteration: 2,
-                    previous_answers: BTreeMap::new(),
-                    demoted: false,
-                    has_changed: false,
-                    merge_happened: false,
-                    recursion_breaks: BTreeSet::new(),
-                },
-            }
-        };
-
-        // Manually construct SCC_inner (top) with iterative state at iteration 1.
-        let scc_inner = {
-            let mut node_state = BTreeMap::new();
-            node_state.insert(d.dupe(), SccNodeState::Fresh);
-            node_state.insert(e.dupe(), SccNodeState::Fresh);
-            Scc {
-                node_state,
-                detected_at: d.dupe(),
-                bottom_pos_inclusive: 3,
-                top_pos_exclusive: 5,
-                iterative: SccIterationState {
-                    iteration: 1,
-                    previous_answers: BTreeMap::new(),
-                    demoted: false,
-                    has_changed: false,
-                    merge_happened: false,
-                    recursion_breaks: BTreeSet::new(),
-                },
-            }
-        };
-
-        // Save the inner SCC's identity, as iterative_resolve_scc would.
-        let scc_identity = scc_inner.detected_at.dupe();
-
-        // Verify scc_identity is D (not A).
-        assert_eq!(
-            scc_identity, d,
-            "scc_identity should be D (the inner SCC's detected_at)"
-        );
-
-        // Push both SCCs: SCC_outer at bottom, SCC_inner on top.
-        {
-            let mut scc_stack = calc_stack.scc_stack.borrow_mut();
-            scc_stack.push(scc_outer);
-            scc_stack.push(scc_inner);
-        }
-
-        // Verify initial state: two SCCs, top detected_at == D.
-        assert_eq!(calc_stack.borrow_scc_stack().len(), 2);
-        assert_eq!(
-            calc_stack.top_scc_detected_at(),
-            d,
-            "before merge, top_scc_detected_at should be D"
-        );
-
-        // No absorption yet: the identity matches the top SCC's detected_at.
-        assert_eq!(
-            calc_stack.top_scc_detected_at(),
-            scc_identity,
-            "before merge, no absorption should be detected"
-        );
-
-        // Simulate what happens during driving: push(A) triggers a
-        // membership back-edge merge because A is in SCC_outer.
-        let _action = calc_stack.push(a.dupe());
-
-        // After merge, there should be exactly one SCC.
-        assert_eq!(
-            calc_stack.borrow_scc_stack().len(),
-            1,
-            "SCCs should have merged into one after membership back-edge"
-        );
-
-        // The absorption detection condition: top_scc_detected_at() != scc_identity.
-        // After merging, the top SCC's detected_at should be A (the ancestor's),
-        // which differs from D (the saved scc_identity).
-        let top_detected_at = calc_stack.top_scc_detected_at();
-        assert_eq!(
-            top_detected_at, a,
-            "after merge, top_scc_detected_at should be A (the ancestor's detected_at)"
-        );
-        assert_ne!(
-            top_detected_at, scc_identity,
-            "absorption detection: top_scc_detected_at should differ from the \
-             inner SCC's saved identity, signaling that the inner SCC was absorbed"
-        );
-
-        // Verify the merged SCC has merge_happened = true (confirming the
-        // merge actually happened; demotion is deferred to drive_all_iteration_members).
-        let scc_stack = calc_stack.borrow_scc_stack();
-        let merged = &scc_stack[0];
         assert!(
-            merged.iterative.merge_happened,
-            "merged SCC should have merge_happened = true"
+            matches!(action, BindingAction::Calculate),
+            "the absorbed caller should leave the requested member Fresh"
         );
         assert!(
-            !merged.iterative.demoted,
-            "merged SCC should have demoted = false (demotion is deferred)"
+            calc_stack.borrow_scc_stack()[0]
+                .node_state
+                .contains_key(&caller),
+            "the nonmember caller should be absorbed"
         );
     }
 

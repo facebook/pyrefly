@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use dupe::Dupe;
 use pyrefly_python::dunder;
 use ruff_python_ast::name::Name;
 use starlark_map::smallmap;
@@ -15,12 +14,12 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
+use crate::types::function::FuncMetadata;
+use crate::types::function::Function;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -45,7 +44,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT, None),
+            metadata: FuncMetadata::method(cls, dunder::INIT),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -61,7 +60,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::NEW, None),
+            metadata: FuncMetadata::method(cls, dunder::NEW),
         });
         ClassSynthesizedField::new(ty)
     }

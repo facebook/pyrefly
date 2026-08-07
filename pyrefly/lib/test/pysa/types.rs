@@ -575,7 +575,7 @@ class MyTypedDict(TypedDict):
     // Handle type[A]
     assert_eq!(
         PysaType::new(
-            "builtins.type[test.MyClass]".to_owned(),
+            "type[test.MyClass]".to_owned(),
             ClassNamesFromType::from_class(&get_class("test", "MyClass", &context), &context)
                 .prepend_modifier(TypeModifier::Type),
         ),
@@ -586,7 +586,7 @@ class MyTypedDict(TypedDict):
     );
     assert_eq!(
         PysaType::new(
-            "builtins.type[test.MyClass]".to_owned(),
+            "type[test.MyClass]".to_owned(),
             ClassNamesFromType::from_class(&get_class("test", "MyClass", &context), &context)
                 .prepend_modifier(TypeModifier::Type),
         ),
@@ -607,7 +607,7 @@ class MyTypedDict(TypedDict):
 
     assert_eq!(
         PysaType::new(
-            "builtins.type[test.A | test.B]".to_owned(),
+            "type[test.A | test.B]".to_owned(),
             ClassNamesFromType::from_classes(
                 vec![
                     get_class_ref("test", "A", &context),
@@ -690,11 +690,6 @@ class MyTypedDict(TypedDict):
                             read_only_reason: None,
                         },
                     )],
-                    value_type: context
-                        .answers_context
-                        .answers
-                        .heap()
-                        .mk_class_type(context.answers_context.stdlib.int().clone()),
                 }))),
             &context,
         ),

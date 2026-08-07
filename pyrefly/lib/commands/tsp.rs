@@ -24,6 +24,7 @@ use crate::lsp::non_wasm::server::MessageReader;
 use crate::lsp::non_wasm::server::Server;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;
+use crate::lsp::non_wasm::workspace::ServerMode;
 use crate::tsp::server::tsp_capabilities;
 use crate::tsp::server::tsp_loop;
 
@@ -38,6 +39,10 @@ pub struct TspArgs {
     /// Note that indexing files is a performance-intensive task.
     #[arg(long, default_value_t = if cfg!(fbcode_build) {0} else {2000})]
     pub(crate) workspace_indexing_limit: usize,
+    /// Selects the transport for the main JSON-RPC connection.
+    /// Use `stdio` (default) or `ipc://<name>` for a local socket / named pipe.
+    #[arg(long, default_value = "stdio")]
+    pub(crate) transport: String,
 }
 
 pub fn run_tsp(
@@ -64,6 +69,7 @@ pub fn run_tsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             false,
+            ServerMode::TypeServer,
             surface,
             agent_session_id,
             agent_invocation_id,
@@ -107,9 +113,7 @@ impl TspArgs {
         // Note that we must have our logging only write out to stderr.
         eprintln!("starting TSP server");
 
-        // Create the transport. Includes the stdio (stdin and stdout) versions but this could
-        // also be implemented to use sockets or HTTP.
-        let (connection, reader, io_threads) = Connection::stdio();
+        let (connection, reader, io_threads) = Connection::from_transport(&self.transport)?;
 
         run_tsp(connection, reader, self, telemetry, wrapper, thread_count)?;
         io_threads.join()?;

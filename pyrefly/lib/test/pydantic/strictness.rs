@@ -126,7 +126,6 @@ Model(x='123')
 Model(x=b'123')
 Model(x=Decimal('123'))
 
-
 class Model2(BaseModel):
     x: bytes
 

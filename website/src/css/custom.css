@@ -370,3 +370,12 @@ html[data-theme='dark'] .navbar .discord__link:before {
         max-width: initial !important;
     }
 }
+
+/* Make h4 headings in doc content visually distinct as sub-headings,
+   while staying smaller and lighter than h3 (which is the parent heading).
+   This affects only in-page rendering — the right-sidebar TOC uses
+   its own theme classes (.table-of-contents__link) and is not affected. */
+.markdown h4 {
+    font-size: 1.25rem;
+    font-weight: 600;
+}

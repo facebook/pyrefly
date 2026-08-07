@@ -22,7 +22,6 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
 use pyrefly_types::facet::FacetKind;
 use pyrefly_types::type_info::TypeInfo;
-use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit;
@@ -309,10 +308,9 @@ fn collect_call_contextual_types(
             // (1 for bound methods to skip `self`, 0 otherwise).
             let (params, skip_count): (&Params, usize) = match &callee_type {
                 Type::Function(f) => (&f.signature.params, 0),
-                Type::BoundMethod(box BoundMethod {
-                    func: BoundMethodType::Function(f),
-                    ..
-                }) => (&f.signature.params, 1),
+                Type::BoundMethod(bm) if let BoundMethodType::Function(f) = &bm.func => {
+                    (&f.signature.params, 1)
+                }
                 _ => return,
             };
 
@@ -485,6 +483,7 @@ impl<'a> ExpressionCollector<'a> {
     /// on the `LocatedType`.
     fn visit_expr(&mut self, x: &Expr, parent: Option<&Expr>) {
         if let Some(ty) = self.lookup_type(x) {
+            let ty = self.answers.solver().for_export_boundary(ty);
             let range = x.range();
             let location = self
                 .module_info
@@ -550,6 +549,8 @@ impl<'a> ExpressionCollector<'a> {
                         });
                 match unnarrowed_ty {
                     Some(unnarrowed_ty) => {
+                        let unnarrowed_ty =
+                            self.answers.solver().for_export_boundary(unnarrowed_ty);
                         let unnarrowed_idx = type_to_structured(
                             &unnarrowed_ty,
                             &mut self.table,
@@ -569,7 +570,8 @@ impl<'a> ExpressionCollector<'a> {
             // Check if this expression flows into a slot with a contextual type
             // (e.g. a literal assigned to a `__static__` primitive variable).
             let contextual_type = self.contextual_types.get(&x.range()).map(|ctx_ty| {
-                type_to_structured(ctx_ty, &mut self.table, &mut self.pending_class_traits)
+                let ctx_ty = self.answers.solver().for_export_boundary(ctx_ty.clone());
+                type_to_structured(&ctx_ty, &mut self.table, &mut self.pending_class_traits)
             });
 
             self.locations.push(LocatedType {

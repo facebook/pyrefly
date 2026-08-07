@@ -39,6 +39,5 @@ class AppConfig(BaseSettings, RootModel):
     database_url: str
     api_key: str
     port: int
-
 "#,
 );

@@ -83,6 +83,51 @@ test(C())
 );
 
 testcase!(
+    test_any_bound_attribute_access,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+class Concrete: ...
+
+def pep695_bound[T: Any](arg: T) -> T:
+    assert_type(arg.method(), Any)
+    return arg
+
+LegacyT = TypeVar("LegacyT", bound=Any)
+def legacy_bound(arg: LegacyT) -> LegacyT:
+    assert_type(arg.method(), Any)
+    return arg
+
+assert_type(pep695_bound(Concrete()), Concrete)
+assert_type(legacy_bound(Concrete()), Concrete)
+
+class Base:
+    def method(self) -> int: ...
+    @classmethod
+    def class_method(cls) -> int: ...
+class Inherited(Base): ...
+
+def union_bound[T: Any | Inherited](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    arg.missing()  # E: Object of class `Inherited` has no attribute `missing`
+    return arg
+
+def constrained[T: (Any, Inherited)](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    return arg
+
+def class_bound[T: Any](arg: type[T]) -> type[T]:
+    assert_type(arg.__name__, str)
+    assert_type(arg.class_method(), Any)
+    return arg
+
+def class_constrained[T: (Any, Inherited)](arg: type[T]) -> type[T]:
+    arg.class_method()
+    return arg
+ "#,
+);
+
+testcase!(
     test_base_class_bound,
     r#"
 class A: pass
@@ -112,7 +157,7 @@ def test[T: (B, C)](x: T) -> None:
     c: C = x  # E: `T` is not assignable to `C`
     d: B | C = x  # OK
 
-test(A())  # E: `A` is not assignable to upper bound `B | C` of type variable `T`
+test(A())  # E: `A` is not assignable to any of constraints `B`, `C` of type variable `T`
 test(B())
 test(C())
 test(D())
@@ -341,7 +386,7 @@ from typing import Self, TypeVar
 
 class B():
     def f(self) -> Self:
-        return self 
+        return self
 class C(B):
     pass
 class D(B):
@@ -592,7 +637,7 @@ class X: ...
 def f[T: (int, str)](x: T) -> T: ...
 
 # X is not assignable to int or str, so this should error.
-f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `T`
+f(X())  # E: `X` is not assignable to any of constraints `int`, `str` of type variable `T`
     "#,
 );
 
@@ -629,6 +674,39 @@ def add1[T: int](x: T, y: T) -> T:
     return x + y # E: Returned type `int` is not assignable to declared return type `T`
 def add2[T: int | float](x: T, y: T) -> T:
     return x + y # E: Returned type `float | int` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    test_multiple_binops_with_constrained_typevar,
+    r#"
+from typing import TypeVar
+
+T = TypeVar("T", str, int)
+
+def foo(a: T) -> T:
+    doubled = 2 * a
+    return a + doubled
+    "#,
+);
+
+testcase!(
+    test_constraints_with_custom_add,
+    r#"
+from typing import assert_type, TypeVar
+class A1:
+    pass
+class A2:
+    def __radd__(self, other: "MyNum") -> str: ...
+class MyNum:
+    def __add__(self, other: A1) -> int: ...
+T = TypeVar("T", bound=MyNum)
+U = TypeVar("U", A1, A2)
+
+def f(x: T, y: U):
+    # T + A1 -> MyNum.__add__(A1) -> int
+    # T + A2 -> A2.__radd__(MyNum) -> str
+    assert_type(x + y, int | str)
     "#,
 );
 
@@ -1134,8 +1212,6 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug =
-        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1156,22 +1232,21 @@ class Bar(Generic[T]):
 
 # Nested class using outer class's TypeVar
 class Outer(Generic[T]):
-    class Bad(Iterable[T]):  # should error: T from outer not in scope
+    class Bad(Iterable[T]):  # E: Type variable `T` is not in scope
         ...
     class AlsoBad:
-        x: list[T]  # should error: T from outer not in scope
+        x: list[T]  # E: Type variable `T` is not in scope
 
-    alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
+    alias: TypeAlias = list[T]  # E: Type variable `T` is not in scope
 
 # Unbound TypeVars at global scope
 global_var1: T  # E: Type variable `T` is not in scope
 global_var2: list[T] = []  # E: Type variable `T` is not in scope
-list[T]()  # should error
+list[T]()  # E: Type variable `T` is not in scope
 "#,
 );
 
 testcase!(
-    bug = "Follow-on errors on TypeVar usages inside nested class that shadows outer TypeVars",
     test_nested_class_independent_typevar_adoption,
     r#"
 from typing import Generic, Type, TypeVar
@@ -1182,15 +1257,95 @@ _Serialized = TypeVar("_Serialized")
 class CustomCoercer(Generic[_Deserialized, _Serialized]):
     # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
     class CoercerMapping(
-        dict[
-            Type[_Deserialized],  # should error: _Deserialized already bound by CustomCoercer
-            Type["CustomCoercer[_Deserialized, _Serialized]"],  # should error: both TypeVars
+        dict[  # E: Type variable `_Deserialized` is not in scope  # E: Type variable `_Serialized` is not in scope
+            Type[_Deserialized],
+            Type["CustomCoercer[_Deserialized, _Serialized]"],
         ]
     ):
+        # A method signature may bind the TypeVars as its own type parameters.
         def __getitem__(
             self,
             key: type[_Deserialized],
         ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
+"#,
+);
+
+testcase!(
+    test_nested_class_outer_legacy_tparam_out_of_scope,
+    r#"
+from typing import Generic, TypeVar
+from collections.abc import Iterable
+
+T = TypeVar("T")
+S = TypeVar("S")
+
+class Outer(Generic[T]):
+    # A method of the enclosing class may use its type parameter.
+    def m(self, x: T) -> T:
+        return x
+
+    # A nested class does not inherit the enclosing class's type parameters, so `T` is out of
+    # scope in its base list and its body.
+    class Bad(Iterable[T]):  # E: Type variable `T` is not in scope
+        ...
+
+    class AlsoBad:
+        x: list[T]  # E: Type variable `T` is not in scope
+
+        # A method signature may still bind `T` as its own type parameter.
+        def method(self, y: T) -> None:
+            ...
+
+    # A nested class may still introduce its own, independent type parameter.
+    class Inner(Iterable[S]):
+        ...
+"#,
+);
+
+testcase!(
+    test_type_alias_cannot_capture_enclosing_tparam,
+    r#"
+from typing import Generic, TypeVar, TypeAlias
+
+T = TypeVar("T")
+
+# A generic type alias at module scope is fine; the free TypeVar parametrizes the alias.
+ModuleAlias: TypeAlias = list[T]  # OK
+
+class Outer(Generic[T]):
+    # A type alias defined in a class body may not capture the class's type parameter.
+    explicit: TypeAlias = list[T]  # E: Type variable `T` is not in scope
+    implicit = dict[str, T]  # E: Type variable `T` is not in scope
+
+    # A method may still use the class's type parameter.
+    def m(self, x: T) -> T:
+        return x
+"#,
+);
+
+testcase!(
+    test_out_of_scope_typevar_in_expression,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+# Instantiating a generic subscripted with an out-of-scope TypeVar is an error.
+list[T]()  # E: Type variable `T` is not in scope
+
+# But a TypeVar may appear as a value (it is a runtime object), and a subscripted generic
+# may be used as an implicit type alias.
+x = T  # OK
+alias = list[T]  # OK
+
+def f(a: T) -> T:
+    # Inside a generic function the TypeVar is in scope.
+    b = list[T]()  # OK
+    return a
+
+class C(Generic[T]):
+    def m(self) -> None:
+        list[T]()  # OK: T is in scope in a method of the generic class
 "#,
 );
 
@@ -1276,6 +1431,238 @@ def main(left: DataFrame, right: DataFrame) -> None:
 
     def func2(*a: Iterable[FrameType] | None) -> None:
         return None
-    func2(left, right)  # E: `Series` is not assignable to upper bound `DataFrame`
+    func2(left, right)  # E: `DataFrame` is not assignable to parameter `*a` with type `Iterable[@_] | None`  # E: `DataFrame` is not assignable to parameter `*a` with type `Iterable[@_] | None`
+    "#,
+);
+
+testcase!(
+    test_ignore_union_member_with_specialization_error,
+    r#"
+from typing import Any
+class A: ...
+def f[T: A](x: Any | T) -> T: ...
+f([1, 2, 3])
+    "#,
+);
+
+testcase!(
+    test_list_literal_overload_with_bounded_typevar_union,
+    r#"
+from typing import overload, Sequence, assert_type, TypeVar
+
+class A: ...
+class B: ...
+class C: ...
+
+T = TypeVar("T", bound=A)
+
+@overload
+def f(data: Sequence[T | None]) -> B: ...
+@overload
+def f(data: Sequence[bool | None]) -> C: ...
+def f(data: object) -> object: ...
+
+assert_type(f([True]), C)
+    "#,
+);
+
+testcase!(
+    test_list_hint_decompose_with_typevar_bound_containing_list,
+    r#"
+from typing import assert_type, Sequence, Self, TypeVar
+S = TypeVar("S", bound=complex | list[str])
+class C(list[S]):
+    def __new__(cls, data: S | Sequence[S]) -> Self: ...
+x = C([1j])
+assert_type(x, C[complex])
+    "#,
+);
+
+testcase!(
+    test_call_with_typevar_union,
+    r#"
+from typing import TypeVar
+
+class C: ...
+T = TypeVar("T", bound=C)
+
+def f(x: T | None) -> T | int: ...
+def g(x: T | None) -> T | int:
+    return f(x)
+    "#,
+);
+
+testcase!(
+    test_unrestricted_typevar_param_with_default,
+    r#"
+from typing import assert_type
+
+def f1[T](x: T = 0) -> T: ...
+assert_type(f1(), int)
+assert_type(f1(""), str)
+
+def f2[T](x: T, y: T = 0) -> T: ...
+assert_type(f2(1), int)
+assert_type(f2(""), int | str)
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_param_with_default,
+    r#"
+from typing import assert_type, reveal_type
+
+def f1[T: (int, str)](x: T = 0) -> T: ...
+assert_type(f1(), int)
+assert_type(f1(""), str)
+
+def f2[T: (int, str)](x: T, y: T = 0) -> T: ...
+assert_type(f2(1), int)
+f2("")  # E: `Literal[0]` is not assignable to parameter `y` with type `str`
+
+def f_bad[T: (int, str)](x: T = b"") -> T: ...  # E: `Literal[b'']` is not assignable to parameter `x` with type `int | str`
+# T is left unsolved
+reveal_type(f_bad())  # E: revealed type: @_
+assert_type(f_bad(0), int)
+    "#,
+);
+
+testcase!(
+    test_bounded_typevar_param_with_default,
+    r#"
+from typing import assert_type, reveal_type
+
+def f1[T: int](x: T = 0) -> T: ...
+assert_type(f1(), int)
+
+def f2[T: int](x: T, y: T = 0) -> T: ...
+assert_type(f2(1), int)
+
+def f_bad[T: int](x: T = "") -> T: ...  # E: `Literal['']` is not assignable to parameter `x` with type `int`
+# T is left unsolved
+reveal_type(f_bad())  # E: revealed type: @_
+assert_type(f_bad(0), int)
+    "#,
+);
+
+testcase!(
+    test_param_with_nested_typevar_and_default,
+    r#"
+from typing import Sequence, assert_type
+def f[T](x: Sequence[T] = (0,)) -> T: ...
+assert_type(f(), int)
+assert_type(f([""]), str)
+    "#,
+);
+
+// Note: in Python, mutable function parameter defaults are wildly unsafe and heavily discouraged.
+// We still want to make sure Pyrefly behaves sensibly, even on this bad code pattern.
+testcase!(
+    test_typevar_param_with_mutable_default,
+    r#"
+from typing import assert_type, reveal_type
+
+def f1[T](x: list[T] = []) -> T: ...
+# T is left unsolved
+reveal_type(f1())  # E: revealed type: @_
+assert_type(f1([0]), int)
+
+def f2[T](x: T, y: list[T] = []) -> T: ...
+assert_type(f2(0), int)
+
+def f3[T](x: list[T] = [""]) -> T: ...
+assert_type(f3(), str)
+assert_type(f3([0]), int)
+
+def f_bad[T: int](x: list[T] = [""]) -> T: ...  # E: `list[str]` is not assignable to parameter `x` with type `list[int]`
+# T is left unsolved
+reveal_type(f_bad())  # E: revealed type: @_
+    "#,
+);
+
+testcase!(
+    test_typevar_posonly_and_kwonly_param_default,
+    r#"
+from typing import assert_type
+
+def f1[T: (int, str)](x: T = 0, /) -> T: ...
+assert_type(f1(), int)
+
+def f2[T: (int, str)](*, x: T = 0) -> T: ...
+assert_type(f2(), int)
+    "#,
+);
+
+testcase!(
+    test_typevar_param_default_custom_generic,
+    r#"
+from typing import reveal_type
+class A[T]: ...
+def f[T](x: A[T] = A()) -> T: ...
+# T is left unsolved
+reveal_type(f())  # E: revealed type: @_
+    "#,
+);
+
+testcase!(
+    test_union_of_constraints_does_not_match_constrained_typevar,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    return x
+def g(x: int | str):
+    f(x)  # E: `int | str` is not assignable to any of constraints `int`, `str` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_constrained_identity_function_preserves_typevar,
+    r#"
+from typing import reveal_type
+def f[T: (bool, int)](x: T) -> T:
+    return x
+def g[T: bool](x: T) -> T:
+    return f(x)
+def h[S: str](x: S) -> S:
+    return f(x)  # E: `S` is not assignable to any of constraints `bool`, `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_cannot_return_union_of_constraints_for_constrained_typevar,
+    r#"
+def f() -> int | str: ...
+def g[T: (int, str)](x: T) -> T:
+    return f()  # E: `int | str` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    bug = "Return type T is narrowed to int, so returning 0 should be allowed",
+    test_return_concrete_type_after_typevar_narrow,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    if isinstance(x, int):
+        return 0  # E: `Literal[0]` is not assignable to declared return type `T`
+    else:
+        return x
+    "#,
+);
+
+testcase!(
+    test_binop_on_two_typevars_after_narrow_one,
+    r#"
+from typing import reveal_type
+def f[T: (str, bytes)](x: T, y: T):
+    if isinstance(x, str):
+        return reveal_type(x + y)  # E: revealed type: str & T
+    "#,
+);
+
+testcase!(
+    test_binop_on_typevar_with_union_bound,
+    r#"
+def f[T: bytes | str](x: T):
+    if isinstance(x, str):
+        y: str = 2 * x
     "#,
 );

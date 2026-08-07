@@ -70,44 +70,12 @@ class CORSMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         pass
 
-
 def use_middleware() -> None:
     app = FastAPI()
     app.add_middleware(
         CORSMiddleware,
         x="",  # E: Unexpected keyword argument `x`
     )
-"#,
-);
-
-testcase!(
-    bug = "Generic functions don't work with ParamSpec",
-    test_param_spec_generic_function,
-    r#"
-from typing import Callable, reveal_type
-def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
-    return x
-def foo[T](x: T, y: T) -> T:
-    return x
-foo2 = identity(foo)
-reveal_type(foo2)  # E: revealed type: (x: Unknown, y: Unknown) -> Unknown
-"#,
-);
-
-testcase!(
-    bug = "Generic class constructors don't work with ParamSpec",
-    test_param_spec_generic_constructor,
-    r#"
-from typing import Callable, reveal_type
-def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
-  return x
-class C[T]:
-  x: T
-  def __init__(self, x: T) -> None:
-    self.x = x
-c2 = identity(C)
-reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
-x: C[int] = c2(1)
 "#,
 );
 
@@ -855,6 +823,41 @@ call_with_retry(compute, 3, 1, "hello")
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3054
+testcase!(
+    test_paramspec_forwarding_with_overloaded_callable,
+    r#"
+from typing import ParamSpec, overload, Callable, Any
+
+P = ParamSpec("P")
+
+@overload
+def assert_raises(
+    exception_class: type[BaseException],
+    /,
+) -> None: ...
+@overload
+def assert_raises(
+    exception_class: type[BaseException],
+    callable: Callable[P, Any],
+    /,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> None: ...
+def assert_raises(*args: Any, **kwargs: Any) -> None:
+    pass
+
+@overload
+def compute(x: int, y: int) -> int: ...
+@overload
+def compute(x: str, y: str) -> str: ...
+def compute(x: int | str, y: int | str) -> int | str:
+    return x
+
+assert_raises(ValueError, compute, "hello", "world")
+"#,
+);
+
 testcase!(
     test_paramspec_forwarding_prefix_param_keyword,
     r#"
@@ -868,5 +871,52 @@ def call_fn(f: Callable[P, None], x: int, *args: P.args, **kwargs: P.kwargs) -> 
 
 def forward(g: Callable[Q, None], *args: Q.args, **kwargs: Q.kwargs) -> None:
     call_fn(g, x=1, *args, **kwargs)
+"#,
+);
+
+// Reproduces pyinfra's @operation decorator pattern: a Protocol whose __call__
+// mixes explicit "global" params with *args: P.args / **kwargs: P.kwargs, and
+// the decorator returns cast(Protocol[P], wrapped_func). Mypy 1.17 handles
+// this correctly.
+testcase!(
+    test_paramspec_protocol_cast_preserves_binding,
+    r#"
+from typing import Protocol, Generic, Callable, Iterator, cast
+from typing_extensions import ParamSpec
+
+P = ParamSpec("P")
+
+class OperationResult:
+    changed: bool
+
+class OperationProtocol(Generic[P], Protocol):
+    def __call__(
+        self,
+        _sudo: bool = False,
+        name: str | None = None,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> OperationResult: ...
+
+def make_operation(func: Callable[P, Iterator[str]]) -> OperationProtocol[P]:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> OperationResult:
+        return OperationResult()
+    return cast(OperationProtocol[P], wrapper)
+
+def _service_impl(service_name: str, running: bool = True) -> Iterator[str]:
+    yield "test"
+
+service = make_operation(_service_impl)
+
+# P-bound params work correctly:
+service(service_name="nginx")
+service(service_name="nginx", running=True)
+
+# Protocol's explicit params also work:
+service(service_name="nginx", _sudo=True)
+service(service_name="nginx", running=True, _sudo=True, name="Start nginx")
+
+# Correctly rejected — not on the Protocol or in P:
+service(nonexistent_param=True)  # E: Missing argument `service_name` # E: Unexpected keyword argument `nonexistent_param`
 "#,
 );

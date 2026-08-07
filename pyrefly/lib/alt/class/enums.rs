@@ -29,7 +29,6 @@ use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
@@ -44,6 +43,34 @@ pub const VALUE_PROP: Name = Name::new_static("value");
 pub const GENERATE_NEXT_VALUE: Name = Name::new_static("_generate_next_value_");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Suggest an enum member when a raw literal matches exactly one expected enum value.
+    pub fn suggest_enum_member_for_value(&self, got: &Type, want: &Type) -> Option<String> {
+        match want {
+            Type::ClassType(cls) | Type::SelfType(cls) => {
+                self.suggest_enum_member_for_class_value(cls.class_object(), got)
+            }
+            Type::Literal(lit) => match &lit.value {
+                Lit::Enum(lit_enum) => {
+                    self.suggest_enum_member_for_class_value(lit_enum.class.class_object(), got)
+                }
+                _ => None,
+            },
+            Type::Union(f) => {
+                let mut suggestion = None;
+                for member in &f.members {
+                    if let Some(candidate) = self.suggest_enum_member_for_value(got, member) {
+                        match &suggestion {
+                            Some(existing) if existing != &candidate => return None,
+                            _ => suggestion = Some(candidate),
+                        }
+                    }
+                }
+                suggestion
+            }
+            _ => None,
+        }
+    }
+
     pub fn get_enum_member(&self, cls: &Class, name: &Name) -> Option<Lit> {
         self.get_field_from_current_class_only(cls, name)
             .and_then(|field| self.as_enum_member(Arc::unwrap_or_clone(field), cls))
@@ -58,6 +85,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn suggest_enum_member_for_class_value(&self, cls: &Class, got: &Type) -> Option<String> {
+        let is_django = self.get_metadata_for_class(cls).enum_metadata()?.is_django;
+        let mut suggestion = None;
+        for lit in self.get_enum_members(cls) {
+            let Lit::Enum(lit_enum) = lit else {
+                unreachable!("enum members must be represented as enum literals");
+            };
+            let value_ty = self.enum_literal_to_value_type((*lit_enum).clone(), is_django);
+            if self.is_equivalent(got, &value_ty) {
+                let candidate = format!("{}.{}", lit_enum.class.name(), lit_enum.member);
+                match &suggestion {
+                    Some(existing) if existing != &candidate => return None,
+                    _ => suggestion = Some(candidate),
+                }
+            }
+        }
+        suggestion
     }
 
     fn is_valid_enum_member(
@@ -174,6 +220,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn literal_typed_dict_key_name(&self, ty: &Type) -> Option<Name> {
+        let Type::Literal(lit) = ty else {
+            return None;
+        };
+        match &lit.value {
+            Lit::Str(field_name) => Some(Name::new(field_name)),
+            Lit::Enum(lit_enum) => {
+                let metadata = self.get_metadata_for_class(lit_enum.class.class_object());
+                let enum_metadata = metadata.enum_metadata()?;
+                let value_ty =
+                    self.enum_value_lookup_on_member(&lit_enum.class, lit_enum, enum_metadata);
+                match value_ty {
+                    Type::Literal(value_lit) => match value_lit.value {
+                        Lit::Str(field_name) => Some(Name::new(&field_name)),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Look up the `_value_` attribute for a specific enum member (e.g. `MyEnum.X._value_`).
     /// Whether `_value_` should be read-write is unspecified, but we need to allow assigning
     /// it in `__init__` so we make it read-write.
@@ -230,31 +299,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_any_implicit()
             };
         }
-        if let Some(mixed_in) = mixed_in {
-            return mixed_in;
-        }
         // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type.
         let enum_value_types: Vec<_> = self
             .get_enum_members(class.class_object())
             .into_iter()
             .filter_map(|lit| {
-                if let Lit::Enum(lit_enum) = lit {
-                    let value_ty =
-                        self.enum_literal_to_value_type(*lit_enum, enum_metadata.is_django);
-                    if value_ty.is_implicit_literal() {
-                        Some(value_ty.promote_implicit_literals(self.stdlib))
+                let Lit::Enum(lit_enum) = lit else {
+                    return None;
+                };
+                let value_ty = self.enum_literal_to_value_type(*lit_enum, enum_metadata.is_django);
+                Some(if let Some(ref mixed_in) = mixed_in {
+                    let promoted = value_ty.clone().promote_implicit_literals(self.stdlib);
+                    if &promoted == mixed_in {
+                        value_ty
                     } else {
-                        Some(value_ty)
+                        mixed_in.clone()
                     }
+                } else if value_ty.is_implicit_literal() {
+                    value_ty.promote_implicit_literals(self.stdlib)
                 } else {
-                    None
-                }
+                    value_ty
+                })
             })
             .collect();
         if enum_value_types.is_empty() {
-            // Don't assume Never if there are no members, because they may
-            // be created dynamically and we don't want false-positives downstream.
-            self.heap.mk_any_implicit()
+            // Don't assume Never if there are no members, because they may be created
+            // dynamically and we don't want false-positives downstream.
+            if let Some(mixed_in) = mixed_in {
+                mixed_in
+            } else {
+                self.heap.mk_any_implicit()
+            }
         } else {
             self.unions(enum_value_types)
         }
@@ -369,7 +444,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             if direct_annotation.is_some() {
                 self.error(
-                    errors, range,ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    errors, range,ErrorKind::InvalidAnnotation,
                     format!("Enum member `{name}` may not be annotated directly. Instead, annotate the `_value_` attribute."),
                 );
             }
@@ -393,7 +468,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Lit::Enum(Box::new(LitEnum {
                     class: enum_.cls.clone(),
                     member: name.clone(),
-                    ty: self.solver().deep_force(ty.clone()),
+                    ty: self.solver().force(ty.clone()),
                 }))
                 .to_implicit_type(),
             )
@@ -447,7 +522,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if !self.is_subset_eq(value, annotation) {
             self.error(
-                errors, range, ErrorInfo::Kind(ErrorKind::BadAssignment),
+                errors, range, ErrorKind::BadAssignment,
                 format!(
                     "Enum member `{member}` has type `{}`, must match the `_value_` attribute annotation of `{}`",
                     self.for_display(value.clone()),

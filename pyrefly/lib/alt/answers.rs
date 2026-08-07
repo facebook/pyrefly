@@ -53,6 +53,7 @@ use crate::report::cinderx::CinderxSolutions;
 use crate::report::pysa::PysaSolutions;
 use crate::solver::solver::Solver;
 use crate::solver::solver::VarRecurser;
+use crate::state::errors::ModuleRanges;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::state::ModuleChanges;
@@ -72,8 +73,8 @@ use crate::types::types::Forallable;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
-/// The index stores all the references where the definition is external to the current module.
-/// This is useful for fast references computation.
+/// The index stores reference edges that cannot be recovered by scanning the current module's AST.
+/// This includes references to external definitions and implicit constructor-protocol references.
 #[derive(Debug, Default)]
 pub struct Index {
     /// A map from (import specifier (ModuleName), imported symbol (Name)) to all references to it
@@ -85,15 +86,31 @@ pub struct Index {
     /// A map from (attribute definition module) to a list of pairs of
     /// (range of attribute definition in the definition, range of reference in the current module).
     pub externally_defined_attribute_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
+    /// A map from (constructor definition module) to a list of pairs of
+    /// (range of the constructor definition, range of the call site in the current module).
+    /// The call-site range spells the class name, not the definition's own name, so these are
+    /// gated behind `ReferenceOptions::include_constructor_call_sites`.
+    pub constructor_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
     /// A map from (child method range) to a list of parent method definitions (ModulePath, parent method range).
     /// This is used to find reimplementations when doing find-references on parent methods.
     pub parent_methods_map: SmallMap<TextRange, Vec<(ModulePath, TextRange)>>,
 }
 
+/// How the source text at a reference range relates to the attribute it resolves to.
+#[derive(Debug, Clone, Copy)]
+pub enum AttributeReferenceKind {
+    /// The reference spells the attribute's own name, as in `x.attr`.
+    Textual,
+    /// The reference is a call site that reaches the attribute implicitly through the
+    /// constructor protocol, as in `Foo()` reaching `Foo.__init__`. Only class construction
+    /// is recorded this way; calling an instance through its `__call__` is not.
+    ConstructorCall,
+}
+
 #[derive(Debug, Clone)]
 pub struct OverloadTrace {
-    pub(crate) callable: Callable,
-    pub(crate) tparams: Option<Arc<TParams>>,
+    callable: Callable,
+    tparams: Option<Arc<TParams>>,
 }
 
 impl OverloadTrace {
@@ -131,11 +148,13 @@ pub struct Traces {
     overloaded_callees: SmallMap<TextRange, OverloadedCallee>,
     /// A map of text ranges that correspond to 'b' portion in expressions a.b where b is a property access -> getter type
     invoked_properties: SmallMap<TextRange, Arc<Type>>,
+    /// A map from expression range to expected type at that position (for type checking)
+    expected_types: SmallMap<TextRange, Arc<Type>>,
 }
 
 impl Traces {
     /// Merge accumulated side effects into the persisted trace store.
-    pub(crate) fn merge(&mut self, side_effects: TraceSideEffects) {
+    fn merge(&mut self, side_effects: TraceSideEffects) {
         for (k, v) in side_effects.types {
             self.types.insert(k, v);
         }
@@ -144,6 +163,9 @@ impl Traces {
         }
         for (k, v) in side_effects.invoked_properties {
             self.invoked_properties.insert(k, v);
+        }
+        for (k, v) in side_effects.expected_types {
+            self.expected_types.insert(k, v);
         }
     }
 }
@@ -155,6 +177,7 @@ pub struct TraceSideEffects {
     pub types: SmallMap<TextRange, Arc<Type>>,
     pub overloaded_callees: SmallMap<TextRange, OverloadedCallee>,
     pub invoked_properties: SmallMap<TextRange, Arc<Type>>,
+    pub expected_types: SmallMap<TextRange, Arc<Type>>,
 }
 
 /// Invariants:
@@ -224,6 +247,8 @@ pub struct Solutions {
     module_info: ModuleInfo,
     table: SolutionsTable,
     metadata: Arc<BindingsMetadata>,
+    /// Multi-line ranges and ignore-all directives.
+    module_ranges: Arc<ModuleRanges>,
     index: Option<Arc<Mutex<Index>>>,
     /// Per-module pysa data, populated when pysa reporting is enabled.
     pysa_solutions: Option<Arc<PysaSolutions>>,
@@ -298,6 +323,10 @@ impl Display for SolutionsDifference<'_> {
 impl Solutions {
     pub fn metadata(&self) -> &Arc<BindingsMetadata> {
         &self.metadata
+    }
+
+    pub fn module_ranges(&self) -> &Arc<ModuleRanges> {
+        &self.module_ranges
     }
 
     /// Access per-module pysa data, if pysa reporting was enabled.
@@ -806,6 +835,7 @@ impl Answers {
             module_info: bindings.module().dupe(),
             table: res,
             metadata: bindings.metadata().dupe(),
+            module_ranges: bindings.module_ranges().dupe(),
             index: self.index.dupe(),
             pysa_solutions,
             cinderx_solutions,
@@ -980,8 +1010,8 @@ impl Answers {
         }
     }
 
-    fn deep_force(&self, t: Type) -> Type {
-        self.solver.deep_force(t)
+    fn force_for_export_boundary(&self, t: Type) -> Type {
+        self.solver.for_export_boundary(t)
     }
 
     pub fn solver(&self) -> &Solver {
@@ -1002,28 +1032,70 @@ impl Answers {
     }
 
     pub fn get_type_at(&self, idx: Idx<Key>) -> Option<Type> {
-        Some(self.deep_force(self.get_idx(idx)?.arc_clone_ty()))
+        Some(self.force_for_export_boundary(self.get_idx(idx)?.arc_clone_ty()))
+    }
+
+    pub fn get_type_at_for_display(&self, idx: Idx<Key>) -> Option<Type> {
+        Some(self.solver.for_display(self.get_idx(idx)?.arc_clone_ty()))
     }
 
     pub fn get_type_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(self.deep_force(lock.types.get(&range)?.as_ref().clone()))
+        Some(self.force_for_export_boundary(lock.types.get(&range)?.as_ref().clone()))
+    }
+
+    pub fn get_expected_type_trace(&self, range: TextRange) -> Option<Type> {
+        let lock = self.trace.as_ref()?.lock();
+        Some(self.force_for_export_boundary(lock.expected_types.get(&range)?.as_ref().clone()))
+    }
+
+    pub fn get_type_trace_for_display(&self, range: TextRange) -> Option<Type> {
+        let lock = self.trace.as_ref()?.lock();
+        Some(
+            self.solver
+                .for_display(lock.types.get(&range)?.as_ref().clone()),
+        )
+    }
+
+    pub fn get_expected_type_trace_for_display(&self, range: TextRange) -> Option<Type> {
+        let lock = self.trace.as_ref()?.lock();
+        Some(
+            self.solver
+                .for_display(lock.expected_types.get(&range)?.as_ref().clone()),
+        )
     }
 
     pub fn try_get_getter_for_range(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(self.deep_force(lock.invoked_properties.get(&range)?.as_ref().clone()))
+        Some(self.force_for_export_boundary(lock.invoked_properties.get(&range)?.as_ref().clone()))
     }
 
     pub fn get_chosen_overload_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
         match lock.overloaded_callees.get(&range)? {
-            OverloadedCallee::Resolved { callable } => Some(self.deep_force(callable.as_type())),
+            OverloadedCallee::Resolved { callable } => {
+                Some(self.force_for_export_boundary(callable.as_type()))
+            }
             OverloadedCallee::Candidates {
                 closest,
                 is_closest_chosen,
                 ..
-            } if *is_closest_chosen => Some(self.deep_force(closest.as_type())),
+            } if *is_closest_chosen => Some(self.force_for_export_boundary(closest.as_type())),
+            _ => None,
+        }
+    }
+
+    pub fn get_chosen_overload_trace_for_display(&self, range: TextRange) -> Option<Type> {
+        let lock = self.trace.as_ref()?.lock();
+        match lock.overloaded_callees.get(&range)? {
+            OverloadedCallee::Resolved { callable } => {
+                Some(self.solver.for_display(callable.as_type()))
+            }
+            OverloadedCallee::Candidates {
+                closest,
+                is_closest_chosen,
+                ..
+            } if *is_closest_chosen => Some(self.solver.for_display(closest.as_type())),
             _ => None,
         }
     }
@@ -1087,9 +1159,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self.current().solver
     }
 
-    pub fn record_resolved_trace(&self, loc: TextRange, ty: Type) {
+    pub fn record_resolved_trace(&self, loc: TextRange, ty: &Type) {
         if self.current().trace.is_some()
-            && let Some(callable) = ty.to_callable()
+            && let Some(callable) = ty.clone().to_callable()
         {
             self.trace_state().record_resolved_trace(
                 loc,
@@ -1121,11 +1193,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn record_external_attribute_definition_index(
+    pub fn record_attribute_definition_index(
         &self,
         base: &Type,
         attribute_name: &Name,
         attribute_reference_range: TextRange,
+        reference_kind: AttributeReferenceKind,
     ) {
         if let Some(index) = &self.current().index {
             for AttrInfo {
@@ -1141,16 +1214,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         cls,
                         range,
                         docstring_range: _,
-                    } => {
-                        if cls.module_path() != self.bindings().module().path() {
-                            index
-                                .lock()
-                                .externally_defined_attribute_references
-                                .entry(cls.module_path().dupe())
-                                .or_default()
-                                .push((range, attribute_reference_range))
+                    } => match reference_kind {
+                        AttributeReferenceKind::ConstructorCall => index
+                            .lock()
+                            .constructor_references
+                            .entry(cls.module_path().dupe())
+                            .or_default()
+                            .push((range, attribute_reference_range)),
+                        AttributeReferenceKind::Textual => {
+                            // Textual references to an attribute defined in this module are
+                            // recovered by scanning the AST for `<expr>.<name>`, so only
+                            // out-of-module definitions need an index entry.
+                            if cls.module_path() != self.bindings().module().path() {
+                                index
+                                    .lock()
+                                    .externally_defined_attribute_references
+                                    .entry(cls.module_path().dupe())
+                                    .or_default()
+                                    .push((range, attribute_reference_range))
+                            }
                         }
-                    }
+                    },
                     AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                         index
                             .lock()

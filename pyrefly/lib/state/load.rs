@@ -20,11 +20,9 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
 use ruff_notebook::Notebook;
 use ruff_text_size::TextRange;
-use vec1::vec1;
 
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
 use crate::module::bundled::BundledStub;
 use crate::module::third_party::get_bundled_third_party;
@@ -169,14 +167,16 @@ impl Load {
         };
         let errors = ErrorCollector::new(module_info.dupe(), error_style);
         if let Some(err) = self_error {
-            errors.add(
-                TextRange::default(),
-                ErrorInfo::Kind(ErrorKind::MissingImport),
-                vec1![format!(
-                    "Failed to load `{name}` from `{}`, got {err:#}",
-                    module_info.path()
-                )],
-            );
+            errors
+                .error_builder(
+                    TextRange::default(),
+                    ErrorKind::MissingImport,
+                    format!(
+                        "Failed to load `{name}` from `{}`, got {err:#}",
+                        module_info.path()
+                    ),
+                )
+                .emit();
         }
         Self {
             errors,

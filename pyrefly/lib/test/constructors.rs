@@ -8,6 +8,23 @@
 use crate::testcase;
 
 testcase!(
+    test_generic_decorator_on_dunder_new,
+    r#"
+from collections.abc import Callable
+
+def fn[T](c: Callable[[T], None]) -> T:  # E: missing an explicit `return`
+    pass
+
+class C:
+    @fn  # E: is not assignable to parameter `c`
+    def __new__(cls):
+        pass
+
+C()  # E: `__new__` on `C` resolves back to the same class
+"#,
+);
+
+testcase!(
     test_class_init,
     r#"
 from typing import assert_type
@@ -188,6 +205,91 @@ assert_type(C(), C[Any]) # Correct, because invalid metaclass.
 );
 
 testcase!(
+    test_metaclass_invalid_losing_direct_generic,
+    r#"
+from typing import Any
+
+class Meta1[T](type): ...
+class Meta2[T](Meta1[T]): ...
+class A(metaclass=Meta2[Any]): ...
+class B[T](A, metaclass=Meta1[T]): ...  # E: Metaclass may not be an unbound generic
+    "#,
+);
+
+testcase!(
+    test_init_subclass_class_keywords,
+    r#"
+class Foo:
+    def __init_subclass__(cls, asdf: int) -> None:
+        pass
+
+class Bar(Foo, asdf=1): ...
+class Baz(Foo, asdf=""): ...  # E: Argument `Literal['']` is not assignable to parameter `asdf` with type `int`
+class Qux(Foo): ...  # E: Missing argument `asdf`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_skips_custom_metaclass_keywords,
+    r#"
+class Meta(type):
+    def __new__(cls, name, bases, namespace, abstract: bool = False):
+        return super().__new__(cls, name, bases, namespace)
+
+class Base(metaclass=Meta): ...
+class Child(Base, abstract=True): ...
+    "#,
+);
+
+testcase!(
+    test_init_subclass_metaclass_without_keywords_still_checked,
+    r#"
+# A custom metaclass only consumes class-header keywords; with no keywords, a
+# required `__init_subclass__` argument still goes unfilled at runtime, so the
+# missing-argument error must fire even in the presence of a metaclass.
+class Meta(type): ...
+
+class Base(metaclass=Meta):
+    def __init_subclass__(cls, x: int) -> None:
+        pass
+
+class Child(Base): ...  # E: Missing argument `x`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_follows_mro_not_first_base,
+    r#"
+class A:
+    def __init_subclass__(cls, kw: str) -> None:
+        pass
+
+class B: ...
+
+# `__init_subclass__` is resolved through C's MRO, so A's requirement applies
+# even though A is not the first base.
+class C(B, A): ...  # E: Missing argument `kw`
+class D(B, A, kw="x"): ...
+class E(B, A, kw=1): ...  # E: Argument `Literal[1]` is not assignable to parameter `kw` with type `str`
+    "#,
+);
+
+testcase!(
+    test_init_subclass_inherited_without_keywords,
+    r#"
+class Grandparent:
+    def __init_subclass__(cls, kw: str) -> None:
+        pass
+
+class Parent(Grandparent, kw="x"): ...
+
+# `Child` inherits `Grandparent.__init_subclass__`, which requires `kw`, so this
+# reports a missing argument even though `Child` passes no keywords.
+class Child(Parent): ...  # E: Missing argument `kw`
+    "#,
+);
+
+testcase!(
     test_metaclass_invalid_generic_legacy_typevar,
     r#"
 from typing import Any, Generic, TypeVar, assert_type
@@ -339,6 +441,56 @@ class C:
         return 0
 x = C()
 assert_type(x, Any)
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_ignores_concrete_new_return,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls) -> C:
+        return object.__new__(cls)
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(), Self)
+        return cls()
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_ignores_bad_new_return,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls) -> int:
+        return 0
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(), Self)
+        return cls()
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_checks_new_params,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls, x: int, y: str) -> "C":
+        return object.__new__(cls)
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(1, "a"), Self)
+        cls(1, 2)  # E: Argument `Literal[2]` is not assignable to parameter `y` with type `str`
+        cls()  # E: Missing argument `x`  # E: Missing argument `y`
+        return cls(1, "a")
     "#,
 );
 
@@ -653,6 +805,22 @@ assert_type(C(False), C[B])
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4192
+testcase!(
+    test_overloaded_init_missing_self,
+    r#"
+from typing import overload
+
+class C:
+    @overload
+    def __init__(): ...  # E: Overloaded function must have an implementation
+    @overload
+    def __init__(): ...
+
+C()  # E: This method has no `self` parameter to receive the implicit instance argument
+    "#,
+);
+
 testcase!(
     test_init_bad_receiver_annotation,
     r#"
@@ -827,8 +995,10 @@ T = TypeVar("T")
 class C(Generic[T]):
     def __init__[V](self: "C[V]", x: V) -> None: pass
 def takes_callable[V](x: Callable[[V], C[V]], y: V) -> C[V]: ...
-assert_type(takes_callable(C, 42), C[int])
-assert_type(takes_callable(C, "hello"), C[str])
+out1 = takes_callable(C, 42)
+assert_type(out1, C[int])
+out2 = takes_callable(C, "hello")
+assert_type(out2, C[str])
     "#,
 );
 
@@ -934,38 +1104,38 @@ class A[T]:
 testcase!(
     test_new_returns_concrete_inside_method,
     r#"
-from typing import Self, reveal_type
+from typing import Self, assert_type, reveal_type
 
 class C:
     def __new__(cls) -> "C": ...
 
     def method(self) -> None:
-        # __new__ explicitly returns C, not Self, so type(self)() returns C.
-        reveal_type(type(self)())  # E: revealed type: C
+        # `type[Self]` construction returns Self, even when __new__ returns C.
+        reveal_type(type(self)())  # E: revealed type: Self@C
 
 class D(C): ...
 
 def check_subclass(d: D) -> None:
-    reveal_type(type(d)())  # E: revealed type: C
+    assert_type(type(d)(), C)
     "#,
 );
 
 testcase!(
     test_new_returns_list_self_inside_method,
     r#"
-from typing import Self, reveal_type
+from typing import Self, assert_type, reveal_type
 
 class C:
     def __new__(cls) -> list[Self]: ...
 
     def method(self) -> None:
-        # __new__ returns list[Self], so type(self)() preserves Self.
-        reveal_type(type(self)())  # E: revealed type: list[Self@C]
+        # `type[Self]` construction returns Self, even when __new__ returns another type.
+        reveal_type(type(self)())  # E: revealed type: Self@C
 
 class D(C): ...
 
 def check_subclass(d: D) -> None:
-    reveal_type(type(d)())  # E: revealed type: list[D]
+    assert_type(type(d)(), list[D])
     "#,
 );
 
@@ -1076,7 +1246,9 @@ def g() -> list[ParentItem] | None:
 
 // Overloaded __new__ where one overload has an explicit return annotation
 // and one doesn't. The unannotated overload should assume Self; the
-// annotated overload should keep its declared return type.
+// annotated overload should keep its declared return type. The explicit-return
+// overload is an inconsistent overload error because `C` is not a subtype of
+// the implementation's `Self@C`.
 testcase!(
     test_overloaded_new_mixed_annotation,
     r#"
@@ -1084,7 +1256,7 @@ from typing import assert_type, overload
 
 class C:
     @overload
-    def __new__(cls, x: int) -> "C": ...
+    def __new__(cls, x: int) -> "C": ...  # E: Overload return type `C` is not assignable to implementation return type `Self@C`
     @overload
     def __new__(cls, x: str): ...
     def __new__(cls, x: int | str):
@@ -1103,5 +1275,48 @@ c2 = C("a")
 assert_type(c2, C)
 d2 = D("a")
 assert_type(d2, D)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3236
+testcase!(
+    test_construct_with_hint_and_overloads,
+    r#"
+from typing import Generic, Never, overload, Protocol, TypeVar
+
+_T = TypeVar("_T")
+_T_co = TypeVar("_T_co", covariant=True)
+_AddWithT_contra = TypeVar("_AddWithT_contra", contravariant=True)
+_ResultT_co = TypeVar("_ResultT_co", covariant=True)
+_AddWithT = TypeVar("_AddWithT")
+_ResultT = TypeVar("_ResultT")
+
+class CanAdd(Protocol[_AddWithT_contra, _ResultT_co]):
+    def __add__(self, other: _AddWithT_contra, /) -> _ResultT_co: ...
+
+class H(Generic[_T_co]):
+    @overload
+    def __init__(self: "H[Never]", init_val: dict[Never, int], /) -> None: ...
+    @overload
+    def __init__(self: "H[_T]", init_val: dict[_T, int], /) -> None: ...
+    @overload
+    def __init__(self: "H[int]", init_val: int, /) -> None: ...
+    def __init__(self, init_val: object, /) -> None: ...
+
+def explode_n(source: "H[CanAdd[_AddWithT, _ResultT]]") -> "H[_ResultT]":
+    raise NotImplementedError
+
+result: "H[int]" = explode_n(H(10))
+    "#,
+);
+
+testcase!(
+    test_hint_and_bound_interaction,
+    r#"
+from typing import assert_type, Self, Sequence
+class C[T: int | list[str]]:
+    def __new__(cls, data: T | Sequence[T]) -> Self: ...
+x = C([1, 2])
+assert_type(x, C[int])
     "#,
 );

@@ -1,7 +1,7 @@
 """Module implements the Mersenne Twister random number generator."""
 
-import sys
-from typing_extensions import Self, TypeAlias, disjoint_base
+from typing import TypeAlias
+from typing_extensions import disjoint_base
 
 # Actually Tuple[(int,) * 625]
 _State: TypeAlias = tuple[int, ...]
@@ -9,11 +9,7 @@ _State: TypeAlias = tuple[int, ...]
 @disjoint_base
 class Random:
     """Random() -> create a random number generator with its own internal state."""
-    if sys.version_info >= (3, 10):
-        def __init__(self, seed: object = ..., /) -> None: ...
-    else:
-        def __new__(self, seed: object = ..., /) -> Self: ...
-
+    def __init__(self, seed: object = ..., /) -> None: ...
     def seed(self, n: object = None, /) -> None:
         """
         seed([n]) -> None.

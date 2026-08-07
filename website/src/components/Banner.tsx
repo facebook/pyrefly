@@ -58,7 +58,7 @@ export default function Banner({
         }
     };
 
-    const handleLinkClick = (link: typeof cta | typeof links[0]) => {
+    const handleLinkClick = (link: typeof cta | (typeof links)[0]) => {
         if (link?.onClick) {
             link.onClick();
         }
@@ -82,9 +82,7 @@ export default function Banner({
             )}
         >
             <div {...stylex.props(styles.content)}>
-                {text && (
-                    <span {...stylex.props(styles.text)}>{text}</span>
-                )}
+                {text && <span {...stylex.props(styles.text)}>{text}</span>}
                 {children}
 
                 {(cta || links.length > 0) && (
@@ -150,7 +148,6 @@ const styles = stylex.create({
         backgroundColor: '#fff3cd',
         color: '#856404',
         borderBottom: '1px solid #ffeaa7',
-
     },
     info: {
         backgroundColor: '#d1ecf1',
@@ -166,7 +163,7 @@ const styles = stylex.create({
     },
     text: {
         margin: 0,
-        fontWeight: '500',
+        fontWeight: '510',
     },
     actions: {
         display: 'flex',

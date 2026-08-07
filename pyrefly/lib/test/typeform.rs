@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -63,6 +64,36 @@ def f(x: TypeForm) -> None:
 
 f(int)
 f(str)
+    "#,
+);
+
+testcase!(
+    test_typeform_string_forward_ref,
+    r#"
+from typing_extensions import TypeForm
+
+def f(x: TypeForm) -> None: ...
+def g(x: TypeForm[int | str]) -> None: ...
+
+f("int")
+g("int")
+g("str")
+f("not a type")  # E: Argument `Literal['not a type']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `f`
+f("UndefinedName")  # E: Argument `Literal['UndefinedName']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `f`
+    "#,
+);
+
+testcase!(
+    test_typeform_string_forward_ref_imported,
+    TestEnv::one("foo", "class MyClass: ..."),
+    r#"
+from typing_extensions import TypeForm
+from foo import MyClass
+
+def f(x: TypeForm) -> None: ...
+
+f("MyClass")
+f("UndefinedClass")  # E: Argument `Literal['UndefinedClass']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `f`
     "#,
 );
 
@@ -127,5 +158,43 @@ import types
 
 # At runtime, str | None creates a types.UnionType object.
 v: types.UnionType = str | None
+    "#,
+);
+
+testcase!(
+    test_typeform_generic_alias,
+    r#"
+import types
+
+# At runtime, list[int] creates a types.GenericAlias object.
+v: types.GenericAlias = list[int]
+    "#,
+);
+
+testcase!(
+    test_typeform_generic_alias_string_type_argument_in_value_context,
+    r#"
+from __future__ import annotations
+
+from typing import assert_type
+from typing import Annotated
+
+class Tomato: ...
+class Cucumber: ...
+
+def main(t: Tomato) -> None:
+    a = list["Tomato | Cucumber"]([t])
+    assert_type(a, list[Tomato | Cucumber])
+
+    b = set["Tomato | Cucumber"]([t])
+    assert_type(b, set[Tomato | Cucumber])
+
+    c = frozenset["Tomato | Cucumber"]([t])
+    assert_type(c, frozenset[Tomato | Cucumber])
+
+x = Annotated[int, "meta"]
+
+# `dict.__dict__` is a runtime mappingproxy; string subscripting is a key lookup.
+dict.__dict__["fromkeys"]
     "#,
 );

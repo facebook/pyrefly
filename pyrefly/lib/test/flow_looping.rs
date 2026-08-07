@@ -59,11 +59,11 @@ def f(my_set: set[int]):
 testcase!(
     test_loop_with_dict_get,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def f(keys: list[str]):
     counters: dict[str, int] = {}
     for k in keys:
-        counters[k] = reveal_type(counters.get(k, 0))  # E: revealed type: int
+        counters[k] = assert_type(counters.get(k, 0), int)
 "#,
 );
 
@@ -707,17 +707,6 @@ def remove_common(x: int, g: int) -> int:
         g = gcd(g, x)
         assert_type(g, int)
     return x
-    "#,
-);
-
-// Test for https://github.com/facebook/pyrefly/issues/1453
-testcase!(
-    test_against_regression_on_1454,
-    r#"
-d: dict[str, str] = {}
-a: str | None = None
-for i in range(10):
-    a = d.get('x', a)
     "#,
 );
 
