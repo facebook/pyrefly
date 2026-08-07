@@ -159,6 +159,29 @@ class C(A):
 );
 
 testcase!(
+    test_override_typevartuple_varargs,
+    r#"
+from typing import Callable
+
+class Base[*Ts]:
+    def encode(self, *values: *Ts) -> str:
+        raise NotImplementedError
+
+class Child[*Ts](Base[*Ts]):
+    def encode(self, *values: *Ts) -> str:
+        return "".join(str(v) for v in values)
+
+def f[*Ts](b: Base[*Ts]) -> None:
+    fn: Callable[[*Ts], str] = b.encode
+
+def sink[*Ts](cb: Callable[[*Ts], str]) -> None: ...
+
+def g[*Ts](b: Base[*Ts]) -> None:
+    sink(b.encode)
+    "#,
+);
+
+testcase!(
     test_override_generic_bounds,
     r#"
 class A: ...
@@ -586,7 +609,7 @@ testcase!(
 import contextlib
 import abc
 
-class Parent:
+class Parent(abc.ABC):
     @contextlib.asynccontextmanager
     @abc.abstractmethod
     async def run(self):
@@ -800,8 +823,11 @@ class C:
     "#,
 );
 
+// Checking `__call__` against every parent reports a missing `@override`, and often a
+// signature mismatch, on the many classes that simply implement a callable interface, so
+// it is checked only against a Protocol parent. See https://github.com/facebook/pyrefly/issues/4220.
 testcase!(
-    bug = "We currently skip checking overrides of `__call__`, which is a soundness hole",
+    bug = "`__call__` inherited from a non-Protocol parent is not checked",
     test_override_dunder_call,
     r#"
 class Base: pass
@@ -812,6 +838,87 @@ class UseBase:
 
 class UseDerived(UseBase):
     def __call__(self) -> list[Derived]: ...
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/4220
+testcase!(
+    test_override_dunder_call_protocol,
+    r#"
+from typing import Protocol
+
+class ProtocolB(Protocol):
+    def __call__(self, s: str): ...
+
+class Bar(ProtocolB):
+    def __call__(self, s: int): ...  # E: Class member `Bar.__call__` overrides parent class `ProtocolB` in an inconsistent manner
+    "#,
+);
+
+// The gradual form `(*args: Any, **kwargs: Any)` is equivalent to `...` per the typing spec,
+// so it is consistent with any signature and must stay overridable. Much of typeshed writes
+// `__call__` this way, and this is what makes checking the rest of them safe.
+testcase!(
+    test_override_dunder_call_gradual_parent,
+    r#"
+from typing import Any
+
+class Callback:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class Narrow(Callback):
+    def __call__(self, x: int) -> str: ...
+    "#,
+);
+
+testcase!(
+    test_override_dunder_call_compatible,
+    r#"
+class Base: pass
+class Derived(Base): pass
+
+class UseDerived:
+    def __call__(self, x: Derived) -> Derived: ...
+
+class UseBase(UseDerived):
+    def __call__(self, x: Base) -> Derived: ...
+    "#,
+);
+
+// Requiring `@override` on every `__call__` is what makes checking it against all parents
+// unusable: implementing a callable interface is not what the decorator documents, and the
+// demand lands on argparse actions, auth handlers and metaclasses throughout the ecosystem.
+testcase!(
+    test_missing_override_decorator_dunder_call,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import Protocol
+
+class Base:
+    def __call__(self, x: int) -> None: ...
+
+class Concrete(Base):
+    def __call__(self, x: int) -> None: ...
+
+class P(Protocol):
+    def __call__(self, x: int) -> None: ...
+
+class Impl(P):
+    def __call__(self, x: int) -> None: ...  # E: is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_override_dunder_call_explicit_override,
+    r#"
+from typing import override
+
+class A:
+    def __call__(self, x: int) -> None: ...
+
+class B(A):
+    @override
+    def __call__(self, x: str) -> None: ...  # E: Class member `B.__call__` overrides parent class `A` in an inconsistent manner
     "#,
 );
 
@@ -1277,6 +1384,87 @@ class A:
 
 class B(A):
     x: ClassVar[int]  # OK - ClassVar, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_classproperty,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override, Callable
+
+class classproperty[T, R]:
+    def __init__(self, fget: Callable[[type[T]], R]) -> None: ...
+    def __get__(self, obj: object, obj_cls_type: type[T]) -> R: ...
+
+class Base:
+    @classproperty
+    def foo(cls) -> None: ...
+
+class DerivedValid(Base):
+    @override
+    @classproperty
+    def foo(cls) -> None: ...
+
+class Derived(Base):
+    @classproperty
+    def foo(cls) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_super_call_init,
+    TestEnv::new().enable_missing_super_call_error(),
+    r#"
+class Base:
+    def __init__(self) -> None:
+        self.value: int = 1
+
+class Child(Base):
+    def __init__(self) -> None:  # E: Method `Child.__init__` does not call the method of the same name in a parent class
+        pass
+    "#,
+);
+
+testcase!(
+    test_missing_super_call_special_methods,
+    TestEnv::new().enable_missing_super_call_error(),
+    r#"
+from typing import Self
+
+class Base:
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
+
+    def __init_subclass__(cls) -> None:
+        super().__init_subclass__()
+
+class CallsSuper(Base):
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
+
+    def __init_subclass__(cls) -> None:
+        super().__init_subclass__()
+
+class MissingSuper(Base):
+    def __new__(cls) -> Self:  # E: Method `MissingSuper.__new__` does not call the method of the same name in a parent class
+        return object.__new__(cls)
+
+    def __init_subclass__(cls) -> None:  # E: Method `MissingSuper.__init_subclass__` does not call the method of the same name in a parent class
+        pass
+    "#,
+);
+
+testcase!(
+    test_missing_super_call_disabled_by_default,
+    r#"
+class Base:
+    def __init__(self) -> None:
+        self.value: int = 1
+
+class Child(Base):
+    def __init__(self) -> None:
+        pass
     "#,
 );
 
@@ -1822,4 +2010,23 @@ class B(A):
     def f(self, x1: int):  # pyrefly: ignore[bad-param-name-override]
         pass
  "#,
+);
+
+testcase!(
+    test_missing_super_call_in_stub,
+    TestEnv::one_with_path(
+        "stub",
+        "stub.pyi",
+        r#"
+class C:
+    def __init__(self) -> None: ...
+
+class D(C):
+    def __init__(self) -> None: ...
+"#,
+    )
+    .enable_missing_super_call_error(),
+    r#"
+from stub import C, D
+    "#,
 );

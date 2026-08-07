@@ -59,6 +59,104 @@ class Base:
 );
 
 testcase!(
+    test_nested_function_can_access_implicit_builtins,
+    r#"
+def outer():
+    def inner(x: object) -> list[int]:
+        return [len([x])]
+    return inner
+"#,
+);
+
+testcase!(
+    test_builtin_use_before_module_shadow,
+    r#"
+print(len([1]))
+len = 5
+"#,
+);
+
+testcase!(
+    test_builtin_class_use_before_module_shadow,
+    r#"
+class TimeoutError(TimeoutError):
+    pass
+raise TimeoutError("x")
+"#,
+);
+
+testcase!(
+    test_module_definition_named_like_builtin,
+    r#"
+def compile(x: int, *, fullgraph: bool) -> int:
+    return x
+
+compile(1, fullgraph=True)
+"#,
+);
+
+testcase!(
+    test_builtin_special_form_before_module_shadow,
+    r#"
+from typing import assert_type
+x: tuple[int, str] = (1, "a")
+assert_type(x, tuple[int, str])
+y: dict[str, int] = {}
+assert_type(y, dict[str, int])
+tuple = 5
+dict = 6
+"#,
+);
+
+testcase!(
+    test_deeply_nested_function_can_access_implicit_builtins,
+    r#"
+from typing import assert_type
+def a():
+    def b():
+        def c() -> int:
+            return len([1, 2])
+        return c
+    return b
+assert_type(a()()(), int)
+"#,
+);
+
+testcase!(
+    test_sibling_nested_functions_materialize_distinct_builtins,
+    r#"
+from typing import assert_type
+def outer():
+    def uses_len(xs: list[int]) -> int:
+        return len(xs)
+    def uses_abs(n: int) -> int:
+        return abs(n)
+    return uses_len, uses_abs
+assert_type(outer()[0]([1]), int)
+assert_type(outer()[1](-1), int)
+"#,
+);
+
+testcase!(
+    test_local_shadow_still_reports_uninitialized_after_builtin_use,
+    r#"
+len([1])
+
+def f(cond: bool) -> int:
+    if cond:
+        len = 1
+    return len  # E: `len` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_unknown_name_suggests_builtin,
+    r#"
+smax  # E: Did you mean `max`?
+"#,
+);
+
+testcase!(
     test_unknown_name_suggests_similar,
     r#"
 long_variable_name = 1
@@ -277,6 +375,17 @@ def f():
     global x
     x = "foo"
 x: str = ""
+"#,
+);
+
+testcase!(
+    test_global_builtin_before_def,
+    r#"
+from typing import assert_type
+def lex():
+    global input
+    assert_type(input(), str)
+    input = 2
 "#,
 );
 
@@ -1099,8 +1208,8 @@ def test(y: object):
 "#,
 );
 
+// #1804: is not None guard, not reassigned
 testcase!(
-    // #1804: is not None guard, not reassigned
     test_narrow_capture_is_not_none,
     r#"
 from typing_extensions import assert_type
@@ -1114,8 +1223,8 @@ def f(x: int | None) -> None:
 "#,
 );
 
+// #1804: x is reassigned so the narrow does NOT propagate
 testcase!(
-    // #1804: x is reassigned so the narrow does NOT propagate
     test_narrow_capture_reassigned_after,
     r#"
 def f_reassigned(x: int | None) -> None:
@@ -1127,8 +1236,8 @@ def f_reassigned(x: int | None) -> None:
 "#,
 );
 
+// #2394: Callable | None narrowing in nested scope
 testcase!(
-    // #2394: Callable | None narrowing in nested scope
     test_narrow_capture_callable,
     r#"
 from typing import Callable
@@ -1143,8 +1252,8 @@ def process(key: Callable[[str], str] | None) -> None:
 "#,
 );
 
+// #2513: Early-return guard
 testcase!(
-    // #2513: Early-return guard
     test_narrow_capture_early_return,
     r#"
 from typing_extensions import assert_type
@@ -1161,8 +1270,8 @@ def handle_request(name: str | None, use_callback: bool) -> None:
 "#,
 );
 
+// #919: isinstance narrowing in nested function
 testcase!(
-    // #919: isinstance narrowing in nested function
     test_narrow_capture_isinstance,
     r#"
 from typing_extensions import assert_type
@@ -1181,8 +1290,8 @@ def bar() -> None:
 "#,
 );
 
+// #768: assert is not None after loop (needs last_range check)
 testcase!(
-    // #768: assert is not None after loop (needs last_range check)
     test_narrow_capture_assert_after_loop,
     r#"
 from typing_extensions import assert_type
@@ -1200,8 +1309,8 @@ def f(rows: list[int]) -> int:
 "#,
 );
 
+// #2739: reassignment before nested function definition should preserve the reassigned type
 testcase!(
-    // #2739: reassignment before nested function definition should preserve the reassigned type
     test_narrow_capture_reassigned_before_nested_def,
     r#"
 from typing import Callable
@@ -1231,8 +1340,8 @@ def make_query_func() -> Callable[[], str]:
 "#,
 );
 
+// #2408: isinstance narrowing with derived variable
 testcase!(
-    // #2408: isinstance narrowing with derived variable
     test_narrow_capture_isinstance_derived,
     r#"
 import copy
@@ -1251,8 +1360,8 @@ def run(code: str | bytes) -> None:
 "#,
 );
 
+// #765: Lambda captures already see outer narrows
 testcase!(
-    // #765: Lambda captures already see outer narrows
     test_narrow_capture_lambda,
     r#"
 from typing import Callable
@@ -1265,8 +1374,8 @@ def foo(obj: str | None) -> Callable[[], str]:
 "#,
 );
 
+// #1800: Final variable narrowing at module level
 testcase!(
-    // #1800: Final variable narrowing at module level
     test_narrow_capture_final_module_level,
     r#"
 from typing import Final
@@ -1280,8 +1389,8 @@ def foo() -> None:
 "#,
 );
 
+// #40: Walrus operator narrowing in nested function
 testcase!(
-    // #40: Walrus operator narrowing in nested function
     test_narrow_capture_walrus,
     r#"
 from typing import Callable

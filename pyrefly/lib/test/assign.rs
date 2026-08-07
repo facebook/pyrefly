@@ -126,7 +126,7 @@ d: list[Any] = ["test"]
 testcase!(
     test_assign_list_concat_with_contextual_hint,
     r#"
-from typing import assert_type, reveal_type
+from typing import assert_type
 
 class Base: ...
 class A(Base): ...
@@ -141,8 +141,8 @@ l2: list[Base] = [A()] + [B()]
 # List concatenation with list comprehension operands
 l3: list[Base] = [A() for _ in range(1)] + [B()]
 
-# Without contextual hint, reveal_type should show the inferred union type
-reveal_type([A()] + [B()])  # E: revealed type: list[A | B]
+# Without contextual hint, the concatenation infers the union type.
+assert_type([A()] + [B()], list[A | B])
 
 # Non-fresh operands (variables) should NOT be coerced
 xs: list[A] = [A()]
@@ -862,12 +862,12 @@ reveal_type(x) # E: revealed type: Unknown
 testcase!(
     test_reveal_type_assign,
     r#"
-from typing import reveal_type
+from typing import Literal, assert_type
 
 def f(x):
     x = 3
     x = "None"
-    reveal_type(x) # E: revealed type: Literal['None']
+    assert_type(x, Literal['None'])
 
 def f(x):
     x = 3
@@ -952,28 +952,54 @@ assert_type(y, str)
 
 // https://github.com/facebook/pyrefly/issues/2928
 testcase!(
-    bug = "Should detect too many values when unpacking a string literal",
     test_unpack_string_too_many,
     r#"
-a, b = "abc"
+a, b = "abc"  # E: Cannot unpack Literal['abc'] (of size 3) into 2 values
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2927
 testcase!(
-    bug = "Should detect too few values when unpacking a single-char string",
     test_unpack_string_too_few,
     r#"
-a, b = "x"
+a, b = "x"  # E: Cannot unpack Literal['x'] (of size 1) into 2 values
 "#,
 );
 
 testcase!(
-    bug = "Should detect zero step size in slice",
+    test_unpack_string_exact,
+    r#"
+a, b, c = "abc"
+"#,
+);
+
+testcase!(
+    test_unpack_string_splat,
+    r#"
+a, *b = "abc"
+x, y, *z = "w"  # E: Cannot unpack Literal['w'] (of size 1) into 2+ values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_too_many,
+    r#"
+a, b = b"abc"  # E: Cannot unpack Literal[b'abc'] (of size 3) into 2 values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_exact,
+    r#"
+a, b, c = b"abc"
+"#,
+);
+
+testcase!(
     test_slice_zero_step,
     r#"
 items = [1, 2, 3, 4]
-bad = items[::0]
+bad = items[::0]  # E: Slice step cannot be zero
 "#,
 );
 
@@ -1249,7 +1275,7 @@ def test(x: int | None) -> None:
 testcase!(
     test_class_rebind_conditional_incompatible,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1262,7 +1288,7 @@ if b():
     Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
@@ -1332,7 +1358,7 @@ assert_type(Real, type[Real])
 testcase!(
     test_class_rebind_repeated_writes_in_one_flow,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1343,14 +1369,14 @@ Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type 
 Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
 testcase!(
     test_class_rebind_repeated_writes_after_join,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1366,7 +1392,7 @@ if b():
     Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
@@ -1398,7 +1424,7 @@ Real().fresh_only()  # E: Object of class `Real` has no attribute `fresh_only`
 testcase!(
     test_class_rebind_compatible_subclass,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1411,7 +1437,7 @@ class Dummy: ...
 def b() -> bool: ...
 
 Real = SubReal
-reveal_type(Real)  # E: revealed type: type[SubReal]
+assert_type(Real, type[SubReal])
 
 if b():
     Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
@@ -1482,10 +1508,9 @@ class Container:
 );
 
 testcase!(
-    bug = "Multi-target rebind of a class name bypasses receiver detection",
     test_class_rebind_multi_target,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1495,21 +1520,17 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    # The single-target form errors here. The multi-target form silently
-    # allows the incompatible rebind, which then poisons the call site
-    # below with spurious argument errors against `Dummy.__init__`.
-    other = Real = Dummy
+    other = Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+assert_type(Real, type[Real])
 "#,
 );
 
 testcase!(
-    bug = "Unpacking rebind of a class name bypasses receiver detection",
     test_class_rebind_unpacked,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1519,12 +1540,9 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    # The single-target form errors here. The unpacking form silently
-    # allows the incompatible rebind, which then poisons the call site
-    # below with spurious argument errors against `Dummy.__init__`.
-    Real, _ = (Dummy, 0)
+    Real, _ = (Dummy, 0)  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+assert_type(Real, type[Real])
 "#,
 );

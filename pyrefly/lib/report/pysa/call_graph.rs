@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Not;
+use std::sync::OnceLock;
 
 use dupe::Dupe;
 use itertools::Either;
@@ -17,7 +18,6 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
@@ -52,6 +52,7 @@ use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFor;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtReturn;
+use ruff_python_ast::StmtTry;
 use ruff_python_ast::StmtWith;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -1241,7 +1242,7 @@ macro_rules! debug_println {
     };
 }
 
-fn has_toplevel_call(body: &[Stmt], callee_name: &'static str) -> bool {
+pub(crate) fn has_toplevel_call(body: &[Stmt], callee_name: &str) -> bool {
     body.iter().any(|stmt| match stmt {
         Stmt::Expr(stmt_expr) => match &*stmt_expr.value {
             Expr::Call(call) => match &*call.func {
@@ -1306,7 +1307,7 @@ fn has_implicit_receiver(
 
 fn extract_function_from_bound_method(
     bound_method: &BoundMethod,
-) -> Vec1<&pyrefly_types::callable::Function> {
+) -> Vec1<&pyrefly_types::function::Function> {
     match &bound_method.func {
         BoundMethodType::Function(function) => Vec1::new(function),
         BoundMethodType::Forall(forall) => Vec1::new(&forall.body),
@@ -1340,7 +1341,7 @@ fn find_class_type_for_new_method(new_method_parameters: &Params) -> Option<&Typ
     })
 }
 
-fn method_name_from_function(function: &pyrefly_types::callable::Function) -> Cow<'_, Name> {
+fn method_name_from_function(function: &pyrefly_types::function::Function) -> Cow<'_, Name> {
     function.metadata.kind.function_name()
 }
 
@@ -1732,7 +1733,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_callable_type(
         &self,
-        function: &pyrefly_types::callable::Function,
+        function: &pyrefly_types::function::Function,
         callee_type: Option<&Type>,
         callee_expr: Option<AnyNodeRef>,
         return_type: ScalarTypeProperties,
@@ -1762,7 +1763,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_callable_metadata(
         &self,
-        function: &pyrefly_types::callable::Function,
+        function: &pyrefly_types::function::Function,
         return_type: ScalarTypeProperties,
         callee_expr_suffix: Option<&str>,
     ) -> Option<PysaCallTarget<FunctionRef>> {
@@ -1770,12 +1771,12 @@ impl<'a> CallGraphVisitor<'a> {
         // name-based lookup. This handles module-level function aliases (e.g.,
         // `fromstring = XML` in `xml.etree.ElementTree`) where the type carries the
         // original definition's index.
-        let (module, def_index) = match &function.metadata.kind {
-            FunctionKind::Def(func_id) if func_id.cls.is_none() && func_id.def_index.is_some() => {
-                (&func_id.module, func_id.def_index.unwrap())
-            }
-            _ => return None,
-        };
+        let func_id = function.metadata.kind.definition_id()?;
+        if func_id.cls.is_some() {
+            return None;
+        }
+        let module = &func_id.module;
+        let def_index = func_id.def_index?;
 
         let function_ref = self
             .module_context
@@ -2001,7 +2002,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_new_method(
         &self,
-        new_method: &pyrefly_types::callable::Function,
+        new_method: &pyrefly_types::function::Function,
         callee_expr: Option<AnyNodeRef>,
         callee_type: Option<&Type>,
         return_type: ScalarTypeProperties,
@@ -2319,7 +2320,7 @@ impl<'a> CallGraphVisitor<'a> {
                 }
                 _ => CallCallees::new_unresolved(UnresolvedReason::UnexpectedPyreflyTarget),
             },
-            Some(CallTargetLookup::Error(targets)) => {
+            Some(CallTargetLookup::Error(_, targets)) => {
                 if targets.is_empty() {
                     debug_println!(
                         self.debug,
@@ -2939,7 +2940,7 @@ impl<'a> CallGraphVisitor<'a> {
         }
         call_arguments
             .unwrap()
-            .arguments_source_order()
+            .iter_source_order()
             .enumerate()
             .filter_map(|(index, argument)| {
                 let argument = match argument {
@@ -3459,16 +3460,20 @@ impl<'a> CallGraphVisitor<'a> {
                     )),
                 },
             ),
-            Some(Stmt::AnnAssign(assign)) if assign.target.range() == subscript_range => (
-                dunder::SETITEM,
-                Origin {
-                    kind: OriginKind::SubscriptSetItem,
-                    location: self.pysa_location(TextRange::new(
-                        subscript_range.start(),
-                        assign.range().end(),
-                    )),
-                },
-            ),
+            Some(Stmt::AnnAssign(assign))
+                if assign.target.range() == subscript_range && assign.value.is_some() =>
+            {
+                (
+                    dunder::SETITEM,
+                    Origin {
+                        kind: OriginKind::SubscriptSetItem,
+                        location: self.pysa_location(TextRange::new(
+                            subscript_range.start(),
+                            assign.range().end(),
+                        )),
+                    },
+                )
+            }
             Some(Stmt::For(stmt_for)) if stmt_for.target.range() == subscript_range => (
                 dunder::SETITEM,
                 Origin {
@@ -4142,6 +4147,37 @@ impl<'a> CallGraphVisitor<'a> {
         }
     }
 
+    fn resolve_and_register_except_star_handlers(&mut self, stmt_try: &StmtTry) {
+        if !stmt_try.is_star {
+            return;
+        }
+        for handler in &stmt_try.handlers {
+            let ruff_python_ast::ExceptHandler::ExceptHandler(except_handler) = handler;
+            if let Some(type_expr) = &except_handler.type_ {
+                let type_range = type_expr.range();
+                let exception_group_class_def_type = self
+                    .module_answers_context
+                    .stdlib
+                    .exception_group_object()
+                    .map(|class| Type::ClassDef(class.dupe()));
+                let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
+                    /* base */ exception_group_class_def_type.as_ref(),
+                    /* attribute */ Some(&dunder::GETITEM),
+                    type_range,
+                    /* callee_expr */ None,
+                    /* unknown_callee_as_direct_call */ true,
+                    "resolve_and_register_except_star_handler",
+                    /* exclude_object_methods */ false,
+                );
+                let expression_identifier = ExpressionIdentifier::ArtificialCall(Origin {
+                    kind: OriginKind::SubscriptGetItem,
+                    location: self.pysa_location(type_range),
+                });
+                self.add_callees(expression_identifier, ExpressionCallees::Call(callees));
+            }
+        }
+    }
+
     fn resolve_and_register_for_statement(&mut self, stmt_for: &StmtFor) {
         let iter_range = stmt_for.iter.range();
         let iter_identifier = ExpressionIdentifier::ArtificialCall(Origin {
@@ -4218,11 +4254,50 @@ impl<'a> CallGraphVisitor<'a> {
         }
     }
 
-    // Enable debug logs by adding `pysa_dump()` to the top level statements of the definition of interest
-    const DEBUG_FUNCTION_NAME: &'static str = "pysa_dump";
+    // `pysa_dump`/`PYSA_DUMP` trigger enables every Pysa phase. This file
+    // only builds the first-order call graph, so it also honors the call-graph
+    // specific `pysa_dump_call_graph`/`PYSA_DUMP_CALL_GRAPH` trigger.
+    const PYSA_DUMP_NAME: &'static str = "pysa_dump";
+    const PYSA_CALL_GRAPH_DUMP_NAME: &'static str = "pysa_dump_call_graph";
+
+    fn environment_enables_debug(&self) -> bool {
+        let Some(current_function) = &self.current_function else {
+            return false;
+        };
+
+        // Read both environment variables first. Computing the qualified name below requires a
+        // definition lookup (to find the defining class for methods), which is more
+        // expensive than the comparison, so skip it entirely when no trigger is set.
+        static PYSA_DUMP_ENV: OnceLock<Option<String>> = OnceLock::new();
+        let pysa_dump = PYSA_DUMP_ENV.get_or_init(|| std::env::var("PYSA_DUMP").ok());
+        static PYSA_DUMP_CALL_GRAPH_ENV: OnceLock<Option<String>> = OnceLock::new();
+        let pysa_dump_call_graph =
+            PYSA_DUMP_CALL_GRAPH_ENV.get_or_init(|| std::env::var("PYSA_DUMP_CALL_GRAPH").ok());
+        if pysa_dump.is_none() && pysa_dump_call_graph.is_none() {
+            return false;
+        }
+
+        let qualified_name = match self.get_base_definition(current_function).defining_class {
+            Some(class_ref) => format!(
+                "{}.{}",
+                class_ref.class.qname().module_qualified_name(),
+                current_function.function_name
+            ),
+            None => format!(
+                "{}.{}",
+                current_function.module_name.as_str(),
+                current_function.function_name
+            ),
+        };
+
+        pysa_dump.as_ref() == Some(&qualified_name)
+            || pysa_dump_call_graph.as_ref() == Some(&qualified_name)
+    }
 
     fn enter_debug_scope(&mut self, body: &[Stmt]) {
-        self.debug = has_toplevel_call(body, Self::DEBUG_FUNCTION_NAME);
+        self.debug = has_toplevel_call(body, Self::PYSA_DUMP_NAME)
+            || has_toplevel_call(body, Self::PYSA_CALL_GRAPH_DUMP_NAME)
+            || self.environment_enables_debug();
         self.debug_scopes.push(self.debug);
     }
 
@@ -4360,6 +4435,7 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
             Stmt::For(stmt_for) => self.resolve_and_register_for_statement(stmt_for),
             Stmt::AugAssign(aug_assign) => self.resolve_and_register_augmented_assign(aug_assign),
             Stmt::Return(return_stmt) => self.resolve_and_register_return_shim(return_stmt),
+            Stmt::Try(stmt_try) => self.resolve_and_register_except_star_handlers(stmt_try),
             _ => {}
         }
     }

@@ -16,6 +16,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
+use thin_vec::ThinVec;
 use vec1::Vec1;
 
 use crate::uniques::Unique;
@@ -213,6 +214,26 @@ impl<To, T: Visit<To>> Visit<To> for Vec1<T> {
 }
 
 impl<To, T: VisitMut<To>> VisitMut<To> for Vec1<T> {
+    const RECURSE_CONTAINS: bool = true;
+
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
+        for item in self {
+            item.visit_mut(f);
+        }
+    }
+}
+
+impl<To, T: Visit<To>> Visit<To> for ThinVec<T> {
+    const RECURSE_CONTAINS: bool = true;
+
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
+        for item in self {
+            item.visit(f);
+        }
+    }
+}
+
+impl<To, T: VisitMut<To>> VisitMut<To> for ThinVec<T> {
     const RECURSE_CONTAINS: bool = true;
 
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {

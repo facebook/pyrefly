@@ -6,7 +6,7 @@ library and third-party packages without requiring external files at runtime.
 
 ## Overview
 
-`pyrefly_bundled` embeds a compressed archive of typeshed `.pyi` (Python
+`pyrefly_bundled` embeds compressed archives of typeshed `.pyi` (Python
 Interface) files directly into the Pyrefly executable. This allows Pyrefly to
 access type stubs for the Python standard library and third-party packages
 without needing to download or locate them on the file system at runtime.
@@ -19,10 +19,10 @@ The build script (`build.rs`) runs during compilation and:
 
 1. Locates the typeshed directory (from `TYPESHED_ROOT` env var or
    `third_party/typeshed`)
-2. Creates a tar archive of the typeshed files
-3. Compresses the archive using zstd
-4. Saves it to the build output directory as `typeshed.tar.zst`
-5. The archive is embedded into the binary using `include_bytes!` macro
+2. Creates separate tar archives for the stdlib and third-party typeshed files
+3. Compresses the archives using zstd
+4. Saves them to the build output directory
+5. The archives are embedded into the binary using the `include_bytes!` macro
 
 ## Updating Typeshed
 

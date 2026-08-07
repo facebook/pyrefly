@@ -34,11 +34,8 @@ $ touch $TMPDIR/pyrefly.toml && \
 ## No errors on our Python code
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check $PYREFLY_PY
+$ touch $(dirname $PYREFLY_PY)/pyrefly.toml && $PYREFLY check $PYREFLY_PY
  INFO 0 errors
-No `pyrefly.toml` found — using preset `basic`.
-Run `pyrefly init` to continue setting up Pyrefly.
-Docs: * (glob)
 [0]
 ```
 
@@ -280,5 +277,17 @@ $ touch $TMPDIR/pyrefly.toml && \
 > echo "def f(x: int) -> int: return x" > $TMPDIR/test.py && \
 > $PYREFLY report $TMPDIR/test.py 2>&1 | grep "warning:"
 warning: `pyrefly report` is deprecated; use `pyrefly coverage report` instead
+[0]
+```
+
+## `pyrefly coverage report` emits modules in a deterministic order across runs
+
+```scrut
+$ cd $TMPDIR && rm -rf detrepo && mkdir detrepo && cd detrepo && touch pyrefly.toml && \
+> for i in 1 2 3 4 5 6; do echo "def f$i() -> int: return $i" > "m$i.py"; done && \
+> $PYREFLY coverage report m1.py m2.py m3.py m4.py m5.py m6.py > a.json 2>/dev/null && \
+> $PYREFLY coverage report m1.py m2.py m3.py m4.py m5.py m6.py > b.json 2>/dev/null && \
+> diff a.json b.json && echo IDENTICAL
+IDENTICAL
 [0]
 ```

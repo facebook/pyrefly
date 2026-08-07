@@ -12,33 +12,85 @@ use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::sync::Arc;
+use std::ops::Deref;
 
-use dupe::Dupe;
-use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
-use pyrefly_python::dunder;
-use pyrefly_python::module::Module;
-use pyrefly_python::module_name::ModuleName;
-use pyrefly_python::module_path::ModulePath;
+use pyrefly_util::display::Fmt;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
+use starlark_map::small_set::SmallSet;
 
-use crate::class::Class;
-use crate::class::ClassType;
 use crate::display::TypeDisplayContext;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
-use crate::keywords::DataclassTransformMetadata;
+use crate::type_output::DisplayOutput;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
 use crate::types::Type;
+
+/// A wrapper for auxiliary data whose identity should be completely ignored
+/// in equality, hashing, ordering, and type-equality comparisons.
+/// `IdentityIgnored<T>` always compares as equal, hashes as a no-op, and
+/// orders as `Equal` — making it transparent to all identity checks.
+///
+/// This is useful for attaching auxiliary data (e.g. closure caches) to
+/// types that derive `PartialEq`, `Hash`, `Ord`, etc. without affecting
+/// their logical identity.
+#[derive(Debug, Clone)]
+pub struct IdentityIgnored<T>(pub T);
+
+impl<T> PartialEq for IdentityIgnored<T> {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for IdentityIgnored<T> {}
+
+impl<T> Hash for IdentityIgnored<T> {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
+impl<T> PartialOrd for IdentityIgnored<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for IdentityIgnored<T> {
+    fn cmp(&self, _other: &Self) -> Ordering {
+        Ordering::Equal
+    }
+}
+
+impl<T> Visit<Type> for IdentityIgnored<T> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl<T> VisitMut<Type> for IdentityIgnored<T> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl<T> TypeEq for IdentityIgnored<T> {
+    fn type_eq(&self, _other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        true
+    }
+}
+
+impl<T> Deref for IdentityIgnored<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -57,7 +109,7 @@ impl Callable {
             return false;
         }
         match &self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 let items = params.items();
                 items.iter().any(|p| matches!(p, Param::Varargs(..)))
                     && items.iter().any(|p| matches!(p, Param::Kwargs(..)))
@@ -79,7 +131,9 @@ impl Callable {
             return true;
         }
         match &self.params {
-            Params::List(params) => params.items().iter().any(|p| p.as_type().any(check)),
+            Params::List(params) | Params::Partial(params) => {
+                params.items().iter().any(|p| p.as_type().any(check))
+            }
             Params::ParamSpec(prefix, p) => {
                 prefix.iter().any(|pp| {
                     let ty = match pp {
@@ -99,7 +153,7 @@ impl Callable {
             return false;
         }
         match &self.params {
-            Params::List(params) => params
+            Params::List(params) | Params::Partial(params) => params
                 .items()
                 .iter()
                 .all(|p| matches!(p.as_type(), Type::Any(AnyStyle::Implicit))),
@@ -111,15 +165,10 @@ impl Callable {
 
 impl Display for Callable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use crate::display::TypeDisplayContext;
-        use crate::type_output::DisplayOutput;
-
-        let ctx = TypeDisplayContext::new(&[]);
+        let ty = Type::Callable(Box::new(self.clone()));
+        let ctx = TypeDisplayContext::new(&[&ty]);
         let mut output = DisplayOutput::new(&ctx, f);
-        self.fmt_with_type(&mut output, &|t, o| {
-            // Use the type's own Display impl to get simple names
-            o.write_str(&format!("{}", t))
-        })
+        self.fmt_with_type(&mut output, &|t, o| ctx.fmt_helper_generic(t, false, o))
     }
 }
 
@@ -158,6 +207,15 @@ pub struct ArgCounts {
     pub overall: ArgCount,
 }
 
+/// Controls which parameters are displayed by `ParamList::fmt_with_type`
+#[derive(Debug, Clone)]
+pub enum ParamOverlay {
+    /// Display all parameters
+    All,
+    /// Display only this set of named parameters, plus all anonymous parameters
+    Subset(SmallSet<Name>),
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct ParamList(Vec<Param>);
@@ -167,19 +225,21 @@ impl ParamList {
         Self(xs)
     }
 
-    /// Create a new ParamList from a list of types
+    /// Create a new ParamList from a list of types,
+    /// converting each one into a positional-only param
     pub fn new_types(xs: Vec<PrefixParam>) -> Self {
-        Self(xs.into_map(|p| p.into_param()))
+        Self(xs.into_map(|p| p.into_posonly_param()))
     }
 
-    /// Prepend some positional parameters, for `Concatenate`
+    /// Prepend some parameters for `Concatenate`
     pub fn prepend_types(&self, pre: &[PrefixParam]) -> Cow<'_, ParamList> {
         if pre.is_empty() {
             Cow::Borrowed(self)
         } else {
+            // Use `to_subset_param` to preserve Pos v.s. PosOnly
             Cow::Owned(ParamList(
                 pre.iter()
-                    .map(|p| p.to_param())
+                    .map(|p| p.to_param_preserve_name())
                     .chain(self.0.iter().cloned())
                     .collect(),
             ))
@@ -190,24 +250,41 @@ impl ParamList {
         &self,
         output: &mut O,
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
+        overlay: &ParamOverlay,
     ) -> fmt::Result {
         let mut named_posonly = false;
         let mut kwonly = false;
+        let mut skipped_prev = false;
         for (i, param) in self.0.iter().enumerate() {
-            if i > 0 {
-                output.write_str(", ")?;
-            }
+            // `/` or `*` markers that should be printed before the param
+            let mut marker_prefixes = Vec::new();
             if matches!(param, Param::PosOnly(Some(_), _, _)) {
                 named_posonly = true;
             } else if named_posonly {
                 named_posonly = false;
-                output.write_str("/, ")?;
+                marker_prefixes.push("/");
             }
             if !kwonly && matches!(param, Param::KwOnly(..)) {
                 kwonly = true;
-                output.write_str("*, ")?;
+                marker_prefixes.push("*");
             }
-            param.fmt_with_type(output, write_type)?;
+            // Should we elide the param?
+            let skip = matches!(overlay, ParamOverlay::Subset(names) if param.name().is_some_and(|name| !names.contains(name)));
+            if i > 0 && (!skipped_prev || !marker_prefixes.is_empty() || !skip) {
+                output.write_str(", ")?;
+            }
+            for marker_prefix in marker_prefixes.iter() {
+                output.write_str(marker_prefix)?;
+                output.write_str(", ")?;
+            }
+            if skip {
+                if !skipped_prev || !marker_prefixes.is_empty() {
+                    output.write_str("...")?;
+                }
+            } else {
+                param.fmt_with_type(output, write_type)?;
+            }
+            skipped_prev = skip;
         }
         if named_posonly {
             output.write_str(", /")?;
@@ -219,33 +296,39 @@ impl ParamList {
     pub fn fmt_with_type_with_newlines<O: TypeOutput>(
         &self,
         output: &mut O,
-        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
+        write_type: &impl Fn(&Type, &mut O, usize) -> fmt::Result,
+        indent: usize,
     ) -> fmt::Result {
         let mut named_posonly = false;
         let mut kwonly = false;
 
         for (i, param) in self.0.iter().enumerate() {
             if i > 0 {
-                output.write_str(",\n    ")?;
+                output.write_str(",\n")?;
+                write_indent(output, indent)?;
             }
 
             if matches!(param, Param::PosOnly(Some(_), _, _)) {
                 named_posonly = true;
             } else if named_posonly {
                 named_posonly = false;
-                output.write_str("/,\n    ")?;
+                output.write_str("/,\n")?;
+                write_indent(output, indent)?;
             }
 
             if !kwonly && matches!(param, Param::KwOnly(..)) {
                 kwonly = true;
-                output.write_str("*,\n    ")?;
+                output.write_str("*,\n")?;
+                write_indent(output, indent)?;
             }
 
-            param.fmt_with_type(output, write_type)?;
+            param.fmt_with_type(output, &|t, o| write_type(t, o, indent))?;
         }
 
         if named_posonly {
-            output.write_str(",\n    /")?;
+            output.write_str(",\n")?;
+            write_indent(output, indent)?;
+            output.write_str("/")?;
         }
 
         Ok(())
@@ -271,12 +354,6 @@ impl ParamList {
         self.0.is_empty()
     }
 
-    pub fn split_first(&self) -> Option<(&Type, ParamList)> {
-        self.0
-            .split_first()
-            .map(|(first, rest)| (first.as_type(), ParamList(rest.to_vec())))
-    }
-
     /// Type signature that permits everything, namely `*args, **kwargs`.
     pub fn everything() -> ParamList {
         ParamList(vec![
@@ -284,6 +361,26 @@ impl ParamList {
             Param::Kwargs(None, Type::any_implicit()),
         ])
     }
+}
+
+/// True if `params` has both a `*args` and a `**kwargs` parameter and both are typed `Any`
+/// (explicitly, or implicitly because they are unannotated). Per the typing spec such a
+/// signature is equivalent to `...`.
+pub fn params_are_gradual_variadic(params: &[Param]) -> bool {
+    let has_vararg_any = params
+        .iter()
+        .any(|p| matches!(p, Param::Varargs(_, Type::Any(_))));
+    let has_kwargs_any = params
+        .iter()
+        .any(|p| matches!(p, Param::Kwargs(_, Type::Any(_))));
+    has_vararg_any && has_kwargs_any
+}
+
+fn write_indent<O: TypeOutput>(output: &mut O, indent: usize) -> fmt::Result {
+    for _ in 0..indent {
+        output.write_str(" ")?;
+    }
+    Ok(())
 }
 
 /// Represents a prefix parameter in `Concatenate`.
@@ -316,29 +413,17 @@ impl PrefixParam {
     /// Convert to a positional-only `Param`. Per the typing spec, params in
     /// `Concatenate` are positional-only at the call site. This is also appropriate
     /// for ParamSpec forwarding where prefix params must be passed positionally.
-    pub fn into_param(self) -> Param {
+    pub fn into_posonly_param(self) -> Param {
         match self {
             Self::PosOnly(name, ty, required) => Param::PosOnly(name, ty, required),
             Self::Pos(name, ty, required) => Param::PosOnly(Some(name), ty, required),
         }
     }
 
-    /// Convert to a positional-only `Param` by cloning. See `into_param`.
-    pub fn to_param(&self) -> Param {
-        match self {
-            Self::PosOnly(name, ty, required) => {
-                Param::PosOnly(name.clone(), ty.clone(), required.clone())
-            }
-            Self::Pos(name, ty, required) => {
-                Param::PosOnly(Some(name.clone()), ty.clone(), required.clone())
-            }
-        }
-    }
-
     /// Convert to a `Param` preserving the Pos vs PosOnly distinction.
     /// Used for subset/subtype checking where name matching matters,
     /// and for direct calls where prefix params should remain keyword-passable.
-    pub fn to_subset_param(&self) -> Param {
+    pub fn to_param_preserve_name(&self) -> Param {
         match self {
             Self::PosOnly(name, ty, required) => {
                 Param::PosOnly(name.clone(), ty.clone(), required.clone())
@@ -352,6 +437,10 @@ impl PrefixParam {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Params {
     List(ParamList),
+    /// The residual parameter list of a `functools.partial(...)`: behaves like `List` for
+    /// call-checking, but is additionally recognized as assignable to `functools.partial[ret]`
+    /// (see the subtyping rule in `subset.rs`). Carries the parameters left after binding a prefix.
+    Partial(ParamList),
     Ellipsis,
     /// All possible materializations of `...`. A subset check with Callable[Materialization, R]
     /// succeeds only if it would succeed with Materialization replaced with any parameter list.
@@ -367,7 +456,7 @@ pub enum Params {
 impl Params {
     fn arg_counts(&self) -> ArgCounts {
         match self {
-            Self::List(params) => {
+            Self::List(params) | Self::Partial(params) => {
                 let mut counts = ArgCounts {
                     positional: ArgCount::none_allowed(),
                     keyword: ArgCount::none_allowed(),
@@ -489,329 +578,6 @@ pub enum Required {
     Optional(Option<DefaultValue>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct Function {
-    pub signature: Callable,
-    pub metadata: FuncMetadata,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct FuncMetadata {
-    pub kind: FunctionKind,
-    pub flags: FuncFlags,
-}
-
-impl FuncMetadata {
-    pub fn def(module: &Module, cls: Option<&Class>, name: Name) -> Self {
-        Self {
-            kind: FunctionKind::Def(Arc::new(FuncId {
-                module: module.dupe(),
-                cls: cls.map(Dupe::dupe),
-                name,
-                def_index: None,
-                outer_funcs: None,
-            })),
-            flags: FuncFlags::default(),
-        }
-    }
-
-    pub fn method(cls: &Class, name: Name) -> Self {
-        Self::def(cls.module(), Some(cls), name)
-    }
-}
-
-/// Metadata extracted from a `@deprecated` decorator.
-#[derive(
-    Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash
-)]
-pub struct Deprecation {
-    pub message: Option<String>,
-}
-
-impl Deprecation {
-    pub fn new(message: Option<String>) -> Self {
-        Self { message }
-    }
-
-    /// Format deprecation metadata for error reporting.
-    pub fn as_error_detail(&self) -> Option<String> {
-        match self.message.as_ref().map(|s| s.trim()) {
-            Some(msg) if !msg.is_empty() => Some(msg.to_owned()),
-            _ => None,
-        }
-    }
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
-)]
-pub enum PropertyRole {
-    Getter,
-    Setter,
-    SetterDecorator,
-    DeleterDecorator,
-}
-
-/// Shape of a function body that consists of a single placeholder statement.
-/// The two variants share the surface form of "trivial body" but have very
-/// different semantics: `RaiseNotImplementedError` is an "abstract-ish"
-/// placeholder that never returns at runtime, while `ReturnNotImplemented`
-/// returns the singleton `NotImplemented` value (a real runtime value used by
-/// the dunder protocol). The type checker keeps them separate so it can relax
-/// override-consistency only for the abstract-style form, without conflating
-/// it with the dunder-protocol form.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
-)]
-pub enum PlaceholderBodyKind {
-    /// Body is exactly `raise NotImplementedError(...)`. This is the canonical
-    /// "abstract-ish" placeholder; concrete subclasses override it.
-    RaiseNotImplementedError,
-    /// Body is exactly `return NotImplemented`. This is the dunder-protocol
-    /// signal to defer to the other operand and is not an override placeholder.
-    ReturnNotImplemented,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
-)]
-pub struct PropertyMetadata {
-    pub role: PropertyRole,
-    pub getter: Type,
-    pub setter: Option<Type>,
-    pub has_deleter: bool,
-}
-
-impl PropertyMetadata {
-    /// Build a PropertyMetadata that stores sanitized (metadata-free) copies of getter/setter.
-    pub fn from_components(
-        role: PropertyRole,
-        getter: &Type,
-        setter: Option<&Type>,
-        has_deleter: bool,
-    ) -> Self {
-        Self {
-            role,
-            getter: getter.without_property_metadata(),
-            setter: setter.map(|s| s.without_property_metadata()),
-            has_deleter,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct FuncFlags {
-    pub is_overload: bool,
-    pub is_staticmethod: bool,
-    pub is_classmethod: bool,
-    /// A function decorated with `@deprecated`
-    pub deprecation: Option<Deprecation>,
-    /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.
-    pub property_metadata: Option<PropertyMetadata>,
-    /// A function decorated with `functools.cached_property` or equivalent.
-    pub is_cached_property: bool,
-    pub has_enum_member_decoration: bool,
-    pub is_override: bool,
-    pub has_final_decoration: bool,
-    /// A function decorated with `@abc.abstractmethod`
-    pub is_abstract_method: bool,
-    /// Function body is treated as a stub (e.g. body is `...` or absent in a stub file)
-    pub lacks_implementation: bool,
-    /// Is the function definition in a `.pyi` file
-    pub defined_in_stub_file: bool,
-    /// Set when the function was declared with `async def` (NOT when a regular
-    /// `def` happens to return a `Coroutine[...]`-typed value). Used to
-    /// distinguish async-def placeholders from sync functions explicitly
-    /// annotated to return a coroutine, which look identical at the type level
-    /// once the async-wrapping into `Coroutine[Any, Any, T]` has happened.
-    pub is_async: bool,
-    /// Set when the function body is a single placeholder statement (see
-    /// `PlaceholderBodyKind`), ignoring a leading docstring. `None` for
-    /// ordinary function bodies, and also for trivial bodies (`pass`, `...`,
-    /// or empty) — those are tracked separately as stubs, not placeholders.
-    pub placeholder_body_kind: Option<PlaceholderBodyKind>,
-    /// Set when the function's return type has no user-supplied annotation and
-    /// was inferred from the body (corresponds to
-    /// `ReturnTypeKind::ShouldInferType`). Used to distinguish a return type
-    /// the user wrote (e.g. an explicit `-> Never`) from one Pyrefly inferred,
-    /// which lets override-consistency logic relax inferred placeholder returns
-    /// without overriding what the user explicitly declared.
-    pub is_return_inferred: bool,
-    /// A function decorated with `typing.dataclass_transform(...)`, turning it into a
-    /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
-    /// `dataclass_transform` call. See
-    /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
-    pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
-}
-
-impl FuncFlags {
-    /// Whether the function lacks a runtime implementation and is not defined in a stub file.
-    /// This indicates a method that cannot actually be called at runtime (e.g. an abstract
-    /// method or protocol method with a `...` or `pass` body in a `.py` file).
-    pub fn lacks_runtime_implementation(&self) -> bool {
-        self.lacks_implementation && !self.defined_in_stub_file
-    }
-}
-
-/// The index of a function definition (`def ..():` statement) within the module,
-/// used as a reference to data associated with the function.
-#[derive(Debug, Clone, Dupe, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
-#[derive(Display, Visit, VisitMut, TypeEq)]
-pub struct FuncDefIndex(pub u32);
-
-#[derive(Debug, Clone)]
-pub struct FuncId {
-    pub module: Module,
-    pub cls: Option<Class>,
-    pub name: Name,
-    pub def_index: Option<FuncDefIndex>,
-    /// Dot-separated path of enclosing function names (e.g. `"f1"` for a function nested inside `f1`).
-    /// `None` for top-level and class-method functions.
-    pub outer_funcs: Option<Name>,
-}
-
-impl PartialEq for FuncId {
-    fn eq(&self, other: &Self) -> bool {
-        self.key_eq().eq(&other.key_eq())
-    }
-}
-
-impl Eq for FuncId {}
-impl TypeEq for FuncId {}
-
-impl Ord for FuncId {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.key_ord().cmp(&other.key_ord())
-    }
-}
-
-impl PartialOrd for FuncId {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Hash for FuncId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.key_eq().hash(state)
-    }
-}
-
-impl VisitMut<Type> for FuncId {
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-impl Visit<Type> for FuncId {
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-/// FuncId contains no Type fields, so visiting through Arc is a no-op.
-impl VisitMut<Type> for Arc<FuncId> {
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-impl Visit<Type> for Arc<FuncId> {
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-impl FuncId {
-    /// Identity tuple for equality and hashing. `outer_funcs` is intentionally
-    /// excluded because it is display-only metadata (the dotted path of enclosing
-    /// function names) and does not affect the logical identity of a function.
-    fn key_eq(
-        &self,
-    ) -> (
-        ModuleName,
-        ModulePath,
-        Option<Class>,
-        &Name,
-        Option<FuncDefIndex>,
-    ) {
-        (
-            self.module.name(),
-            self.module.path().to_key_eq(),
-            self.cls.clone(),
-            &self.name,
-            self.def_index,
-        )
-    }
-
-    fn key_ord(
-        &self,
-    ) -> (
-        ModuleName,
-        ModulePath,
-        Option<Class>,
-        &Name,
-        Option<FuncDefIndex>,
-    ) {
-        self.key_eq()
-    }
-
-    fn format_impl(
-        func_module: ModuleName,
-        func_cls: Option<Class>,
-        func_name: &Name,
-        current_module: ModuleName,
-    ) -> String {
-        let module_prefix =
-            if func_module == current_module || func_module == ModuleName::builtins() {
-                "".to_owned()
-            } else {
-                format!("{}.", func_module)
-            };
-        let class_prefix = match &func_cls {
-            Some(cls) => {
-                format!("{}.", cls.name())
-            }
-            None => "".to_owned(),
-        };
-        format!("{module_prefix}{class_prefix}{}", func_name)
-    }
-
-    pub fn format(&self, current_module: ModuleName) -> String {
-        Self::format_impl(
-            self.module.name(),
-            self.cls.clone(),
-            &self.name,
-            current_module,
-        )
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub enum FunctionKind {
-    IsInstance,
-    IsSubclass,
-    Dataclass,
-    DataclassField,
-    DataclassReplace,
-    /// `typing.dataclass_transform`. Note that this is `dataclass_transform` itself, *not* the
-    /// decorator created by a `dataclass_transform(...)` call. See
-    /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
-    DataclassTransform,
-    ClassMethod,
-    Overload,
-    Override,
-    Cast,
-    AssertType,
-    RevealType,
-    Final,
-    RuntimeCheckable,
-    Def(Arc<FuncId>),
-    AbstractMethod,
-    /// Instance of a protocol with a `__call__` method. The function has the `__call__` signature.
-    CallbackProtocol(Box<ClassType>),
-    TotalOrdering,
-    DisjointBase,
-    /// `numba.jit()`
-    NumbaJit,
-    /// `numba.njit()`
-    NumbaNjit,
-}
-
 impl Callable {
     pub fn fmt_with_type<O: TypeOutput>(
         &self,
@@ -819,9 +585,9 @@ impl Callable {
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match &self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 output.write_str("(")?;
-                params.fmt_with_type(output, write_type)?;
+                params.fmt_with_type(output, write_type, &ParamOverlay::All)?;
                 output.write_str(") -> ")?;
                 write_type(&self.ret, output)
             }
@@ -846,7 +612,7 @@ impl Callable {
                         if !args.is_empty() && !params.is_empty() {
                             output.write_str(", ")?;
                         }
-                        params.fmt_with_type(output, write_type)?;
+                        params.fmt_with_type(output, write_type, &ParamOverlay::All)?;
                     }
                     Type::Ellipsis => {
                         if !args.is_empty() {
@@ -874,26 +640,96 @@ impl Callable {
     pub fn fmt_with_type_with_newlines<O: TypeOutput>(
         &self,
         output: &mut O,
-        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
+        write_type: &impl Fn(&Type, &mut O, usize) -> fmt::Result,
+        indent: usize,
     ) -> fmt::Result {
         match &self.params {
-            Params::List(params) if params.len() > 1 => {
+            Params::List(params) | Params::Partial(params) if params.len() > 1 => {
                 // For multiple parameters, put each on a new line with indentation
-                output.write_str("(\n    ")?;
-                params.fmt_with_type_with_newlines(output, write_type)?;
-                output.write_str("\n) -> ")?;
-                write_type(&self.ret, output)
+                let param_indent = indent + 4;
+                output.write_str("(\n")?;
+                write_indent(output, param_indent)?;
+                params.fmt_with_type_with_newlines(output, write_type, param_indent)?;
+                output.write_str("\n")?;
+                write_indent(output, indent)?;
+                output.write_str(") -> ")?;
+                write_type(&self.ret, output, indent)
+            }
+            Params::ParamSpec(args, _) if !args.is_empty() => {
+                let param_indent = indent + 4;
+                output.write_str("(\n")?;
+                write_indent(output, param_indent)?;
+                self.fmt_param_spec_with_newlines(output, write_type, param_indent)?;
+                output.write_str("\n")?;
+                write_indent(output, indent)?;
+                output.write_str(") -> ")?;
+                write_type(&self.ret, output, indent)
             }
             Params::List(..)
+            | Params::Partial(..)
             | Params::ParamSpec(..)
             | Params::Ellipsis
-            | Params::Materialization => self.fmt_with_type(output, write_type),
+            | Params::Materialization => {
+                self.fmt_with_type(output, &|t, o| write_type(t, o, indent))
+            }
+        }
+    }
+
+    fn fmt_param_spec_with_newlines<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O, usize) -> fmt::Result,
+        indent: usize,
+    ) -> fmt::Result {
+        let Params::ParamSpec(args, pspec) = &self.params else {
+            unreachable!("only ParamSpec callables can be formatted as ParamSpec")
+        };
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                output.write_str(",\n")?;
+                write_indent(output, indent)?;
+            }
+            write_type(arg.ty(), output, indent)?;
+        }
+        match pspec {
+            Type::ParamSpecValue(params) if !params.is_empty() => {
+                if !args.is_empty() {
+                    output.write_str(",\n")?;
+                    write_indent(output, indent)?;
+                }
+                params.fmt_with_type_with_newlines(output, write_type, indent)
+            }
+            Type::ParamSpecValue(_) => Ok(()),
+            Type::Ellipsis => {
+                if !args.is_empty() {
+                    output.write_str(",\n")?;
+                    write_indent(output, indent)?;
+                }
+                output.write_str("...")
+            }
+            _ => {
+                if !args.is_empty() {
+                    output.write_str(",\n")?;
+                    write_indent(output, indent)?;
+                }
+                output.write_str("ParamSpec(")?;
+                write_type(pspec, output, indent)?;
+                output.write_str(")")
+            }
         }
     }
 
     pub fn list(params: ParamList, ret: Type) -> Self {
         Self {
             params: Params::List(params),
+            ret,
+        }
+    }
+
+    /// Build a `Callable` carrying a [`Params::Partial`] residual signature, returning `ret`.
+    pub fn partial(params: ParamList, ret: Type) -> Self {
+        Self {
+            params: Params::Partial(params),
             ret,
         }
     }
@@ -920,18 +756,9 @@ impl Callable {
     }
 
     /// Return a new Callable with the first parameter removed (the `self` param for bound methods).
-    /// Returns a clone if the params are not a list or the list is empty.
-    pub fn strip_self_param(&self) -> Self {
-        match &self.params {
-            Params::List(params) => {
-                if let Some((_, rest)) = params.split_first() {
-                    Callable::list(rest, self.ret.clone())
-                } else {
-                    self.clone()
-                }
-            }
-            _ => self.clone(),
-        }
+    pub fn strip_first_param(&self) -> Option<Self> {
+        self.split_first_param(&mut Owner::new())
+            .map(|(_, rest)| rest)
     }
 
     pub fn split_first_param<'a>(&'a self, owner: &'a mut Owner<Type>) -> Option<(&'a Type, Self)> {
@@ -940,8 +767,29 @@ impl Callable {
                 params: Params::List(params),
                 ret,
             } => {
-                let (first, rest) = params.split_first()?;
-                Some((first, Self::list(rest, ret.clone())))
+                let (first, rest) = params.0.split_first()?;
+                if let Param::Varargs(_, first) = first {
+                    Some((first, self.clone()))
+                } else {
+                    Some((
+                        first.as_type(),
+                        Self::list(ParamList(rest.to_vec()), ret.clone()),
+                    ))
+                }
+            }
+            Self {
+                params: Params::Partial(params),
+                ret,
+            } => {
+                let (first, rest) = params.0.split_first()?;
+                if let Param::Varargs(_, first) = first {
+                    Some((first, self.clone()))
+                } else {
+                    Some((
+                        first.as_type(),
+                        Self::partial(ParamList(rest.to_vec()), ret.clone()),
+                    ))
+                }
             }
             Self {
                 params: Params::ParamSpec(ts, p),
@@ -961,26 +809,37 @@ impl Callable {
         }
     }
 
-    pub fn get_first_param(&self) -> Option<Type> {
-        match self {
-            Self {
-                params: Params::List(params),
-                ret: _,
-            } if let Some(param) = params.items().first() => match param {
-                Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) | Param::Varargs(_, ty) => {
-                    Some(ty.clone())
-                }
-                _ => None,
+    pub fn get_first_param(&self) -> Option<&Type> {
+        match &self.params {
+            Params::List(params) | Params::Partial(params) => {
+                params.0.first().map(|param| param.as_type())
+            }
+            Params::ParamSpec(prefix, _) => prefix.first().map(|param| param.ty()),
+            Params::Ellipsis => Some(&Type::Any(AnyStyle::Implicit)),
+            Params::Materialization => None,
+        }
+    }
+
+    /// Whether this signature can be called with a single positional argument, i.e. none of the
+    /// parameters after the first is required (positional or keyword-only). `*args`/`**kwargs`
+    /// don't prevent it.
+    pub fn accepts_single_positional_arg(&self) -> bool {
+        match &self.params {
+            Params::List(params) | Params::Partial(params) => match params.0.split_first() {
+                Some((_, rest)) => !rest.iter().any(|p| {
+                    matches!(
+                        p,
+                        Param::PosOnly(_, _, Required::Required)
+                            | Param::Pos(_, _, Required::Required)
+                            | Param::KwOnly(_, _, Required::Required)
+                    )
+                }),
+                None => false,
             },
-            Self {
-                params: Params::ParamSpec(ts, _),
-                ret: _,
-            } => ts.first().map(|x| x.ty().clone()),
-            Self {
-                params: Params::Ellipsis,
-                ret: _,
-            } => Some(Type::any_implicit()),
-            _ => None,
+            Params::Ellipsis | Params::Materialization => true,
+            // A bare `P` or `Concatenate[A, P]` can resolve to anything, so stay permissive; only
+            // `Concatenate[A, B, ...]` (2+ prepended args) cannot be called with one positional.
+            Params::ParamSpec(prefix, _) => prefix.len() <= 1,
         }
     }
 
@@ -1125,10 +984,6 @@ impl Param {
     /// This is similar to the `Display` impl, but allows passing in a `TypeDisplayContext`
     /// for context-aware formatting (e.g., disambiguating types with the same name).
     pub fn format_for_signature(&self, type_ctx: &TypeDisplayContext) -> String {
-        use pyrefly_util::display::Fmt;
-
-        use crate::type_output::DisplayOutput;
-
         format!(
             "{}",
             Fmt(|f| {
@@ -1143,158 +998,9 @@ impl Param {
 
 impl Display for Param {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use crate::display::TypeDisplayContext;
-        use crate::type_output::DisplayOutput;
-
-        let ctx = TypeDisplayContext::new(&[]);
+        let ctx = TypeDisplayContext::new(&[self.as_type()]);
         let mut output = DisplayOutput::new(&ctx, f);
-        self.fmt_with_type(&mut output, &|t, o| {
-            // Use the type's own Display impl to get simple names
-            o.write_str(&format!("{}", t))
-        })
-    }
-}
-
-impl FunctionKind {
-    pub fn from_name(
-        module: Module,
-        cls: Option<Class>,
-        func: &Name,
-        def_index: Option<FuncDefIndex>,
-        outer_funcs: Option<Name>,
-    ) -> Self {
-        match (module.name().as_str(), cls.as_ref(), func.as_str()) {
-            ("builtins", None, "isinstance") => Self::IsInstance,
-            ("builtins", None, "issubclass") => Self::IsSubclass,
-            ("builtins", None, "classmethod") => Self::ClassMethod,
-            ("dataclasses", None, "dataclass") => Self::Dataclass,
-            ("dataclasses", None, "field") => Self::DataclassField,
-            ("dataclasses", None, "replace") => Self::DataclassReplace,
-            ("typing" | "typing_extensions", None, "overload") => Self::Overload,
-            ("typing" | "typing_extensions", None, "override") => Self::Override,
-            ("typing" | "typing_extensions", None, "cast") => Self::Cast,
-            ("typing" | "typing_extensions", None, "assert_type") => Self::AssertType,
-            ("typing" | "typing_extensions", None, "reveal_type") => Self::RevealType,
-            ("typing" | "typing_extensions", None, "final") => Self::Final,
-            ("typing" | "typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
-            ("typing" | "typing_extensions", None, "dataclass_transform") => {
-                Self::DataclassTransform
-            }
-            ("abc", None, "abstractmethod") => Self::AbstractMethod,
-            ("functools", None, "total_ordering") => Self::TotalOrdering,
-            ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
-            ("numba.core.decorators", None, "jit") => Self::NumbaJit,
-            ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
-            _ => Self::Def(Arc::new(FuncId {
-                module,
-                cls,
-                name: func.clone(),
-                def_index,
-                outer_funcs,
-            })),
-        }
-    }
-
-    pub fn module_name(&self) -> ModuleName {
-        match self {
-            Self::IsInstance => ModuleName::builtins(),
-            Self::IsSubclass => ModuleName::builtins(),
-            Self::ClassMethod => ModuleName::builtins(),
-            Self::Dataclass => ModuleName::dataclasses(),
-            Self::DataclassField => ModuleName::dataclasses(),
-            Self::DataclassReplace => ModuleName::dataclasses(),
-            Self::DataclassTransform => ModuleName::typing(),
-            Self::Final => ModuleName::typing(),
-            Self::Overload => ModuleName::typing(),
-            Self::Override => ModuleName::typing(),
-            Self::Cast => ModuleName::typing(),
-            Self::AssertType => ModuleName::typing(),
-            Self::RevealType => ModuleName::typing(),
-            Self::RuntimeCheckable => ModuleName::typing(),
-            Self::CallbackProtocol(cls) => cls.qname().module_name(),
-            Self::AbstractMethod => ModuleName::abc(),
-            Self::TotalOrdering => ModuleName::functools(),
-            Self::DisjointBase => ModuleName::typing(),
-            Self::NumbaJit => ModuleName::from_str("numba"),
-            Self::NumbaNjit => ModuleName::from_str("numba"),
-            Self::Def(func_id) => func_id.module.name().dupe(),
-        }
-    }
-
-    pub fn function_name(&self) -> Cow<'_, Name> {
-        match self {
-            Self::IsInstance => Cow::Owned(Name::new_static("isinstance")),
-            Self::IsSubclass => Cow::Owned(Name::new_static("issubclass")),
-            Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
-            Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
-            Self::DataclassField => Cow::Owned(Name::new_static("field")),
-            Self::DataclassReplace => Cow::Owned(Name::new_static("replace")),
-            Self::DataclassTransform => Cow::Owned(Name::new_static("dataclass_transform")),
-            Self::Final => Cow::Owned(Name::new_static("final")),
-            Self::Overload => Cow::Owned(Name::new_static("overload")),
-            Self::Override => Cow::Owned(Name::new_static("override")),
-            Self::Cast => Cow::Owned(Name::new_static("cast")),
-            Self::AssertType => Cow::Owned(Name::new_static("assert_type")),
-            Self::RevealType => Cow::Owned(Name::new_static("reveal_type")),
-            Self::RuntimeCheckable => Cow::Owned(Name::new_static("runtime_checkable")),
-            Self::CallbackProtocol(_) => Cow::Owned(dunder::CALL),
-            Self::AbstractMethod => Cow::Owned(Name::new_static("abstractmethod")),
-            Self::TotalOrdering => Cow::Owned(Name::new_static("total_ordering")),
-            Self::DisjointBase => Cow::Owned(Name::new_static("disjoint_base")),
-            Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
-            Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
-            Self::Def(func_id) => Cow::Borrowed(&func_id.name),
-        }
-    }
-
-    pub fn class(&self) -> Option<Class> {
-        match self {
-            Self::IsInstance => None,
-            Self::IsSubclass => None,
-            Self::ClassMethod => None,
-            Self::Dataclass => None,
-            Self::DataclassField => None,
-            Self::DataclassReplace => None,
-            Self::DataclassTransform => None,
-            Self::Final => None,
-            Self::Overload => None,
-            Self::Override => None,
-            Self::Cast => None,
-            Self::AssertType => None,
-            Self::RevealType => None,
-            Self::RuntimeCheckable => None,
-            Self::NumbaJit => None,
-            Self::NumbaNjit => None,
-            Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
-            Self::AbstractMethod => None,
-            Self::TotalOrdering => None,
-            Self::DisjointBase => None,
-            Self::Def(func_id) => func_id.cls.clone(),
-        }
-    }
-
-    pub fn outer_funcs(&self) -> Option<&Name> {
-        match self {
-            Self::Def(func_id) => func_id.outer_funcs.as_ref(),
-            _ => None,
-        }
-    }
-
-    pub fn format(&self, current_module: ModuleName) -> String {
-        FuncId::format_impl(
-            self.module_name(),
-            self.class(),
-            self.function_name().as_ref(),
-            current_module,
-        )
-    }
-
-    /// Does this decorator require special-casing to be signature-preserving?
-    pub fn is_signature_preserving_decorator(&self) -> bool {
-        match self {
-            Self::NumbaJit | Self::NumbaNjit => true,
-            _ => false,
-        }
+        self.fmt_with_type(&mut output, &|t, o| ctx.fmt_helper_generic(t, false, o))
     }
 }
 
@@ -1310,6 +1016,7 @@ pub fn unexpected_keyword(error: &dyn Fn(String), func: &str, keyword: &Keyword)
 #[cfg(test)]
 mod tests {
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_util::owner::Owner;
     use pyrefly_util::visit::Visit;
     use pyrefly_util::visit::VisitMut;
     use ruff_python_ast::name::Name;
@@ -1319,6 +1026,7 @@ mod tests {
     use crate::callable::DefaultValue;
     use crate::callable::Param;
     use crate::callable::ParamList;
+    use crate::callable::Params;
     use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::quantified::AnchorIndex;
@@ -1329,6 +1037,38 @@ mod tests {
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::types::Type;
+
+    #[test]
+    fn test_get_first_param_matches_split_first_param() {
+        let callables = [
+            Callable::list(ParamList::new(Vec::new()), Type::None),
+            Callable::list(
+                ParamList::new(vec![Param::PosOnly(None, Type::None, Required::Required)]),
+                Type::None,
+            ),
+            Callable::partial(
+                ParamList::new(vec![Param::Varargs(None, Type::any_implicit())]),
+                Type::None,
+            ),
+            Callable::concatenate(
+                vec![PrefixParam::new(Type::None, Required::Required)].into_boxed_slice(),
+                Type::any_implicit(),
+                Type::None,
+            ),
+            Callable::param_spec(Type::any_implicit(), Type::None),
+            Callable::ellipsis(Type::None),
+            Callable {
+                params: Params::Materialization,
+                ret: Type::None,
+            },
+        ];
+        for callable in callables {
+            let expected = callable
+                .split_first_param(&mut Owner::new())
+                .map(|(first, _)| first.clone());
+            assert_eq!(callable.get_first_param(), expected.as_ref());
+        }
+    }
 
     #[test]
     fn test_arg_counts_positional() {
