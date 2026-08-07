@@ -43,7 +43,8 @@ const KEY_TO_DEFINITION_INITIAL_GAS: Gas = Gas::new(100);
 pub enum IntermediateDefinition {
     Local(Export),
     NamedImport(TextRange, ModuleName, Name, Option<TextRange>),
-    Module(TextRange, ModuleName),
+    /// The flag records whether the module was bound to an explicit alias.
+    Module(TextRange, ModuleName, bool),
 }
 
 /// An edit that imports a single name into a module.
@@ -112,9 +113,8 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             Binding::Phi(_, branches) if !branches.is_empty() => {
                 current_idx = branches[0].value_key
             }
-            Binding::PossibleLegacyTParam(k, _) => {
-                let binding = bindings.get(*k);
-                current_idx = binding.idx();
+            Binding::PossibleLegacyTParam(legacy_tparam, _) => {
+                current_idx = bindings.get(legacy_tparam.first_key()).idx();
             }
             Binding::AssignToSubscript(x)
                 if let Some(key) = base_key_of_assign_target(&Expr::Subscript(x.0.clone())) =>
@@ -149,9 +149,8 @@ fn create_intermediate_definition_from(
             Binding::Forward(k) | Binding::PromoteForward(k) | Binding::ForwardToFirstUse(k) => {
                 current_binding = bindings.get(*k)
             }
-            Binding::PossibleLegacyTParam(k, _) => {
-                let binding = bindings.get(*k);
-                current_binding = bindings.get(binding.idx());
+            Binding::PossibleLegacyTParam(legacy_tparam, _) => {
+                current_binding = bindings.get(bindings.get(legacy_tparam.first_key()).idx());
             }
             Binding::Import(x) => {
                 return Some(IntermediateDefinition::NamedImport(
@@ -176,10 +175,11 @@ fn create_intermediate_definition_from(
                 return Some(IntermediateDefinition::Module(
                     def_key.range(),
                     imported_module_name,
+                    matches!(def_key, Key::Definition(..)),
                 ));
             }
-            Binding::Function(idx, ..) => {
-                let func = bindings.get(*idx);
+            Binding::Function { decorated_idx, .. } => {
+                let func = bindings.get(*decorated_idx);
                 let undecorated = bindings.get(func.undecorated_idx);
                 let symbol_kind = if undecorated.class_key.is_some() {
                     SymbolKind::Method

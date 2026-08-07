@@ -24,6 +24,7 @@ use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::LocalRefactorCodeAction;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::lsp::Transaction;
 
 /// A text replacement for a single load of the target name.
@@ -78,7 +79,7 @@ pub(crate) fn invert_boolean_code_actions(
         definition.metadata.clone(),
         definition.definition_range,
         &definition.module,
-        true,
+        ReferenceOptions::textual_only(true),
     )?;
     let reference_set: HashSet<TextRange> = references.into_iter().collect();
 

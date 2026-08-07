@@ -22,7 +22,9 @@ use serde::Serializer;
 use crate::dunder;
 use crate::module_name::ModuleName;
 
-#[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Dupe, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord
+)]
 pub enum ModuleStyle {
     /// .py - executable code.
     #[default]
@@ -40,6 +42,16 @@ impl ModuleStyle {
             ModuleStyle::Executable
         }
     }
+}
+
+impl<To: 'static> Visit<To> for ModuleStyle {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+
+impl<To: 'static> VisitMut<To> for ModuleStyle {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
 }
 
 /// Store information about where a module is sourced from.
@@ -194,10 +206,6 @@ impl ModulePath {
 
     pub fn is_memory(&self) -> bool {
         matches!(self.0, ModulePathDetails::Memory(_))
-    }
-
-    pub fn is_notebook(&self) -> bool {
-        self.as_path().extension() == Some("ipynb".as_ref())
     }
 
     /// Attempt to match the given [`ModuleName`]'s components to this `ModulePath`,

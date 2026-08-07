@@ -8,6 +8,7 @@
 use std::iter::once;
 use std::sync::Arc;
 
+use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
@@ -33,22 +34,147 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
+use crate::state::ide::import_regular_import_edit;
+use crate::state::ide::insert_import_edit;
+use crate::state::import_tracker::ImportTracker;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::AnnotationKind;
 use crate::state::lsp::DefinitionMetadata;
+use crate::state::lsp::ImportFormat;
 use crate::state::lsp::InlayHintConfig;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::callable::Params;
+use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 
 pub struct InlayHintData {
     pub position: TextSize,
     /// Label parts with optional location info for click-to-navigate
     pub label_parts: Vec<(String, Option<TextRangeWithModule>)>,
-    /// Whether double-clicking should insert the type annotation.
-    pub insertable: bool,
+    /// Edits to apply when inserting the hint, or `None` when it is display-only.
+    pub edits: Option<InlayHintEdits>,
+}
+
+pub struct InlayHintEdits {
+    pub annotation: String,
+    pub imports: Vec<(TextSize, String)>,
+}
+
+struct DirectImport {
+    handle: Handle,
+    heads: Vec<String>,
+}
+
+struct TypeHintRenderer<'a, 'state> {
+    transaction: &'a Transaction<'state>,
+    handle: &'a Handle,
+    tracker: ImportTracker,
+    ast: Arc<ModModule>,
+    stdlib: &'a Stdlib,
+    import_format: ImportFormat,
+}
+
+impl TypeHintRenderer<'_, '_> {
+    fn render(&self, prefix: &str, ty: &Type) -> InlayHintEdits {
+        let parts = ty.get_annotation_parts(Some(self.stdlib));
+
+        let mut direct = Vec::<DirectImport>::new();
+        for (module, head) in self
+            .tracker
+            .direct_import_candidates(&parts, self.handle.module())
+        {
+            let Some(module_handle) = self
+                .transaction
+                .import_handle(self.handle, module, None)
+                .finding()
+            else {
+                continue;
+            };
+            let name = Name::new(&head);
+            if !self
+                .transaction
+                .get_exports(&module_handle)
+                .contains_key(&name)
+                || self
+                    .transaction
+                    .builtin_module_for_name(self.handle, &name)
+                    .is_some()
+            {
+                continue;
+            }
+            match direct
+                .iter_mut()
+                .find(|import| import.handle.module() == module)
+            {
+                Some(import) => import.heads.push(head),
+                None => direct.push(DirectImport {
+                    handle: module_handle,
+                    heads: vec![head],
+                }),
+            }
+        }
+        direct.sort_by(|left, right| {
+            left.handle
+                .module()
+                .as_str()
+                .cmp(right.handle.module().as_str())
+        });
+        for import in &mut direct {
+            import.heads.sort();
+        }
+
+        let direct_imports = direct
+            .iter()
+            .flat_map(|import| {
+                import
+                    .heads
+                    .iter()
+                    .map(|head| (import.handle.module(), head.as_str()))
+            })
+            .collect::<Vec<_>>();
+        let (text, missing) =
+            self.tracker
+                .resolve_annotation(&parts, self.handle.module(), &direct_imports);
+
+        let mut missing = missing.into_iter().collect::<Vec<_>>();
+        missing.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        let mut import_edit = None;
+        for module in missing {
+            if let Some(handle_to_import) = self
+                .transaction
+                .import_handle(self.handle, module, None)
+                .finding()
+            {
+                let (position, insert_text, _) =
+                    import_regular_import_edit(self.ast.as_ref(), handle_to_import, None);
+                let (_, combined) = import_edit.get_or_insert((position, String::new()));
+                combined.push_str(&insert_text);
+            }
+        }
+        for import in direct {
+            let edit = insert_import_edit(
+                self.ast.as_ref(),
+                self.transaction.config_finder(),
+                self.handle.dupe(),
+                import.handle,
+                &import.heads.join(", "),
+                self.import_format,
+            );
+            let (_, combined) = import_edit.get_or_insert((edit.range.start(), String::new()));
+            combined.push_str(&edit.insert_text);
+        }
+        let imports = match import_edit {
+            Some(import_edit) => vec![import_edit],
+            None => Vec::new(),
+        };
+        InlayHintEdits {
+            annotation: format!("{prefix}{text}"),
+            imports,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -92,10 +218,33 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
 }
 
 impl<'a> Transaction<'a> {
+    /// NewType values are callable aliases, not class objects, so `type[N]` is
+    /// not a valid annotation. If `ty` is a NewType, returns its constructor
+    /// signature to display in place of `type[N]`; callers should then avoid
+    /// offering it as an insertable annotation. Returns `None` otherwise.
+    fn new_type_constructor_signature(&self, handle: &Handle, ty: &Type) -> Option<Type> {
+        let Type::ClassDef(cls) = ty else {
+            return None;
+        };
+        self.ad_hoc_solve(handle, "inlay_hint_new_type", |solver| {
+            if !solver.get_metadata_for_class(cls).is_new_type() {
+                return None;
+            }
+            let cls = solver.promote_nontypeddict_silently_to_classtype(cls);
+            let new = solver.get_dunder_new(&cls, false)?;
+            let constructor = solver
+                .bind_dunder_new(&new, cls)
+                .expect("NewType __new__ method can be bound");
+            Some(solver.for_display(constructor))
+        })
+        .flatten()
+    }
+
     pub fn inlay_hints(
         &self,
         handle: &Handle,
         inlay_hint_config: InlayHintConfig,
+        import_format: ImportFormat,
     ) -> Option<Vec<InlayHintData>> {
         let is_interesting = |e: &Expr, ty: &Type, class_name: Option<&Name>| {
             !ty.is_any()
@@ -139,20 +288,34 @@ impl<'a> Transaction<'a> {
         };
         let bindings = self.get_bindings(handle)?;
         let stdlib = self.get_stdlib(handle);
+        let renderer = self.get_ast(handle).map(|ast| TypeHintRenderer {
+            transaction: self,
+            handle,
+            tracker: ImportTracker::from_ast(
+                ast.as_ref(),
+                handle.module(),
+                handle.path().is_init(),
+                *handle.sys_info(),
+            ),
+            ast,
+            stdlib: &stdlib,
+            import_format,
+        });
         let make_type_hint =
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
                 let type_parts = ty.get_types_with_locations(Some(&stdlib));
-                let label_parts = once((prefix.to_owned(), None))
-                    .chain(
-                        type_parts
-                            .iter()
-                            .map(|(text, loc)| (text.clone(), loc.clone())),
-                    )
-                    .collect();
+                let label_parts = once((prefix.to_owned(), None)).chain(type_parts).collect();
+                let edits = if insertable {
+                    renderer
+                        .as_ref()
+                        .map(|renderer| renderer.render(prefix, ty))
+                } else {
+                    None
+                };
                 InlayHintData {
                     position,
                     label_parts,
-                    insertable,
+                    edits,
                 }
             };
         let mut res = Vec::new();
@@ -160,12 +323,13 @@ impl<'a> Transaction<'a> {
             match bindings.idx_to_key(idx) {
                 key @ Key::ReturnType(id) if inlay_hint_config.function_return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                        Binding::Function(x, _pred, _class_meta) => {
+                        Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(mut ty) = self.get_type_for_display(handle, key)
                                 && !ty.is_any()
                             {
-                                let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                                let fun =
+                                    bindings.get(bindings.get(*decorated_idx).undecorated_idx);
                                 if fun.def.is_async
                                     && let Some(Some((_, _, return_ty))) = self.ad_hoc_solve(
                                         handle,
@@ -188,10 +352,23 @@ impl<'a> Transaction<'a> {
                 }
                 key @ Key::Definition(_)
                     if inlay_hint_config.variable_types
-                        && let Some(ty) = self.get_type_for_display(handle, key) =>
+                        && let Some(mut ty) = self.get_type_for_display(handle, key) =>
                 {
-                    // For unpacked values, extract the element expression if available
-                    let (e, is_unpacked) = match bindings.get(idx) {
+                    let mut insertable = true;
+                    if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
+                        ty = constructor;
+                        insertable = false;
+                    }
+                    // Inspect the value-producing binding before deciding whether to show a hint.
+                    // A pattern capture is a definition boundary for navigation, but stays
+                    // transparent here when examining how its type was produced.
+                    let binding = bindings.get(idx);
+                    let is_pattern_capture = matches!(binding, Binding::PatternCapture(_));
+                    let source = match binding {
+                        Binding::PatternCapture(source_idx) => bindings.get(*source_idx),
+                        _ => binding,
+                    };
+                    let (e, is_unpacked) = match source {
                         // Pinned assignments (explicit annotation or
                         // receiver-constrained class rebind) are already
                         // authoritatively typed; suggesting an explicit
@@ -230,7 +407,12 @@ impl<'a> Transaction<'a> {
                         is_unpacked && !ty.is_any()
                     };
                     if should_show {
-                        res.push(make_type_hint(": ", key.range().end(), &ty, !is_unpacked));
+                        res.push(make_type_hint(
+                            ": ",
+                            key.range().end(),
+                            &ty,
+                            insertable && !is_unpacked && !is_pattern_capture,
+                        ));
                     }
                 }
                 _ => {}
@@ -244,7 +426,7 @@ impl<'a> Transaction<'a> {
             for field_idx in bindings.keys::<KeyClassField>() {
                 let field = bindings.get(field_idx);
                 if let ClassFieldDefinition::DefinedInMethod {
-                    value,
+                    values,
                     annotation: None,
                     ..
                 } = &field.definition
@@ -252,8 +434,16 @@ impl<'a> Transaction<'a> {
                     let Some(class_field) = answers.get_idx::<KeyClassField>(field_idx) else {
                         continue;
                     };
-                    let ty = answers.solver().for_display(class_field.ty());
-                    let expr = match value.as_ref() {
+                    let mut ty = answers.solver().for_display(class_field.ty());
+                    let mut insertable = true;
+                    if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
+                        ty = constructor;
+                        insertable = false;
+                    }
+                    let expr = match values
+                        .first()
+                        .expect("DefinedInMethod must have at least one value")
+                    {
                         ExprOrBinding::Expr(e) => Some(e),
                         ExprOrBinding::Binding(_) => None,
                     };
@@ -276,7 +466,7 @@ impl<'a> Transaction<'a> {
                         None => !ty.is_any(),
                     };
                     if should_show {
-                        res.push(make_type_hint(": ", field.range.end(), &ty, true));
+                        res.push(make_type_hint(": ", field.range.end(), &ty, insertable));
                     }
                 }
             }
@@ -288,8 +478,11 @@ impl<'a> Transaction<'a> {
                     .into_iter()
                     .map(|(pos, text)| InlayHintData {
                         position: pos,
-                        label_parts: vec![(text, None)],
-                        insertable: true,
+                        label_parts: vec![(text.clone(), None)],
+                        edits: Some(InlayHintEdits {
+                            annotation: text,
+                            imports: Vec::new(),
+                        }),
                     }),
             );
         }
@@ -325,8 +518,8 @@ impl<'a> Transaction<'a> {
         // Extract the element at the given position
         // This mirrors the logic in solve.rs for Binding::UnpackedValue
         match pos {
-            UnpackedPosition::Index(i) => elts.get(i),
-            UnpackedPosition::ReverseIndex(i) => {
+            UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => elts.get(i),
+            UnpackedPosition::ReverseIndex(i, _) => {
                 elts.len().checked_sub(i).and_then(|idx| elts.get(idx))
             }
             // For slices (starred unpacking), we can't return a single element
@@ -370,11 +563,21 @@ impl<'a> Transaction<'a> {
                         answers.get_type_trace(call.func.range())
                     };
 
-                    if let Some(params) =
-                        callee_type.and_then(normalize_singleton_function_type_into_params)
+                    if let Some(params) = callee_type
+                        .map(|ty| self.coerce_type_to_callable(handle, ty))
+                        .and_then(normalize_singleton_function_type_into_params)
                     {
                         for (arg_idx, arg) in call.arguments.args.iter().enumerate() {
-                            // Skip keyword arguments - they already show their parameter name
+                            // Account for keyword arguments omitted from `args`, including
+                            // malformed calls while an inlay edit is being applied.
+                            let positional_arg_idx = arg_idx
+                                + call
+                                    .arguments
+                                    .keywords
+                                    .iter()
+                                    .filter(|kw| kw.range().start() < arg.range().start())
+                                    .count();
+                            // Skip keyword arguments - they already show their parameter name.
                             let is_keyword_arg = call
                                 .arguments
                                 .keywords
@@ -382,8 +585,10 @@ impl<'a> Transaction<'a> {
                                 .any(|kw| kw.value.range() == arg.range());
 
                             if !is_keyword_arg
-                                && let Some(param_match) =
-                                    Self::param_name_for_positional_argument(&params, arg_idx)
+                                && let Some(param_match) = Self::param_name_for_positional_argument(
+                                    &params,
+                                    positional_arg_idx,
+                                )
                                 && !param_match.is_vararg_repeat
                                 && param_match.name.as_str() != "self"
                                 && param_match.name.as_str() != "cls"
@@ -513,7 +718,7 @@ impl<'a> Transaction<'a> {
                 *handle.sys_info(),
                 definition_kind,
                 TextRangeWithModule::new(module_info, id.range()),
-                true,
+                ReferenceOptions::all(true),
             ) {
                 return references;
             }
@@ -585,9 +790,9 @@ impl<'a> Transaction<'a> {
                 .flat_map(|idx| {
                     let binding = bindings.get(idx);
                     // Check if this binding is a function
-                    if let Binding::Function(key_function, _, _) = binding {
+                    if let Binding::Function { decorated_idx, .. } = binding {
                         let binding_func =
-                            bindings.get(bindings.get(*key_function).undecorated_idx);
+                            bindings.get(bindings.get(*decorated_idx).undecorated_idx);
                         let args = binding_func.def.parameters.args.clone();
                         let func_args: Vec<ParameterAnnotation> = args
                             .into_iter()
@@ -633,12 +838,13 @@ impl<'a> Transaction<'a> {
                 // Return Annotation
                 key @ Key::ReturnType(id) if return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                        Binding::Function(x, _pred, _class_meta) => {
+                        Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(ty) = self.get_type_for_display(handle, key)
                                 && is_interesting_type(&ty)
                             {
-                                let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                                let fun =
+                                    bindings.get(bindings.get(*decorated_idx).undecorated_idx);
                                 res.push((
                                     fun.def.parameters.range.end(),
                                     ty,

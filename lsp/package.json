@@ -29,8 +29,11 @@
         "lint"
     ],
     "engines": {
-        "vscode": "^1.94.0"
+        "vscode": "^1.103.0"
     },
+    "enabledApiProposals": [
+        "editorHoverVerbosityLevel"
+    ],
     "main": "./dist/extension",
     "activationEvents": [
         "onLanguage:python",
@@ -72,6 +75,11 @@
                 "command": "pyrefly.unfoldAllDocstrings"
             },
             {
+                "title": "Infer Types for Current File",
+                "category": "pyrefly",
+                "command": "pyrefly.infer"
+            },
+            {
                 "title": "Run File",
                 "category": "pyrefly",
                 "command": "pyrefly.runMain"
@@ -86,6 +94,33 @@
             {
                 "language": "python",
                 "scopes": {
+                    "string.byteString": [
+                        "string.quoted.binary.single.python",
+                        "string.quoted.binary.multi.python"
+                    ],
+                    "string.byteString.rawString": [
+                        "string.quoted.raw.binary.single.python",
+                        "string.quoted.raw.binary.multi.python"
+                    ],
+                    "string.formatString": [
+                        "string.interpolated.python"
+                    ],
+                    "string.formatString.rawString": [
+                        "string.interpolated.python"
+                    ],
+                    "string.rawString": [
+                        "string.quoted.raw.single.python",
+                        "string.quoted.raw.multi.python"
+                    ],
+                    "string.stringPrefix": [
+                        "storage.type.string.python"
+                    ],
+                    "string.templateString": [
+                        "string.interpolated.python"
+                    ],
+                    "string.rawString.templateString": [
+                        "string.interpolated.python"
+                    ],
                     "variable.readonly": [
                         "variable.other.constant.python"
                     ]
@@ -259,6 +294,12 @@
                     "description": "Automatically insert parentheses when completing a function or method.",
                     "scope": "resource"
                 },
+                "python.analysis.autoImportCompletions": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement.",
+                    "scope": "resource"
+                },
                 "python.analysis.diagnosticMode": {
                     "type": "string",
                     "default": "openFilesOnly",
@@ -311,6 +352,13 @@
                             "description": "Show inferred variable types as inlay hints on assignments."
                         }
                     }
+                },
+                "python.analysis.inlayHintDebounceMs": {
+                    "type": "number",
+                    "default": 150,
+                    "minimum": 0,
+                    "description": "Debounce window, in milliseconds, for inlay hints. While a file is being edited, inlay hint updates are held until editing pauses for this long, so hint widths don't jitter on every keystroke. Set to 0 to update inlay hints immediately.",
+                    "scope": "resource"
                 },
                 "python.pyrefly.syncNotebooks": {
                     "type": "boolean",
@@ -368,7 +416,7 @@
         "@types/node": "^16.11.7",
         "@types/vscode": "^1.78.1",
         "@vscode/test-cli": "^0.0.10",
-        "@vscode/test-electron": "^2.5.2",
+        "@vscode/test-electron": "^3.1.0",
         "@vscode/vsce": "^2.9.2",
         "esbuild": "^0.28.1",
         "npm-run-all": "^4.1.5",

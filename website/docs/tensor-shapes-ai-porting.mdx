@@ -1,6 +1,6 @@
 ---
 title: Agent Skill for Tensor Shape Porting
-description: How to use the port-model agent skill to automatically add tensor shape annotations to PyTorch models.
+description: How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.
 ---
 
 {/*
@@ -18,26 +18,27 @@ skill runs a structured, multi-step workflow — auditing ops, inventorying
 parameters, probing shapes with `reveal_type`, restructuring for tracking, and
 verifying the result — that produces a fully annotated port file.
 
-## Invoking the skill
+## Where the skill lives
 
-In Claude Code, from a project with pyrefly's tensor shape fixtures, ask:
-
-```
-Port this model to use tensor shape types: path/to/model.py
-```
-
-Or use the slash command directly:
+The skill is a directory in the Pyrefly source tree:
 
 ```
-/port-model path/to/model.py
+tensor-shapes/skills/add-shape-types-to-torch-model/
 ```
+
+You can either copy the skill into your configuration and use a
+slash command like `/add-shape-types-to-torch-model` to invoke it, or you
+can just point your agent at the skill file and ask it to follow the steps.
+
+
+## What should the agent do?
 
 The skill will:
 
 1. **Audit ops** — check every `nn.Module` and `torch`/`F.` function against
    fixture stubs and the DSL registry, adding missing stubs before proceeding.
 2. **Inventory the original** — list every class, method, and function, noting
-   which constructor parameters are `Dim` vs `int`.
+   which constructor parameters are `Int` vs `int`.
 3. **Port each module in dependency order** — for each module, inventory
    parameters, type the constructor, probe the forward with `reveal_type`,
    restructure bare results for tracking, write the forward with `assert_type`,
@@ -59,8 +60,8 @@ The workflow:
    against what the skill prescribes. A prompt like:
 
    ```
-   Re-read the port-model skill and reflect on the port you just produced.
-   What did you miss? What could be improved?
+   Re-read the add-shape-types-to-torch-model skill and reflect on the port you
+   just produced. What did you miss? What could be improved?
    ```
 
    This typically surfaces missed restructuring opportunities — cases where the
@@ -104,6 +105,6 @@ domain knowledge:
   for tracking (e.g., separating the first iteration of a loop vs. using a typed
   interface), domain knowledge about the model's invariants can guide the better
   choice.
-- **Config parameterization.** Deciding which config fields should become `Dim`
+- **Config parameterization.** Deciding which config fields should become `Int`
   type parameters (and which modules extract which parameters) is often a design
   decision about the model's API.
