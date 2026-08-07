@@ -143,7 +143,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 11);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 19);
+assert_words!(BindingUndecoratedFunction, 18);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1964,9 +1964,7 @@ pub struct BindingUndecoratedFunction {
     pub class_key: Option<Idx<KeyClass>>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[Idx<KeyDecorator>]>,
-    /// Dot-separated path of enclosing function names (e.g. `"f1"` for `f2` defined inside `f1`,
-    /// or `"f1.g1"` for two levels deep). `None` for top-level or class-method functions.
-    pub outer_funcs: Option<Name>,
+    pub parent: NestingContext,
     /// When the function is decorated with `@shape_dsl_function`, this holds the
     /// parsed DSL IR so the solver can produce `FunctionKind::ShapeDsl`.
     pub shape_dsl_def: Option<Arc<ShapeDslFunction>>,

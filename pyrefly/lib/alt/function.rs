@@ -15,6 +15,7 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::IdentityIgnored;
 use pyrefly_types::callable::Params;
@@ -536,7 +537,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
-        outer_funcs: Option<Name>,
+        parent: &NestingContext,
         shape_dsl_def: Option<Arc<ShapeDslFunction>>,
         type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
         uses_shape_dsl_ir_name: Option<ShortIdentifier>,
@@ -695,6 +696,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .filter_map(|key| self.get_idx(*key).deref().parameter().cloned());
         tparams.extend(legacy_tparams);
         let tparams = self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
+        let outer_funcs = parent.ancestor_function_path(self.module());
 
         let kind = if let Some(dsl_fn) = shape_dsl_def {
             // Build the transitive closure of helper functions this DSL function calls,

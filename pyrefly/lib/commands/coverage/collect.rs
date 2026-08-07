@@ -124,24 +124,11 @@ fn parse_suppressions(module: &Module) -> Vec<ReportSuppression> {
     suppressions
 }
 
-fn has_function_ancestor(parent: &NestingContext) -> bool {
-    let mut current = parent;
-    loop {
-        if current.is_function() {
-            return true;
-        }
-        match current.parent() {
-            Some(p) => current = p,
-            None => return false,
-        }
-    }
-}
-
 /// True if the class, or an enclosing class, was removed by a module-scope `del`.
 /// After `del X` at module scope the entire `X.*` subtree is unreachable, so a nested
 /// class (and its methods/attrs) must be excluded along with `X` itself. We therefore
 /// test the outermost enclosing name: function-nested classes are already filtered by
-/// `has_function_ancestor`, so every context reached here is a class.
+/// `NestingContext::has_function_ancestor`, so every context reached here is a class.
 fn is_deleted_class(module: &Module, bindings: &Bindings, cls: &ClassBinding) -> bool {
     let mut nesting = &cls.parent;
     let outermost = loop {
@@ -667,7 +654,7 @@ fn parse_instance_attrs(
             BindingClass::ClassDef(cls) => cls,
             BindingClass::FunctionalClassDef(..) => continue,
         };
-        if has_function_ancestor(&cls_binding.parent)
+        if cls_binding.parent.has_function_ancestor()
             || is_deleted_class(module, bindings, cls_binding)
         {
             continue;
@@ -758,7 +745,7 @@ fn parse_functions(
             let fun = bindings.get(decorated.undecorated_idx);
             // Skip functions nested inside other functions, even when the name collides with an
             // exported module-level function (gh-4018).
-            if fun.outer_funcs.is_some() {
+            if fun.parent.has_function_ancestor() {
                 continue;
             }
             // Skip @type_check_only decorated functions.
@@ -798,7 +785,7 @@ fn parse_functions(
                 match bindings.get(class_key) {
                     BindingClass::ClassDef(cls) => {
                         // Skip methods of function-nested and `del`eted classes
-                        if has_function_ancestor(&cls.parent)
+                        if cls.parent.has_function_ancestor()
                             || is_deleted_class(module, bindings, cls)
                         {
                             continue;
@@ -931,7 +918,7 @@ fn parse_functions(
                 BindingClass::ClassDef(cls) => cls,
                 BindingClass::FunctionalClassDef(..) => continue,
             };
-            if has_function_ancestor(&cls.parent) {
+            if cls.parent.has_function_ancestor() {
                 continue;
             }
             let class_prefix = class_fqn(module, &cls.parent, &cls.def.name);
@@ -1178,7 +1165,7 @@ fn parse_classes(
         let parent = &cls_binding.parent;
         let name = &cls_binding.def.name;
         // Skip classes nested inside functions, since they are not public symbols.
-        if has_function_ancestor(parent) {
+        if parent.has_function_ancestor() {
             continue;
         }
         if is_deleted_class(module, bindings, cls_binding) {
@@ -1224,7 +1211,7 @@ fn collect_class_members(
         let BindingClass::ClassDef(binding) = bindings.get(idx) else {
             continue;
         };
-        if has_function_ancestor(&binding.parent) {
+        if binding.parent.has_function_ancestor() {
             continue;
         }
         let Some(cls) = answers.get_idx(idx).and_then(|r| r.0.clone()) else {

@@ -6130,7 +6130,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             x.class_key.as_ref(),
             &x.decorators,
             &x.legacy_tparams,
-            x.outer_funcs.clone(),
+            &x.parent,
             x.shape_dsl_def.clone(),
             x.type_shape_dsl_def.clone(),
             x.uses_shape_dsl_ir_name,

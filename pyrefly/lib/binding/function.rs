@@ -899,8 +899,7 @@ impl<'a> BindingsBuilder<'a> {
         }
 
         let type_shape_dsl_def = if is_type_shape_dsl && !is_shape_dsl {
-            let is_top_level =
-                class_key.is_none() && parent.ancestor_function_path(&self.module_info).is_none();
+            let is_top_level = class_key.is_none() && !parent.has_function_ancestor();
             match ValidatedTypeShapeDslFunction::try_new(x.clone(), is_top_level) {
                 Ok(definition) => Some(Arc::new(definition)),
                 Err(error) => {
@@ -1010,7 +1009,6 @@ impl<'a> BindingsBuilder<'a> {
         self.scopes.pop();
         self.scopes
             .record_self_assignments_if_applicable(self_assignments);
-        let outer_funcs = parent.ancestor_function_path(&self.module_info);
         let undecorated_idx = self.insert_binding_idx(
             undecorated_idx,
             BindingUndecoratedFunction {
@@ -1023,7 +1021,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
-                outer_funcs,
+                parent: parent.dupe(),
                 shape_dsl_def,
                 type_shape_dsl_def,
                 uses_shape_dsl_ir_name,
