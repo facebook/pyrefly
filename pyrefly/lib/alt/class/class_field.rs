@@ -3356,7 +3356,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Type::Callable(callable) = ty {
                     ty = self.heap.mk_function(Function {
                         signature: *callable,
-                        metadata: FuncMetadata::def(self.module(), None, field_name.clone()),
+                        metadata: FuncMetadata::synthesized(
+                            self.module(),
+                            None,
+                            field_name.clone(),
+                        ),
                     })
                 }
                 if let Some(quantified) = self_quantified {

@@ -791,11 +791,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// The `def`-name range of `metadata`'s function, via `KeyUndecoratedFunctionRange`.
-    /// `None` when there's no `def_index` (synthesized/metadata-only); the caller then
-    /// falls back to the field range. Current-module only: variance checks a class's own
-    /// fields, so `def_index` is always local — we don't resolve cross-module `FuncId`s.
+    /// Current-module only: variance checks a class's own fields, so `def_index` is always
+    /// local — we don't resolve cross-module `FuncDefId`s.
     fn func_def_range(&self, metadata: &FuncMetadata) -> Option<TextRange> {
-        let def_index = metadata.kind.definition_id()?.def_index?;
+        let func_id = metadata.kind.as_func_def_id()?;
+        let def_index = func_id.def_index;
         let idx = self
             .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))?;

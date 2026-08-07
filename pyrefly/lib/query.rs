@@ -598,8 +598,8 @@ impl<'a> CalleesWithLocation<'a> {
         format!("{}.{}", n.module_name(), n.id())
     }
     fn class_name_from_def_kind(kind: &FunctionKind) -> String {
-        if let Some(f) = kind.definition_id()
-            && let Some(cls) = &f.cls
+        if let Some(f) = kind.to_func_symbol()
+            && let Some(cls) = f.cls.as_ref()
         {
             format!("{}.{}", f.module.name(), cls.name())
         } else if let FunctionKind::CallbackProtocol(c) = kind {
@@ -609,11 +609,11 @@ impl<'a> CalleesWithLocation<'a> {
         }
     }
     fn target_from_def_kind(kind: &FunctionKind, module_name_override: Option<&str>) -> String {
-        if let Some(f) = kind.definition_id() {
+        if let Some(f) = kind.to_func_symbol() {
             if let Some(module_name_override) = module_name_override {
                 format!("{module_name_override}.{}", f.name)
             } else {
-                match &f.cls {
+                match f.cls.as_ref() {
                     Some(cls) => {
                         format!("{}.{}.{}", f.module.name(), cls.name(), f.name)
                     }

@@ -1483,7 +1483,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Required::Required,
             ),
         ];
-        let mut metadata = FuncMetadata::def(self.module(), Some(cls), dunder::SETATTR);
+        let mut metadata = FuncMetadata::synthesized(self.module(), Some(cls), dunder::SETATTR);
         metadata.flags.has_final_decoration = true;
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
@@ -1502,7 +1502,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Required::Required,
             ),
         ];
-        let mut metadata = FuncMetadata::def(self.module(), Some(cls), dunder::DELATTR);
+        let mut metadata = FuncMetadata::synthesized(self.module(), Some(cls), dunder::DELATTR);
         metadata.flags.has_final_decoration = true;
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),

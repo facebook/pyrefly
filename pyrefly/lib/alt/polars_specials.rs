@@ -42,7 +42,7 @@ use crate::binding::polars::polars_column_mutation;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::class::Class;
-use crate::types::function::FuncId;
+use crate::types::function::FuncDefId;
 use crate::types::function::FunctionKind;
 use crate::types::literal::Lit;
 
@@ -315,7 +315,7 @@ enum PolarsFrameConversion {
 }
 
 impl PolarsFunction {
-    fn from_id(id: &FuncId) -> Self {
+    fn from_id(id: &FuncDefId) -> Self {
         match (id.name.as_str(), id.module.name().as_str()) {
             ("col", "polars.functions.col") => Self::Col,
             ("concat", "polars.functions.eager") => Self::Concat,

@@ -112,7 +112,7 @@ impl UndecoratedFunction {
                 Name::default(),
                 TextRange::default(),
             )),
-            metadata: FuncMetadata::def(
+            metadata: FuncMetadata::synthesized(
                 &Module::new(
                     ModuleName::from_str("__undecorated_function_recursive__"),
                     ModulePath::filesystem(PathBuf::default()),

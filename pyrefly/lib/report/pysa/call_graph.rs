@@ -1771,12 +1771,12 @@ impl<'a> CallGraphVisitor<'a> {
         // name-based lookup. This handles module-level function aliases (e.g.,
         // `fromstring = XML` in `xml.etree.ElementTree`) where the type carries the
         // original definition's index.
-        let func_id = function.metadata.kind.definition_id()?;
+        let func_id = function.metadata.kind.as_func_def_id()?;
         if func_id.cls.is_some() {
             return None;
         }
         let module = &func_id.module;
-        let def_index = func_id.def_index?;
+        let def_index = func_id.def_index;
 
         let function_ref = self
             .module_context

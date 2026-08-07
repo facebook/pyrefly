@@ -6615,8 +6615,8 @@ impl Server {
         // the same `SysInfo` the transaction computed it with; re-deriving a
         // config-default `SysInfo` would miss the module in a multi-`SysInfo`
         // transaction and silently collapse the range to zero.
-        let resolve_func_range = |func_id: &pyrefly_types::function::FuncId| {
-            let def_index = func_id.def_index?;
+        let resolve_func_range = |func_id: &pyrefly_types::function::FuncDefId| {
+            let def_index = func_id.def_index;
             let handle = Handle::new(
                 func_id.module.name(),
                 func_id.module.path().dupe(),

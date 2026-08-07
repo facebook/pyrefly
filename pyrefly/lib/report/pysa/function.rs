@@ -377,8 +377,8 @@ fn assert_decorated_function_in_context(
     function: &DecoratedFunction,
     context: &ModuleAnswersContext,
 ) {
-    if let Some(func_id) = function.undecorated.metadata.kind.definition_id() {
-        assert_eq!(func_id.module, context.module_info);
+    if let Some(func_symbol) = function.undecorated.metadata.kind.to_func_symbol() {
+        assert_eq!(func_symbol.module, context.module_info);
     }
 }
 

@@ -264,8 +264,7 @@ impl PysaModuleIndex {
                     && let FunctionKind::Def(func_id) = &function.metadata.kind
                     && func_id.name != field_name
                     && func_id.module == context.module_info
-                    && let Some(def_index) = func_id.def_index
-                    && let Some(getter_ref) = func_def_to_function_ref.get(&def_index)
+                    && let Some(getter_ref) = func_def_to_function_ref.get(&func_id.def_index)
                     && let Some(declaration) =
                         get_class_field_declaration(&class, &field_name, context)
                 {

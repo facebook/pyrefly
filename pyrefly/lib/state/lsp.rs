@@ -398,8 +398,8 @@ pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
             // must default to method rather than function.
             let is_function = ty.visit_toplevel_func_metadata(&|meta| {
                 meta.kind
-                    .definition_id()
-                    .is_some_and(|func| func.cls.is_none())
+                    .to_func_symbol()
+                    .is_some_and(|symbol| symbol.cls.is_none())
             });
             if is_function {
                 SymbolKind::Function
@@ -4913,17 +4913,43 @@ impl<'a> CancellableTransaction<'a> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::symbol_kind::SymbolKind;
+    use pyrefly_types::callable::Callable;
+    use pyrefly_types::function::FuncMetadata;
+    use pyrefly_types::function::Function;
     use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 
     use super::Transaction;
+    use super::attribute_symbol_kind_from_type;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
     use crate::types::types::Type;
 
     fn any_type() -> Type {
         TypeHeap::new().mk_any_explicit()
+    }
+
+    #[test]
+    fn synthesized_free_function_keeps_function_symbol_kind() {
+        let heap = TypeHeap::new();
+        let module = Module::new(
+            ModuleName::from_str("generated"),
+            ModulePath::filesystem(PathBuf::from("generated.py")),
+            Arc::new(String::new()),
+        );
+        let ty = heap.mk_function(Function {
+            signature: Callable::ellipsis(heap.mk_none()),
+            metadata: FuncMetadata::synthesized(&module, None, Name::new("callback")),
+        });
+
+        assert_eq!(attribute_symbol_kind_from_type(&ty), SymbolKind::Function);
     }
 
     #[test]

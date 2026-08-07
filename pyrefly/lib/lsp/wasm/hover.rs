@@ -194,16 +194,12 @@ impl HoverValue {
         // For methods, search in parent class; for constructors, use the return type
         let search_type = context_type
             .visit_toplevel_func_metadata(&|meta| {
-                if let Some(func) = meta.kind.definition_id()
-                    && let Some(class) = &func.cls
-                {
-                    Some(Type::ClassType(ClassType::new(
-                        class.clone(),
-                        Default::default(),
-                    )))
-                } else {
-                    None
-                }
+                let symbol = meta.kind.to_func_symbol()?;
+                let class = symbol.cls.as_ref()?;
+                Some(Type::ClassType(ClassType::new(
+                    class.clone(),
+                    Default::default(),
+                )))
             })
             .or_else(|| {
                 if let Type::Callable(callable) = context_type
@@ -1096,7 +1092,7 @@ mod tests {
             ModulePath::filesystem(PathBuf::from(format!("{module_name}.pyi"))),
             Arc::new(String::new()),
         );
-        let metadata = FuncMetadata::def(&module, None, Name::new(func_name));
+        let metadata = FuncMetadata::synthesized(&module, None, Name::new(func_name));
         heap.mk_function(Function {
             signature: Callable::ellipsis(heap.mk_none()),
             metadata,

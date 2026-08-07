@@ -22,7 +22,7 @@ use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::Int;
 use pyrefly_types::function::BodyKind;
-use pyrefly_types::function::FuncId;
+use pyrefly_types::function::FuncDefId;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
@@ -716,15 +716,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.module().dupe(),
                     defining_cls.clone(),
                     &def.name.id,
-                    Some(def_index),
+                    def_index,
                     outer_funcs,
                 )
             } else {
-                let func_id = Arc::new(FuncId {
+                let func_id = Arc::new(FuncDefId {
                     module: self.module().dupe(),
                     cls: defining_cls.clone(),
                     name: def.name.id.clone(),
-                    def_index: Some(def_index),
+                    def_index,
                     outer_funcs,
                 });
                 FunctionKind::ShapeDsl(func_id, dsl_fn, IdentityIgnored(fn_closure))
@@ -734,7 +734,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.module().dupe(),
                 defining_cls.clone(),
                 &def.name.id,
-                Some(def_index),
+                def_index,
                 outer_funcs,
             )
         };

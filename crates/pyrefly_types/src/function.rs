@@ -52,21 +52,19 @@ pub struct FuncMetadata {
 }
 
 impl FuncMetadata {
-    pub fn def(module: &Module, cls: Option<&Class>, name: Name) -> Self {
+    pub fn synthesized(module: &Module, cls: Option<&Class>, name: Name) -> Self {
         Self {
-            kind: FunctionKind::Def(Arc::new(FuncId {
+            kind: FunctionKind::Synthesized(Arc::new(FuncSymbol {
                 module: module.dupe(),
                 cls: cls.map(Dupe::dupe),
                 name,
-                def_index: None,
-                outer_funcs: None,
             })),
             flags: FuncFlags::default(),
         }
     }
 
     pub fn method(cls: &Class, name: Name) -> Self {
-        Self::def(cls.module(), Some(cls), name)
+        Self::synthesized(cls.module(), Some(cls), name)
     }
 }
 
@@ -268,72 +266,65 @@ impl FuncFlags {
 #[derive(Display, Visit, VisitMut, TypeEq)]
 pub struct FuncDefIndex(pub u32);
 
+/// Identity of a source-backed function definition.
 #[derive(Debug, Clone)]
-pub struct FuncId {
+pub struct FuncDefId {
     pub module: Module,
     pub cls: Option<Class>,
     pub name: Name,
-    pub def_index: Option<FuncDefIndex>,
+    pub def_index: FuncDefIndex,
     /// Dot-separated path of enclosing function names (e.g. `"f1"` for a function nested inside `f1`).
     /// `None` for top-level and class-method functions.
     pub outer_funcs: Option<Name>,
 }
 
-impl PartialEq for FuncId {
+impl PartialEq for FuncDefId {
     fn eq(&self, other: &Self) -> bool {
         self.key_eq().eq(&other.key_eq())
     }
 }
 
-impl Eq for FuncId {}
-impl TypeEq for FuncId {}
+impl Eq for FuncDefId {}
+impl TypeEq for FuncDefId {}
 
-impl Ord for FuncId {
+impl Ord for FuncDefId {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key_ord().cmp(&other.key_ord())
     }
 }
 
-impl PartialOrd for FuncId {
+impl PartialOrd for FuncDefId {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Hash for FuncId {
+impl Hash for FuncDefId {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.key_eq().hash(state)
     }
 }
 
-impl VisitMut<Type> for FuncId {
+impl VisitMut<Type> for FuncDefId {
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
 }
-impl Visit<Type> for FuncId {
+impl Visit<Type> for FuncDefId {
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
-/// FuncId contains no Type fields, so visiting through Arc is a no-op.
-impl VisitMut<Type> for Arc<FuncId> {
+/// FuncDefId contains no Type fields, so visiting through Arc is a no-op.
+impl VisitMut<Type> for Arc<FuncDefId> {
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
 }
-impl Visit<Type> for Arc<FuncId> {
+impl Visit<Type> for Arc<FuncDefId> {
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
-impl FuncId {
+impl FuncDefId {
     /// Identity tuple for equality and hashing. `outer_funcs` is intentionally
     /// excluded because it is display-only metadata (the dotted path of enclosing
     /// function names) and does not affect the logical identity of a function.
-    fn key_eq(
-        &self,
-    ) -> (
-        ModuleName,
-        ModulePath,
-        Option<Class>,
-        &Name,
-        Option<FuncDefIndex>,
-    ) {
+    fn key_eq(&self) -> (ModuleName, ModulePath, Option<Class>, &Name, FuncDefIndex) {
         (
             self.module.name(),
             self.module.path().to_key_eq(),
@@ -343,16 +334,71 @@ impl FuncId {
         )
     }
 
-    fn key_ord(
-        &self,
-    ) -> (
-        ModuleName,
-        ModulePath,
-        Option<Class>,
-        &Name,
-        Option<FuncDefIndex>,
-    ) {
+    fn key_ord(&self) -> (ModuleName, ModulePath, Option<Class>, &Name, FuncDefIndex) {
         self.key_eq()
+    }
+}
+
+/// A function identified nominally by its module, class, and name.
+#[derive(Debug, Clone)]
+pub struct FuncSymbol {
+    pub module: Module,
+    pub cls: Option<Class>,
+    pub name: Name,
+}
+
+impl PartialEq for FuncSymbol {
+    fn eq(&self, other: &Self) -> bool {
+        self.key().eq(&other.key())
+    }
+}
+
+impl Eq for FuncSymbol {}
+impl TypeEq for FuncSymbol {}
+
+impl Ord for FuncSymbol {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key().cmp(&other.key())
+    }
+}
+
+impl PartialOrd for FuncSymbol {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Hash for FuncSymbol {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key().hash(state)
+    }
+}
+
+impl VisitMut<Type> for FuncSymbol {
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl Visit<Type> for FuncSymbol {
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+/// FuncSymbol contains no Type fields, so visiting through Arc is a no-op.
+impl VisitMut<Type> for Arc<FuncSymbol> {
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl Visit<Type> for Arc<FuncSymbol> {
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl FuncSymbol {
+    fn key(&self) -> (ModuleName, ModulePath, Option<Class>, &Name) {
+        (
+            self.module.name(),
+            self.module.path().to_key_eq(),
+            self.cls.clone(),
+            &self.name,
+        )
     }
 }
 
@@ -391,7 +437,8 @@ pub enum FunctionKind {
     RevealType,
     Final,
     RuntimeCheckable,
-    Def(Arc<FuncId>),
+    Synthesized(Arc<FuncSymbol>),
+    Def(Arc<FuncDefId>),
     AbstractMethod,
     /// A function decorated with `typing.no_type_check` or `typing_extensions.no_type_check`.
     NoTypeCheck,
@@ -407,16 +454,16 @@ pub enum FunctionKind {
     /// `numba.njit()`
     NumbaNjit,
     /// A function whose return type is computed by a shape DSL definition.
-    /// The `FuncId` provides identity (module, class, name) for display and
+    /// The `FuncDefId` provides identity (module, class, name) for display and
     /// lookup; the `ShapeDslFunction` carries the parsed DSL IR.
     ShapeDsl(
-        Arc<FuncId>,
+        Arc<FuncDefId>,
         Arc<ShapeDslFunction>,
         IdentityIgnored<Arc<Vec<Arc<ShapeDslFunction>>>>,
     ),
     /// A validated user-defined type-level shape DSL function.
     TypeShapeDsl(
-        Arc<FuncId>,
+        Arc<FuncDefId>,
         TypeShapeDslDomain,
         Arc<ValidatedTypeShapeDslFunction>,
     ),
@@ -427,12 +474,25 @@ pub enum FunctionKind {
 }
 
 impl FunctionKind {
-    /// Return source-definition identity for variants that preserve an ordinary function def.
-    pub fn definition_id(&self) -> Option<&FuncId> {
+    /// Return the nominal symbol carried by this function kind, if any.
+    pub fn to_func_symbol(&self) -> Option<FuncSymbol> {
         match self {
             Self::Def(func_id) | Self::ShapeDsl(func_id, ..) | Self::TypeShapeDsl(func_id, ..) => {
-                Some(func_id)
+                Some(FuncSymbol {
+                    module: func_id.module.dupe(),
+                    cls: func_id.cls.as_ref().map(Dupe::dupe),
+                    name: func_id.name.clone(),
+                })
             }
+            Self::Synthesized(symbol) => Some((**symbol).clone()),
+            _ => None,
+        }
+    }
+
+    /// Return the source definition carried by this function kind, if any.
+    pub fn as_func_def_id(&self) -> Option<&FuncDefId> {
+        match self {
+            Self::Def(id) | Self::ShapeDsl(id, ..) | Self::TypeShapeDsl(id, ..) => Some(id),
             _ => None,
         }
     }
@@ -441,7 +501,7 @@ impl FunctionKind {
         module: Module,
         cls: Option<Class>,
         func: &Name,
-        def_index: Option<FuncDefIndex>,
+        def_index: FuncDefIndex,
         outer_funcs: Option<Name>,
     ) -> Self {
         match (module.name().as_str(), cls.as_ref(), func.as_str()) {
@@ -477,7 +537,7 @@ impl FunctionKind {
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
             ("shape_extensions", None, "uses_shape_dsl") => Self::UsesShapeDsl,
             ("shape_extensions", None, "defines_assert_shape") => Self::DefinesAssertShape,
-            _ => Self::Def(Arc::new(FuncId {
+            _ => Self::Def(Arc::new(FuncDefId {
                 module,
                 cls,
                 name: func.clone(),
@@ -519,6 +579,7 @@ impl FunctionKind {
             Self::DisjointBase => ModuleName::typing(),
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
+            Self::Synthesized(id) => id.module.name(),
             Self::Def(func_id) => func_id.module.name().dupe(),
             Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.module.name().dupe(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
@@ -558,6 +619,7 @@ impl FunctionKind {
             Self::DisjointBase => Cow::Owned(Name::new_static("disjoint_base")),
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
+            Self::Synthesized(id) => Cow::Borrowed(&id.name),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
             Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
@@ -591,6 +653,7 @@ impl FunctionKind {
             Self::RuntimeCheckable => None,
             Self::NumbaJit => None,
             Self::NumbaNjit => None,
+            Self::Synthesized(id) => id.cls.clone(),
             Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
             Self::SingleDispatchRegister(_) => None,
             Self::AbstractMethod => None,
@@ -605,12 +668,7 @@ impl FunctionKind {
     }
 
     pub fn outer_funcs(&self) -> Option<&Name> {
-        match self {
-            Self::Def(func_id)
-            | Self::ShapeDsl(func_id, _, _)
-            | Self::TypeShapeDsl(func_id, _, _) => func_id.outer_funcs.as_ref(),
-            _ => None,
-        }
+        self.as_func_def_id()?.outer_funcs.as_ref()
     }
 
     pub fn format(&self, current_module: ModuleName) -> String {
