@@ -1628,6 +1628,21 @@ class OpenTypedDict(TypedDict, closed=True): ...
 Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions` rather than
 `typing` to use the `closed` feature.
 
+## overload-argument-expansion-limit
+
+Default severity: `warn`
+
+When resolving a call to an overloaded function, Pyrefly may
+[expand](https://typing.python.org/en/latest/spec/overload.html#argument-type-expansion) an
+argument (for example, splitting a `bool` into `Literal[True]` and `Literal[False]`) and try each
+resulting combination. To bound this work, Pyrefly stops once splitting one more argument would
+take it past a fixed number of combinations. This warning is reported when that limit is reached,
+since the remaining combinations are left unchecked and the call may be resolved as if it had no
+matching overload even though one exists.
+
+This typically only happens in overload-heavy libraries. If you hit it, consider simplifying the
+call site (for example, narrowing an argument before the call) so fewer expansions are needed.
+
 ## parse-error
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.

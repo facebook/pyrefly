@@ -21,10 +21,10 @@ use pyrefly_types::type_output::TypeOutput;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::display::count;
-use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
@@ -80,18 +80,74 @@ impl CalledOverload<'_> {
     }
 }
 
+enum TypeExpansion {
+    Expanded(Vec<Type>),
+    NotExpandable,
+    LimitExceeded,
+}
+
+/// The parameter type that a plain argument at `slot` (a positional index, or a keyword name)
+/// binds to in `sig`. Returns `None` when this cannot be determined cheaply and unambiguously —
+/// variadic/`**kwargs` absorption, `ParamSpec`/`Ellipsis`/`Partial` signatures, or an index/name
+/// with no matching plain parameter — in which case the caller must assume the position matters and
+/// keep expanding. This deliberately under-approximates the real argument matcher
+/// (`callable_infer_params`): it only pins a type for the unambiguous positional-run / named-param
+/// cases.
+fn simple_param_type<'s>(sig: &'s Callable, slot: Either<usize, &Name>) -> Option<&'s Type> {
+    let Params::List(params) = &sig.params else {
+        return None;
+    };
+    match slot {
+        Either::Left(pos) => {
+            let mut idx = 0;
+            for p in params.items() {
+                match p {
+                    Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => {
+                        if idx == pos {
+                            return Some(ty);
+                        }
+                        idx += 1;
+                    }
+                    // A `*args` could absorb this position, so no single type is pinned.
+                    Param::Varargs(..) => return None,
+                    Param::KwOnly(..) | Param::Kwargs(..) => {}
+                }
+            }
+            None
+        }
+        Either::Right(name) => {
+            for p in params.items() {
+                match p {
+                    Param::Pos(n, ty, _) | Param::KwOnly(n, ty, _) if n == name => {
+                        return Some(ty);
+                    }
+                    // A `**kwargs` could absorb this name, so no single type is pinned.
+                    Param::Kwargs(..) => return None,
+                    _ => {}
+                }
+            }
+            None
+        }
+    }
+}
+
 /// Performs argument type expansion for arguments to an overloaded function.
 pub struct ArgsExpander<'a, Ans: LookupAnswer> {
     /// The index of the next argument to expand. Left is positional args; right, keyword args.
     idx: Either<usize, usize>,
     /// Current argument lists.
     arg_lists: Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>,
-    /// Hard-coded limit to how many times we'll expand.
-    gas: Gas,
+    /// Set once the expansion budget is exceeded, so the caller can report the truncated expansion.
+    limit_hit: bool,
+    /// Which positional / keyword arguments are worth expanding. Both default to all-`true`
+    /// (expand everything); `call_overloads` narrows them once the candidate overloads are known.
+    expandable_pos: Vec<bool>,
+    expandable_kw: Vec<bool>,
     solver: &'a AnswersSolver<'a, Ans>,
 }
 
 impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
+    /// The most argument-type combinations we are willing to check for a single call.
     const GAS: usize = 100;
 
     pub fn new(
@@ -99,6 +155,8 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
         keywords: Vec<CallKeyword<'a>>,
         solver: &'a AnswersSolver<'a, Ans>,
     ) -> Self {
+        let expandable_pos = vec![true; posargs.len()];
+        let expandable_kw = vec![true; keywords.len()];
         Self {
             idx: if posargs.is_empty() {
                 Either::Right(0)
@@ -106,7 +164,9 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                 Either::Left(0)
             },
             arg_lists: vec![(posargs, keywords)],
-            gas: Gas::new(Self::GAS as isize),
+            limit_hit: false,
+            expandable_pos,
+            expandable_kw,
             solver,
         }
     }
@@ -140,10 +200,35 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                 return None;
             }
         };
-        let expanded_types = self.expand_type(value.infer(self.solver, errors));
+        let expand_here = match idx {
+            Either::Left(i) => self.expandable_pos[i],
+            Either::Right(i) => self.expandable_kw[i],
+        };
+        let expanded_types = match if expand_here {
+            self.expand_type(value.infer(self.solver, errors))
+        } else {
+            TypeExpansion::NotExpandable
+        } {
+            TypeExpansion::Expanded(types) => types,
+            TypeExpansion::NotExpandable => Vec::new(),
+            TypeExpansion::LimitExceeded => {
+                // A single argument's expansion (e.g. a large concrete tuple's cartesian product)
+                // can exceed the budget on its own. Skip it like `NotExpandable` and try the next
+                // argument, but record the truncation so a call that ultimately fails to match still
+                // reports it. Only an over-budget round below aborts expansion entirely.
+                self.limit_hit = true;
+                Vec::new()
+            }
+        };
         if expanded_types.is_empty() {
-            // Nothing to expand here, try the next argument.
+            // Nothing to expand here (or this position cannot disambiguate), try the next argument.
             self.expand(errors, owner)
+        } else if self.arg_lists.len().saturating_mul(expanded_types.len()) > Self::GAS {
+            // Splitting this argument would take us past the budget. Stop expanding, and move `idx`
+            // past the end of the keywords so that subsequent `expand` calls know we're done.
+            self.limit_hit = true;
+            self.idx = Either::Right(keywords.len());
+            None
         } else {
             let expanded_types = expanded_types.into_map(|t| owner.push(t));
             let mut new_arg_lists = Vec::new();
@@ -169,12 +254,6 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                         }
                     }
                     new_arg_lists.push((new_posargs, new_keywords));
-                    if self.gas.stop() {
-                        // We've hit our hard-coded limit; stop expanding, and move `idx` past the
-                        // end of the keywords so that subsequent `expand` calls know we're done.
-                        self.idx = Either::Right(keywords.len());
-                        return None;
-                    }
                 }
             }
             self.arg_lists = new_arg_lists.clone();
@@ -183,71 +262,82 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
     }
 
     /// Expands a type according to https://typing.python.org/en/latest/spec/overload.html#argument-type-expansion.
-    fn expand_type(&self, ty: Type) -> Vec<Type> {
+    fn expand_type(&self, ty: Type) -> TypeExpansion {
         match ty {
-            Type::Union(f) => f.members,
-            Type::ClassType(cls) if cls.is_builtin("bool") => {
-                vec![
-                    Lit::Bool(true).to_implicit_type(),
-                    Lit::Bool(false).to_implicit_type(),
-                ]
-            }
+            Type::Union(f) => TypeExpansion::Expanded(f.members),
+            Type::ClassType(cls) if cls.is_builtin("bool") => TypeExpansion::Expanded(vec![
+                Lit::Bool(true).to_implicit_type(),
+                Lit::Bool(false).to_implicit_type(),
+            ]),
             Type::ClassType(cls)
                 if self
                     .solver
                     .get_metadata_for_class(cls.class_object())
                     .is_enum() =>
             {
-                self.solver
+                let members = self
+                    .solver
                     .get_enum_members(cls.class_object())
                     .into_iter()
                     .map(Lit::to_implicit_type)
-                    .collect()
+                    .collect::<Vec<_>>();
+                if members.is_empty() {
+                    TypeExpansion::NotExpandable
+                } else {
+                    TypeExpansion::Expanded(members)
+                }
             }
             Type::Type(f) if matches!(&*f, Type::Union(_)) => {
                 // Repeated match because pattern guards cannot move out of bindings.
                 let Type::Union(u) = *f else {
                     unreachable!("guarded by matches! above")
                 };
-                u.members.into_map(|t| self.solver.heap.mk_type_of(t))
+                TypeExpansion::Expanded(u.members.into_map(|t| self.solver.heap.mk_type_of(t)))
             }
             Type::Tuple(Tuple::Concrete(elements)) => {
                 let mut count: usize = 1;
                 let mut changed = false;
                 let mut element_expansions = Vec::new();
                 for e in elements {
-                    let element_expansion = self.expand_type(e.clone());
-                    if element_expansion.is_empty() {
-                        element_expansions.push(vec![e].into_iter());
-                    } else {
-                        let len = element_expansion.len();
-                        count = count.saturating_mul(len);
-                        if count > Self::GAS {
-                            return Vec::new();
+                    match self.expand_type(e.clone()) {
+                        TypeExpansion::Expanded(element_expansion) => {
+                            count = count.saturating_mul(element_expansion.len());
+                            if count > Self::GAS {
+                                return TypeExpansion::LimitExceeded;
+                            }
+                            changed = true;
+                            element_expansions.push(element_expansion.into_iter());
                         }
-                        changed = true;
-                        element_expansions.push(element_expansion.into_iter());
+                        TypeExpansion::NotExpandable => {
+                            element_expansions.push(vec![e].into_iter());
+                        }
+                        TypeExpansion::LimitExceeded => {
+                            return TypeExpansion::LimitExceeded;
+                        }
                     }
                 }
-                // Enforce a hard-coded limit on the number of expansions for perf reasons.
-                if count <= Self::GAS && changed {
-                    element_expansions
-                        .into_iter()
-                        .multi_cartesian_product()
-                        .map(|x| self.solver.heap.mk_concrete_tuple(x))
-                        .collect()
+                if changed {
+                    TypeExpansion::Expanded(
+                        element_expansions
+                            .into_iter()
+                            .multi_cartesian_product()
+                            .map(|x| self.solver.heap.mk_concrete_tuple(x))
+                            .collect(),
+                    )
                 } else {
-                    Vec::new()
+                    TypeExpansion::NotExpandable
                 }
             }
 
             // a constraind typevar argument is one of its constraints, so expand like a union ie try each constraint against overloads + union the matched returns
             Type::Quantified(q) => match q.restriction() {
-                Restriction::Constraints(constraints) => constraints.clone(),
-                _ => Vec::new(),
+                Restriction::Constraints(constraints) => {
+                    TypeExpansion::Expanded(constraints.clone())
+                }
+                _ => TypeExpansion::NotExpandable,
             },
 
-            _ => Vec::new(),
+            _ => TypeExpansion::NotExpandable,
         }
     }
 }
@@ -332,9 +422,76 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let refine = matched
                     && self.solver().legacy_overload_expansion
                     && matches!(&closest_overload.res, Type::Union(_));
-                let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone(), self);
+                let mut args_expander = (!matched || refine)
+                    .then(|| ArgsExpander::new(args.clone(), keywords.clone(), self));
+                // Prune expansion of arguments that cannot change the outcome. Leaving a position
+                // un-split is safe exactly when every candidate binds it to an equivalent parameter
+                // type `p` *and* the argument is already assignable to `p`: then splitting cannot
+                // discriminate between candidates (they all check against the same `p`), and it
+                // cannot rescue the call either, because every expanded member is a subtype of the
+                // argument and so stays assignable. Both halves are load-bearing — an argument that
+                // only checks out once split (`tuple[str | None, str]` against
+                // `tuple[str, str] | tuple[None, str]`) must keep expanding even when it binds the
+                // same parameter everywhere. Conservative elsewhere: a position whose binding isn't
+                // statically determinable (call-site unpacking, `*args`/`**kwargs` absorption,
+                // `ParamSpec`, differing arities) stays expandable, and generic overloads are
+                // excluded entirely because expansion also drives their type-variable solving.
+                if let Some(args_expander) = args_expander.as_mut()
+                    && !arity_compatible_overloads
+                        .iter()
+                        .any(|o| o.0.as_ref().is_some_and(|tparams| !tparams.is_empty()))
+                {
+                    // Parameter types can mention placeholder vars owned by the receiver (an empty
+                    // `{}` passed as `self`, say), and the probes below solve vars, so snapshot
+                    // around them exactly as `find_closest_overload` does for speculative calls.
+                    let placeholder_vars =
+                        self.collect_placeholder_vars(self_obj.as_ref(), &args, &keywords);
+                    let snapshot = self.solver().snapshot_vars(&placeholder_vars);
+                    let self_offset = self_obj.is_some() as usize;
+                    let has_star = args.iter().any(|a| matches!(a, CallArg::Star(..)));
+                    let has_kwargs_splat = keywords.iter().any(|kw| kw.arg.is_none());
+                    let prunable = |slot: Either<usize, &Name>, value: &TypeOrExpr| {
+                        // `CallWithTypes` deliberately leaves container literals as expressions so
+                        // they can be typed against a parameter. Inferring one here would both
+                        // report errors and pin vars, so treat it as expandable.
+                        let TypeOrExpr::Type(arg_ty, _) = value else {
+                            return false;
+                        };
+                        let mut param_tys = arity_compatible_overloads
+                            .iter()
+                            .map(|o| simple_param_type(&o.1.signature, slot));
+                        let Some(Some(first)) = param_tys.next() else {
+                            return false;
+                        };
+                        param_tys.all(|t| t.is_some_and(|t| self.is_equivalent(first, t)))
+                            && self.is_subset_eq(arg_ty, first)
+                    };
+                    // A call-site `*args` splat makes positional-slot correspondence unreliable, so
+                    // keep every positional expandable; keyword-by-name binding is unaffected by it
+                    // (and is guarded separately by `has_kwargs_splat`).
+                    args_expander.expandable_pos = args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, arg)| match arg {
+                            CallArg::Arg(value) if !has_star => {
+                                !prunable(Either::Left(i + self_offset), value)
+                            }
+                            _ => true,
+                        })
+                        .collect();
+                    args_expander.expandable_kw = keywords
+                        .iter()
+                        .map(|kw| match kw.arg {
+                            Some(id) if !has_kwargs_splat => {
+                                !prunable(Either::Right(&id.id), &kw.value)
+                            }
+                            _ => true,
+                        })
+                        .collect();
+                    self.solver().restore_vars(snapshot);
+                }
                 let owner = Owner::new();
-                'outer: while (!matched || refine)
+                'outer: while let Some(args_expander) = args_expander.as_mut()
                     && let Some(arg_lists) = args_expander.expand(errors, &owner)
                 {
                     // Expand by one argument (for example, try splitting up union types), and try the call with each
@@ -403,6 +560,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         matched = true;
                         break;
                     }
+                }
+                if args_expander
+                    .as_ref()
+                    .is_some_and(|args_expander| args_expander.limit_hit)
+                    && !(matched || arity_compatible_overloads.len() == 1)
+                {
+                    // Expansion stopped early at the hard limit without resolving the call, so we may
+                    // have given up on a call that would otherwise match. Surface it rather than
+                    // silently truncating. Stay quiet when the call did resolve — either `matched`,
+                    // or a single arity-compatible overload (which is treated as the match below);
+                    // in those cases any truncation only affected return-type refinement.
+                    self.error(
+                        errors,
+                        arguments_range,
+                        ErrorKind::OverloadArgumentExpansionLimit,
+                        format!(
+                            "Argument type expansion for this overloaded call hit the limit of {} expansions; some argument type combinations were not checked",
+                            ArgsExpander::<Ans>::GAS
+                        ),
+                    );
                 }
                 (
                     closest_overload,

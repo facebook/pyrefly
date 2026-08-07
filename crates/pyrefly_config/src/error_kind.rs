@@ -337,6 +337,9 @@ pub enum ErrorKind {
     NotRequiredKeyAccess,
     /// Unpacking an open TypedDict that may contain a bad key via inheritance.
     OpenUnpacking,
+    /// Argument type expansion for an overloaded call reached its limit, so some argument
+    /// type combinations were left unchecked.
+    OverloadArgumentExpansionLimit,
     /// An error related to parsing or syntax.
     ParseError,
     /// A potential conflict between an explicit keyword argument and a NotRequired
@@ -574,6 +577,7 @@ impl ErrorKind {
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::OverloadArgumentExpansionLimit => Severity::Warn,
             ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintPrintTensor => Severity::Ignore,
