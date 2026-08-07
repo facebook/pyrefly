@@ -55,9 +55,10 @@ Pyrefly v1.3.0-dev.1 bundles **162 commits** from **23 contributors**.
 
 ### Django Support
 
-- Django now adds reverse managers to the target of each `ForeignKey`, with the default `<source>_set` attribute or a custom `related_name`.
-- Reverse `OneToOneField` relationships now expose the source model directly on the reverse side.
-- Reverse `ManyToManyField` relationships now add a manager with the correct model type.
+Pyrefly now understands reverse relationships between Django models *in the same file*:
+- Reverse managers are added to the target of each `ForeignKey`, with the default `<source>_set` attribute or a custom `related_name`.
+- Reverse `OneToOneField` relationships expose the source model directly on the reverse side.
+- Reverse `ManyToManyField` relationships add a manager with the correct model type.
 - Django `related_name` placeholders (class and app-label) are filled in, and disabled or malformed names create no attribute.
 
 ### Error Suppressions and Diagnostics
