@@ -171,8 +171,8 @@ impl<'a> Transaction<'a> {
                 let fields = solver
                     .type_order()
                     .typed_dict_fields(typed_dict)
-                    .into_iter()
-                    .map(|(name, field)| (name.to_string(), field.ty))
+                    .iter()
+                    .map(|(name, field)| (name.to_string(), field.ty.clone()))
                     .collect();
                 Some((member, fields))
             })
@@ -600,7 +600,7 @@ impl<'a> Transaction<'a> {
                     Type::TypedDict(td) | Type::PartialTypedDict(td) => td,
                     _ => continue,
                 };
-                for (name, field) in solver.type_order().typed_dict_fields(&typed_dict) {
+                for (name, field) in solver.type_order().typed_dict_fields(&typed_dict).iter() {
                     map.entry(name.to_string())
                         .or_insert_with(|| field.ty.clone());
                 }

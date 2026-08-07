@@ -150,8 +150,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) {
         let ty = self.expr_infer(&keyword.value, errors);
         if let Type::TypedDict(typed_dict) = ty {
-            for (name, field) in self.typed_dict_fields(&typed_dict) {
-                keywords.push((name, Annotation::new_type(field.ty)));
+            for (name, field) in self.typed_dict_fields(&typed_dict).iter() {
+                keywords.push((name.clone(), Annotation::new_type(field.ty.clone())));
             }
         } else if let Some((key, _)) = self.unwrap_mapping(&ty) {
             if !self.is_subset_eq(&key, &self.heap.mk_class_type(self.stdlib.str().clone())) {
