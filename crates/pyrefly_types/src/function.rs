@@ -354,36 +354,6 @@ impl FuncId {
     ) {
         self.key_eq()
     }
-
-    fn format_impl(
-        func_module: ModuleName,
-        func_cls: Option<Class>,
-        func_name: &Name,
-        current_module: ModuleName,
-    ) -> String {
-        let module_prefix =
-            if func_module == current_module || func_module == ModuleName::builtins() {
-                "".to_owned()
-            } else {
-                format!("{}.", func_module)
-            };
-        let class_prefix = match &func_cls {
-            Some(cls) => {
-                format!("{}.", cls.name())
-            }
-            None => "".to_owned(),
-        };
-        format!("{module_prefix}{class_prefix}{}", func_name)
-    }
-
-    pub fn format(&self, current_module: ModuleName) -> String {
-        Self::format_impl(
-            self.module.name(),
-            self.cls.clone(),
-            &self.name,
-            current_module,
-        )
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -644,11 +614,22 @@ impl FunctionKind {
     }
 
     pub fn format(&self, current_module: ModuleName) -> String {
-        FuncId::format_impl(
-            self.module_name(),
-            self.class(),
-            self.function_name().as_ref(),
-            current_module,
+        let func_module = self.module_name();
+        let module_prefix =
+            if func_module == current_module || func_module == ModuleName::builtins() {
+                "".to_owned()
+            } else {
+                format!("{}.", func_module)
+            };
+        let class_prefix = match &self.class() {
+            Some(cls) => {
+                format!("{}.", cls.name())
+            }
+            None => "".to_owned(),
+        };
+        format!(
+            "{module_prefix}{class_prefix}{}",
+            self.function_name().as_ref()
         )
     }
 
