@@ -28,6 +28,9 @@ name with the `--config`/`-c` flag, but they will not be automatically found by
 
 Both absolute and config-relative paths are supported.
 
+The [Bazel integration](./bazel.mdx) does not read these configuration files;
+configure its aspect instead.
+
 ## Unconfigured projects
 
 On the command-line, when no `pyrefly.toml` or `[tool.pyrefly]` section governs the file being checked, Pyrefly synthesizes a configuration on the fly:

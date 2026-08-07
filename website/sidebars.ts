@@ -125,6 +125,11 @@ let docsSidebar = [
         label: 'Import Resolution',
     },
     {
+        type: 'doc' as const,
+        id: 'bazel',
+        label: 'Bazel Integration',
+    },
+    {
         type: 'category' as const,
         label: 'Tools',
         collapsed: false,
