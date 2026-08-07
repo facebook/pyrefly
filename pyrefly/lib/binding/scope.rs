@@ -1499,10 +1499,12 @@ pub struct Scopes {
     /// throughout the program, even if the scope has already been popped. This is useful
     /// for autocomplete purposes.
     keep_scope_tree: bool,
+    /// True when the module is a stub (`.pyi`).
+    is_interface: bool,
 }
 
 impl Scopes {
-    pub fn module(range: TextRange, keep_scope_tree: bool) -> Self {
+    pub fn module(range: TextRange, keep_scope_tree: bool, is_interface: bool) -> Self {
         let module_scope = Scope::module(range);
         Self {
             scopes: Vec1::new(ScopeTreeNode {
@@ -1510,6 +1512,7 @@ impl Scopes {
                 children: Vec::new(),
             }),
             keep_scope_tree,
+            is_interface,
         }
     }
 
@@ -3238,9 +3241,15 @@ impl Scopes {
                 } else {
                     flow_info.initialized()
                 };
-                // Because class body scopes are dynamic, if we know that the name is
-                // definitely not initialized in the flow, we should skip it.
+                // Because class body scopes are dynamic, if we're in a non-stub file
+                // and we know that the name is definitely not initialized, we should skip it.
                 if is_class && matches!(initialized, InitializedInFlow::No) {
+                    if self.is_interface {
+                        return Some(NameReadInfo::Flow {
+                            idx: flow_info.idx(),
+                            initialized: InitializedInFlow::Yes,
+                        });
+                    }
                     return None;
                 }
                 return Some(NameReadInfo::Flow {

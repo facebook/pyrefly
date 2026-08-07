@@ -7,6 +7,7 @@
 
 // @lint-ignore-every SPELL deliberately testing bad spelling
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -261,6 +262,35 @@ class C:
     # Inside of a method, x refers to the global x: int
     def m(self) -> str:
         return x # E: Returned type `int` is not assignable to declared return type `str`
+"#,
+);
+
+// In an executable module the annotation-only statement `x: int` does not bind `x`
+// at runtime, so reading it later in the same class body is a runtime `NameError`.
+testcase!(
+    test_annotation_only_class_attr_not_readable_in_module,
+    r#"
+class C:
+    x: int
+    y = x  # E: Could not find name `x`
+"#,
+);
+
+// A stub (`.pyi`) is never executed, so an annotation-only class attribute is a
+// declaration that is in scope for the rest of the class body.
+testcase!(
+    test_annotation_only_class_attr_readable_in_stub,
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+class C:
+    x: int
+    y = x
+"#,
+    ),
+    r#"
+from foo import C
 "#,
 );
 

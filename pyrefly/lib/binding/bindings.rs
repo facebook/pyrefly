@@ -637,7 +637,7 @@ impl Bindings {
             type_alias_count: 0,
             await_context: AwaitContext::General,
             has_docstring: Ast::has_docstring(&x),
-            scopes: Scopes::module(x.range, enable_trace),
+            scopes: Scopes::module(x.range, enable_trace, module_info.path().is_interface()),
             table: Default::default(),
             check_unannotated_defs,
             analyze_unannotated_for_ide,
