@@ -1825,9 +1825,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let value_ty =
                     Arc::unwrap_or_clone(self.solve_binding(&binding, range, errors)).into_ty();
                 if let Binding::Function { decorated_idx, .. } = self.bindings().get(*definition) {
+                    let binding = self.bindings().get(*decorated_idx);
                     descriptor_is_override = self
-                        .get_decorated_function(*decorated_idx)
-                        .undecorated
+                        .get_idx(binding.undecorated_idx)
                         .metadata
                         .flags
                         .is_override;

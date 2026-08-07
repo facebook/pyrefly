@@ -98,6 +98,36 @@ x2: C.X = [["oops"]]  # E: `list[list[str]]` is not assignable to `int | list[X]
     "#,
 );
 
+// This intentionally contrived decorator/annotation cycle exercises fixpoint
+// convergence; it is not intended as a recommended typing pattern.
+testcase!(
+    test_decorated_method_recursive_return_annotation,
+    r#"
+from __future__ import annotations
+from typing import Callable, assert_type
+
+class Wrapper[T]:
+    class Result: pass
+
+    def __init__(self, f: Callable[..., T]) -> None:
+        self.f = f
+
+    def __call__(self, *args: object) -> T:
+        return self.f(*args)
+
+def wrap[T](f: Callable[..., T]) -> Wrapper[T]:
+    return Wrapper(f)
+
+class C:
+    @wrap
+    def f(self) -> C.f.Result:
+        return Wrapper.Result()
+
+assert_type(C.f, Wrapper[Wrapper.Result])
+assert_type(C.f.Result, type[Wrapper.Result])
+    "#,
+);
+
 testcase!(
     bug = "Fails to resolve forward ref",
     test_unqualified_class_attr_ref,
