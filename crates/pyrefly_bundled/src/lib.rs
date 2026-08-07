@@ -14,12 +14,19 @@ use starlark_map::small_map::SmallMap;
 use tar::Archive;
 use zstd::stream::read::Decoder;
 
-const BUNDLED_TYPESHED_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.tar.zst"));
+static BUNDLED_TYPESHED_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/stdlib.tar.zst"));
 
 pub const BUNDLED_TYPESHED_DIGEST: &[u8; 32] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.sha256"));
+    include_bytes!(concat!(env!("OUT_DIR"), "/stdlib.sha256"));
 
-const BUNDLED_THIRD_PARTY_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/stubs.tar.zst"));
+static BUNDLED_TYPESHED_THIRD_PARTY_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/typeshed_stubs.tar.zst"));
+
+pub const BUNDLED_TYPESHED_THIRD_PARTY_DIGEST: &[u8; 32] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/typeshed_stubs.sha256"));
+
+static BUNDLED_THIRD_PARTY_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/stubs.tar.zst"));
 
 pub const BUNDLED_THIRD_PARTY_DIGEST: &[u8; 32] =
     include_bytes!(concat!(env!("OUT_DIR"), "/stubs.sha256"));
@@ -45,7 +52,8 @@ impl PathFilter {
 
     fn archive_bytes(&self) -> &'static [u8] {
         match self {
-            PathFilter::Stdlib | PathFilter::ThirdPartyTypeshedStubs => BUNDLED_TYPESHED_BYTES,
+            PathFilter::Stdlib => BUNDLED_TYPESHED_BYTES,
+            PathFilter::ThirdPartyTypeshedStubs => BUNDLED_TYPESHED_THIRD_PARTY_BYTES,
             PathFilter::ThirdPartyStubs => BUNDLED_THIRD_PARTY_BYTES,
         }
     }

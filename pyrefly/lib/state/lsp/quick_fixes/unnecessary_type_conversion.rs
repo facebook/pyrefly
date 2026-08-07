@@ -47,10 +47,11 @@ pub(crate) fn unnecessary_type_conversion_code_action(
         return None;
     }
     let arg_text = module_info.code_at(arg.range());
+    let parent = Ast::parent_node(ast, call.range());
     Some((
         format!("Remove unnecessary `{conversion_name}()` call"),
         module_info.dupe(),
         call.range(),
-        wrap_if_needed(arg, arg_text),
+        wrap_if_needed(parent, arg, arg_text),
     ))
 }

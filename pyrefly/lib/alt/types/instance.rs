@@ -130,6 +130,9 @@ impl<'a> Instance<'a> {
                     Restriction::Unrestricted => return quantified_ty,
                     Restriction::Bound(b) => b.clone(),
                     Restriction::Constraints(cs) => unions(cs.clone(), heap),
+                    // Flag domains are builtin ClassTypes, but this API has no Stdlib with which
+                    // to materialize one. Preserve the quantified instead of inventing a fallback.
+                    Restriction::Flag(_) => return quantified_ty,
                 };
                 let instance_ty =
                     heap.mk_class_type(ClassType::new(self.class.dupe(), self.targs.clone()));

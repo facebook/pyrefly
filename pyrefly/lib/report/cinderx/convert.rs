@@ -56,7 +56,7 @@ fn callable_to_structured(
     pending_class_traits: &mut Vec<(usize, Class)>,
 ) -> usize {
     let param_indices: Vec<usize> = match params {
-        Params::List(param_list) => param_list
+        Params::List(param_list) | Params::Partial(param_list) => param_list
             .items()
             .iter()
             .map(|p| type_to_structured(p.as_type(), table, pending_class_traits))
@@ -93,6 +93,11 @@ fn quantified_to_structured(
         Restriction::Constraints(constraints) => constraints
             .iter()
             .map(|c| type_to_structured(c, table, pending_class_traits))
+            .collect(),
+        Restriction::Flag(domain) => domain
+            .class_names()
+            .into_iter()
+            .map(|name| insert_simple_class(name, table))
             .collect(),
         Restriction::Unrestricted => vec![],
     };
@@ -312,7 +317,7 @@ pub(crate) fn type_to_structured(
                     vec![type_to_structured(inner, table, pending_class_traits)]
                 }
                 pyrefly_types::tuple::Tuple::Unpacked(unpacked) => {
-                    let (prefix, middle, suffix) = &**unpacked;
+                    let (prefix, middle, suffix) = unpacked.parts();
                     let mut indices: Vec<usize> = prefix
                         .iter()
                         .map(|e| type_to_structured(e, table, pending_class_traits))
@@ -385,6 +390,11 @@ pub(crate) fn type_to_structured(
                     .iter()
                     .map(|c| type_to_structured(c, table, pending_class_traits))
                     .collect(),
+                Restriction::Flag(domain) => domain
+                    .class_names()
+                    .into_iter()
+                    .map(|name| insert_simple_class(name, table))
+                    .collect(),
                 Restriction::Unrestricted => vec![],
             };
             let bound_hashes: Vec<u64> = bound_indices.iter().map(|&i| table.hash_at(i)).collect();
@@ -435,8 +445,11 @@ pub(crate) fn type_to_structured(
         | Type::Sentinel(_)
         | Type::ElementOfTypeVarTuple(_)
         | Type::ShapedArray(_)
+        | Type::IntTuple(_)
         | Type::NNModule(_)
-        | Type::Size(_)
-        | Type::Dim(_) => insert_simple_other_form("typing.Any", table),
+        | Type::DataFrame(_)
+        | Type::Series(_)
+        | Type::Int(_)
+        | Type::TypeLevelDslCall(_) => insert_simple_other_form("typing.Any", table),
     }
 }

@@ -37,6 +37,7 @@ use crate::solver::solver::Solver;
 use crate::state::load::Load;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::require::Require;
+use crate::state::state::OldData;
 use crate::state::state::TransactionTimingCounters;
 use crate::types::stdlib::Stdlib;
 
@@ -59,9 +60,13 @@ pub struct Context<'a, Lookup> {
     pub check_unannotated_defs: bool,
     pub infer_return_types: InferReturnTypes,
     pub infer_with_first_use: bool,
+    pub check_all_matches: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
+    pub legacy_overload_expansion: bool,
+    pub treat_all_caps_as_final: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
     /// Pysa context for building PysaSolutions during the Solutions step.
     pub pysa_context: Option<PysaContext<'a>>,
@@ -283,13 +288,6 @@ pub struct StepsMut {
     pub exports: ArcSwapOption<Exports>,
     pub answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
     pub solutions: ArcSwapOption<Solutions>,
-    // Pre-rebuild data for diffing at the Solutions step.
-    // Populated by `reset_for_rebuild()`, consumed by `ComputeGuard::take_old_*()`.
-    // May remain unconsumed for modules that never reach Solutions (e.g.,
-    // require=Exports); dropped when `take_and_freeze()` consumes `self`.
-    pub old_exports: ArcSwapOption<Exports>,
-    pub old_answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
-    pub old_solutions: ArcSwapOption<Solutions>,
 }
 
 impl StepsMut {
@@ -302,9 +300,6 @@ impl StepsMut {
             exports: ArcSwapOption::new(steps.exports.dupe()),
             answers: ArcSwapOption::new(steps.answers.dupe()),
             solutions: ArcSwapOption::new(steps.solutions.dupe()),
-            old_exports: ArcSwapOption::empty(),
-            old_answers: ArcSwapOption::empty(),
-            old_solutions: ArcSwapOption::empty(),
         }
     }
 
@@ -317,9 +312,6 @@ impl StepsMut {
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
-            old_exports: ArcSwapOption::empty(),
-            old_answers: ArcSwapOption::empty(),
-            old_solutions: ArcSwapOption::empty(),
         }
     }
 
@@ -334,9 +326,6 @@ impl StepsMut {
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
-            old_exports: ArcSwapOption::empty(),
-            old_answers: ArcSwapOption::empty(),
-            old_solutions: ArcSwapOption::empty(),
         }
     }
 
@@ -379,10 +368,10 @@ impl StepsMut {
     }
 
     /// Reset steps for recomputation. Optionally clears AST, always clears
-    /// exports/answers/solutions (saving them into `old_*` for later diffing).
+    /// exports/answers/solutions (returning them as `OldData` for later diffing).
     /// Uses relaxed ordering — caller is responsible for a subsequent release-store
     /// on another variable (e.g. `checked` epoch) to make these writes visible.
-    pub fn reset_for_rebuild(&self, clear_ast: bool) {
+    pub(crate) fn reset_for_rebuild(&self, clear_ast: bool, old: &mut OldData) {
         if clear_ast {
             self.ast.store(None);
         }
@@ -400,9 +389,9 @@ impl StepsMut {
         };
 
         // Take and clear exports/answers/solutions, saving for diffing at Solutions step.
-        self.old_exports.store(self.exports.swap(None));
-        self.old_answers.store(self.answers.swap(None));
-        self.old_solutions.store(self.solutions.swap(None));
+        old.exports = self.exports.swap(None);
+        old.answers = self.answers.swap(None);
+        old.solutions = self.solutions.swap(None);
 
         // Relaxed is fine here because the caller will release-store on `checked`,
         // which synchronizes all these writes with readers.
@@ -411,7 +400,6 @@ impl StepsMut {
 
     /// Consume and produce a frozen `Steps`.
     pub fn take_and_freeze(self) -> Steps {
-        // old_exports/old_answers/old_solutions are dropped with `self`.
         Steps {
             last_step: self.current_step.load(),
             load: self.load.into_inner(),
@@ -485,9 +473,12 @@ impl Step {
     ) -> Arc<(Bindings, Arc<Answers>)> {
         let solver = Solver::new(
             ctx.infer_with_first_use,
+            ctx.check_all_matches,
             ctx.tensor_shapes,
             ctx.strict_callable_subtyping,
+            ctx.strict_partial_subtyping,
             ctx.spec_compliant_overloads,
+            ctx.legacy_overload_expansion,
         );
         let enable_index = ctx.require.keep_index();
         let enable_trace =
@@ -504,6 +495,7 @@ impl Step {
             ctx.check_unannotated_defs,
             ctx.require.keep_index(),
             ctx.infer_return_types,
+            ctx.treat_all_caps_as_final,
         );
         let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
         Arc::new((bindings, Arc::new(answers)))

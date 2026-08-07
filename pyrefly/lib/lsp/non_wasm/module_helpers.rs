@@ -62,9 +62,7 @@ pub(crate) fn handle_from_module_path(state: &State, path: ModulePath) -> Handle
                 .unwrap_or(unknown);
             Handle::new(module_name, path, config.get_sys_info())
         }
-        _ => {
-            config.handle_from_module_path_with_fallback(path.dupe(), &config.fallback_search_path)
-        }
+        _ => config.handle_from_module_path(path.dupe()),
     }
 }
 

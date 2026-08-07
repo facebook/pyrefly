@@ -15,6 +15,7 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_alias::TypeAliasData;
+use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Type;
@@ -198,6 +199,7 @@ fn strip_coroutine<'a>(type_: &'a Type, context: &ModuleContext) -> Option<&'a T
 enum TypeVariableRestriction {
     Bound(Type),
     Constraints(Vec<Type>),
+    Flag(FlagDomain),
 }
 
 fn strip_typevar(type_: &Type) -> Option<TypeVariableRestriction> {
@@ -208,6 +210,7 @@ fn strip_typevar(type_: &Type) -> Option<TypeVariableRestriction> {
                 Restriction::Constraints(constraints) => {
                     Some(TypeVariableRestriction::Constraints(constraints.clone()))
                 }
+                Restriction::Flag(domain) => Some(TypeVariableRestriction::Flag(*domain)),
                 Restriction::Unrestricted => None,
             }
         }
@@ -238,6 +241,10 @@ fn is_scalar_type(get: &Type, want: &Class, context: &ModuleContext) -> bool {
         return match type_variable_restriction {
             TypeVariableRestriction::Bound(inner) => is_scalar_type(&inner, want, context),
             TypeVariableRestriction::Constraints(inners) => inners
+                .iter()
+                .any(|inner| is_scalar_type(inner, want, context)),
+            TypeVariableRestriction::Flag(domain) => domain
+                .types(&context.answers_context.stdlib)
                 .iter()
                 .any(|inner| is_scalar_type(inner, want, context)),
         };
@@ -271,6 +278,13 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
                 .map(|inner| get_classes_of_type(inner, context).prepend_typevar_constraint())
                 .reduce(|acc, next| acc.join_with(next))
                 .unwrap()
+                .sort_and_dedup(),
+            TypeVariableRestriction::Flag(domain) => domain
+                .types(&context.answers_context.stdlib)
+                .iter()
+                .map(|inner| get_classes_of_type(inner, context).prepend_typevar_bound())
+                .reduce(|acc, next| acc.join_with(next))
+                .expect("a Flag domain always has at least one member")
                 .sort_and_dedup(),
         };
     }
