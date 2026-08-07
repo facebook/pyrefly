@@ -305,6 +305,7 @@ fn hint_to_string(
 impl InferArgs {
     pub fn run(
         mut self,
+        version: &str,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
@@ -318,10 +319,17 @@ impl InferArgs {
             .set_infer_return_types_if_unset(InferReturnTypes::Checked);
         let (files_to_check, config_finder, _) =
             self.files.resolve(self.config_override, wrapper)?;
-        Self::run_inner(files_to_check, config_finder, self.flags, thread_count)
+        Self::run_inner(
+            version,
+            files_to_check,
+            config_finder,
+            self.flags,
+            thread_count,
+        )
     }
 
     pub fn run_inner(
+        version: &str,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
         flags: InferFlags,
@@ -447,6 +455,7 @@ impl InferArgs {
             let config_finder = ConfigFinder::new_constant(current_dir_config);
             let state = holder.as_ref();
             let (_, errors, _) = check_args.run_once(
+                version,
                 files_to_check,
                 config_finder,
                 UpsellDecision::Skip,
@@ -546,6 +555,8 @@ mod test {
     use super::*;
     use crate::test::util::TestEnv;
 
+    const TEST_VERSION: &str = "0.0.0";
+
     fn assert_annotations(input: &str, output: &str, flags: Option<InferFlags>) {
         let flags = flags.unwrap_or_else(InferFlags::default);
         let tdir = tempfile::tempdir().unwrap();
@@ -562,7 +573,13 @@ mod test {
             HiddenDirFilter::Disabled,
         ));
         let config_finder = t.config_finder();
-        let result = InferArgs::run_inner(f_globs, config_finder, flags, TEST_THREAD_COUNT);
+        let result = InferArgs::run_inner(
+            TEST_VERSION,
+            f_globs,
+            config_finder,
+            flags,
+            TEST_THREAD_COUNT,
+        );
         assert!(
             result.is_ok(),
             "autotype command failed: {:?}",
@@ -597,7 +614,7 @@ mod test {
         t.add(&file_two_path.display().to_string(), file_two);
         t.add(&config_path.display().to_string(), configuration);
         let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
-        let result = args.run(None, TEST_THREAD_COUNT);
+        let result = args.run(TEST_VERSION, None, TEST_THREAD_COUNT);
         assert!(result.is_ok(), "infer command failed: {:?}", result.err());
 
         let got_file = fs_anyhow::read_to_string(&file_one_path).unwrap();
@@ -633,7 +650,7 @@ mod test {
         )?;
 
         let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
-        let result = args.run(None, TEST_THREAD_COUNT);
+        let result = args.run(TEST_VERSION, None, TEST_THREAD_COUNT);
         assert!(result.is_ok(), "infer command failed: {:?}", result.err());
 
         let got = fs_anyhow::read_to_string(&test_path)?;
@@ -1188,7 +1205,7 @@ class MyClass:
         t.add(&file_private_path.display().to_string(), file_private);
         t.add(&config_path.display().to_string(), configuration);
         let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
-        let result = args.run(None, TEST_THREAD_COUNT);
+        let result = args.run(TEST_VERSION, None, TEST_THREAD_COUNT);
         assert!(result.is_ok(), "infer command failed: {:?}", result.err());
 
         let got_file = fs_anyhow::read_to_string(&file_one_path).unwrap();
@@ -1277,8 +1294,14 @@ def foo() -> ExampleA:
             HiddenDirFilter::Disabled,
         ));
         let config_finder = t.config_finder();
-        let status = InferArgs::run_inner(f_globs, config_finder, flags, TEST_THREAD_COUNT)
-            .expect("run_inner should not error");
+        let status = InferArgs::run_inner(
+            TEST_VERSION,
+            f_globs,
+            config_finder,
+            flags,
+            TEST_THREAD_COUNT,
+        )
+        .expect("run_inner should not error");
         let on_disk = fs_anyhow::read_to_string(&path).unwrap();
         (status, on_disk)
     }
@@ -1360,7 +1383,7 @@ def foo() -> int:
             "--config",
             &config_path.display().to_string(),
         ]);
-        let status = args.run(None, TEST_THREAD_COUNT)?;
+        let status = args.run(TEST_VERSION, None, TEST_THREAD_COUNT)?;
 
         assert_eq!(
             status,
