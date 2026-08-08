@@ -6,7 +6,6 @@
  */
 
 use std::ffi::OsStr;
-use std::ffi::OsString;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -15,8 +14,6 @@ use std::num::NonZeroUsize;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::LazyLock;
 use std::thread::available_parallelism;
 
 use anyhow::Context;
@@ -40,25 +37,71 @@ use crate::includes::Includes;
 use crate::lock::Mutex;
 use crate::prelude::SliceExt;
 use crate::prelude::VecExt;
-use crate::upward_search::UpwardSearch;
 
-static IGNORE_FILES_SEARCH: LazyLock<Vec<UpwardSearch<Arc<(PathBuf, PathBuf)>>>> =
-    LazyLock::new(|| {
-        [".gitignore", ".ignore", ".git/info/exclude"]
-            .iter()
-            .map(|f| {
-                UpwardSearch::new(vec![OsString::from(f)], |p| {
-                    let mut ignore_root = p.to_path_buf();
-                    ignore_root.pop();
-                    if *f == ".git/info/exclude" {
-                        ignore_root.pop();
-                        ignore_root.pop();
-                    }
-                    Arc::new((p.to_path_buf(), ignore_root))
-                })
-            })
-            .collect::<Vec<_>>()
-    });
+/// The ignore files that govern `root`, as `(file, root the patterns are
+/// relative to)` pairs, honouring repository boundaries the way git does.
+/// Walking upward from `root`:
+///
+/// * the nearest `.gitignore` and the nearest `.ignore` apply, each rooted
+///   at its own directory;
+/// * the first directory carrying a `.git` entry is the working-tree root,
+///   and the walk stops there: an ignore file above it belongs to a
+///   different, enclosing repository, and git never applies an outer
+///   repository's rules inside an inner working tree;
+/// * the repository's `info/exclude` applies rooted at the working-tree
+///   root. For a linked worktree `.git` is a *file* (`gitdir: ...`) and the
+///   exclude file lives in the shared common dir -- resolved through
+///   `commondir`, but still rooted at *this* worktree: a pattern like
+///   `worktrees/` in a main checkout's exclude file names the worktree
+///   directories as seen from the main checkout, not the files inside them.
+fn find_ignore_files(root: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let mut gitignore = None;
+    let mut dotignore = None;
+    let mut info_exclude = None;
+    for dir in root.absolutize().ancestors() {
+        if gitignore.is_none() {
+            let candidate = dir.join(".gitignore");
+            if candidate.is_file() {
+                gitignore = Some((candidate, dir.to_path_buf()));
+            }
+        }
+        if dotignore.is_none() {
+            let candidate = dir.join(".ignore");
+            if candidate.is_file() {
+                dotignore = Some((candidate, dir.to_path_buf()));
+            }
+        }
+        let git = dir.join(".git");
+        if git.exists() {
+            info_exclude = git_common_dir(&git)
+                .map(|common| common.join("info").join("exclude"))
+                .filter(|exclude| exclude.is_file())
+                .map(|exclude| (exclude, dir.to_path_buf()));
+            break;
+        }
+    }
+    [gitignore, dotignore, info_exclude]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// The repository directory a `.git` entry denotes: itself when it is a
+/// directory, or -- for a linked worktree or submodule, where it is a
+/// `gitdir: ...` pointer file -- the *common* directory the pointer leads to,
+/// following `commondir` when the private per-worktree directory carries one.
+fn git_common_dir(git: &Path) -> Option<PathBuf> {
+    if git.is_dir() {
+        return Some(git.to_path_buf());
+    }
+    let pointer = std::fs::read_to_string(git).ok()?;
+    let target = pointer.lines().next()?.strip_prefix("gitdir:")?.trim();
+    let private = Path::new(target).absolutize_from(git.parent()?);
+    match std::fs::read_to_string(private.join("commondir")) {
+        Ok(common) => Some(Path::new(common.trim()).absolutize_from(&private)),
+        Err(_) => Some(private),
+    }
+}
 
 const PYTHON_FILE_EXTENSIONS: &[&str] = &["py", "pyi", "pyw", "ipynb"];
 
@@ -885,23 +928,19 @@ impl GlobFilter {
     }
 
     pub fn ignore_files(root: &Path) -> (Vec<Gitignore>, Vec<anyhow::Error>, Vec<PathBuf>) {
-        let found_ignores = IGNORE_FILES_SEARCH
-            .iter()
-            .filter_map(|s| s.directory_absolute(root));
         let mut errors = vec![];
         let mut ignores = vec![];
         let mut ignore_paths = vec![];
-        for item in found_ignores {
-            let (ignore_file, ignore_root) = &*item;
-            let mut builder = GitignoreBuilder::new(ignore_root);
-            if let Some(error) = builder.add(ignore_file) {
+        for (ignore_file, ignore_root) in find_ignore_files(root) {
+            let mut builder = GitignoreBuilder::new(&ignore_root);
+            if let Some(error) = builder.add(&ignore_file) {
                 errors.push(error.into());
             }
             match builder.build() {
                 Ok(ignore) => ignores.push(ignore),
                 Err(error) => errors.push(error.into()),
             }
-            ignore_paths.push(ignore_file.to_owned());
+            ignore_paths.push(ignore_file);
         }
         (ignores, errors, ignore_paths)
     }
@@ -1817,6 +1856,109 @@ mod tests {
             HiddenDirFilter::Disabled,
         );
         assert!(!filter.is_excluded(&root.join("my_file.py")));
+    }
+
+    #[test]
+    fn test_ignore_files_stop_at_the_enclosing_repository() {
+        // A project that is its own repository: ignore files above its
+        // working-tree root belong to a different (enclosing) repository,
+        // and git never applies an outer repository's rules inside an
+        // inner working tree.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file_with_contents(".gitignore", "**/*.outer_exclude"),
+                TestPath::dir(
+                    ".git",
+                    vec![TestPath::dir(
+                        "info",
+                        vec![TestPath::file_with_contents("exclude", "inner/")],
+                    )],
+                ),
+                TestPath::dir(
+                    "inner",
+                    vec![
+                        TestPath::dir(
+                            ".git",
+                            vec![TestPath::dir(
+                                "info",
+                                vec![TestPath::file_with_contents("exclude", "generated/")],
+                            )],
+                        ),
+                        TestPath::file("pyrefly.toml"),
+                    ],
+                ),
+            ],
+        );
+
+        let inner = root.join("inner");
+        let filter = GlobFilter::new(Globs::empty(), Some(&inner), HiddenDirFilter::Disabled);
+
+        assert_eq!(filter.ignore_paths, vec![inner.join(".git/info/exclude")]);
+        // The outer `.gitignore` and the outer repository's `inner/` exclude
+        // both name this tree from outside; neither governs files within it.
+        assert!(!filter.is_excluded(&inner.join("my_file.outer_exclude")));
+        assert!(!filter.is_excluded(&inner.join("src/my_file.py")));
+        // The inner repository's own exclude file still applies.
+        assert!(filter.is_excluded(&inner.join("generated/my_file.py")));
+    }
+
+    #[test]
+    fn test_worktree_reads_the_common_exclude_rooted_at_the_worktree() {
+        // A linked worktree: `.git` is a `gitdir: ...` pointer file, and the
+        // repository's `info/exclude` lives in the shared common dir. Its
+        // patterns apply *relative to this worktree's root* -- a pattern
+        // naming the worktree's own location as seen from the main checkout
+        // (`.claude/worktrees/`, the shape that hid every include from a
+        // checkout under such a path) must not match the files inside it.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file_with_contents(".gitignore", "**/*.outer_exclude"),
+                TestPath::dir(
+                    ".git",
+                    vec![
+                        TestPath::dir(
+                            "info",
+                            vec![TestPath::file_with_contents(
+                                "exclude",
+                                "**/.claude/worktrees/\ngenerated/",
+                            )],
+                        ),
+                        TestPath::dir("worktrees", vec![TestPath::dir("wt", vec![])]),
+                    ],
+                ),
+                TestPath::dir(
+                    ".claude",
+                    vec![TestPath::dir(
+                        "worktrees",
+                        vec![TestPath::dir("wt", vec![TestPath::file("pyrefly.toml")])],
+                    )],
+                ),
+            ],
+        );
+        let private = root.join(".git/worktrees/wt");
+        std::fs::write(private.join("commondir"), "../..\n").unwrap();
+        let worktree = root.join(".claude/worktrees/wt");
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", private.display()),
+        )
+        .unwrap();
+
+        let filter = GlobFilter::new(Globs::empty(), Some(&worktree), HiddenDirFilter::Disabled);
+
+        // The common exclude file is found through the pointer, rooted here.
+        assert_eq!(filter.ignore_paths, vec![root.join(".git/info/exclude")]);
+        assert!(!filter.is_excluded(&worktree.join("src/my_file.py")));
+        assert!(!filter.is_excluded(&worktree.join("my_file.outer_exclude")));
+        // Per-worktree semantics: the same file's patterns still apply to
+        // paths as seen from this worktree's own root.
+        assert!(filter.is_excluded(&worktree.join("generated/my_file.py")));
     }
 
     #[test]
