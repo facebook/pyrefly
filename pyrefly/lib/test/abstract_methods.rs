@@ -24,6 +24,30 @@ shape = Shape()  # E: Cannot instantiate `Shape`
 );
 
 testcase!(
+    test_generic_abstract_class_instantiation_error,
+    r#"
+from abc import ABC, abstractmethod
+
+class Shape[T](ABC):
+    @abstractmethod
+    def area(self) -> T:
+        pass
+
+class ConcreteShape(Shape[int]):
+    def area(self) -> int:
+        return 0
+
+shape = Shape[int]()  # E: Cannot instantiate `Shape`
+
+def construct(cls: type[Shape[int]]) -> Shape[int]:
+    return cls()
+
+classes: tuple[type[Shape[int]], ...] = (ConcreteShape,)
+concrete_shape = classes[0]()
+"#,
+);
+
+testcase!(
     test_concrete_subclass_instantiation_ok,
     r#"
 from abc import ABC, abstractmethod
@@ -59,10 +83,18 @@ class DirectABCMeta(metaclass=ABCMeta):
 class IndirectABCMeta(DirectABCMeta):
     pass
 
+class DirectGenericABC[T](ABC):
+    pass
+
+class DirectGenericABCMeta[T](metaclass=ABCMeta):
+    pass
+
 direct_abc = DirectABC()  # E: Cannot instantiate `DirectABC`
 indirect_abc = IndirectABC()
 direct_abc_meta = DirectABCMeta()  # E: Cannot instantiate `DirectABCMeta`
 indirect_abc_meta = IndirectABCMeta()
+direct_generic_abc = DirectGenericABC[int]()
+direct_generic_abc_meta = DirectGenericABCMeta[int]()
 "#,
 );
 
