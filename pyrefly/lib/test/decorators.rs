@@ -10,6 +10,94 @@ use pyrefly_python::sys_info::PythonVersion;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+fn env_with_flask_typing_alias() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "flask.typing",
+        r#"
+from __future__ import annotations
+import typing as t
+
+ResponseValue = t.Union[str, bytes]
+
+ResponseReturnValue = t.Union[
+    ResponseValue,
+    tuple[ResponseValue, int],
+    tuple[ResponseValue, int, dict[str, str]],
+]
+"#,
+    );
+    env.add(
+        "flask",
+        r#"
+from __future__ import annotations
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+from flask.typing import ResponseReturnValue
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+class LoginManager:
+    def unauthorized(self) -> ResponseReturnValue: ...
+
+class App:
+    login_manager: LoginManager
+
+    def ensure_sync(self, func: Callable[P, R]) -> Callable[P, R]: ...
+
+current_app: App
+"#,
+    );
+    env.add(
+        "libs.login",
+        r#"
+from __future__ import annotations
+from collections.abc import Callable
+from functools import wraps
+from typing import ParamSpec, TypeVar
+
+from flask import current_app
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def login_required(func: Callable[P, R]):
+    @wraps(func)
+    def decorated_view(*args: P.args, **kwargs: P.kwargs):
+        if args:
+            return current_app.login_manager.unauthorized()
+        return current_app.ensure_sync(func)(*args, **kwargs)
+    return decorated_view
+"#,
+    );
+    env.add(
+        "controllers.console.wraps",
+        r#"
+from __future__ import annotations
+from collections.abc import Callable
+
+def setup_required(view: Callable[..., int]) -> Callable[..., int]: ...
+"#,
+    );
+    env.add(
+        "controllers.console.app.mcp_server",
+        r#"
+from __future__ import annotations
+
+from controllers.console.wraps import setup_required
+from libs.login import login_required
+
+@setup_required
+@login_required
+def handler(*args, **kwargs) -> int:
+    return 0
+"#,
+    );
+    env
+}
+
 testcase!(
     test_simple_function_decorator,
     r#"
@@ -486,6 +574,37 @@ def f0(arg: Callable[..., int]) -> Callable[..., int]: ...
 @dec  # E: Argument `int` is not assignable to parameter `arg` with type `(...) -> Any` in function `dec`
 @f0
 def f0(arg: Callable[..., int]) -> Callable[..., int]: ...
+    "#,
+);
+
+testcase!(
+    test_decorator_error_uses_external_union_alias,
+    env_with_flask_typing_alias(),
+    r#"
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+from flask import current_app
+from flask.typing import ResponseReturnValue
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def login_required(func: Callable[P, R]) -> Callable[P, ResponseReturnValue | R]:
+    def decorated_view(*args: P.args, **kwargs: P.kwargs) -> ResponseReturnValue | R:
+        if args:
+            return current_app.login_manager.unauthorized()
+        return current_app.ensure_sync(func)(*args, **kwargs)
+    return decorated_view
+
+def setup_required(view: Callable[..., int]) -> Callable[..., int]: ...
+
+@setup_required  # E: Argument `(*args: Unknown, **kwargs: Unknown) -> ResponseReturnValue | R` is not assignable to parameter `view` with type `(...) -> int` in function `setup_required`
+@login_required
+def handler(*args, **kwargs) -> int:
+    return 0
     "#,
 );
 
