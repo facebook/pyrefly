@@ -5492,6 +5492,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (Type, Type) {
         let base = self.expr_infer(&subscript.value, errors);
         let slice_ty = self.expr_infer(&subscript.slice, errors);
+        // Whether an empty display assigned here can still be observed as an implicit
+        // `Any` is a property of the whole target. It absorbs only if its own type is
+        // known: not if it still holds an unpinned placeholder, and not if it holds an
+        // `Any` pyrefly inferred rather than the user declaring one, since a container
+        // pinned from `{}` absorbs nothing - it propagates the same uncertainty, and
+        // its contents deserve the diagnostic as much as it did. Computed before
+        // distributing because pinning is global, so a solved union arm would otherwise
+        // silence a placeholder that an unsolved arm genuinely leaks.
+        let target_absorbs = !base.any(|t| match t {
+            Type::Any(AnyStyle::Implicit) => true,
+            Type::Var(v) => self.solver().var_is_partial(*v),
+            _ => false,
+        });
         let assigned_ty = self.distribute_over_union(&base, |base| {
             self.distribute_over_union(&slice_ty, |key| {
                 match (base, key) {
@@ -5542,13 +5555,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ExprOrBinding::Expr(e) => {
                                 call_setitem(CallArg::expr(e));
                                 // We already emit errors for `e` during `call_method_or_error`
-                                self.expr_infer(
+                                let ty = self.expr_infer(
                                     e,
                                     &ErrorCollector::new(
                                         errors.module().clone(),
                                         ErrorStyle::Never,
                                     ),
-                                )
+                                );
+                                // That call already checked `e` against `__setitem__`'s value
+                                // parameter; this pass only produces the type the subscript
+                                // narrows to, and re-inferring mints a *fresh* placeholder for
+                                // every empty display in `e`. Once the target is fully solved
+                                // it has already absorbed the value, so those placeholders are
+                                // unobservable and are pinned rather than reported. A target
+                                // still holding a partial var is what the diagnostic exists
+                                // for - there the placeholder really does leak. Containment
+                                // keeps this to placeholders `e` minted itself; one belonging
+                                // to a name `e` merely mentions outlives the assignment and
+                                // keeps its own diagnostic. Note the target's *shape* is never
+                                // consulted, so `dict`, `list` and a hand-written
+                                // `__setitem__` all absorb alike.
+                                if target_absorbs {
+                                    self.solver()
+                                        .pin_contained_placeholders_within(&ty, e.range());
+                                }
+                                ty
                             }
                             ExprOrBinding::Binding(b) => {
                                 let binding_ty = self
