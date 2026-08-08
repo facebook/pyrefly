@@ -28,3 +28,4 @@ pub(crate) mod redundant_cast;
 pub(crate) mod safe_delete;
 pub(crate) mod types;
 pub(crate) mod unnecessary_type_conversion;
+pub(crate) mod use_function;
