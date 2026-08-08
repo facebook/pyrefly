@@ -695,6 +695,24 @@ will always, unconditionally replace the import with `typing.Any`.
     - When a `.pyc` file is encountered and no source/stub files are available, Pyrefly automatically treats module as `typing.Any`.
       This behavior ensures that compiled Python files without available source code do not cause import errors and are handled permissively.
 
+### `replace-untyped-imports-with-any`
+
+When enabled, Pyrefly treats third-party packages that lack a PEP 561 `py.typed`
+marker (and have no type stub) as `typing.Any`, instead of analyzing their untyped
+implementation. This is useful for silencing noisy errors from packages whose
+runtime types cannot be recovered — for example, wildcard imports over compiled
+submodules such as OpenCV's `from .cv2 import *`.
+
+Stubs and `py.typed`-marked packages are always analyzed normally; the option only
+affects genuinely untyped third-party packages. First-party code is never affected.
+For per-module control, prefer the sibling [`replace-imports-with-any`](#replace-imports-with-any),
+which takes precedence over this blanket policy.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--replace-untyped-imports-with-any`
+- Equivalent configs: `follow_imports = skip` in mypy (per-module; `replace-imports-with-any` already maps to this)
+
 ### `ignore-errors-in-generated-code`
 
 Whether to ignore type errors in generated code. If enabled, generated files

@@ -238,6 +238,14 @@ pub struct ConfigOverrideArgs {
     /// related import errors.
     #[arg(long)]
     ignore_missing_imports: Option<Vec<String>>,
+    /// Replace untyped third-party imports (no py.typed, no stub) with typing.Any.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    replace_untyped_imports_with_any: Option<bool>,
     /// Whether to ignore type errors in generated code.
     #[arg(
         long,
@@ -497,6 +505,9 @@ impl ConfigOverrideArgs {
                     .filter_map(|x| ModuleWildcard::new(x).ok())
                     .collect(),
             );
+        }
+        if let Some(x) = &self.replace_untyped_imports_with_any {
+            config.root.replace_untyped_imports_with_any = Some(*x);
         }
         if let Some(x) = &self.ignore_errors_in_generated_code {
             config.root.ignore_errors_in_generated_code = Some(*x);
