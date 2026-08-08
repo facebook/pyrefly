@@ -1731,7 +1731,7 @@ impl ConfigFile {
     /// Parse a pyproject.toml file. Returns a tuple of:
     /// - `Option<ConfigFile>`: the pyrefly config, if `[tool.pyrefly]` was present
     /// - `bool`: whether Python tool sections like `[tool.ruff]` were detected
-    fn parse_pyproject_toml(config_str: &str) -> anyhow::Result<(Option<ConfigFile>, bool)> {
+    pub fn parse_pyproject_toml(config_str: &str) -> anyhow::Result<(Option<ConfigFile>, bool)> {
         let pyproject = parse_toml_document::<PyProject>(config_str)?;
         let has_python_tools = pyproject.has_python_tools();
         Ok((pyproject.pyrefly(), has_python_tools))
