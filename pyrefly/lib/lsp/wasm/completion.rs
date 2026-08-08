@@ -1230,6 +1230,7 @@ impl Transaction<'_> {
                     let expression_only =
                         matches!(context, IdentifierContext::Expr(_)) && !at_statement_start;
                     Self::add_keyword_completions(handle, expression_only, &mut result);
+                    let local_completion_start = result.len();
                     let has_local_completions = self.add_local_variable_completions(
                         handle,
                         Some(&identifier),
@@ -1237,7 +1238,10 @@ impl Transaction<'_> {
                         expected_type.as_ref(),
                         &mut result,
                     );
-                    if auto_import && !has_local_completions {
+                    let has_prefix_local_completion = result[local_completion_start..]
+                        .iter()
+                        .any(|completion| completion.item.label.starts_with(identifier.as_str()));
+                    if auto_import && !has_prefix_local_completion {
                         self.add_autoimport_completions(
                             handle,
                             &identifier,

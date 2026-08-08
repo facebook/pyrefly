@@ -2674,6 +2674,40 @@ Completion Results:
 }
 
 #[test]
+fn autoimport_completion_not_blocked_by_fuzzy_local_symbol() {
+    let code = r#"
+def avg_kendall_tau(): ...
+
+kendalltau
+#         ^
+"#;
+    let files = [("main", code), ("scipy.stats", "def kendalltau(): ...\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    let autoimport = completions
+        .iter()
+        .find(|item| item.label == "kendalltau")
+        .expect("expected kendalltau auto-import completion");
+    assert!(
+        autoimport.additional_text_edits.is_some(),
+        "expected auto-import edit, got {autoimport:?}"
+    );
+    assert!(
+        autoimport
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("from scipy.stats import kendalltau")),
+        "expected scipy.stats import detail, got {:?}",
+        autoimport.detail
+    );
+}
+
+#[test]
 fn autoimport_common_alias_for_module() {
     let code = r#"
 T = spio
