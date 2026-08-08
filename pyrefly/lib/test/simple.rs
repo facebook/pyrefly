@@ -1235,6 +1235,31 @@ Y = Annotated[int] # E: `Annotated` needs at least one piece of metadata in addi
 );
 
 testcase!(
+    test_annotated_metadata_errors,
+    r#"
+from typing import Annotated
+
+class Metadata:
+    pass
+
+metadata = Metadata()
+
+def factory(x: int) -> int:
+    return x
+
+Alias = Annotated[int, missing_alias_metadata]  # E: Could not find name `missing_alias_metadata`
+
+def f(
+    x: Annotated[int, missing_name],  # E: Could not find name `missing_name`
+    y: Annotated[int, metadata.missing_attribute],  # E: Object of class `Metadata` has no attribute `missing_attribute`
+    z: Annotated[int, factory(bad_argument=True)],  # E: Missing argument `x` # E: Unexpected keyword argument `bad_argument`
+    w: Annotated[int, 1 + "x"],  # E: `+` is not supported between `Literal[1]` and `Literal['x']`
+) -> None:
+    pass
+    "#,
+);
+
+testcase!(
     test_annotated_dunder_doc,
     r#"
 from typing import Annotated, assert_type
