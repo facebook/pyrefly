@@ -886,6 +886,7 @@ impl<'a> BindingsBuilder<'a> {
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
         let mut negated_prev_subject: Option<(NarrowOp, TextRange)> = None;
+        let include_open_builtins = x.cases.len() > 1;
         for case in x.cases {
             let MatchCase {
                 pattern,
@@ -1056,6 +1057,7 @@ impl<'a> BindingsBuilder<'a> {
                         narrowing_subject,
                         narrow_ops_for_fall_through: (Box::new(op), range),
                         subject_range: match_subject.subject_range(x.subject.range()),
+                        include_open_builtins,
                         show_subject_expr: match_subject.is_synthetic(),
                     },
                 );
