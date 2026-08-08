@@ -1011,6 +1011,7 @@ struct ScopeClass {
     indices: ClassIndices,
     attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
     attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
+    nn_module_registrations: SmallMap<Name, Vec<Expr>>,
     has_protocol_base: bool,
 }
 
@@ -1021,6 +1022,7 @@ impl ScopeClass {
             indices,
             attributes_from_recognized_methods: SmallMap::new(),
             attributes_from_other_methods: SmallMap::new(),
+            nn_module_registrations: SmallMap::new(),
             has_protocol_base,
         }
     }
@@ -1029,10 +1031,19 @@ impl ScopeClass {
         &mut self,
         method_name: Name,
         attributes: SmallMap<Name, InstanceAttribute>,
+        nn_module_registrations: SmallMap<Name, Vec<Expr>>,
     ) {
         if is_attribute_defining_method(&method_name, &self.name.id) {
             self.attributes_from_recognized_methods
-                .insert(method_name, attributes);
+                .insert(method_name.clone(), attributes);
+            if method_name == dunder::INIT || method_name == dunder::POST_INIT {
+                for (name, values) in nn_module_registrations {
+                    self.nn_module_registrations
+                        .entry(name)
+                        .or_default()
+                        .extend(values);
+                }
+            }
         } else {
             self.attributes_from_other_methods
                 .insert(method_name, attributes);
@@ -1125,6 +1136,7 @@ struct ScopeMethod {
     name: Identifier,
     self_name: Option<Identifier>,
     instance_attributes: SmallMap<Name, InstanceAttribute>,
+    nn_module_registrations: SmallMap<Name, Vec<Expr>>,
     parameters: SmallMap<Name, ParameterUsage>,
     yields_and_returns: YieldsAndReturns,
     is_async: bool,
@@ -1196,6 +1208,7 @@ impl ScopeMethod {
             name,
             self_name: None,
             instance_attributes: SmallMap::new(),
+            nn_module_registrations: SmallMap::new(),
             parameters: SmallMap::new(),
             yields_and_returns: Default::default(),
             is_async,
@@ -2017,6 +2030,7 @@ impl Scopes {
                 Some(SelfAssignments {
                     method_name: method_scope.name.id,
                     instance_attributes: method_scope.instance_attributes,
+                    nn_module_registrations: method_scope.nn_module_registrations,
                 }),
                 Self::collect_unused_parameters(method_scope.parameters),
                 unused_variables,
@@ -2083,6 +2097,29 @@ impl Scopes {
             }
         }
         false
+    }
+
+    /// Record the value of `self.register_buffer(...)` or `self.register_parameter(...)`.
+    /// The enclosing class is checked for `torch.nn.Module` ancestry during solving.
+    pub fn record_nn_module_registration(&mut self, receiver: &Expr, name: Name, value: Expr) {
+        for scope in self.iter_rev_mut() {
+            match &mut scope.kind {
+                ScopeKind::Method(method_scope) => {
+                    if let Some(self_name) = &method_scope.self_name
+                        && matches!(receiver, Expr::Name(receiver_name) if receiver_name.id == self_name.id)
+                    {
+                        method_scope
+                            .nn_module_registrations
+                            .entry(name)
+                            .or_default()
+                            .push(value);
+                    }
+                    return;
+                }
+                ScopeKind::Function(_) => return,
+                _ => {}
+            }
+        }
     }
 
     pub fn method_that_sets_attr(&self, x: &ExprAttribute) -> Option<MethodThatSetsAttr> {
@@ -2798,6 +2835,7 @@ impl Scopes {
             class_scope.add_attributes_defined_by_method(
                 self_assignments.method_name,
                 self_assignments.instance_attributes,
+                self_assignments.nn_module_registrations,
             );
         }
     }
@@ -2891,10 +2929,13 @@ impl Scopes {
     /// - Panics if the current scope is not a class body.
     pub fn finish_class_and_get_field_definitions(
         &mut self,
-    ) -> SmallMap<Name, (ClassFieldDefinition, TextRange)> {
+    ) -> (
+        SmallMap<Name, (ClassFieldDefinition, TextRange)>,
+        SmallMap<Name, Vec<Expr>>,
+    ) {
         let mut field_definitions = SmallMap::new();
         let class_body = self.pop();
-        let class_scope = {
+        let mut class_scope = {
             if let ScopeKind::Class(class_scope) = class_body.kind {
                 class_scope
             } else {
@@ -2907,6 +2948,7 @@ impl Scopes {
         // are initialized in a recognized instance method (e.g. `__init__`) before building
         // field definitions — a Final field is legally uninitialized in the class body if it
         // appears in such a method.
+        let nn_module_registrations = mem::take(&mut class_scope.nn_module_registrations);
         let method_attrs: Vec<_> = class_scope.method_defined_attributes().collect();
         let recognized_instance_attrs: SmallSet<Name> = method_attrs
             .iter()
@@ -3035,7 +3077,7 @@ impl Scopes {
                 }
             },
         );
-        field_definitions
+        (field_definitions, nn_module_registrations)
     }
 
     /// Return a pair Some((method_name, class_key)) if we are currently in a method

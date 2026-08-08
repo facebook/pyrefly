@@ -26,15 +26,19 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
+use crate::alt::types::class_metadata::ClassSynthesizedField;
+use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::types::class::Class;
 use crate::types::class::ClassType;
 
 pub fn is_nn_module_dict(cls: &ClassType) -> bool {
@@ -48,6 +52,43 @@ pub fn is_nn_sequential(cls: &ClassType) -> bool {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Synthesize attributes created by `nn.Module.register_buffer` and
+    /// `nn.Module.register_parameter` calls in a constructor.
+    pub fn get_nn_module_synthesized_fields(
+        &self,
+        cls: &Class,
+        registrations: &SmallMap<Name, Vec<Expr>>,
+    ) -> Option<ClassSynthesizedFields> {
+        if registrations.is_empty()
+            || !self
+                .get_mro_for_class(cls)
+                .ancestors_no_object()
+                .iter()
+                .any(|base| {
+                    let base = base.class_object();
+                    base.has_toplevel_qname("torch.nn", "Module")
+                        || base.has_toplevel_qname("torch.nn.modules.module", "Module")
+                })
+        {
+            return None;
+        }
+
+        let errors = self.error_swallower();
+        let mut fields = SmallMap::with_capacity(registrations.len());
+        for (name, values) in registrations {
+            let mut types = values.iter().map(|value| self.expr_infer(value, &errors));
+            let first = types
+                .next()
+                .expect("registration map values are never empty");
+            let ty = types.fold(first, |left, right| self.union(left, right));
+            fields.insert(
+                name.clone(),
+                ClassSynthesizedField::new_instance_attribute(ty),
+            );
+        }
+        Some(ClassSynthesizedFields::new(fields))
+    }
+
     /// Chain input through each module in an `nn.Sequential`.
     ///
     /// When `Sequential[M1, M2, M3]` is called with input `x`, threads `x` through

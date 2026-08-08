@@ -486,6 +486,12 @@ impl ClassSynthesizedField {
             inner: Arc::new(ClassField::new_synthesized_classvar(ty)),
         }
     }
+
+    pub fn new_instance_attribute(ty: Type) -> Self {
+        Self {
+            inner: Arc::new(ClassField::new_synthesized_instance_attribute(ty)),
+        }
+    }
 }
 
 /// A class's synthesized fields, such as a dataclass's `__init__` method.
