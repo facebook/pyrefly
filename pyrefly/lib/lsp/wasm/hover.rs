@@ -719,6 +719,34 @@ fn keyword_argument_identifier(
         .then_some(identifier.identifier)
 }
 
+fn declared_function_hover_display(
+    ast: &ModModule,
+    module: &Module,
+    definition_range: TextRange,
+) -> Option<String> {
+    let function_def = Ast::locate_node(ast, definition_range.start())
+        .into_iter()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtFunctionDef(function_def)
+                if function_def.name.range() == definition_range =>
+            {
+                Some(function_def)
+            }
+            _ => None,
+        })?;
+    let signature_end = function_def
+        .returns
+        .as_ref()
+        .map(|returns| returns.range().end())
+        .unwrap_or_else(|| function_def.parameters.end());
+    let contents = module.contents();
+    let colon_offset =
+        contents[signature_end.to_usize()..function_def.range.end().to_usize()].find(':')?;
+    let colon = signature_end + TextSize::try_from(colon_offset + 1).ok()?;
+    let header = module.code_at(TextRange::new(function_def.range.start(), colon));
+    Some(format!("{header} ..."))
+}
+
 /// Check if the cursor position is on the `in` keyword within a for loop or comprehension.
 /// Returns Some(iterable_range) if found, None otherwise.
 fn in_keyword_in_iteration_at(ast: Option<&ModModule>, position: TextSize) -> Option<TextRange> {
@@ -803,7 +831,7 @@ fn resolve_hovered_type(
     handle: &Handle,
     ast: Option<&ModModule>,
     position: TextSize,
-) -> Option<Type> {
+) -> Option<(Type, bool)> {
     let mut type_ = transaction
         .subscript_operator_type_at(handle, position)
         .or_else(|| transaction.get_type_at_for_display(handle, position))
@@ -855,7 +883,7 @@ fn resolve_hovered_type(
             type_ = transaction.coerce_type_to_callable(handle, type_);
         }
     }
-    Some(type_)
+    Some((type_, callee_range_opt.is_none()))
 }
 
 /// Resolve parameter documentation for the symbol under the cursor: keyword-argument docs
@@ -932,7 +960,8 @@ pub fn get_hover_with_verbosity(
         return Some(result);
     }
 
-    let type_ = resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
+    let (type_, use_declared_function_display) =
+        resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
 
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
     // chain highlights the whole expression.
@@ -973,24 +1002,31 @@ pub fn get_hover_with_verbosity(
                     item.module.code_at(item.definition_range) == identifier.id.as_str()
                 })
         });
-    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
-        metadata,
-        definition_range: definition_location,
-        module,
-        docstring_range,
-        display_name,
-    }) = definition
-    {
-        let kind = metadata.symbol_kind();
-        let name = hover_name_from_definition_snippet(
-            module.code_at(definition_location),
-            display_name.as_deref(),
-            fallback_name_from_type,
-        );
-        (kind, name, docstring_range, Some(module))
-    } else {
-        (None, fallback_name_from_type, None, None)
-    };
+    let (kind, name, definition_range, docstring_range, module) =
+        if let Some(FindDefinitionItemWithDocstring {
+            metadata,
+            definition_range: definition_location,
+            module,
+            docstring_range,
+            display_name,
+        }) = definition
+        {
+            let kind = metadata.symbol_kind();
+            let name = hover_name_from_definition_snippet(
+                module.code_at(definition_location),
+                display_name.as_deref(),
+                fallback_name_from_type,
+            );
+            (
+                kind,
+                name,
+                Some(definition_location),
+                docstring_range,
+                Some(module),
+            )
+        } else {
+            (None, fallback_name_from_type, None, None, None)
+        };
 
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
@@ -1003,47 +1039,62 @@ pub fn get_hover_with_verbosity(
         && hover_identifier
             .as_ref()
             .is_some_and(|id| !matches!(id.context, IdentifierContext::ClassDef { .. }));
-    let (type_display, can_increase_verbosity) =
-        match transaction.ad_hoc_solve(handle, "hover_display", {
-            let mut cloned = type_.clone();
-            move |solver| {
-                let unions_expanded = options.verbosity_level > 0;
-                if let Some(owner) = &type_parameter_owner_class
-                    && let Some(display) = type_parameter_hover_display(&solver, &cloned, owner)
-                {
-                    // Type parameter displays (e.g. `T@Foo (covariant)`) never contain unions.
-                    return (display, false);
-                }
-                // Named unions can be surfaced by the class/kwargs transforms, so pick the
-                // type we're about to render first.
-                let display_type = if show_constructor
-                    && let Some(class_type) = class_display_type(&solver, &cloned)
-                {
-                    class_type
-                } else {
-                    cloned.transform_toplevel_callable(|c| {
-                        expand_callable_kwargs_for_hover(&solver, c)
-                    });
-                    cloned
-                };
-                let render = |expand| {
-                    display_type.as_lsp_string_with_fallback_name_and_expanded_unions(
-                        name_for_display.as_deref(),
-                        LspDisplayMode::Hover,
-                        expand,
-                    )
-                };
-                let rendered = render(unions_expanded);
-                // Offer "+" only when expanding actually changes the rendered type. Deriving
-                // this from the renderer itself (rather than a structural type walk) means the
-                // affordance can never advertise an expansion that produces identical output.
-                let can_increase_verbosity = !unions_expanded && rendered != render(true);
-                (rendered, can_increase_verbosity)
+    let declared_function_display = if use_declared_function_display {
+        match (&type_, module.as_ref(), definition_range) {
+            (Type::Function(_), Some(module), Some(definition_range)) => {
+                transaction.get_ast(handle).and_then(|ast| {
+                    declared_function_hover_display(ast.as_ref(), module, definition_range)
+                })
             }
-        }) {
-            Some((display, can_increase)) => (Some(display), can_increase),
-            None => (None, false),
-        };
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let solved_display = transaction.ad_hoc_solve(handle, "hover_display", {
+        let mut cloned = type_.clone();
+        move |solver| {
+            let unions_expanded = options.verbosity_level > 0;
+            if let Some(owner) = &type_parameter_owner_class
+                && let Some(display) = type_parameter_hover_display(&solver, &cloned, owner)
+            {
+                // Type parameter displays (e.g. `T@Foo (covariant)`) never contain unions.
+                return (display, false);
+            }
+            // Named unions can be surfaced by the class/kwargs transforms, so pick the
+            // type we're about to render first.
+            let display_type = if show_constructor
+                && let Some(class_type) = class_display_type(&solver, &cloned)
+            {
+                class_type
+            } else {
+                cloned
+                    .transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
+                cloned
+            };
+            let render = |expand| {
+                display_type.as_lsp_string_with_fallback_name_and_expanded_unions(
+                    name_for_display.as_deref(),
+                    LspDisplayMode::Hover,
+                    expand,
+                )
+            };
+            let rendered = render(unions_expanded);
+            // Offer "+" only when expanding actually changes the rendered type. Deriving
+            // this from the renderer itself (rather than a structural type walk) means the
+            // affordance can never advertise an expansion that produces identical output.
+            let can_increase_verbosity = !unions_expanded && rendered != render(true);
+            (rendered, can_increase_verbosity)
+        }
+    });
+    let (type_display, can_increase_verbosity) = match (declared_function_display, solved_display) {
+        (Some(display), Some((_, can_increase))) if options.verbosity_level == 0 => {
+            (Some(display), can_increase)
+        }
+        (_, Some((display, can_increase))) => (Some(display), can_increase),
+        (Some(display), None) => (Some(display), false),
+        (None, None) => (None, false),
+    };
 
     let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
         Some(Docstring(docstring, module))
