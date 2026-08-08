@@ -913,6 +913,22 @@ pub enum Type {
     None,
 }
 
+pub const REGEX_GROUPS_METADATA_TAG: &str = "__pyrefly_regex_groups__";
+
+/// Return the encoded group entries from Pyrefly's synthetic regex metadata.
+pub fn regex_metadata_groups(metadata: &[Type]) -> Option<&[Type]> {
+    metadata.iter().find_map(|ty| {
+        let Type::Tuple(Tuple::Concrete(items)) = ty else {
+            return None;
+        };
+        let [Type::Literal(tag), Type::Tuple(Tuple::Concrete(groups))] = items.as_slice() else {
+            return None;
+        };
+        matches!(&tag.value, Lit::Str(tag) if tag.as_str() == REGEX_GROUPS_METADATA_TAG)
+            .then_some(groups.as_slice())
+    })
+}
+
 impl Visit for Type {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Self)) {
         match self {
