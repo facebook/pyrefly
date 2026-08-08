@@ -32,7 +32,7 @@ harness = false
 anstream = "0.6.11"
 anyhow = "1.0.104"
 arc-swap = { version = "1.9.2", features = ["weak"] }
-blake3 = { version = "=1.8.4", features = ["mmap", "rayon", "traits-preview"] }
+blake3 = { version = "=1.8.5", features = ["mmap", "rayon", "traits-preview"] }
 capnp = "0.25.6"
 clap = { version = "4.6.2", features = ["cargo", "derive", "env", "string", "unicode", "wrap_help"] }
 crossbeam-channel = "0.5.16"
