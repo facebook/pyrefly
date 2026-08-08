@@ -2617,6 +2617,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 is_async,
                 is_generator,
                 has_explicit_return,
+                has_infinite_loop,
             } => {
                 let annotation = self.get_idx(*annotation).annotation.get_type().clone();
                 let implicit_return = self.get_idx(*implicit_return);
@@ -2626,6 +2627,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     *is_async,
                     *is_generator,
                     *has_explicit_return,
+                    *has_infinite_loop,
                     range,
                     errors,
                 );
@@ -5645,9 +5647,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         is_async: bool,
         is_generator: bool,
         has_explicit_returns: bool,
+        has_infinite_loop: bool,
         range: TextRange,
         errors: &ErrorCollector,
     ) {
+        if has_infinite_loop
+            && !has_explicit_returns
+            && !is_generator
+            && !annotation.is_never()
+            && !annotation.is_none()
+            && implicit_return.ty().is_never()
+        {
+            self.error(
+                errors,
+                range,
+                ErrorKind::InfiniteLoop,
+                format!(
+                    "Function declared to return `{}` but can never return",
+                    self.for_display(annotation.clone())
+                ),
+            );
+        }
         if is_async && is_generator {
             let hints = self.decompose_hint(HintRef::soft(annotation), |hint| {
                 self.decompose_async_generator(hint)

@@ -225,6 +225,8 @@ pub enum ErrorKind {
     /// An inconsistency between a function parameter's type in an overload signature and its
     /// default value in the implementation.
     InconsistentOverloadDefault,
+    /// A function declares a non-None, non-Never return type but can only loop forever.
+    InfiniteLoop,
     /// Internal Pyrefly error.
     InternalError,
     /// An `@abstractmethod` is defined in a class that is not abstract.
@@ -558,6 +560,7 @@ impl ErrorKind {
             ErrorKind::ImplicitReexport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::IncompatibleComparison => Severity::Ignore,
+            ErrorKind::InfiniteLoop => Severity::Warn,
             ErrorKind::InvalidAbstractMethod => Severity::Ignore,
             ErrorKind::InvalidCast => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
