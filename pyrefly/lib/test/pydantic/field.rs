@@ -136,6 +136,25 @@ Model(x=5)
 );
 
 pydantic_testcase!(
+    test_field_range_decimal,
+    r#"
+from decimal import Decimal
+from typing import Annotated
+from pydantic import BaseModel, Field
+
+class DecimalField(BaseModel):
+    a: Decimal = Field(ge=0)
+    b: Decimal = Field(gt=0)
+    c: Decimal = Field(le=100)
+    d: Decimal = Field(lt=100)
+    e: Decimal | None = Field(default=None, ge=0)
+    f: Decimal = Field(ge="0")  # E: Pydantic `ge` value has type `Literal['0']`, which is not assignable to field type `Decimal`
+    g: Annotated[Decimal, Field(ge=0)]
+    h: Annotated[Decimal, Field(ge="0")]  # E: Pydantic `ge` value has type `Literal['0']`, which is not assignable to field type `Decimal`
+"#,
+);
+
+pydantic_testcase!(
     test_field_optional,
     r#"
 from pydantic import BaseModel, Field
