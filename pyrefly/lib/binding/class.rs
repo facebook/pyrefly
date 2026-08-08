@@ -385,16 +385,8 @@ impl<'a> BindingsBuilder<'a> {
         let mut keywords = Vec::new();
         if let Some(args) = &mut x.arguments {
             args.keywords.iter_mut().for_each(|keyword| {
-                if let Some(name) = &keyword.arg {
-                    self.ensure_expr(&mut keyword.value, class_object.usage());
-                    keywords.push((name.clone(), keyword.value.clone()));
-                } else {
-                    self.error(
-                        keyword.range(),
-                        ErrorKind::InvalidInheritance,
-                        "Unpacking is not supported in class header".to_owned(),
-                    )
-                }
+                self.ensure_expr(&mut keyword.value, class_object.usage());
+                keywords.push(keyword.clone());
             });
         }
         let bases: Arc<[BaseClass]> = Arc::from(bases.into_boxed_slice());
@@ -1156,7 +1148,7 @@ impl<'a> BindingsBuilder<'a> {
         class_indices: ClassIndices,
         parent: &NestingContext,
         base: Option<Expr>,
-        keywords: Box<[(Identifier, Expr)]>,
+        keywords: Box<[Keyword]>,
         // name, position, annotation, value
         member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         illegal_identifier_handling: IllegalIdentifierHandling,
@@ -1605,11 +1597,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => None,
             };
             if recognized_kw.is_some() {
-                let kw_name = kw
-                    .arg
-                    .clone()
-                    .expect("recognized TypedDict keyword must have a name");
-                base_class_keywords.push((kw_name, kw.value.clone()));
+                base_class_keywords.push(kw.clone());
             } else {
                 let msg = if let Some(name) = &kw.arg {
                     format!("Unrecognized keyword argument `{name}`")
