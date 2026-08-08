@@ -20,6 +20,7 @@ pub(crate) mod inline_parameter;
 pub(crate) mod inline_variable;
 pub(crate) mod introduce_parameter;
 pub(crate) mod invert_boolean;
+pub(crate) mod method_object;
 pub(crate) mod move_members;
 pub(crate) mod move_module;
 pub(crate) mod pyrefly_ignore;
