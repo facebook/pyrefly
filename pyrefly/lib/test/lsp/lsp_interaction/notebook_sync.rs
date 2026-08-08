@@ -113,6 +113,7 @@ fn test_notebook_did_open() {
         .expect_response(json!({"items": [], "kind": "full"}))
         .unwrap();
     // Cell 3 has an error
+    let notebook_uri = Url::from_file_path(root.path().join("notebook.ipynb")).unwrap();
     interaction
         .diagnostic_for_cell("notebook.ipynb", "cell3")
         .expect_response(json!({
@@ -126,6 +127,16 @@ fn test_notebook_did_open() {
                     "start": {"line": 1, "character": 4},
                     "end": {"line": 1, "character": 5}
                 },
+                "relatedInformation": [{
+                    "location": {
+                        "range": {
+                            "end": {"character": 6, "line": 0},
+                            "start": {"character": 3, "line": 0}
+                        },
+                        "uri": notebook_uri.as_str()
+                    },
+                    "message": "declared type"
+                }],
                 "severity": 1,
                 "source": "Pyrefly"
             }],
