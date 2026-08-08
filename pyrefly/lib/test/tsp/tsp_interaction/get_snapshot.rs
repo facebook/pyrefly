@@ -115,8 +115,8 @@ y = "hello"
     tsp.server
         .did_change_watched_files("changing_test.py", "changed");
 
-    // Wait for the async RecheckFinished event to be processed
-    tsp.client.expect_any_message();
+    // Wait for the async recheck to publish the snapshot change notification.
+    tsp.client.expect_notification("typeServer/snapshotChanged");
 
     // Get snapshot after async recheck completes
     tsp.server.get_snapshot();
