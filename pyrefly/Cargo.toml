@@ -91,9 +91,11 @@ pyrefly_lsp_test = { path = "../crates/pyrefly_lsp_test" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 backtrace-on-stack-overflow = { version = "0.3", optional = true }
+
+[target.'cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))'.dependencies]
 tikv-jemallocator = "0.6.0"
 
-[target.'cfg(target_os = "windows")'.dependencies]
+[target.'cfg(any(target_os = "windows", target_env = "musl"))'.dependencies]
 mimalloc = { version = "0.1.46", default-features = false }
 
 [features]
