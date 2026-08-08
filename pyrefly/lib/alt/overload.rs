@@ -11,6 +11,7 @@ use itertools::Either;
 use itertools::Itertools;
 use pyrefly_types::callable::ArgCount;
 use pyrefly_types::callable::ArgCounts;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamOverlay;
 use pyrefly_types::display::TypeDisplayContext;
@@ -44,6 +45,7 @@ use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::error::ErrorQuickFix;
 use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::Params;
@@ -456,6 +458,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors.error_builder(arguments_range, ErrorKind::Deprecated, header);
                 if let Some(detail) = detail {
                     error_builder = error_builder.with_detail(detail);
+                }
+                if let FunctionKind::Def(id) = &closest_overload.func.1.metadata.kind
+                    && id.module.name().as_str() == "contextlib"
+                {
+                    let replacement = match id.name.as_str() {
+                        "contextmanager" => Some(("Iterator", "Generator")),
+                        "asynccontextmanager" => Some(("AsyncIterator", "AsyncGenerator")),
+                        _ => None,
+                    };
+                    if let Some((from, to)) = replacement {
+                        error_builder = error_builder.with_quick_fix(
+                            ErrorQuickFix::ReplaceDeprecatedContextManagerReturn {
+                                from: from.to_owned(),
+                                to: to.to_owned(),
+                            },
+                        );
+                    }
                 }
                 error_builder.with_context(context).emit();
             }

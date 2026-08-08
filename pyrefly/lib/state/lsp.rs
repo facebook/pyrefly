@@ -3133,6 +3133,29 @@ impl<'a> Transaction<'a> {
                 }
             }
             if error_range.contains_range(range)
+                && let Some((title, module, edit_range, replacement, needs_import)) =
+                    quick_fixes::deprecated_contextmanager::replace_return_code_action(
+                        &module_info,
+                        &ast,
+                        &error,
+                    )
+            {
+                let mut edits = vec![(module, edit_range, replacement.clone())];
+                if needs_import
+                    && let Some(import_edit) = self.typing_import_edit(
+                        handle,
+                        &module_info,
+                        &ast,
+                        &replacement,
+                        import_format,
+                        custom_thread_pool,
+                    )
+                {
+                    edits.push(import_edit);
+                }
+                multi_actions.push((title, edits));
+            }
+            if error_range.contains_range(range)
                 && let Some(action) = quick_fixes::pyrefly_ignore::add_pyrefly_ignore_code_action(
                     &module_info,
                     &error,
@@ -3256,10 +3279,11 @@ impl<'a> Transaction<'a> {
                         let mut edits = vec![(module, decorator_range, insert_text)];
                         // Import `typing.override` if necessary.
                         if !quick_fixes::add_override::override_in_scope(ast.as_ref())
-                            && let Some(import_edit) = self.override_import_edit(
+                            && let Some(import_edit) = self.typing_import_edit(
                                 handle,
                                 &module_info,
                                 &ast,
+                                "override",
                                 import_format,
                                 custom_thread_pool,
                             )
@@ -3311,19 +3335,19 @@ impl<'a> Transaction<'a> {
         (!actions.is_empty()).then_some(actions)
     }
 
-    /// Builds an edit inserting `from typing import override` (preferring `typing`
-    /// over `typing_extensions`) at the top of the file. Returns `None` when no
-    /// module in scope exports `override`.
-    fn override_import_edit(
+    /// Builds an edit importing `export_name`, preferring `typing` when it exports
+    /// the name. Returns `None` when the name cannot be found.
+    fn typing_import_edit(
         &self,
         handle: &Handle,
         module_info: &Module,
         ast: &ModModule,
+        export_name: &str,
         import_format: ImportFormat,
         custom_thread_pool: Option<&ThreadPool>,
     ) -> Option<(Module, TextRange, String)> {
         let handle_to_import_from = self
-            .search_exports_exact("override", custom_thread_pool)
+            .search_exports_exact(export_name, custom_thread_pool)
             .unwrap_or_default()
             .into_iter()
             .map(|(handle_to_import_from, _, _)| handle_to_import_from)
@@ -3333,7 +3357,7 @@ impl<'a> Transaction<'a> {
             self.config_finder(),
             handle.dupe(),
             handle_to_import_from,
-            "override",
+            export_name,
             import_format,
         );
         Some((module_info.dupe(), edit.range, edit.insert_text))

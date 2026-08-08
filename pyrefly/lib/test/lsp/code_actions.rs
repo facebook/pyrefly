@@ -1032,6 +1032,84 @@ takes_status("active")
 }
 
 #[test]
+fn quickfix_deprecated_contextmanager_return() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from contextlib import contextmanager
+from typing import Iterator
+
+@contextmanager
+# ^
+def managed() -> Iterator[int]:
+    yield 1
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Replace `Iterator` with `Generator`"),
+        "{report}"
+    );
+    assert!(report.contains("from typing import Generator"), "{report}");
+    assert!(
+        report.contains("def managed() -> Generator[int]:"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_qualified_and_async_returns() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            (
+                "sync",
+                r#"import typing
+from contextlib import contextmanager
+
+@contextmanager
+# ^
+def managed() -> typing.Iterator[int]:
+    yield 1
+"#,
+            ),
+            (
+                "async",
+                r#"from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+@asynccontextmanager
+# ^
+async def managed() -> AsyncIterator[int]:
+    yield 1
+"#,
+            ),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("def managed() -> typing.Generator[int]:"),
+        "{report}"
+    );
+    assert!(
+        !report.contains("from typing import Generator\n"),
+        "{report}"
+    );
+    assert!(
+        report.contains("# Title: Replace `AsyncIterator` with `AsyncGenerator`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("from typing import AsyncGenerator"),
+        "{report}"
+    );
+    assert!(
+        report.contains("async def managed() -> AsyncGenerator[int]:"),
+        "{report}"
+    );
+}
+
+#[test]
 fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
