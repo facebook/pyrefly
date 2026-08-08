@@ -31,6 +31,7 @@ use pyrefly_types::dimension::is_gradual_size;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::quantified::substitute_tparam_defaults;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tuple::Tuple;
@@ -2924,28 +2925,19 @@ impl Solver {
                 if let Some(default) = param.default() {
                     // Note that TypeVars are stored in Type::TypeVar form, and have not yet been
                     // converted to Quantified form, so we do that now.
-                    // TODO: deal with code duplication in get_tparam_default
-                    let mut t = default.clone();
-                    t.transform_mut(&mut |t| {
-                        let name = match t {
-                            Type::TypeVar(t) => Some(t.qname().id()),
-                            Type::TypeVarTuple(t) => Some(t.qname().id()),
-                            Type::ParamSpec(p) => Some(p.qname().id()),
-                            Type::Quantified(q) => Some(q.name()),
-                            _ => None,
-                        };
-                        if let Some(name) = name {
-                            *t = if let Some(i) = seen_params.get(name) {
+                    let t = substitute_tparam_defaults(
+                        default.clone(),
+                        &|name| {
+                            seen_params.get(name).map(|i| {
                                 let new_targ: &Option<Type> = &new_targs[*i];
                                 new_targ
                                     .as_ref()
                                     .unwrap_or_else(|| &targs.as_slice()[*i])
                                     .clone()
-                            } else {
-                                param.as_gradual_type()
-                            }
-                        }
-                    });
+                            })
+                        },
+                        param.as_gradual_type(),
+                    );
                     Some(t)
                 } else if self.infer_with_first_use {
                     let v = Var::new(uniques);

@@ -443,3 +443,30 @@ impl Quantified {
         Self::as_gradual_type_helper(self.kind(), self.default())
     }
 }
+
+/// Substitute references to earlier type parameters inside a tparam default.
+///
+/// The `default` is a tparam's default type, whose leaves may reference earlier
+/// tparams (matched here as `TypeVar`/`TypeVarTuple`/`ParamSpec`/`Quantified`).
+/// `lookup` resolves an earlier tparam's name to its already-computed targ;
+/// when a name is out of scope (no entry), `fallback` is used. Both are passed
+/// by the caller because the two call paths (call/specialization vs class-level
+/// finalization) intentionally differ in lookup source and fallback value.
+pub fn substitute_tparam_defaults(
+    default: Type,
+    lookup: &dyn Fn(&Name) -> Option<Type>,
+    fallback: Type,
+) -> Type {
+    default.transform(&mut |default| {
+        let name = match default {
+            Type::TypeVar(t) => Some(t.qname().id()),
+            Type::TypeVarTuple(t) => Some(t.qname().id()),
+            Type::ParamSpec(p) => Some(p.qname().id()),
+            Type::Quantified(q) => Some(q.name()),
+            _ => None,
+        };
+        if let Some(name) = name {
+            *default = lookup(name).unwrap_or_else(|| fallback.clone());
+        }
+    })
+}
