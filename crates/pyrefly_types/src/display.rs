@@ -24,7 +24,11 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
+use crate::callable::Callable;
+use crate::callable::Param;
 use crate::callable::ParamOverlay;
+use crate::callable::Params;
+use crate::callable::Required;
 use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
 use crate::data_frame::SchemaCompleteness;
@@ -61,6 +65,15 @@ use crate::types::NeverStyle;
 use crate::types::SuperObj;
 use crate::types::TArgs;
 use crate::types::Type;
+
+enum HoverParamRow {
+    Marker(&'static str),
+    Param {
+        name: Option<String>,
+        ty: String,
+        default: Option<String>,
+    },
+}
 
 /// Scope guard that truncates the forall type-parameter tracking stack on drop,
 /// ensuring cleanup even on early return or panic.
@@ -611,7 +624,7 @@ impl<'a> TypeDisplayContext<'a> {
         &self,
         output: &mut impl TypeOutput,
         func_name: &Name,
-        kind: &crate::function::FunctionKind,
+        kind: &FunctionKind,
     ) -> fmt::Result {
         if self.always_display_module_name {
             let module = kind.module_name();
@@ -646,6 +659,177 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    fn fmt_callable_hover(
+        &self,
+        callable: &Callable,
+        output: &mut impl TypeOutput,
+        indent: usize,
+    ) -> fmt::Result {
+        match &callable.params {
+            Params::List(params)
+                if params.len() > 1
+                    && params.items().iter().all(|param| {
+                        !self
+                            .display_internal(param.as_type())
+                            .to_string()
+                            .contains('\n')
+                    }) =>
+            {
+                let param_indent = indent + 4;
+                output.write_str("(\n")?;
+                output.write_str(&" ".repeat(param_indent))?;
+                self.fmt_params_hover(params.items(), output, param_indent)?;
+                output.write_str("\n")?;
+                output.write_str(&" ".repeat(indent))?;
+                output.write_str(") -> ")?;
+                self.fmt_hover_type(&callable.ret, false, output, indent)
+            }
+            _ => callable.fmt_with_type_with_newlines(
+                output,
+                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                indent,
+            ),
+        }
+    }
+
+    fn fmt_params_hover(
+        &self,
+        params: &[Param],
+        output: &mut impl TypeOutput,
+        indent: usize,
+    ) -> fmt::Result {
+        let mut rows = Vec::new();
+        let mut named_posonly = false;
+        let mut kwonly = false;
+        for param in params {
+            if matches!(param, Param::PosOnly(Some(_), _, _)) {
+                named_posonly = true;
+            } else if named_posonly {
+                named_posonly = false;
+                rows.push(HoverParamRow::Marker("/"));
+            }
+
+            if !kwonly && matches!(param, Param::KwOnly(..)) {
+                kwonly = true;
+                rows.push(HoverParamRow::Marker("*"));
+            }
+
+            rows.push(self.param_hover_row(param));
+        }
+        if named_posonly {
+            rows.push(HoverParamRow::Marker("/"));
+        }
+
+        let align = rows.iter().any(|row| {
+            matches!(
+                row,
+                HoverParamRow::Param {
+                    default: Some(_),
+                    ..
+                }
+            )
+        });
+        let name_width = if align {
+            rows.iter()
+                .filter_map(|row| match row {
+                    HoverParamRow::Param {
+                        name: Some(name), ..
+                    } => Some(name.len()),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or_default()
+        } else {
+            0
+        };
+        let default_type_width = if align {
+            rows.iter()
+                .filter_map(|row| match row {
+                    HoverParamRow::Param {
+                        ty,
+                        default: Some(_),
+                        ..
+                    } => Some(ty.len()),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or_default()
+        } else {
+            0
+        };
+
+        for (i, row) in rows.iter().enumerate() {
+            if i > 0 {
+                output.write_str(",\n")?;
+                output.write_str(&" ".repeat(indent))?;
+            }
+            match row {
+                HoverParamRow::Marker(marker) => output.write_str(marker)?,
+                HoverParamRow::Param { name, ty, default } => {
+                    if let Some(name) = name {
+                        output.write_str(name)?;
+                        if align {
+                            for _ in 0..name_width - name.len() {
+                                output.write_str(" ")?;
+                            }
+                        }
+                        output.write_str(": ")?;
+                    }
+                    output.write_str(ty)?;
+                    if let Some(default) = default {
+                        if align {
+                            for _ in 0..default_type_width - ty.len() {
+                                output.write_str(" ")?;
+                            }
+                        }
+                        output.write_str(" = ")?;
+                        output.write_str(default)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn param_hover_row(&self, param: &Param) -> HoverParamRow {
+        let ty = self.display_internal(param.as_type()).to_string();
+        let named = |name: String, default| HoverParamRow::Param {
+            name: Some(name),
+            ty: ty.clone(),
+            default,
+        };
+        match param {
+            Param::PosOnly(None, _, Required::Required) => HoverParamRow::Param {
+                name: None,
+                ty,
+                default: None,
+            },
+            Param::PosOnly(None, _, Required::Optional(default)) => {
+                named("_".to_owned(), Some(param.fmt_default(default)))
+            }
+            Param::PosOnly(Some(name), _, Required::Required)
+            | Param::Pos(name, _, Required::Required)
+            | Param::KwOnly(name, _, Required::Required) => named(name.to_string(), None),
+            Param::PosOnly(Some(name), _, Required::Optional(default))
+            | Param::Pos(name, _, Required::Optional(default))
+            | Param::KwOnly(name, _, Required::Optional(default)) => {
+                named(name.to_string(), Some(param.fmt_default(default)))
+            }
+            Param::Varargs(Some(name), _) => named(format!("*{name}"), None),
+            Param::Varargs(None, _) => HoverParamRow::Param {
+                name: None,
+                ty: format!("*{ty}"),
+                default: None,
+            },
+            Param::Kwargs(Some(name), _) => named(format!("**{name}"), None),
+            Param::Kwargs(None, _) => HoverParamRow::Param {
+                name: None,
+                ty: format!("**{ty}"),
+                default: None,
+            },
+        }
+    }
+
     /// Format the value type of an anonymous typed dict by computing the union
     /// of all field types on-the-fly. This avoids storing a redundant clone in the
     /// type tree (which caused exponential memory growth for nested dict literals).
@@ -672,11 +856,7 @@ impl<'a> TypeDisplayContext<'a> {
             return self.fmt_helper_generic(t, is_toplevel, output);
         }
         match t {
-            Type::Callable(c) => c.fmt_with_type_with_newlines(
-                output,
-                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                indent,
-            ),
+            Type::Callable(c) => self.fmt_callable_hover(c, output, indent),
             Type::Forall(forall) => {
                 let Forall { tparams, body } = &**forall;
                 let Forallable::Callable(c) = body else {
@@ -689,11 +869,7 @@ impl<'a> TypeDisplayContext<'a> {
                     commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
                 )?;
                 output.write_str("]")?;
-                c.fmt_with_type_with_newlines(
-                    output,
-                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                    indent,
-                )
+                self.fmt_callable_hover(c, output, indent)
             }
             _ => self.fmt_helper_generic(t, is_toplevel, output),
         }
@@ -877,11 +1053,7 @@ impl<'a> TypeDisplayContext<'a> {
                 // Hover output should be readable even when callables appear inside unions
                 // (e.g. constructor display that unions __new__ and __init__).
                 if self.lsp_display_mode == LspDisplayMode::Hover {
-                    c.fmt_with_type_with_newlines(
-                        output,
-                        &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                        0,
-                    )
+                    self.fmt_callable_hover(c, output, 0)
                 } else {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
@@ -944,11 +1116,7 @@ impl<'a> TypeDisplayContext<'a> {
                         self.write_func_fqn(output, &func_name, &metadata.kind)?;
                         match self.lsp_display_mode {
                             LspDisplayMode::Hover => {
-                                signature.fmt_with_type_with_newlines(
-                                    output,
-                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                                    0,
-                                )?;
+                                self.fmt_callable_hover(signature, output, 0)?;
                             }
                             _ => {
                                 signature.fmt_with_type(output, &|t, o| {
@@ -1057,13 +1225,7 @@ impl<'a> TypeDisplayContext<'a> {
                                 };
                                 match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
-                                        effective_sig.fmt_with_type_with_newlines(
-                                            output,
-                                            &|t, o, indent| {
-                                                self.fmt_hover_type(t, false, o, indent)
-                                            },
-                                            0,
-                                        )?;
+                                        self.fmt_callable_hover(&effective_sig, output, 0)?;
                                     }
                                     _ => {
                                         effective_sig.fmt_with_type(output, &|t, o| {
@@ -1107,14 +1269,9 @@ impl<'a> TypeDisplayContext<'a> {
                                 };
                                 let _scope = self.push_forall_scope(tparams.iter());
                                 let result = match self.lsp_display_mode {
-                                    LspDisplayMode::Hover => effective_sig
-                                        .fmt_with_type_with_newlines(
-                                            output,
-                                            &|t, o, indent| {
-                                                self.fmt_hover_type(t, false, o, indent)
-                                            },
-                                            0,
-                                        ),
+                                    LspDisplayMode::Hover => {
+                                        self.fmt_callable_hover(&effective_sig, output, 0)
+                                    }
                                     _ => effective_sig.fmt_with_type(output, &|t, o| {
                                         self.fmt_helper_generic(t, false, o)
                                     }),
@@ -1288,11 +1445,7 @@ impl<'a> TypeDisplayContext<'a> {
                                 commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
                             )?;
                             output.write_str("]")?;
-                            c.fmt_with_type_with_newlines(
-                                output,
-                                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                                0,
-                            )
+                            self.fmt_callable_hover(c, output, 0)
                         } else {
                             output.write_str("[")?;
                             write!(
@@ -1327,11 +1480,9 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                             let _scope = self.push_forall_scope(tparams.iter());
                             match self.lsp_display_mode {
-                                LspDisplayMode::Hover => signature.fmt_with_type_with_newlines(
-                                    output,
-                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                                    0,
-                                ),
+                                LspDisplayMode::Hover => {
+                                    self.fmt_callable_hover(signature, output, 0)
+                                }
                                 _ => signature.fmt_with_type(output, &|t, o| {
                                     self.fmt_helper_generic(t, false, o)
                                 }),
