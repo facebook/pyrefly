@@ -40,8 +40,19 @@ static PYTHON_INTERPRETER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// to be found at either `.venv/bin/python(\d(\.\d)?)?` or `.venv/python(\d(\.\d)?)?`.
 ///
 /// Note: we do not follow links. For `venv`s, the symlink path contains important
-/// information the Python interpreter needs to proplrly execute.
+/// information the Python interpreter needs to properly execute.
 pub fn walk_interpreter(start: &Path, depth: usize) -> impl Iterator<Item = PathBuf> {
+    walk_interpreter_pruned(start, depth, |_| true)
+}
+
+/// Like [`walk_interpreter`], but skips descending into any directory for which
+/// `should_descend` returns `false`, pruning that subtree; use this to avoid
+/// walking source trees that *cannot* hold an interpreter.
+pub fn walk_interpreter_pruned(
+    start: &Path,
+    depth: usize,
+    should_descend: impl Fn(&walkdir::DirEntry) -> bool,
+) -> impl Iterator<Item = PathBuf> {
     let walker = WalkDir::new(start)
         .min_depth(1)
         .max_depth(depth)
@@ -60,7 +71,10 @@ pub fn walk_interpreter(start: &Path, depth: usize) -> impl Iterator<Item = Path
         Some(entry.path().to_path_buf())
     }
 
-    walker.into_iter().filter_map(filter_map)
+    walker
+        .into_iter()
+        .filter_entry(move |e| !e.file_type().is_dir() || should_descend(e))
+        .filter_map(filter_map)
 }
 
 #[cfg(test)]
