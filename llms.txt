@@ -4,6 +4,7 @@
 
 - [attrs Support](attrs): Pyrefly support for the attrs library.
 - [Infer](autotype): Automatically add type annotations to your code with the Pyrefly infer feature.
+- [Bazel Integration](bazel): Run Pyrefly type checking over Bazel Python targets with rules_pyrefly
 - [Configuration](configuration): Configure Pyrefly settings and options
 - [DataFrames](dataframes): Pyrefly support for Polars and pandas DataFrames, including column and dtype inference.
 - [Django Support](django): Pyrefly support for Django ORM.
