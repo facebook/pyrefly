@@ -24,11 +24,11 @@ $ mkdir $TMPDIR/globbing && touch $TMPDIR/globbing/pyrefly.toml && \
 [1]
 ```
 
-## --search-path takes precedence over default typeshed
+## --typeshed-path takes precedence over default typeshed
 
 ```scrut
 $ touch $TYPESHED_ROOT/pyrefly.toml && \
-> PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib --output-format=min-text --use-ignore-files=false --permissive-ignores=true 2>&1 | grep -v "overrides"
+> $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --typeshed-path $TYPESHED_ROOT/typeshed --output-format=min-text --use-ignore-files=false --permissive-ignores=true 2>&1 | grep -v "overrides"
  INFO * errors* (glob)
 [0]
 ```

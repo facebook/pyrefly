@@ -27,6 +27,47 @@ C(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type
 );
 
 testcase!(
+    test_transform_parameters,
+    r#"
+from typing import Callable, dataclass_transform
+
+def field() -> object: ...
+
+@dataclass_transform(
+    eq_default=True,
+    order_default=False,
+    kw_only_default=False,
+    frozen_default=False,
+    field_specifiers=(field,),
+)
+def valid[T](cls: type[T]) -> type[T]: ...
+
+@dataclass_transform(unknown=True)  # E: Unexpected keyword argument `unknown`
+def invalid[T](cls: type[T]) -> type[T]: ...
+
+@dataclass_transform()
+def experimental(*, custom: bool = False) -> Callable[[type[object]], type[object]]: ...
+
+@experimental(custom=True)
+class C: ...
+    "#,
+);
+
+testcase!(
+    test_transform_unrecognized_parameter_typing_extensions,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+from typing import TypeVar
+from typing_extensions import dataclass_transform
+
+T = TypeVar("T")
+
+@dataclass_transform(unknown=True)  # E: Unexpected keyword argument `unknown`
+def invalid(cls: type[T]) -> type[T]: ...
+    "#,
+);
+
+testcase!(
     test_field_named_like_builtin,
     {
         let mut env = TestEnv::new();

@@ -113,7 +113,7 @@ testcase!(
 class M0(type): pass
 class M1(type): pass
 class B(metaclass=M0): pass
-class A(B, metaclass=M1):  # E:  Class `A` has metaclass `M1` which is not a subclass of metaclass `M0` from base class `B`
+class A(B, metaclass=M1):  # E:  Class `A` has metaclass `M1` which is not compatible with metaclass `M0` from base class `B`
     pass
 "#,
 );
@@ -125,7 +125,7 @@ class M0(type): pass
 class M1(type): pass
 class B0(metaclass=M0): pass
 class B1(metaclass=M1): pass
-class A(B0, B1):  # E:  Class `A` has metaclass `M0` which is not a subclass of metaclass `M1` from base class `B1`
+class A(B0, B1):  # E:  Class `A` has metaclass `M0` from base class `B0` which is not compatible with metaclass `M1` from base class `B1`
     pass
 "#,
 );
@@ -155,10 +155,77 @@ f(C2[int])
 );
 
 testcase!(
+    test_recursive_base_used_as_metaclass,
+    r#"
+class C(C):  # E: Class `C` inheriting from `C` creates a cycle
+    pass
+
+class D(C, _):  # E: Class `D` inheriting from `C` creates a cycle  # E: Could not find name `_`
+    pass
+
+class E(metaclass=D):
+    pass
+"#,
+);
+
+testcase!(
     test_illegal_unpacking,
     r#"
 def f() -> dict: ...
 class A(**f):  # E: Unpacking is not supported in class header
     pass
+    "#,
+);
+
+testcase!(
+    test_metaclasses_ok_any_order,
+    r#"
+from typing import assert_type
+
+class Meta1(type): ...
+class Meta2(Meta1):
+    x: int = 0
+
+class A1(metaclass=Meta1): ...
+class A2(A1, metaclass=Meta2): ...
+
+class B1(metaclass=Meta2): ...
+# B2's metaclass has to be a (non-strict) subclass of Meta1 and Meta2. The only legal metaclass is
+# Meta2, which is what the runtime chooses (despite the explicit metaclass=Meta1 declaration).
+class B2(B1, metaclass=Meta1): ...
+
+assert_type(A2.__class__.x, int)
+assert_type(B2.__class__.x, int)
+    "#,
+);
+
+testcase!(
+    test_metaclass_conflict_preserves_running_winner,
+    r#"
+from typing import assert_type
+
+class MA(type):
+    x: int
+class MB(type): ...
+class MC(MA, MB): ...
+
+class A(metaclass=MA): ...
+class B(metaclass=MB): ...
+class C(metaclass=MC): ...
+
+class X(A, B, C): ...  # E: not compatible with metaclass
+class Y(A, C, B): ...
+
+assert_type(X.x, int)
+assert_type(Y.x, int)
+    "#,
+);
+
+testcase!(
+    test_redundant_type_metaclass_is_ok,
+    r#"
+from typing import Any
+class A(metaclass=type): ...
+class B(metaclass=type[Any]): ...
     "#,
 );

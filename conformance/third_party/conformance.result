@@ -15,9 +15,7 @@
   "annotations_generators.py": [],
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
-  "callables_annotation.py": [
-    "Line 159: Expected 1 errors"
-  ],
+  "callables_annotation.py": [],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
   "callables_subtyping.py": [],
@@ -27,10 +25,7 @@
   "constructors_call_metaclass.py": [],
   "constructors_call_new.py": [],
   "constructors_call_type.py": [],
-  "constructors_callable.py": [
-    "Line 186: Expected 1 errors",
-    "Line 185: Unexpected errors ['assert_type(Class8[Unknown], Class8[str]) failed']"
-  ],
+  "constructors_callable.py": [],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [
     "Line 32: Unexpected errors ['Cannot set field `y` to data descriptor `Desc1` with inconsistent types\\n  Return type `Desc1 | int` of `Desc1.__get__` is not assignable to value type `int` of `Desc1.__set__`']",
@@ -68,10 +63,7 @@
   "enums_member_names.py": [],
   "enums_member_values.py": [],
   "enums_members.py": [],
-  "exceptions_context_managers.py": [
-    "Line 50: Unexpected errors ['assert_type(str, int | str) failed']",
-    "Line 57: Unexpected errors ['assert_type(str, int | str) failed']"
-  ],
+  "exceptions_context_managers.py": [],
   "generics_base_class.py": [],
   "generics_basic.py": [],
   "generics_defaults.py": [],
@@ -81,12 +73,7 @@
   "generics_paramspec_components.py": [],
   "generics_paramspec_semantics.py": [],
   "generics_paramspec_specialization.py": [],
-  "generics_scoping.py": [
-    "Line 86: Expected 1 errors",
-    "Line 89: Expected 1 errors",
-    "Line 98: Expected 1 errors",
-    "Line 107: Expected 1 errors"
-  ],
+  "generics_scoping.py": [],
   "generics_self_advanced.py": [],
   "generics_self_attributes.py": [],
   "generics_self_basic.py": [],

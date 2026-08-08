@@ -46,10 +46,10 @@ use crate::types::types::Type;
 /// the `Type` object itself does not contain enough information to determine
 /// subset relations.
 #[derive(Clone_, Copy_, Dupe_)]
-pub struct TypeOrder<'a, Ans: LookupAnswer>(&'a AnswersSolver<'a, Ans>);
+pub struct TypeOrder<'solver, Ans: LookupAnswer>(&'solver AnswersSolver<'solver, Ans>);
 
-impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
-    pub fn new(solver: &'a AnswersSolver<'a, Ans>) -> Self {
+impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
+    pub fn new(solver: &'solver AnswersSolver<'solver, Ans>) -> Self {
         Self(solver)
     }
 
@@ -58,7 +58,11 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.is_debug()
     }
 
-    pub fn stdlib(self) -> &'a Stdlib {
+    pub fn has_active_scc(self) -> bool {
+        self.0.has_active_scc()
+    }
+
+    pub fn stdlib(self) -> &'solver Stdlib {
         self.0.stdlib
     }
 
@@ -87,7 +91,7 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
     }
 
     pub fn is_protocol(self, cls: &Class) -> bool {
-        self.0.get_metadata_for_class(cls).is_protocol()
+        cls.is_protocol()
     }
 
     pub fn is_final(self, cls: &Class) -> bool {
@@ -172,6 +176,11 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.constructor_to_callable(cls)
     }
 
+    pub fn constructor_to_callable_for_class_def(self, cls: &Class) -> Option<Type> {
+        self.0
+            .constructor_to_callable_for_class_def(&self.0.as_class_type_unchecked(cls))
+    }
+
     pub fn instantiate_fresh_forall(self, forall: Forall<Forallable>) -> (QuantifiedHandle, Type) {
         self.0.instantiate_fresh_forall(forall)
     }
@@ -194,9 +203,9 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
 
     pub fn args_expander(
         self,
-        posargs: Vec<CallArg<'a>>,
-        keywords: Vec<CallKeyword<'a>>,
-    ) -> ArgsExpander<'a, Ans> {
+        posargs: Vec<CallArg<'solver>>,
+        keywords: Vec<CallKeyword<'solver>>,
+    ) -> ArgsExpander<'solver, Ans> {
         ArgsExpander::new(posargs, keywords, self.0)
     }
 

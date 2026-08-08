@@ -212,6 +212,7 @@ class CargoExecutor(Executor):
 
     def jsonschema(self) -> None:
         run(["python3", "schemas/validate_schemas.py"])
+        run(["python3", "test/sarif/validate_sarif.py"])
 
 
 @final
@@ -304,6 +305,7 @@ class BuckExecutor(Executor):
                 "test",
                 "--reuse-current-config",
                 "schemas:test",
+                "test:sarif-schema",
             ]
         )
 
