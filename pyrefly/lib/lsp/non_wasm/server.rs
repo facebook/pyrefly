@@ -5481,11 +5481,11 @@ impl Server {
                 .workspace_symbols(query, Some(&self.lsp_thread_pool))
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|(name, kind, location)| {
-                    self.to_lsp_location(&location)
+                .filter_map(|symbol| {
+                    self.to_lsp_location(&symbol.location)
                         .map(|location| SymbolInformation {
-                            name,
-                            kind,
+                            name: symbol.name,
+                            kind: symbol.kind,
                             location,
                             tags: None,
                             deprecated: None,
