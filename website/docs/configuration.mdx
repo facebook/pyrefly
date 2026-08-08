@@ -1181,7 +1181,9 @@ The config options we query the interpreter for are:
 
 - `python-platform`: `sys.platform`
 - `python-version`: `sys.version_info[:3]`
-- `site-package-path`: `site.getsitepackages() + [site.getusersitepackages()]`
+- `site-package-path`: entries from `sys.path`, excluding the empty entry, `.zip`
+  archives, the standard library path reported by `sysconfig.get_path("stdlib")`, and
+  paths ending in `/lib-dynload`
 
 :::info
 You can run `pyrefly dump-config` and pass in your file or configuration like you would
