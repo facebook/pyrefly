@@ -2074,6 +2074,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     errors,
                 );
+                // A match-arm negation may build on a facet narrow from an earlier arm.
+                // If the accumulated facet is impossible, the whole subject is impossible.
+                if facet_subject.origin == FacetOrigin::MatchSubject
+                    && facet_subject.allow_never_collapse
+                    && ty.is_never()
+                {
+                    return type_info.clone().with_ty(ty);
+                }
                 let mut narrowed = type_info.with_narrow(resolved_chain.facets(), ty);
                 // For certain types of narrows, we can also narrow the parent of the current subject
                 // If `.get()` on a dict or TypedDict is falsy, the key may not be present at all
@@ -2136,12 +2144,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     type_info.clone()
                 }
             }
-            NarrowOp::Or(ops) => TypeInfo::join(
-                ops.map(|op| self.narrow(type_info, op, range, errors)),
-                &|tys| self.unions(tys),
-                &|got, want| self.is_subset_eq(got, want),
-                JoinStyle::SimpleMerge,
-            ),
+            NarrowOp::Or(ops) => {
+                let mut branches = ops.map(|op| self.narrow(type_info, op, range, errors));
+                if ops.iter().any(NarrowOp::has_match_subject_facet) {
+                    branches.retain(|branch| !branch.ty().is_never());
+                }
+                TypeInfo::join(
+                    branches,
+                    &|tys| self.unions(tys),
+                    &|got, want| self.is_subset_eq(got, want),
+                    JoinStyle::SimpleMerge,
+                )
+            }
         }
     }
 
