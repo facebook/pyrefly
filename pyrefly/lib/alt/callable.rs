@@ -109,6 +109,8 @@ impl CallWithTypes {
         errors: &ErrorCollector,
     ) -> TypeOrExpr<'a> {
         match x {
+            // Lambdas need the function's parameter type for contextual inference.
+            TypeOrExpr::Expr(e @ Expr::Lambda(_)) => TypeOrExpr::Expr(e),
             TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_)))
                 if !nests_calls_to_depth(e, MIN_FLATTEN_CALL_DEPTH) =>
             {

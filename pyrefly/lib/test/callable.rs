@@ -1877,11 +1877,10 @@ f = lambda x=1: x
 );
 
 testcase!(
-    bug = "Pyrefly does not contextually type lambda parameters in generic callback arguments (e.g. `sorted(key=...)`), so they become implicit `Any` and are flagged, even though the type is derivable (Pyright infers `int` here)",
     test_implicit_any_lambda_in_generic_call,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
-xs = sorted([3, 1, 2], key=lambda x: x)  # E: Type of lambda parameter `x` is unknown
+xs = sorted([3, 1, 2], key=lambda x: x)
 "#,
 );
 
