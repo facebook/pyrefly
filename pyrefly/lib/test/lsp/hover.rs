@@ -11,6 +11,7 @@ use lsp_types::Position;
 use lsp_types::Range;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::sys_info::PythonVersion;
 use ruff_text_size::TextSize;
 
 use crate::lsp::wasm::hover::HoverOptions;
@@ -1897,6 +1898,73 @@ def supported_language(lang):
             && report.contains(") -> bool"),
         "Expected hover to show list.__contains__ method signature, got: {report}"
     );
+    assert!(
+        report.contains("(keyword) in")
+            && report.contains("member of the right operand")
+            && report.contains("membership-test-operations")
+            && !report.contains("the-for-statement"),
+        "Expected only membership documentation for `in`, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_type_aware_keyword_operators_includes_keyword_documentation() {
+    let code = r#"
+a = 1 and 2
+#     ^
+b = 1 or 2
+#     ^
+c = not 0
+#   ^
+d = None is None
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    for keyword in ["and", "or", "not", "is"] {
+        assert!(
+            report.contains(&format!("(keyword) {keyword}")),
+            "Expected type-aware hover to retain `{keyword}` documentation, got: {report}"
+        );
+    }
+    assert!(
+        report.contains("Negates the truth value of its operand")
+            && report.contains("point to the same object"),
+        "Expected context-specific operator documentation, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_not_in_and_is_not_selects_the_compound_operator_role() {
+    let code = r#"
+a = 1 not in []
+#     ^
+b = None is not None
+#           ^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let reports = extract_cursors_for_test(code)
+        .into_iter()
+        .map(|position| get_test_report(&state, &handle, position))
+        .collect::<Vec<_>>();
+
+    assert!(
+        reports[0].contains("__contains__")
+            && reports[0].contains("(keyword) not")
+            && reports[0].contains("Negates a membership test")
+            && !reports[0].contains("identity"),
+        "Expected only `not in` documentation, got: {}",
+        reports[0]
+    );
+    assert!(
+        reports[1].contains("(keyword) not")
+            && reports[1].contains("Completes the `is not` operator")
+            && !reports[1].contains("membership"),
+        "Expected only `is not` documentation, got: {}",
+        reports[1]
+    );
 }
 
 #[test]
@@ -2035,6 +2103,134 @@ Test()
 }
 
 #[test]
+fn hover_over_control_flow_keywords_shows_language_reference() {
+    let code = r#"
+for item in []:
+#^
+    pass
+else:
+#^
+    pass
+
+while False:
+#^
+    break
+
+if True:
+#^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(keyword) for")
+            && report.contains("after exhaustion, but not after `break`"),
+        "Expected `for` documentation, got: {report}"
+    );
+    assert!(
+        report.contains("(keyword) else")
+            && report.contains("after iteration is exhausted, but not after `break`"),
+        "Expected loop `else` documentation, got: {report}"
+    );
+    assert!(
+        report.contains("(keyword) while")
+            && report.contains("when the condition becomes false, but not after `break`"),
+        "Expected `while` documentation, got: {report}"
+    );
+    assert!(
+        report.contains("(keyword) if") && report.contains("Conditionally selects a suite"),
+        "Expected statement-specific `if` documentation, got: {report}"
+    );
+    assert!(
+        report.contains("[Python language reference](https://docs.python.org/3/reference/"),
+        "Expected links to the Python language reference, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_from_keyword_selects_its_current_grammar_role() {
+    let code = r#"
+from library import value
+#^
+
+def generate():
+    yield from ()
+#         ^
+
+class E(Exception): ...
+
+def fail():
+    raise E from None
+#           ^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    env.add("library", "value = 1");
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let reports = extract_cursors_for_test(code)
+        .into_iter()
+        .map(|position| get_test_report(&state, &handle, position))
+        .collect::<Vec<_>>();
+
+    assert!(
+        reports[0].contains("`from ... import ...`")
+            && reports[0].contains("the-import-statement")
+            && !reports[0].contains("yield-expressions"),
+        "Expected import-specific `from` documentation, got: {}",
+        reports[0]
+    );
+    assert!(
+        reports[1].contains("Delegates part of a generator")
+            && reports[1].contains("yield-expressions")
+            && !reports[1].contains("the-import-statement"),
+        "Expected yield-specific `from` documentation, got: {}",
+        reports[1]
+    );
+    assert!(
+        reports[2].contains("explicit cause of an exception")
+            && reports[2].contains("the-raise-statement")
+            && !reports[2].contains("yield-expressions"),
+        "Expected raise-specific `from` documentation, got: {}",
+        reports[2]
+    );
+}
+
+#[test]
+fn hover_only_treats_soft_keywords_as_keywords_in_their_grammar_context() {
+    let identifiers = r#"
+match = 1
+#^
+case = 2
+#^
+type = 3
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", identifiers)], get_test_report);
+    assert!(
+        !report.contains("(keyword)"),
+        "Soft keywords used as identifiers should retain normal hovers, got: {report}"
+    );
+
+    let syntax = r#"
+match 1:
+#^
+    case 1:
+#   ^
+        pass
+
+type Alias = int
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", syntax)], get_test_report);
+    assert!(
+        report.contains("(keyword) match")
+            && report.contains("(keyword) case")
+            && report.contains("(keyword) type"),
+        "Expected soft-keyword documentation in syntax contexts, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_keyword_in_for_loop() {
     let code = r#"
 for x in [1, 2, 3]:
@@ -2042,11 +2238,54 @@ for x in [1, 2, 3]:
     pass
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    // The hover should show the iteration keyword with iterable type
     assert!(
-        report.contains("(keyword) in") && report.contains("Iteration over"),
-        "Expected hover to show iteration keyword info, got: {report}"
+        report.contains("(keyword) in")
+            && report.contains("Iteration over")
+            && report.contains("Separates the target and iterable")
+            && report.contains("the-for-statement")
+            && !report.contains("membership-test-operations"),
+        "Expected only iteration documentation for `in`, got: {report}"
     );
+}
+
+#[test]
+fn hover_only_treats_lazy_as_a_keyword_in_lazy_imports() {
+    let code = r#"
+lazy import json
+#^
+lazy from pathlib import Path
+#^
+lazy = 1
+#^
+import lazy
+#      ^
+from lazy import value
+#    ^
+"#;
+    let mut env = TestEnv::new_with_version(PythonVersion::new(3, 15, 0));
+    env.add("main", code);
+    env.add("lazy", "");
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let reports = extract_cursors_for_test(code)
+        .into_iter()
+        .map(|position| get_test_report(&state, &handle, position))
+        .collect::<Vec<_>>();
+
+    for report in &reports[..2] {
+        assert!(
+            report.contains("(keyword) lazy")
+                && report.contains("deferring module loading")
+                && report.contains("3.15/reference/simple_stmts.html#lazy-imports"),
+            "Expected `lazy` import keyword documentation, got: {report}"
+        );
+    }
+    for report in &reports[2..] {
+        assert!(
+            !report.contains("(keyword) lazy"),
+            "`lazy` used as an identifier should retain its normal hover, got: {report}"
+        );
+    }
 }
 
 #[test]
