@@ -5,13 +5,20 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
+
 use itertools::Itertools as _;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
+use pyrefly_python::module_path::ModulePath;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use tempfile::tempdir;
 
+use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
 use crate::test::util::code_frame_of_source_at_range;
@@ -187,6 +194,71 @@ Definition Result:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_goes_to_conftest_fixture_definition() {
+    let temp = tempdir().unwrap();
+    let conftest_path = temp.path().join("conftest.py");
+    let conftest = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def answer():
+    return 42
+"#;
+    fs::write(&conftest_path, conftest).unwrap();
+    let conftest_stub_path = temp.path().join("conftest.pyi");
+    fs::write(
+        &conftest_stub_path,
+        r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def answer(): ...
+"#,
+    )
+    .unwrap();
+    let code = r#"
+def test_thing(answer):
+#              ^
+    assert answer == 42
+"#;
+    let main_path = temp.path().join("test_main.py");
+    let (state, handle_for_name) =
+        TestEnv::one_with_path("test_main", main_path.to_str().unwrap(), code).to_state();
+    let handle = handle_for_name("test_main");
+    let conftest_module_path = ModulePath::filesystem(conftest_path.clone());
+    let conftest_config = state.config_finder().python_file(
+        ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+        &conftest_module_path,
+    );
+    let conftest_handle = conftest_config.handle_from_module_path(conftest_module_path);
+    let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+    transaction
+        .as_mut()
+        .run(&[conftest_handle.clone()], Require::Indexing, None);
+    state.commit_transaction(transaction, None);
+    let transaction = state.transaction();
+    assert!(transaction.get_ast(&conftest_handle).is_none());
+    assert!(transaction.get_bindings(&conftest_handle).is_none());
+
+    let position = extract_cursors_for_test(code).into_iter().next().unwrap();
+    let definitions = transaction.goto_definition(&handle, position).unwrap();
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].module.path().as_path(), conftest_path);
+    let declarations = transaction.goto_declaration(&handle, position).unwrap();
+    assert_eq!(declarations.len(), 1);
+    assert_eq!(declarations[0].module.path().as_path(), conftest_stub_path);
+    assert_eq!(
+        r#"
+5 | def answer():
+        ^^^^^^
+"#
+        .trim(),
+        code_frame_of_source_at_range(definitions[0].module.contents(), definitions[0].range)
+            .trim(),
     );
 }
 
