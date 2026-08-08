@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import assert_type
 
-from shape_extensions import Int, IntVar
+from shape_extensions import IntVar
 from torch import Tensor
 
 
