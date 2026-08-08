@@ -4,6 +4,9 @@
 # Preset (named collection of defaults applied as the base config)
 preset = "legacy"
 
+# Runtime version requirement
+required-version = ">=0.0.0.dev0"
+
 # Basic project configuration
 project-includes = ["src", "tests"]
 project-excludes = ["**/node_modules", "**/__pycache__"]
