@@ -29,6 +29,11 @@ exports[`Sandbox Component render sandbox correctly 1`] = `
           +
         </button>
       </div>
+      <span
+        id="pyrefly-version"
+      >
+        Pyrefly 1.2.3-test
+      </span>
     </div>
     <div>
       <div
