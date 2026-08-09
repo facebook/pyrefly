@@ -132,7 +132,9 @@
             "cursorpyright.disableLanguageServices": true,
             "editor.semanticTokenColorCustomizations": {
                 "rules": {
-                    "variable.readonly:python": "#4EC9B0"
+                    "variable.readonly:python": {
+                        "bold": true
+                    }
                 }
             },
             "windsurfPyright.disableLanguageServices": true
