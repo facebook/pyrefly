@@ -110,6 +110,8 @@ pub struct Exports {
     /// but they take up very little space, so not worth the hassle to detect when
     /// calculation completes.
     definitions: Definitions,
+    /// Names statically known to be in a partially resolvable explicit `__all__`.
+    partially_known_dunder_all: SmallSet<Name>,
     /// Names that are available via `from <this_module> import *`
     wildcard: Calculation<Arc<SmallSet<Name>>>,
     /// Names that are available via `from <this_module> import <name>` along with their locations
@@ -143,6 +145,24 @@ impl Exports {
             sys_info,
         );
         definitions.inject_implicit_globals();
+        let partially_known_dunder_all =
+            if matches!(definitions.dunder_all.kind, DunderAllKind::Unresolvable(_)) {
+                let mut names = SmallSet::new();
+                for entry in &definitions.dunder_all.entries {
+                    match entry {
+                        DunderAllEntry::Name(_, name) => {
+                            names.insert(name.clone());
+                        }
+                        DunderAllEntry::Remove(_, name) => {
+                            names.shift_remove(name);
+                        }
+                        DunderAllEntry::Module(..) => {}
+                    }
+                }
+                names
+            } else {
+                SmallSet::new()
+            };
         definitions.ensure_dunder_all(module_info.path().style());
         if module_info.name() == ModuleName::builtins() {
             // The `builtins` module is a bit weird. It has no `__all__` in TypeShed,
@@ -161,6 +181,7 @@ impl Exports {
             module_name: module_info.name(),
             is_init: module_info.path().is_init(),
             definitions,
+            partially_known_dunder_all,
             wildcard: Calculation::new(),
             exports: Calculation::new(),
             docstring_range: Docstring::range_from_stmts(x),
@@ -245,6 +266,8 @@ impl Exports {
                         || self_defs.special_exports.get(name)
                             != other_defs.special_exports.get(name)
                         || self_def.main_guard_only != other_def.main_guard_only
+                        || self.partially_known_dunder_all.contains(name)
+                            != other.partially_known_dunder_all.contains(name)
                     {
                         changed.0.names.entry(name.clone()).or_default().metadata = true;
                     }
@@ -458,6 +481,9 @@ impl Exports {
     /// Names defined locally, redundantly aliased (`as` same-name), or introduced
     /// via a wildcard import are not implicit re-exports.
     pub fn is_implicit_reexport(&self, name: &Name) -> bool {
+        if self.partially_known_dunder_all.contains(name) {
+            return false;
+        }
         if let Some(mut all) = self.get_explicit_dunder_all_names_iter()
             && all.any(|n| n == name)
         {

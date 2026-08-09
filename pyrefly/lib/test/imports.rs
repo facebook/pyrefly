@@ -2306,6 +2306,8 @@ from foo import b as b
 from foo import c
 d: int = 4
 __all__ = ["c"]
+for name in ["d"]:
+    __all__.append(name)  # E: `__all__` could not be statically analyzed
 "#,
     );
     t
