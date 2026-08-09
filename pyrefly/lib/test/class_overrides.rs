@@ -1212,10 +1212,11 @@ testcase!(
 from typing import Protocol
 
 class Interface(Protocol):
-    def foo(self, x: int) -> None: ...
+    def foo(self, x: int) -> None:
+        return None
 
 class Implementation(Interface):
-    def foo(self, x: int) -> None: ...  # OK - implements a directly inherited protocol
+    def foo(self, x: int) -> None: ...  # OK - implements a directly inherited protocol member
     "#,
 );
 
@@ -1226,10 +1227,11 @@ testcase!(
 from typing import Protocol
 
 class Interface(Protocol):
-    def foo(self, x: int) -> None: ...
+    def foo(self, x: int) -> None:
+        return None
 
 class Base(Interface):
-    def foo(self, x: int) -> None: ...  # OK - implements a directly inherited protocol
+    pass
 
 class Derived(Base):
     def foo(self, x: int) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
