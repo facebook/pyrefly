@@ -94,7 +94,9 @@ impl LspEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LspEventKind {
     Priority,
+    /// An event that makes work triggered by preceding mutations redundant.
     Mutation,
+    /// A FIFO event that does not make preceding mutation work redundant.
     NonMutation,
 }
 
@@ -128,9 +130,6 @@ impl LspEvent {
             | Self::DidChangeNotebookDocument(_)
             | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
-            // Responses are FIFO events, but they do not supersede preceding document
-            // mutations. In particular, a no-op configuration response will not
-            // compensate for validation skipped by a preceding didOpen.
             Self::LspResponse(_) | Self::LspRequest(_) => LspEventKind::NonMutation,
         }
     }
@@ -139,7 +138,8 @@ impl LspEvent {
 pub struct LspQueue {
     /// The next id to use for a new event.
     id: AtomicUsize,
-    /// The index of the last event we are aware of that is a mutation. 0 = unknown.
+    /// The index of the last queued mutation. `recv` uses this to tell handlers
+    /// whether work triggered by an earlier mutation can be deferred. 0 = unknown.
     last_mutation: AtomicUsize,
     /// When the most recent document edit was enqueued, or `None` if no edit has
     /// happened yet. Used to debounce queries (e.g. inlay hints) that shouldn't
