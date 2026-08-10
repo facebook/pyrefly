@@ -487,16 +487,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             } else {
                 // We've run out of arguments, and we have type parameters left to consume.
-                checked_targs.extend(self.consume_remaining_tparams(
+                self.consume_remaining_tparams(
                     name,
                     &tparams,
                     param_idx,
-                    &checked_targs,
+                    &mut checked_targs,
                     targs_cursor.nargs(),
-                    &name_to_idx,
+                    &mut name_to_idx,
                     range,
                     errors,
-                ));
+                );
                 break;
             }
             name_to_idx.insert(param.name(), param_idx);
@@ -773,17 +773,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Consume all remaining type parameters after we've run out of arguments.
-    fn consume_remaining_tparams(
+    fn consume_remaining_tparams<'b>(
         &self,
         name: &Name,
-        tparams: &TParams,
+        tparams: &'b TParams,
         param_idx: usize,
-        checked_targs: &[Type],
+        checked_targs: &mut Vec<Type>,
         nargs: usize,
-        name_to_idx: &SmallMap<&Name, usize>,
+        name_to_idx: &mut SmallMap<&'b Name, usize>,
         range: TextRange,
         errors: &ErrorCollector,
-    ) -> Vec<Type> {
+    ) {
         let all_remaining_params_can_be_empty = tparams
             .iter()
             .skip(param_idx)
@@ -801,20 +801,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
-        tparams
-            .iter()
-            .skip(param_idx)
-            .map(|x| {
-                // A TypeVarTuple with no remaining args captures zero types when
-                // the specialization is otherwise valid. In error recovery (not
-                // enough args for non-defaulted params), keep the gradual type
-                // to avoid cascading errors.
-                if all_remaining_params_can_be_empty && x.is_type_var_tuple() {
-                    self.heap.mk_concrete_tuple(Vec::new())
-                } else {
-                    self.get_tparam_default(x, checked_targs, name_to_idx)
-                }
-            })
-            .collect()
+        for x in tparams.iter().skip(param_idx) {
+            // A TypeVarTuple with no remaining args captures zero types when
+            // the specialization is otherwise valid. In error recovery (not
+            // enough args for non-defaulted params), keep the gradual type
+            // to avoid cascading errors.
+            let targ = if all_remaining_params_can_be_empty && x.is_type_var_tuple() {
+                self.heap.mk_concrete_tuple(Vec::new())
+            } else {
+                self.get_tparam_default(x, checked_targs, name_to_idx)
+            };
+            checked_targs.push(targ);
+            name_to_idx.insert(x.name(), checked_targs.len() - 1);
+        }
     }
 }

@@ -1066,13 +1066,12 @@ class A:
 );
 
 testcase!(
-    bug = "S should default to int, not Unknown",
     test_nondefault_followed_by_default,
     r#"
 from typing import assert_type
 class C[R, T = int, S = T]: ...
 def f(x: C[str]) -> None:
-    assert_type(x, C[str, int, int])  # E: C[str, int, Unknown]
+    assert_type(x, C[str, int, int])
     "#,
 );
 
