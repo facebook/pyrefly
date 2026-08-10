@@ -13,8 +13,8 @@ use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::fs_anyhow;
 
 use crate::error::error::Error;
-use crate::error::legacy::LegacyError;
-use crate::error::legacy::LegacyErrors;
+use crate::error::legacy::BaselineError;
+use crate::error::legacy::BaselineErrors;
 
 /// If an error with an exactly matching path, error slug, and starting column exist in the baseline, we ignore it.
 /// Keys always use absolute paths internally so that comparison is decoupled from path format in baseline file.
@@ -25,8 +25,8 @@ struct BaselineKey {
     column: usize,
 }
 
-impl From<&LegacyError> for BaselineKey {
-    fn from(baseline_error: &LegacyError) -> Self {
+impl From<&BaselineError> for BaselineKey {
+    fn from(baseline_error: &BaselineError) -> Self {
         Self {
             path: baseline_error.path.clone(),
             name: baseline_error.name.clone(),
@@ -63,12 +63,12 @@ impl BaselineProcessor {
     /// so that relative paths in the file are resolved correctly.
     pub fn from_file(baseline_path: &Path, relative_to: &Path) -> Result<Self> {
         let content = fs_anyhow::read_to_string(baseline_path)?;
-        let baseline_file: LegacyErrors = serde_json::from_str(&content)?;
-        Ok(Self::from_legacy_errors(&baseline_file, relative_to))
+        let baseline_file: BaselineErrors = serde_json::from_str(&content)?;
+        Ok(Self::from_baseline_errors(&baseline_file, relative_to))
     }
 
-    fn from_legacy_errors(legacy_errors: &LegacyErrors, relative_to: &Path) -> Self {
-        let baseline_keys = legacy_errors
+    fn from_baseline_errors(baseline_errors: &BaselineErrors, relative_to: &Path) -> Self {
+        let baseline_keys = baseline_errors
             .errors
             .iter()
             .map(|e| {
@@ -161,7 +161,7 @@ mod tests {
         }
         "#;
 
-        let baseline_file: LegacyErrors = serde_json::from_str(baseline_json).unwrap();
+        let baseline_file: BaselineErrors = serde_json::from_str(baseline_json).unwrap();
         let baseline_keys: HashSet<BaselineKey> =
             baseline_file.errors.iter().map(BaselineKey::from).collect();
 
@@ -233,8 +233,8 @@ mod tests {
             }]
         });
 
-        let baseline_file: LegacyErrors = serde_json::from_value(baseline_json).unwrap();
-        let processor = BaselineProcessor::from_legacy_errors(&baseline_file, &cwd);
+        let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
+        let processor = BaselineProcessor::from_baseline_errors(&baseline_file, &cwd);
 
         let module = Module::new(
             ModuleName::from_str("foo"),
@@ -275,9 +275,9 @@ mod tests {
             }]
         });
 
-        let baseline_file: LegacyErrors = serde_json::from_value(baseline_json).unwrap();
+        let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
         let processor =
-            BaselineProcessor::from_legacy_errors(&baseline_file, Path::new("/workspace"));
+            BaselineProcessor::from_baseline_errors(&baseline_file, Path::new("/workspace"));
 
         // Simulate a Windows-style path with backslashes in the error.
         let module = Module::new(
@@ -309,8 +309,8 @@ mod tests {
                 "description": "test", "concise_description": "test"
             }]
         });
-        let baseline_file: LegacyErrors = serde_json::from_value(baseline_json).unwrap();
-        let processor = BaselineProcessor::from_legacy_errors(&baseline_file, &relative_to);
+        let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
+        let processor = BaselineProcessor::from_baseline_errors(&baseline_file, &relative_to);
 
         let module = Module::new(
             ModuleName::from_str("foo"),

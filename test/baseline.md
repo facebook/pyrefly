@@ -68,6 +68,14 @@ $ grep '"name": "bad-assignment"' $TMPDIR/baseline_update_from_pyproject/baselin
 [0]
 ```
 
+The written baseline omits fields that are not used for matching.
+
+```scrut {output_stream: stdout}
+$ grep -cE '"(line|stop_line|stop_column|code|description)"' $TMPDIR/baseline_update_from_pyproject/baseline.json
+0
+[1]
+```
+
 ## Updating a baseline requires a path from the CLI or configuration
 
 ```scrut {output_stream: stderr}

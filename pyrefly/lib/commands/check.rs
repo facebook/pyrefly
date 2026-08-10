@@ -77,6 +77,7 @@ use crate::error::code_climate::CodeClimateIssues;
 use crate::error::error::Error;
 use crate::error::error::ErrorRenderer;
 use crate::error::error::print_error_counts;
+use crate::error::legacy::BaselineErrors;
 use crate::error::legacy::LegacyError;
 use crate::error::legacy::LegacyErrors;
 use crate::error::legacy::severity_to_str;
@@ -569,6 +570,18 @@ fn write_error_json_to_file(
     }
     f(path, relative_to, errors)
         .with_context(|| format!("while writing JSON errors to `{}`", path.display()))
+}
+
+fn write_baseline_to_file(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    fn f(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+        let mut writer = BufWriter::new(File::create(path)?);
+        let baseline = BaselineErrors::from_errors(relative_to, errors);
+        serde_json::to_writer_pretty(&mut writer, &baseline)?;
+        writer.flush()?;
+        Ok(())
+    }
+    f(path, relative_to, errors)
+        .with_context(|| format!("while writing baseline to `{}`", path.display()))
 }
 
 fn write_error_json_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
@@ -1446,7 +1459,7 @@ impl CheckArgs {
                     error.error_kind(),
                 )
             });
-            write_error_json_to_file(baseline_path, relative_to.as_path(), &new_baseline)?;
+            write_baseline_to_file(baseline_path, relative_to.as_path(), &new_baseline)?;
         }
 
         // Directives always display, but only affect the exit code when they
