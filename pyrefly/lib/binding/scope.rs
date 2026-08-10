@@ -704,13 +704,13 @@ impl ConditionalFlowFact {
                 active
                     .0
                     .get(name)
-                    .is_some_and(|(active_op, _)| active_op == op)
+                    .is_some_and(|(active_op, _)| active_op.semantically_eq(op))
             })
     }
 
     fn same_fact(&self, other: &Self) -> bool {
         self.name == other.name
-            && self.conditions == other.conditions
+            && self.conditions.semantically_eq(&other.conditions)
             && self.info.idx() == other.info.idx()
     }
 }

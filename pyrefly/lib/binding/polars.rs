@@ -14,7 +14,7 @@ use ruff_python_ast::Number;
 use ruff_python_ast::name::Name;
 
 /// How an in-place mutation changes a Polars frame's tracked column set.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum PolarsMutationKind {
     /// Preserve known columns but make the schema partial.
     Add,

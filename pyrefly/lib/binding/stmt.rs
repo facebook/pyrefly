@@ -1330,10 +1330,17 @@ impl<'a> BindingsBuilder<'a> {
                         &Usage::NonPinningValue(None),
                     );
                     let mut active_narrow_ops = negated_prev_ops.clone();
-                    if !new_narrow_ops.0.is_empty() {
+                    if active_narrow_ops.0.is_empty() {
+                        active_narrow_ops = new_narrow_ops.clone();
+                    } else if !new_narrow_ops.0.is_empty() {
                         active_narrow_ops.and_all(new_narrow_ops.clone());
                     }
-                    negated_prev_ops.and_all(new_narrow_ops.negate());
+                    let negated_new_narrow_ops = new_narrow_ops.negate();
+                    if negated_prev_ops.0.is_empty() {
+                        negated_prev_ops = negated_new_narrow_ops;
+                    } else {
+                        negated_prev_ops.and_all(negated_new_narrow_ops);
+                    }
                     if is_type_checking_branch {
                         self.type_checking_depth += 1;
                         self.stmts(body, parent);
