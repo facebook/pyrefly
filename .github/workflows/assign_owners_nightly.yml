@@ -2,17 +2,15 @@ name: Nightly assign team owners to unassigned PRs
 
 # Nightly sweep that assigns a Pyrefly team engineer (from .github/owners.json)
 # to open PRs that have no assignee, no merge conflict, and a signed CLA — the
-# PRs that are ready for a team member to shepherd but nobody has picked up.
-# Same logic as the on-demand backfill (assign_owners_sweep.yml), but runs
-# automatically once a day so newly-eligible PRs get picked up without anyone
-# having to trigger it.
+# PRs that are ready for a team member to shepherd but nobody has picked up. It
+# runs automatically once a day so newly-eligible PRs get picked up without
+# anyone having to trigger it.
 #
 # Selection is least-loaded (balanced against each owner's current open-PR
 # backlog). The picked owner is both assigned and requested as a reviewer (so
 # the PR shows up in their review queue), and each assignment is announced in
 # the team Discord channel.
 #
-# Scheduled runs assign for real.
 # Scheduled runs assign for real. A manual run from the Actions tab exposes a
 # "dry_run" toggle (default off) to preview without assigning.
 
@@ -67,8 +65,8 @@ jobs:
             // members: managers, hands-off maintainers, and anyone not
             // responsible for reviewing PRs. They stay in owners.json (still
             // team members for auto_assign.yml) but never receive sweep
-            // assignments.
-            const NOT_ASSIGNABLE = new Set(['lolpack', 'ndmitchell', 'javabster', 'yangdanny97']);
+            // assignments. kinto0 is temporarily excluded while on PTO.
+            const NOT_ASSIGNABLE = new Set(['lolpack', 'ndmitchell', 'javabster', 'yangdanny97', 'kinto0']);
             const assignable = owners.filter((o) => !NOT_ASSIGNABLE.has(o));
             if (assignable.length === 0) {
               console.log('No assignable owners after exclusions, nothing to assign');
