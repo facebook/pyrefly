@@ -630,29 +630,17 @@ impl ErrorKind {
         }
     }
 
-    /// A soft error is a warning that should not influence overload selection
+    /// A soft error is a diagnostic that should not influence overload selection
     /// or other type-inference decisions. The type check itself passed, but the
     /// code pattern is suspicious.
     pub fn is_soft(self) -> bool {
-        matches!(
-            self,
-            ErrorKind::Deprecated
-                | ErrorKind::ImplicitAnyAttribute
-                | ErrorKind::ImplicitAnyEmptyContainer
-                | ErrorKind::ImplicitAnyLambda
-                | ErrorKind::ImplicitAnyParameter
-                | ErrorKind::ImplicitAnyTypeArgument
-                | ErrorKind::PytorchEfficiencyLintCudaCall
-                | ErrorKind::PytorchEfficiencyLintItemCall
-                | ErrorKind::PytorchEfficiencyLintPrintTensor
-                | ErrorKind::PytorchEfficiencyLintRedundantToCall
-                | ErrorKind::RedundantCast
-                | ErrorKind::StringAsIterable
-                | ErrorKind::UnknownArgumentType
-                | ErrorKind::UnknownAttributeType
-                | ErrorKind::UnknownVariableType
-                | ErrorKind::UnnecessaryTypeConversion
-        )
+        self.default_severity() == Severity::Ignore
+            || matches!(
+                self,
+                ErrorKind::Deprecated
+                    | ErrorKind::RedundantCast
+                    | ErrorKind::UnnecessaryTypeConversion
+            )
     }
 
     /// Coverage kinds are emitted only by `pyrefly coverage check`.
