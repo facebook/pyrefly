@@ -398,9 +398,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check for non-data descriptors in dataclass fields and emit errors.
     ///
-    /// Non-data descriptors (having __get__ but no __set__) are unsound in dataclasses
-    /// because the dataclass __init__ writes to the instance dict, shadowing the
-    /// class-level descriptor.
+    /// Non-data descriptors (having __get__ but neither __set__ nor __delete__) are unsound
+    /// in dataclasses because they do not take priority over the instance dict, so the
+    /// dataclass __init__ writes there, shadowing the class-level descriptor.
     ///
     /// Exception: a __get__ returning Self or the descriptor's own class is sound.
     fn check_dataclass_non_data_descriptors(
@@ -425,7 +425,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors
                     .error_builder(
                         range,
-                        ErrorKind::BadClassDefinition,
+                        ErrorKind::BadDataclassDescriptor,
                         format!("Cannot set field `{name}` to non-data descriptor `{cls}`"),
                     )
                     .with_detail(format!(
@@ -438,7 +438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check that data descriptor defaults are type-safe in dataclass fields.
     ///
-    /// For a data descriptor (having both __get__ and __set__), the "default" value
+    /// For a data descriptor with a __set__, the "default" value
     /// when the field is not provided to __init__ is the class-level descriptor.
     /// Reading the field returns the `__get__` return type, but setting the field
     /// expects the `__set__` value parameter type. For the default to be type-safe,
@@ -472,7 +472,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors
                             .error_builder(
                                 range,
-                                ErrorKind::BadClassDefinition,
+                                ErrorKind::BadDataclassDescriptor,
                                 format!("Cannot set field `{name}` to data descriptor `{cls}` with inconsistent types"),
                             )
                             .with_detail(format!(

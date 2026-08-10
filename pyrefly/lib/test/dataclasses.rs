@@ -2328,20 +2328,20 @@ testcase!(
 from dataclasses import dataclass
 from typing import assert_type, Self
 
-# Non-data descriptors (only __get__, no __set__) in dataclasses are unsound:
-# The dataclass __init__ writes to the instance dict, shadowing the class-level
-# descriptor. This means the static type (from __get__) doesn't match the runtime
-# type (the raw descriptor object in the instance dict).
+# Non-data descriptors (only __get__, no __set__ or __delete__) in dataclasses are unsound:
+# They don't take priority over the instance dict, so the dataclass __init__ writes there,
+# shadowing the class-level descriptor. This means the static type (from __get__) doesn't
+# match the runtime type (the raw descriptor object in the instance dict).
 class DescA:
     def __get__(self, obj, cls) -> int: ...
-    # No __set__ - non-data descriptor
+    # No __set__ or __delete__ - non-data descriptor
 
 # If the result of `__get__` is `Self`, then the shadowing described above doesn't cause
 # any static typing issues. Because this pattern does sometimes occur (e.g. Pytorch Device is a
 # Self-returning descriptor), we allow it.
 class DescB:
     def __get__(self, obj, cls) -> Self: ...
-    # No __set__ - non-data descriptor, but __get__ returns Self
+    # No __set__ or __delete__ - non-data descriptor, but __get__ returns Self
 
 @dataclass
 class C:
@@ -2350,6 +2350,26 @@ class C:
 
 # Regardless of any errors, any descriptors assigned in the class body do have default values.
 c = C()
+    "#,
+);
+
+// A descriptor defining `__delete__` is a data descriptor even without `__set__`, so the
+// instance dict never shadows it and there is no `__get__`/`__set__` pair to compare.
+testcase!(
+    test_delete_only_data_descriptor_in_dataclass,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+class Desc:
+    def __get__(self, obj, cls) -> int: ...
+    def __delete__(self, obj) -> None: ...
+
+@dataclass
+class C:
+    x: Desc = Desc()
+
+assert_type(C().x, int)
     "#,
 );
 

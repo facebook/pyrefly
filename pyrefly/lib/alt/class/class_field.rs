@@ -1126,7 +1126,8 @@ impl ClassField {
         }
     }
 
-    /// For a `__get__`-only descriptor, get the descriptor range and type. Used for
+    /// For a non-data descriptor (`__get__` but neither `__set__` nor `__delete__`), get the
+    /// descriptor range and type. Used for
     /// dataclass validation, where we typically disallow non-data descriptors but certain
     /// edge cases (where instance shadows are assignable to the `__get__` return type) are ok.
     /// Uninitialized descriptors are excluded because there is no actual descriptor
@@ -1147,7 +1148,7 @@ impl ClassField {
         }
     }
 
-    /// For a data descriptor (has both `__get__` and `__set__`), get the descriptor range
+    /// For a data descriptor with a `__set__`, get the descriptor range
     /// and class type. Used for dataclass validation to check that the class-level `__get__`
     /// return type is compatible with `__set__`. Uninitialized descriptors are excluded
     /// because there is no class-level descriptor instance to act as an implicit default.

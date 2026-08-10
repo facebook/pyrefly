@@ -98,6 +98,9 @@ pub enum ErrorKind {
     BadClassDefinition,
     /// Attempting to use a type that cannot be used as a contextmanager in a `with` statement.
     BadContextManager,
+    /// A dataclass field is typed as a descriptor whose read-back type does not match
+    /// what the synthesized `__init__` writes.
+    BadDataclassDescriptor,
     /// An entry in user-defined `__all__` does not exist in the module.
     BadDunderAll,
     /// A function definition has some typing-related error.

@@ -27,9 +27,7 @@
   "constructors_call_type.py": [],
   "constructors_callable.py": [],
   "constructors_consistency.py": [],
-  "dataclasses_descriptors.py": [
-    "Line 58: Unexpected errors ['Cannot set field `z` to non-data descriptor `Desc2`\\n  Hint: add a `__set__` method to make `Desc2` a data descriptor']"
-  ],
+  "dataclasses_descriptors.py": [],
   "dataclasses_final.py": [],
   "dataclasses_frozen.py": [],
   "dataclasses_hash.py": [],
