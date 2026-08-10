@@ -180,6 +180,7 @@ impl Preset {
                     (ErrorKind::DirectAbstractBaseInstantiation, Severity::Error),
                     (ErrorKind::ImplicitAny, Severity::Error),
                     (ErrorKind::MissingOverrideDecorator, Severity::Error),
+                    (ErrorKind::OpenUnpacking, Severity::Error),
                     (ErrorKind::PotentialBadKeywordArgument, Severity::Error),
                     (ErrorKind::UnusedIgnore, Severity::Error),
                 ]);
