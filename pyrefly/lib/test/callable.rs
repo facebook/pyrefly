@@ -255,6 +255,21 @@ def test(f: Callable[[bool, *tuple[int, str], bool], None]) -> Callable[[*tuple[
 );
 
 testcase!(
+    test_callable_unpacked_homogeneous_tuple_args,
+    r#"
+from typing import Callable
+type VarCallback = Callable[[*tuple[int, ...]], None]
+def takes(cb: VarCallback) -> None:
+    cb(1, 2, 3)  # OK: any number of ints
+    cb("a")  # E: Unpacked argument `tuple[Literal['a']]` is not assignable to varargs type `tuple[int, ...]`
+def good(*args: int) -> None: ...
+def bad(*args: str) -> None: ...
+x: VarCallback = good  # OK
+y: VarCallback = bad  # E: `(*args: str) -> None` is not assignable to `(**tuple[int, ...]) -> None`
+    "#,
+);
+
+testcase!(
     test_callable_unpack_vararg,
     r#"
 from typing import Protocol
@@ -563,6 +578,16 @@ def err(x: int = ...): pass # E: Default `Ellipsis` is not assignable to paramet
 );
 
 testcase!(
+    test_default_value_checked_against_annotation,
+    r#"
+def f1(x: int = 0) -> None: ...  # OK
+def f2(x: int | None = None) -> None: ...  # OK
+def f3(x: int = 0.0) -> None: ...  # E: Default `float` is not assignable to parameter `x` with type `int`
+def f4(x: int = None) -> None: ...  # E: Default `None` is not assignable to parameter `x` with type `int`
+    "#,
+);
+
+testcase!(
     test_splat_tuple,
     r#"
 def test(x: int, y: int, z: int): ...
@@ -859,6 +884,44 @@ x: P1 = func1  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `P1`
 y: P2 = func1  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `P2`
 z: P3 = func1  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `P3`
 "#,
+);
+
+testcase!(
+    test_assignability_unpack_kwargs_to_regular_kwargs,
+    r#"
+from typing import TypedDict, Unpack, Protocol
+class TD(TypedDict):
+    x: int
+class Untyped(Protocol):
+    def __call__(self, **kwargs) -> None: ...
+class Traditional(Protocol):
+    def __call__(self, **kwargs: int) -> None: ...
+def src(**kwargs: Unpack[TD]) -> None: ...
+# An `Unpack[TypedDict]` source is not assignable to an untyped or traditionally
+# typed `**kwargs` destination, because traditional kwargs are not checked for
+# keyword names and could be called with keys the TypedDict does not permit.
+a: Untyped = src  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `Untyped`
+b: Traditional = src  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `Traditional`
+"#,
+);
+
+testcase!(
+    test_forwarding_unpack_kwargs_to_fixed_signature,
+    TestEnv::new().enable_open_unpacking_error(),
+    r#"
+from typing import TypedDict, Unpack
+class Open(TypedDict):
+    name: str
+class Closed(TypedDict, closed=True):
+    name: str
+def has_kwargs(**kwargs: Unpack[Open]) -> None: ...
+def takes_name(name: str) -> None: ...
+def forward_open(**kwargs: Unpack[Open]) -> None:
+    has_kwargs(**kwargs)  # OK: target accepts **kwargs
+    takes_name(**kwargs)  # E: `Open` is an open TypedDict with unknown extra items, which cannot be unpacked into a callable without `**kwargs`
+def forward_closed(**kwargs: Unpack[Closed]) -> None:
+    takes_name(**kwargs)  # OK: closed TypedDict has no extra keys
+    "#,
 );
 
 testcase!(

@@ -1202,6 +1202,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let ty = kw.value.infer(self, arg_errors);
                     self.maybe_error_unknown_argument_type(&ty, kw.range, arg_errors);
                     if let Type::TypedDict(typed_dict) = ty {
+                        // Splatting an open TypedDict into a callable without `**kwargs` is
+                        // unsafe, since the TypedDict may contain additional, unknown keys
+                        if kwargs.is_none()
+                            && !matches!(
+                                self.typed_dict_extra_items(&typed_dict),
+                                ExtraItems::Closed
+                            )
+                        {
+                            error(
+                                call_errors,
+                                kw.range,
+                                ErrorKind::OpenUnpacking,
+                                format!(
+                                    "`{}` is an open TypedDict with unknown extra items, which cannot be unpacked into a callable without `**kwargs`",
+                                    typed_dict.name()
+                                ),
+                            );
+                        }
                         for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
                             let name = name_owner.push(name);
                             let mut hint = kwargs.as_ref().and_then(|(_, ty)| *ty);
