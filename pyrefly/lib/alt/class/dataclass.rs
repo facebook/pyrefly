@@ -356,6 +356,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Look up `name` on a descriptor class, substituting the descriptor's
+    /// type arguments so a generic descriptor such as `Desc[str]` reports its specialized
+    /// signatures rather than the bare type parameter. Returns `None` when the member is absent.
+    fn descriptor_member_type(&self, descriptor_cls: &ClassType, name: &Name) -> Option<Type> {
+        let field = self.get_class_member(descriptor_cls.class_object(), name)?;
+        Some(descriptor_cls.substitution().substitute_into(field.ty()))
+    }
+
+    /// Best-effort return type for descriptor `__get__` access through a dataclass instance.
+    ///
+    /// Descriptors commonly overload `__get__` on `obj: None` for class access and an instance
+    /// type for instance access. Union the returns of all overloads whose `obj` parameter can accept
+    /// the owning dataclass instance. If none matches, fall back to the combined callable return
+    /// type so the descriptor checks below remain conservative for malformed descriptors. Returns
+    /// `None` only when `__get__` is absent or not callable.
+    fn descriptor_instance_get_return_type(
+        &self,
+        cls: &Class,
+        descriptor_cls: &ClassType,
+    ) -> Option<Type> {
+        let get_ty = self.descriptor_member_type(descriptor_cls, &dunder::GET)?;
+        let instance_ty = self.instantiate(cls);
+        // `callable_signatures` yields the unbound member signatures, so the parameters are
+        // `__get__(self, obj, cls)` - the `obj` param is at index 1
+        let instance_returns = get_ty
+            .callable_signatures()
+            .iter()
+            .filter_map(|sig| {
+                let obj_ty = sig.get_positional_param(1)?;
+                self.is_subset_eq(&instance_ty, obj_ty)
+                    .then(|| sig.ret.clone())
+            })
+            .collect::<Vec<_>>();
+        if instance_returns.is_empty() {
+            get_ty.callable_return_type(self.heap)
+        } else {
+            Some(self.unions(instance_returns))
+        }
+    }
+
     /// Check for non-data descriptors in dataclass fields and emit errors.
     ///
     /// Non-data descriptors (having __get__ but no __set__) are unsound in dataclasses
@@ -373,9 +413,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
                 && let Some((range, descriptor_cls)) = field.value.non_data_descriptor_info()
             {
-                let get_return_ty = self
-                    .get_class_member(descriptor_cls.class_object(), &dunder::GET)
-                    .and_then(|get_field| get_field.ty().callable_return_type(self.heap));
+                let get_return_ty = self.descriptor_instance_get_return_type(cls, &descriptor_cls);
 
                 match &get_return_ty {
                     Some(Type::SelfType(_)) => continue,
@@ -415,31 +453,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
                 && let Some((range, descriptor_cls)) = field.value.data_descriptor_info()
             {
-                // Get the __get__ method's return type from the descriptor class.
-                let get_return_ty = self
-                    .get_class_member(descriptor_cls.class_object(), &dunder::GET)
-                    .and_then(|get_field| get_field.ty().callable_return_type(self.heap));
+                let get_return_ty = self.descriptor_instance_get_return_type(cls, &descriptor_cls);
 
                 // Get the __set__ method and extract the value parameter type (3rd param).
                 let set_value_ty = self
-                    .get_class_member(descriptor_cls.class_object(), &dunder::SET)
-                    .and_then(|set_field| {
-                        set_field
-                            .ty()
+                    .descriptor_member_type(&descriptor_cls, &dunder::SET)
+                    .and_then(|set_ty| {
+                        set_ty
                             .callable_signatures()
                             .first()
-                            .and_then(|sig| {
-                                if let Params::List(params) = &sig.params {
-                                    match params.items().get(2) {
-                                        Some(Param::Pos(_, t, _) | Param::PosOnly(_, t, _)) => {
-                                            Some(t.clone())
-                                        }
-                                        _ => None,
-                                    }
-                                } else {
-                                    None
-                                }
-                            })
+                            .and_then(|sig| sig.get_positional_param(2).cloned())
                     });
 
                 if let (Some(get_ty), Some(set_ty)) = (get_return_ty, set_value_ty) {

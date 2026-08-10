@@ -794,12 +794,10 @@ impl ClassField {
     /// Given a `__set__(self, instance, value)` function, gets the type of `value`.
     fn get_descriptor_setter_value(heap: &TypeHeap, setter: &Type) -> Type {
         let mut values = Vec::new();
-        setter.visit_toplevel_callable(|callable| match &callable.params {
-            Params::List(params) => match params.items().get(2) {
-                Some(Param::Pos(_, t, _) | Param::PosOnly(_, t, _)) => values.push(t.clone()),
-                _ => {}
-            },
-            _ => {}
+        setter.visit_toplevel_callable(|callable| {
+            if let Some(t) = callable.get_positional_param(2) {
+                values.push(t.clone());
+            }
         });
         if values.is_empty() {
             heap.mk_any_implicit()
@@ -1954,8 +1952,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
 
-        // Identify whether this is a descriptor
-        let mut descriptor = None;
+        // Identify whether this is a descriptor. Construct the stored descriptor only after
+        // forcing the field type so its class cannot retain solver variables.
+        let mut descriptor_methods = None;
         // Descriptor semantics apply when the field is modeled as class-level:
         // either by a class-body definition, by `Magic` for stub/interface
         // declarations where the runtime initializer is omitted, or by an
@@ -1981,15 +1980,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .get_class_member(cls.class_object(), &dunder::DELETE)
                         .is_some();
                     if getter || setter || deleter {
-                        descriptor = Some(Descriptor {
-                            range,
-                            cls: cls.clone(),
-                            getter,
-                            setter,
-                            deleter,
-                            initialization: initialization.clone(),
-                            is_override: descriptor_is_override,
-                        })
+                        descriptor_methods = Some((getter, setter, deleter));
                     }
                 }
                 _ => {}
@@ -2017,12 +2008,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &ty,
             unpromoted_ty.as_ref(),
             field_definition,
-            descriptor.is_some(),
+            descriptor_methods.is_some(),
             range,
             errors,
         ) {
             // Don't use the descriptor, since we've set a custom type instead.
-            descriptor = None;
+            descriptor_methods = None;
             special_ty
         } else {
             ty
@@ -2034,6 +2025,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // TODO(stroxler): Ideally we would implement some simple heuristics, similar to
         // first-use based inference we use with assignments, to get more useful types here.
         let ty = self.solver().force(ty);
+        let descriptor = match (descriptor_methods, &ty) {
+            (Some((getter, setter, deleter)), Type::ClassType(cls)) => Some(Descriptor {
+                range,
+                cls: cls.clone(),
+                getter,
+                setter,
+                deleter,
+                initialization: initialization.clone(),
+                is_override: descriptor_is_override,
+            }),
+            _ => None,
+        };
 
         let direct_annotation_idx = match field_definition {
             ClassFieldDefinition::DeclaredByAnnotation { annotation, .. } => Some(*annotation),

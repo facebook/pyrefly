@@ -28,7 +28,6 @@
   "constructors_callable.py": [],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [
-    "Line 32: Unexpected errors ['Cannot set field `y` to data descriptor `Desc1` with inconsistent types\\n  Return type `Desc1 | int` of `Desc1.__get__` is not assignable to value type `int` of `Desc1.__set__`']",
     "Line 58: Unexpected errors ['Cannot set field `z` to non-data descriptor `Desc2`\\n  Hint: add a `__set__` method to make `Desc2` a data descriptor']"
   ],
   "dataclasses_final.py": [],

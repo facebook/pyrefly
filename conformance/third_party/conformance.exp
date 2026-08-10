@@ -3834,17 +3834,6 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot set field `y` to data descriptor `Desc1` with inconsistent types",
-      "description": "Cannot set field `y` to data descriptor `Desc1` with inconsistent types\n  Return type `Desc1 | int` of `Desc1.__get__` is not assignable to value type `int` of `Desc1.__set__`",
-      "line": 32,
-      "name": "bad-class-definition",
-      "severity": "error",
-      "stop_column": 6,
-      "stop_line": 32
-    },
-    {
-      "code": -2,
-      "column": 5,
       "concise_description": "Cannot set field `z` to non-data descriptor `Desc2`",
       "description": "Cannot set field `z` to non-data descriptor `Desc2`\n  Hint: add a `__set__` method to make `Desc2` a data descriptor",
       "line": 58,

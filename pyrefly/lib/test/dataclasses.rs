@@ -2418,6 +2418,77 @@ assert_type(c.y, int)
 );
 
 testcase!(
+    test_overloaded_descriptor_in_dataclass,
+    r#"
+from dataclasses import dataclass
+from typing import Any, assert_type, overload
+
+# Descriptors conventionally overload `__get__` on `obj: None` (access through the
+# class) vs `obj: object` (access through an instance). A dataclass field is read
+# through an instance, so only the instance overload is relevant to these checks.
+class Data:
+    @overload
+    def __get__(self, obj: None, cls: Any) -> "Data": ...
+    @overload
+    def __get__(self, obj: object, cls: Any) -> int: ...
+    def __get__(self, obj: object | None, cls: Any) -> "int | Data": ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class NonData:
+    @overload
+    def __get__(self, obj: None, cls: Any) -> list["NonData"]: ...
+    @overload
+    def __get__(self, obj: object, cls: Any) -> "NonData": ...
+    def __get__(self, obj: object | None, cls: Any) -> "list[NonData] | NonData": ...
+
+class Bad:
+    @overload
+    def __get__(self, obj: None, cls: Any) -> int: ...
+    @overload
+    def __get__(self, obj: object, cls: Any) -> str: ...
+    def __get__(self, obj: object | None, cls: Any) -> "int | str": ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class Other: ...
+
+class OwnerSpecific:
+    @overload
+    def __get__(self, obj: Other, cls: Any) -> str: ...
+    @overload
+    def __get__(self, obj: "C", cls: Any) -> int: ...
+    def __get__(self, obj: object, cls: Any) -> "int | str": ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class ClassOnly:
+    def __get__(self, obj: None, cls: Any) -> str: ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class Overlapping:
+    @overload
+    def __get__(self, obj: "C", cls: Any) -> int: ...
+    @overload
+    def __get__(self, obj: object, cls: Any) -> str: ...
+    def __get__(self, obj: object, cls: Any) -> "int | str": ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+@dataclass
+class C:
+    x: Data = Data()
+    y: NonData = NonData()
+    z: Bad = Bad()  # E: Cannot set field `z` to data descriptor `Bad` with inconsistent types\n  Return type `str` of `Bad.__get__` is not assignable to value type `int` of `Bad.__set__`
+    w: OwnerSpecific = OwnerSpecific()
+    q: ClassOnly = ClassOnly()  # E: Cannot set field `q` to data descriptor `ClassOnly` with inconsistent types\n  Return type `str` of `ClassOnly.__get__` is not assignable to value type `int` of `ClassOnly.__set__`
+    r: Overlapping = Overlapping()  # E: Cannot set field `r` to data descriptor `Overlapping` with inconsistent types\n  Return type `int | str` of `Overlapping.__get__` is not assignable to value type `int` of `Overlapping.__set__`
+
+c = C()
+assert_type(c.x, int)
+assert_type(c.y, NonData)
+assert_type(c.w, int)
+assert_type(C.x, Data)
+"#,
+);
+
+testcase!(
     test_dataclass_generic_descriptor_conformance,
     r#"
 from dataclasses import dataclass

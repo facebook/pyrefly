@@ -820,6 +820,20 @@ impl Callable {
         }
     }
 
+    /// Type of the parameter at `index`, but only when it is a positional
+    /// parameter of a concrete parameter list. Returns `None` for a
+    /// non-positional param, an out-of-range index, or a non-`List`/`Partial` signature.
+    /// A bound `self`/`cls` counts as index 0.
+    pub fn get_positional_param(&self, index: usize) -> Option<&Type> {
+        match &self.params {
+            Params::List(params) | Params::Partial(params) => match params.0.get(index) {
+                Some(Param::Pos(_, t, _) | Param::PosOnly(_, t, _)) => Some(t),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Whether this signature can be called with a single positional argument, i.e. none of the
     /// parameters after the first is required (positional or keyword-only). `*args`/`**kwargs`
     /// don't prevent it.

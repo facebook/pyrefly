@@ -3,7 +3,7 @@
   "pass": 138,
   "fail": 2,
   "pass_rate": 0.99,
-  "differences": 4,
+  "differences": 3,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -146,7 +146,7 @@
   ],
   "failing": {
     "annotations_forward_refs.py": 2,
-    "dataclasses_descriptors.py": 2
+    "dataclasses_descriptors.py": 1
   },
   "comment": "@generated"
 }
