@@ -164,6 +164,47 @@ class A:
 with A(): ...  # `A` is missing an `__exit__` method!
 ```
 
+## bad-dataclass-descriptor
+
+A dataclass field is typed as a descriptor whose read-back type does not match what the
+synthesized `__init__` writes.
+
+A **data descriptor** defines `__set__` and/or `__delete__`. It always takes priority over the
+instance dictionary, so when one is used as a dataclass field the class-level descriptor acts as
+the field's default. If it also defines `__get__`, reading the field yields the `__get__` return
+type while writing it goes through `__set__`, so the two must agree:
+
+```python
+from dataclasses import dataclass
+
+class Desc:
+    def __get__(self, obj, cls) -> int: ...
+    def __set__(self, obj, value: str) -> None: ...
+
+@dataclass
+class C:
+    x: Desc = Desc()  # `__get__` returns `int`, but `__set__` accepts `str` [bad-dataclass-descriptor]
+```
+
+A **non-data descriptor** defines `__get__` but neither `__set__` nor `__delete__`. It does not
+take priority over the instance dictionary, so the synthesized `__init__` writes straight into
+that dictionary and shadows the class-level descriptor. Every later read returns the raw value
+rather than calling `__get__`:
+
+```python
+from dataclasses import dataclass
+
+class Desc:
+    def __get__(self, obj, cls) -> int: ...
+
+@dataclass
+class C:
+    x: Desc = Desc()  # instance attribute shadows the descriptor [bad-dataclass-descriptor]
+```
+
+A non-data descriptor whose `__get__` returns `Self` or its own class is exempt, since the
+shadowing value then has the same type as the read-back value.
+
 ## bad-dunder-all
 
 This error occurs when `__all__` is explicitly defined for a module but contains an entry that cannot be found in the module's definitions, wildcard imports, or submodules (for `__init__.py` files).
