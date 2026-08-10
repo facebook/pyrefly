@@ -270,6 +270,7 @@ const config: Config = {
                             new webpack.EnvironmentPlugin({
                                 INTERNAL_STATIC_DOCS:
                                     process.env.INTERNAL_STATIC_DOCS === '1' || false,
+                                PYREFLY_COMMIT: process.env.PYREFLY_COMMIT || '',
                             }),
                         ],
                     };

@@ -15,6 +15,16 @@ import { SANDBOX_FILE_NAME } from '../pages/sandbox';
 import { DEFAULT_SANDBOX_PROGRAM } from '../sandbox/DefaultSandboxProgram';
 
 describe('Sandbox Component', () => {
+    const pyreflyCommit = '123456789abcdef';
+
+    beforeAll(() => {
+        process.env.PYREFLY_COMMIT = pyreflyCommit;
+    });
+
+    afterAll(() => {
+        delete process.env.PYREFLY_COMMIT;
+    });
+
     test('render sandbox correctly', async () => {
         const container = await act(async () => {
             const { container } = render(
@@ -31,8 +41,13 @@ describe('Sandbox Component', () => {
             DEFAULT_SANDBOX_PROGRAM,
             false
         );
-        expect(container.querySelector('#pyrefly-version')).toHaveTextContent(
-            'Pyrefly 1.2.3-test'
+        const buildLink = container.querySelector('#pyrefly-build');
+        expect(buildLink).toHaveTextContent(
+            'Pyrefly 1.2.3-test (commit 123456789)'
+        );
+        expect(buildLink).toHaveAttribute(
+            'href',
+            `https://github.com/facebook/pyrefly/commit/${pyreflyCommit}`
         );
 
         // Run test with --update-snapshot to update the snapshot if the test is failing after
@@ -66,6 +81,26 @@ describe('Sandbox Component', () => {
         // Run test with --update-snapshot to update the snapshot if the test is failing after
         // you made a intentional change to the home page
         expect(container).toMatchSnapshot();
+    });
+
+    test('omits the commit for local builds', async () => {
+        delete process.env.PYREFLY_COMMIT;
+        try {
+            const container = await act(async () => {
+                const { container } = render(
+                    <Sandbox sampleFilename={SANDBOX_FILE_NAME} />
+                );
+
+                await Promise.resolve();
+                return container;
+            });
+
+            expect(
+                container.querySelector('#pyrefly-build')
+            ).not.toBeInTheDocument();
+        } finally {
+            process.env.PYREFLY_COMMIT = pyreflyCommit;
+        }
     });
 
     function expectMonacoEditorLoadedWithContent(
