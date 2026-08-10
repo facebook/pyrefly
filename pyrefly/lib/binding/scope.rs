@@ -7,6 +7,7 @@
 
 use std::cmp::max;
 use std::fmt::Debug;
+use std::iter;
 use std::mem;
 
 use itertools::Either;
@@ -3738,7 +3739,7 @@ fn determine_definition_status(
     }
 }
 
-fn common_conditional_facts(flows: &[Flow]) -> Vec<ConditionalFlowFact> {
+fn common_conditional_facts(flows: &[&Flow]) -> Vec<ConditionalFlowFact> {
     let Some((first, rest)) = flows.split_first() else {
         return Vec::new();
     };
@@ -4066,7 +4067,12 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             live_branches
         };
-        let conditional_facts = common_conditional_facts(&flows);
+        let fact_flows: Vec<&Flow> = if merge_style.is_loop() {
+            iter::once(&base).chain(flows.iter()).collect()
+        } else {
+            flows.iter().collect()
+        };
+        let conditional_facts = common_conditional_facts(&fact_flows);
         // Determine reachability of the merged flow.
         // For Loop style with empty flows (all branches terminated), the loop body might
         // never execute (empty iterable), so we use the base flow's reachability.
