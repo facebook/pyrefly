@@ -276,3 +276,144 @@ g.register(int, int_impl)
 reveal_type(g(1))  # E: revealed type: str
 "#,
 );
+
+functools_testcase!(
+    test_singledispatch_register_bare_functional_preserves_signature,
+    r#"
+from typing import reveal_type
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+g = f.register(impl)
+reveal_type(g)  # E: revealed type: (arg: int) -> str
+g("wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `arg` with type `int` in function `impl`
+"#,
+);
+
+functools_testcase!(
+    test_singledispatch_register_two_step_call_preserves_signature,
+    r#"
+from typing import reveal_type
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+reveal_type(f.register(int)(impl))  # E: revealed type: (arg: int) -> str
+deco = f.register(int)
+registered = deco(impl)
+reveal_type(registered)  # E: revealed type: (arg: int) -> str
+registered("wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `arg` with type `int` in function `impl`
+"#,
+);
+
+// Registration is not position-sensitive: `f.register(...)` returns the impl and never mutates the
+// dispatcher, so `f(...)` stays fallback-typed above and below the register call.
+functools_testcase!(
+    test_singledispatch_register_not_position_sensitive,
+    r#"
+from typing import reveal_type
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> int: return arg
+reveal_type(f(1))  # E: revealed type: str
+r = f.register(int)(impl)
+reveal_type(r)  # E: revealed type: (arg: int) -> int
+reveal_type(f(1))  # E: revealed type: str
+"#,
+);
+
+// An overloaded impl applied by call keeps its overloads (not the stub's erased `(...) -> _T`), so a
+// call that matches no overload is still reported.
+functools_testcase!(
+    test_singledispatch_register_two_step_overloaded_impl,
+    r#"
+from functools import singledispatch
+from typing import overload
+@singledispatch
+def f(arg: object) -> str: return "base"
+@overload
+def impl(arg: int) -> str: ...
+@overload
+def impl(arg: bytes) -> str: ...
+def impl(arg: object) -> str: return "int"
+registered = f.register(int)(impl)
+registered("wrong")  # E: No matching overload found for function `impl`
+"#,
+);
+
+// A functional or bare register call returns the impl itself, so calling the captured result yields
+// the impl's return type rather than being misread as applying a register decorator.
+functools_testcase!(
+    test_singledispatch_register_functional_capture_call,
+    r#"
+from typing import reveal_type
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+g = f.register(int, impl)
+reveal_type(g(1))  # E: revealed type: str
+h = f.register(impl)
+reveal_type(h(1))  # E: revealed type: str
+"#,
+);
+
+// A malformed application of the register decorator (wrong arity, or a non-callable argument) is
+// checked normally rather than silently taking the argument's type.
+functools_testcase!(
+    test_singledispatch_register_two_step_call_malformed,
+    r#"
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+f.register(int)(impl, impl)  # E: Expected 1 positional argument, got 2
+f.register(int)(42)  # E: Argument `Literal[42]` is not assignable to parameter with type `(...) -> str`
+"#,
+);
+
+// The non-subtype dispatch class is checked once at the `.register(C)` call, not re-reported when the
+// returned decorator is applied.
+functools_testcase!(
+    test_singledispatch_register_two_step_call_not_subtype,
+    r#"
+from functools import singledispatch
+@singledispatch
+def f(arg: int) -> str: return ""
+def impl(arg: str) -> str: return ""
+f.register(str)(impl)  # E: Dispatch type `str` is not a subtype of fallback first argument type `int`
+"#,
+);
+
+// An overloaded impl registered with bare `@f.register` is still subtype-checked against the
+// fallback (the dispatch type comes from the impl's first parameter).
+functools_testcase!(
+    test_singledispatch_register_overloaded_impl_subtype_checked,
+    r#"
+from functools import singledispatch
+from typing import overload
+@singledispatch
+def f(arg: int) -> str: return ""
+@overload
+def g(arg: str) -> str: ...
+@overload
+def g(arg: str, y: int) -> str: ...
+@f.register  # E: Dispatch type `str` is not a subtype of fallback first argument type `int`
+def g(arg: str, y: int = 0) -> str: return ""
+"#,
+);
+
+// The bare-functional signature-preserving path applies only to exactly `register(impl)`; a stray
+// keyword falls through to the stub, which rejects it.
+functools_testcase!(
+    test_singledispatch_register_bare_functional_extra_kwarg,
+    r#"
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+f.register(impl, foo=1)  # E: No matching overload found for function `functools.register`
+"#,
+);

@@ -55,9 +55,6 @@ Coding style: All code must be clean, documented and minimal. That means:
   complicated work at all.
 - If some code looks heavyweight, perhaps with lots of conditionals, then think
   harder for a more elegant way of achieving it.
-- Code should have comments and functions should have docstrings, but both should be
-  concise. The best comments are ones that introduce invariants, or prove that invariants are being upheld, or indicate which invariants the code relies upon. Don't write duplicate comments, overly long comments, or comments for things that are obvious from
-  reading the code.
 - **Unreachable states must panic, not silently degrade.** Do not use defensive
   programming to handle states that should be impossible. If a match arm, Option,
   or Result should never occur given the surrounding invariants, use
@@ -76,6 +73,22 @@ Coding style: All code must be clean, documented and minimal. That means:
   not `crate::foo::Bar` inline). The only exception is when there is a name
   collision between two imports, which is rare.
 
+## Comments and Documentation
+
+- Code should have comments and functions should have docstrings, but both should be
+  concise. The best comments are ones that introduce invariants, or prove that invariants are being upheld, or indicate which invariants the code relies upon. Don't write duplicate comments, overly long comments, or comments for things that are obvious from
+  reading the code.
+- Prioritize readability over brevity. Reduce comments by omitting irrelevant
+  information, not by compressing necessary information into fewer words. Use
+  complete sentences, and do not drop words or use sentence fragments to save
+  space or tokens.
+- Use established, standard terminology. Do not coin new terms or shorthand for
+  concepts, because doing so reduces comprehensibility.
+- Write comments and documentation as statements of current truth. Never narrate
+  corrections, prior framings, or what changed.
+- When adding or modifying configuration options or command line flags, the corresponding
+  docs should be updated.
+
 ## Commit Messages
 
 Do not write a laundry list of implementation changes. Focus on:
@@ -88,32 +101,15 @@ A reader should be able to understand the intent and rationale from the commit m
 
 ## Development environments
 
-There are three possible development environments:
+Pyrefly is developed both on GitHub and inside Meta's monorepo, and the
+available tooling differs. **How to detect which one you are in:** check for a
+`BUCK` file in the project root — BUCK files are not exported to GitHub.
 
-1. **External/GitHub checkout**: Only `cargo` is available. The `buck` and `arc`
-   commands do not exist.
-2. **Internal on-demand**: Only `buck` is available. The `cargo` command may not
-   be configured.
-3. **Internal devserver with cargo**: Both `buck` and `cargo` are available.
-
-**How to detect the environment:** Check for the presence of a `BUCK` file in
-the project root. BUCK files are not exported to GitHub, so:
-- If `BUCK` exists → internal checkout, `buck` and `arc` are available
-- If `BUCK` does not exist → GitHub checkout, only `cargo` works
-
-### Source control
-
-**Do not assume git.** This repo may be either a Git checkout or a Sapling
-(Mercurial-based) checkout. Before running any source-control commands, detect
-which VCS is in use:
-
-- If `.git` exists at the repo root → Git. Use `git` commands.
-- If `.sl` exists at the repo root → Sapling. Use `sl` commands (`sl status`,
-  `sl diff`, `sl commit`, `sl amend`, etc.). **Do not use `git`.**
-
-You can check with: `test -d "$(sl root 2>/dev/null)/.sl" && echo sapling || echo git`
-
-The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
+- No `BUCK` → GitHub checkout. Only `cargo` is available, `buck` and `arc` do
+  not exist, and source control is git. The rest of this file assumes this case.
+- `BUCK` present → Meta-internal checkout. Read `facebook/AGENTS.md`, which
+  covers the internal tooling and conventions (buck, arc, Sapling, Phabricator
+  diffs) and overrides this file where they conflict.
 
 ## Feature guidelines
 
@@ -122,28 +118,15 @@ The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
 
 ### Running tests
 
-- **With buck (internal):** `buck test pyrefly:pyrefly_library -- <name of test>`
-  (from within the project folder)
-- **With cargo (external):** `cargo test <name of test>`
-
-Note: The heavyweight `lsp_interaction` tests live in a separate
-`rust_unittest` target for faster iteration. Run them with
-`buck test pyrefly:pyrefly_lsp_interaction_tests -- <name of test>`.
-Running `buck test pyrefly:pyrefly` triggers both test targets.
+- `cargo test <name of test>`
 
 ### Running the full test suite
 
 - `./test.py` runs linters and tests. It is heavyweight, so only run it when
   you are confident the feature is complete.
-- By default, `test.py` auto-detects the build tool based on BUCK file presence.
-  You can override this with `--mode buck` or `--mode cargo`.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
   `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
-
-### After modifying BUCK files (internal only)
-
-- Run `arc autocargo` to regenerate Cargo.toml files and validate changes
 
 ### Before committing
 
@@ -161,7 +144,9 @@ human to commit. Do not skip this step during human-in-the-loop iteration.
   whether the errors are in code you modified. If so, fix them before
   committing.
 
-## The `bug` marker in tests
+## Writing tests
+
+### The `bug` marker in tests
 
 The `testcase!` macro supports a `bug = "<description>"` marker to indicate that
 a test captures undesirable behavior. Important points:
@@ -181,3 +166,20 @@ a test captures undesirable behavior. Important points:
   detailed explanations as comments inside the test body rather than making the
   marker message very long. If there is an associated Github issue, linking to it
   in a comment is often sufficient without paraphrasing the issue in the test.
+
+### `testcase!` header hygiene
+
+The macro uses `line!()` to map errors in the embedded source back to the test file,
+assuming a fixed layout. Extra lines in the header shift every reported line number.
+
+- Put comments above `testcase!(`, never between it and the `r#"..."#` content.
+- Keep `bug = "..."` on one line, with no blank lines in the header.
+- `rustfmt` re-splits a `bug = ` line past 100 cols, so keep the message short
+  enough to fit; put longer detail in a comment above the macro.
+
+### Prefer `assert_type` over `reveal_type`
+
+`assert_type` checks for type equivalence, whereas `reveal_type` expectations
+do a more fragile text-based match. Prefer to use `assert_type` when possible.
+It's acceptable to use `reveal_type` in cases in which the expected type cannot
+be expressed in a type annotation - for example, a complex function signature.

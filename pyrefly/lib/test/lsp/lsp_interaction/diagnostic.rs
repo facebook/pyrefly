@@ -14,18 +14,20 @@ use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Initialize;
 use lsp_types::request::Request as _;
 use lsp_types::request::WorkspaceConfiguration;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::lsp::non_wasm::protocol::Message;
-use pyrefly::lsp::non_wasm::protocol::Notification;
-use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::Notification;
+use pyrefly_lsp_test::Request;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
+use pyrefly_lsp_test::object_model::LspMessageError;
 use pyrefly_util::stdlib::register_stdlib_paths;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspMessageError;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn require_markdown_initialize(interaction: &LspInteraction) {
     let settings = InitializeSettings {
@@ -219,6 +221,44 @@ fn test_baseline_diagnostic_is_hint() {
     interaction.shutdown().unwrap();
 }
 
+#[test]
+fn test_baselined_unused_type_ignore_is_hint() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_unused_type_ignore");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("bad.py");
+
+    interaction
+        .client
+        .diagnostic("bad.py")
+        .expect_response_with(|response| {
+            let DocumentDiagnosticReportResult::Report(report) = response else {
+                return false;
+            };
+            let lsp_types::DocumentDiagnosticReport::Full(full) = report else {
+                return false;
+            };
+            let items = &full.full_document_diagnostic_report.items;
+            items.len() == 1
+                && items[0].code
+                    == Some(lsp_types::NumberOrString::String(
+                        "unused-type-ignore".to_owned(),
+                    ))
+                && items[0].severity == Some(lsp_types::DiagnosticSeverity::HINT)
+        })
+        .expect("Failed to receive baselined unused-type-ignore diagnostic");
+
+    interaction.shutdown().unwrap();
+}
+
 /// Push diagnostics (`publishDiagnostics`) is the primary user-facing path and
 /// has the same HINT-downgrade logic as the pull path exercised above, so assert
 /// the published notification downgrades only the baselined error.
@@ -274,7 +314,13 @@ fn test_baseline_diagnostic_is_hint_push() {
 fn test_stream_diagnostics_after_save() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -329,7 +375,13 @@ fn test_stream_diagnostics_after_save() {
 fn test_stream_diagnostics_no_flicker_after_undo_edit() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -399,7 +451,13 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
 fn test_open_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -454,7 +512,13 @@ fn test_open_file_during_recheck() {
 fn test_edit_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -879,7 +943,7 @@ fn test_unused_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `os` is unused",
+                    "message": "Import `os` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 7},
                         "end": {"line": 6, "character": 9}
@@ -928,7 +992,7 @@ fn test_unused_from_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `Dict` is unused",
+                    "message": "Import `Dict` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 19},
                         "end": {"line": 6, "character": 23}
@@ -1613,7 +1677,7 @@ fn test_untyped_import_diagnostic_does_not_show_non_recommended_packages() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `boto3` is unused",
+                    "message": "Import `boto3` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 12}
@@ -1642,7 +1706,7 @@ fn test_cross_file_diagnostic_no_indexing() {
     let root = get_test_files_root();
     let root_path = root.path().join("cross_file_method_change");
     // Indexing must be disabled to reproduce.
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
+    let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -1730,7 +1794,7 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
                 },
                 {
                     "code": "unused-import",
-                    "message": "Import `django` is unused",
+                    "message": "Import `django` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 13}
@@ -1776,7 +1840,7 @@ fn test_no_diagnostics_for_non_open_files_in_open_files_only_mode() {
     // publishDiagnostics URI it sees and only terminates on the shutdown response,
     // ensuring no messages are silently consumed.
     let shutdown_handle = interaction.client.send_shutdown();
-    let shutdown_id = shutdown_handle.id.clone();
+    let shutdown_id = shutdown_handle.id().clone();
     let mut diagnostics_uris: Vec<Url> = Vec::new();
     interaction
         .client

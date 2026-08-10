@@ -22,6 +22,7 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -40,7 +41,7 @@ class LinearLayer(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, N, M](
+    def forward[B: IntVar, N: IntVar, M: IntVar](
         self, x: Tensor[[B, N]], weight: Tensor[[M, N]]
     ) -> Tensor[[B, M]]:
         """Generic method - all dims visible in method scope"""
@@ -75,7 +76,7 @@ class TwoLayerMLP(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, N, M, K](
+    def forward[B: IntVar, N: IntVar, M: IntVar, K: IntVar](
         self, x: Tensor[[B, N]], w1: Tensor[[M, N]], w2: Tensor[[K, M]]
     ) -> Tensor[[B, K]]:
         """Two-layer forward pass"""
@@ -109,7 +110,13 @@ class ConvLayer(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, C_in, C_out, H, W](
+    def forward[
+        B: IntVar,
+        C_in: IntVar,
+        C_out: IntVar,
+        H: IntVar,
+        W: IntVar,
+    ](
         self, x: Tensor[[B, C_in, H, W]], weight: Tensor[[C_out, C_in, 3, 3]]
     ) -> Tensor[[B, C_out, H, W]]:
         """Conv with padding=1 preserves spatial dims"""
@@ -138,7 +145,9 @@ class SelfAttention(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, T, D](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
+    def forward[B: IntVar, T: IntVar, D: IntVar](
+        self, x: Tensor[[B, T, D]]
+    ) -> Tensor[[B, T, D]]:
         """Self-attention with Q=K=V=x (simplified)"""
         q: Tensor[[B, T, D]] = x
         k: Tensor[[B, T, D]] = x
@@ -169,7 +178,9 @@ class MultiHeadAttention(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, H, T, D](self, x: Tensor[[B, H, T, D]]) -> Tensor[[B, H, T, D]]:
+    def forward[B: IntVar, H: IntVar, T: IntVar, D: IntVar](
+        self, x: Tensor[[B, H, T, D]]
+    ) -> Tensor[[B, H, T, D]]:
         """Attention across heads"""
         q: Tensor[[B, H, T, D]] = x
         k: Tensor[[B, H, T, D]] = x
@@ -200,7 +211,7 @@ class CrossAttention(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, Tq, Tkv, D](
+    def forward[B: IntVar, Tq: IntVar, Tkv: IntVar, D: IntVar](
         self,
         queries: Tensor[[B, Tq, D]],
         keys: Tensor[[B, Tkv, D]],
@@ -235,7 +246,7 @@ class ResidualBlock(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, C, H, W](
+    def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]], weight: Tensor[[C, C, 3, 3]]
     ) -> Tensor[[B, C, H, W]]:
         """Residual: out + skip"""
@@ -267,7 +278,9 @@ class GlobalAvgPool(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, C, H, W](self, x: Tensor[[B, C, H, W]]) -> Tensor[[B, C]]:
+    def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]]
+    ) -> Tensor[[B, C]]:
         """Pool over spatial dimensions"""
         # Mean over H dimension, then W dimension
         pooled_h: Tensor[[B, C, W]] = torch.mean(x, dim=2)
@@ -295,7 +308,9 @@ class LayerNorm(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, T, D](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
+    def forward[B: IntVar, T: IntVar, D: IntVar](
+        self, x: Tensor[[B, T, D]]
+    ) -> Tensor[[B, T, D]]:
         """Normalize over last dimension"""
         mean: Tensor[[B, T]] = torch.mean(x, dim=2)
         std: Tensor[[B, T]] = torch.std(x, dim=2)
@@ -324,7 +339,7 @@ class BilinearPooling(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward[B, C](
+    def forward[B: IntVar, C: IntVar](
         self,
         feat_a: Tensor[[B, C, 49]],  # Flattened spatial (7*7)
         feat_b: Tensor[[B, C, 49]],
@@ -350,7 +365,7 @@ def test_bilinear_pooling():
 # ============================================================================
 
 
-def batched_linear[B, N, M](
+def batched_linear[B: IntVar, N: IntVar, M: IntVar](
     x: Tensor[[B, N]], weight: Tensor[[M, N]]
 ) -> Tensor[[B, M]]:
     """

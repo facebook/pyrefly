@@ -7,7 +7,7 @@
 
 from typing import Any, assert_type, TYPE_CHECKING
 
-from shape_extensions import Elements, SizeTuple
+from shape_extensions import Elements, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -118,17 +118,21 @@ def chained_with_tensor(x: Tensor[[2, 3]], y: Tensor[[2, 3]]) -> Tensor[[2, 3]]:
 # ============================================================================
 
 
-def add_symbolic[N, M](x: Tensor[[N, M]]) -> Tensor[[N, M]]:
+def add_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N, M]]:
     """Scalar add with symbolic dimensions"""
     return x + 1.0
 
 
-def mul_symbolic[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]) -> Tensor[[N, M]]:
+def mul_symbolic[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]], y: Tensor[[N, M]]
+) -> Tensor[[N, M]]:
     """Tensor multiply with symbolic dimensions"""
     return x * y
 
 
-def chained_symbolic[B, N, M](x: Tensor[[B, N, M]]) -> Tensor[[B, N, M]]:
+def chained_symbolic[B: IntVar, N: IntVar, M: IntVar](
+    x: Tensor[[B, N, M]],
+) -> Tensor[[B, N, M]]:
     """Chained ops with 3D symbolic tensor"""
     return (x + 1.0) * 2.0 / 3.0
 
@@ -166,8 +170,8 @@ def broadcast_wrong_return(x: Tensor[[1, 3]], y: Tensor[[2, 3]]) -> Tensor[[1, 3
 
 def broadcast_incompatible_dims(x: Tensor[[2, 3]], y: Tensor[[4, 5]]) -> Tensor[[4, 5]]:
     """Incompatible dimensions cannot broadcast."""
-    # E: Cannot broadcast tensor shapes:
-    #    Cannot broadcast dimension 3 with dimension 5 at position 1
+    # E: Cannot evaluate type-level shape DSL call:
+    #    Cannot broadcast dimension Int[3] with dimension Int[5] at position 1
     return x + y
 
 
@@ -191,27 +195,29 @@ def broadcast_both_any(x: Tensor[[Any, 3]], y: Tensor[[Any, 3]]) -> None:
 # ============================================================================
 
 
-def broadcast_same_symbolic[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]) -> None:
+def broadcast_same_symbolic[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]], y: Tensor[[N, M]]
+) -> None:
     """Same symbolic dims are compatible"""
     assert_type(x + y, Tensor[[N, M]])
 
 
-def broadcast_symbolic_with_1[N](x: Tensor[[N, 3]], y: Tensor[[1, 3]]) -> None:
+def broadcast_symbolic_with_1[N: IntVar](x: Tensor[[N, 3]], y: Tensor[[1, 3]]) -> None:
     """Size(1) broadcasts to symbolic dim"""
     assert_type(x + y, Tensor[[N, 3]])
 
 
-def broadcast_1_with_symbolic[N](x: Tensor[[1, 3]], y: Tensor[[N, 3]]) -> None:
+def broadcast_1_with_symbolic[N: IntVar](x: Tensor[[1, 3]], y: Tensor[[N, 3]]) -> None:
     """Symmetric: Size(1) on the left broadcasts to symbolic on the right"""
     assert_type(x + y, Tensor[[N, 3]])
 
 
-def broadcast_different_symbolic[N, M](
+def broadcast_different_symbolic[N: IntVar, M: IntVar](
     x: Tensor[[N, 3]], y: Tensor[[M, 3]]
 ) -> Tensor[[N, 3]]:
     """Different symbolic dimensions are not compatible for broadcasting."""
-    # E: Cannot broadcast tensor shapes:
-    #    Cannot broadcast dimension N with dimension M at position 0
+    # E: Cannot evaluate type-level shape DSL call:
+    #    Cannot broadcast dimension Int[N] with dimension Int[M] at position 0
     return x + y
 
 
@@ -235,71 +241,71 @@ def broadcast_scalar_with_shapeless(x: Tensor[[]], y: Tensor) -> None:
 # ============================================================================
 
 
-def broadcast_concrete_suffix_match[Ts: SizeTuple](
+def broadcast_concrete_suffix_match[Ts: IntTuple](
     x: Tensor[[3]], y: Tensor[[*Elements[Ts], 3]]
 ) -> None:
     """Concrete consumed by suffix → preserves prefix + middle"""
     assert_type(x + y, Tensor[[*Elements[Ts], 3]])
 
 
-def broadcast_scalar_with_unpacked[Ts: SizeTuple](
+def broadcast_scalar_with_unpacked[Ts: IntTuple](
     x: Tensor[[]], y: Tensor[[*Elements[Ts], 3]]
 ) -> None:
     """Scalar + unpacked = unpacked (scalar broadcasts to anything)"""
     assert_type(x + y, Tensor[[*Elements[Ts], 3]])
 
 
-def broadcast_concrete_exceeds_suffix[Ts: SizeTuple](
+def broadcast_concrete_exceeds_suffix[Ts: IntTuple](
     x: Tensor[[5, 10, 20]], y: Tensor[[*Elements[Ts], 20]]
 ) -> Tensor[[5, 10, 20]]:
-    """Leftover concrete dims cannot align with the TypeVarTuple middle."""
-    # E: Cannot broadcast tensor shapes:
+    """Leftover concrete dims cannot align with the IntTuple middle."""
+    # E: Cannot evaluate type-level shape DSL call:
     #    Cannot broadcast concrete dims with variadic shape
     return x + y
 
 
 # ============================================================================
-# Broadcasting Unpacked + Unpacked (same TypeVarTuple)
+# Broadcasting Unpacked + Unpacked (same IntTuple)
 # ============================================================================
 
 
-def broadcast_same_tvt[Ts: SizeTuple](
+def broadcast_same_int_tuple[Ts: IntTuple](
     x: Tensor[[*Elements[Ts], 3]], y: Tensor[[*Elements[Ts], 3]]
 ) -> None:
-    """Same TypeVarTuple, same suffix → cancel middles, result preserves shape"""
+    """Same IntTuple, same suffix → cancel middles, result preserves shape"""
     assert_type(x + y, Tensor[[*Elements[Ts], 3]])
 
 
-def broadcast_same_tvt_prefix[Ts: SizeTuple](
+def broadcast_same_int_tuple_prefix[Ts: IntTuple](
     x: Tensor[[5, *Elements[Ts]]], y: Tensor[[1, *Elements[Ts]]]
 ) -> None:
-    """Same TypeVarTuple, broadcast prefixes (1 broadcasts to 5)"""
+    """Same IntTuple, broadcast prefixes (1 broadcasts to 5)"""
     assert_type(x + y, Tensor[[5, *Elements[Ts]]])
 
 
-def broadcast_same_tvt_prefix_extension[Ts: SizeTuple](
+def broadcast_same_int_tuple_prefix_extension[Ts: IntTuple](
     x: Tensor[[5, 6, *Elements[Ts]]], y: Tensor[[6, *Elements[Ts]]]
 ) -> None:
-    """Same TypeVarTuple, left prefix extends right (right padded with implicit 1)"""
+    """Same IntTuple, left prefix extends right (right padded with implicit 1)"""
     assert_type(x + y, Tensor[[5, 6, *Elements[Ts]]])
 
 
 # ============================================================================
-# Broadcasting Unpacked + Unpacked with Different TypeVarTuples
+# Broadcasting Unpacked + Unpacked with Different IntTuples
 # ============================================================================
 
 
-def broadcast_different_tvt[Ts: SizeTuple, Us: SizeTuple](
+def broadcast_different_int_tuple[Ts: IntTuple, Us: IntTuple](
     x: Tensor[[*Elements[Ts], 3]], y: Tensor[[*Elements[Us], 3]]
 ) -> Tensor[[*Elements[Ts], 3]]:
-    """Different TypeVarTuples degrade to shapeless batch dims."""
-    # E: Returned type `Tensor[[*tuple[Unknown, ...], 3]]` is not assignable
-    #    to declared return type `Tensor[[*Ts, 3]]`
+    """Different IntTuples degrade to shapeless batch dims."""
+    # E: Returned type `Tensor[[*tuple[int, ...], 3]]` is not assignable
+    #    to declared return type `Tensor[[*Elements[Ts], 3]]`
     return x + y
 
 
-def broadcast_different_tvt_any_batch[Ts: SizeTuple, Us: SizeTuple](
+def broadcast_different_int_tuple_any_batch[Ts: IntTuple, Us: IntTuple](
     x: Tensor[[*Elements[Ts], 3]], y: Tensor[[*Elements[Us], 3]]
-) -> Tensor[[*Elements[SizeTuple], 3]]:
-    """Different TypeVarTuples are accepted with unbounded batch dims."""
+) -> Tensor[[*Elements[IntTuple], 3]]:
+    """Different IntTuples are accepted with unbounded batch dims."""
     return x + y

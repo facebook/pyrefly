@@ -46,10 +46,10 @@ from typing import Any, assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from shape_extensions import Elements, SizeTuple
+from shape_extensions import Elements, IntTuple, IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
@@ -59,16 +59,24 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class LLaMAConfig[VocabSize, D, NHead, NLayer, HiddenDim, MaxBatch, MaxSeq]:
+class LLaMAConfig[
+    VocabSize: IntVar,
+    D: IntVar,
+    NHead: IntVar,
+    NLayer: IntVar,
+    HiddenDim: IntVar,
+    MaxBatch: IntVar,
+    MaxSeq: IntVar,
+]:
     """Configuration for LLaMA model, generic over key dimensions."""
 
-    vocab_size: Dim[VocabSize]
-    dim: Dim[D]
-    n_heads: Dim[NHead]
-    n_layers: Dim[NLayer]
-    hidden_dim: Dim[HiddenDim]
-    max_batch_size: Dim[MaxBatch]
-    max_seq_len: Dim[MaxSeq]
+    vocab_size: Int[VocabSize]
+    dim: Int[D]
+    n_heads: Int[NHead]
+    n_layers: Int[NLayer]
+    hidden_dim: Int[HiddenDim]
+    max_batch_size: Int[MaxBatch]
+    max_seq_len: Int[MaxSeq]
     norm_eps: float = 1e-5
 
 
@@ -83,8 +91,8 @@ def compute_hidden_dim(dim: int, multiple_of: int = 256) -> int:
 # ============================================================================
 
 
-def precompute_freqs_cis[HeadDim, End](
-    dim: Dim[HeadDim], end: Dim[End], theta: float = 10000.0
+def precompute_freqs_cis[HeadDim: IntVar, End: IntVar](
+    dim: Int[HeadDim], end: Int[End], theta: float = 10000.0
 ) -> Tensor[[End, HeadDim // 2]]:
     """Precompute complex-valued frequency tensor for RoPE.
 
@@ -104,7 +112,7 @@ def precompute_freqs_cis[HeadDim, End](
     return freqs_cis
 
 
-def reshape_for_broadcast[T, HD](
+def reshape_for_broadcast[T: IntVar, HD: IntVar](
     freqs_cis: Tensor[[T, HD]], x: Tensor
 ) -> Tensor[[1, 1, T, HD]]:
     """Reshape frequency tensor for broadcasting with multi-head tensors.
@@ -118,7 +126,7 @@ def reshape_for_broadcast[T, HD](
     return freqs_cis.view(1, 1, t, hd)
 
 
-def apply_rotary_emb[B, NHead, T, HeadDim](
+def apply_rotary_emb[B: IntVar, NHead: IntVar, T: IntVar, HeadDim: IntVar](
     xq: Tensor[[B, NHead, T, HeadDim]],
     xk: Tensor[[B, NHead, T, HeadDim]],
     freqs_cis: Tensor[[T, HeadDim // 2]],
@@ -150,7 +158,7 @@ def apply_rotary_emb[B, NHead, T, HeadDim](
 # ============================================================================
 
 
-def build_causal_mask[T](seq_len: Dim[T]) -> Tensor[[T, T]]:
+def build_causal_mask[T: IntVar](seq_len: Int[T]) -> Tensor[[T, T]]:
     """Build causal (upper-triangular) attention mask.
 
     Original: llama/model.py, constructed in Transformer.__init__.
@@ -168,18 +176,18 @@ def build_causal_mask[T](seq_len: Dim[T]) -> Tensor[[T, T]]:
 # ============================================================================
 
 
-class RMSNorm[D](nn.Module):
+class RMSNorm[D: IntVar](nn.Module):
     """Root Mean Square Layer Normalization.
 
     Shape-preserving: (*, D) → (*, D)
     """
 
-    def __init__(self, dim: Dim[D], eps: float = 1e-6) -> None:
+    def __init__(self, dim: Int[D], eps: float = 1e-6) -> None:
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def forward[Bs: SizeTuple](
+    def forward[Bs: IntTuple](
         self, x: Tensor[[*Elements[Bs], D]]
     ) -> Tensor[[*Elements[Bs], D]]:
         normed = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
@@ -191,7 +199,7 @@ class RMSNorm[D](nn.Module):
 # ============================================================================
 
 
-class FeedForward[D, HiddenDim](nn.Module):
+class FeedForward[D: IntVar, HiddenDim: IntVar](nn.Module):
     """SwiGLU feedforward network.
 
     Architecture: silu(w1(x)) * w3(x) → w2 → output
@@ -210,7 +218,7 @@ class FeedForward[D, HiddenDim](nn.Module):
         self.w2 = nn.Linear(config.hidden_dim, config.dim, bias=False)
         self.w3 = nn.Linear(config.dim, config.hidden_dim, bias=False)
 
-    def forward[B, T](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
+    def forward[B: IntVar, T: IntVar](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
         gate = F.silu(self.w1(x))
         assert_type(gate, Tensor[[B, T, HiddenDim]])
         up = self.w3(x)
@@ -223,7 +231,7 @@ class FeedForward[D, HiddenDim](nn.Module):
 # ============================================================================
 
 
-class Attention[D, NHead, MaxBatch, MaxSeq](nn.Module):
+class Attention[D: IntVar, NHead: IntVar, MaxBatch: IntVar, MaxSeq: IntVar](nn.Module):
     """Multi-head self-attention with RoPE and KV cache.
 
     Shape flow:
@@ -250,7 +258,7 @@ class Attention[D, NHead, MaxBatch, MaxSeq](nn.Module):
         self.wv = nn.Linear(config.dim, config.dim, bias=False)
         self.wo = nn.Linear(config.dim, config.dim, bias=False)
         # KV cache: pre-allocated buffers for inference.
-        # Shape: (MaxBatch, MaxSeq, NHead, HeadDim). torch.zeros with Dim args → typed.
+        # Shape: (MaxBatch, MaxSeq, NHead, HeadDim). torch.zeros with Int args → typed.
         self.cache_k = torch.zeros(
             (config.max_batch_size, config.max_seq_len, config.n_heads, self.head_dim)
         )
@@ -258,17 +266,17 @@ class Attention[D, NHead, MaxBatch, MaxSeq](nn.Module):
             (config.max_batch_size, config.max_seq_len, config.n_heads, self.head_dim)
         )
 
-    def forward[B, T, SP](
+    def forward[B: IntVar, T: IntVar, SP: IntVar](
         self,
         x: Tensor[[B, T, D]],
-        start_pos: Dim[SP] | None = None,
+        start_pos: Int[SP] | None = None,
         freqs_cis: Tensor[[T, D // NHead // 2]] | None = None,
         mask: Tensor[[T, T]] | None = None,
     ) -> Tensor[[B, T, D]]:
         b, t, d = x.size()
-        assert_type(b, Dim[B])
-        assert_type(t, Dim[T])
-        assert_type(d, Dim[D])
+        assert_type(b, Int[B])
+        assert_type(t, Int[T])
+        assert_type(d, Int[D])
         q = self.wq(x)
         k = self.wk(x)
         v = self.wv(x)
@@ -322,7 +330,13 @@ class Attention[D, NHead, MaxBatch, MaxSeq](nn.Module):
 # ============================================================================
 
 
-class TransformerBlock[D, NHead, HiddenDim, MaxBatch, MaxSeq](nn.Module):
+class TransformerBlock[
+    D: IntVar,
+    NHead: IntVar,
+    HiddenDim: IntVar,
+    MaxBatch: IntVar,
+    MaxSeq: IntVar,
+](nn.Module):
     """Pre-norm transformer block with RMSNorm.
 
     x → RMSNorm → Attention → + residual
@@ -341,10 +355,10 @@ class TransformerBlock[D, NHead, HiddenDim, MaxBatch, MaxSeq](nn.Module):
         self.attention_norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.ffn_norm = RMSNorm(config.dim, eps=config.norm_eps)
 
-    def forward[B, T, SP](
+    def forward[B: IntVar, T: IntVar, SP: IntVar](
         self,
         x: Tensor[[B, T, D]],
-        start_pos: Dim[SP] | None = None,
+        start_pos: Int[SP] | None = None,
         freqs_cis: Tensor[[T, D // NHead // 2]] | None = None,
         mask: Tensor[[T, T]] | None = None,
     ) -> Tensor[[B, T, D]]:
@@ -360,7 +374,12 @@ class TransformerBlock[D, NHead, HiddenDim, MaxBatch, MaxSeq](nn.Module):
 # ============================================================================
 
 
-class Transformer[VocabSize, D, NHead, HiddenDim](nn.Module):
+class Transformer[
+    VocabSize: IntVar,
+    D: IntVar,
+    NHead: IntVar,
+    HiddenDim: IntVar,
+](nn.Module):
     """LLaMA decoder-only transformer.
 
     tokens (B, T) → Embedding → (B, T, D)
@@ -386,8 +405,8 @@ class Transformer[VocabSize, D, NHead, HiddenDim](nn.Module):
         self.norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
 
-    def forward[B, T, SP](
-        self, tokens: Tensor[[B, T]], start_pos: Dim[SP] | None = None
+    def forward[B: IntVar, T: IntVar, SP: IntVar](
+        self, tokens: Tensor[[B, T]], start_pos: Int[SP] | None = None
     ) -> Tensor[[B, VocabSize]]:
         h = self.tok_embeddings(tokens)
         assert_type(h, Tensor[[B, T, D]])

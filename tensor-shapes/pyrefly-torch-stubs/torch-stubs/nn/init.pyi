@@ -14,7 +14,7 @@ to maintain shape information through initialization calls.
 
 from typing import Literal
 
-from shape_extensions import SizeTuple
+from shape_extensions import IntTuple
 from torch import Tensor
 
 __all__ = [
@@ -41,37 +41,37 @@ __all__ = [
 ]
 
 # Uniform and normal initializations
-def uniform_[Shape: SizeTuple](
+def uniform_[Shape: IntTuple](
     tensor: Tensor[Shape], a: float = 0.0, b: float = 1.0
 ) -> Tensor[Shape]:
     """Fill tensor with values from uniform distribution U(a, b)."""
     ...
 
-def normal_[Shape: SizeTuple](
+def normal_[Shape: IntTuple](
     tensor: Tensor[Shape], mean: float = 0.0, std: float = 1.0
 ) -> Tensor[Shape]:
     """Fill tensor with values from normal distribution N(mean, std)."""
     ...
 
 # Constant initializations
-def constant_[Shape: SizeTuple](tensor: Tensor[Shape], val: float) -> Tensor[Shape]:
+def constant_[Shape: IntTuple](tensor: Tensor[Shape], val: float) -> Tensor[Shape]:
     """Fill tensor with constant value."""
     ...
 
-def ones_[Shape: SizeTuple](tensor: Tensor[Shape]) -> Tensor[Shape]:
+def ones_[Shape: IntTuple](tensor: Tensor[Shape]) -> Tensor[Shape]:
     """Fill tensor with ones."""
     ...
 
-def zeros_[Shape: SizeTuple](tensor: Tensor[Shape]) -> Tensor[Shape]:
+def zeros_[Shape: IntTuple](tensor: Tensor[Shape]) -> Tensor[Shape]:
     """Fill tensor with zeros."""
     ...
 
-def eye_[Shape: SizeTuple](tensor: Tensor[Shape]) -> Tensor[Shape]:
+def eye_[Shape: IntTuple](tensor: Tensor[Shape]) -> Tensor[Shape]:
     """Fill 2D tensor as identity matrix."""
     ...
 
 # Kaiming (He) initialization
-def kaiming_uniform_[Shape: SizeTuple](
+def kaiming_uniform_[Shape: IntTuple](
     tensor: Tensor[Shape],
     a: float = 0,
     mode: Literal["fan_in", "fan_out"] = "fan_in",
@@ -80,7 +80,7 @@ def kaiming_uniform_[Shape: SizeTuple](
     """Kaiming uniform initialization."""
     ...
 
-def kaiming_normal_[Shape: SizeTuple](
+def kaiming_normal_[Shape: IntTuple](
     tensor: Tensor[Shape],
     a: float = 0,
     mode: Literal["fan_in", "fan_out"] = "fan_in",
@@ -90,34 +90,34 @@ def kaiming_normal_[Shape: SizeTuple](
     ...
 
 # Xavier (Glorot) initialization
-def xavier_uniform_[Shape: SizeTuple](
+def xavier_uniform_[Shape: IntTuple](
     tensor: Tensor[Shape], gain: float = 1.0
 ) -> Tensor[Shape]:
     """Xavier uniform initialization."""
     ...
 
-def xavier_normal_[Shape: SizeTuple](
+def xavier_normal_[Shape: IntTuple](
     tensor: Tensor[Shape], gain: float = 1.0
 ) -> Tensor[Shape]:
     """Xavier normal initialization."""
     ...
 
 # Orthogonal initialization
-def orthogonal_[Shape: SizeTuple](
+def orthogonal_[Shape: IntTuple](
     tensor: Tensor[Shape], gain: float = 1.0
 ) -> Tensor[Shape]:
     """Orthogonal matrix initialization."""
     ...
 
 # Sparse initialization
-def sparse_[Shape: SizeTuple](
+def sparse_[Shape: IntTuple](
     tensor: Tensor[Shape], sparsity: float, std: float = 0.01
 ) -> Tensor[Shape]:
     """Sparse initialization."""
     ...
 
 # Truncated normal initialization
-def trunc_normal_[Shape: SizeTuple](
+def trunc_normal_[Shape: IntTuple](
     tensor: Tensor[Shape],
     mean: float = 0.0,
     std: float = 1.0,

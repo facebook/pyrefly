@@ -15,12 +15,11 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FuncDefIndex;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
+use pyrefly_types::function::FuncDefIndex;
+use pyrefly_types::function::PropertyRole;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Type;
@@ -361,7 +360,7 @@ fn export_function_parameter(param: &Param, context: &ModuleContext) -> Function
 
 fn export_function_parameters(params: &Params, context: &ModuleContext) -> FunctionParameters {
     match params {
-        Params::List(params) => FunctionParameters::List(
+        Params::List(params) | Params::Partial(params) => FunctionParameters::List(
             params
                 .items()
                 .iter()
@@ -378,11 +377,8 @@ fn assert_decorated_function_in_context(
     function: &DecoratedFunction,
     context: &ModuleAnswersContext,
 ) {
-    match &function.undecorated.metadata.kind {
-        FunctionKind::Def(func_id) => {
-            assert_eq!(func_id.module, context.module_info);
-        }
-        _ => (),
+    if let Some(func_symbol) = function.undecorated.metadata.kind.to_func_symbol() {
+        assert_eq!(func_symbol.module, context.module_info);
     }
 }
 
@@ -613,9 +609,9 @@ impl FunctionNode {
                 ..
             }) => {
                 let binding = context.bindings.get(*definition);
-                if let Binding::Function(key_decorated_function, _, _) = binding {
+                if let Binding::Function { decorated_idx, .. } = binding {
                     let exported_function = get_exported_decorated_function(
-                        *key_decorated_function,
+                        *decorated_idx,
                         /* skip_property_getter */ false,
                         context,
                     );
@@ -733,7 +729,9 @@ impl FunctionNode {
 
     fn is_stub(&self) -> bool {
         match self {
-            FunctionNode::DecoratedFunction(function) => function.is_stub(),
+            FunctionNode::DecoratedFunction(function) => {
+                function.metadata().flags.facts().is_stub()
+            }
             FunctionNode::ClassField { .. } => false,
         }
     }

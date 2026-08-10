@@ -32,11 +32,11 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from shape_extensions import SizeTuple
+from shape_extensions import IntTuple, IntVar
 from torch import distributions as pyd
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
@@ -62,19 +62,19 @@ class TanhTransform(pyd.transforms.Transform):
         self.clamp = clamp
 
     @staticmethod
-    def atanh[S: SizeTuple](x: Tensor[S]) -> Tensor[S]:
+    def atanh[S: IntTuple](x: Tensor[S]) -> Tensor[S]:
         return 0.5 * (x.log1p() - (-x).log1p())
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, TanhTransform)
 
-    def _call[S: SizeTuple](self, x: Tensor[S]) -> Tensor[S]:
+    def _call[S: IntTuple](self, x: Tensor[S]) -> Tensor[S]:
         return x.tanh()
 
-    def _inverse[S: SizeTuple](self, y: Tensor[S]) -> Tensor[S]:
+    def _inverse[S: IntTuple](self, y: Tensor[S]) -> Tensor[S]:
         return self.atanh(y if self.clamp is None else y.clamp(*self.clamp))
 
-    def log_abs_det_jacobian[S: SizeTuple](
+    def log_abs_det_jacobian[S: IntTuple](
         self, x: Tensor[S], y: Tensor[S]
     ) -> Tensor[S]:
         return 2.0 * (math.log(2.0) - x - F.softplus(-2.0 * x))
@@ -119,13 +119,13 @@ class BetaDist(pyd.transformed_distribution.TransformedDistribution):
         def __eq__(self, other: object) -> bool:
             return isinstance(other, BetaDist._BetaDistTransform)
 
-        def _inverse[S: SizeTuple](self, y: Tensor[S]) -> Tensor[S]:
+        def _inverse[S: IntTuple](self, y: Tensor[S]) -> Tensor[S]:
             return (y.clamp(-0.99, 0.99) + 1.0) / 2.0
 
-        def _call[S: SizeTuple](self, x: Tensor[S]) -> Tensor[S]:
+        def _call[S: IntTuple](self, x: Tensor[S]) -> Tensor[S]:
             return (2.0 * x) - 1.0
 
-        def log_abs_det_jacobian[S: SizeTuple](
+        def log_abs_det_jacobian[S: IntTuple](
             self, x: Tensor[S], y: Tensor[S]
         ) -> Tensor[S]:
             # Constant Jacobian — scalar broadcasts to match input shape
@@ -149,20 +149,20 @@ class BetaDist(pyd.transformed_distribution.TransformedDistribution):
 # ============================================================================
 
 
-class BaselineActor[S, A](nn.Module):
+class BaselineActor[S: IntVar, A: IntVar](nn.Module):
     """Simple MLP actor: state → action.
 
     Architecture: Linear(S, 400) → ReLU → Linear(400, 400) → ReLU →
                   Linear(400, A) → Tanh
     """
 
-    def __init__(self, state_size: Dim[S], action_size: Dim[A]) -> None:
+    def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(state_size, 400)
         self.fc2 = nn.Linear(400, 400)
         self.out = nn.Linear(400, action_size)
 
-    def forward[B](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
+    def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
         h1 = F.relu(self.fc1(state))
         assert_type(h1, Tensor[[B, 400]])
         h2 = F.relu(self.fc2(h1))
@@ -172,7 +172,7 @@ class BaselineActor[S, A](nn.Module):
         return act
 
 
-class BaselineCritic[S, A](nn.Module):
+class BaselineCritic[S: IntVar, A: IntVar](nn.Module):
     """Simple MLP critic: (state, action) → Q-value.
 
     Concatenates state and action, then MLP to scalar output.
@@ -180,13 +180,13 @@ class BaselineCritic[S, A](nn.Module):
                   Linear(400, 300) → ReLU → Linear(300, 1)
     """
 
-    def __init__(self, state_size: Dim[S], action_size: Dim[A]) -> None:
+    def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(state_size + action_size, 400)
         self.fc2 = nn.Linear(400, 300)
         self.out = nn.Linear(300, 1)
 
-    def forward[B](
+    def forward[B: IntVar](
         self, state: Tensor[[B, S]], action: Tensor[[B, A]]
     ) -> Tensor[[B, 1]]:
         sa = torch.cat((state, action), dim=1)
@@ -199,7 +199,7 @@ class BaselineCritic[S, A](nn.Module):
         return val
 
 
-class BigCritic[S, A, H](nn.Module):
+class BigCritic[S: IntVar, A: IntVar, H: IntVar](nn.Module):
     """Large MLP critic with configurable hidden size.
 
     Architecture: Cat(S+A) → Linear(S+A, H) → ReLU →
@@ -208,16 +208,16 @@ class BigCritic[S, A, H](nn.Module):
 
     def __init__(
         self,
-        state_space_size: Dim[S],
-        act_space_size: Dim[A],
-        hidden_size: Dim[H],
+        state_space_size: Int[S],
+        act_space_size: Int[A],
+        hidden_size: Int[H],
     ) -> None:
         super().__init__()
         self.fc1 = nn.Linear(state_space_size + act_space_size, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, 1)
 
-    def forward[B](
+    def forward[B: IntVar](
         self, state: Tensor[[B, S]], action: Tensor[[B, A]]
     ) -> Tensor[[B, 1]]:
         sa = torch.cat((state, action), dim=1)
@@ -230,7 +230,7 @@ class BigCritic[S, A, H](nn.Module):
         return out
 
 
-class BaselineDiscreteCritic[S, A, H](nn.Module):
+class BaselineDiscreteCritic[S: IntVar, A: IntVar, H: IntVar](nn.Module):
     """MLP critic for discrete actions: state → Q-values for each action.
 
     Architecture: Linear(S, H) → ReLU → Linear(H, H) → ReLU →
@@ -238,14 +238,14 @@ class BaselineDiscreteCritic[S, A, H](nn.Module):
     """
 
     def __init__(
-        self, obs_shape: Dim[S], action_shape: Dim[A], hidden_size: Dim[H]
+        self, obs_shape: Int[S], action_shape: Int[A], hidden_size: Int[H]
     ) -> None:
         super().__init__()
         self.fc1 = nn.Linear(obs_shape, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.out = nn.Linear(hidden_size, action_shape)
 
-    def forward[B](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
+    def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
         h1 = F.relu(self.fc1(state))
         assert_type(h1, Tensor[[B, H]])
         h2 = F.relu(self.fc2(h1))
@@ -255,7 +255,7 @@ class BaselineDiscreteCritic[S, A, H](nn.Module):
         return vals
 
 
-class StochasticActor[S, A, H](nn.Module):
+class StochasticActor[S: IntVar, A: IntVar, H: IntVar](nn.Module):
     """Stochastic MLP actor: state → distribution over actions.
 
     Architecture: Linear(S, H) → ReLU → Linear(H, H) → ReLU →
@@ -268,9 +268,9 @@ class StochasticActor[S, A, H](nn.Module):
 
     def __init__(
         self,
-        state_space_size: Dim[S],
-        act_space_size: Dim[A],
-        hidden_size: Dim[H],
+        state_space_size: Int[S],
+        act_space_size: Int[A],
+        hidden_size: Int[H],
         log_std_low: float = -10.0,
         log_std_high: float = 2.0,
         dist_impl: str = "pyd",
@@ -283,7 +283,7 @@ class StochasticActor[S, A, H](nn.Module):
         self.log_std_high = log_std_high
         self.dist_impl = dist_impl
 
-    def forward[B](self, state: Tensor[[B, S]]) -> SquashedNormal | BetaDist:
+    def forward[B: IntVar](self, state: Tensor[[B, S]]) -> SquashedNormal | BetaDist:
         h1 = F.relu(self.fc1(state))
         assert_type(h1, Tensor[[B, H]])
         h2 = F.relu(self.fc2(h1))
@@ -316,7 +316,7 @@ class StochasticActor[S, A, H](nn.Module):
         return dist
 
 
-class GracBaselineActor[S, A](nn.Module):
+class GracBaselineActor[S: IntVar, A: IntVar](nn.Module):
     """Two-headed MLP actor: state → Normal(mean, std).
 
     Architecture: Linear(S, 400) → ReLU → Linear(400, 300) → ReLU →
@@ -325,14 +325,14 @@ class GracBaselineActor[S, A](nn.Module):
     Returns Normal(mean, std).
     """
 
-    def __init__(self, obs_size: Dim[S], action_size: Dim[A]) -> None:
+    def __init__(self, obs_size: Int[S], action_size: Int[A]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(obs_size, 400)
         self.fc2 = nn.Linear(400, 300)
         self.fc_mean = nn.Linear(300, action_size)
         self.fc_std = nn.Linear(300, action_size)
 
-    def forward[B](self, state: Tensor[[B, S]]) -> pyd.Normal:
+    def forward[B: IntVar](self, state: Tensor[[B, S]]) -> pyd.Normal:
         h1 = F.relu(self.fc1(state))
         assert_type(h1, Tensor[[B, 400]])
         h2 = F.relu(self.fc2(h1))
@@ -344,7 +344,7 @@ class GracBaselineActor[S, A](nn.Module):
         return pyd.Normal(mean, std)
 
 
-class BaselineDiscreteActor[S, A, H](nn.Module):
+class BaselineDiscreteActor[S: IntVar, A: IntVar, H: IntVar](nn.Module):
     """Discrete MLP actor: state → Categorical distribution.
 
     Architecture: Linear(S, H) → ReLU → Linear(H, H) → ReLU →
@@ -352,14 +352,14 @@ class BaselineDiscreteActor[S, A, H](nn.Module):
     """
 
     def __init__(
-        self, obs_shape: Dim[S], action_size: Dim[A], hidden_size: Dim[H]
+        self, obs_shape: Int[S], action_size: Int[A], hidden_size: Int[H]
     ) -> None:
         super().__init__()
         self.fc1 = nn.Linear(obs_shape, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.act_p = nn.Linear(hidden_size, action_size)
 
-    def forward[B](self, state: Tensor[[B, S]]) -> pyd.Categorical:
+    def forward[B: IntVar](self, state: Tensor[[B, S]]) -> pyd.Categorical:
         h1 = F.relu(self.fc1(state))
         assert_type(h1, Tensor[[B, H]])
         h2 = F.relu(self.fc2(h1))
@@ -374,7 +374,7 @@ class BaselineDiscreteActor[S, A, H](nn.Module):
 # ============================================================================
 
 
-class SmallPixelEncoder[C, OutDim](nn.Module):
+class SmallPixelEncoder[C: IntVar, OutDim: IntVar](nn.Module):
     """Small CNN encoder for 84×84 pixel observations.
 
     Architecture:
@@ -385,7 +385,7 @@ class SmallPixelEncoder[C, OutDim](nn.Module):
     - Linear(3136, OutDim)
     """
 
-    def __init__(self, channels: Dim[C], out_dim: Dim[OutDim]) -> None:
+    def __init__(self, channels: Int[C], out_dim: Int[OutDim]) -> None:
         super().__init__()
         self.conv1 = nn.Conv2d(channels, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
@@ -393,7 +393,7 @@ class SmallPixelEncoder[C, OutDim](nn.Module):
         self.flatten = nn.Flatten(1, -1)
         self.fc = nn.Linear(3136, out_dim)
 
-    def forward[B](self, obs: Tensor[[B, C, 84, 84]]) -> Tensor[[B, OutDim]]:
+    def forward[B: IntVar](self, obs: Tensor[[B, C, 84, 84]]) -> Tensor[[B, OutDim]]:
         # obs = obs / 255.0 omitted (scalar div, doesn't change shape)
         h1 = F.relu(self.conv1(obs))
         assert_type(h1, Tensor[[B, 32, 20, 20]])
@@ -408,7 +408,7 @@ class SmallPixelEncoder[C, OutDim](nn.Module):
         return state
 
 
-class BigPixelEncoder[C, OutDim](nn.Module):
+class BigPixelEncoder[C: IntVar, OutDim: IntVar](nn.Module):
     """Large CNN encoder for 84×84 pixel observations.
 
     Architecture:
@@ -420,7 +420,7 @@ class BigPixelEncoder[C, OutDim](nn.Module):
     - Linear(39200, OutDim) → LayerNorm(OutDim) → Tanh
     """
 
-    def __init__(self, channels: Dim[C], out_dim: Dim[OutDim]) -> None:
+    def __init__(self, channels: Int[C], out_dim: Int[OutDim]) -> None:
         super().__init__()
         self.conv1 = nn.Conv2d(channels, 32, kernel_size=3, stride=2)
         self.conv2 = nn.Conv2d(32, 32, kernel_size=3, stride=1)
@@ -430,7 +430,7 @@ class BigPixelEncoder[C, OutDim](nn.Module):
         self.fc = nn.Linear(39200, out_dim)
         self.ln = nn.LayerNorm(out_dim)
 
-    def forward[B](self, obs: Tensor[[B, C, 84, 84]]) -> Tensor[[B, OutDim]]:
+    def forward[B: IntVar](self, obs: Tensor[[B, C, 84, 84]]) -> Tensor[[B, OutDim]]:
         h1 = F.relu(self.conv1(obs))
         assert_type(h1, Tensor[[B, 32, 41, 41]])
         h2 = F.relu(self.conv2(h1))

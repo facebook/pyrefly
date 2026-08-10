@@ -8,6 +8,7 @@
 use std::fmt;
 
 use dupe::Dupe;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -44,7 +45,7 @@ use crate::types::types::Type;
 ///
 /// The reason this is tracked separately from `ClassMetadata` is to avoid the possibility of
 /// cycles when type arguments of the base classes may depend on the class itself.
-#[derive(Debug, Clone, PartialEq, Eq, VisitMut, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Visit, VisitMut, Default)]
 pub struct ClassBases {
     /// The direct base types in the base class list
     base_types: Box<[ClassType]>,
@@ -253,13 +254,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter_map(|x| match x {
                 BaseClass::BaseClassExpr(x) => {
-                    let (ty, base_has_strict) = self.base_class_expr_untype(
+                    let (mut ty, base_has_strict) = self.base_class_expr_untype(
                         x,
                         TypeFormContext::BaseClassList,
                         &fake_error_collector,
                     );
                     if base_has_strict {
                         has_pydantic_strict_metadata = true;
+                    }
+                    // A base class may reference a legacy TypeVar that is out of scope.
+                    // Skip NewType, which reports its own "unbound generic" error for the same type.
+                    if !is_new_type {
+                        self.check_legacy_typevar_scoping(&mut ty, x.range(), errors);
                     }
                     Some((ty, x.range()))
                 }

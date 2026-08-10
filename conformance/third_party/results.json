@@ -1,9 +1,9 @@
 {
   "total": 140,
-  "pass": 134,
-  "fail": 6,
-  "pass_rate": 0.96,
-  "differences": 13,
+  "pass": 139,
+  "fail": 1,
+  "pass_rate": 0.99,
+  "differences": 2,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -16,6 +16,7 @@
     "annotations_generators.py",
     "annotations_methods.py",
     "annotations_typeexpr.py",
+    "callables_annotation.py",
     "callables_kwargs.py",
     "callables_protocol.py",
     "callables_subtyping.py",
@@ -25,7 +26,9 @@
     "constructors_call_metaclass.py",
     "constructors_call_new.py",
     "constructors_call_type.py",
+    "constructors_callable.py",
     "constructors_consistency.py",
+    "dataclasses_descriptors.py",
     "dataclasses_final.py",
     "dataclasses_frozen.py",
     "dataclasses_hash.py",
@@ -58,6 +61,7 @@
     "enums_member_names.py",
     "enums_member_values.py",
     "enums_members.py",
+    "exceptions_context_managers.py",
     "generics_base_class.py",
     "generics_basic.py",
     "generics_defaults.py",
@@ -67,6 +71,7 @@
     "generics_paramspec_components.py",
     "generics_paramspec_semantics.py",
     "generics_paramspec_specialization.py",
+    "generics_scoping.py",
     "generics_self_advanced.py",
     "generics_self_attributes.py",
     "generics_self_basic.py",
@@ -141,12 +146,7 @@
     "typeforms_typeform.py"
   ],
   "failing": {
-    "annotations_forward_refs.py": 2,
-    "callables_annotation.py": 1,
-    "constructors_callable.py": 2,
-    "dataclasses_descriptors.py": 2,
-    "exceptions_context_managers.py": 2,
-    "generics_scoping.py": 4
+    "annotations_forward_refs.py": 2
   },
   "comment": "@generated"
 }

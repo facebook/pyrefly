@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Tests for symbolic dimension support
-# Week 2-3: Systematic tests with TypeVar-based dimension variables
+# Week 2-3: Systematic tests with IntVar-based dimension variables
 # Using modern Python 3.12+ generic syntax: def f[N]
 
 from typing import assert_type
@@ -13,13 +13,15 @@ import torch
 import torch.fft
 import torch.linalg
 import torch.nn.functional as F
-from shape_extensions import Dim
+from shape_extensions import Int, IntVar
 from torch import Tensor
 
 # ==== Week 2: Symbolic Dimension Tests ====
 
 
-def accepts_symbolic_returns_symbolic[N](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
+def accepts_symbolic_returns_symbolic[N: IntVar](
+    x: Tensor[[N, 3]],
+) -> Tensor[[N, 3]]:
     """Identity function with symbolic dimension - preserves shape"""
     return x
 
@@ -37,7 +39,9 @@ def test_symbolic_identity():
     assert_type(result, Tensor[[2, 3]])
 
 
-def concat_symbolic[N, M](x: Tensor[[N, 3]], y: Tensor[[M, 3]]) -> Tensor[[N + M, 3]]:
+def concat_symbolic[N: IntVar, M: IntVar](
+    x: Tensor[[N, 3]], y: Tensor[[M, 3]]
+) -> Tensor[[N + M, 3]]:
     """Concat with symbolic dimension addition: N + M"""
     return torch.cat([x, y], dim=0)
 
@@ -54,7 +58,9 @@ def test_concat_adds_dimensions():
     assert_type(z, Tensor[[7, 3]])
 
 
-def flatten_symbolic[B, N, M](x: Tensor[[B, N, M]]) -> Tensor[[B * N * M]]:
+def flatten_symbolic[B: IntVar, N: IntVar, M: IntVar](
+    x: Tensor[[B, N, M]],
+) -> Tensor[[B * N * M]]:
     """Flatten with symbolic dimension multiplication"""
     return x.flatten()
 
@@ -70,7 +76,7 @@ def test_flatten_multiplies_dimensions():
     assert_type(y, Tensor[[24]])
 
 
-def tile_symbolic[N](x: Tensor[[N, 3]]) -> Tensor[[N * 2, 3]]:
+def tile_symbolic[N: IntVar](x: Tensor[[N, 3]]) -> Tensor[[N * 2, 3]]:
     """Tile multiplies dimensions"""
     return x.tile((2, 1))
 
@@ -85,7 +91,7 @@ def test_tile_multiplies_dimension():
     assert_type(y, Tensor[[10, 3]])
 
 
-def broadcast_binary_symbolic[N, M](
+def broadcast_binary_symbolic[N: IntVar, M: IntVar](
     x: Tensor[[N]], y: Tensor[[M, N]]
 ) -> Tensor[[M, N]]:
     """Binary tensor ops broadcast symbolic dimensions."""
@@ -99,7 +105,7 @@ def test_binary_ops_broadcast_symbolic():
     assert_type(z, Tensor[[2, 3]])
 
 
-def loop_binary_preserves_shape[B, N](
+def loop_binary_preserves_shape[B: IntVar, N: IntVar](
     x: Tensor[[B, N]], y: Tensor[[B, N]]
 ) -> Tensor[[B, N]]:
     for _ in range(2):
@@ -108,7 +114,9 @@ def loop_binary_preserves_shape[B, N](
     return x
 
 
-def repeat_symbolic[N, M](x: Tensor[[N, M]]) -> Tensor[[N * 2, M * 3]]:
+def repeat_symbolic[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[N * 2, M * 3]]:
     """Repeat multiplies each dimension"""
     return x.repeat(2, 3)
 
@@ -136,7 +144,7 @@ def test_repeat_interleave_tensor_repeats_output_size():
     assert_type(y, Tensor[[5, 3]])
 
 
-def process_batch[B, D](x: Tensor[[B, D]]) -> Tensor[[B, D]]:
+def process_batch[B: IntVar, D: IntVar](x: Tensor[[B, D]]) -> Tensor[[B, D]]:
     """Identity operation preserves symbolic dimensions"""
     return torch.relu(x)
 
@@ -154,7 +162,7 @@ def test_identity_preserves_symbolic():
 # ==== More Symbolic Tests ====
 
 
-def transpose_symbolic[N, M](x: Tensor[[N, M]]) -> Tensor[[M, N]]:
+def transpose_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[M, N]]:
     """Transpose swaps symbolic dimensions"""
     return x.transpose(0, 1)
 
@@ -166,7 +174,9 @@ def test_transpose_swaps_symbolic():
     assert_type(y, Tensor[[5, 3]])
 
 
-def permute_symbolic[N, M, K](x: Tensor[[N, M, K]]) -> Tensor[[K, N, M]]:
+def permute_symbolic[N: IntVar, M: IntVar, K: IntVar](
+    x: Tensor[[N, M, K]],
+) -> Tensor[[K, N, M]]:
     """Permute with symbolic dimensions"""
     # Permute (2, 0, 1) reorders [N, M, K] → [K, N, M]
     return x.permute(2, 0, 1)
@@ -180,7 +190,7 @@ def test_permute_reorders_symbolic():
     assert_type(y, Tensor[[4, 2, 3]])
 
 
-def reduce_symbolic[N, M](x: Tensor[[N, M]]) -> Tensor[[N]]:
+def reduce_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N]]:
     """Reduce along dimension removes it"""
     result = torch.sum(x, dim=1)
     # Returns Tensor[[N]] (removed M dimension)
@@ -194,7 +204,7 @@ def test_reduce_removes_dimension():
     assert_type(y, Tensor[[3]])
 
 
-def matmul_symbolic[B, N, M, K](
+def matmul_symbolic[B: IntVar, N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[B, N, M]], b: Tensor[[B, M, K]]
 ) -> Tensor[[B, N, K]]:
     """MatMul with symbolic batch dimension"""
@@ -209,7 +219,7 @@ def test_matmul_symbolic_batch():
     assert_type(c, Tensor[[2, 3, 5]])
 
 
-def mixed_literal_symbolic[N](x: Tensor[[N, 28, 28]]) -> Tensor[[N * 784]]:
+def mixed_literal_symbolic[N: IntVar](x: Tensor[[N, 28, 28]]) -> Tensor[[N * 784]]:
     """Mix symbolic batch with literal spatial dims"""
     # flatten() flattens all dims: N * 28 * 28 = N * 784
     # Note: Might produce (N * 28) * 28 which needs better simplification
@@ -227,7 +237,7 @@ def test_mixed_literal_symbolic():
 # ==== Complex Expressions ====
 
 
-def nested_operations[N, M](
+def nested_operations[N: IntVar, M: IntVar](
     x: Tensor[[N, 3]], y: Tensor[[M, 3]]
 ) -> Tensor[[(N + M) * 3]]:
     """Nested expressions: concat then flatten"""
@@ -245,16 +255,16 @@ def test_nested_expressions():
     assert_type(z, Tensor[[21]])
 
 
-# ==== Future: Size/Numel with Symbolic (requires Literal subscript parsing) ====
+# ==== Future: Int/Numel with Symbolic (requires Literal subscript parsing) ====
 
-# These would demonstrate Dim[N] and Literal[N*M] return types
+# These would demonstrate Int[N] and Literal[N*M] return types
 # Commented out until parser supports TypeVar inside Literal subscript
 
-# def get_size_symbolic[N, M](x: Tensor[[N, M]]) -> tuple[Dim[N], Dim[M]]:
-#     """Size returns tuple of symbolic dimensions as Literal types"""
+# def get_size_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> tuple[Int[N], Int[M]]:
+#     """size() returns tuple of symbolic dimensions as Literal types"""
 #     return x.size()
 
-# def get_numel_symbolic[N, M](x: Tensor[[N, M]]) -> Literal[N * M]:
+# def get_numel_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Literal[N * M]:
 #     """Numel returns symbolic product as Literal type"""
 #     return x.numel()
 
@@ -272,7 +282,7 @@ def test_nested_expressions():
 # ==== Shape Manipulation Tests ====
 
 
-def squeeze_symbolic[N](x: Tensor[[N, 1, 3]]) -> Tensor[[N, 3]]:
+def squeeze_symbolic[N: IntVar](x: Tensor[[N, 1, 3]]) -> Tensor[[N, 3]]:
     """Squeeze removes size-1 dimensions"""
     return x.squeeze(1)
 
@@ -284,7 +294,9 @@ def test_squeeze_symbolic():
     assert_type(y, Tensor[[5, 3]])
 
 
-def unsqueeze_symbolic[N, M](x: Tensor[[N, M]]) -> Tensor[[N, 1, M]]:
+def unsqueeze_symbolic[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[N, 1, M]]:
     """Unsqueeze adds size-1 dimension"""
     return x.unsqueeze(1)
 
@@ -296,7 +308,7 @@ def test_unsqueeze_symbolic():
     assert_type(y, Tensor[[3, 1, 4]])
 
 
-def select_symbolic[N, M](x: Tensor[[N, M, 3]]) -> Tensor[[N, 3]]:
+def select_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M, 3]]) -> Tensor[[N, 3]]:
     """Select with symbolic dimensions"""
     # Select along dim=1 removes that dimension
     return x.select(1, 0)
@@ -313,7 +325,7 @@ def test_select_symbolic():
 # ==== Reduction with keepdim ====
 
 
-def reduce_keepdim[N, M](x: Tensor[[N, M]]) -> Tensor[[N, 1]]:
+def reduce_keepdim[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N, 1]]:
     """Reduction with keepdim preserves rank"""
     return torch.sum(x, dim=1, keepdim=True)
 
@@ -325,7 +337,9 @@ def test_reduce_keepdim_symbolic():
     assert_type(y, Tensor[[3, 1]])
 
 
-def min_with_dim[N, M](x: Tensor[[N, M]]) -> tuple[Tensor[[N]], Tensor[[N]]]:
+def min_with_dim[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> tuple[Tensor[[N]], Tensor[[N]]]:
     """Min with dim returns tuple (values, indices)"""
     return torch.min(x, dim=1)
 
@@ -341,7 +355,9 @@ def test_min_tuple_symbolic():
 # ==== Linear Algebra with Symbolic Batch ====
 
 
-def mm_symbolic[N, M, K](a: Tensor[[N, M]], b: Tensor[[M, K]]) -> Tensor[[N, K]]:
+def mm_symbolic[N: IntVar, M: IntVar, K: IntVar](
+    a: Tensor[[N, M]], b: Tensor[[M, K]]
+) -> Tensor[[N, K]]:
     """Matrix multiply without batch"""
     return torch.mm(a, b)
 
@@ -354,7 +370,7 @@ def test_mm_symbolic():
     assert_type(c, Tensor[[3, 5]])
 
 
-def bmm_symbolic[B, N, M, K](
+def bmm_symbolic[B: IntVar, N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[B, N, M]], b: Tensor[[B, M, K]]
 ) -> Tensor[[B, N, K]]:
     """Batched mm preserves batch dimension"""
@@ -372,7 +388,9 @@ def test_bmm_symbolic():
 # ==== Broadcasting ====
 
 
-def broadcast_add[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]) -> Tensor[[N, M]]:
+def broadcast_add[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]], y: Tensor[[N, M]]
+) -> Tensor[[N, M]]:
     """Element-wise addition preserves shape"""
     return x + y
 
@@ -388,7 +406,9 @@ def test_broadcast_add_symbolic():
 # ==== Stack (adds dimension) ====
 
 
-def stack_symbolic[N](x: Tensor[[N, 3]], y: Tensor[[N, 3]]) -> Tensor[[2, N, 3]]:
+def stack_symbolic[N: IntVar](
+    x: Tensor[[N, 3]], y: Tensor[[N, 3]]
+) -> Tensor[[2, N, 3]]:
     """Stack adds new dimension"""
     return torch.stack([x, y], dim=0)
 
@@ -404,7 +424,7 @@ def test_stack_symbolic():
 # ==== Indexing ====
 
 
-def index_select_symbolic[N](
+def index_select_symbolic[N: IntVar](
     x: Tensor[[N, 10]], indices: Tensor[[5]]
 ) -> Tensor[[N, 5]]:
     """Index select replaces dimension with index count"""
@@ -427,7 +447,7 @@ def test_index_select_symbolic():
 # For now, reshape works when called with explicit literal arguments.
 
 # Future enhancement:
-# def reshape_symbolic[N, M](x: Tensor[[N, M]]) -> Tensor[[N * M]]:
+# def reshape_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N * M]]:
 #     n, m = x.size()  # Extract runtime values
 #     return x.reshape(n * m)  # Type system should know n*m = N*M
 #
@@ -436,7 +456,7 @@ def test_index_select_symbolic():
 # ==== Convolution with Symbolic Spatial Dimensions (Week 3) ====
 
 
-def conv2d_symbolic[H, W](
+def conv2d_symbolic[H: IntVar, W: IntVar](
     x: Tensor[[1, 3, H, W]], weight: Tensor[[64, 3, 3, 3]]
 ) -> Tensor[[1, 64, H, W]]:
     """Conv2d with symbolic spatial dimensions and padding=1 preserves size"""
@@ -455,7 +475,7 @@ def test_conv2d_preserves_spatial_symbolic():
     assert_type(y, Tensor[[1, 64, 224, 224]])
 
 
-def conv2d_stride2[H, W](
+def conv2d_stride2[H: IntVar, W: IntVar](
     x: Tensor[[1, 3, H, W]], weight: Tensor[[64, 3, 3, 3]]
 ) -> Tensor:
     """Conv2d with stride=2 (formula needs symbolic computation)"""
@@ -482,7 +502,9 @@ def test_conv2d_stride2_symbolic():
 # ==== P0: Testing Updated Meta-Shapes (Week 3 Verification) ====
 
 
-def pool_symbolic[H, W](x: Tensor[[1, 3, H, W]]) -> Tensor[[1, 3, H, W]]:
+def pool_symbolic[H: IntVar, W: IntVar](
+    x: Tensor[[1, 3, H, W]],
+) -> Tensor[[1, 3, H, W]]:
     """Max pool with padding=1, kernel=3, stride=1 preserves size"""
     import torch.nn.functional as F
 
@@ -496,7 +518,9 @@ def test_pool_symbolic():
     assert_type(y, Tensor[[1, 3, 56, 56]])
 
 
-def pad_symbolic[H, W](x: Tensor[[1, 3, H, W]]) -> Tensor[[1, 3, H + 4, W + 6]]:
+def pad_symbolic[H: IntVar, W: IntVar](
+    x: Tensor[[1, 3, H, W]],
+) -> Tensor[[1, 3, H + 4, W + 6]]:
     """Pad with symbolic dimensions"""
     import torch.nn.functional as F
 
@@ -516,61 +540,61 @@ def test_pad_symbolic():
 # Verifying that ~100 identity operations work with symbolic dimensions
 
 
-def test_identity_gelu[N, M](x: Tensor[[N, M]]):
+def test_identity_gelu[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """GELU activation preserves symbolic shape"""
     y = F.gelu(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_identity_sin[N, M](x: Tensor[[N, M]]):
+def test_identity_sin[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Sin preserves symbolic shape"""
     y = torch.sin(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_identity_exp[N, M](x: Tensor[[N, M]]):
+def test_identity_exp[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Exp preserves symbolic shape"""
     y = torch.exp(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_identity_log[N, M](x: Tensor[[N, M]]):
+def test_identity_log[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Log preserves symbolic shape"""
     y = torch.log(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_identity_sqrt[N, M](x: Tensor[[N, M]]):
+def test_identity_sqrt[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Sqrt preserves symbolic shape"""
     y = torch.sqrt(x.abs())  # abs to avoid sqrt of negative
     assert_type(y, Tensor[[N, M]])
 
 
-def test_identity_abs[N, M](x: Tensor[[N, M]]):
+def test_identity_abs[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Abs preserves symbolic shape"""
     y = torch.abs(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_identity_neg[N, M](x: Tensor[[N, M]]):
+def test_identity_neg[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Negation preserves symbolic shape"""
     y = torch.neg(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_identity_tanh[N, M](x: Tensor[[N, M]]):
+def test_identity_tanh[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Tanh preserves symbolic shape"""
     y = torch.tanh(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_identity_floor[N, M](x: Tensor[[N, M]]):
+def test_identity_floor[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Floor preserves symbolic shape"""
     y = torch.floor(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_identity_clamp[N, M](x: Tensor[[N, M]]):
+def test_identity_clamp[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Clamp preserves symbolic shape"""
     y = torch.clamp(x, min=-1.0, max=1.0)
     assert_type(y, Tensor[[N, M]])
@@ -592,37 +616,37 @@ test_identity_clamp(_test_tensor)
 # ==== P1: Spot-Check Tests for Binary Operations ====
 
 
-def test_binary_sub[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_binary_sub[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     """Subtraction preserves symbolic shape"""
     z = torch.sub(x, y)
     assert_type(z, Tensor[[N, M]])
 
 
-def test_binary_div[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_binary_div[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     """Division preserves symbolic shape"""
     z = torch.div(x, y)
     assert_type(z, Tensor[[N, M]])
 
 
-def test_binary_pow[N, M](x: Tensor[[N, M]]):
+def test_binary_pow[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Power preserves symbolic shape"""
     z = torch.pow(x, 2.0)
     assert_type(z, Tensor[[N, M]])
 
 
-def test_binary_eq[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_binary_eq[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     """Equality comparison preserves symbolic shape"""
     z = torch.eq(x, y)
     assert_type(z, Tensor[[N, M]])
 
 
-def test_binary_lt[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_binary_lt[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     """Less than preserves symbolic shape"""
     z = torch.lt(x, y)
     assert_type(z, Tensor[[N, M]])
 
 
-def test_binary_logical_and[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_binary_logical_and[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     """Logical AND preserves symbolic shape"""
     # Create bool tensors first
     x_bool: Tensor[[N, M]] = x.abs()
@@ -631,25 +655,27 @@ def test_binary_logical_and[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     assert_type(z, Tensor[[N, M]])
 
 
-def test_binary_maximum[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_binary_maximum[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     """Element-wise maximum preserves symbolic shape"""
     z = torch.maximum(x, y)
     assert_type(z, Tensor[[N, M]])
 
 
-def test_binary_mul_operator[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_binary_mul_operator[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]], y: Tensor[[N, M]]
+):
     """Multiplication operator (* ) preserves symbolic shape"""
     z = x * y
     assert_type(z, Tensor[[N, M]])
 
 
-def test_binary_hypot[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_binary_hypot[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     """Hypot preserves symbolic shape"""
     z = torch.hypot(x, y)
     assert_type(z, Tensor[[N, M]])
 
 
-def test_binary_fmax[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_binary_fmax[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     """Fmax preserves symbolic shape"""
     z = torch.fmax(x, y)
     assert_type(z, Tensor[[N, M]])
@@ -672,31 +698,31 @@ test_binary_fmax(_t1, _t2)
 # ==== P1: Spot-Check Tests for Reductions ====
 
 
-def test_reduce_prod[N, M](x: Tensor[[N, M]]):
+def test_reduce_prod[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Product reduction removes dimension"""
     y = torch.prod(x, dim=1)
     assert_type(y, Tensor[[N]])
 
 
-def test_reduce_var[N, M](x: Tensor[[N, M]]):
+def test_reduce_var[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Variance reduction removes dimension"""
     y = torch.var(x, dim=1)
     assert_type(y, Tensor[[N]])
 
 
-def test_reduce_argmax[N, M](x: Tensor[[N, M]]):
+def test_reduce_argmax[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Argmax reduction removes dimension"""
     y = torch.argmax(x, dim=1)
     assert_type(y, Tensor[[N]])
 
 
-def test_reduce_argmin[N, M](x: Tensor[[N, M]]):
+def test_reduce_argmin[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Argmin reduction removes dimension"""
     y = torch.argmin(x, dim=0)
     assert_type(y, Tensor[[M]])
 
 
-def test_reduce_logsumexp[N, M](x: Tensor[[N, M]]):
+def test_reduce_logsumexp[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Logsumexp reduction removes dimension"""
     y = torch.logsumexp(x, dim=1)
     assert_type(y, Tensor[[N]])
@@ -713,54 +739,54 @@ test_reduce_logsumexp(_test_tensor_34)
 # ==== P1 Priority 1: Test Untested Variants from Tested Meta-Shapes ====
 
 
-def test_max_with_dim[N, M](x: Tensor[[N, M]]):
+def test_max_with_dim[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Max with dim returns tuple (like min)"""
     values, indices = torch.max(x, dim=1)
     assert_type(values, Tensor[[N]])
     assert_type(indices, Tensor[[N]])
 
 
-def test_median_with_dim[N, M](x: Tensor[[N, M]]):
+def test_median_with_dim[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Median with dim returns tuple (like min/max)"""
     values, indices = torch.median(x, dim=1)
     assert_type(values, Tensor[[N]])
     assert_type(indices, Tensor[[N]])
 
 
-def test_cumsum[N, M](x: Tensor[[N, M]]):
+def test_cumsum[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Cumsum preserves shape"""
     y = torch.cumsum(x, dim=1)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_cumprod[N, M](x: Tensor[[N, M]]):
+def test_cumprod[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Cumprod preserves shape"""
     y = torch.cumprod(x, dim=0)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_cummax[N, M](x: Tensor[[N, M]]):
+def test_cummax[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Cummax returns tuple and preserves shape"""
     values, indices = torch.cummax(x, dim=1)
     assert_type(values, Tensor[[N, M]])
     assert_type(indices, Tensor[[N, M]])
 
 
-def test_cummin[N, M](x: Tensor[[N, M]]):
+def test_cummin[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Cummin returns tuple and preserves shape"""
     values, indices = torch.cummin(x, dim=0)
     assert_type(values, Tensor[[N, M]])
     assert_type(indices, Tensor[[N, M]])
 
 
-def test_mode[N, M](x: Tensor[[N, M]]):
+def test_mode[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Mode reduces dimension and returns tuple"""
     values, indices = torch.mode(x, dim=1)
     assert_type(values, Tensor[[N]])
     assert_type(indices, Tensor[[N]])
 
 
-def test_topk[N, M](x: Tensor[[N, M]]):
+def test_topk[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Topk changes dimension size and returns tuple"""
     values, indices = torch.topk(x, k=3, dim=1)
     # Replaces dim 1 with k=3: [N, M] → [N, 3]
@@ -768,14 +794,14 @@ def test_topk[N, M](x: Tensor[[N, M]]):
     assert_type(indices, Tensor[[N, 3]])
 
 
-def test_sort[N, M](x: Tensor[[N, M]]):
+def test_sort[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Sort preserves shape and returns tuple"""
     values, indices = torch.sort(x, dim=1)
     assert_type(values, Tensor[[N, M]])
     assert_type(indices, Tensor[[N, M]])
 
 
-def test_kthvalue[N, M](x: Tensor[[N, M]]):
+def test_kthvalue[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Kthvalue reduces dimension and returns tuple"""
     values, indices = torch.kthvalue(x, k=3, dim=1)
     # Removes dim 1: [N, M] → [N]
@@ -783,41 +809,41 @@ def test_kthvalue[N, M](x: Tensor[[N, M]]):
     assert_type(indices, Tensor[[N]])
 
 
-def test_var_mean[N, M](x: Tensor[[N, M]]):
+def test_var_mean[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Var_mean reduces dimension and returns tuple"""
     var, mean = torch.var_mean(x, dim=1)
     assert_type(var, Tensor[[N]])
     assert_type(mean, Tensor[[N]])
 
 
-def test_std_mean[N, M](x: Tensor[[N, M]]):
+def test_std_mean[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Std_mean reduces dimension and returns tuple"""
     std_val, mean = torch.std_mean(x, dim=1)
     assert_type(std_val, Tensor[[N]])
     assert_type(mean, Tensor[[N]])
 
 
-def test_mv[N, M](mat: Tensor[[N, M]], vec: Tensor[[M]]):
+def test_mv[N: IntVar, M: IntVar](mat: Tensor[[N, M]], vec: Tensor[[M]]):
     """Matrix-vector multiply"""
     result = torch.mv(mat, vec)
     # [N, M] @ [M] → [N]
     assert_type(result, Tensor[[N]])
 
 
-def test_dot[N](x: Tensor[[N]], y: Tensor[[N]]):
+def test_dot[N: IntVar](x: Tensor[[N]], y: Tensor[[N]]):
     """Dot product returns scalar"""
     result = torch.dot(x, y)
     # Scalar output
     assert_type(result, Tensor[[]])
 
 
-def test_all[N, M](x: Tensor[[N, M]]):
+def test_all[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """All reduces dimension"""
     result = torch.all(x, dim=1)
     assert_type(result, Tensor[[N]])
 
 
-def test_any[N, M](x: Tensor[[N, M]]):
+def test_any[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Any reduces dimension"""
     result = torch.any(x, dim=0)
     assert_type(result, Tensor[[M]])
@@ -848,67 +874,69 @@ test_any(_t34.abs())
 # ==== P1 Priority 3: Test Likely-Working Operations ====
 
 
-def test_eig[M](A: Tensor[[M, M]]):
+def test_eig[M: IntVar](A: Tensor[[M, M]]):
     """Eigenvalue decomposition with symbolic"""
     eigenvalues, eigenvectors = torch.linalg.eig(A)
     assert_type(eigenvalues, Tensor[[M]])
     assert_type(eigenvectors, Tensor[[M, M]])
 
 
-def test_eigh[M](A: Tensor[[M, M]]):
+def test_eigh[M: IntVar](A: Tensor[[M, M]]):
     """Hermitian eigenvalue decomposition"""
     eigenvalues, eigenvectors = torch.linalg.eigh(A)
     assert_type(eigenvalues, Tensor[[M]])
     assert_type(eigenvectors, Tensor[[M, M]])
 
 
-def test_eigvals[M](A: Tensor[[M, M]]):
+def test_eigvals[M: IntVar](A: Tensor[[M, M]]):
     """Eigenvalues only"""
     eigenvalues = torch.linalg.eigvals(A)
     assert_type(eigenvalues, Tensor[[M]])
 
 
-def test_cholesky[M](A: Tensor[[M, M]]):
+def test_cholesky[M: IntVar](A: Tensor[[M, M]]):
     """Cholesky preserves shape"""
     L = torch.linalg.cholesky(A)
     assert_type(L, Tensor[[M, M]])
 
 
-def test_det[B, M](A: Tensor[[B, M, M]]):
+def test_det[B: IntVar, M: IntVar](A: Tensor[[B, M, M]]):
     """Determinant removes matrix dimensions"""
     d = torch.linalg.det(A)
     # Removes last 2 dims: [B, M, M] → [B]
     assert_type(d, Tensor[[B]])
 
 
-def test_trace[B, M](A: Tensor[[B, M, M]]):
+def test_trace[B: IntVar, M: IntVar](A: Tensor[[B, M, M]]):
     """Trace removes matrix dimensions"""
     t = torch.trace(A)
     # Removes last 2 dims: [B, M, M] → [B]
     assert_type(t, Tensor[[B]])
 
 
-def test_narrow[N, M](x: Tensor[[N, M]]):
+def test_narrow[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Narrow replaces dimension size"""
     y = torch.narrow(x, dim=1, start=5, length=10)
     # Replaces dim 1 with length=10: [N, M] → [N, 10]
     assert_type(y, Tensor[[N, 10]])
 
 
-def test_gather[N, M](x: Tensor[[N, M]], index: Tensor[[N, 5]]):
+def test_gather[N: IntVar, M: IntVar](x: Tensor[[N, M]], index: Tensor[[N, 5]]):
     """Gather returns index shape"""
     y = torch.gather(x, dim=1, index=index)
     # Returns index shape: [N, 5]
     assert_type(y, Tensor[[N, 5]])
 
 
-def test_where[N, M](condition: Tensor[[N, M]], x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_where[N: IntVar, M: IntVar](
+    condition: Tensor[[N, M]], x: Tensor[[N, M]], y: Tensor[[N, M]]
+):
     """Where preserves shape"""
     result = torch.where(condition, x, y)
     assert_type(result, Tensor[[N, M]])
 
 
-def test_zeros_like[N, M](x: Tensor[[N, M]]):
+def test_zeros_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Zeros_like copies shape"""
     y = torch.zeros_like(x)
     assert_type(y, Tensor[[N, M]])
@@ -935,7 +963,7 @@ test_zeros_like(_t34)
 # ==== P1 Priority 4: Remaining Operations - Creation ====
 
 
-def test_zeros_like_verified[N, M](x: Tensor[[N, M]]):
+def test_zeros_like_verified[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Already tested above, adding comment for completeness"""
     y = torch.zeros_like(x)
     assert_type(y, Tensor[[N, M]])
@@ -944,19 +972,19 @@ def test_zeros_like_verified[N, M](x: Tensor[[N, M]]):
 test_zeros_like_verified(_t34)
 
 
-def test_ones_like[N, M](x: Tensor[[N, M]]):
+def test_ones_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Ones_like copies shape"""
     y = torch.ones_like(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_randn_like[N, M](x: Tensor[[N, M]]):
+def test_randn_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Randn_like copies shape"""
     y = torch.randn_like(x)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_empty_like[N, M](x: Tensor[[N, M]]):
+def test_empty_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Empty_like copies shape"""
     y = torch.empty_like(x)
     assert_type(y, Tensor[[N, M]])
@@ -973,33 +1001,39 @@ test_empty_like(_t34)
 # ==== Remaining Indexing Operations ====
 
 
-def test_scatter[N, M](x: Tensor[[N, M]], index: Tensor[[N, 5]], src: Tensor[[N, 5]]):
+def test_scatter[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]], index: Tensor[[N, 5]], src: Tensor[[N, 5]]
+):
     """Scatter preserves input shape"""
     y = torch.scatter(x, dim=1, index=index, src=src)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_masked_fill[N, M](x: Tensor[[N, M]], mask: Tensor[[N, M]]):
+def test_masked_fill[N: IntVar, M: IntVar](x: Tensor[[N, M]], mask: Tensor[[N, M]]):
     """Masked_fill preserves shape"""
     y = torch.masked_fill(x, mask, 0.0)
     assert_type(y, Tensor[[N, M]])
 
 
-def test_take[N, M](x: Tensor[[N, M]], index: Tensor[[5]]):
+def test_take[N: IntVar, M: IntVar](x: Tensor[[N, M]], index: Tensor[[5]]):
     """Take returns index shape"""
     y = torch.take(x, index)
     # Returns shape of index: [5]
     assert_type(y, Tensor[[5]])
 
 
-def test_take_along_dim[N, M](x: Tensor[[N, M]], indices: Tensor[[N, 5]]):
+def test_take_along_dim[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]], indices: Tensor[[N, 5]]
+):
     """Take_along_dim returns index shape"""
     y = torch.take_along_dim(x, indices, dim=1)
     # Returns indices shape: [N, 5]
     assert_type(y, Tensor[[N, 5]])
 
 
-def test_index_add[N, M](x: Tensor[[N, M]], index: Tensor[[5]], source: Tensor[[N, 5]]):
+def test_index_add[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]], index: Tensor[[5]], source: Tensor[[N, 5]]
+):
     """Index_add preserves shape"""
     y = torch.index_add(x, dim=1, index=index, source=source)
     assert_type(y, Tensor[[N, M]])
@@ -1017,24 +1051,24 @@ test_index_add(_t310_b, _idx5, _src35)
 # ==== Remaining Dimension Operations ====
 
 
-def test_movedim[N, M, K](x: Tensor[[N, M, K]]):
+def test_movedim[N: IntVar, M: IntVar, K: IntVar](x: Tensor[[N, M, K]]):
     """Movedim reorders dimensions"""
     y = torch.movedim(x, source=0, destination=2)
     # Moves dim 0 to position 2: [N, M, K] → [M, K, N]
     assert_type(y, Tensor[[M, K, N]])
 
 
-def test_expand[N](x: Tensor[[N, 1]]):
+def test_expand[N: IntVar](x: Tensor[[N, 1]]):
     """Expand to target size"""
     # expand() with runtime values - checking what it actually returns
     n = x.size(0)
-    assert_type(n, Dim[N])
+    assert_type(n, Int[N])
     y = x.expand(n, 5)
     # Expands [N, 1] → [N, 5] (keeps dim 0, broadcasts dim 1)
     assert_type(y, Tensor[[N, 5]])
 
 
-def test_t_2d[N, M](x: Tensor[[N, M]]):
+def test_t_2d[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """2D transpose (t method)"""
     y = x.t()
     assert_type(y, Tensor[[M, N]])
@@ -1050,53 +1084,53 @@ test_t_2d(_t34)
 # ==== Specialized Operations ====
 
 
-def test_fft[N](x: Tensor[[N]]):
+def test_fft[N: IntVar](x: Tensor[[N]]):
     """FFT preserves shape"""
     y = torch.fft.fft(x)
     assert_type(y, Tensor[[N]])
 
 
-def test_ifft[N](x: Tensor[[N]]):
+def test_ifft[N: IntVar](x: Tensor[[N]]):
     """Inverse FFT preserves shape"""
     y = torch.fft.ifft(x)
     assert_type(y, Tensor[[N]])
 
 
-def test_rfft[N](x: Tensor[[N]]):
+def test_rfft[N: IntVar](x: Tensor[[N]]):
     """Real FFT changes dimension"""
     y = torch.fft.rfft(x)
     assert_type(y, Tensor[[N // 2 + 1]])
 
 
-def test_mse_loss[N, M](input: Tensor[[N, M]], target: Tensor[[N, M]]):
+def test_mse_loss[N: IntVar, M: IntVar](input: Tensor[[N, M]], target: Tensor[[N, M]]):
     """MSE loss reduces to scalar"""
     loss = F.mse_loss(input, target)
     # Default reduction='mean' → scalar
     assert_type(loss, Tensor[[]])
 
 
-def test_adaptive_avg_pool2d[B](x: Tensor[[B, 64, 56, 56]]):
+def test_adaptive_avg_pool2d[B: IntVar](x: Tensor[[B, 64, 56, 56]]):
     """Adaptive pool outputs target size with symbolic batch dimension"""
     y = F.adaptive_avg_pool2d(x, (7, 7))
     # Adaptive pool preserves batch dimension B and outputs literal spatial dims
     assert_type(y, Tensor[[B, 64, 7, 7]])
 
 
-def test_diag_embed[B, N](x: Tensor[[B, N]]):
+def test_diag_embed[B: IntVar, N: IntVar](x: Tensor[[B, N]]):
     """Diag_embed creates matrix from vector"""
     y = torch.diag_embed(x)
     # Creates diagonal matrix: [B, N] → [B, N, N]
     assert_type(y, Tensor[[B, N, N]])
 
 
-def test_norm_symbolic[N, M](x: Tensor[[N, M]]):
+def test_norm_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Norm with symbolic dimensions"""
     # Frobenius norm reduces to scalar
     n = torch.norm(x)
     assert_type(n, Tensor[[]])
 
 
-def test_dist[N, M](x: Tensor[[N, M]], y: Tensor[[N, M]]):
+def test_dist[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     """Distance returns scalar"""
     d = torch.dist(x, y)
     assert_type(d, Tensor[[]])

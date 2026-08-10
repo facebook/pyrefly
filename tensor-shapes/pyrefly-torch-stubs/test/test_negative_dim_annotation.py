@@ -5,22 +5,29 @@
 
 from typing import assert_type, TYPE_CHECKING
 
+from shape_extensions import IntVar
+
+
 if TYPE_CHECKING:
     from torch import Tensor
 
 
 # -1 + L in a return type annotation
-def test_neg_plus[B, L](x: Tensor[[B, 3, L]]) -> Tensor[[B, 3, (-1 + L)]]:
+def test_neg_plus[B: IntVar, L: IntVar](
+    x: Tensor[[B, 3, L]],
+) -> Tensor[[B, 3, (-1 + L)]]:
     return x  # type: ignore
 
 
 # L - 1 (should be equivalent)
-def test_sub[B, L](x: Tensor[[B, 3, L]]) -> Tensor[[B, 3, (L - 1)]]:
+def test_sub[B: IntVar, L: IntVar](
+    x: Tensor[[B, 3, L]],
+) -> Tensor[[B, 3, (L - 1)]]:
     return x  # type: ignore
 
 
 # Both should produce the same canonical form
-def test_equivalence[B, L](
+def test_equivalence[B: IntVar, L: IntVar](
     x: Tensor[[B, 3, (-1 + L)]], y: Tensor[[B, 3, (L - 1)]]
 ) -> None:
     assert_type(x, Tensor[[B, 3, (L - 1)]])

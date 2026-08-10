@@ -30,7 +30,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as LZString from 'lz-string';
+import { generateSandboxUrl } from './generateSandboxUrl';
 
 const SANDBOX_EXTENSIONS = ['.py', '.pyi', '.toml'];
 
@@ -62,8 +62,7 @@ export function parseSandboxConfig(body: string): SandboxConfig | null {
     return {
         dir: config.dir,
         active: config.active ?? 'sandbox.py',
-        linkText:
-            config.linkText ?? 'Open this example in the Pyrefly sandbox',
+        linkText: config.linkText ?? 'Open this example in the Pyrefly sandbox',
         description: config.description ?? '',
     };
 }
@@ -109,7 +108,7 @@ export function readSandboxFiles(dirPath: string): Record<string, string> {
 
     if (Object.keys(files).length === 0) {
         throw new Error(
-            `No sandbox files found in ${dirPath} (expected .py, .pyi, or .toml files)`,
+            `No sandbox files found in ${dirPath} (expected .py, .pyi, or .toml files)`
         );
     }
 
@@ -118,13 +117,9 @@ export function readSandboxFiles(dirPath: string): Record<string, string> {
 
 export function buildSandboxUrl(
     files: Record<string, string>,
-    activeFile: string,
+    activeFile: string
 ): string {
-    const project = { files, activeFile };
-    const compressed = LZString.compressToEncodedURIComponent(
-        JSON.stringify(project),
-    );
-    return `https://pyrefly.org/sandbox/?project=${compressed}`;
+    return generateSandboxUrl(files, activeFile);
 }
 
 // Walks an mdast tree, calling `visitor(node, index, parent)` for every node
@@ -132,7 +127,7 @@ export function buildSandboxUrl(
 function visit(
     tree: any,
     targetType: string,
-    visitor: (node: any, index: number, parent: any) => void,
+    visitor: (node: any, index: number, parent: any) => void
 ): void {
     function walk(node: any, index: number, parent: any): void {
         if (node.type === targetType) {
@@ -169,7 +164,7 @@ function remarkSandboxPlugin(options?: RemarkSandboxPluginOptions) {
             const config = parseSandboxConfig(node.value);
             if (!config) {
                 throw new Error(
-                    `Invalid sandbox code block: missing "dir" field. Content:\n${node.value}`,
+                    `Invalid sandbox code block: missing "dir" field. Content:\n${node.value}`
                 );
             }
 
@@ -198,9 +193,7 @@ function remarkSandboxPlugin(options?: RemarkSandboxPluginOptions) {
                 children: [
                     {
                         type: 'containerDirectiveLabel',
-                        children: [
-                            { type: 'text', value: 'Try it yourself' },
-                        ],
+                        children: [{ type: 'text', value: 'Try it yourself' }],
                     },
                     {
                         type: 'paragraph',

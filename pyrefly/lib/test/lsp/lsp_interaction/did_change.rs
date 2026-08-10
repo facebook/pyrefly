@@ -7,12 +7,14 @@
 
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
-use pyrefly::commands::lsp::IndexingMode;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_text_document_did_change() {
@@ -197,7 +199,13 @@ fn test_text_document_did_change_updates_symlinked_imports() {
     symlink(&module_path, &symlink_path).unwrap();
     std::fs::write(&importer_path, "from sym import hello\nhello(\"John\")\n").unwrap();
 
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
