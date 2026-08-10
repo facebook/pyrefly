@@ -95,7 +95,7 @@ impl LspEvent {
 enum LspEventKind {
     Priority,
     Mutation,
-    Query,
+    NonMutation,
 }
 
 impl LspEvent {
@@ -122,14 +122,16 @@ impl LspEvent {
             | Self::DrainWatchedFileChanges
             | Self::DidChangeWorkspaceFolders(_)
             | Self::DidChangeConfiguration(_)
-            | Self::LspResponse(_)
             | Self::DidOpenNotebookDocument(_)
             | Self::DidCloseNotebookDocument(_)
             | Self::DidSaveNotebookDocument(_)
             | Self::DidChangeNotebookDocument(_)
             | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
-            Self::LspRequest(_) => LspEventKind::Query,
+            // Responses are FIFO events, but they do not supersede preceding document
+            // mutations. In particular, a no-op configuration response will not
+            // compensate for validation skipped by a preceding didOpen.
+            Self::LspResponse(_) | Self::LspRequest(_) => LspEventKind::NonMutation,
         }
     }
 }
@@ -371,6 +373,7 @@ impl HeavyTaskQueue {
 
 #[cfg(test)]
 mod tests {
+    use lsp_types::TextDocumentItem;
     use lsp_types::Url;
     use lsp_types::VersionedTextDocumentIdentifier;
 
@@ -427,5 +430,41 @@ mod tests {
             queue.time_since_last_edit().expect("edit was enqueued") < elapsed,
             "a new edit should reset the debounce clock"
         );
+    }
+
+    #[test]
+    fn test_lsp_response_does_not_supersede_did_open() {
+        let queue = LspQueue::new();
+        queue
+            .send(LspEvent::DidOpenTextDocument(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: Url::parse("file:///test.py").unwrap(),
+                    language_id: "python".to_owned(),
+                    version: 1,
+                    text: "x: int = 'not an int'".to_owned(),
+                },
+            }))
+            .unwrap();
+        let response_id = RequestId::from(3);
+        queue
+            .send(LspEvent::LspResponse(Response::new_ok(
+                response_id.clone(),
+                serde_json::json!([{}]),
+            )))
+            .unwrap();
+
+        let (subsequent_mutation, event, _) = queue.recv().unwrap();
+        assert!(matches!(event, LspEvent::DidOpenTextDocument(_)));
+        assert!(
+            !subsequent_mutation,
+            "a client response must not suppress didOpen validation"
+        );
+
+        let (subsequent_mutation, event, _) = queue.recv().unwrap();
+        assert!(!subsequent_mutation);
+        assert!(matches!(
+            event,
+            LspEvent::LspResponse(Response { id, .. }) if id == response_id
+        ));
     }
 }
