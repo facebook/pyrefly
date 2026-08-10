@@ -1077,14 +1077,13 @@ def f(x: C[str]) -> None:
 );
 
 testcase!(
-    bug = "tuple[*Unknown] should normalize to tuple[Unknown, ...]",
     test_recover_gracefully_from_out_of_scope_typevartuple,
     r#"
 from typing import TypeVarTuple, reveal_type
 Ts = TypeVarTuple("Ts")
 class E[R, T = tuple[*Ts]]: ...   # E: out-of-scope type parameter `Ts`
 def f(x: E[str]):
-    reveal_type(x)  # E: E[str, tuple[*Unknown]]
+    reveal_type(x)  # E: E[str, tuple[Unknown, ...]]
     "#,
 );
 
