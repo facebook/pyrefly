@@ -889,7 +889,7 @@ class UseBase(UseDerived):
 // unusable: implementing a callable interface is not what the decorator documents, and the
 // demand lands on argparse actions, auth handlers and metaclasses throughout the ecosystem.
 testcase!(
-    test_missing_override_decorator_dunder_call,
+    test_missing_override_decorator_dunder_call_exemptions,
     TestEnv::new().enable_missing_override_decorator_error(),
     r#"
 from typing import Protocol
@@ -904,7 +904,7 @@ class P(Protocol):
     def __call__(self, x: int) -> None: ...
 
 class Impl(P):
-    def __call__(self, x: int) -> None: ...  # E: is missing an `@override` decorator
+    def __call__(self, x: int) -> None: ...
     "#,
 );
 
@@ -1187,6 +1187,72 @@ class Base:
 class Derived(Base):
     @override
     def foo(self, x: int) -> None: ...  # OK - has @override
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_abstract_method,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def foo(self, x: int) -> None: ...  # OK - implements an abstract method
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_direct_protocol,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import Protocol
+
+class Interface(Protocol):
+    def foo(self, x: int) -> None:
+        return None
+
+class Implementation(Interface):
+    def foo(self, x: int) -> None: ...  # OK - implements a directly inherited protocol member
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_indirect_protocol,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import Protocol
+
+class Interface(Protocol):
+    def foo(self, x: int) -> None:
+        return None
+
+class Base(Interface):
+    pass
+
+class Derived(Base):
+    def foo(self, x: int) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_mixed_abstract_and_concrete,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class AbstractBase(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> None: ...
+
+class ConcreteBase:
+    def foo(self, x: int) -> None: ...
+
+class Derived(AbstractBase, ConcreteBase):
+    def foo(self, x: int) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
     "#,
 );
 

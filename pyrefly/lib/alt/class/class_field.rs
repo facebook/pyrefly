@@ -3833,6 +3833,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut got_attribute = None;
         let mut parent_attr_found = false;
+        let mut parent_attr_requires_override = false;
         let mut parent_attr_is_from_object = false;
         let mut parent_has_any = false;
         let is_typed_dict_field = self.is_typed_dict_field(metadata.as_ref(), field_name);
@@ -3892,6 +3893,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 parent_attr_is_from_object = true;
             }
             let want_class_field = Arc::unwrap_or_clone(want_field.value);
+            parent_attr_requires_override = parent_attr_requires_override
+                || (!parent_metadata.is_protocol() && !want_class_field.is_abstract());
             if want_class_field.is_final() {
                 self.error(
                     errors,
@@ -4194,9 +4197,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         // Check for missing @override decorator when overriding a parent attribute.
         // This error is emitted when a method overrides a parent but doesn't have @override.
+        // Implementing an abstract member or a directly inherited Protocol member is exempt.
+        // With multiple bases, any matching concrete non-Protocol member still makes this an
+        // override that requires the decorator.
         // Since this error has Severity::Ignore by default, it won't be shown unless enabled.
         if !(is_explicit_override
-            || !parent_attr_found
+            || !parent_attr_requires_override
             || parent_has_any
             || parent_attr_is_from_object && is_dunder(field_name.as_str()))
             && class_field.can_have_override_decorator()
