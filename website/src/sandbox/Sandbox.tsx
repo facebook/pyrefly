@@ -129,6 +129,7 @@ export default function Sandbox({
     const [pythonVersion, setPythonVersion] = useState('3.12');
     const [showParameterHints, setShowParameterHints] = useState(false);
     const [pyreflyVersion, setPyreflyVersion] = useState<string | null>(null);
+    const pyreflyCommit = process.env.PYREFLY_COMMIT;
     // Absolute pixel height for the editor pane (null = not yet initialized)
     const [editorHeight, setEditorHeight] = useState<number | null>(null);
     const [isResizing, setIsResizing] = useState(false);
@@ -565,10 +566,17 @@ export default function Sandbox({
                 />
                 Parameter hints
             </label>
-            {pyreflyVersion && (
-                <span id="pyrefly-version" {...stylex.props(styles.version)}>
-                    {`Pyrefly ${pyreflyVersion}`}
-                </span>
+            {pyreflyVersion && pyreflyCommit && (
+                <a
+                    id="pyrefly-build"
+                    href={`https://github.com/facebook/pyrefly/commit/${pyreflyCommit}`}
+                    title={`Pyrefly ${pyreflyVersion}, commit ${pyreflyCommit}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    {...stylex.props(styles.commit)}
+                >
+                    {`Pyrefly ${pyreflyVersion} (commit ${pyreflyCommit.slice(0, 9)})`}
+                </a>
             )}
         </div>
     );
@@ -1682,13 +1690,16 @@ const styles = stylex.create({
         cursor: 'pointer',
         whiteSpace: 'nowrap',
         userSelect: 'none',
-    }
-    version: {
+    },
+    commit: {
         color: 'var(--color-text-secondary)',
         fontSize: '12px',
-        marginLeft: 'auto',
         padding: '7px 15px',
+        textDecoration: 'none',
         whiteSpace: 'nowrap',
+        ':hover': {
+            textDecoration: 'underline',
+        },
     },
     actionButton: {
         border: 'none',
