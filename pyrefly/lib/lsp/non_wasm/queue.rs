@@ -96,8 +96,8 @@ enum LspEventKind {
     Priority,
     /// An event that makes work triggered by preceding mutations redundant.
     Mutation,
-    /// A FIFO event that does not make preceding mutation work redundant.
-    NonMutation,
+    /// A normal-priority event that does not count as a mutation for coalescing.
+    Query,
 }
 
 impl LspEvent {
@@ -130,7 +130,7 @@ impl LspEvent {
             | Self::DidChangeNotebookDocument(_)
             | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
-            Self::LspResponse(_) | Self::LspRequest(_) => LspEventKind::NonMutation,
+            Self::LspResponse(_) | Self::LspRequest(_) => LspEventKind::Query,
         }
     }
 }
