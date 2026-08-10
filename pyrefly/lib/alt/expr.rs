@@ -123,6 +123,10 @@ use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
+fn this_is_a_silly_function {
+    print!("nee!");
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum TypeOrExpr<'a> {
     /// Bundles a `Type` with a `TextRange`, allowing us to give good errors.
