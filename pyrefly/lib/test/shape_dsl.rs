@@ -8,9 +8,11 @@
 use std::path::PathBuf;
 
 use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_types::dimension::is_gradual_size;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::type_var::Restriction;
 use ruff_python_ast::name::Name;
@@ -4634,3 +4636,48 @@ def f(shapeless: Array[IntTuple, int], concrete: Array[[3], int]) -> None:
     assert_type(concrete, Array[[3], int])
 "#,
 );
+
+/// Pins the invariant `iterate_int_tuple` relies on: an unpacked shape's middle
+/// is always gradual, because a concrete one flattens into the prefix.
+#[test]
+fn test_int_tuple_unpacked_middle_is_always_gradual() {
+    let mut env = shaped_array_env();
+    env.add(
+        "main",
+        r#"
+from shape_extensions import Elements, IntTuple, shaped_array
+
+@shaped_array(shape="Shape")
+class Array[Shape: IntTuple, DType]: ...
+
+def variadic[S: IntTuple](x: Array[[2, *Elements[S], 3], int]) -> IntTuple[2, *Elements[S], 3]: ...
+def make() -> Array[[2, 4, 5, 3], int]: ...
+
+concrete = variadic(make())
+symbolic: IntTuple[2, *Elements[IntTuple], 3]
+"#,
+    );
+    let (state, handle) = env.to_state();
+    let main = handle("main");
+    let solutions = state.transaction().get_solutions(&main).unwrap();
+    for name in ["concrete", "symbolic"] {
+        let ty = &**solutions.get(&KeyExport(Name::new(name)));
+        let Type::IntTuple(shape) = ty else {
+            panic!("expected `{name}` to solve to an `IntTuple`, got `{ty}`");
+        };
+        match shape.to_tuple() {
+            // Flattened to a fixed length, so `iterate_int_tuple` never sees a middle.
+            Tuple::Concrete(_) | Tuple::Unbounded(_) => {}
+            Tuple::Unpacked(unpacked) => {
+                let (_, middle, _) = &*unpacked;
+                assert!(
+                    matches!(middle, Type::IntTuple(s) if s.is_shapeless())
+                        || matches!(middle, Type::Tuple(Tuple::Unbounded(elt))
+                            if elt.is_any() || is_gradual_size(elt)),
+                    "`{name}` has non-gradual unpacked middle `{middle}`; folding the \
+                     ends into the element type would now double-count them"
+                );
+            }
+        }
+    }
+}
