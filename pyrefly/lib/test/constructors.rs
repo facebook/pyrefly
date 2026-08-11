@@ -290,6 +290,15 @@ class Child(Parent): ...  # E: Missing argument `kw`
 );
 
 testcase!(
+    test_cannot_inherit_noncallable_init_subclass,
+    r#"
+class Foo:
+    __init_subclass__: None = None
+class Bar(Foo): ...  # E: Expected `__init_subclass__` to be a callable, got `None`
+    "#,
+);
+
+testcase!(
     test_metaclass_invalid_generic_legacy_typevar,
     r#"
 from typing import Any, Generic, TypeVar, assert_type

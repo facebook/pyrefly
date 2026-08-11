@@ -5008,8 +5008,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         Arc::unwrap_or_clone(field)
             .as_raw_special_method_type(self.heap, &Instance::of_class(cls))
-            .and_then(|ty| {
-                make_bound_classmethod(self.heap, &ClassBase::ClassType(cls.clone()), ty).ok()
+            .map(|ty| {
+                match make_bound_classmethod(self.heap, &ClassBase::ClassType(cls.clone()), ty) {
+                    Ok(bound_classmethod) => bound_classmethod,
+                    Err(ty) => ty,
+                }
             })
     }
 
