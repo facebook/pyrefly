@@ -679,6 +679,109 @@ test2(1, *(2, 3), *(4, "5"))  # E: Unpacked argument `tuple[Literal[1], Literal[
 "#,
 );
 
+// Splatting a tuple with a variadic middle preserves the positions of its fixed ends.
+// See https://github.com/facebook/pyrefly/issues/4482
+testcase!(
+    test_splat_unpacked_args_shape,
+    r#"
+class P: ...
+class V: ...
+class S: ...
+
+def f(a1: P, a2: P, /, *args: *tuple[*tuple[V, ...], S, S]) -> None: ...
+
+def test(
+    p: P,
+    v: tuple[V, ...],
+    s: S,
+    vs: tuple[*tuple[V, ...], S],
+    pv: tuple[P, *tuple[V, ...]],
+) -> None:
+    # Reassembles to exactly the `*args` type.
+    f(p, p, *vs, s)
+    # `a2` sees the prefix element `P`, not `P | V`.
+    f(p, *pv, s, s)
+    # All 45 ways to parenthesize the arguments are equivalent.
+    f(p, p, *v, s, s)
+    f(p, p, *v, *(s, s))
+    f(p, p, *(*v, s), s)
+    f(p, p, *(*v, s, s))
+    f(p, p, *(*v, *(s, s)))
+    f(p, p, *(*(*v, s), s))
+    f(p, *(p, *v), s, s)
+    f(p, *(p, *v), *(s, s))
+    f(p, *(p, *v, s), s)
+    f(p, *(p, *(*v, s)), s)
+    f(p, *(*(p, *v), s), s)
+    f(p, *(p, *v, s, s))
+    f(p, *(p, *v, *(s, s)))
+    f(p, *(p, *(*v, s), s))
+    f(p, *(p, *(*v, s, s)))
+    f(p, *(p, *(*v, *(s, s))))
+    f(p, *(p, *(*(*v, s), s)))
+    f(p, *(*(p, *v), s, s))
+    f(p, *(*(p, *v), *(s, s)))
+    f(p, *(*(p, *v, s), s))
+    f(p, *(*(p, *(*v, s)), s))
+    f(p, *(*(*(p, *v), s), s))
+    f(*(p, p), *v, s, s)
+    f(*(p, p), *v, *(s, s))
+    f(*(p, p), *(*v, s), s)
+    f(*(p, p), *(*v, s, s))
+    f(*(p, p), *(*v, *(s, s)))
+    f(*(p, p), *(*(*v, s), s))
+    f(*(p, p, *v), s, s)
+    f(*(p, *(p, *v)), s, s)
+    f(*(*(p, p), *v), s, s)
+    f(*(p, p, *v), *(s, s))
+    f(*(p, *(p, *v)), *(s, s))
+    f(*(*(p, p), *v), *(s, s))
+    f(*(p, p, *v, s), s)
+    f(*(p, p, *(*v, s)), s)
+    f(*(p, *(p, *v), s), s)
+    f(*(p, *(p, *v, s)), s)
+    f(*(p, *(p, *(*v, s))), s)
+    f(*(p, *(*(p, *v), s)), s)
+    f(*(*(p, p), *v, s), s)
+    f(*(*(p, p), *(*v, s)), s)
+    f(*(*(p, p, *v), s), s)
+    f(*(*(p, *(p, *v)), s), s)
+    f(*(*(*(p, p), *v), s), s)
+"#,
+);
+
+// Against ordinary positional parameters, only positions past the prefix widen.
+testcase!(
+    test_splat_unbounded_middle_against_positional,
+    r#"
+def f(a: int, b: str, c: bytes) -> None: ...
+
+def test(
+    prefix: tuple[int, *tuple[str, ...]],
+    suffix: tuple[*tuple[int, ...], bytes],
+) -> None:
+    # `a` gets the prefix element exactly; `b` and `c` draw from the middle.
+    f(*prefix)  # E: Argument `str` is not assignable to parameter `c` with type `bytes`
+    # No prefix, so which parameter the `bytes` reaches depends on the middle's length.
+    f(*suffix)  # E: Argument `bytes | int` is not assignable to parameter `a` with type `int` # E: Argument `bytes | int` is not assignable to parameter `b` with type `str` # E: Argument `bytes | int` is not assignable to parameter `c` with type `bytes`
+"#,
+);
+
+// Variadic parameter takes the whole remainder, so every element must be assignable to it.
+testcase!(
+    test_splat_variadic_checks_whole_remainder,
+    r#"
+def f(*args: int) -> None: ...
+
+def test(
+    mixed: tuple[int, *tuple[str, ...]],
+    none: tuple[str, *tuple[bytes, ...]],
+) -> None:
+    f(*mixed)  # E: Argument `int | str` is not assignable to parameter `*args` with type `int`
+    f(*none)  # E: Argument `bytes | str` is not assignable to parameter `*args` with type `int`
+"#,
+);
+
 testcase!(
     test_splat_union,
     r#"

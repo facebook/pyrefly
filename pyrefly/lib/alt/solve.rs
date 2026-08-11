@@ -347,6 +347,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Tuple::Unbounded(elt) => vec![Iterable::OfType(*elt)],
             Tuple::Unpacked(unpacked) => {
                 let (prefix, middle, suffix) = *unpacked;
+                // Note: folding in the ends does not double-count them: an unpacked shape's
+                // middle is always gradual, so the union will collapse to it either way.
                 vec![Iterable::Unpacked {
                     middle: self.int_tuple_unpacked_element_type(&prefix, &middle, &suffix),
                     prefix,

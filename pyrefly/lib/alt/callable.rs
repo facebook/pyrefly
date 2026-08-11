@@ -369,8 +369,27 @@ impl<'a> CallArg<'a> {
                     let tys = fixed_tys.into_map(|tys| solver.unions(tys));
                     CallArgPreEval::Fixed(tys, 0)
                 } else {
-                    let ty = solver.get_produced_type(iterables);
-                    CallArgPreEval::Star(ty, false)
+                    // A lone unpacked tuple has fixed ends at known positions, so keep
+                    // its shape. A union of iterables has no single shape to keep.
+                    let (prefix, middle, suffix) = if let [
+                        Iterable::Unpacked {
+                            prefix,
+                            middle,
+                            suffix,
+                        },
+                    ] = iterables.as_slice()
+                    {
+                        (prefix.clone(), middle.clone(), suffix.clone())
+                    } else {
+                        (Vec::new(), solver.get_produced_type(iterables), Vec::new())
+                    };
+                    CallArgPreEval::Star {
+                        prefix,
+                        middle,
+                        suffix,
+                        consumed: 0,
+                        done: false,
+                    }
                 }
             }
         }
@@ -383,20 +402,46 @@ impl<'a> CallArg<'a> {
 enum CallArgPreEval<'a> {
     Type(&'a Type, bool),
     Expr(&'a Expr, bool),
-    Star(Type, bool),
+    Star {
+        prefix: Vec<Type>,
+        middle: Type,
+        suffix: Vec<Type>,
+        consumed: usize,
+        done: bool,
+    },
     Fixed(Vec<Type>, usize),
 }
 
 impl CallArgPreEval<'_> {
     fn step(&self) -> bool {
         match self {
-            Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => !*done,
+            Self::Type(_, done) | Self::Expr(_, done) | Self::Star { done, .. } => !*done,
             Self::Fixed(tys, i) => *i < tys.len(),
         }
     }
 
     fn is_star(&self) -> bool {
-        matches!(self, Self::Star(..))
+        matches!(self, Self::Star { .. })
+    }
+
+    /// The type a splat offers a parameter: an exact prefix element, or a union past
+    /// the prefix. `absorb_all` unions the whole remainder, for a variadic parameter.
+    fn star_element<Ans: LookupAnswer>(
+        solver: &AnswersSolver<Ans>,
+        prefix: &[Type],
+        middle: &Type,
+        suffix: &[Type],
+        consumed: usize,
+        absorb_all: bool,
+    ) -> Type {
+        if !absorb_all && let Some(ty) = prefix.get(consumed) {
+            return ty.clone();
+        }
+        let rest = if absorb_all { consumed } else { prefix.len() };
+        let mut tys = prefix[rest..].to_vec();
+        tys.push(middle.clone());
+        tys.extend(suffix.iter().cloned());
+        solver.unions(tys)
     }
 
     fn inferred_type<Ans: LookupAnswer>(
@@ -407,7 +452,13 @@ impl CallArgPreEval<'_> {
         match self {
             Self::Type(ty, _) => (*ty).clone(),
             Self::Expr(expr, _) => solver.expr_infer(expr, arg_errors),
-            Self::Star(ty, _) => ty.clone(),
+            Self::Star {
+                prefix,
+                middle,
+                suffix,
+                consumed,
+                ..
+            } => Self::star_element(solver, prefix, middle, suffix, *consumed, false),
             Self::Fixed(tys, idx) => tys[*idx].clone(),
         }
     }
@@ -488,15 +539,27 @@ impl CallArgPreEval<'_> {
                 solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
                 Some(ty)
             }
-            Self::Star(ty, done) => {
+            Self::Star {
+                prefix,
+                middle,
+                suffix,
+                consumed,
+                done,
+            } => {
+                let ty = Self::star_element(solver, prefix, middle, suffix, *consumed, vararg);
+                if !vararg && *consumed < prefix.len() {
+                    // A prefix element is consumed once matched; the variadic tail
+                    // is not, since it stays on offer to every later parameter.
+                    *consumed += 1;
+                }
                 *done = vararg;
                 solver.check_type_with_options(
-                    ty,
+                    &ty,
                     hint,
                     range,
                     TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                 );
-                Some(ty.clone())
+                Some(ty)
             }
             Self::Fixed(tys, i) => {
                 let arg_ty = tys[*i].clone();
@@ -517,7 +580,7 @@ impl CallArgPreEval<'_> {
     // Intended for arguments matched to unpack-annotated *args, which are typechecked separately later
     fn post_skip(&mut self) {
         match self {
-            Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => {
+            Self::Type(_, done) | Self::Expr(_, done) | Self::Star { done, .. } => {
                 *done = true;
             }
             Self::Fixed(_, i) => {
@@ -529,7 +592,7 @@ impl CallArgPreEval<'_> {
     // Similar to post_skip but it skips to the end of any fixed length arguments.
     fn mark_done(&mut self) {
         match self {
-            Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => {
+            Self::Type(_, done) | Self::Expr(_, done) | Self::Star { done, .. } => {
                 *done = true;
             }
             Self::Fixed(tys, i) => {
@@ -1028,12 +1091,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             suffix.push(tys[idx].clone());
                         }
                     }
-                    CallArgPreEval::Star(ty, _) => {
-                        if !middle.is_empty() {
+                    CallArgPreEval::Star {
+                        prefix: star_prefix,
+                        middle: star_middle,
+                        suffix: star_suffix,
+                        consumed,
+                        ..
+                    } => {
+                        // Only elements landing between two variadic portions lose
+                        // their position; the rest stay in the prefix or suffix.
+                        let unmatched_prefix = star_prefix.into_iter().skip(consumed);
+                        if middle.is_empty() {
+                            prefix.extend(unmatched_prefix);
+                        } else {
                             middle.extend(suffix);
                             suffix = Vec::new();
+                            middle.extend(unmatched_prefix);
                         }
-                        middle.push(ty);
+                        middle.push(star_middle);
+                        suffix.extend(star_suffix);
                     }
                 }
             }
