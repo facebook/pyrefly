@@ -24,6 +24,7 @@ use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
@@ -81,6 +82,28 @@ use crate::types::types::Type;
 pub enum CallStyle<'a> {
     Method(&'a Name),
     FreeForm,
+}
+
+/// Minimum nesting before a constructor argument is worth collapsing into a type.
+const FLATTEN_CALL_DEPTH: u32 = 4;
+
+/// Does `x` nest at least `depth` calls, counting `x` itself?
+fn nests_calls(x: &Expr, depth: u32) -> bool {
+    if depth == 0 {
+        return true;
+    }
+    let remaining = if matches!(x, Expr::Call(_)) {
+        depth - 1
+    } else {
+        depth
+    };
+    let mut found = false;
+    x.recurse(&mut |child: &Expr| {
+        if !found {
+            found = nests_calls(child, remaining);
+        }
+    });
+    found
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -982,6 +1005,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
+        // Classes that override `__new__` and also define `__init__` check/infer args
+        // twice, potentially leading to exponential check costs: `O(2^depth)`.
+        let checks_args_twice = |cls: &ClassType, preserve_self| {
+            self.get_dunder_new(cls, preserve_self).is_some()
+                && self.get_dunder_init(cls, false).is_some()
+        };
+        let is_deeply_nested =
+            |x: &TypeOrExpr| matches!(x, TypeOrExpr::Expr(e) if nests_calls(e, FLATTEN_CALL_DEPTH));
+
+        // Infer deeply nested arguments once, up front. Shallower nesting costs only a constant
+        // factor, and flattening it would discard the parameter hint for no benefit.
+        let flatten_nested = args
+            .iter()
+            .map(|a| match a {
+                CallArg::Arg(x) | CallArg::Star(x, _) => x,
+            })
+            .chain(keywords.iter().map(|k| &k.value))
+            .any(is_deeply_nested)
+            && checks_args_twice(&cls, constructor_kind == ConstructorKind::TypeOfSelf);
+
+        let call = CallWithTypes::new();
+        let flattened = flatten_nested.then(|| {
+            (
+                args.map(|a| match a {
+                    CallArg::Arg(x) | CallArg::Star(x, _) if is_deeply_nested(x) => {
+                        call.call_arg(a, self, errors)
+                    }
+                    _ => a.clone(),
+                }),
+                keywords.map(|k| {
+                    if is_deeply_nested(&k.value) {
+                        call.call_keyword(k, self, errors)
+                    } else {
+                        k.clone()
+                    }
+                }),
+            )
+        });
+        let (args, keywords) = match &flattened {
+            Some((args, keywords)) => (args.as_slice(), keywords.as_slice()),
+            None => (args, keywords),
+        };
+
         self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
             self.construct_class_inner(
                 cls.clone(),

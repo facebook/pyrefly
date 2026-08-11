@@ -1320,3 +1320,81 @@ x = C([1, 2])
 assert_type(x, C[int])
     "#,
 );
+
+// A class defining both `__new__` and `__init__` has its args checked twice, so
+// nesting cost `O(2^depth)` (below test would be 2^18 checks without the fix).
+testcase!(
+    test_deeply_nested_new_and_init_ctor_calls,
+    r#"
+from typing import Self, assert_type
+class D:
+    def __new__(cls, x: "D | None" = None) -> Self: ...
+    def __init__(self, x: "D | None" = None) -> None: ...
+x = D(D(D(D(D(D(D(D(D(D(D(D(D(D(D(D(D(D(None))))))))))))))))))
+assert_type(x, D)
+    "#,
+);
+
+// The `dict` stubs declare `__new__` alongside `__init__`, so subclasses
+// inherit both https://github.com/facebook/pyrefly/issues/4276.
+testcase!(
+    test_deeply_nested_dict_subclass_ctor_calls,
+    r#"
+from typing import Any, assert_type
+class D(dict[str, Any]):
+    def __init__(self, x: "D | None" = None) -> None: ...
+x = D(D(D(D(D(D(D(D(D(D(D(D(D(D(D(D(D(D(None))))))))))))))))))
+assert_type(x, D)
+    "#,
+);
+
+// Confirm that flattening resolves by type (ensure aliases still collapse).
+testcase!(
+    test_deeply_nested_aliased_ctor_calls,
+    r#"
+from typing import Self, assert_type
+class D:
+    def __new__(cls, x: "D | None" = None) -> Self: ...
+    def __init__(self, x: "D | None" = None) -> None: ...
+E = D
+x = E(E(E(E(E(E(E(E(E(E(E(E(E(E(E(E(E(E(None))))))))))))))))))
+assert_type(x, D)
+    "#,
+);
+
+// A shallow generic construction is not flattened, so the parameter still pins the type argument.
+testcase!(
+    test_nested_generic_ctor_keeps_contextual_targs,
+    r#"
+from typing import Self
+class G[T]:
+    def __new__(cls, xs: list[T]) -> Self: ...
+    def __init__(self, xs: list[T]) -> None: ...
+class A: ...
+class B(A): ...
+class Outer:
+    def __new__(cls, g: "G[A]") -> Self: ...
+    def __init__(self, g: "G[A]") -> None: ...
+Outer(G([B()]))
+def takes_float(g: "G[float]") -> None: ...
+takes_float(G([1]))
+    "#,
+);
+
+// Past `FLATTEN_CALL_DEPTH` the argument is inferred without the parameter as a hint, so the
+// inner `G`'s type argument is pinned by the list literal alone.
+testcase!(
+    test_deeply_nested_generic_ctor_loses_contextual_targs,
+    r#"
+from typing import Self
+class G[T]:
+    def __new__(cls, xs: list[T]) -> Self: ...
+    def __init__(self, xs: list[T]) -> None: ...
+class A: ...
+class B(A): ...
+class Outer:
+    def __new__(cls, g: "G[G[G[A]]]") -> Self: ...
+    def __init__(self, g: "G[G[G[A]]]") -> None: ...
+Outer(G([G([G([B()])])]))  # E: Argument `G[G[G[B]]]` is not assignable to parameter `g` with type `G[G[G[A]]]`
+    "#,
+);
