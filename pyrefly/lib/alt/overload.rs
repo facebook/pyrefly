@@ -912,7 +912,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let selected_overload = if spec_compliant {
                 self.disambiguate_overloads_spec_compliant(&matched_overloads)
             } else {
-                self.disambiguate_overloads(&matched_overloads)
+                // this should cause some chaos :)
+                self.disambiguate_overloads_spec_compliant(&matched_overloads)
             };
             if let Some(idx) = selected_overload {
                 let overload = matched_overloads
