@@ -1788,6 +1788,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     &self.type_order.get_type_alias(want_alias).as_type(),
                 )
             }
+            (got, Type::TypeForm(_)) if let Some(got_alias) = as_type_alias(got) => {
+                self.is_subset_eq(&self.type_order.get_type_alias(got_alias).as_type(), want)
+            }
             (Type::TypeAlias(got), _) => {
                 // We use `as_value` to get the alias's runtime type.
                 self.is_subset_eq(
