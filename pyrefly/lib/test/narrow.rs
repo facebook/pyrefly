@@ -1724,12 +1724,32 @@ testcase!(
 from typing import Any, assert_type
 
 class ModelField:
-    type_: Any
+    def __init__(self, type_: type[Any]) -> None:
+        self.type_: Any = type_
 
-    def analyze(self) -> None:
+    def analyze(self, replace_with_any: bool) -> None:
+        if replace_with_any:
+            self.type_ = Any
+        if self.type_ is Any or self.type_ is object:
+            return
         if isinstance(self.type_, type):
             assert_type(self.type_, type[Any])
             isinstance(None, self.type_)
+    "#,
+);
+
+testcase!(
+    test_isinstance_type_preserves_bounded_class_object_typevar,
+    r#"
+from typing import TypeVar, assert_type
+
+C = TypeVar("C", bound=type)
+
+def reg(cls: C) -> C:
+    if not isinstance(cls, type):
+        raise TypeError
+    assert_type(cls, C)
+    return cls
     "#,
 );
 

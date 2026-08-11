@@ -398,6 +398,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Narrow a type by removing values identity-equal to `right` (`is not` semantics).
     fn narrow_is_not(&self, ty: &Type, right: &Type) -> Type {
         self.distribute_over_union(ty, |t| match (t, right) {
+            (Type::ClassDef(left), Type::ClassDef(right)) if left == right => self.heap.mk_never(),
             (_, right) if Self::is_identity_literal(right) && Self::literal_equal(t, right) => {
                 self.heap.mk_never()
             }
@@ -649,14 +650,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn narrow_isinstance_from_definite(&self, left: &Type, right: &Type) -> Type {
+        let builtins_type = self.heap.mk_class_type(self.stdlib.builtins_type().clone());
+        let is_class_object_member = |left: &Type| match left {
+            Type::Type(_) | Type::ClassDef(_) => true,
+            Type::Quantified(q) => {
+                self.is_subset_eq(&q.upper_bound(self.stdlib, self.heap), &builtins_type)
+            }
+            _ => false,
+        };
         let mut has_class_object_member = false;
         self.map_over_union(left, |left| {
-            has_class_object_member |= matches!(left, Type::Type(_) | Type::ClassDef(_));
+            has_class_object_member |= is_class_object_member(left);
         });
         self.distribute_over_union(left, |l| {
             self.with_fresh_class_info_target(l, right, |right| {
                 if matches!(&right, Type::ClassType(cls) if cls.is_builtin("type")) {
-                    if matches!(l, Type::Type(_) | Type::ClassDef(_)) {
+                    if is_class_object_member(l) {
                         l.clone()
                     } else if has_class_object_member {
                         self.heap.mk_never()
