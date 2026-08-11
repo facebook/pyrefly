@@ -44,6 +44,19 @@ def f(x: int) -> None:
 );
 
 testcase!(
+    test_subscript_assign_does_not_narrow_any,
+    r#"
+from typing import Any, assert_type
+
+values: list[float] = []
+frame: Any = object()
+frame["start"] = values
+assert_type(frame["start"], Any)
+frame["end"] = frame["start"].shift(-1)
+"#,
+);
+
+testcase!(
     test_error_assign,
     r#"
 x: str = 1  # E: `Literal[1]` is not assignable to `str`
