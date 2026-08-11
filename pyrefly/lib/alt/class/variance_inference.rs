@@ -132,7 +132,7 @@ fn handle_tuple_type(
             on_type(variance, inj, unbounded_ty, on_edge, on_var);
         }
         Tuple::Unpacked(boxed_parts) => {
-            let (before, middle, after) = &**boxed_parts;
+            let (before, middle, after) = boxed_parts.parts();
             for ty in before {
                 on_type(variance, inj, ty, on_edge, on_var);
             }

@@ -1421,7 +1421,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         }
                         Type::Tuple(Tuple::Unpacked(f)) if unbounded.is_empty() => {
-                            let (pre, middle, suff) = *f;
+                            let (pre, middle, suff) = f.into_parts();
                             prefix.extend(pre);
                             suffix.extend(suff);
                             unbounded.push(middle);
@@ -1513,7 +1513,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Tuple::Concrete(elts) => (elts.iter().collect(), None),
             Tuple::Unpacked(f) => {
                 // TODO: We should also contextually type based on the middle and suffix
-                (f.0.iter().collect(), None)
+                (f.prefix().iter().collect(), None)
             }
             Tuple::Unbounded(elt) => (Vec::new(), Some(elt)),
         }
@@ -4330,8 +4330,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match ty {
             Type::Tuple(Tuple::Unbounded(_)) => true,
             Type::Tuple(Tuple::Unpacked(unpacked)) => {
-                let (_, middle, _) = &**unpacked;
-                Self::has_unbounded_tuple_carrier(middle)
+                Self::has_unbounded_tuple_carrier(unpacked.middle())
             }
             Type::Unpack(inner) => Self::has_unbounded_tuple_carrier(inner),
             _ => false,

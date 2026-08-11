@@ -284,22 +284,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .mk_unpacked_tuple(Vec::new(), self.heap.mk_tuple(l.clone()), r.clone())
             }
             (Tuple::Unpacked(l), Tuple::Concrete(r)) => {
-                let (l_prefix, l_middle, l_suffix) = &**l;
-                let mut new_suffix = l_suffix.clone();
+                let (l_prefix, l_middle, l_suffix) = l.parts();
+                let mut new_suffix = l_suffix.to_vec();
                 new_suffix.extend(r.clone());
                 self.heap
-                    .mk_unpacked_tuple(l_prefix.clone(), l_middle.clone(), new_suffix)
+                    .mk_unpacked_tuple(l_prefix.to_vec(), l_middle.clone(), new_suffix)
             }
             (Tuple::Concrete(l), Tuple::Unpacked(r)) => {
-                let (r_prefix, r_middle, r_suffix) = &**r;
+                let (r_prefix, r_middle, r_suffix) = r.parts();
                 let mut new_prefix = l.clone();
-                new_prefix.extend(r_prefix.clone());
+                new_prefix.extend(r_prefix.to_vec());
                 self.heap
-                    .mk_unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.clone())
+                    .mk_unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.to_vec())
             }
             (Tuple::Unbounded(l), Tuple::Unpacked(r)) => {
-                let (r_prefix, r_middle, r_suffix) = &**r;
-                let mut middle = r_prefix.clone();
+                let (r_prefix, r_middle, r_suffix) = r.parts();
+                let mut middle = r_prefix.to_vec();
                 middle.push((**l).clone());
                 middle.push(
                     self.unwrap_iterable(r_middle)
@@ -308,28 +308,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_unpacked_tuple(
                     Vec::new(),
                     self.heap.mk_unbounded_tuple(self.unions(middle)),
-                    r_suffix.clone(),
+                    r_suffix.to_vec(),
                 )
             }
             (Tuple::Unpacked(l), Tuple::Unbounded(r)) => {
-                let (l_prefix, l_middle, l_suffix) = &**l;
-                let mut middle = l_suffix.clone();
+                let (l_prefix, l_middle, l_suffix) = l.parts();
+                let mut middle = l_suffix.to_vec();
                 middle.push((**r).clone());
                 middle.push(
                     self.unwrap_iterable(l_middle)
                         .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
                 self.heap.mk_unpacked_tuple(
-                    l_prefix.clone(),
+                    l_prefix.to_vec(),
                     self.heap.mk_unbounded_tuple(self.unions(middle)),
                     Vec::new(),
                 )
             }
             (Tuple::Unpacked(l), Tuple::Unpacked(r)) => {
-                let (l_prefix, l_middle, l_suffix) = &**l;
-                let (r_prefix, r_middle, r_suffix) = &**r;
-                let mut middle = l_suffix.clone();
-                middle.extend(r_prefix.clone());
+                let (l_prefix, l_middle, l_suffix) = l.parts();
+                let (r_prefix, r_middle, r_suffix) = r.parts();
+                let mut middle = l_suffix.to_vec();
+                middle.extend(r_prefix.to_vec());
                 middle.push(
                     self.unwrap_iterable(l_middle)
                         .unwrap_or_else(|| self.heap.mk_any_implicit()),
@@ -339,9 +339,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
                 self.heap.mk_unpacked_tuple(
-                    l_prefix.clone(),
+                    l_prefix.to_vec(),
                     self.heap.mk_unbounded_tuple(self.unions(middle)),
-                    r_suffix.clone(),
+                    r_suffix.to_vec(),
                 )
             }
         }

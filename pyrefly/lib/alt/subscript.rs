@@ -95,7 +95,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.infer_concrete_slice(elts, &slice.lower, &slice.upper, slice_targs)
             }
             Tuple::Unpacked(f) => {
-                let (prefix, middle, suffix) = &**f;
+                let (prefix, middle, suffix) = f.parts();
                 self.infer_unpacked_slice(
                     prefix,
                     middle,
@@ -121,10 +121,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Tuple::Concrete(elts) => {
                     self.infer_concrete_index(elts, idx, index.range(), errors)
                 }
-                Tuple::Unpacked(f) => {
-                    let (prefix, _middle, suffix) = &**f;
-                    self.infer_unpacked_index(prefix, suffix, idx)
-                }
+                Tuple::Unpacked(f) => self.infer_unpacked_index(f.prefix(), f.suffix(), idx),
                 _ => None,
             },
             _ => None,
@@ -141,14 +138,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match &idx_type {
             Type::Literal(lit) if let Some(idx) = lit.value.as_index_i64() => match tuple {
                 Tuple::Unpacked(f) => {
-                    let (prefix, middle, suffix) = &**f;
+                    let (prefix, middle, suffix) = f.parts();
                     Some(self.infer_int_tuple_unpacked_index(prefix, middle, suffix, idx))
                 }
                 _ => self.infer_tuple_index(tuple, index, errors),
             },
             _ => match tuple {
                 Tuple::Unpacked(f) => {
-                    let (prefix, middle, suffix) = &**f;
+                    let (prefix, middle, suffix) = f.parts();
                     Some(self.int_tuple_unpacked_element_type(prefix, middle, suffix))
                 }
                 _ => None,

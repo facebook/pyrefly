@@ -435,7 +435,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Tuple::Unpacked(f) => {
-                let (prefix, middle, suffix) = *f;
+                let (prefix, middle, suffix) = f.into_parts();
                 let mut elements = prefix;
                 match middle {
                     Type::Tuple(Tuple::Unbounded(unbounded_middle)) => {

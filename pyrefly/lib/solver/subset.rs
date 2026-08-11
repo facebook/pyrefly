@@ -121,7 +121,7 @@ fn canonical_vararg_unpack_inner<'a>(ty: &'a Type, other: &Type) -> &'a Type {
         return ty;
     }
     if let Type::Tuple(Tuple::Unpacked(unpacked)) = ty {
-        let (prefix, middle, suffix) = unpacked.as_ref();
+        let (prefix, middle, suffix) = unpacked.parts();
         if prefix.is_empty() && suffix.is_empty() {
             return middle;
         }
@@ -804,7 +804,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
             (Tuple::Unbounded(l), Tuple::Unbounded(u)) => self.is_subset_eq(l, u),
             (Tuple::Concrete(lelts), Tuple::Unpacked(u_unpacked)) => {
-                let (u_prefix, u_middle, u_suffix) = &**u_unpacked;
+                let (u_prefix, u_middle, u_suffix) = u_unpacked.parts();
                 if lelts.len() < u_prefix.len() + u_suffix.len() {
                     Err(SubsetError::Other)
                 } else {
@@ -823,7 +823,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
             }
             (Tuple::Unbounded(_), Tuple::Unpacked(u_unpacked)) => {
-                let (u_prefix, u_middle, u_suffix) = &**u_unpacked;
+                let (u_prefix, u_middle, u_suffix) = u_unpacked.parts();
                 if u_prefix.is_empty() && u_suffix.is_empty() {
                     self.is_subset_eq(&self.solver.heap.mk_tuple(got.clone()), u_middle)
                 } else {
@@ -831,13 +831,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
             }
             (Tuple::Unpacked(l_unpacked), Tuple::Unbounded(u)) => {
-                let (l_prefix, l_middle, l_suffix) = &**l_unpacked;
+                let (l_prefix, l_middle, l_suffix) = l_unpacked.parts();
                 all(l_prefix.iter(), |l| self.is_subset_eq(l, u))?;
                 all(l_suffix.iter(), |l| self.is_subset_eq(l, u))?;
                 self.is_subset_eq(l_middle, &self.solver.heap.mk_tuple(want.clone()))
             }
             (Tuple::Unpacked(l_unpacked), Tuple::Concrete(uelts)) => {
-                let (l_prefix, l_middle, l_suffix) = &**l_unpacked;
+                let (l_prefix, l_middle, l_suffix) = l_unpacked.parts();
                 if uelts.len() < l_prefix.len() + l_suffix.len() {
                     Err(SubsetError::Other)
                 } else {
@@ -856,8 +856,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
             }
             (Tuple::Unpacked(l_unpacked), Tuple::Unpacked(u_unpacked)) => {
-                let (l_prefix, l_middle, l_suffix) = &**l_unpacked;
-                let (u_prefix, u_middle, u_suffix) = &**u_unpacked;
+                let (l_prefix, l_middle, l_suffix) = l_unpacked.parts();
+                let (u_prefix, u_middle, u_suffix) = u_unpacked.parts();
                 // Invariant: 0-2 of these are non-empty
                 // l_before and u_before cannot both be non-empty
                 // l_after and u_after cannot both be non-empty
@@ -2510,12 +2510,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.is_subset_eq(&tuple_type, want)
             }
             (Type::Tuple(Tuple::Unpacked(unpacked)), _)
-                if matches!(unpacked.1, Type::Tuple(Tuple::Unbounded(_))) =>
+                if let (prefix, Type::Tuple(Tuple::Unbounded(middle)), suffix) =
+                    unpacked.parts() =>
             {
-                let (prefix, middle, suffix) = &**unpacked;
-                let Type::Tuple(Tuple::Unbounded(middle)) = middle else {
-                    unreachable!("guarded by matches! above")
-                };
                 let elts = prefix
                     .iter()
                     .chain(iter::once(&**middle))
@@ -2530,7 +2527,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.is_subset_eq(&tuple_type, want)
             }
             (Type::Tuple(Tuple::Unpacked(unpacked)), _) => {
-                let (prefix, middle, suffix) = &**unpacked;
+                let (prefix, middle, suffix) = unpacked.parts();
                 let elts = prefix.iter().chain(suffix).cloned().collect::<Vec<_>>();
                 let tuple_type = self.solver.heap.mk_class_type(
                     self.type_order

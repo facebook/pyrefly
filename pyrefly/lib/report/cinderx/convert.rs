@@ -312,7 +312,7 @@ pub(crate) fn type_to_structured(
                     vec![type_to_structured(inner, table, pending_class_traits)]
                 }
                 pyrefly_types::tuple::Tuple::Unpacked(unpacked) => {
-                    let (prefix, middle, suffix) = &**unpacked;
+                    let (prefix, middle, suffix) = unpacked.parts();
                     let mut indices: Vec<usize> = prefix
                         .iter()
                         .map(|e| type_to_structured(e, table, pending_class_traits))

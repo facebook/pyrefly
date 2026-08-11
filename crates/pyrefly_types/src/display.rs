@@ -347,7 +347,7 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_type_sequence(elts.iter(), ", ", false, output)
             }
             Type::Tuple(Tuple::Unpacked(unpacked)) => {
-                let (prefix, middle, suffix) = &**unpacked;
+                let (prefix, middle, suffix) = unpacked.parts();
                 let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
                 self.fmt_type_sequence(
                     prefix

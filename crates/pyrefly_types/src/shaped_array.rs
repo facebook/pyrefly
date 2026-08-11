@@ -332,7 +332,7 @@ impl IntTuple {
         match tuple {
             Tuple::Concrete(dims) => Self::from_types(dims),
             Tuple::Unpacked(unpacked) => {
-                let (prefix, middle, suffix) = *unpacked;
+                let (prefix, middle, suffix) = unpacked.into_parts();
                 Self::unpacked_from_types(prefix, middle, suffix)
             }
             Tuple::Unbounded(elt) if elt.is_any() || is_gradual_size(&elt) => Self::shapeless(),
@@ -447,7 +447,7 @@ impl IntTuple {
         }
 
         if let Type::Tuple(Tuple::Unpacked(unpacked)) = &middle {
-            let (inner_prefix, inner_middle, inner_suffix) = &**unpacked;
+            let (inner_prefix, inner_middle, inner_suffix) = unpacked.parts();
             prefix.extend(inner_prefix.iter().map(carrier_element_to_dim_recover));
             let mut combined_suffix: Vec<Int> = inner_suffix
                 .iter()
@@ -956,7 +956,7 @@ pub fn tuple_carrier_to_shape(carrier: &Type) -> Option<IntTuple> {
             Some(IntTuple::from_ints(dims))
         }
         Type::Tuple(Tuple::Unpacked(unpacked)) => {
-            let (prefix, middle, suffix) = &**unpacked;
+            let (prefix, middle, suffix) = unpacked.parts();
             let prefix = prefix
                 .iter()
                 .map(carrier_element_to_dim)
@@ -983,7 +983,7 @@ pub fn tuple_carrier_to_shape(carrier: &Type) -> Option<IntTuple> {
 fn recover_unbounded_tuple_carrier_middle(middle: Type) -> Type {
     match middle {
         Type::Tuple(Tuple::Unpacked(unpacked)) => {
-            let (prefix, middle, suffix) = *unpacked;
+            let (prefix, middle, suffix) = unpacked.into_parts();
             Type::Tuple(Tuple::unpacked(
                 prefix,
                 recover_unbounded_tuple_carrier_middle(middle),
@@ -1004,7 +1004,7 @@ fn validate_tuple_carrier_unpacked_middle(middle: &Type) -> Option<()> {
             Some(())
         }
         Type::Tuple(Tuple::Unpacked(unpacked)) => {
-            let (prefix, middle, suffix) = &**unpacked;
+            let (prefix, middle, suffix) = unpacked.parts();
             prefix
                 .iter()
                 .map(carrier_element_to_dim)

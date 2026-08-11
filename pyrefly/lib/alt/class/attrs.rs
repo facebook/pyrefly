@@ -108,7 +108,7 @@ fn attrs_type_is_frozen_setter(ty: &Type) -> bool {
         Type::Tuple(Tuple::Concrete(elts)) => elts.iter().any(attrs_type_is_frozen_setter),
         Type::Tuple(Tuple::Unbounded(elt)) => attrs_type_is_frozen_setter(elt),
         Type::Tuple(Tuple::Unpacked(unpacked)) => {
-            let (prefix, middle, suffix) = &**unpacked;
+            let (prefix, middle, suffix) = unpacked.parts();
             prefix.iter().any(attrs_type_is_frozen_setter)
                 || attrs_type_is_frozen_setter(middle)
                 || suffix.iter().any(attrs_type_is_frozen_setter)

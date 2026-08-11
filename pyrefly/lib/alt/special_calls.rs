@@ -725,7 +725,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::Tuple(Tuple::Unbounded(t)) => f(me, *t, res),
                 Type::Tuple(Tuple::Unpacked(unpacked)) => {
-                    let (pre, mid, post) = *unpacked;
+                    let (pre, mid, post) = unpacked.into_parts();
                     for t in pre {
                         f(me, t, res)
                     }

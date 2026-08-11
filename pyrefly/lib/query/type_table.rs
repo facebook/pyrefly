@@ -635,7 +635,7 @@ fn tuple_indexed_args(
             indexed_named_leaf(table, "..."),
         ],
         Tuple::Unpacked(unpacked) => {
-            let (prefix, middle, suffix) = &**unpacked;
+            let (prefix, middle, suffix) = unpacked.parts();
             let mut args = prefix
                 .iter()
                 .map(|ty| type_to_indexed_shape(context, ty, table))

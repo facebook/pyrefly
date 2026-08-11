@@ -318,7 +318,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Tuple(Tuple::Concrete(elts)) => self.unions(elts.clone()),
             Type::Tuple(Tuple::Unbounded(elt)) => (**elt).clone(),
             Type::Tuple(Tuple::Unpacked(unpacked)) => {
-                let (prefix, middle, suffix) = &**unpacked;
+                let (prefix, middle, suffix) = unpacked.parts();
                 self.int_tuple_unpacked_element_type(prefix, middle, suffix)
             }
             // An unresolved variadic middle (an unsolved `Var`, or a raw
@@ -346,7 +346,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Tuple::Concrete(elts) => vec![Iterable::FixedLen(elts)],
             Tuple::Unbounded(elt) => vec![Iterable::OfType(*elt)],
             Tuple::Unpacked(unpacked) => {
-                let (prefix, middle, suffix) = *unpacked;
+                let (prefix, middle, suffix) = unpacked.into_parts();
                 // Note: folding in the ends does not double-count them: an unpacked shape's
                 // middle is always gradual, so the union will collapse to it either way.
                 vec![Iterable::Unpacked {
@@ -989,8 +989,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Tuple(Tuple::Unbounded(elt)) => vec![Iterable::OfType((**elt).clone())],
             // Empty ends around the unbounded middle, e.g. `tuple[*Ts]` or `tuple[*tuple[X, ...]]`:
             // iteration collapses to the middle alone, so there are no fixed ends to keep distinct.
-            Type::Tuple(Tuple::Unpacked(f)) if f.0.is_empty() && f.2.is_empty() => {
-                let (_, middle, _) = &**f;
+            Type::Tuple(Tuple::Unpacked(f))
+                if let (prefix, middle, suffix) = f.parts()
+                    && prefix.is_empty()
+                    && suffix.is_empty() =>
+            {
                 if let Type::Quantified(q) = middle
                     && q.is_type_var_tuple()
                 {
@@ -1001,7 +1004,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Tuple(Tuple::Unpacked(f)) => {
                 // Keep the fixed ends distinct so a starred target captures only the middle.
-                let (prefix, middle, suffix) = &**f;
+                let (prefix, middle, suffix) = f.parts();
                 let middle = match middle {
                     Type::Tuple(Tuple::Unbounded(elt)) => (**elt).clone(),
                     Type::Quantified(q) if q.is_type_var_tuple() => {
@@ -1011,9 +1014,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => self.get_produced_type(self.iterate(middle, range, errors, orig_context)),
                 };
                 vec![Iterable::Unpacked {
-                    prefix: prefix.clone(),
+                    prefix: prefix.to_vec(),
                     middle,
-                    suffix: suffix.clone(),
+                    suffix: suffix.to_vec(),
                 }]
             }
             Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
@@ -1574,16 +1577,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match tuple {
                 Tuple::Concrete(ts) => ts.iter().collect(),
                 Tuple::Unbounded(t) => vec![t],
-                Tuple::Unpacked(ts) => {
-                    ts.0.iter()
-                        .chain(if let Type::Tuple(inner) = &ts.1 {
-                            collect_tuple_members(inner)
-                        } else {
-                            Vec::new()
-                        })
-                        .chain(ts.2.iter())
-                        .collect()
-                }
+                Tuple::Unpacked(ts) => ts
+                    .prefix()
+                    .iter()
+                    .chain(if let Type::Tuple(inner) = ts.middle() {
+                        collect_tuple_members(inner)
+                    } else {
+                        Vec::new()
+                    })
+                    .chain(ts.suffix().iter())
+                    .collect(),
             }
         }
 

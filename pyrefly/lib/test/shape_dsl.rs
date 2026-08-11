@@ -4669,7 +4669,7 @@ symbolic: IntTuple[2, *Elements[IntTuple], 3]
             // Flattened to a fixed length, so `iterate_int_tuple` never sees a middle.
             Tuple::Concrete(_) | Tuple::Unbounded(_) => {}
             Tuple::Unpacked(unpacked) => {
-                let (_, middle, _) = &*unpacked;
+                let middle = unpacked.middle();
                 assert!(
                     matches!(middle, Type::IntTuple(s) if s.is_shapeless())
                         || matches!(middle, Type::Tuple(Tuple::Unbounded(elt))

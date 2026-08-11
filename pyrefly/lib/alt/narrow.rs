@@ -507,8 +507,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Tuple::Concrete(elts) => elts.clone(),
             Tuple::Unbounded(elt) => vec![(**elt).clone()],
             Tuple::Unpacked(unpacked) => {
-                let (prefix, middle, suffix) = &**unpacked;
-                let mut elements = prefix.clone();
+                let (prefix, middle, suffix) = unpacked.parts();
+                let mut elements = prefix.to_vec();
                 let middle = if let Type::Var(_) = middle {
                     self.force_for_narrowing(middle, range, errors)
                 } else {
@@ -521,7 +521,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::TypeVarTuple(_) | Type::Quantified(_) | Type::Unpack(_) => return None,
                     _ => elements.push(middle),
                 }
-                elements.extend(suffix.clone());
+                elements.extend_from_slice(suffix);
                 elements
             }
         };
@@ -1005,10 +1005,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // otherwise the narrowed forms make weird unions when used with control flow
         self.distribute_over_union(ty, |ty| match ty {
             Type::Tuple(Tuple::Concrete(elts)) if elts.len() >= len => self.heap.mk_never(),
-            Type::Tuple(Tuple::Unpacked(f)) if f.0.len() + f.2.len() >= len => self.heap.mk_never(),
+            Type::Tuple(Tuple::Unpacked(f)) if f.prefix().len() + f.suffix().len() >= len => {
+                self.heap.mk_never()
+            }
             Type::ClassType(class) if let Some(tuple) = self.as_tuple(class) => match tuple {
                 Tuple::Concrete(elts) if elts.len() >= len => self.heap.mk_never(),
-                Tuple::Unpacked(f) if f.0.len() + f.2.len() >= len => self.heap.mk_never(),
+                Tuple::Unpacked(f) if f.prefix().len() + f.suffix().len() >= len => {
+                    self.heap.mk_never()
+                }
                 _ => ty.clone(),
             },
             _ => ty.clone(),
@@ -1242,31 +1246,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         match tuple {
             Tuple::Concrete(elts) if elts.len() != len => self.heap.mk_never(),
-            Tuple::Unpacked(f) if f.0.len() + f.2.len() > len => self.heap.mk_never(),
-            Tuple::Unpacked(f) if f.0.len() + f.2.len() == len => {
-                let (prefix, _, suffix) = &**f;
-                self.heap
-                    .mk_concrete_tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
+            Tuple::Unpacked(f) if f.prefix().len() + f.suffix().len() > len => self.heap.mk_never(),
+            Tuple::Unpacked(f) if f.prefix().len() + f.suffix().len() == len => {
+                self.heap.mk_concrete_tuple(
+                    f.prefix()
+                        .iter()
+                        .cloned()
+                        .chain(f.suffix().to_vec())
+                        .collect(),
+                )
             }
             Tuple::Unpacked(f)
-                if let Type::Tuple(Tuple::Unbounded(middle)) = &f.1
-                    && f.0.len() + f.2.len() < len =>
+                if let (prefix, Type::Tuple(Tuple::Unbounded(middle)), suffix) = f.parts()
+                    && prefix.len() + suffix.len() < len =>
             {
-                let (prefix, _, suffix) = &**f;
                 let middle_elements = vec![(**middle).clone(); len - prefix.len() - suffix.len()];
                 self.heap.mk_concrete_tuple(
                     prefix
                         .iter()
                         .cloned()
                         .chain(middle_elements)
-                        .chain(suffix.clone())
+                        .chain(suffix.to_vec())
                         .collect(),
                 )
             }
-            Tuple::Unpacked(f) if let Type::Var(_) = &f.1 => {
-                let (prefix, middle_var, suffix) = &**f;
+            Tuple::Unpacked(f) if matches!(f.middle(), Type::Var(_)) => {
+                let (prefix, middle_var, suffix) = f.parts();
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
-                let new_tuple = Tuple::unpacked(prefix.clone(), forced_middle, suffix.clone());
+                let new_tuple = Tuple::unpacked(prefix.to_vec(), forced_middle, suffix.to_vec());
                 self.tuple_len_eq(&simplify_tuples(new_tuple, self.heap), len, range, errors)
             }
             Tuple::Unbounded(elements) => {
@@ -1285,10 +1292,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         match tuple {
             Tuple::Concrete(elts) if elts.len() == len => self.heap.mk_never(),
-            Tuple::Unpacked(f) if let Type::Var(_) = &f.1 => {
-                let (prefix, middle_var, suffix) = &**f;
+            Tuple::Unpacked(f) if matches!(f.middle(), Type::Var(_)) => {
+                let (prefix, middle_var, suffix) = f.parts();
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
-                let new_tuple = Tuple::unpacked(prefix.clone(), forced_middle, suffix.clone());
+                let new_tuple = Tuple::unpacked(prefix.to_vec(), forced_middle, suffix.to_vec());
                 self.tuple_len_not_eq(&simplify_tuples(new_tuple, self.heap), len, range, errors)
             }
             _ => self.heap.mk_tuple(tuple.clone()),
