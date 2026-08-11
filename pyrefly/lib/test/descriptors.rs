@@ -332,15 +332,24 @@ class MethodInitialized:
     def __init__(self) -> None:
         self.device = Device()
 
-def f(a: AnnotationOnly, m: MethodInitialized) -> None:
+class AnnotatedAndMethodInitialized:
+    device: Device
+    def __init__(self) -> None:
+        self.device = Device()
+
+def f(a: AnnotationOnly, m: MethodInitialized, am: AnnotatedAndMethodInitialized) -> None:
     # Annotation-only descriptor: writes are rejected (no `__set__`).
     a.device = Device()  # E: Attribute `device` of class `AnnotationOnly` is a read-only descriptor with no `__set__` and cannot be set
     # Method-initialized: plain instance attribute, write allowed.
     m.device = Device()
+    # An annotation does not install a descriptor on the class when the field is
+    # initialized on the instance.
+    am.device = Device()
     # Annotation-only descriptor: read invokes `__get__` and returns int.
     assert_type(a.device, int)
     # Method-initialized: read returns the attribute itself.
     assert_type(m.device, Device)
+    assert_type(am.device, Device)
     "#,
 );
 

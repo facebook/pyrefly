@@ -1956,6 +1956,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Identify whether this is a descriptor. Construct the stored descriptor only after
         // forcing the field type so its class cannot retain solver variables.
         let mut descriptor_methods = None;
+        let is_annotation_initialized_in_method = match field_definition {
+            ClassFieldDefinition::DeclaredByAnnotation {
+                initialized_in_recognized_method,
+                ..
+            } => *initialized_in_recognized_method,
+            _ => false,
+        };
         // Descriptor semantics apply when the field is modeled as class-level:
         // either by a class-body definition, by `Magic` for stub/interface
         // declarations where the runtime initializer is omitted, or by an
@@ -1980,7 +1987,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let deleter = self
                         .get_class_member(cls.class_object(), &dunder::DELETE)
                         .is_some();
-                    if getter || setter || deleter {
+                    // A getter-only annotation that is initialized on the instance does not
+                    // install a descriptor on the class. Keep data-descriptor behavior,
+                    // however, for metaclass-powered fields such as SQLAlchemy's `Mapped[T]`.
+                    if setter || deleter || getter && !is_annotation_initialized_in_method {
                         descriptor_methods = Some((getter, setter, deleter));
                     }
                 }
