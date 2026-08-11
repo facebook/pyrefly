@@ -73,6 +73,7 @@ use crate::types::simplify::simplify_tuples;
 use crate::types::simplify::unions;
 use crate::types::simplify::unions_with_literals;
 use crate::types::typed_dict::TypedDict;
+use crate::types::types::Substitution;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -2913,62 +2914,26 @@ impl Solver {
     /// will resolve to their default, if one exists. Otherwise, create a "partial" var and
     /// try to find an instantiation at the first use, like finish_quantified.
     pub fn finish_class_targs(&self, targs: &mut TArgs, uniques: &UniqueFactory) {
-        // The default can refer to a tparam from earlier in the list, so we maintain a
-        // small scope data structure during the traversal.
-        let mut seen_params = SmallMap::new();
-        let mut new_targs: Vec<Option<Type>> = Vec::with_capacity(targs.len());
-        targs.iter_paired().enumerate().for_each(|(i, (param, t))| {
-            let new_targ = if let Type::Quantified(q) = t
-                && **q == *param
-            {
-                if let Some(default) = param.default() {
-                    // Note that TypeVars are stored in Type::TypeVar form, and have not yet been
-                    // converted to Quantified form, so we do that now.
-                    // TODO: deal with code duplication in get_tparam_default
-                    let mut t = default.clone();
-                    t.transform_mut(&mut |t| {
-                        let name = match t {
-                            Type::TypeVar(t) => Some(t.qname().id()),
-                            Type::TypeVarTuple(t) => Some(t.qname().id()),
-                            Type::ParamSpec(p) => Some(p.qname().id()),
-                            Type::Quantified(q) => Some(q.name()),
-                            _ => None,
-                        };
-                        if let Some(name) = name {
-                            *t = if let Some(i) = seen_params.get(name) {
-                                let new_targ: &Option<Type> = &new_targs[*i];
-                                new_targ
-                                    .as_ref()
-                                    .unwrap_or_else(|| &targs.as_slice()[*i])
-                                    .clone()
-                            } else {
-                                param.as_gradual_type()
-                            }
-                        }
-                    });
-                    Some(t)
-                } else if self.infer_with_first_use {
-                    let v = Var::new(uniques);
-                    self.variables.lock().insert_fresh(v, Variable::finished(q));
-                    Some(v.to_type(&self.heap))
-                } else {
-                    Some(q.as_gradual_type())
-                }
-            } else {
-                None
+        let (tparams, args) = targs.split_mut();
+        for (i, param) in tparams.iter().enumerate() {
+            let Type::Quantified(q) = &args[i] else {
+                continue;
             };
-            seen_params.insert(param.name(), i);
-            new_targs.push(new_targ);
-        });
-        drop(seen_params);
-        new_targs
-            .into_iter()
-            .zip(targs.as_mut().iter_mut())
-            .for_each(|(new_targ, targ)| {
-                if let Some(new_targ) = new_targ {
-                    *targ = new_targ;
-                }
-            })
+            if **q != *param {
+                continue;
+            }
+            let new_targ = if let Some(default) = param.default() {
+                // The default can refer to a tparam from earlier in the list.
+                Substitution::for_prefix(tparams, &args[..i]).substitute_into(default.clone())
+            } else if self.infer_with_first_use {
+                let v = Var::new(uniques);
+                self.variables.lock().insert_fresh(v, Variable::finished(q));
+                v.to_type(&self.heap)
+            } else {
+                q.as_gradual_type()
+            };
+            args[i] = new_targ;
+        }
     }
 
     /// Generate a fresh variable used to tie recursive bindings.

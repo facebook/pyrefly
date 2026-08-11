@@ -284,6 +284,11 @@ impl TArgs {
         &mut Arc::make_mut(&mut self.0).1
     }
 
+    pub fn split_mut(&mut self) -> (&TParams, &mut [Type]) {
+        let inner = Arc::make_mut(&mut self.0);
+        (&inner.0, &mut inner.1)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.1.is_empty()
     }
@@ -354,6 +359,13 @@ impl TArgs {
 pub struct Substitution<'a>(SmallMap<&'a Quantified, &'a Type>);
 
 impl<'a> Substitution<'a> {
+    /// Builds a substitution for a prefix of `tparams` by pairing `args` with the first
+    /// `args.len()` parameters.
+    pub fn for_prefix(tparams: &'a TParams, args: &'a [Type]) -> Self {
+        assert!(args.len() <= tparams.len());
+        Self(tparams.iter().zip(args).collect())
+    }
+
     pub fn substitute_into_mut(&self, ty: &mut Type) {
         ty.subst_mut(&self.0)
     }

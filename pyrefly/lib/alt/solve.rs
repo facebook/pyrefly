@@ -2202,18 +2202,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn validate_type_params(
+    /// Validates `tparams` and returns a validated `TParams`.
+    /// References to out-of-scope legacy type variables are replaced with gradual fallbacks.
+    pub fn validated_tparams(
         &self,
         range: TextRange,
-        tparams: &[Quantified],
+        mut tparams: Vec<Quantified>,
         source: TParamsSource,
         errors: &ErrorCollector,
-    ) {
+    ) -> Arc<TParams> {
         let mut last_tparam: Option<&Quantified> = None;
-        let mut seen = SmallSet::new();
+        let mut seen: SmallMap<&Name, &Quantified> = SmallMap::new();
         let mut typevartuple = None;
         let mut typevartuple_count = 0;
-        for tparam in tparams {
+        for tparam in tparams.iter_mut() {
             if let Some(p) = last_tparam
                 && p.default().is_some()
             {
@@ -2231,10 +2233,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
             }
-            if let Some(default) = tparam.default() {
+            if let Some(default) = &mut tparam.default {
                 let mut out_of_scope_names = Vec::new();
-                default.collect_raw_legacy_type_variables(&mut out_of_scope_names);
-                out_of_scope_names.retain(|name| !seen.contains(name));
+                default.transform_raw_legacy_type_variables(&mut |ty| {
+                    let (name, kind) = match &*ty {
+                        Type::TypeVar(t) => (t.qname().id(), QuantifiedKind::TypeVar),
+                        Type::TypeVarTuple(t) => (t.qname().id(), QuantifiedKind::TypeVarTuple),
+                        Type::ParamSpec(p) => (p.qname().id(), QuantifiedKind::ParamSpec),
+                        _ => unreachable!(
+                            "transform_raw_legacy_type_variables only visits legacy type variables"
+                        ),
+                    };
+                    *ty = match seen.get(name) {
+                        Some(q) => (**q).clone().to_type(self.heap),
+                        None => {
+                            out_of_scope_names.push(name.clone());
+                            Quantified::as_gradual_type_helper(kind, None)
+                        }
+                    };
+                });
                 if !out_of_scope_names.is_empty() {
                     self.error(
                         errors,
@@ -2263,7 +2280,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
             }
-            seen.insert(tparam.name().clone());
+            seen.insert(tparam.name(), tparam);
             if tparam.is_type_var_tuple() {
                 typevartuple = Some(tparam.name().clone());
                 typevartuple_count += 1;
@@ -2281,16 +2298,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .to_owned(),
             );
         }
-    }
-
-    pub fn validated_tparams(
-        &self,
-        range: TextRange,
-        tparams: Vec<Quantified>,
-        source: TParamsSource,
-        errors: &ErrorCollector,
-    ) -> Arc<TParams> {
-        self.validate_type_params(range, &tparams, source, errors);
+        drop(seen);
         Arc::new(TParams::new(tparams))
     }
 
