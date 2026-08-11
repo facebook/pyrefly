@@ -390,6 +390,188 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
 }
 
 #[test]
+fn test_will_rename_files_updates_relative_package_import() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    let root_path = root.path().join("package_relative_rename");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("pkg/a.py");
+
+    interaction
+        .client
+        .will_rename_files("pkg/a.py", "pkg/a2.py")
+        .expect_response(json!({
+            "changes": {
+                Url::from_file_path(root_path.join("pkg/b.py")).unwrap().to_string(): [
+                    {
+                        "newText": "a2",
+                        "range": {
+                            "start": {"line": 5, "character": 6},
+                            "end": {"line": 5, "character": 7}
+                        }
+                    },
+                ],
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_will_rename_files_rewrites_relative_import_as_absolute_on_move() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    let root_path = root.path().join("package_relative_rename");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("pkg/a.py");
+
+    interaction
+        .client
+        .will_rename_files("pkg/a.py", "other/a.py")
+        .expect_response(json!({
+            "changes": {
+                Url::from_file_path(root_path.join("pkg/b.py")).unwrap().to_string(): [
+                    {
+                        "newText": "other.a",
+                        "range": {
+                            "start": {"line": 5, "character": 5},
+                            "end": {"line": 5, "character": 7}
+                        }
+                    },
+                ],
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+// Pins the intentional no-op for `from . import name`: the name binds the module
+// directly, so rewriting it would also require semantically renaming every use of
+// that binding, which willRenameFiles does not do. A rename therefore updates the
+// sibling `from .a import foo` but leaves `from . import a` untouched (an
+// incomplete rename the user must finish by hand). See
+// https://github.com/facebook/pyrefly/issues/4055.
+#[test]
+fn test_will_rename_files_leaves_from_dot_import_name_unchanged() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    let root_path = root.path().join("package_from_import_noop");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("pkg/a.py");
+
+    interaction
+        .client
+        .will_rename_files("pkg/a.py", "pkg/a2.py")
+        .expect_response(json!({
+            "changes": {
+                Url::from_file_path(root_path.join("pkg/c.py")).unwrap().to_string(): [
+                    {
+                        "newText": "a2",
+                        "range": {
+                            "start": {"line": 6, "character": 6},
+                            "end": {"line": 6, "character": 7}
+                        }
+                    },
+                ],
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_will_rename_files_updates_multi_dot_relative_import() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    let root_path = root.path().join("package_relative_multidot");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("pkg/a.py");
+
+    interaction
+        .client
+        .will_rename_files("pkg/a.py", "pkg/a2.py")
+        .expect_response(json!({
+            "changes": {
+                Url::from_file_path(root_path.join("pkg/sub/d.py")).unwrap().to_string(): [
+                    {
+                        "newText": "a2",
+                        "range": {
+                            "start": {"line": 5, "character": 7},
+                            "end": {"line": 5, "character": 8}
+                        }
+                    },
+                ],
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_will_rename_files_document_changes() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
