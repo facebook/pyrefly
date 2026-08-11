@@ -2520,8 +2520,9 @@ pub enum Binding {
     Delete(Box<Expr>),
     /// A name in the class body that wasn't found in the static scope
     /// It could either be an unbound name or a reference to an inherited attribute
-    /// We'll find out which when we solve the class
-    ClassBodyUnknownName(Box<(Idx<KeyClass>, Identifier, Option<Name>)>),
+    /// We'll find out which when we solve the class. The boolean records whether a postponed or
+    /// quoted annotation may also resolve an attribute declared later in the same class body.
+    ClassBodyUnknownName(Box<(Idx<KeyClass>, Identifier, Option<Name>, bool)>),
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
@@ -2827,12 +2828,13 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
             Self::ClassBodyUnknownName(x) => {
-                let (class_key, name, suggestion) = x.as_ref();
+                let (class_key, name, suggestion, allow_class_body_forward_reference) = x.as_ref();
                 write!(
                     f,
-                    "ClassBodyUnknownName({}, {}",
+                    "ClassBodyUnknownName({}, {}, allow_class_body_forward_reference={}",
                     m.display(ctx.idx_to_key(*class_key)),
                     name,
+                    allow_class_body_forward_reference,
                 )?;
                 if let Some(suggestion) = suggestion {
                     write!(f, ", {suggestion}")?;
