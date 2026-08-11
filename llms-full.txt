@@ -575,7 +575,7 @@ Not seeing inlay hints in VS Code? Try setting `editor.inlayHints.enabled` to `t
 :::
 
 :::tip
-Want type error squiggles to show up in your editor by default? Run `pyrefly init`. It adds a `[tool.pyrefly]` section to an existing `pyproject.toml`, or creates a new `pyrefly.toml` if no `pyproject.toml` is present. You can also set `python.pyrefly.typeCheckingMode` to `"default"` or `"strict"` in your editor settings.
+Want the broader set of type-check diagnostics to show up in your editor by default? Run `pyrefly init`. It adds a `[tool.pyrefly]` section to an existing `pyproject.toml`, or creates a new `pyrefly.toml` if no `pyproject.toml` is present. You can also set `python.pyrefly.typeCheckingMode` to `"default"` or `"strict"` in your editor settings.
 :::
 
 ## Customization
@@ -588,18 +588,19 @@ The following configuration options are IDE-specific and exposed as VSCode setti
 
 #### `python.pyrefly.typeCheckingMode`
 
-**Type:** enum (`auto`, `off`, `basic`, `legacy`, `default`, `strict`) &nbsp; **Default:** `"auto"`
+**Type:** enum (`auto`, `off`, `basic`, `legacy`, `default`, `strict`, `all`) &nbsp; **Default:** `"auto"`
 
-Controls Pyrefly's behavior for files not covered by a `pyrefly.toml` or `[tool.pyrefly]` section. Those configurations always take precedence over this setting.
+Controls how Pyrefly configures files not covered by a `pyrefly.toml` or `[tool.pyrefly]` section. Those configurations always take precedence over this setting. `auto` is a configuration-selection mode, not a preset.
 
-- `auto` (default): auto-detects a nearby `mypy.ini` / `pyrightconfig.json` (or `[tool.mypy]` / `[tool.pyright]` in `pyproject.toml`) and automatically migrates it. Falls back to the `basic` preset if nothing is found.
+- `auto` (default): searches for a nearby `mypy.ini` / `pyrightconfig.json` (or `[tool.mypy]` / `[tool.pyright]` in `pyproject.toml`) and migrates its settings in memory. If no migratable configuration is found, or migration fails, Pyrefly uses the `basic` preset. Nothing is written to disk.
 - `off`: silences every error kind. Useful for editor users who only want IDE features (hover, go-to-def) without diagnostics.
 - `basic`: minimal checking. Only high-confidence errors fire; everything else is silenced.
 - `legacy`: looser preset for codebases migrating from mypy. Unlike `auto`, this is just the bare preset with no migration of any nearby mypy/pyright config.
 - `default`: Pyrefly's default behavior.
 - `strict`: additional error kinds on top of default for stricter checking.
+- `all`: enables every error kind at error severity.
 
-The non-`auto` values force a specific preset and skip auto-detection.
+The non-`auto` values force a specific preset and skip configuration detection and migration.
 
 #### `python.pyrefly.disableTypeErrors`
 
@@ -1117,7 +1118,7 @@ Ensure the pyrefly is on `$PATH`, add following snippet to your `coc-settings.js
 ```
 
 :::tip
-For projects without a Pyrefly configuration, Pyrefly defaults to the `basic` preset (a small set of high-confidence diagnostics). To switch to a stricter preset for files not covered by a `pyrefly.toml`, add the following `initializationOptions`:
+For projects without a Pyrefly configuration, Pyrefly migrates a nearby mypy/pyright configuration in memory or falls back to the `basic` preset (a small set of high-confidence diagnostics). To switch to a stricter preset for files not covered by a `pyrefly.toml`, add the following `initializationOptions`:
 
 ```json
 "languageserver": {
@@ -1135,7 +1136,7 @@ For projects without a Pyrefly configuration, Pyrefly defaults to the `basic` pr
 }
 ```
 
-Available values: `"auto"` (the default; auto-detects a nearby mypy/pyright config or falls back to `basic`), `"off"`, `"basic"`, `"legacy"`, `"default"`, `"strict"`. To suppress all diagnostics in this workspace regardless of preset, use `"disableTypeErrors": true` instead.
+Available values: `"auto"` (the default; migrates a nearby mypy/pyright config in memory or falls back to `basic`), `"off"`, `"basic"`, `"legacy"`, `"default"`, `"strict"`, `"all"`. To suppress all diagnostics in this workspace regardless of preset, use `"disableTypeErrors": true` instead.
 :::
 
 ### Vim + ALE
@@ -1815,12 +1816,12 @@ configure its aspect instead.
 
 ## Unconfigured projects
 
-On the command-line, when no `pyrefly.toml` or `[tool.pyrefly]` section governs the file being checked, Pyrefly synthesizes a configuration on the fly:
+On the command line, when no `pyrefly.toml` or `[tool.pyrefly]` section governs the file being checked, Pyrefly automatically selects a synthesized configuration:
 
-- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml` is found nearby, Pyrefly automatically migrates it and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
-- Otherwise Pyrefly uses the same [**basic preset**](#preset-basic) the IDE uses. This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.). Other diagnostics are silenced.
+- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml` is found nearby, Pyrefly migrates it in memory and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
+- If no migratable configuration is found, or migration fails, Pyrefly uses the [**basic preset**](#preset-basic). This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.); other diagnostics are silenced.
 
-For the IDE equivalent of this behavior, including how to override it, see [`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode).
+This automatic selection behavior is not a preset, so `auto` is not a valid value for [`preset`](#preset) or `--preset`. For the IDE equivalent, including how to override automatic selection, see [`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode).
 
 :::info
 Want full type-check squiggles by default? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`).
@@ -1892,8 +1893,7 @@ configuration file. More precisely:
    looks like `/x/y/z/a/b/c`, we can walk up the components of `a.b.c` to find a root at
    `/x/y/z`.
 
-Note that only `pyrefly.toml` and `pyproject.toml` are parsed for config options, but we look for
-additional files that mark the root of a project to aid import resolution.
+`pyrefly.toml` and the `[tool.pyrefly]` section of `pyproject.toml` are parsed as native Pyrefly configuration. In an unconfigured project, `mypy.ini`, `pyrightconfig.json`, and the `[tool.mypy]` / `[tool.pyright]` sections of `pyproject.toml` may also be parsed and migrated in memory. Other files found during the search only mark the project root for import resolution.
 
 For project checking mode, the 'start location' is current working directory. For single-file checking mode,
 the start location is the directory containing each file to be type checked, and
@@ -1902,10 +1902,7 @@ we find the config for each file matched by the pattern provided.
 If a `pyrefly.toml` is found, it is parsed and used for type checking, and will
 return an error to the user on invalid types, syntax, values, or unknown config options.
 
-If a `pyproject.toml` is found, Pyrefly will use the `[tool.pyrefly]`
-section if it exists, otherwise it will assume a default config.
-The same errors will be returned as when loading a `pyrefly.toml` if
-the config is invalid.
+If a `pyproject.toml` with `[tool.pyrefly]` is found, Pyrefly parses and uses that section. The same errors are returned as when loading an invalid `pyrefly.toml`. Without `[tool.pyrefly]`, Pyrefly migrates `[tool.mypy]` or `[tool.pyright]` in memory if present; otherwise it uses the [`basic` preset](#preset-basic).
 
 ### Providing a Config in Single-File Mode
 
@@ -2350,7 +2347,7 @@ Silences every error kind. Other settings (scalar flags, behavior settings) are 
 
 #### Preset: `basic`
 
-A minimal-checking preset used by default in projects without a Pyrefly configuration and in the LSP. Enables parse errors plus a small set of high-confidence, locally-fixable checks. Stricter checks like override validation, annotation completeness, and broader call-shape or assignment validation are disabled.
+A minimal-checking preset used when automatic configuration selection finds no migratable mypy/pyright configuration (or migration fails). It can also be selected explicitly with `preset = "basic"`, `--preset basic`, or the IDE's `"basic"` type-checking mode. It enables parse errors plus a small set of high-confidence, locally-fixable checks. Stricter checks like override validation, annotation completeness, and broader call-shape or assignment validation are disabled.
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
 - Enables (as errors): [`bad-class-definition`](./error-kinds.mdx#bad-class-definition), [`bad-instantiation`](./error-kinds.mdx#bad-instantiation), [`bad-keyword-argument`](./error-kinds.mdx#bad-keyword-argument), [`bad-raise`](./error-kinds.mdx#bad-raise), [`bad-unpacking`](./error-kinds.mdx#bad-unpacking), [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`invalid-literal`](./error-kinds.mdx#invalid-literal), [`invalid-super-call`](./error-kinds.mdx#invalid-super-call), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`not-async`](./error-kinds.mdx#not-async), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unexpected-positional-argument`](./error-kinds.mdx#unexpected-positional-argument), [`unknown-name`](./error-kinds.mdx#unknown-name), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
@@ -2374,7 +2371,7 @@ The default Pyrefly configuration. Equivalent to having no preset at all.
 Enables additional error codes on top of the default for stricter checking.
 
 - Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
-- Enables (as errors): [`direct-abstract-base-instantiation`](./error-kinds.mdx#direct-abstract-base-instantiation), [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
+- Enables (as errors): [`direct-abstract-base-instantiation`](./error-kinds.mdx#direct-abstract-base-instantiation), [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`open-unpacking`](./error-kinds.mdx#open-unpacking), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
 
 #### Preset: `all`
 
@@ -7049,11 +7046,11 @@ Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new rel
 
 ## What you get out of the box
 
-When you first install Pyrefly without a configuration file, it uses the **basic preset** by default. This shows only high-confidence errors that are very likely to indicate real bugs or crashes, like syntax errors and missing imports. Other diagnostics are silenced.
+When you first install Pyrefly without a Pyrefly configuration, it automatically looks for a nearby mypy or Pyright configuration to migrate in memory. If it does not find one, or migration fails, Pyrefly uses the **basic preset**. This shows only high-confidence errors that are very likely to indicate real bugs or crashes, like syntax errors and missing imports. Other diagnostics are silenced.
 
-The basic preset is useful immediately, without setup. You don't need to understand Python typing concepts to benefit. Open a file in VS Code with the Pyrefly extension and you'll get inlay hints, go-to-definition, and the curated error set right away. The status bar shows `Pyrefly (Basic)` so you know which preset is active.
+The basic preset is useful immediately, without setup. You don't need to understand Python typing concepts to benefit. Open a file in VS Code with the Pyrefly extension and you'll get inlay hints, go-to-definition, and the curated error set right away. When the fallback is active, the status bar shows `Pyrefly (Basic)` so you know which preset is active.
 
-If you already have a `mypy.ini`, `pyrightconfig.json`, or a `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml`, Pyrefly automatically migrates that configuration the first time it runs in your project. The status bar will show `Pyrefly (Legacy)` (mypy migration) or `Pyrefly (Default)` (pyright migration) accordingly. Nothing is written to disk during the migration; running `pyrefly init` later will commit the same migration permanently.
+If Pyrefly finds a `mypy.ini`, `pyrightconfig.json`, or a `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml`, the status bar instead shows `Pyrefly (Legacy)` (mypy migration) or `Pyrefly (Default)` (Pyright migration). Nothing is written to disk during the migration; running `pyrefly init` later will commit the same migration permanently.
 
 To unlock full type checking and pin your configuration, run `pyrefly init`. This writes a `pyrefly.toml` (or updates `pyproject.toml`) and explicitly migrates any existing mypy/pyright settings. After running `pyrefly init`, common knobs to tune include:
 
@@ -7347,7 +7344,7 @@ $ pyrefly init path/to/your/project
 
 This will search for an existing `mypy.ini` or `pyproject.toml` with a `tool.mypy` section, and then transform it into a `pyrefly.toml` (or `[tool.pyrefly]` section) while preserving as many options as possible. See `init --help` for more options.
 
-We do recommend checking the resulting config for errors. While there is some overlap between mypy's config options and pyrefly's config options, it's not always possible to cleanly translate one config option to another.
+We recommend reviewing the resulting config. While there is some overlap between mypy's and Pyrefly's config options, not every option or error code has an exact equivalent.
 
 If you'd rather start fresh with a hand-written config, please see the [pyrefly configuration docs](configuration.mdx).
 If you run into any issues with config migration, please [let us know](https://github.com/facebook/pyrefly/issues)!
@@ -7379,7 +7376,7 @@ permissive-ignores = true
 
 Pyrefly makes an effort to transform the `exclude` regex into a list of filepath globs for `project_excludes`. This should excel on simple regexes, such as `some/file.py|exclude_dir/`, which becomes `["**/some/file.py", "**/exclude_dir/"]`.
 
-The `ignore_missing_imports` per-module config option is turned into a list of modules. For example:
+The `ignore_missing_imports` config option is migrated to `ignore-missing-imports`. For example:
 
 ```ini
 [mypy-some.*.module]
@@ -7389,22 +7386,21 @@ ignore_missing_imports = True
 Becomes:
 
 ```toml
-replace_imports_with_any = ["some.*.module"]
+ignore-missing-imports = ["some.*.module"]
 ```
 
-Mypy's `follow_imports = "skip"` is handled the same way.
+Mypy's `follow_imports = "skip"` is migrated to `replace-imports-with-any`. Unlike `ignore-missing-imports`, this always replaces matching modules with `typing.Any`, even when Pyrefly can resolve them.
 
 Pyrefly does support mypy's [module name pattern syntax](https://mypy.readthedocs.io/en/stable/config_file.html#config-file-format): see [Module Globbing](configuration.mdx#module-globbing) in the configuration docs.
 
-Mypy's `follow_untyped_imports` option is allowed to be global or per-module. The pyrefly equivalent, `use_untyped_imports`, is only global. This setting defaults to `true` unless
-the `follow_untyped_imports` is disabled in the `[mypy]` section of the migrated config.
+Mypy's global `platform`, `check_untyped_defs`, and `strict` settings are recognized in both `mypy.ini` and `pyproject.toml`'s `[tool.mypy]` section during migration. `check_untyped_defs` and `strict` enable `check-unannotated-defs` while keeping `infer-return-types = "never"`, matching mypy's treatment of unannotated return values.
 
 ### Mypy Error Codes and Pyrefly Error Kinds
 
 Pyrefly maps Mypy's [error codes](https://mypy.readthedocs.io/en/stable/error_code_list.html) to equivalent pyrefly [error kinds](error-kinds.mdx).
-While not every error code has an equivalent error kind, we make an effort to ensure that pyrefly suppresses the same errors that mypy does.
+While not every error code has an equivalent error kind, we make an effort to ensure that Pyrefly suppresses the same errors that mypy does. Error codes without a Pyrefly equivalent are omitted from the generated config and reported as migration warnings, so audit the generated `[errors]` table against the original `enable_error_code` and `disable_error_code` settings.
 
-This may lead to overly broad error suppressions, and you may want to consider removing some error kinds from the disable list.
+Mapped codes may lead to overly broad error suppressions, and you may want to consider removing some error kinds from the disable list.
 You can also use a [SubConfig](configuration.mdx#sub_config) to selectively silence errors in specific files,
 or see [Silencing Errors](#silencing-errors) for how to suppress errors at the source.
 
@@ -7545,7 +7541,7 @@ If you run into any issues with config migration, please [let us know](https://g
 
 When it comes to listing files, pyright uses just paths, while pyrefly supports glob patterns. Thankfully, paths are a subset of glob patterns, so pyrefly can just use the paths as-is. You could consider manually simplifying the paths into glob patterns, but it's not necessary.
 
-Pyright supports four platforms: Windows, Linux, Darwin (macOS), and All. Since pyrefly only supports Python's [supported platforms](https://docs.python.org/3/library/sys.html#sys.platform), we choose to treat "All" as "linux".
+Pyright's Windows, Linux, Darwin (macOS), and All platform settings are preserved during migration. Pyrefly's `all` platform keeps platform-dependent expressions unconstrained rather than selecting one specific platform.
 
 ### Type Check Diagnostic Settings and Error Kinds
 
@@ -7611,15 +7607,6 @@ To allow `pyright: ignore` comments to be used by Pyrefly.
 
 This table shows the mapping between pyright's [type check diagnostics settings](https://microsoft.github.io/pyright/#/configuration?id=type-check-diagnostics-settings)
 and pyrefly's [error kinds](error-kinds.mdx).
-
-:::info
-When no configuration file is present, Pyrefly shows the following diagnostics as **warnings** in the IDE, matching pyright's default behavior:
-- `reportInvalidTypeForm` → [`invalid-annotation`](error-kinds.mdx#invalid-annotation)
-- `reportMissingImports` → [`missing-import`](error-kinds.mdx#missing-import)
-- `reportUndefinedVariable` → [`unknown-name`](error-kinds.mdx#unknown-name)
-
-This means users migrating from pyright will see familiar diagnostics even before creating a Pyrefly config file.
-:::
 
 | Pyright | Pyrefly |
 | ------- | ------- |

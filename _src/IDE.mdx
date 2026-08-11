@@ -26,7 +26,7 @@ Not seeing inlay hints in VS Code? Try setting `editor.inlayHints.enabled` to `t
 :::
 
 :::tip
-Want type error squiggles to show up in your editor by default? Run `pyrefly init`. It adds a `[tool.pyrefly]` section to an existing `pyproject.toml`, or creates a new `pyrefly.toml` if no `pyproject.toml` is present. You can also set `python.pyrefly.typeCheckingMode` to `"default"` or `"strict"` in your editor settings.
+Want the broader set of type-check diagnostics to show up in your editor by default? Run `pyrefly init`. It adds a `[tool.pyrefly]` section to an existing `pyproject.toml`, or creates a new `pyrefly.toml` if no `pyproject.toml` is present. You can also set `python.pyrefly.typeCheckingMode` to `"default"` or `"strict"` in your editor settings.
 :::
 
 ## Customization
@@ -39,18 +39,19 @@ The following configuration options are IDE-specific and exposed as VSCode setti
 
 #### `python.pyrefly.typeCheckingMode`
 
-**Type:** enum (`auto`, `off`, `basic`, `legacy`, `default`, `strict`) &nbsp; **Default:** `"auto"`
+**Type:** enum (`auto`, `off`, `basic`, `legacy`, `default`, `strict`, `all`) &nbsp; **Default:** `"auto"`
 
-Controls Pyrefly's behavior for files not covered by a `pyrefly.toml` or `[tool.pyrefly]` section. Those configurations always take precedence over this setting.
+Controls how Pyrefly configures files not covered by a `pyrefly.toml` or `[tool.pyrefly]` section. Those configurations always take precedence over this setting. `auto` is a configuration-selection mode, not a preset.
 
-- `auto` (default): auto-detects a nearby `mypy.ini` / `pyrightconfig.json` (or `[tool.mypy]` / `[tool.pyright]` in `pyproject.toml`) and automatically migrates it. Falls back to the `basic` preset if nothing is found.
+- `auto` (default): searches for a nearby `mypy.ini` / `pyrightconfig.json` (or `[tool.mypy]` / `[tool.pyright]` in `pyproject.toml`) and migrates its settings in memory. If no migratable configuration is found, or migration fails, Pyrefly uses the `basic` preset. Nothing is written to disk.
 - `off`: silences every error kind. Useful for editor users who only want IDE features (hover, go-to-def) without diagnostics.
 - `basic`: minimal checking. Only high-confidence errors fire; everything else is silenced.
 - `legacy`: looser preset for codebases migrating from mypy. Unlike `auto`, this is just the bare preset with no migration of any nearby mypy/pyright config.
 - `default`: Pyrefly's default behavior.
 - `strict`: additional error kinds on top of default for stricter checking.
+- `all`: enables every error kind at error severity.
 
-The non-`auto` values force a specific preset and skip auto-detection.
+The non-`auto` values force a specific preset and skip configuration detection and migration.
 
 #### `python.pyrefly.disableTypeErrors`
 
@@ -568,7 +569,7 @@ Ensure the pyrefly is on `$PATH`, add following snippet to your `coc-settings.js
 ```
 
 :::tip
-For projects without a Pyrefly configuration, Pyrefly defaults to the `basic` preset (a small set of high-confidence diagnostics). To switch to a stricter preset for files not covered by a `pyrefly.toml`, add the following `initializationOptions`:
+For projects without a Pyrefly configuration, Pyrefly migrates a nearby mypy/pyright configuration in memory or falls back to the `basic` preset (a small set of high-confidence diagnostics). To switch to a stricter preset for files not covered by a `pyrefly.toml`, add the following `initializationOptions`:
 
 ```json
 "languageserver": {
@@ -586,7 +587,7 @@ For projects without a Pyrefly configuration, Pyrefly defaults to the `basic` pr
 }
 ```
 
-Available values: `"auto"` (the default; auto-detects a nearby mypy/pyright config or falls back to `basic`), `"off"`, `"basic"`, `"legacy"`, `"default"`, `"strict"`. To suppress all diagnostics in this workspace regardless of preset, use `"disableTypeErrors": true` instead.
+Available values: `"auto"` (the default; migrates a nearby mypy/pyright config in memory or falls back to `basic`), `"off"`, `"basic"`, `"legacy"`, `"default"`, `"strict"`, `"all"`. To suppress all diagnostics in this workspace regardless of preset, use `"disableTypeErrors": true` instead.
 :::
 
 ### Vim + ALE

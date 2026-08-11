@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.a072d1dc.js" defer="defer"></script>
-<script src="/assets/js/main.f6d1d591.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.225198a6.js" defer="defer"></script>
+<script src="/assets/js/main.ca8029c6.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -60,12 +60,12 @@ name with the <code>--config</code>/<code>-c</code> flag, but they will not be a
 <p>The <a href="/en/docs/bazel/">Bazel integration</a> does not read these configuration files;
 configure its aspect instead.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="unconfigured-projects">Unconfigured projects<a href="#unconfigured-projects" class="hash-link" aria-label="Direct link to Unconfigured projects" title="Direct link to Unconfigured projects">​</a></h2>
-<p>On the command-line, when no <code>pyrefly.toml</code> or <code>[tool.pyrefly]</code> section governs the file being checked, Pyrefly synthesizes a configuration on the fly:</p>
+<p>On the command line, when no <code>pyrefly.toml</code> or <code>[tool.pyrefly]</code> section governs the file being checked, Pyrefly automatically selects a synthesized configuration:</p>
 <ul>
-<li>If a <code>mypy.ini</code>, <code>pyrightconfig.json</code>, or <code>[tool.mypy]</code> / <code>[tool.pyright]</code> section in <code>pyproject.toml</code> is found nearby, Pyrefly automatically migrates it and uses the resulting settings (the same migration <code>pyrefly init</code> would commit to disk).</li>
-<li>Otherwise Pyrefly uses the same <a href="#preset-basic"><strong>basic preset</strong></a> the IDE uses. This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.). Other diagnostics are silenced.</li>
+<li>If a <code>mypy.ini</code>, <code>pyrightconfig.json</code>, or <code>[tool.mypy]</code> / <code>[tool.pyright]</code> section in <code>pyproject.toml</code> is found nearby, Pyrefly migrates it in memory and uses the resulting settings (the same migration <code>pyrefly init</code> would commit to disk).</li>
+<li>If no migratable configuration is found, or migration fails, Pyrefly uses the <a href="#preset-basic"><strong>basic preset</strong></a>. This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.); other diagnostics are silenced.</li>
 </ul>
-<p>For the IDE equivalent of this behavior, including how to override it, see <a href="/en/docs/IDE/#pythonpyreflytypecheckingmode"><code>python.pyrefly.typeCheckingMode</code></a>.</p>
+<p>This automatic selection behavior is not a preset, so <code>auto</code> is not a valid value for <a href="#preset"><code>preset</code></a> or <code>--preset</code>. For the IDE equivalent, including how to override automatic selection, see <a href="/en/docs/IDE/#pythonpyreflytypecheckingmode"><code>python.pyrefly.typeCheckingMode</code></a>.</p>
 <div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>Want full type-check squiggles by default? Run <code>pyrefly init</code> to create a <code>pyrefly.toml</code> (or update <code>pyproject.toml</code>).</p></div></div>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="simple-configuration-example">Simple Configuration Example<a href="#simple-configuration-example" class="hash-link" aria-label="Direct link to Simple Configuration Example" title="Direct link to Simple Configuration Example">​</a></h2>
 <p>Here&#x27;s an example of a simple config. To see more complex examples,
@@ -124,17 +124,13 @@ importing <code>from a.b.c import q</code>, if our project structure
 looks like <code>/x/y/z/a/b/c</code>, we can walk up the components of <code>a.b.c</code> to find a root at
 <code>/x/y/z</code>.</li>
 </ol>
-<p>Note that only <code>pyrefly.toml</code> and <code>pyproject.toml</code> are parsed for config options, but we look for
-additional files that mark the root of a project to aid import resolution.</p>
+<p><code>pyrefly.toml</code> and the <code>[tool.pyrefly]</code> section of <code>pyproject.toml</code> are parsed as native Pyrefly configuration. In an unconfigured project, <code>mypy.ini</code>, <code>pyrightconfig.json</code>, and the <code>[tool.mypy]</code> / <code>[tool.pyright]</code> sections of <code>pyproject.toml</code> may also be parsed and migrated in memory. Other files found during the search only mark the project root for import resolution.</p>
 <p>For project checking mode, the &#x27;start location&#x27; is current working directory. For single-file checking mode,
 the start location is the directory containing each file to be type checked, and
 we find the config for each file matched by the pattern provided.</p>
 <p>If a <code>pyrefly.toml</code> is found, it is parsed and used for type checking, and will
 return an error to the user on invalid types, syntax, values, or unknown config options.</p>
-<p>If a <code>pyproject.toml</code> is found, Pyrefly will use the <code>[tool.pyrefly]</code>
-section if it exists, otherwise it will assume a default config.
-The same errors will be returned as when loading a <code>pyrefly.toml</code> if
-the config is invalid.</p>
+<p>If a <code>pyproject.toml</code> with <code>[tool.pyrefly]</code> is found, Pyrefly parses and uses that section. The same errors are returned as when loading an invalid <code>pyrefly.toml</code>. Without <code>[tool.pyrefly]</code>, Pyrefly migrates <code>[tool.mypy]</code> or <code>[tool.pyright]</code> in memory if present; otherwise it uses the <a href="#preset-basic"><code>basic</code> preset</a>.</p>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="providing-a-config-in-single-file-mode">Providing a Config in Single-File Mode<a href="#providing-a-config-in-single-file-mode" class="hash-link" aria-label="Direct link to Providing a Config in Single-File Mode" title="Direct link to Providing a Config in Single-File Mode">​</a></h3>
 <p>Providing <code>-c</code>/<code>--config</code> in single-file checking mode disables the upward file search for config
 files. All options are read from the provided config file except <code>project-includes</code> and
@@ -565,7 +561,7 @@ Any explicit settings you specify override the preset.</p>
 <li>Disables every error kind.</li>
 </ul>
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="preset-basic">Preset: <code>basic</code><a href="#preset-basic" class="hash-link" aria-label="Direct link to preset-basic" title="Direct link to preset-basic">​</a></h4>
-<p>A minimal-checking preset used by default in projects without a Pyrefly configuration and in the LSP. Enables parse errors plus a small set of high-confidence, locally-fixable checks. Stricter checks like override validation, annotation completeness, and broader call-shape or assignment validation are disabled.</p>
+<p>A minimal-checking preset used when automatic configuration selection finds no migratable mypy/pyright configuration (or migration fails). It can also be selected explicitly with <code>preset = &quot;basic&quot;</code>, <code>--preset basic</code>, or the IDE&#x27;s <code>&quot;basic&quot;</code> type-checking mode. It enables parse errors plus a small set of high-confidence, locally-fixable checks. Stricter checks like override validation, annotation completeness, and broader call-shape or assignment validation are disabled.</p>
 <ul>
 <li>Sets <a href="#check-unannotated-defs"><code>check-unannotated-defs</code></a> <code>= false</code>, <a href="#infer-return-types"><code>infer-return-types</code></a> <code>= &quot;never&quot;</code>, <a href="#infer-with-first-use"><code>infer-with-first-use</code></a> <code>= false</code>, <a href="#permissive-ignores"><code>permissive-ignores</code></a> <code>= true</code></li>
 <li>Enables (as errors): <a href="/en/docs/error-kinds/#bad-class-definition"><code>bad-class-definition</code></a>, <a href="/en/docs/error-kinds/#bad-instantiation"><code>bad-instantiation</code></a>, <a href="/en/docs/error-kinds/#bad-keyword-argument"><code>bad-keyword-argument</code></a>, <a href="/en/docs/error-kinds/#bad-raise"><code>bad-raise</code></a>, <a href="/en/docs/error-kinds/#bad-unpacking"><code>bad-unpacking</code></a>, <a href="/en/docs/error-kinds/#division-by-zero"><code>division-by-zero</code></a>, <a href="/en/docs/error-kinds/#invalid-annotation"><code>invalid-annotation</code></a>, <a href="/en/docs/error-kinds/#invalid-literal"><code>invalid-literal</code></a>, <a href="/en/docs/error-kinds/#invalid-super-call"><code>invalid-super-call</code></a>, <a href="/en/docs/error-kinds/#invalid-syntax"><code>invalid-syntax</code></a>, <a href="/en/docs/error-kinds/#missing-import"><code>missing-import</code></a>, <a href="/en/docs/error-kinds/#not-async"><code>not-async</code></a>, <a href="/en/docs/error-kinds/#parse-error"><code>parse-error</code></a>, <a href="/en/docs/error-kinds/#unexpected-keyword"><code>unexpected-keyword</code></a>, <a href="/en/docs/error-kinds/#unexpected-positional-argument"><code>unexpected-positional-argument</code></a>, <a href="/en/docs/error-kinds/#unknown-name"><code>unknown-name</code></a>, <a href="/en/docs/error-kinds/#unused-coroutine"><code>unused-coroutine</code></a></li>
@@ -586,7 +582,7 @@ Any explicit settings you specify override the preset.</p>
 <p>Enables additional error codes on top of the default for stricter checking.</p>
 <ul>
 <li>Sets <a href="#strict-callable-subtyping"><code>strict-callable-subtyping</code></a> <code>= true</code></li>
-<li>Enables (as errors): <a href="/en/docs/error-kinds/#direct-abstract-base-instantiation"><code>direct-abstract-base-instantiation</code></a>, <a href="/en/docs/error-kinds/#implicit-any"><code>implicit-any</code></a> (covers every implicit-<code>Any</code> sub-kind), <a href="/en/docs/error-kinds/#missing-override-decorator"><code>missing-override-decorator</code></a>, <a href="/en/docs/error-kinds/#potential-bad-keyword-argument"><code>potential-bad-keyword-argument</code></a>, <a href="/en/docs/error-kinds/#unused-ignore"><code>unused-ignore</code></a></li>
+<li>Enables (as errors): <a href="/en/docs/error-kinds/#direct-abstract-base-instantiation"><code>direct-abstract-base-instantiation</code></a>, <a href="/en/docs/error-kinds/#implicit-any"><code>implicit-any</code></a> (covers every implicit-<code>Any</code> sub-kind), <a href="/en/docs/error-kinds/#missing-override-decorator"><code>missing-override-decorator</code></a>, <a href="/en/docs/error-kinds/#open-unpacking"><code>open-unpacking</code></a>, <a href="/en/docs/error-kinds/#potential-bad-keyword-argument"><code>potential-bad-keyword-argument</code></a>, <a href="/en/docs/error-kinds/#unused-ignore"><code>unused-ignore</code></a></li>
 </ul>
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="preset-all">Preset: <code>all</code><a href="#preset-all" class="hash-link" aria-label="Direct link to preset-all" title="Direct link to preset-all">​</a></h4>
 <div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>For most users, we recommend using the <code>strict</code> preset and enabling individual additional errors as desired,
