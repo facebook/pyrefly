@@ -841,3 +841,21 @@ B(foo="x")  # E: `Literal['x']` is not assignable to parameter `foo` with type `
 B()  # E: Missing argument `foo`
     "#,
 );
+
+testcase!(
+    test_field_specifier_conflicting_defaults,
+    r#"
+from typing import dataclass_transform, Any
+def field(**kwargs) -> Any: ...
+@dataclass_transform(field_specifiers=(field,))
+def build[T](cls: type[T]) -> type[T]: ...
+@build
+class C:
+    a: int = field(default=0, factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    b: int = field(default=0, default_factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    c: int = field(default_factory=int, factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    d: int = field(default=0)
+    e: int = field(factory=int)
+    f: int = field(default_factory=int)
+    "#,
+);

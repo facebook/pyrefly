@@ -804,6 +804,24 @@ class C:
 "#,
 );
 
+attrs_testcase!(
+    test_attrs_mixed_custom_field_specifier_conflicting_defaults,
+    r#"
+from typing import Any, dataclass_transform
+from attrs import field
+
+def custom_field(metadata: str = "", **kwargs) -> Any: ...
+
+@dataclass_transform(field_specifiers=(field, custom_field))
+def build[T](cls: type[T]) -> type[T]: ...
+
+@build
+class C:
+    x: int = custom_field(default=1, default_factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    y: int = custom_field("metadata", default_factory=int)
+"#,
+);
+
 // `default=Factory(...)` is the canonical desugaring of `factory=`: only `default` is
 // passed, so it must NOT be reported as a conflict.
 attrs_testcase!(

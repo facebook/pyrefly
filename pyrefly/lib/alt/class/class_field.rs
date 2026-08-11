@@ -1425,6 +1425,82 @@ struct OverrideError {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn validate_dataclass_transform_defaults(
+        &self,
+        call: &ExprCall,
+        name: &Name,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let has_default = call.arguments.find_keyword("default").is_some();
+        let has_default_factory = call.arguments.find_keyword("default_factory").is_some();
+        let has_factory = call.arguments.find_keyword("factory").is_some();
+        let has_keyword_conflict = has_default && (has_default_factory || has_factory)
+            || has_default_factory && has_factory;
+        let may_have_positional_default =
+            !call.arguments.args.is_empty() && (has_default_factory || has_factory);
+        if !has_keyword_conflict && !may_have_positional_default {
+            return;
+        }
+
+        let callee_kind = self
+            .expr_infer(&call.func, &self.error_swallower())
+            .callee_kind();
+        if matches!(
+            &callee_kind,
+            Some(CalleeKind::Function(FunctionKind::DataclassField))
+                | Some(CalleeKind::Class(ClassKind::DataclassField))
+        ) {
+            return;
+        }
+
+        // Pydantic is validated by the overloaded signatures, so don't emit a duplicate error here
+        let function_id = match &callee_kind {
+            Some(CalleeKind::Function(FunctionKind::Def(id))) => Some(id),
+            _ => None,
+        };
+        if function_id.is_some_and(|id| {
+            id.has_toplevel_qname("pydantic.fields", "Field")
+                || id.has_toplevel_qname("pydantic.fields", "PrivateAttr")
+                || id.has_toplevel_qname("pydantic._internal._model_construction", "NoInitField")
+        }) {
+            return;
+        }
+
+        // Special case attrs, which doesn't support default_factory
+        let attrs_function = function_id.filter(|id| {
+            id.qname.module_name() == ModuleName::attr()
+                || id.qname.module_name() == ModuleName::attrs()
+        });
+        if let Some(id) = attrs_function {
+            let has_positional_default =
+                id.has_toplevel_qname("attr", "attrib") && !call.arguments.args.is_empty();
+            if !has_factory || !has_default && !has_positional_default {
+                return;
+            }
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("`{name}` cannot specify both `default` and `factory`"),
+            );
+            return;
+        }
+
+        // Regular dataclass transforms
+        if !has_keyword_conflict {
+            return;
+        }
+        self.error(
+            errors,
+            range,
+            ErrorKind::BadClassDefinition,
+            format!(
+                "`{name}` cannot specify more than one of `default`, `default_factory`, and `factory`"
+            ),
+        );
+    }
+
     pub fn calculate_class_field(
         &self,
         class: &Class,
@@ -1643,20 +1719,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self.error(errors, range, ErrorKind::BadClassDefinition, message);
                             }
                         }
-                        // `attr.ib` accepts `default` positionally, so a positional arg
-                        // counts as a default here too.
-                        if matches!(&dm.kind, DataclassKind::Attrs { .. })
-                            && (call.arguments.find_keyword("default").is_some()
-                                || !call.arguments.args.is_empty())
-                            && call.arguments.find_keyword("factory").is_some()
-                        {
-                            self.error(
-                                errors,
-                                range,
-                                ErrorKind::BadClassDefinition,
-                                format!("`{name}` cannot specify both `default` and `factory`"),
-                            );
-                        }
+                        self.validate_dataclass_transform_defaults(call, name, range, errors);
                         // attrs validates eq/order/cmp legality on the field specifier, mirroring
                         // the decorator-site check.
                         if matches!(&dm.kind, DataclassKind::Attrs { .. }) {

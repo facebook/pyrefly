@@ -13,6 +13,17 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 pydantic_testcase!(
+    test_field_conflicting_defaults_uses_overload_error,
+    r#"
+from pydantic import BaseModel, Field, PrivateAttr
+
+class Model(BaseModel):
+    value: int = Field(default=1, default_factory=int)  # E: No matching overload found for function `pydantic.fields.Field`
+    _private: int = PrivateAttr(default=1, default_factory=int)  # E: No matching overload found for function `pydantic.fields.PrivateAttr`
+"#,
+);
+
+pydantic_testcase!(
     test_field_right_type,
     r#"
 from pydantic import BaseModel, Field
