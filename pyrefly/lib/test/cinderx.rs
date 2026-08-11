@@ -44,7 +44,7 @@ class single(float): pass
 fn fixtures_dir() -> std::path::PathBuf {
     let cwd = std::env::current_dir().expect("cwd should be available");
     let mut candidates = vec![
-        cwd.join("fbcode/pyrefly/pyrefly/lib/test/cinderx/fixtures"),
+        cwd.join("pyrefly/pyrefly/lib/test/cinderx/fixtures"),
         cwd.join("pyrefly/lib/test/cinderx/fixtures"),
         cwd.join("lib/test/cinderx/fixtures"),
     ];
