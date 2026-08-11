@@ -17,7 +17,6 @@ use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
-use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -45,6 +44,7 @@ use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
+use crate::types::types::Substitution;
 use crate::types::types::TArgs;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -440,7 +440,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let nparams = tparams.len();
         let mut targs_cursor = TArgsCursor::new(targs);
         let mut checked_targs = Vec::new();
-        let mut name_to_idx = SmallMap::new();
         for (param_idx, param) in tparams.iter().enumerate() {
             if let Some(arg) = targs_cursor.peek() {
                 // Get next type argument
@@ -493,13 +492,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     param_idx,
                     &mut checked_targs,
                     targs_cursor.nargs(),
-                    &mut name_to_idx,
                     range,
                     errors,
                 );
                 break;
             }
-            name_to_idx.insert(param.name(), param_idx);
         }
         if targs_cursor.nargs_unconsumed(targs_cursor.nargs()) > 0 {
             self.error(
@@ -514,7 +511,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
-        drop(name_to_idx);
         TArgs::new(tparams, checked_targs)
     }
 
@@ -743,44 +739,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn get_tparam_default(
-        &self,
-        param: &Quantified,
-        checked_targs: &[Type],
-        name_to_idx: &SmallMap<&Name, usize>,
-    ) -> Type {
-        if let Some(default) = param.default() {
-            default.clone().transform(&mut |default| {
-                let (typevar_name, typevar_kind) = match default {
-                    Type::TypeVar(t) => (t.qname().id(), QuantifiedKind::TypeVar),
-                    Type::TypeVarTuple(t) => (t.qname().id(), QuantifiedKind::TypeVarTuple),
-                    Type::ParamSpec(p) => (p.qname().id(), QuantifiedKind::ParamSpec),
-                    Type::Quantified(q) => (q.name(), q.kind()),
-                    _ => return,
-                };
-                *default = if let Some(i) = name_to_idx.get(typevar_name) {
-                    // The default of this TypeVar contains the value of a previous TypeVar.
-                    checked_targs[*i].clone()
-                } else {
-                    // The default refers to the value of a TypeVar that isn't in scope. We've
-                    // already logged an error in TParams::new(); return a sensible default.
-                    Quantified::as_gradual_type_helper(typevar_kind, None)
-                }
-            })
-        } else {
-            param.as_gradual_type()
-        }
-    }
-
     /// Consume all remaining type parameters after we've run out of arguments.
-    fn consume_remaining_tparams<'b>(
+    fn consume_remaining_tparams(
         &self,
         name: &Name,
-        tparams: &'b TParams,
+        tparams: &TParams,
         param_idx: usize,
         checked_targs: &mut Vec<Type>,
         nargs: usize,
-        name_to_idx: &mut SmallMap<&'b Name, usize>,
         range: TextRange,
         errors: &ErrorCollector,
     ) {
@@ -808,11 +774,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // to avoid cascading errors.
             let targ = if all_remaining_params_can_be_empty && x.is_type_var_tuple() {
                 self.heap.mk_concrete_tuple(Vec::new())
+            } else if let Some(default) = x.default() {
+                // A default may refer to the parameters declared before it.
+                Substitution::for_prefix(tparams, checked_targs).substitute_into(default.clone())
             } else {
-                self.get_tparam_default(x, checked_targs, name_to_idx)
+                x.as_gradual_type()
             };
             checked_targs.push(targ);
-            name_to_idx.insert(x.name(), checked_targs.len() - 1);
         }
     }
 }
