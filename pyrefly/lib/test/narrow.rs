@@ -1704,6 +1704,36 @@ def main(categories: Iterable[str] | type[enum.Enum]) -> None:
 );
 
 testcase!(
+    test_isinstance_type_and_issubclass_argparse_choices,
+    r#"
+import argparse
+import enum
+from typing import assert_type
+
+def main(parser: argparse.ArgumentParser) -> None:
+    for action in parser._actions:
+        if isinstance(action.choices, type) and issubclass(action.choices, enum.Enum):
+            assert_type(action.choices, type[enum.Enum])
+            action.choices = list(action.choices)
+    "#,
+);
+
+testcase!(
+    test_isinstance_any_as_class_object,
+    r#"
+from typing import Any, assert_type
+
+class ModelField:
+    type_: Any
+
+    def analyze(self) -> None:
+        if isinstance(self.type_, type):
+            assert_type(self.type_, type[Any])
+            isinstance(None, self.type_)
+    "#,
+);
+
+testcase!(
     test_issubclass_with_metaclass_instance,
     r#"
 class ModelBase(type):

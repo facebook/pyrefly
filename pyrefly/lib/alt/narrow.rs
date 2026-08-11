@@ -649,12 +649,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn narrow_isinstance_from_definite(&self, left: &Type, right: &Type) -> Type {
+        let mut has_class_object_member = false;
+        self.map_over_union(left, |left| {
+            has_class_object_member |= matches!(left, Type::Type(_) | Type::ClassDef(_));
+        });
         self.distribute_over_union(left, |l| {
             self.with_fresh_class_info_target(l, right, |right| {
-                if matches!(&right, Type::ClassType(cls) if cls.is_builtin("type"))
-                    && matches!(l, Type::Type(_) | Type::ClassDef(_))
-                {
-                    l.clone()
+                if matches!(&right, Type::ClassType(cls) if cls.is_builtin("type")) {
+                    if matches!(l, Type::Type(_) | Type::ClassDef(_)) {
+                        l.clone()
+                    } else if has_class_object_member {
+                        self.heap.mk_never()
+                    } else if left.is_union() {
+                        // A class object may satisfy a union member through its metaclass.
+                        self.heap.mk_type_of(self.heap.mk_any_implicit())
+                    } else {
+                        right.clone()
+                    }
                 } else if right.is_any() {
                     // NOTE(grievejia): The most precise refinement would be `left`:
                     // `isinstance(x, Any)` provides no concrete evidence about the type
