@@ -698,9 +698,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn narrow_isinstance_from_definite(&self, left: &Type, right: &Type) -> Type {
+        let mut has_class_object_member = false;
+        self.map_over_union(left, |left| {
+            has_class_object_member |= matches!(left, Type::Type(_) | Type::ClassDef(_));
+        });
         self.distribute_over_union(left, |l| {
             self.with_fresh_class_info_target(l, right, |right| {
-                if right.is_any() {
+                if matches!(&right, Type::ClassType(cls) if cls.is_builtin("type")) {
+                    if matches!(l, Type::Type(_) | Type::ClassDef(_)) {
+                        l.clone()
+                    } else if has_class_object_member {
+                        self.heap.mk_never()
+                    } else if left.is_union() {
+                        // A class object may satisfy a union member through its metaclass.
+                        self.heap.mk_type_of(self.heap.mk_any_implicit())
+                    } else {
+                        right.clone()
+                    }
+                } else if right.is_any() {
                     // A class object whose identity is unknown gives no evidence about the
                     // subject, so keep the subject's type rather than degrading it to `Any`.
                     // The cost is losing the permissiveness of `Any` inside the branch.
