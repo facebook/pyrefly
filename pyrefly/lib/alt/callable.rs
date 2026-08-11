@@ -1950,7 +1950,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if let Some(targs) = ctor_targs {
             let residual_vars = call_context.captured_vars();
-            self.solver().generalize_class_targs(targs, &residual_vars);
+            self.solver()
+                .generalize_class_targs(targs, &residual_vars, false);
         }
         let errors = self
             .solver()

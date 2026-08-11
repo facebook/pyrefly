@@ -65,6 +65,19 @@ impl Restriction {
         matches!(self, Self::Bound(_) | Self::Constraints(_))
     }
 
+    /// Indicate whether this restriction can reject any type. A bound of `Any` or `object`
+    /// restricts nothing (despite being syntactically a `Bound`) because *every* type
+    /// satisfies it. Constraints always restrict, admitting only their own members.
+    pub fn can_reject(&self) -> bool {
+        match self {
+            Self::Bound(b) => {
+                !b.is_any() && !matches!(b, Type::ClassType(cls) if cls.is_builtin("object"))
+            }
+            Self::Constraints(_) => true,
+            Self::Unrestricted => false,
+        }
+    }
+
     fn as_type(&self, stdlib: &Stdlib, heap: &TypeHeap, kind: QuantifiedKind) -> Type {
         match self {
             Self::Bound(t) => t.clone(),

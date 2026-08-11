@@ -153,6 +153,11 @@ impl Bounds {
     fn is_empty(&self) -> bool {
         self.lower.is_empty() && self.upper.is_empty()
     }
+
+    /// Indicate if every bound is `Any` (and there is at least one bound).
+    fn is_all_any(&self) -> bool {
+        !self.is_empty() && self.lower.iter().chain(self.upper.iter()).all(Type::is_any)
+    }
 }
 
 #[cfg(test)]
@@ -2875,11 +2880,42 @@ impl Solver {
     /// Solve each fresh var created in freshen_class_targs. If we still have a Var, we do not
     /// yet have an instantiation, but one might come later. E.g., __new__ did not provide an
     /// instantiation, but __init__ will.
+    ///
+    /// Pass `keep_restricted_free = true` *only* when argument matching follows, such as when
+    /// applying an expected type to a constructor call; otherwise pass `false`. An `Any` that a
+    /// gradual expected type pins onto a restricted parameter says nothing about it, so `true`
+    /// discards it and leaves the parameter free for argument matching to check its restriction.
     pub fn generalize_class_targs(
         &self,
         targs: &mut TArgs,
         vars_with_residual_captures: &SmallSet<Var>,
+        keep_restricted_free: bool,
     ) {
+        // Undo an `Any` that a gradual type argument pinned onto a restricted parameter,
+        // before the expansion below bakes it into the type argument.
+        if keep_restricted_free {
+            let lock = self.variables.lock();
+            targs.iter_paired_mut().for_each(|(param, t)| {
+                if let Type::Var(v) = t
+                    && param.restriction().can_reject()
+                {
+                    let mut e = lock.get_mut(*v);
+                    if let Variable::Quantified { quantified, bounds } = &mut *e
+                        && *quantified == *param
+                        && bounds.is_all_any()
+                    {
+                        *bounds = Bounds::new();
+                    } else if matches!(&*e, Variable::Answer(a) if a.is_any()) {
+                        // A constrained parameter is solved as soon as a bound arrives, so that
+                        // every use picks the same constraint and its `Any` arrives as an answer.
+                        *e = Variable::Quantified {
+                            quantified: param.clone(),
+                            bounds: Bounds::new(),
+                        };
+                    }
+                }
+            });
+        }
         // Expanding targs might require the variables lock, so do that first.
         targs.as_mut().iter_mut().for_each(|t| self.expand_mut(t));
         let lock = self.variables.lock();

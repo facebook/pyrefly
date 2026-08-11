@@ -1081,7 +1081,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             let matched_hint = self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint);
             self.solver()
-                .generalize_class_targs(cls.targs_mut(), &SmallSet::new());
+                .generalize_class_targs(cls.targs_mut(), &SmallSet::new(), true);
             (vs, matched_hint)
         } else {
             (QuantifiedHandle::empty(), false)
@@ -1412,7 +1412,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .freshen_class_targs(typed_dict.targs_mut(), self.uniques);
             let matched_hint = self.is_subset_eq(&typed_dict.clone().to_type(self.heap), hint);
             self.solver()
-                .generalize_class_targs(typed_dict.targs_mut(), &SmallSet::new());
+                .generalize_class_targs(typed_dict.targs_mut(), &SmallSet::new(), true);
             (vs, matched_hint)
         } else {
             (QuantifiedHandle::empty(), false)
