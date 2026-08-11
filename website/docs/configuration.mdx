@@ -1250,7 +1250,7 @@ Examples:
 filepath glob matching. Only certain config options are allowed to be overridden, and a need
 to override other configs means you likely need to use a separate config file for your subdirectory.
 You can have as many SubConfigs as you want in a project, and even multiple separate SubConfigs
-that can apply to a given file when the `matches` glob pattern matches.
+that can apply to a given file when any of their `matches` glob patterns match.
 
 #### **SubConfig Allowed Overrides**
 
@@ -1278,15 +1278,21 @@ and would like to see the option supported.
 
 A SubConfig has two or more entries:
 
-- a `matches` key, with a [Filesystem Glob](#filesystem-globbing) detailing which files the config
-  applies to.
+- a `matches` key containing either one [Filesystem Glob](#filesystem-globbing) string or a
+  non-empty list of glob strings. A list applies the SubConfig when any entry matches.
 - at least one of the [SubConfig allowed overrides](#subconfig-allowed-overrides)
+
+```toml
+[[sub-config]]
+matches = ["src/first.py", "tests/second.py"]
+ignore-errors-in-generated-code = true
+```
 
 #### **SubConfig Option Selection**
 
 Since you can have more than one SubConfig matching a file, we need to define a resolution order
 to determine which SubConfig's option should be selected. Pyrefly does this by filtering
-SubConfigs whose `matches` does not match the given file, then takes the first non-null
+SubConfigs where none of the `matches` entries match the given file, then takes the first non-null
 value that can be found in the order the SubConfigs appear in your configuration.
 
 If no SubConfigs match, or there are no non-null config options present, then we take

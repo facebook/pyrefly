@@ -80,16 +80,87 @@ pub static GENERATED_FILE_CONFIG_OVERRIDE: LazyLock<
     RwLock<SmallMap<InternedPath, ArcId<ConfigFile>>>,
 > = LazyLock::new(|| RwLock::new(SmallMap::new()));
 
+/// One or more path globs that select files for a [`SubConfig`].
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct SubConfigMatches(Vec<Glob>);
+
+impl SubConfigMatches {
+    /// Creates a matcher from a non-empty collection of globs.
+    pub fn new(matches: Vec<Glob>) -> anyhow::Result<Self> {
+        if matches.is_empty() {
+            return Err(anyhow!(
+                "sub-config `matches` must contain at least one path or glob"
+            ));
+        }
+        Ok(Self(matches))
+    }
+
+    fn with_root(self, root: &Path) -> Self {
+        Self(self.0.into_map(|pattern| pattern.from_root(root)))
+    }
+
+    fn matches(&self, path: &Path) -> bool {
+        self.0.iter().any(|pattern| pattern.matches(path))
+    }
+}
+
+impl From<Glob> for SubConfigMatches {
+    fn from(value: Glob) -> Self {
+        Self(vec![value])
+    }
+}
+
+impl Display for SubConfigMatches {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.as_slice() {
+            [pattern] => pattern.fmt(f),
+            patterns => write!(f, "[{}]", patterns.iter().join(", ")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SubConfigMatches {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OneOrMany {
+            One(Glob),
+            Many(Vec<Glob>),
+        }
+
+        let matches = match OneOrMany::deserialize(deserializer)? {
+            OneOrMany::One(pattern) => vec![pattern],
+            OneOrMany::Many(patterns) => patterns,
+        };
+        Self::new(matches).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for SubConfigMatches {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self.0.as_slice() {
+            [pattern] => pattern.serialize(serializer),
+            patterns => patterns.serialize(serializer),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct SubConfig {
-    pub matches: Glob,
+    pub matches: SubConfigMatches,
     #[serde(flatten)]
     pub settings: ConfigBase,
 }
 
 impl SubConfig {
     fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
-        self.matches = self.matches.clone().from_root(config_root);
+        self.matches = self.matches.clone().with_root(config_root);
     }
 }
 
@@ -2011,7 +2082,7 @@ mod tests {
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
-                    matches: Glob::new("sub/project/**".to_owned()).unwrap(),
+                    matches: Glob::new("sub/project/**".to_owned()).unwrap().into(),
                     settings: ConfigBase {
                         extras: Default::default(),
                         errors: Some(ErrorDisplayConfig::new(HashMap::from_iter([
@@ -2361,7 +2432,7 @@ mod tests {
             source_db: Default::default(),
             build_system: Default::default(),
             sub_configs: vec![SubConfig {
-                matches: Glob::new("sub/project/**".to_owned()).unwrap(),
+                matches: Glob::new("sub/project/**".to_owned()).unwrap().into(),
                 settings: Default::default(),
             }],
             coverage: CoverageConfig {
@@ -2432,7 +2503,7 @@ mod tests {
             build_system: Default::default(),
             source_db: Default::default(),
             sub_configs: vec![SubConfig {
-                matches: sub_config_matches,
+                matches: sub_config_matches.into(),
                 settings: Default::default(),
             }],
             coverage: CoverageConfig {
@@ -2522,6 +2593,38 @@ mod tests {
                  "#;
         let err = ConfigFile::parse_config(config_str).unwrap_err();
         assert!(err.to_string().contains("missing field `matches`"));
+    }
+
+    #[test]
+    fn test_deserializing_sub_config_multiple_matches() {
+        let config = ConfigFile::parse_config(
+            r#"
+ignore-errors-in-generated-code = false
+
+[[sub-config]]
+matches = ["src/first.py", "tests/second.py"]
+ignore-errors-in-generated-code = true
+"#,
+        )
+        .unwrap();
+
+        assert!(config.ignore_errors_in_generated_code(Path::new("src/first.py")));
+        assert!(config.ignore_errors_in_generated_code(Path::new("tests/second.py")));
+        assert!(!config.ignore_errors_in_generated_code(Path::new("src/other.py")));
+    }
+
+    #[test]
+    fn test_deserializing_sub_config_rejects_empty_matches() {
+        let err = ConfigFile::parse_config(
+            r#"
+[[sub-config]]
+matches = []
+ignore-errors-in-generated-code = true
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("at least one path or glob"));
     }
 
     #[test]
@@ -2626,7 +2729,7 @@ output-format = "omit-errors"
             },
             sub_configs: vec![
                 SubConfig {
-                    matches: Glob::new("**/highest/**".to_owned()).unwrap(),
+                    matches: Glob::new("**/highest/**".to_owned()).unwrap().into(),
                     settings: ConfigBase {
                         replace_imports_with_any: Some(vec![
                             ModuleWildcard::new("highest").unwrap(),
@@ -2636,7 +2739,7 @@ output-format = "omit-errors"
                     },
                 },
                 SubConfig {
-                    matches: Glob::new("**/priority*".to_owned()).unwrap(),
+                    matches: Glob::new("**/priority*".to_owned()).unwrap().into(),
                     settings: ConfigBase {
                         replace_imports_with_any: Some(vec![
                             ModuleWildcard::new("second").unwrap(),
@@ -2684,7 +2787,7 @@ output-format = "omit-errors"
                 ..Default::default()
             },
             sub_configs: vec![SubConfig {
-                matches: Glob::new("sub/**".to_owned()).unwrap(),
+                matches: Glob::new("sub/**".to_owned()).unwrap().into(),
                 settings: ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(HashMap::from([(
                         ErrorKind::BadReturn,
@@ -2733,7 +2836,7 @@ output-format = "omit-errors"
                 ..Default::default()
             },
             sub_configs: vec![SubConfig {
-                matches: Glob::new("strict/**".to_owned()).unwrap(),
+                matches: Glob::new("strict/**".to_owned()).unwrap().into(),
                 settings: ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(HashMap::from([(
                         ErrorKind::BadAssignment,
@@ -2765,7 +2868,7 @@ output-format = "omit-errors"
                 ..Default::default()
             },
             sub_configs: vec![SubConfig {
-                matches: Glob::new("sub/**".to_owned()).unwrap(),
+                matches: Glob::new("sub/**".to_owned()).unwrap().into(),
                 settings: ConfigBase {
                     check_unannotated_defs: Some(false),
                     ..Default::default()
@@ -3095,7 +3198,7 @@ output-format = "omit-errors"
         let mut config = ConfigFile {
             preset: Some(Preset::Legacy),
             sub_configs: vec![SubConfig {
-                matches: Glob::new("tests/**".to_owned()).unwrap(),
+                matches: Glob::new("tests/**".to_owned()).unwrap().into(),
                 settings: ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(HashMap::from([(
                         ErrorKind::BadOverride,
