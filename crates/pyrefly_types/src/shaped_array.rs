@@ -383,11 +383,11 @@ impl IntTuple {
                     }
                     middle => middle.clone(),
                 };
-                Type::Tuple(Tuple::Unpacked(Box::new((
+                Type::Tuple(Tuple::unpacked(
                     dims_to_types(prefix),
                     middle,
                     dims_to_types(suffix),
-                ))))
+                ))
             }
         }
     }
@@ -876,11 +876,11 @@ pub fn shape_to_tuple_carrier(shape: &IntTuple) -> Type {
                 Type::IntTuple(shape) => shape_to_tuple_carrier(shape),
                 _ => middle.clone(),
             };
-            Type::Tuple(Tuple::Unpacked(Box::new((
+            Type::Tuple(Tuple::unpacked(
                 prefix.iter().map(dim_to_carrier_element).collect(),
                 middle,
                 suffix.iter().map(dim_to_carrier_element).collect(),
-            ))))
+            ))
         }
     }
 }
@@ -984,11 +984,11 @@ fn recover_unbounded_tuple_carrier_middle(middle: Type) -> Type {
     match middle {
         Type::Tuple(Tuple::Unpacked(unpacked)) => {
             let (prefix, middle, suffix) = *unpacked;
-            Type::Tuple(Tuple::Unpacked(Box::new((
+            Type::Tuple(Tuple::unpacked(
                 prefix,
                 recover_unbounded_tuple_carrier_middle(middle),
                 suffix,
-            ))))
+            ))
         }
         Type::Tuple(Tuple::Unbounded(_)) => gradual_shape_middle(),
         middle => middle,
@@ -2547,11 +2547,7 @@ mod tests {
         );
         assert_eq!(
             shape.to_tuple_type(),
-            Type::Tuple(Tuple::Unpacked(Box::new((
-                Vec::new(),
-                Type::Tuple(Tuple::Unbounded(Box::new(size(5)))),
-                Vec::new(),
-            ))))
+            Type::Tuple(Tuple::Unbounded(Box::new(size(5)))),
         );
     }
 
@@ -2822,11 +2818,11 @@ mod tests {
 
         assert_eq!(
             projected,
-            Type::Tuple(Tuple::Unpacked(Box::new((
+            Type::Tuple(Tuple::unpacked(
                 vec![size(2)],
                 Type::Tuple(Tuple::Unbounded(Box::new(gradual_size()))),
                 vec![size(3)],
-            ))))
+            ))
         );
     }
 
@@ -2848,9 +2844,7 @@ mod tests {
 
         assert_eq!(
             projected,
-            Type::Tuple(Tuple::Unpacked(Box::new(
-                (vec![size(2)], s, vec![size(3)],)
-            )))
+            Type::Tuple(Tuple::unpacked(vec![size(2)], s, vec![size(3)],))
         );
     }
 
@@ -2861,11 +2855,11 @@ mod tests {
 
         assert_eq!(
             shape.to_tuple_type(),
-            Type::Tuple(Tuple::Unpacked(Box::new((
+            Type::Tuple(Tuple::unpacked(
                 vec![size(1)],
                 Type::Tuple(Tuple::Unbounded(Box::new(gradual_size()))),
                 vec![size(2)],
-            ))))
+            ))
         );
         assert_eq!(
             IntTuple::from_tuple(shape.to_tuple()),
@@ -3362,11 +3356,7 @@ mod tests {
         let carrier = shape_to_tuple_carrier(&shape);
         assert_eq!(
             carrier,
-            Type::Tuple(Tuple::Unpacked(Box::new((
-                vec![literal(2)],
-                middle,
-                vec![literal(3)],
-            ))))
+            Type::Tuple(Tuple::unpacked(vec![literal(2)], middle, vec![literal(3)],))
         );
         assert_eq!(tuple_carrier_to_shape(&carrier), Some(shape));
     }
@@ -3394,37 +3384,37 @@ mod tests {
 
     #[test]
     fn unpacked_tuple_carrier_middle_is_validated_strictly() {
-        let valid = Type::Tuple(Tuple::Unpacked(Box::new((
+        let valid = Type::Tuple(Tuple::unpacked(
             vec![literal(1)],
             Type::Tuple(Tuple::Concrete(vec![literal(3)])),
             vec![literal(2)],
-        ))));
+        ));
         assert_eq!(
             tuple_carrier_to_shape(&valid),
             Some(IntTuple::from_types(vec![size(1), size(3), size(2)]))
         );
 
-        let invalid = Type::Tuple(Tuple::Unpacked(Box::new((
+        let invalid = Type::Tuple(Tuple::unpacked(
             vec![literal(1)],
             Type::Tuple(Tuple::Concrete(vec![Type::ClassType(fake_class_type(
                 "builtins", "str",
             ))])),
             vec![literal(2)],
-        ))));
+        ));
         assert_eq!(tuple_carrier_to_shape(&invalid), None);
     }
 
     #[test]
     fn nested_concrete_tuple_carrier_middle_is_recursively_flattened() {
-        let carrier = Type::Tuple(Tuple::Unpacked(Box::new((
+        let carrier = Type::Tuple(Tuple::unpacked(
             vec![literal(1)],
-            Type::Tuple(Tuple::Unpacked(Box::new((
+            Type::Tuple(Tuple::unpacked(
                 vec![literal(2)],
                 Type::Tuple(Tuple::Concrete(vec![literal(3)])),
                 vec![literal(4)],
-            )))),
+            )),
             vec![literal(5)],
-        ))));
+        ));
 
         assert_eq!(
             tuple_carrier_to_shape(&carrier),
@@ -3440,15 +3430,15 @@ mod tests {
 
     #[test]
     fn nested_unbounded_tuple_carrier_middle_recovers_to_gradual() {
-        let carrier = Type::Tuple(Tuple::Unpacked(Box::new((
+        let carrier = Type::Tuple(Tuple::unpacked(
             vec![literal(1)],
-            Type::Tuple(Tuple::Unpacked(Box::new((
+            Type::Tuple(Tuple::unpacked(
                 vec![literal(2)],
                 Type::Tuple(Tuple::Unbounded(Box::new(literal(3)))),
                 vec![literal(4)],
-            )))),
+            )),
             vec![literal(5)],
-        ))));
+        ));
 
         assert_eq!(
             tuple_carrier_to_shape(&carrier),
@@ -3462,11 +3452,11 @@ mod tests {
 
     #[test]
     fn unpacked_tuple_carrier_unbounded_middle_recovers_to_gradual() {
-        let carrier = Type::Tuple(Tuple::Unpacked(Box::new((
+        let carrier = Type::Tuple(Tuple::unpacked(
             vec![literal(1)],
             Type::Tuple(Tuple::Unbounded(Box::new(literal(5)))),
             vec![literal(2)],
-        ))));
+        ));
 
         assert_eq!(
             tuple_carrier_to_shape(&carrier),
@@ -3477,11 +3467,11 @@ mod tests {
             ))
         );
 
-        let invalid_prefix = Type::Tuple(Tuple::Unpacked(Box::new((
+        let invalid_prefix = Type::Tuple(Tuple::unpacked(
             vec![Type::ClassType(fake_class_type("builtins", "str"))],
             Type::Tuple(Tuple::Unbounded(Box::new(literal(5)))),
             vec![literal(2)],
-        ))));
+        ));
         assert_eq!(tuple_carrier_to_shape(&invalid_prefix), None);
     }
 

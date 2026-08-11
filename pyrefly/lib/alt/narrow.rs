@@ -1266,8 +1266,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Tuple::Unpacked(f) if let Type::Var(_) = &f.1 => {
                 let (prefix, middle_var, suffix) = &**f;
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
-                let new_tuple =
-                    Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
+                let new_tuple = Tuple::unpacked(prefix.clone(), forced_middle, suffix.clone());
                 self.tuple_len_eq(&simplify_tuples(new_tuple, self.heap), len, range, errors)
             }
             Tuple::Unbounded(elements) => {
@@ -1289,8 +1288,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Tuple::Unpacked(f) if let Type::Var(_) = &f.1 => {
                 let (prefix, middle_var, suffix) = &**f;
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
-                let new_tuple =
-                    Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
+                let new_tuple = Tuple::unpacked(prefix.clone(), forced_middle, suffix.clone());
                 self.tuple_len_not_eq(&simplify_tuples(new_tuple, self.heap), len, range, errors)
             }
             _ => self.heap.mk_tuple(tuple.clone()),

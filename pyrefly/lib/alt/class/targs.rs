@@ -297,11 +297,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             PreInferenceVariance::Covariant,
         );
         let tparams = TParams::new(vec![quantified.clone()]);
-        let tuple_ty = self.heap.mk_tuple(Tuple::Unpacked(Box::new((
+        let tuple_ty = self.heap.mk_tuple(Tuple::unpacked(
             Vec::new(),
             self.heap.mk_quantified(quantified),
             Vec::new(),
-        ))));
+        ));
         (tparams, tuple_ty)
     }
 
