@@ -248,17 +248,10 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyrefly.restartClient', async () => {
-      await client.stop();
       // Clear the output channel but don't dispose it
       outputChannel.clear();
       traceOutputChannel.clear();
-      client = new LanguageClient(
-        'pyrefly',
-        'Pyrefly language server',
-        serverOptions,
-        clientOptions,
-      );
-      await client.start();
+      await client.restart();
     }),
   );
 
