@@ -44,6 +44,7 @@ use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Forallable;
+use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -116,6 +117,7 @@ use crate::types::quantified::QuantifiedKind;
 use crate::types::sentinel::Sentinel;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
+use crate::types::type_info::JoinStyle;
 use crate::types::type_info::TypeInfo;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
@@ -420,6 +422,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn expr_infer(&self, x: &Expr, errors: &ErrorCollector) -> Type {
         self.expr_with_options(x, ExprOptions::infer(errors, None))
             .into_ty()
+    }
+
+    /// Infer the receiver of an attribute assignment. In an unreachable branch, narrowing a
+    /// receiver through one of its facets can reduce the receiver itself to `Never`. Attribute
+    /// writes still need to be checked against their declared type in that case.
+    pub fn expr_infer_for_attribute_assignment(&self, x: &Expr, errors: &ErrorCollector) -> Type {
+        let narrowed = self.expr_infer(x, errors);
+        if !narrowed.is_never() {
+            return narrowed;
+        }
+        self.expr_infer_without_narrowing(x, errors).into_ty()
+    }
+
+    fn expr_infer_without_narrowing(&self, x: &Expr, errors: &ErrorCollector) -> TypeInfo {
+        match x {
+            Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => {
+                let key = Key::BoundName(ShortIdentifier::expr_name(name));
+                let mut idx = self.bindings().key_to_idx(&key);
+                let mut gas = Gas::new(100);
+                loop {
+                    if gas.stop() {
+                        break;
+                    }
+                    match self.bindings().get(idx) {
+                        Binding::Forward(next)
+                        | Binding::PatternCapture(next)
+                        | Binding::Narrow(next, _, _) => idx = *next,
+                        Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
+                        _ => break,
+                    }
+                }
+                TypeInfo::of_ty(self.get_idx(idx).ty().clone())
+            }
+            Expr::Attribute(attr) => {
+                let base = self.expr_infer_without_narrowing(&attr.value, errors);
+                self.attr_access_infer(attr, &base, errors)
+            }
+            Expr::Subscript(subscript) => {
+                let base = self.expr_infer_without_narrowing(&subscript.value, errors);
+                self.subscript_infer(&base, &subscript.slice, subscript.range(), errors)
+            }
+            _ => TypeInfo::of_ty(self.expr_infer(x, errors)),
+        }
     }
 
     /// Infer a type for an expression, with an optional type hint that influences the inferred type.

@@ -256,6 +256,28 @@ def test_invalidate_narrow_with_assignment(c0: C, c1: C):
 );
 
 testcase!(
+    test_attr_assignment_uses_declared_type_after_impossible_narrow,
+    r#"
+from typing import assert_type
+
+class Container: pass
+
+class Env:
+    def __init__(self) -> None:
+        self.domains: Container = Container()
+
+    def setup(self) -> None:
+        if self.domains is None:
+            self.domains = Container()
+            assert_type(self.domains, Container)
+
+    def rejects_incompatible_write(self) -> None:
+        if self.domains is None:
+            self.domains = 1  # E: `Literal[1]` is not assignable to attribute `domains` with type `Container`
+"#,
+);
+
+testcase!(
     bug = "TODO(stroxler) We should fine-tune descriptor narrowing more; this is not high-priority",
     test_descriptor_narrowing,
     r#"

@@ -5130,7 +5130,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         //
         // This should be the case since contextual typing requires working out the class field
         // type information first, but is difficult to see from a skim.
-        let base = self.expr_infer(&attr.value, errors);
+        let base = self.expr_infer_for_attribute_assignment(&attr.value, errors);
         let narrowed = self.check_assign_to_attribute_and_infer_narrow(
             &base,
             &attr.attr.id,
