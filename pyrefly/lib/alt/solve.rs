@@ -5261,12 +5261,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Whether post-assignment narrowing of `arm[k]` to the assigned value is
     /// sound for this union arm. Defers to the per-class cached
-    /// `KeyClassSubscriptSymmetry` answer for `ClassType` arms; preserves
-    /// today's always-narrow behavior for everything else (TypedDicts,
-    /// tuples, etc.).
+    /// `KeyClassSubscriptSymmetry` answer for `ClassType` arms. `Any` must not
+    /// be narrowed because its runtime `__setitem__` and `__getitem__` behavior
+    /// is unknown; other structural types such as TypedDicts and tuples keep
+    /// their existing behavior.
     fn subscript_assign_arm_allows_narrowing(&self, arm: &Type) -> bool {
         match arm {
             Type::ClassType(cls) => *self.get_subscript_symmetry_for_class(cls.class_object()),
+            Type::Any(_) => false,
             _ => true,
         }
     }
