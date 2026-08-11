@@ -2498,9 +2498,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn literal_equal(&self, left: &Type, right: &Type) -> bool {
+        // `...` in value position and a `types.EllipsisType` annotation denote the same
+        // singleton, so treat the two representations as one for identity comparisons.
+        let is_ellipsis = |ty: &Type| match ty {
+            Type::Ellipsis => true,
+            Type::ClassType(cls) => cls.has_qname("types", "EllipsisType"),
+            _ => false,
+        };
+        if is_ellipsis(left) && is_ellipsis(right) {
+            return true;
+        }
         match (left, right) {
             (Type::None, Type::None) => true,
-            (Type::Ellipsis, Type::Ellipsis) => true,
             (Type::Sentinel(s1), Type::Sentinel(s2)) => s1 == s2,
             (Type::Literal(left), Type::Literal(right)) => left.value == right.value,
             _ => false,
