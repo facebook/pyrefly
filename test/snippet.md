@@ -117,6 +117,17 @@ $ $PYREFLY snippet "x: int = 'hello'" --output-format=json
 [1]
 ```
 
+## Snippet with multiple output destinations
+
+```scrut
+$ $PYREFLY snippet "x: int = 'hello'" --summary=none \
+>     --output=min-text:- --output="json:$TMPDIR/snippet.json"; rc=$?; \
+> $JQ -r '.errors[0].name' $TMPDIR/snippet.json; exit $rc
+ERROR snippet:1:10-17: `Literal['hello']` is not assignable to `int` [bad-assignment]
+bad-assignment
+[1]
+```
+
 ## Snippet with CodeClimate output format
 
 ```scrut
