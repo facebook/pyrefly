@@ -947,6 +947,53 @@ class C:
     }
 
     #[test]
+    fn test_callable_annotations_use_python_syntax() -> anyhow::Result<()> {
+        assert_annotations(
+            r#"def call_it(fn):
+    return fn()
+
+call_it(lambda: 0)
+
+def make_formatter():
+    def format_one(n: int) -> str:
+        return str(n)
+    return format_one
+
+class Runner:
+    def run(self) -> None:
+        pass
+
+def swallow(fn):
+    fn()
+
+swallow(Runner().run)
+"#,
+            r#"from typing import Callable
+def call_it(fn: Callable[[], int]):
+    return fn()
+
+call_it(lambda: 0)
+
+def make_formatter() -> Callable[[int], str]:
+    def format_one(n: int) -> str:
+        return str(n)
+    return format_one
+
+class Runner:
+    def run(self) -> None:
+        pass
+
+def swallow(fn: Callable[[], None]) -> None:
+    fn()
+
+swallow(Runner().run)
+"#,
+            None,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_imports() -> anyhow::Result<()> {
         let file_one = r#"
         from file_two import get_a
