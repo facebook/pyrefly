@@ -2324,7 +2324,8 @@ set on the CLI.
 - Notes:
     - `output-format` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
-    - A CLI `--output-format` flag still takes precedence over the config value.
+    - A CLI `--output-format` flag takes precedence over the config value and sets
+      the default for every `--output` without a format prefix.
     - `"junit-xml"` emits a JUnit XML `<testsuites>` report suitable for CI
       dashboards (Jenkins, GitLab MR widgets, CircleCI, Azure DevOps, etc.).
     - `"sarif"` emits a SARIF 2.1.0 report suitable for static-analysis
@@ -6719,6 +6720,25 @@ Note that `baseline` is a **project-level setting** and cannot be overridden in 
 
 Errors are matched with the baseline by looking at file, error code, and column number.
 Note that errors suppressed by the baseline file are still shown in the IDE.
+
+If a baseline file is configured but cannot be read or parsed, the run fails with an error rather than proceeding as if no baseline were set. The exception is `--update-baseline`, which regenerates the file from scratch and so tolerates a missing or unparseable baseline.
+
+As you fix errors, the entries that suppressed them become stale. Two flags help keep the baseline current:
+
+```
+# Rewrite the baseline to drop stale entries, without recording any new errors.
+pyrefly check --prune-baseline
+
+# Exit with a non-zero status if the baseline contains stale entries.
+pyrefly check --error-stale-baseline
+```
+
+Both actions use the scope of the current check. An unmatched entry is stale when its file was checked, or when the file is confirmed not to exist. Entries for existing files outside a narrowed check are retained, as are entries whose file status cannot be determined because of a filesystem error.
+
+Pruning keeps entries for diagnostics that still occur, even when `--min-severity` hides them. This is intentionally conservative. `--update-baseline` instead regenerates the baseline from diagnostics at or above the severity threshold.
+
+`--error-stale-baseline` is intended for CI, where an out-of-date baseline should fail the build the same way a new error does. `--prune-baseline`, `--error-stale-baseline`, and `--update-baseline` are mutually exclusive, and each requires a baseline file from `--baseline` or the configuration file.
+
 This feature is experimental, so please submit any feedback or requests you have on our Github repo.
 
 ## Upgrading Pyrefly (And other changes that introduce new type errors)

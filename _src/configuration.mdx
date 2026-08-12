@@ -541,7 +541,8 @@ set on the CLI.
 - Notes:
     - `output-format` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
-    - A CLI `--output-format` flag still takes precedence over the config value.
+    - A CLI `--output-format` flag takes precedence over the config value and sets
+      the default for every `--output` without a format prefix.
     - `"junit-xml"` emits a JUnit XML `<testsuites>` report suitable for CI
       dashboards (Jenkins, GitLab MR widgets, CircleCI, Azure DevOps, etc.).
     - `"sarif"` emits a SARIF 2.1.0 report suitable for static-analysis
