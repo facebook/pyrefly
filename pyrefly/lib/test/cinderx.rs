@@ -7,6 +7,8 @@
 
 //! Tests for the CinderX type report.
 
+use std::path::PathBuf;
+
 use pretty_assertions::assert_eq;
 
 use crate::report::cinderx::collect::collect_module_types;
@@ -33,34 +35,6 @@ class double(float): pass
 class single(float): pass
 "#;
 
-// ---------------------------------------------------------------------------
-// Fixture-based expect tests
-// ---------------------------------------------------------------------------
-
-/// Resolve the `fixtures/` directory from the current working directory.
-///
-/// Under Buck the `CINDERX_TEST_PATH` env var holds a project-relative path,
-/// which we join onto the current directory (the project root). Cargo does not
-/// set it, so we fall back to trying several candidate paths. The function
-/// panics if none of the candidates exist.
-fn fixtures_dir() -> std::path::PathBuf {
-    let cwd = std::env::current_dir().expect("cwd should be available");
-    let mut candidates = Vec::new();
-    if let Ok(cinderx_test_path) = std::env::var("CINDERX_TEST_PATH") {
-        candidates.push(cwd.join(cinderx_test_path));
-    }
-    candidates.push(cwd.join("pyrefly/pyrefly/lib/test/cinderx/fixtures"));
-    candidates.push(cwd.join("pyrefly/lib/test/cinderx/fixtures"));
-    candidates.push(cwd.join("lib/test/cinderx/fixtures"));
-    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
-        candidates.push(std::path::Path::new(manifest_dir).join("lib/test/cinderx/fixtures"));
-    }
-    candidates
-        .into_iter()
-        .find(|p| p.exists())
-        .unwrap_or_else(|| panic!("cinderx fixtures directory not found; tried multiple paths"))
-}
-
 /// Run a fixture-based expect test.
 ///
 /// Reads `fixtures/<name>.py`, type-checks it (with the `__static__` stub
@@ -71,7 +45,9 @@ fn fixtures_dir() -> std::path::PathBuf {
 /// `.expected` file instead of asserting equality. Use this when adding a
 /// new fixture or when intentionally changing Pyrefly's output.
 fn check_fixture(name: &str) {
-    let fixtures = fixtures_dir();
+    let fixtures = PathBuf::from(
+        std::env::var("CINDERX_FIXTURES_PATH").expect("CINDERX_FIXTURES_PATH must be set"),
+    );
 
     let py_path = fixtures.join(format!("{name}.py"));
     let source = std::fs::read_to_string(&py_path)
