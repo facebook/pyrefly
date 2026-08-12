@@ -149,7 +149,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let Type::Tuple(Tuple::Unpacked(unpacked)) = *ty else {
                         unreachable!("guarded by matches! above")
                     };
-                    let (pre, mid, suff) = *unpacked;
+                    let (pre, mid, suff) = unpacked.into_parts();
                     if middle.is_none() {
                         prefix.extend(pre);
                         middle = Some(mid);

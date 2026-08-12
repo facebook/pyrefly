@@ -8,7 +8,7 @@
 use dupe::Dupe;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FuncDefIndex;
+use pyrefly_types::function::FuncDefIndex;
 use ruff_python_ast::AnyNodeRef;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;

@@ -43,6 +43,30 @@ circle = Circle()
 );
 
 testcase!(
+    test_direct_abc_without_abstract_methods_instantiation_error,
+    r#"
+from abc import ABC, ABCMeta
+
+class DirectABC(ABC):
+    pass
+
+class IndirectABC(DirectABC):
+    pass
+
+class DirectABCMeta(metaclass=ABCMeta):
+    pass
+
+class IndirectABCMeta(DirectABCMeta):
+    pass
+
+direct_abc = DirectABC()  # E: Cannot instantiate `DirectABC`
+indirect_abc = IndirectABC()
+direct_abc_meta = DirectABCMeta()  # E: Cannot instantiate `DirectABCMeta`
+indirect_abc_meta = IndirectABCMeta()
+"#,
+);
+
+testcase!(
     test_polymorphic_calls_ok,
     r#"
 from abc import ABC, abstractmethod
@@ -474,6 +498,31 @@ class D(C):  # E: Class `D` has unimplemented abstract members: `bar`
 );
 
 testcase!(
+    test_inherited_metaclass_and_explicit_abstractness,
+    TestEnv::new().enable_implicit_abstract_class_error(),
+    r#"
+from abc import ABCMeta, abstractmethod
+class M(ABCMeta): ...
+class A(metaclass=M): ...
+class B(A, metaclass=ABCMeta):
+    @abstractmethod
+    def f(self) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_inherited_abcmeta_is_implicitly_abstract,
+    TestEnv::new().enable_implicit_abstract_class_error(),
+    r#"
+from abc import ABCMeta, abstractmethod
+class M(ABCMeta): ...
+class A(metaclass=M):  # E: has unimplemented abstract members: `f`
+    @abstractmethod
+    def f(self) -> None: ...
+    "#,
+);
+
+testcase!(
     test_uninit_classvar_abc,
     r#"
 # To align with mypy and pyright, we do not consider uninitialized class vars on abstract classes to be abstract
@@ -482,7 +531,7 @@ from typing import ClassVar, final
 @final
 class A(ABC):
     x: ClassVar[int]
-a = A()
+a = A()  # E: Cannot instantiate `A`
 "#,
 );
 
@@ -570,4 +619,201 @@ class A(metaclass=Meta2):
         pass
 A()  # E: Cannot instantiate `A`
     "#,
+);
+
+testcase!(
+    test_final_class_with_unimplemented_sequence_methods,
+    r#"
+from typing import final
+from collections.abc import Sequence
+@final
+class A[T](Sequence[T]): # E: cannot have unimplemented abstract members: `__len__`, `__getitem__`
+    ...
+    "#,
+);
+
+testcase!(
+    test_final_class_with_unimplemented_collection_and_reversible_methods,
+    r#"
+from typing import final
+from collections.abc import Collection, Reversible
+@final
+class B[T](Collection[T], Reversible[T]): # E: cannot have unimplemented abstract members: `__iter__`, `__contains__`, `__len__`, `__reversed__`
+    ...
+    "#,
+);
+
+testcase!(
+    test_final_class_with_unimplemented_abstract_methods,
+    r#"
+from typing import final
+from abc import ABC, abstractmethod
+
+class A1(ABC):
+    @abstractmethod
+    def a(): ...
+
+class B1(ABC):
+    @abstractmethod
+    def b(): ...
+
+class C(A1, B1): ...
+
+@final
+class D(C): ... # E: cannot have unimplemented abstract members: `a`, `b`
+    "#,
+);
+
+// Even though a TypedDict's fake TypedDictFallback base inherits from Mapping, which has abstract
+// methods, we must never consider a TypedDict to have unimplemented abstract methods.
+testcase!(
+    test_typed_dict_is_not_abstract,
+    r#"
+from typing import TypedDict, final
+@final
+class FinalTD(TypedDict):
+    year: int
+"#,
+);
+
+// Tests for invalid-abstract-method: @abstractmethod in a non-abstract class.
+
+testcase!(
+    test_invalid_abstract_method_basic,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod
+    def fn(self) -> int:  # E: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_multiple,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod
+    def fn(self) -> int:  # E: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+
+    @abstractmethod
+    def gn(self) -> str:  # E: `Foo.gn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_abc_base_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Foo(ABC):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_abcmeta_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABCMeta, abstractmethod
+
+class Foo(metaclass=ABCMeta):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_transitive_abc_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    pass
+
+class Child(Base):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_protocol_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+from typing import Protocol
+
+class Foo(Protocol):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_abstract_property,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @property
+    @abstractmethod
+    def fn(self) -> int:  # E: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_inherited_only_no_error,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+
+class Child(Base):
+    # Child only inherits the abstract method, does not define its own @abstractmethod
+    pass
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_tuple_child_is_not_abstract,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+class A(tuple):
+    @abstractmethod
+    def f(self): ...  # E: `A` is not an abstract class
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_off_by_default,
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
 );

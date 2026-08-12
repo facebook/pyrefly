@@ -18,7 +18,6 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
@@ -1308,7 +1307,7 @@ fn has_implicit_receiver(
 
 fn extract_function_from_bound_method(
     bound_method: &BoundMethod,
-) -> Vec1<&pyrefly_types::callable::Function> {
+) -> Vec1<&pyrefly_types::function::Function> {
     match &bound_method.func {
         BoundMethodType::Function(function) => Vec1::new(function),
         BoundMethodType::Forall(forall) => Vec1::new(&forall.body),
@@ -1342,7 +1341,7 @@ fn find_class_type_for_new_method(new_method_parameters: &Params) -> Option<&Typ
     })
 }
 
-fn method_name_from_function(function: &pyrefly_types::callable::Function) -> Cow<'_, Name> {
+fn method_name_from_function(function: &pyrefly_types::function::Function) -> Cow<'_, Name> {
     function.metadata.kind.function_name()
 }
 
@@ -1734,7 +1733,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_callable_type(
         &self,
-        function: &pyrefly_types::callable::Function,
+        function: &pyrefly_types::function::Function,
         callee_type: Option<&Type>,
         callee_expr: Option<AnyNodeRef>,
         return_type: ScalarTypeProperties,
@@ -1764,7 +1763,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_callable_metadata(
         &self,
-        function: &pyrefly_types::callable::Function,
+        function: &pyrefly_types::function::Function,
         return_type: ScalarTypeProperties,
         callee_expr_suffix: Option<&str>,
     ) -> Option<PysaCallTarget<FunctionRef>> {
@@ -1772,12 +1771,12 @@ impl<'a> CallGraphVisitor<'a> {
         // name-based lookup. This handles module-level function aliases (e.g.,
         // `fromstring = XML` in `xml.etree.ElementTree`) where the type carries the
         // original definition's index.
-        let (module, def_index) = match &function.metadata.kind {
-            FunctionKind::Def(func_id) if func_id.cls.is_none() && func_id.def_index.is_some() => {
-                (&func_id.module, func_id.def_index.unwrap())
-            }
-            _ => return None,
-        };
+        let func_id = function.metadata.kind.as_func_def_id()?;
+        if func_id.cls.is_some() {
+            return None;
+        }
+        let module = func_id.qname.module();
+        let def_index = func_id.def_index;
 
         let function_ref = self
             .module_context
@@ -2003,7 +2002,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_new_method(
         &self,
-        new_method: &pyrefly_types::callable::Function,
+        new_method: &pyrefly_types::function::Function,
         callee_expr: Option<AnyNodeRef>,
         callee_type: Option<&Type>,
         return_type: ScalarTypeProperties,
@@ -2321,7 +2320,7 @@ impl<'a> CallGraphVisitor<'a> {
                 }
                 _ => CallCallees::new_unresolved(UnresolvedReason::UnexpectedPyreflyTarget),
             },
-            Some(CallTargetLookup::Error(targets)) => {
+            Some(CallTargetLookup::Error(_, targets)) => {
                 if targets.is_empty() {
                     debug_println!(
                         self.debug,

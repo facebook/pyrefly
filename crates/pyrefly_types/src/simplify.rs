@@ -369,7 +369,7 @@ fn collapse_tuple_unions_with_empty(types: &mut Vec<Type>, heap: &TypeHeap) {
                 empty_is_redundant = true;
             }
             Type::Tuple(Tuple::Unpacked(unpacked)) => {
-                let (prefix, middle, suffix) = &**unpacked;
+                let (prefix, middle, suffix) = unpacked.parts();
                 if prefix.len() + suffix.len() == 1
                     && let Type::Tuple(Tuple::Unbounded(elem)) = middle
                     && prefix
@@ -498,7 +498,7 @@ pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
     match tuple {
         Tuple::Concrete(elts) => Tuple::Concrete(flatten_unpacked_concrete_tuples(elts)),
         Tuple::Unpacked(unpacked) => {
-            let (prefix, middle, suffix) = *unpacked;
+            let (prefix, middle, suffix) = unpacked.into_parts();
             if prefix.is_empty()
                 && suffix.is_empty()
                 && let Type::Tuple(middle) = middle
@@ -516,7 +516,7 @@ pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
                     ))
                 }
                 Type::Tuple(Tuple::Unpacked(m_unpacked)) => {
-                    let (m_prefix, m_middle, m_suffix) = *m_unpacked;
+                    let (m_prefix, m_middle, m_suffix) = m_unpacked.into_parts();
                     let mut new_prefix = flatten_unpacked_concrete_tuples(prefix);
                     new_prefix.extend(flatten_unpacked_concrete_tuples(m_prefix));
                     let mut new_suffix = flatten_unpacked_concrete_tuples(m_suffix);
@@ -572,7 +572,7 @@ fn collect_tuple_elements(tuple: &Tuple, heap: &TypeHeap, out: &mut Vec<Type>) {
             out.push((**elem).clone());
         }
         Tuple::Unpacked(unpacked) => {
-            let (prefix, middle, suffix) = unpacked.as_ref();
+            let (prefix, middle, suffix) = unpacked.parts();
             for elt in prefix {
                 collect_tuple_member(elt, heap, out);
             }
