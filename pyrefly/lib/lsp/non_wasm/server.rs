@@ -1730,9 +1730,13 @@ impl Server {
             } else {
                 let path = path.absolutize();
                 let version = version_info.get(&path).copied();
-                match Url::from_file_path(&path) {
-                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, version, source),
-                    Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
+                if let Some(uri) = self.unsaved_file_tracker.uri_for_path(&path) {
+                    self.publish_diagnostics_for_uri(uri, diags, version, source)
+                } else {
+                    match Url::from_file_path(&path) {
+                        Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, version, source),
+                        Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
+                    }
                 }
             }
         }
