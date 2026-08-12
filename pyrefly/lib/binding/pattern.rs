@@ -47,6 +47,15 @@ use crate::export::special::SpecialExport;
 use crate::types::facet::UnresolvedFacetChain;
 use crate::types::facet::UnresolvedFacetKind;
 
+/// A case always matches only when its pattern is irrefutable for the subject and it has no guard.
+pub(crate) fn match_case_always_matches(
+    pattern: &Pattern,
+    subject: &Expr,
+    guard: Option<&Expr>,
+) -> bool {
+    guard.is_none() && Ast::pattern_is_irrefutable_for_subject(pattern, subject)
+}
+
 #[derive(Clone, Debug)]
 enum MatchSubject {
     /// No narrowing subject available.
@@ -895,9 +904,9 @@ impl<'a> BindingsBuilder<'a> {
                 ..
             } = case;
             self.start_branch();
-            let case_is_irrefutable =
-                Ast::pattern_is_irrefutable_for_subject(&pattern, &subject_expr);
-            if case_is_irrefutable {
+            let case_always_matches =
+                match_case_always_matches(&pattern, &subject_expr, guard.as_deref());
+            if case_always_matches {
                 exhaustive = true;
             }
             self.bind_narrow_ops(

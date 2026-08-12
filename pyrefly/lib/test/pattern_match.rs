@@ -270,6 +270,17 @@ def foo(x: Literal['A'] | Literal['B']):
 );
 
 testcase!(
+    test_guarded_irrefutable_pattern_is_not_exhaustive,
+    r#"
+def f(x: int, guard: bool) -> int:
+    match x:
+        case _ if guard:
+            return 1
+    return 2
+    "#,
+);
+
+testcase!(
     test_negated_exhaustive_class_match,
     r#"
 from typing import assert_type

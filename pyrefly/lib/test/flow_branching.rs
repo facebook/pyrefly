@@ -533,6 +533,10 @@ def test2(x: int) -> int:  # E: Function declared to return `int`, but one or mo
     match x:
         case 1:
             return 1
+def test3(x: int, guard: bool) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
+    match x:
+        case _ if guard:
+            return 1
 "#,
 );
 
