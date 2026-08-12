@@ -39,15 +39,19 @@ class single(float): pass
 
 /// Resolve the `fixtures/` directory from the current working directory.
 ///
-/// Buck and cargo run tests from different roots, so we try several candidate
-/// paths. The function panics if none of the candidates exist.
+/// Under Buck the `CINDERX_TEST_PATH` env var holds a project-relative path,
+/// which we join onto the current directory (the project root). Cargo does not
+/// set it, so we fall back to trying several candidate paths. The function
+/// panics if none of the candidates exist.
 fn fixtures_dir() -> std::path::PathBuf {
     let cwd = std::env::current_dir().expect("cwd should be available");
-    let mut candidates = vec![
-        cwd.join("pyrefly/pyrefly/lib/test/cinderx/fixtures"),
-        cwd.join("pyrefly/lib/test/cinderx/fixtures"),
-        cwd.join("lib/test/cinderx/fixtures"),
-    ];
+    let mut candidates = Vec::new();
+    if let Ok(cinderx_test_path) = std::env::var("CINDERX_TEST_PATH") {
+        candidates.push(cwd.join(cinderx_test_path));
+    }
+    candidates.push(cwd.join("pyrefly/pyrefly/lib/test/cinderx/fixtures"));
+    candidates.push(cwd.join("pyrefly/lib/test/cinderx/fixtures"));
+    candidates.push(cwd.join("lib/test/cinderx/fixtures"));
     if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
         candidates.push(std::path::Path::new(manifest_dir).join("lib/test/cinderx/fixtures"));
     }
