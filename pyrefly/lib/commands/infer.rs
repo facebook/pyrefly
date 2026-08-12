@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -23,6 +24,7 @@ use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextSize;
 
+use crate::annotation::format_annotation;
 use crate::commands::check::Handles;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
@@ -32,7 +34,6 @@ use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::types::class::Class;
-use crate::types::display::TypeDisplayContext;
 use crate::types::heap::TypeHeap;
 use crate::types::simplify::unions_with_literals;
 use crate::types::stdlib::Stdlib;
@@ -220,7 +221,16 @@ fn format_hints(
         if contains_self_type {
             hint_imports.push((ModuleName::typing(), "Self".to_owned()));
         }
-        let formatted_hint = hint_to_string(hint, stdlib, enum_members, heap);
+        let mut typing_imports = BTreeSet::new();
+        let mut uses_incomplete = false;
+        let formatted_hint = hint_to_string(
+            hint,
+            stdlib,
+            enum_members,
+            heap,
+            &mut typing_imports,
+            &mut uses_incomplete,
+        );
         // TODO: Put these behind a flag
         if formatted_hint.contains("Any") {
             continue;
@@ -237,12 +247,20 @@ fn format_hints(
         if formatted_hint.contains("Overload") {
             continue;
         }
+        if uses_incomplete {
+            continue;
+        }
         if formatted_hint == "None" && kind == AnnotationKind::Parameter {
             continue;
         }
         if !is_container && kind == AnnotationKind::Variable {
             continue;
         }
+        needed_imports.extend(
+            typing_imports
+                .into_iter()
+                .map(|name| (ModuleName::typing(), name.to_owned())),
+        );
         // Only record imports for types that pass all filters above
         needed_imports.extend(hint_imports);
         match kind {
@@ -274,6 +292,8 @@ fn hint_to_string(
     stdlib: &Stdlib,
     enum_members: &dyn Fn(&Class) -> Option<usize>,
     heap: &TypeHeap,
+    typing_imports: &mut BTreeSet<&'static str>,
+    uses_incomplete: &mut bool,
 ) -> String {
     let hint = hint.promote_implicit_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
@@ -281,10 +301,7 @@ fn hint_to_string(
         Type::Union(u) => unions_with_literals(u.members, stdlib, enum_members, heap),
         _ => hint,
     };
-    let mut ctx = TypeDisplayContext::new(&[&hint]);
-    ctx.render_self_type_as_self();
-    ctx.strip_library_schemas();
-    ctx.display(&hint).to_string()
+    format_annotation(&hint, typing_imports, uses_incomplete)
 }
 
 impl InferArgs {
@@ -967,6 +984,14 @@ def swallow(fn):
     fn()
 
 swallow(Runner().run)
+
+def maybe_callback(flag: bool):
+    if flag:
+        return lambda: 1
+    return None
+
+def callbacks():
+    return [lambda: 1]
 "#,
             r#"from typing import Callable
 def call_it(fn: Callable[[], int]):
@@ -987,6 +1012,14 @@ def swallow(fn: Callable[[], None]) -> None:
     fn()
 
 swallow(Runner().run)
+
+def maybe_callback(flag: bool):
+    if flag:
+        return lambda: 1
+    return None
+
+def callbacks():
+    return [lambda: 1]
 "#,
             None,
         );
