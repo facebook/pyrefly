@@ -11,12 +11,9 @@
  * file contains the implementations of a few special calls that need to be hard-coded.
  */
 
-use pyrefly_types::callable::FuncMetadata;
-use pyrefly_types::shaped_array::ShapedArrayShape;
-use pyrefly_types::shaped_array::ShapedArrayType;
-use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_python::dunder;
 use pyrefly_types::shaped_array::IntTuple;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
