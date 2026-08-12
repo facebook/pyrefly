@@ -895,6 +895,16 @@ impl Param {
         }
     }
 
+    /// Convert a positional-or-keyword parameter to keyword-only.
+    pub fn passed_by_name(&self) -> Self {
+        match self {
+            Param::Pos(name, ty, required) => {
+                Param::KwOnly(name.clone(), ty.clone(), required.clone())
+            }
+            param => param.clone(),
+        }
+    }
+
     pub fn is_required(&self) -> bool {
         match self {
             Param::PosOnly(_, _, Required::Required)
