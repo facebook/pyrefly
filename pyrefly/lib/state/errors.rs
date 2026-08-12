@@ -5,9 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
@@ -34,9 +36,12 @@ use starlark_map::small_set::SmallSet;
 
 use crate::config::config::ConfigFile;
 use crate::error::baseline::BaselineProcessor;
+use crate::error::baseline::TrackedBaselineProcessor;
+use crate::error::baseline::normalize_baseline_path;
 use crate::error::collector::CollectedErrors;
 use crate::error::error::Error;
 use crate::error::expectation::Expectation;
+use crate::error::legacy::BaselineError;
 use crate::error::style::ErrorStyle;
 use crate::state::load::Load;
 
@@ -305,21 +310,56 @@ impl Errors {
         errors
     }
 
-    /// Apply baseline filtering to already-collected errors.
+    /// Apply baseline filtering to already-collected errors in place.
     /// `relative_to` is the resolved `--relative-to` directory so that
     /// relative paths stored in the baseline file are resolved correctly.
+    ///
+    /// When `classify_stale_entries` is true, returns the number of baseline entries
+    /// that are definitely unused together with all entries that should be retained.
+    /// Ordinary checks skip that filesystem work and return empty maintenance data.
+    ///
+    /// A baseline path that exists but cannot be read or parsed is a hard error
+    /// rather than being silently ignored, so a corrupt baseline surfaces instead
+    /// of behaving as if no baseline were configured. Callers that regenerate the
+    /// baseline from scratch (i.e. `--update-baseline`) may choose to ignore this.
     pub fn apply_baseline(
         &self,
-        mut errors: CollectedErrors,
+        errors: &mut CollectedErrors,
         baseline_path: Option<&Path>,
         relative_to: &Path,
-    ) -> CollectedErrors {
+        classify_stale_entries: bool,
+    ) -> anyhow::Result<(usize, Vec<BaselineError>)> {
+        let mut unused_baseline_entries = 0;
+        let mut retained_baseline_entries = Vec::new();
         if let Some(baseline_path) = baseline_path
-            && let Ok(processor) = BaselineProcessor::from_file(baseline_path, relative_to)
+            && baseline_path.exists()
         {
-            processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
+            if classify_stale_entries {
+                let mut processor = TrackedBaselineProcessor::from_file(baseline_path, relative_to)
+                    .with_context(|| {
+                        format!("failed to read baseline file `{}`", baseline_path.display())
+                    })?;
+                processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
+                let checked_paths: HashSet<_> = self
+                    .loads
+                    .iter()
+                    .filter(|(load, _, _)| load.errors.style() != ErrorStyle::Never)
+                    .map(|(load, _, _)| {
+                        normalize_baseline_path(load.module_info.path().as_path(), relative_to)
+                    })
+                    .collect();
+                let result = processor.into_pruning_result(&checked_paths);
+                unused_baseline_entries = result.unused_entry_count;
+                retained_baseline_entries = result.retained_entries;
+            } else {
+                let processor = BaselineProcessor::from_file(baseline_path, relative_to)
+                    .with_context(|| {
+                        format!("failed to read baseline file `{}`", baseline_path.display())
+                    })?;
+                processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
+            }
         }
-        errors
+        Ok((unused_baseline_entries, retained_baseline_entries))
     }
 
     /// Collect display errors for the language server, partitioned by whether or not they

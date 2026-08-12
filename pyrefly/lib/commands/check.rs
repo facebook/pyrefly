@@ -26,6 +26,7 @@ use anstream::stderr;
 use anstream::stdout;
 use anyhow::Context as _;
 use anyhow::bail;
+use anyhow::ensure;
 use clap::Parser;
 use clap::ValueEnum;
 use dupe::Dupe as _;
@@ -64,6 +65,7 @@ use ruff_text_size::Ranged;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
 
 use self::sarif::write_error_sarif_to_console;
@@ -379,8 +381,17 @@ struct OutputArgs {
     baseline: Option<PathBuf>,
 
     /// When specified, emit a sorted/formatted JSON of the errors to the baseline file
-    #[arg(long)]
+    #[arg(long, group = "baseline_action")]
     update_baseline: bool,
+
+    /// Rewrite the baseline file to drop stale entries without recording new errors.
+    /// Existing entries for files outside the current check are retained.
+    #[arg(long, group = "baseline_action")]
+    prune_baseline: bool,
+
+    /// Exit with a non-zero status when the checked scope makes baseline entries stale.
+    #[arg(long, group = "baseline_action")]
+    error_stale_baseline: bool,
 
     /// Minimum severity level for errors to be displayed.
     /// Errors below this severity will not be shown. Defaults to "error".
@@ -647,16 +658,18 @@ fn write_error_json_to_file(
         .with_context(|| format!("while writing JSON errors to `{}`", path.display()))
 }
 
-fn write_baseline_to_file(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
-    fn f(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+fn write_baseline_errors_to_file(path: &Path, errors: &BaselineErrors) -> anyhow::Result<()> {
+    fn f(path: &Path, errors: &BaselineErrors) -> anyhow::Result<()> {
         let mut writer = BufWriter::new(File::create(path)?);
-        let baseline = BaselineErrors::from_errors(relative_to, errors);
-        serde_json::to_writer_pretty(&mut writer, &baseline)?;
+        serde_json::to_writer_pretty(&mut writer, errors)?;
         writer.flush()?;
         Ok(())
     }
-    f(path, relative_to, errors)
-        .with_context(|| format!("while writing baseline to `{}`", path.display()))
+    f(path, errors).with_context(|| format!("while writing baseline to `{}`", path.display()))
+}
+
+fn write_baseline_to_file(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    write_baseline_errors_to_file(path, &BaselineErrors::from_errors(relative_to, errors))
 }
 
 fn write_error_json_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
@@ -1390,13 +1403,36 @@ impl CheckArgs {
         require: Require,
         upsell: UpsellDecision,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
-        let baseline_path = if self.output.update_baseline {
-            Some(self.output.baseline.as_ref().context(
-                "`--update-baseline` requires a baseline file set by `--baseline` or configuration",
-            )?)
+        // Baseline maintenance actions are mutually exclusive.
+        let baseline_action = if self.output.update_baseline {
+            Some("--update-baseline")
+        } else if self.output.prune_baseline {
+            Some("--prune-baseline")
+        } else if self.output.error_stale_baseline {
+            Some("--error-stale-baseline")
         } else {
             None
         };
+        if let Some(flag) = baseline_action {
+            ensure!(
+                self.output.baseline.is_some(),
+                "`{flag}` requires a baseline file set by `--baseline` or configuration"
+            );
+        }
+        // `--update-baseline` regenerates the baseline from the current run, so a
+        // missing file is fine. The other actions operate on the existing baseline,
+        // so a missing file is a user error (typically a
+        // wrong `--baseline` path) rather than a silent success.
+        if let Some(flag) = baseline_action
+            && !self.output.update_baseline
+            && let Some(baseline_path) = self.output.baseline.as_deref()
+        {
+            ensure!(
+                baseline_path.exists(),
+                "`{flag}` requires an existing baseline file, but `{}` does not exist",
+                baseline_path.display()
+            );
+        }
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         if let Some(pysa_directory) = &self.output.report_pysa {
@@ -1465,11 +1501,27 @@ impl CheckArgs {
         // Pass pre-collected errors to avoid redundant error collection.
         let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display(&collected);
         collected.ordinary.extend(unused_ignore_errors.ordinary);
-        let errors = loads.apply_baseline(
-            collected,
+        let (unused_baseline_entries, retained_baseline_entries) = match loads.apply_baseline(
+            &mut collected,
             self.output.baseline.as_deref(),
             relative_to.as_path(),
-        );
+            self.output.prune_baseline || self.output.error_stale_baseline,
+        ) {
+            Ok(result) => result,
+            // `--update-baseline` regenerates the baseline from the current run, so
+            // a missing or unreadable existing baseline is not fatal. Log the
+            // discarded error so a genuinely broken environment (e.g. a permission
+            // error) leaves a trace rather than silently surfacing later as an
+            // unrelated write failure.
+            Err(e) if self.output.update_baseline => {
+                debug!(
+                    "ignoring unreadable baseline while regenerating it with `--update-baseline`: {e:#}"
+                );
+                (0, Vec::new())
+            }
+            Err(e) => return Err(e),
+        };
+        let errors = collected;
         let (directives, ordinary_errors) = if let Some(only) = &self.output.only {
             let only = only.iter().collect::<SmallSet<_>>();
             (
@@ -1519,16 +1571,19 @@ impl CheckArgs {
 
         // We update the baseline file if requested, after reporting any new
         // errors using the old baseline. Directives are structurally excluded
-        // — they live in `directives`, not `ordinary_errors`. The baseline only
-        // tracks errors that meet the min-severity threshold.
-        if let Some(baseline_path) = baseline_path {
-            let mut new_baseline = ordinary_errors.clone();
-            new_baseline.extend(
-                errors
-                    .baseline
-                    .into_iter()
-                    .filter(|e| e.severity() >= min_severity),
-            );
+        // — they live in `directives`, not `ordinary_errors`.
+        // `--prune-baseline` rewrites the file only when there is something to drop.
+        let rewriting_baseline = self.output.prune_baseline && unused_baseline_entries > 0;
+        if self.output.update_baseline {
+            let baseline_path = self
+                .output
+                .baseline
+                .as_ref()
+                .expect("a baseline action requires a baseline path");
+            // The baseline only tracks errors that meet the min-severity threshold.
+            let mut new_baseline = errors.baseline;
+            new_baseline.retain(|e| e.severity() >= min_severity);
+            new_baseline.extend(ordinary_errors.iter().cloned());
             new_baseline.sort_by_cached_key(|error| {
                 (
                     error.path().to_string(),
@@ -1538,6 +1593,36 @@ impl CheckArgs {
                 )
             });
             write_baseline_to_file(baseline_path, relative_to.as_path(), &new_baseline)?;
+        } else if rewriting_baseline {
+            let baseline_path = self
+                .output
+                .baseline
+                .as_ref()
+                .expect("a baseline action requires a baseline path");
+            write_baseline_errors_to_file(
+                baseline_path,
+                &BaselineErrors {
+                    errors: retained_baseline_entries,
+                },
+            )?;
+        }
+        if rewriting_baseline {
+            info!(
+                "Removed {} from the baseline file",
+                count(unused_baseline_entries, "unused suppression")
+            );
+        } else if self.output.prune_baseline {
+            // `--prune-baseline` was requested but there was nothing to drop, so no
+            // file was rewritten. Confirm the no-op so scripted/CI runs are not left
+            // wondering whether the flag took effect.
+            info!("Baseline file has no unused suppressions to remove");
+        }
+        let stale_baseline = self.output.error_stale_baseline && unused_baseline_entries > 0;
+        if stale_baseline {
+            error!(
+                "Baseline file has {}; rerun with `--prune-baseline` to update it",
+                count(unused_baseline_entries, "unused suppression")
+            );
         }
 
         // Directives always display, but only affect the exit code when they
@@ -1731,7 +1816,7 @@ impl CheckArgs {
         if self.behavior.expectations {
             loads.check_against_expectations()?;
             Ok((CommandExitStatus::Success, output_errors))
-        } else if diagnostics_count > 0 {
+        } else if diagnostics_count > 0 || stale_baseline {
             Ok((CommandExitStatus::UserError, output_errors))
         } else {
             Ok((CommandExitStatus::Success, output_errors))
