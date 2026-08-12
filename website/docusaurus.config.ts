@@ -431,11 +431,6 @@ const config: Config = {
                     ],
                 },
             ],
-            logo: {
-                alt: 'Meta Open Source Logo',
-                src: 'img/meta_open_source_logo.svg',
-                href: 'https://opensource.fb.com/',
-            },
             // Please do not remove the credits, help to publicize Docusaurus :)
             copyright: `Copyright © ${new Date().getFullYear()} Meta Platforms, Inc. Built with Docusaurus.`,
         },
