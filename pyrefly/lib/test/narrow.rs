@@ -2007,6 +2007,179 @@ def lookup_resource(registry: dict[str, str]) -> str | None:
 "#,
 );
 
+testcase!(
+    bug = "Named builtin containers do not narrow membership by element type",
+    test_in_named_builtin_container_narrows_element_type,
+    r#"
+from collections import deque
+from typing import assert_type
+
+def test_set(x: str | None, values: set[str]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+
+def test_frozenset(x: str | None, values: frozenset[str]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+
+def test_list(x: str | None, values: list[str]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+
+def test_deque(x: str | None, values: deque[str]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+"#,
+);
+
+testcase!(
+    test_in_arbitrary_contains_preserves_input_type,
+    r#"
+from collections.abc import Container, Iterable, Iterator, Sequence, Set as AbstractSet
+from typing import assert_type
+
+class StringContainer(Container[str]):
+    def __contains__(self, value: object) -> bool:
+        return True
+
+class StringIterable(Iterable[str]):
+    def __iter__(self) -> Iterator[str]: ...
+
+    def __contains__(self, value: object) -> bool:
+        return True
+
+def test_sequence(x: str | None, values: Sequence[str]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+
+def test_abstract_set(x: str | None, values: AbstractSet[str]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+
+def test_custom_iterable(x: str | None, values: StringIterable) -> None:
+    if x in values:
+        assert_type(x, str | None)
+
+def test_custom_container(x: str | None, values: StringContainer) -> None:
+    if x in values:
+        assert_type(x, str | None)
+"#,
+);
+
+testcase!(
+    test_in_bytes_preserves_supported_operand_types,
+    r#"
+from typing import assert_type
+
+def test_bytes(x: bytes | int, values: bytes) -> None:
+    if x in values:
+        assert_type(x, bytes | int)
+"#,
+);
+
+testcase!(
+    test_in_named_mapping_and_tuple_narrowing,
+    r#"
+from typing import assert_type
+
+def test_mapping_control(x: str | None, values: dict[str, int]) -> None:
+    if x in values:
+        assert_type(x, str)
+
+def test_tuple_control(x: str | None, values: tuple[str, ...]) -> None:
+    if x in values:
+        assert_type(x, str)
+"#,
+);
+
+testcase!(
+    bug = "Named container membership does not narrow control flow",
+    test_in_named_container_control_flow,
+    r#"
+from collections.abc import Container
+from typing import assert_type
+
+def test_not_in(x: str | None, values: set[str]) -> None:
+    if x not in values:
+        assert_type(x, str | None)
+    else:
+        assert_type(x, str | None)
+
+def test_union_element(x: str | int | None, values: set[str | int]) -> None:
+    if x in values:
+        assert_type(x, str | int | None)
+
+def test_nullable_element(x: str | None, values: Container[str | None]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+"#,
+);
+
+// assert_type treats gradual Any alternatives as equivalent.
+testcase!(
+    test_in_named_container_preserves_gradual_types,
+    r#"
+from collections.abc import Container
+from typing import Any, Generic, TypeVar, assert_type, reveal_type
+
+T = TypeVar("T")
+
+class Task(Generic[T]):
+    def result(self) -> T: ...
+
+def test_any_element(x: str | None, values: Container[Any]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+
+def test_nested_any(event_task: Task[Any], bool_task: Task[bool]) -> None:
+    done = {event_task, bool_task}
+    if event_task not in done:
+        return
+    reveal_type(event_task)  # E: Task[Any]
+"#,
+);
+
+testcase!(
+    bug = "Named container narrowing does not account for equality",
+    test_in_named_container_respects_equality,
+    r#"
+from typing import Generic, Literal, LiteralString, NewType, TypeVar, assert_type
+
+ObjectId = NewType("ObjectId", bytes)
+T = TypeVar("T")
+
+class GenericId(int, Generic[T]):
+    pass
+
+class User:
+    pass
+
+def test_newtype(x: bytes | None, values: set[ObjectId]) -> None:
+    if x in values:
+        assert_type(x, bytes | None)
+
+def test_builtin_subclass(x: int | None, values: set[GenericId[User]]) -> None:
+    if x in values:
+        assert_type(x, int | None)
+
+def test_numeric(x: float | None, values: set[int]) -> None:
+    if x in values:
+        assert_type(x, float | None)
+
+def test_bool(x: bool | None, values: set[int]) -> None:
+    if x in values:
+        assert_type(x, bool | None)
+
+def test_literal(x: str | None, values: set[Literal["x"]]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+
+def test_literal_string(x: str | None, values: set[LiteralString]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+"#,
+);
+
 // Make sure we catch illegal arguments to isinstance and issubclass even when we aren't narrowing.
 testcase!(
     test_validate_class_object_no_narrow,
