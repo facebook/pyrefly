@@ -2142,3 +2142,134 @@ class C:
         assert_type(self.x, defaultdict[Any, frozenset[Any]])
     "#,
 );
+
+// `Want(1, 2)` fills `got`'s `pos` and `lower`, while `Want(lower=1, upper=2)` fills its
+// `lower` and `upper`: a non-constant mapping. See https://github.com/python/typing/issues/2224.
+testcase!(
+    test_non_constant_param_mapping,
+    r#"
+from typing import Protocol
+
+class Want(Protocol):
+    def __call__(self, lower: int, upper: int) -> None: ...
+
+def got(pos: str | int | None = None, /, lower: int | None = None, upper: int | None = None) -> None: ...
+ok: Want = got
+    "#,
+);
+
+// Each of these breaks one call to `Want`, so no split of its parameters is assignable.
+testcase!(
+    test_non_constant_param_mapping_negative,
+    r#"
+from typing import Protocol
+
+class Want(Protocol):
+    def __call__(self, lower: int, upper: int) -> None: ...
+
+# `Want(1, 2)` passes `lower` to a slot that rejects `int`.
+def bad_pos_type(pos: str | None = None, /, lower: int | None = None, upper: int | None = None) -> None: ...
+e1: Want = bad_pos_type  # E: is not assignable to `Want`
+
+# `Want(lower=1, upper=2)` has no `lower` to pass by name.
+def no_lower_keyword(lower_pos: int | None = None, /, upper: int | None = None) -> None: ...
+e2: Want = no_lower_keyword  # E: is not assignable to `Want`
+
+# `Want(lower=1, upper=2)` leaves the required `pos` unfilled.
+def required_pos(pos: int, /, lower: int | None = None, upper: int | None = None) -> None: ...
+e3: Want = required_pos  # E: is not assignable to `Want`
+
+# `Want(1, upper=2)` would pass two values for `upper`.
+def swapped(upper: int | None = None, lower: int | None = None) -> None: ...
+e4: Want = swapped  # E: is not assignable to `Want`
+    "#,
+);
+
+// Parameter names need not match: `Want(1)` fills `b`, and `Want(a=1)` lands in `**kwargs`.
+testcase!(
+    test_non_constant_param_mapping_kwargs,
+    r#"
+from typing import Protocol
+
+class Want(Protocol):
+    def __call__(self, a: int) -> None: ...
+
+def got(b: int = 0, **kwargs: int) -> None: ...
+ok: Want = got
+
+# Without `**kwargs`, `Want(a=1)` has nowhere to go.
+def no_kwargs(b: int = 0) -> None: ...
+e: Want = no_kwargs  # E: is not assignable to `Want`
+    "#,
+);
+
+// A split that fails must not leak the type variables it pinned on the way: `T` is solved by
+// `v`, not by the `**kwargs: str` that the by-name split matched `a` against.
+testcase!(
+    test_non_constant_param_mapping_no_var_leak,
+    r#"
+from typing import Protocol, assert_type
+
+class Want[T](Protocol):
+    def __call__(self, a: T, b: int) -> None: ...
+
+def use[T](w: Want[T], v: T) -> T: ...
+
+def got(x: int = 0, **kwargs: str) -> None: ...
+assert_type(use(got, 1), int)  # E: is not assignable to parameter `w`
+    "#,
+);
+
+// A name mismatch is only the reason for failure when the by-name call form is what fails.
+testcase!(
+    test_non_constant_param_mapping_error_cause,
+    r#"
+from typing import Protocol
+
+class Want(Protocol):
+    def __call__(self, a: int, b: int) -> None: ...
+
+# `Want(a=1, b=2)` and `Want(1, b=2)` both work, so the reason is `Want(1, 2)` passing an `int`
+# to `y: str`, not the `x`/`a` mismatch.
+def late_type_error(x: int = 0, y: str = "", **kwargs: int) -> None: ...
+e1: Want = late_type_error  # E: is not assignable to `Want` # !E: Positional parameter name mismatch
+
+# `Want(a=1, b=2)` cannot be satisfied at all, so the mismatch is the reason.
+def swapped_names(b: int = 0, a: str = "") -> None: ...
+e2: Want = swapped_names  # E: Positional parameter name mismatch: got `b`, want `a`
+    "#,
+);
+
+// `Want`'s callers pass only keywords, so the required `pos` can never be filled.
+testcase!(
+    test_unmatched_required_pos_only,
+    r#"
+from typing import Protocol
+
+class Want(Protocol):
+    def __call__(self, *, lower: int, upper: int) -> None: ...
+
+def got(pos: int, /, lower: int | None = None, upper: int | None = None) -> None: ...
+e: Want = got  # E: is not assignable to `Want`
+    "#,
+);
+
+// A by-name split strands `Want`'s `*args` where no argument can reach it, which
+// is harmless because the split that passes `a` positionally still checks `*args`.
+testcase!(
+    test_split_strands_varargs,
+    r#"
+from typing import Protocol
+
+class Want(Protocol):
+    def __call__(self, a: int, *args: int) -> None: ...
+
+# `Want(a=1)` reaches `**kwargs`, and `Want(1, 2)` reaches `b` and `*args`.
+def got(b: int = 0, *args: int, **kwargs: int) -> None: ...
+ok: Want = got
+
+# `Want(1, 2)` passes an `int` to `*args: str`.
+def bad_varargs(b: int = 0, *args: str, **kwargs: int) -> None: ...
+e: Want = bad_varargs  # E: is not assignable to `Want`
+    "#,
+);
