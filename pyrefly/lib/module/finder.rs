@@ -1321,6 +1321,62 @@ mod tests {
     }
 
     #[test]
+    fn test_typed_namespace_overlays_later_regular_package() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "site_packages",
+                    vec![TestPath::dir(
+                        "a",
+                        vec![TestPath::file("py.typed"), TestPath::file("b.pyi")],
+                    )],
+                ),
+                TestPath::dir(
+                    "editable_source",
+                    vec![TestPath::dir("a", vec![TestPath::file("__init__.py")])],
+                ),
+            ],
+        );
+        let roots = [root.join("site_packages"), root.join("editable_source")];
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                &DirEntryCache::new(),
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("editable_source/a/__init__.py")
+            ))
+        );
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.b"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                &DirEntryCache::new(),
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("site_packages/a/b.pyi")))
+        );
+    }
+
+    #[test]
     fn test_legacy_namespace_package_then_regular_package() {
         // Once `find_one_part` enters LegacyNamespacePackage (LNP) mode
         // (root0 has an extend_path __init__.py), a *regular* package in

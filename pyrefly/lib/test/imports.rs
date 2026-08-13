@@ -1873,6 +1873,45 @@ fn test_pkgutil_namespace_absorbs_implicit_namespace() {
         .unwrap();
 }
 
+#[test]
+fn test_editable_install_generated_stub_overlay() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("site_packages/package")).unwrap();
+    std::fs::create_dir_all(root.join("editable_source/package")).unwrap();
+    std::fs::write(root.join("site_packages/package/py.typed"), "").unwrap();
+    std::fs::write(
+        root.join("site_packages/package/_core.pyi"),
+        "def add(a: int, b: int) -> int: ...\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("editable_source/package/__init__.py"),
+        "from package._core import add\n",
+    )
+    .unwrap();
+
+    let mut env = TestEnv::new().with_site_package_paths(vec![
+        root.join("site_packages"),
+        root.join("editable_source"),
+    ]);
+    env.add_with_path(
+        "main",
+        "main.py",
+        r#"
+from package import add
+
+add("hello", "world")  # E: Argument `Literal['hello']` is not assignable to parameter `a` with type `int` # E: Argument `Literal['world']` is not assignable to parameter `b` with type `int`
+"#,
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
 // ----------------------------------------------------------------------------
 // Cross-module class rebind tests: importers should observe whichever class
 // the visible result chose. See `assign.rs` for the same-module regressions.
