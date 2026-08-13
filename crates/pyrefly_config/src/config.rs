@@ -75,6 +75,7 @@ use crate::finder::ConfigError;
 use crate::migration::run::MigratedFromKind;
 use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
+use crate::util::ConfigOrigin;
 
 pub static GENERATED_FILE_CONFIG_OVERRIDE: LazyLock<
     RwLock<SmallMap<InternedPath, ArcId<ConfigFile>>>,
@@ -703,6 +704,7 @@ impl Default for ConfigFile {
             interpreters: Interpreters {
                 python_interpreter_path: None,
                 fallback_python_interpreter_name: None,
+                python_interpreter_find_cmd: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -1346,6 +1348,19 @@ impl ConfigFile {
         // file or CLI flag). If not, we auto-discover a `typings/` directory below.
         let site_package_path_set = self.python_environment.site_package_path.is_some();
 
+        if self.interpreters.python_interpreter_find_cmd.is_some()
+            && (matches!(
+                self.interpreters.python_interpreter_path,
+                Some(ConfigOrigin::CommandLine(_) | ConfigOrigin::ConfigFile(_))
+            ) || self.interpreters.fallback_python_interpreter_name.is_some()
+                || self.interpreters.conda_environment.is_some()
+                || self.interpreters.skip_interpreter_query)
+        {
+            configure_errors.push(anyhow::anyhow!(
+                "`python-interpreter-find-cmd` cannot be combined with another interpreter selection option."
+            ));
+        }
+
         if self.interpreters.skip_interpreter_query {
             self.python_environment.set_empty_to_default();
         } else {
@@ -1608,6 +1623,7 @@ impl ConfigFile {
 
         if self.interpreters.python_interpreter_path.is_some()
             && self.interpreters.conda_environment.is_some()
+            && self.interpreters.python_interpreter_find_cmd.is_none()
         {
             configure_errors.push(anyhow::anyhow!(
                      "Cannot use both `python-interpreter-path` and `conda-environment`. Finding environment info using `python-interpreter-path`.",
@@ -2017,6 +2033,7 @@ mod tests {
                         "venv/my/python"
                     ))),
                     fallback_python_interpreter_name: None,
+                    python_interpreter_find_cmd: None,
                     conda_environment: None,
                     skip_interpreter_query: false,
                 },
@@ -2391,6 +2408,7 @@ mod tests {
                     interpreter.clone(),
                 ))),
                 fallback_python_interpreter_name: None,
+                python_interpreter_find_cmd: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -2452,6 +2470,7 @@ mod tests {
             interpreters: Interpreters {
                 python_interpreter_path: Some(ConfigOrigin::config(test_path.join(interpreter))),
                 fallback_python_interpreter_name: None,
+                python_interpreter_find_cmd: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -2605,6 +2624,23 @@ output-format = "omit-errors"
     }
 
     #[test]
+    fn test_python_interpreter_find_cmd_config_parsing() {
+        let config = ConfigFile::parse_config(
+            r#"python-interpreter-find-cmd = ["poetry", "env", "info", "-e"]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.interpreters.python_interpreter_find_cmd,
+            Some(vec![
+                "poetry".to_owned(),
+                "env".to_owned(),
+                "info".to_owned(),
+                "-e".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
     fn test_expect_all_fields_set_in_root_config() {
         let root = TempDir::new().unwrap();
         let mut config = ConfigFile::init_at_root(root.path(), &ProjectLayout::default(), false);
@@ -2619,6 +2655,7 @@ output-format = "omit-errors"
             "project-excludes",
             "python-interpreter-path",
             "fallback-python-interpreter-name",
+            "python-interpreter-find-cmd",
             // values we won't be getting
             "extras",
             // values that must be Some (if flattened, their contents will be checked)
@@ -3526,6 +3563,7 @@ output-format = "omit-errors"
             interpreters: Interpreters {
                 python_interpreter_path: Some(ConfigOrigin::config(PathBuf::new())),
                 fallback_python_interpreter_name: None,
+                python_interpreter_find_cmd: None,
                 conda_environment: Some(ConfigOrigin::config("".to_owned())),
                 skip_interpreter_query: false,
             },
@@ -3539,6 +3577,24 @@ output-format = "omit-errors"
                  e.get_message() == "Cannot use both `python-interpreter-path` and `conda-environment`. Finding environment info using `python-interpreter-path`."
              })
          );
+    }
+
+    #[test]
+    fn test_python_interpreter_find_cmd_is_mutually_exclusive() {
+        let mut config = ConfigFile {
+            interpreters: Interpreters {
+                python_interpreter_find_cmd: Some(vec!["ignored".to_owned()]),
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let validation_errors = config.configure();
+        assert!(validation_errors.iter().any(|error| {
+            error.get_message()
+                == "`python-interpreter-find-cmd` cannot be combined with another interpreter selection option."
+        }));
     }
 
     #[test]
@@ -3562,6 +3618,7 @@ output-format = "omit-errors"
             interpreters: Interpreters {
                 python_interpreter_path: Some(ConfigOrigin::config(PathBuf::from("abcd"))),
                 fallback_python_interpreter_name: None,
+                python_interpreter_find_cmd: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
