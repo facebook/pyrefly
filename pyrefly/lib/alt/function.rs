@@ -2527,6 +2527,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &mut |a, b| self.is_subset_eq(a, b),
         )?;
         self.expand_mut(&mut bound);
+        Some(self.normalize_class_constructor_tparams(bound, class_tparams.as_ref()))
+    }
+
+    /// Normalize class type parameters independently for each callable branch in `ty`.
+    fn normalize_class_constructor_tparams(&self, mut ty: Type, class_tparams: &TParams) -> Type {
+        ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+            let mut parameter_tparams = SmallSet::new();
+            callable
+                .params
+                .visit(&mut |ty| ty.collect_quantifieds(&mut parameter_tparams));
+            for q in class_tparams.iter() {
+                if !parameter_tparams.contains(q) {
+                    let gradual = q.as_gradual_type();
+                    callable
+                        .ret
+                        .subst_mut_fn(&mut |candidate| (candidate == q).then(|| gradual.clone()));
+                }
+            }
+        });
+
         fn quantify<T: Visit<Type>>(
             body: &T,
             tparams: Option<&TParams>,
@@ -2546,10 +2566,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Arc::new(TParams::new(quantifieds))
         }
-        Some(match bound {
+
+        match ty {
             Type::Forall(forall) => {
                 let Forall { tparams, body } = *forall;
-                let tparams = quantify(&body, Some(&tparams), &class_tparams);
+                let tparams = quantify(&body, Some(&tparams), class_tparams);
                 body.forall(tparams)
             }
             Type::Overload(Overload {
@@ -2561,7 +2582,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         OverloadType::Function(body) => (body, None),
                         OverloadType::Forall(Forall { tparams, body }) => (body, Some(tparams)),
                     };
-                    let tparams = quantify(&body, tparams.as_deref(), &class_tparams);
+                    let tparams = quantify(&body, tparams.as_deref(), class_tparams);
                     if tparams.is_empty() {
                         OverloadType::Function(body)
                     } else {
@@ -2574,15 +2595,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             }
             Type::Function(body) => {
-                let tparams = quantify(&*body, None, &class_tparams);
+                let tparams = quantify(&*body, None, class_tparams);
                 Forallable::Function(*body).forall(tparams)
             }
             Type::Callable(body) => {
-                let tparams = quantify(&*body, None, &class_tparams);
+                let tparams = quantify(&*body, None, class_tparams);
                 Forallable::Callable(*body).forall(tparams)
             }
-            bound => bound,
-        })
+            ty => ty,
+        }
     }
 
     /// Bind a `__init__` method for constructor callable conversion.

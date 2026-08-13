@@ -21,6 +21,7 @@
  * behavior.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 // Make sure no residual type leaks into user output, when a residual
@@ -399,6 +400,37 @@ class C[T]:
 c2 = identity(C)
 reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
 x: C[int] = c2(1)
+"#,
+);
+
+testcase!(
+    test_overloaded_generic_new_constructor_callable,
+    TestEnv::one_with_path(
+        "constructor_stub",
+        "constructor_stub.pyi",
+        r#"
+from typing import overload
+
+class C[T = str]:
+    @overload
+    def __new__(cls) -> C[T]: ...
+    @overload
+    def __new__(cls, value: T, /) -> C[T]: ...
+"#,
+    ),
+    r#"
+from collections.abc import Callable
+from typing import assert_type
+from constructor_stub import C
+
+def call0[R](ctor: Callable[[], R]) -> R:
+    return ctor()
+
+def identity[**P, R](ctor: Callable[P, R]) -> Callable[P, R]:
+    return ctor
+
+assert_type(call0(C), C[str])
+assert_type(identity(C)(1), C[int])
 "#,
 );
 
