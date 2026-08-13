@@ -807,10 +807,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return None;
         }
-        let ty = self.expr_infer(x, arg_errors);
+        // Probe the context-free type in a throwaway collector: on the fallback path the caller
+        // re-infers `x` into `arg_errors`, so emitting body diagnostics here too would duplicate
+        // them. If the result isn't fully resolved we return `None` and discard the probe, leaving
+        // the caller's re-inference as the sole source of those diagnostics.
+        let probe = self.error_collector();
+        let ty = self.expr_infer(x, &probe);
         if ty.any(|t| t.is_any()) || !ty.collect_maybe_placeholder_vars().is_empty() {
             return None;
         }
+        // Committed to keeping the known element type here, so surface the body diagnostics the
+        // probe found (this path does not re-infer `x`, so they would otherwise be lost).
+        arg_errors.extend(probe);
         self.check_type_with_options(
             &ty,
             hint,

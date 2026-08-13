@@ -2712,3 +2712,16 @@ def call() -> None:
     assert_type(g(0, [lambda x: x for _ in range(1)]), int)
 "#,
 );
+
+// A comprehension deferred during overload resolution still reports errors inside its body when the
+// widening guard keeps its (fully resolved) element type. Guards against dropping those diagnostics.
+testcase!(
+    test_overload_deferred_comprehension_reports_body_errors,
+    r#"
+from collections.abc import Collection
+def need_int(a: int) -> str:
+    return ""
+def validated(emails: Collection[str]) -> list[str]:
+    return list(filter(bool, {need_int() for _ in emails}))  # E: Missing argument `a`
+"#,
+);
