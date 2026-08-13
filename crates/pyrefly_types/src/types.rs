@@ -964,9 +964,6 @@ impl Visit for Type {
             Type::ParamSpec(x) => x.visit(f),
             Type::TypeVarTuple(x) => x.visit(f),
             Type::SpecialForm(x) => x.visit(f),
-            // The ParamSpec tail is a real `Type` (a `Var`, `Quantified`, `ParamSpecValue`, ...),
-            // so it must be visited. `subst`, `collect_quantifieds` and `Solver::resolve_vars` all
-            // reach it only through here; skipping it strands the tail unsubstituted.
             Type::Concatenate(prefix, pspec) => {
                 prefix.visit(f);
                 pspec.visit(f);
@@ -1030,8 +1027,6 @@ impl VisitMut for Type {
             Type::ParamSpec(x) => x.visit_mut(f),
             Type::TypeVarTuple(x) => x.visit_mut(f),
             Type::SpecialForm(x) => x.visit_mut(f),
-            // As in `Visit::recurse`, the ParamSpec tail must be visited or it never gets
-            // substituted or resolved.
             Type::Concatenate(prefix, pspec) => {
                 prefix.visit_mut(f);
                 pspec.visit_mut(f);
