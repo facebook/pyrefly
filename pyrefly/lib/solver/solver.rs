@@ -793,11 +793,10 @@ impl WitnessCaptures {
 }
 
 /// Witness-keyed pruning decisions threaded through finishing.
-#[derive(Clone, Debug, Default)]
-struct OverloadWitnessPruningDecision {
-    surviving_branch_indices: SmallSet<usize>,
-    all_pruned: bool,
-    all_pruned_cause: Option<OverloadAllPrunedCause>,
+#[derive(Clone, Debug)]
+enum OverloadWitnessPruningDecision {
+    AllPruned(OverloadAllPrunedCause),
+    Surviving(SmallSet<usize>),
 }
 
 type OverloadPruningByWitness = HashMap<OverloadResidualIdentity, OverloadWitnessPruningDecision>;
@@ -2304,20 +2303,19 @@ impl Solver {
     ) -> Type {
         let identity = OverloadResidualIdentity { witness_hash };
         let pruning_decision = overload_pruning_by_witness.get(&identity);
-        if pruning_decision.is_some_and(|decision| decision.all_pruned) {
-            // All candidate branches were pruned for this witness.
-            // Return Never immediately and avoid any branch materialization work.
-            return Type::never();
-        }
-        let surviving_branch_indices = pruning_decision
-            .map(|decision| decision.surviving_branch_indices.clone())
-            .unwrap_or_else(|| {
-                branch_captures
-                    .iter()
-                    .filter(|capture| capture.values.contains_key(&var))
-                    .map(|capture| capture.branch_index)
-                    .collect()
-            });
+        let surviving_branch_indices = match pruning_decision {
+            Some(OverloadWitnessPruningDecision::AllPruned(_)) => {
+                // All candidate branches were pruned for this witness.
+                // Return Never immediately and avoid any branch materialization work.
+                return Type::never();
+            }
+            Some(OverloadWitnessPruningDecision::Surviving(indices)) => indices.clone(),
+            None => branch_captures
+                .iter()
+                .filter(|capture| capture.values.contains_key(&var))
+                .map(|capture| capture.branch_index)
+                .collect(),
+        };
         let surviving_branches = branch_captures
             .iter()
             .filter(|capture| surviving_branch_indices.contains(&capture.branch_index))
@@ -2504,17 +2502,14 @@ impl Solver {
                 let surviving_branch_indices = surviving_by_witness?;
                 solved_constraints
                     .sort_by(|left, right| left.quantified_name.cmp(&right.quantified_name));
-                let all_pruned = surviving_branch_indices.is_empty();
-                let all_pruned_cause =
-                    all_pruned.then_some(OverloadAllPrunedCause { solved_constraints });
-                Some((
-                    identity,
-                    OverloadWitnessPruningDecision {
-                        surviving_branch_indices,
-                        all_pruned,
-                        all_pruned_cause,
-                    },
-                ))
+                let decision = if surviving_branch_indices.is_empty() {
+                    OverloadWitnessPruningDecision::AllPruned(OverloadAllPrunedCause {
+                        solved_constraints,
+                    })
+                } else {
+                    OverloadWitnessPruningDecision::Surviving(surviving_branch_indices)
+                };
+                Some((identity, decision))
             })
             .collect()
     }
@@ -2700,12 +2695,9 @@ impl Solver {
             HashMap::new()
         };
         for decision in overload_pruning_by_witness.values() {
-            if !decision.all_pruned {
+            let OverloadWitnessPruningDecision::AllPruned(all_pruned_cause) = decision else {
                 continue;
-            }
-            let all_pruned_cause = decision.all_pruned_cause.as_ref().unwrap_or_else(|| {
-                unreachable!("all-pruned witness diagnostics require solved-type cause")
-            });
+            };
             err.push(TypeVarSpecializationError::IncompatibleOverloadResidual {
                 solved_constraints: all_pruned_cause.solved_constraints.map(|constraint| {
                     (
@@ -2772,39 +2764,33 @@ impl Solver {
                 } else {
                     None
                 };
-                let overload_all_pruned = witness_hash.is_some_and(|wh| {
-                    overload_pruning_by_witness
-                        .get(&OverloadResidualIdentity { witness_hash: wh })
-                        .is_some_and(|decision| decision.all_pruned)
+                let all_pruned_witness = witness_hash.and_then(|witness_hash| {
+                    match overload_pruning_by_witness
+                        .get(&OverloadResidualIdentity { witness_hash })
+                    {
+                        Some(OverloadWitnessPruningDecision::AllPruned(cause)) => {
+                            Some((witness_hash, cause))
+                        }
+                        _ => None,
+                    }
                 });
 
-                if overload_all_pruned {
-                    let witness_hash = witness_hash.expect("all-pruned requires a witness hash");
-                    if reported_all_pruned_witnesses.insert(witness_hash) {
-                        let all_pruned_cause = overload_pruning_by_witness
-                            .get(&OverloadResidualIdentity { witness_hash })
-                            .and_then(|decision| decision.all_pruned_cause.as_ref())
-                            .unwrap_or_else(|| {
-                                unreachable!(
-                                    "all-pruned witness diagnostics require solved-type cause"
-                                )
-                            });
-                        err.push(TypeVarSpecializationError::IncompatibleOverloadResidual {
-                            solved_constraints: all_pruned_cause.solved_constraints.map(
-                                |constraint| {
-                                    (
-                                        constraint.quantified_name.clone(),
-                                        constraint.solved_ty.clone(),
-                                    )
-                                },
-                            ),
-                        });
-                    }
+                if let Some((witness_hash, all_pruned_cause)) = all_pruned_witness
+                    && reported_all_pruned_witnesses.insert(witness_hash)
+                {
+                    err.push(TypeVarSpecializationError::IncompatibleOverloadResidual {
+                        solved_constraints: all_pruned_cause.solved_constraints.map(|constraint| {
+                            (
+                                constraint.quantified_name.clone(),
+                                constraint.solved_ty.clone(),
+                            )
+                        }),
+                    });
                 }
 
                 *e = if let Some(bound) = solved_bound {
                     Variable::Answer(bound)
-                } else if overload_all_pruned {
+                } else if all_pruned_witness.is_some() {
                     Variable::Answer(Type::never())
                 } else if let Some(witness_hash) = witness_hash {
                     let overload_captures =
