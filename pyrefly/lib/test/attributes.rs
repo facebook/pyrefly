@@ -945,6 +945,22 @@ def test(foo: Foo) -> None:
 );
 
 testcase!(
+    test_getattr_does_not_provide_dunder_bool,
+    r#"
+# Implicit dunders like `__bool__` are looked up on the type and are not
+# resolved through `__getattr__`, so a `__getattr__` returning a non-callable
+# type must not make an instance look like it has a non-callable `__bool__`.
+# Regression test for https://github.com/facebook/pyrefly/issues/4467
+class Tensor: ...
+class M:
+    def __getattr__(self, name: str) -> "Tensor | M": ...
+
+def f(x: M | None) -> M:
+    return x or M()
+    "#,
+);
+
+testcase!(
     test_object_setattr_wrong_signature,
     r#"
 from typing import assert_type
