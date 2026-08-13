@@ -701,6 +701,33 @@ assert_type(A() == 42, bool)
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3977.
+testcase!(
+    test_overloaded_eq_preserves_bounded_typevar,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type, overload
+
+ShapeT = TypeVar("ShapeT", bound=tuple[int, ...])
+TypeT = TypeVar("TypeT")
+AnyShape = tuple[Any, ...]
+
+class Array(Generic[ShapeT, TypeT]): ...
+
+def widen_shape(arr: Array[Any, TypeT]) -> Array[AnyShape, TypeT]: ...
+
+class C:
+    @overload
+    def __eq__(self, other: Array[ShapeT, Any]) -> Array[ShapeT, bool]: ...
+    @overload
+    def __eq__(self, other: object) -> bool: ...
+    def __eq__(self, other: object) -> Any: ...
+
+def test(x: C, concrete: Array[tuple[int], str]) -> None:
+    widened = widen_shape(concrete)
+    assert_type(x == widened, Array[AnyShape, bool])
+    "#,
+);
+
 testcase!(
     test_in_generator,
     r#"

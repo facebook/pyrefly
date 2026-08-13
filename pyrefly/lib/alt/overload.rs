@@ -844,7 +844,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // ambiguity in overload selection. This matches pyright, mypy, and ty.
                 let owner = Owner::new();
                 let mut changed = false;
-                let should_materialize = |arg_range| {
+                let should_materialize = |arg_range, top_level_any| {
                     if spec_compliant {
                         return true;
                     }
@@ -855,28 +855,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // If we can't find the expected type, be conservative and assume there may be multiple.
                         return true;
                     };
+                    let mut all_equivalent = true;
+                    let mut only_object_fallbacks = !first.is_any()
+                        && !matches!(first, Type::ClassType(cls) if cls.is_builtin("object"));
                     for t in param_types {
-                        if !self.is_equivalent(first, t) {
-                            return true;
-                        }
+                        let equivalent = self.is_equivalent(first, t);
+                        all_equivalent &= equivalent;
+                        only_object_fallbacks &= equivalent
+                            || matches!(t, Type::ClassType(cls) if cls.is_builtin("object"));
                     }
-                    false
+                    // Mypy and pyright prefer the specific overload when a gradual type nested
+                    // inside the argument makes both it and a later `object` fallback match. Keep
+                    // materializing a top-level `Any`, since that call is genuinely ambiguous.
+                    !all_equivalent && (top_level_any || !only_object_fallbacks)
                 };
                 let materialized_args = args.map(|arg| {
-                    let (materialized_arg, arg_changed) = if should_materialize(arg.range()) {
-                        arg.materialize(self, errors, &owner)
-                    } else {
-                        (arg.clone(), false)
+                    let top_level_any = match arg {
+                        CallArg::Arg(TypeOrExpr::Type(ty, _))
+                        | CallArg::Star(TypeOrExpr::Type(ty, _), _) => ty.is_any(),
+                        CallArg::Arg(TypeOrExpr::Expr(_))
+                        | CallArg::Star(TypeOrExpr::Expr(_), _) => true,
                     };
+                    let (materialized_arg, arg_changed) =
+                        if should_materialize(arg.range(), top_level_any) {
+                            arg.materialize(self, errors, &owner)
+                        } else {
+                            (arg.clone(), false)
+                        };
                     changed |= arg_changed;
                     materialized_arg
                 });
                 let materialized_keywords = keywords.map(|kw| {
-                    let (materialized_kw, kw_changed) = if should_materialize(kw.range()) {
-                        kw.materialize(self, errors, &owner)
-                    } else {
-                        (kw.clone(), false)
+                    let top_level_any = match kw.value {
+                        TypeOrExpr::Type(ty, _) => ty.is_any(),
+                        TypeOrExpr::Expr(_) => true,
                     };
+                    let (materialized_kw, kw_changed) =
+                        if should_materialize(kw.range(), top_level_any) {
+                            kw.materialize(self, errors, &owner)
+                        } else {
+                            (kw.clone(), false)
+                        };
                     changed |= kw_changed;
                     materialized_kw
                 });

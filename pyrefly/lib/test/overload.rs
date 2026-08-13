@@ -1548,6 +1548,40 @@ def g(x: list[Any]):
 );
 
 testcase!(
+    test_nested_any_prefers_over_object_fallback,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: list[int]) -> int: ...
+@overload
+def f(x: object) -> str: ...
+def f(x: object) -> int | str: ...
+
+def g(nested: list[Any], dynamic: Any):
+    assert_type(f(nested), int)
+    assert_type(f(dynamic), Any)
+    "#,
+);
+
+testcase!(
+    test_nested_any_with_object_fallback_spec_compliant,
+    TestEnv::new().enable_spec_compliant_overloads(),
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: list[int]) -> int: ...
+@overload
+def f(x: object) -> str: ...
+def f(x: object) -> int | str: ...
+
+def g(nested: list[Any]):
+    assert_type(f(nested), Any)
+    "#,
+);
+
+testcase!(
     test_callable_param_materialization,
     r#"
 from typing import Any, assert_type, Callable, Never, overload
