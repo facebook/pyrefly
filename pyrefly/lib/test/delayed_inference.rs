@@ -71,6 +71,32 @@ assert_type(x, list[int])
 );
 
 testcase!(
+    tuple_unpack_preserves_independent_first_use_inference,
+    r#"
+from typing import assert_type
+xs, ys = [], []
+xs.append(1)
+ys.append("value")
+assert_type(xs, list[int])
+assert_type(ys, list[str])
+"#,
+);
+
+testcase!(
+    nested_tuple_unpack_preserves_first_use_inference,
+    r#"
+from typing import assert_type
+head, (left, right) = [], ([], [])
+head.append(1)
+left.append("value")
+right.append(b"value")
+assert_type(head, list[int])
+assert_type(left, list[str])
+assert_type(right, list[bytes])
+"#,
+);
+
+testcase!(
     test_empty_list_check,
     r#"
 from typing import Literal, assert_type
