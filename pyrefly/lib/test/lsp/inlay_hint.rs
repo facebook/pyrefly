@@ -541,7 +541,7 @@ foo("hello", 1, 2, 3, 5, a=1, b=2, t=4)
         ^ inlay-hint: `s= `
 
 5 | foo("hello", 1, 2, 3, 5, a=1, b=2, t=4)
-                 ^ inlay-hint: `args= `
+                 ^ inlay-hint: `*args= `
 "#
         .trim(),
         generate_inlay_hint_report(
@@ -570,7 +570,7 @@ mark("database", "cache")
         r#"
 # main.py
 7 | mark("database", "cache")
-         ^ inlay-hint: `fixtures= `
+         ^ inlay-hint: `*fixtures= `
 "#
         .trim(),
         generate_inlay_hint_report(

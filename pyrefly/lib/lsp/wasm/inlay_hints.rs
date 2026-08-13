@@ -187,14 +187,24 @@ pub struct ParameterAnnotation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParamNameMatch<'param> {
     pub name: &'param Name,
+    pub is_vararg: bool,
     pub is_vararg_repeat: bool,
 }
 
 impl<'param> ParamNameMatch<'param> {
-    fn new(name: &'param Name, is_vararg_repeat: bool) -> Self {
+    fn new(name: &'param Name, is_vararg: bool, is_vararg_repeat: bool) -> Self {
         Self {
             name,
+            is_vararg,
             is_vararg_repeat,
+        }
+    }
+
+    fn display_name(&self) -> String {
+        if self.is_vararg {
+            format!("*{}", self.name.as_str())
+        } else {
+            self.name.as_str().to_owned()
         }
     }
 }
@@ -596,7 +606,7 @@ impl<'a> Transaction<'a> {
                             {
                                 param_hints.push((
                                     arg.range().start(),
-                                    format!("{}= ", param_match.name.as_str()),
+                                    format!("{}= ", param_match.display_name()),
                                 ));
                             }
                         }
@@ -619,21 +629,29 @@ impl<'a> Transaction<'a> {
                 Param::PosOnly(name, ..) => {
                     if positional_params_seen == positional_arg_index {
                         return name.as_ref().map(|name| {
-                            ParamNameMatch::new(name, /* is_vararg_repeat */ false)
+                            ParamNameMatch::new(
+                                name, /* is_vararg */ false, /* is_vararg_repeat */ false,
+                            )
                         });
                     }
                     positional_params_seen += 1;
                 }
                 Param::Pos(name, ..) => {
                     if positional_params_seen == positional_arg_index {
-                        return Some(ParamNameMatch::new(name, false));
+                        return Some(ParamNameMatch::new(
+                            name, /* is_vararg */ false, /* is_vararg_repeat */ false,
+                        ));
                     }
                     positional_params_seen += 1;
                 }
                 Param::Varargs(name, ..) => {
                     if positional_arg_index >= positional_params_seen {
                         return name.as_ref().map(|name| {
-                            ParamNameMatch::new(name, positional_arg_index > positional_params_seen)
+                            ParamNameMatch::new(
+                                name,
+                                /* is_vararg */ true,
+                                positional_arg_index > positional_params_seen,
+                            )
                         });
                     }
                     break;
