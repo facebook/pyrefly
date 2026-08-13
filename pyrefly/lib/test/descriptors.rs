@@ -103,6 +103,23 @@ def f(c: C):
 );
 
 testcase!(
+    test_overloaded_property_class_access_preserves_narrow_self,
+    r#"
+from typing import LiteralString, overload, reveal_type
+class C(str):
+    @property
+    @overload
+    def foo(self: LiteralString) -> int: ...
+    @property
+    @overload
+    def foo(self: str) -> str: ...
+    @property
+    def foo(self: str) -> int | str: ...
+reveal_type(C.foo)  # E: revealed type: Overload[ (self: LiteralString) -> int (self: str) -> str ]
+    "#,
+);
+
+testcase!(
     test_abstract_property,
     r#"
 from typing import assert_type

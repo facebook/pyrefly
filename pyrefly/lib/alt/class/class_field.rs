@@ -3501,11 +3501,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn as_class_attribute(
+    fn as_class_attribute_inner(
         &self,
         field_name: &Name,
         field: &ClassField,
         cls: &ClassBase,
+        overload_self_type: Option<Type>,
     ) -> ClassAttribute {
         // Special handling for `__new__`: because `__new__` is a static method, it can be called
         // with a `cls` argument that differs from the class on which it is accessed, so we use a
@@ -3546,14 +3547,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // on str methods). These overloads only apply when the instance is known to be the
                 // narrower type; for unbound access from the class, the self parameter is the
                 // general class type, so the narrowing overloads should not participate.
-                if let Type::Overload(overload) = &ty
-                    && let Some(filtered_overload) = self.filter_overloads_by_self_type(
-                        overload,
-                        &cls.clone().to_self_type(self.heap),
-                    )
+                if let Some(self_type) = overload_self_type
+                    && let Type::Overload(overload) = &ty
+                    && let Some(filtered_overload) =
+                        self.filter_overloads_by_self_type(overload, &self_type)
                 {
                     ty = self.heap.mk_overload(filtered_overload);
-                };
+                }
                 if let Some(quantified) = self_quantified {
                     ty = self.wrap_with_quantified(ty, quantified);
                 }
@@ -3599,6 +3599,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ))
             }
         }
+    }
+
+    fn as_class_attribute(
+        &self,
+        field_name: &Name,
+        field: &ClassField,
+        cls: &ClassBase,
+    ) -> ClassAttribute {
+        self.as_class_attribute_inner(
+            field_name,
+            field,
+            cls,
+            Some(cls.clone().to_self_type(self.heap)),
+        )
     }
 
     pub fn as_param(
@@ -4953,10 +4967,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
         let new_ty = self
-            .as_class_attribute(
+            .as_class_attribute_inner(
                 &dunder::NEW,
                 &new_member.value,
                 &ClassBase::ClassDef(cls.clone()),
+                None,
             )
             .as_instance_method()?;
         let class_tparams = self.get_class_tparams(cls.class_object());
