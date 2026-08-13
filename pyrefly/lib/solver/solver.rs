@@ -156,593 +156,6 @@ impl Bounds {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    use pyrefly_python::module::Module;
-    use pyrefly_python::module_name::ModuleName;
-    use pyrefly_python::module_path::ModulePath;
-    use pyrefly_python::nesting_context::NestingContext;
-    use pyrefly_types::class::ClassDefIndex;
-    use pyrefly_types::class::ClassType;
-    use pyrefly_types::dimension::Int;
-    use pyrefly_types::dimension::gradual_size;
-    use pyrefly_types::lit_int::LitInt;
-    use pyrefly_types::quantified::AnchorIndex;
-    use pyrefly_types::quantified::QuantifiedIdentity;
-    use pyrefly_types::quantified::QuantifiedOrigin;
-    use pyrefly_types::shaped_array::IntTuple;
-    use pyrefly_types::shaped_array::ShapedArrayType;
-    use pyrefly_types::type_var::PreInferenceVariance;
-    use pyrefly_types::types::AnyStyle;
-    use pyrefly_types::types::TArgs;
-    use pyrefly_types::types::TParams;
-    use pyrefly_types::types::Union;
-    use ruff_python_ast::Identifier;
-    use ruff_text_size::TextSize;
-
-    use super::*;
-
-    fn solver_with_answer(answer: Type) -> (Solver, Var) {
-        let solver = Solver::new(false, true, false, false, false, false);
-        let uniques = UniqueFactory::new();
-        let var = Var::new(&uniques);
-        solver
-            .variables
-            .lock()
-            .insert_fresh(var, Variable::Answer(answer));
-        (solver, var)
-    }
-
-    #[test]
-    fn call_context_defers_quantified_only_to_a_real_boundary() {
-        let uniques = UniqueFactory::new();
-        let outside_var = Var::new(&uniques);
-        let outside_handle = CallContext::outside()
-            .with_argument_side(ArgumentSide::Got)
-            .defer_quantified(QuantifiedHandle(vec![outside_var]))
-            .expect_err("an argument side does not own quantified vars");
-
-        let boundary = CallBoundary::new();
-        boundary
-            .context()
-            .defer_quantified(outside_handle)
-            .expect("a context backed by a boundary owns quantified vars");
-        let boundary_var = Var::new(&uniques);
-        boundary.defer_quantified(QuantifiedHandle(vec![boundary_var]));
-
-        let (handles, captures) = boundary.into_parts();
-        assert_eq!(handles.len(), 2);
-        assert_eq!(handles[0].vars(), &[outside_var]);
-        assert_eq!(handles[1].vars(), &[boundary_var]);
-        assert!(captures.overload.is_empty());
-        assert!(captures.generic.is_empty());
-    }
-
-    #[test]
-    #[should_panic(expected = "CallBoundary dropped without being consumed")]
-    fn call_boundary_must_be_consumed() {
-        drop(CallBoundary::new());
-    }
-
-    #[test]
-    fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
-        let solver = Solver::new(false, true, false, false, false, false);
-        let uniques = UniqueFactory::new();
-        let range = TextRange::new(TextSize::new(1), TextSize::new(3));
-        let partial = solver.fresh_partial_contained(&uniques, range);
-        let outer = Var::new(&uniques);
-        solver
-            .variables
-            .lock()
-            .insert_fresh(outer, Variable::Answer(Type::Var(partial)));
-        let ty = Type::Var(outer);
-
-        let errors = solver.sanitize_type_vars(&ty, true);
-
-        assert!(matches!(
-            errors.as_slice(),
-            [PinError::ImplicitPartialContained(error_range)] if *error_range == range
-        ));
-        assert!(solver.force_var(partial).is_any());
-        assert_eq!(ty, Type::Var(outer));
-    }
-
-    fn quantified(kind: QuantifiedKind, index: u32) -> Quantified {
-        quantified_with_restriction(kind, index, Restriction::Unrestricted)
-    }
-
-    fn quantified_with_restriction(
-        kind: QuantifiedKind,
-        index: u32,
-        restriction: Restriction,
-    ) -> Quantified {
-        Quantified::new(
-            QuantifiedIdentity::new(
-                ModuleName::from_str("test"),
-                AnchorIndex::new(TextRange::default(), index),
-                QuantifiedOrigin::SyntheticCallableResidual,
-            ),
-            Name::new(match kind {
-                QuantifiedKind::IntVar => "S",
-                QuantifiedKind::TypeVar => "T",
-                QuantifiedKind::ParamSpec | QuantifiedKind::TypeVarTuple => {
-                    unreachable!("test only creates scalar quantifieds")
-                }
-            }),
-            kind,
-            None,
-            restriction,
-            PreInferenceVariance::Invariant,
-        )
-    }
-
-    fn fake_array(targs: TArgs) -> ClassType {
-        let module = Module::new(
-            ModuleName::from_str("test"),
-            ModulePath::filesystem(PathBuf::from("test")),
-            Arc::new("fake module contents".to_owned()),
-        );
-        ClassType::new(
-            Class::new(
-                ClassDefIndex(0),
-                Identifier::new(Name::new("Array"), TextRange::empty(TextSize::new(0))),
-                NestingContext::toplevel(),
-                module,
-                None,
-                false,
-            ),
-            targs,
-        )
-    }
-
-    #[test]
-    fn expand_with_bounds_canonicalizes_solved_int_literals() {
-        let (solver, var) = solver_with_answer(LitInt::new(2).to_implicit_type());
-        let mut ty = Type::Int(Int::add(Type::Var(var), Type::Int(Int::Literal(1))));
-
-        solver.expand_with_bounds(&mut ty);
-
-        assert_eq!(ty, Type::Int(Int::Literal(3)));
-    }
-
-    #[test]
-    fn expand_with_bounds_canonicalizes_solved_gradual_int() {
-        let (solver, var) = solver_with_answer(Type::Any(AnyStyle::Explicit));
-        let mut ty = Type::Int(Int::mul(Type::Int(Int::Literal(2)), Type::Var(var)));
-
-        solver.expand_with_bounds(&mut ty);
-
-        assert_eq!(ty, gradual_size());
-    }
-
-    #[test]
-    fn expand_with_bounds_preserves_quantified_int_leaves() {
-        let cases = [QuantifiedKind::IntVar, QuantifiedKind::TypeVar];
-        for (index, kind) in cases.into_iter().enumerate() {
-            let quantified = quantified(kind, index as u32);
-            let quantified_ty = Type::Quantified(Box::new(quantified));
-            let (solver, var) = solver_with_answer(quantified_ty.clone());
-            let mut ty = Type::Int(Int::add(Type::Var(var), Type::Int(Int::Literal(1))));
-
-            solver.expand_with_bounds(&mut ty);
-
-            assert_eq!(
-                ty,
-                Type::Int(Int::add(Type::Int(Int::Literal(1)), quantified_ty)),
-            );
-        }
-    }
-
-    #[test]
-    fn expand_with_bounds_canonicalizes_int_inside_tuple_splice() {
-        let quantified_ty = Type::Quantified(Box::new(quantified(QuantifiedKind::IntVar, 0)));
-        let raw_compound = Type::Int(Int::add(quantified_ty.clone(), quantified_ty));
-        let expected_compound = canonicalize(raw_compound.clone());
-        assert_ne!(raw_compound, expected_compound);
-
-        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![raw_compound])));
-        let mut ty = Type::Tuple(Tuple::unpacked(
-            vec![Type::Int(Int::Literal(1))],
-            Type::Var(var),
-            vec![Type::Int(Int::Literal(3))],
-        ));
-
-        solver.expand_with_bounds(&mut ty);
-
-        assert_eq!(
-            ty,
-            Type::Tuple(Tuple::unpacked(
-                vec![Type::Int(Int::Literal(1))],
-                Type::Tuple(Tuple::Concrete(vec![expected_compound])),
-                vec![Type::Int(Int::Literal(3))],
-            ))
-        );
-    }
-
-    #[test]
-    fn expand_with_bounds_does_not_simplify_non_int_types() {
-        let union = Type::Union(Box::new(Union {
-            members: vec![Type::None, Type::None],
-            display_name: None,
-        }));
-        let (solver, var) = solver_with_answer(union.clone());
-        let mut ty = Type::Var(var);
-
-        solver.expand_with_bounds(&mut ty);
-
-        assert_eq!(ty, union);
-    }
-
-    #[test]
-    fn simplify_mut_flattens_reachable_concrete_tuple_unpack() {
-        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![Type::Int(
-            Int::Literal(2),
-        )])));
-        let mut ty = Type::Tuple(Tuple::unpacked(
-            vec![Type::Int(Int::Literal(1))],
-            Type::Var(var),
-            vec![Type::Int(Int::Literal(3))],
-        ));
-
-        solver.expand_mut(&mut ty);
-
-        assert_eq!(
-            ty,
-            Type::Tuple(Tuple::Concrete(vec![
-                Type::Int(Int::Literal(1)),
-                Type::Int(Int::Literal(2)),
-                Type::Int(Int::Literal(3)),
-            ]))
-        );
-    }
-
-    #[test]
-    fn simplify_mut_normalizes_standalone_int_tuple() {
-        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![
-            Type::Int(Int::Literal(2)),
-            Type::Int(Int::Literal(3)),
-        ])));
-        let mut ty =
-            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)])
-                .to_shape_arg_type();
-
-        solver.expand_mut(&mut ty);
-
-        assert_eq!(
-            ty,
-            IntTuple::from_types(vec![
-                Type::Int(Int::Literal(1)),
-                Type::Int(Int::Literal(2)),
-                Type::Int(Int::Literal(3)),
-                Type::Int(Int::Literal(4)),
-            ])
-            .to_shape_arg_type()
-        );
-    }
-
-    #[test]
-    fn simplify_mut_flattens_tuple_unpack_in_standalone_int_tuple() {
-        let nested = Type::Unpack(Box::new(Type::Tuple(Tuple::Concrete(vec![
-            Type::Int(Int::Literal(2)),
-            Type::Int(Int::Literal(3)),
-        ]))));
-        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![nested])));
-        let mut ty =
-            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)])
-                .to_shape_arg_type();
-
-        solver.expand_mut(&mut ty);
-
-        assert_eq!(
-            ty,
-            IntTuple::from_types(vec![
-                Type::Int(Int::Literal(1)),
-                Type::Int(Int::Literal(2)),
-                Type::Int(Int::Literal(3)),
-                Type::Int(Int::Literal(4)),
-            ])
-            .to_shape_arg_type()
-        );
-    }
-
-    #[test]
-    fn simplify_mut_normalizes_inline_shaped_array() {
-        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![Type::Int(
-            Int::Literal(2),
-        )])));
-        let shape =
-            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(3)]);
-        let mut ty = ShapedArrayType::new(fake_array(TArgs::default()), shape).to_type();
-
-        solver.expand_mut(&mut ty);
-
-        let Type::ShapedArray(array) = ty else {
-            panic!("expected shaped array")
-        };
-        assert_eq!(
-            array.shape(),
-            IntTuple::from_types(vec![
-                Type::Int(Int::Literal(1)),
-                Type::Int(Int::Literal(2)),
-                Type::Int(Int::Literal(3)),
-            ])
-        );
-        assert_eq!(array.tuple_carrier_shape_arg_index(), None);
-    }
-
-    #[test]
-    fn simplify_mut_flattens_tuple_unpack_in_inline_shaped_array() {
-        let nested = Type::Unpack(Box::new(Type::Tuple(Tuple::Concrete(vec![
-            Type::Int(Int::Literal(2)),
-            Type::Int(Int::Literal(3)),
-        ]))));
-        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![nested])));
-        let shape =
-            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)]);
-        let mut ty = ShapedArrayType::new(fake_array(TArgs::default()), shape).to_type();
-
-        solver.expand_mut(&mut ty);
-
-        let Type::ShapedArray(array) = ty else {
-            panic!("expected shaped array")
-        };
-        assert_eq!(
-            array.shape(),
-            IntTuple::from_types(vec![
-                Type::Int(Int::Literal(1)),
-                Type::Int(Int::Literal(2)),
-                Type::Int(Int::Literal(3)),
-                Type::Int(Int::Literal(4)),
-            ])
-        );
-        assert_eq!(array.tuple_carrier_shape_arg_index(), None);
-    }
-
-    #[test]
-    fn simplify_mut_normalizes_concrete_tuple_carrier_as_first_class_shape_arg() {
-        let nested = Type::Unpack(Box::new(Type::Tuple(Tuple::Concrete(vec![
-            Type::Int(Int::Literal(2)),
-            Type::Int(Int::Literal(3)),
-        ]))));
-        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![nested])));
-        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
-        let base_class = fake_array(TArgs::new(
-            Arc::new(TParams::new(vec![shape_param])),
-            vec![Type::Var(var)],
-        ));
-        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
-            .with_tuple_carrier_shape_arg(0)
-            .to_type();
-
-        solver.expand_mut(&mut ty);
-
-        let Type::ShapedArray(array) = ty else {
-            panic!("expected shaped array")
-        };
-        let expected =
-            IntTuple::from_types(vec![Type::Int(Int::Literal(2)), Type::Int(Int::Literal(3))]);
-        assert_eq!(array.shape(), expected);
-        assert_eq!(
-            array.base_class.targs().as_slice()[0],
-            expected.to_shape_arg_type()
-        );
-        assert_eq!(array.tuple_carrier_shape_arg_index(), Some(0));
-    }
-
-    #[test]
-    fn simplify_mut_normalizes_gradual_tuple_carrier_as_first_class_shape_arg() {
-        let (solver, var) =
-            solver_with_answer(Type::Tuple(Tuple::Unbounded(Box::new(gradual_size()))));
-        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
-        let base_class = fake_array(TArgs::new(
-            Arc::new(TParams::new(vec![shape_param])),
-            vec![Type::Var(var)],
-        ));
-        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
-            .with_tuple_carrier_shape_arg(0)
-            .to_type();
-
-        solver.expand_mut(&mut ty);
-
-        let Type::ShapedArray(array) = ty else {
-            panic!("expected shaped array")
-        };
-        let expected = IntTuple::shapeless();
-        assert_eq!(array.shape(), expected);
-        assert_eq!(
-            array.base_class.targs().as_slice()[0],
-            expected.to_shape_arg_type()
-        );
-        assert_eq!(array.tuple_carrier_shape_arg_index(), Some(0));
-    }
-
-    #[test]
-    fn simplify_mut_normalizes_existing_first_class_tuple_carrier() {
-        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![
-            Type::Int(Int::Literal(2)),
-            Type::Int(Int::Literal(3)),
-        ])));
-        let shape =
-            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)]);
-        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
-        let base_class = fake_array(TArgs::new(
-            Arc::new(TParams::new(vec![shape_param])),
-            vec![shape.to_shape_arg_type()],
-        ));
-        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
-            .with_tuple_carrier_shape_arg(0)
-            .to_type();
-
-        solver.expand_mut(&mut ty);
-
-        let Type::ShapedArray(array) = ty else {
-            panic!("expected shaped array")
-        };
-        let expected = IntTuple::from_types(vec![
-            Type::Int(Int::Literal(1)),
-            Type::Int(Int::Literal(2)),
-            Type::Int(Int::Literal(3)),
-            Type::Int(Int::Literal(4)),
-        ]);
-        assert_eq!(array.shape(), expected);
-        assert_eq!(
-            array.base_class.targs().as_slice()[0],
-            expected.to_shape_arg_type()
-        );
-        assert_eq!(array.tuple_carrier_shape_arg_index(), Some(0));
-    }
-
-    #[test]
-    fn simplify_mut_preserves_whole_shape_typevar_carrier_as_first_class_shape_arg() {
-        let carrier = Type::Quantified(Box::new(quantified(QuantifiedKind::TypeVar, 1)));
-        let (solver, var) = solver_with_answer(carrier.clone());
-        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
-        let base_class = fake_array(TArgs::new(
-            Arc::new(TParams::new(vec![shape_param])),
-            vec![Type::Var(var)],
-        ));
-        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
-            .with_tuple_carrier_shape_arg(0)
-            .to_type();
-
-        solver.expand_mut(&mut ty);
-
-        let Type::ShapedArray(array) = ty else {
-            panic!("expected shaped array")
-        };
-        let expected = IntTuple::unpacked(Vec::new(), carrier, Vec::new());
-        assert_eq!(array.shape(), expected);
-        assert_eq!(
-            array.base_class.targs().as_slice()[0],
-            expected.to_shape_arg_type()
-        );
-        assert_eq!(array.to_string(), "Array[T]");
-    }
-
-    #[test]
-    fn intvar_typevar_unification_preserves_intvar_kind() {
-        let cases = [
-            (
-                false,
-                QuantifiedKind::IntVar,
-                Restriction::Unrestricted,
-                false,
-                QuantifiedKind::TypeVar,
-                Restriction::Bound(Type::any_implicit()),
-            ),
-            (
-                false,
-                QuantifiedKind::TypeVar,
-                Restriction::Bound(Type::any_implicit()),
-                false,
-                QuantifiedKind::IntVar,
-                Restriction::Unrestricted,
-            ),
-            (
-                false,
-                QuantifiedKind::IntVar,
-                Restriction::Bound(Type::any_implicit()),
-                false,
-                QuantifiedKind::TypeVar,
-                Restriction::Bound(Type::any_implicit()),
-            ),
-            (
-                false,
-                QuantifiedKind::TypeVar,
-                Restriction::Bound(Type::any_implicit()),
-                false,
-                QuantifiedKind::IntVar,
-                Restriction::Bound(Type::any_implicit()),
-            ),
-            (
-                true,
-                QuantifiedKind::IntVar,
-                Restriction::Unrestricted,
-                false,
-                QuantifiedKind::TypeVar,
-                Restriction::Bound(Type::any_implicit()),
-            ),
-            (
-                false,
-                QuantifiedKind::TypeVar,
-                Restriction::Bound(Type::any_implicit()),
-                true,
-                QuantifiedKind::IntVar,
-                Restriction::Unrestricted,
-            ),
-            (
-                false,
-                QuantifiedKind::IntVar,
-                Restriction::Bound(Type::any_implicit()),
-                true,
-                QuantifiedKind::TypeVar,
-                Restriction::Bound(Type::any_implicit()),
-            ),
-            (
-                true,
-                QuantifiedKind::TypeVar,
-                Restriction::Bound(Type::any_implicit()),
-                false,
-                QuantifiedKind::IntVar,
-                Restriction::Bound(Type::any_implicit()),
-            ),
-        ];
-        for (index, (v1_quantified, k1, r1, v2_quantified, k2, r2)) in cases.into_iter().enumerate()
-        {
-            let solver = Solver::new(false, true, false, false, false, false);
-            let uniques = UniqueFactory::new();
-            let v1 = Var::new(&uniques);
-            let v2 = Var::new(&uniques);
-            let q1 = quantified_with_restriction(k1, (index * 2) as u32, r1);
-            let q2 = quantified_with_restriction(k2, (index * 2 + 1) as u32, r2);
-            let mut variables = solver.variables.lock();
-            variables.insert_fresh(
-                v1,
-                if v1_quantified {
-                    Variable::Quantified {
-                        quantified: q1,
-                        bounds: Bounds::new(),
-                    }
-                } else {
-                    Variable::PartialQuantified(q1)
-                },
-            );
-            variables.insert_fresh(
-                v2,
-                if v2_quantified {
-                    Variable::Quantified {
-                        quantified: q2,
-                        bounds: Bounds::new(),
-                    }
-                } else {
-                    Variable::PartialQuantified(q2)
-                },
-            );
-            let variable1 = variables.get(v1);
-            let variable2 = variables.get(v2);
-            let (x, y) = intvar_typevar_unify_order(v1, &variable1, v2, &variable2)
-                .expect("case should require IntVar-preserving unification");
-            drop(variable1);
-            drop(variable2);
-            variables.unify(x, y);
-
-            for var in [v1, v2] {
-                let current = variables.get(var);
-                assert!(match &*current {
-                    Variable::Quantified { quantified, .. } => {
-                        quantified.kind() == QuantifiedKind::IntVar
-                    }
-                    Variable::PartialQuantified(q) => q.kind() == QuantifiedKind::IntVar,
-                    _ => false,
-                });
-            }
-        }
-    }
-}
-
 /// Per-call capture of generic witness information, stored on `CallBoundary`.
 /// Each entry records a single Forall instantiation's witness vars and the
 /// target vars that are allowed to observe the residualized answer.
@@ -4531,5 +3944,592 @@ fn intvar_typevar_unify_order(
         (Some(QuantifiedKind::IntVar), Some(QuantifiedKind::TypeVar)) => Some((v2, v1)),
         (Some(QuantifiedKind::TypeVar), Some(QuantifiedKind::IntVar)) => Some((v1, v2)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::nesting_context::NestingContext;
+    use pyrefly_types::class::ClassDefIndex;
+    use pyrefly_types::class::ClassType;
+    use pyrefly_types::dimension::Int;
+    use pyrefly_types::dimension::gradual_size;
+    use pyrefly_types::lit_int::LitInt;
+    use pyrefly_types::quantified::AnchorIndex;
+    use pyrefly_types::quantified::QuantifiedIdentity;
+    use pyrefly_types::quantified::QuantifiedOrigin;
+    use pyrefly_types::shaped_array::IntTuple;
+    use pyrefly_types::shaped_array::ShapedArrayType;
+    use pyrefly_types::type_var::PreInferenceVariance;
+    use pyrefly_types::types::AnyStyle;
+    use pyrefly_types::types::TArgs;
+    use pyrefly_types::types::TParams;
+    use pyrefly_types::types::Union;
+    use ruff_python_ast::Identifier;
+    use ruff_text_size::TextSize;
+
+    use super::*;
+
+    fn solver_with_answer(answer: Type) -> (Solver, Var) {
+        let solver = Solver::new(false, true, false, false, false, false);
+        let uniques = UniqueFactory::new();
+        let var = Var::new(&uniques);
+        solver
+            .variables
+            .lock()
+            .insert_fresh(var, Variable::Answer(answer));
+        (solver, var)
+    }
+
+    #[test]
+    fn call_context_defers_quantified_only_to_a_real_boundary() {
+        let uniques = UniqueFactory::new();
+        let outside_var = Var::new(&uniques);
+        let outside_handle = CallContext::outside()
+            .with_argument_side(ArgumentSide::Got)
+            .defer_quantified(QuantifiedHandle(vec![outside_var]))
+            .expect_err("an argument side does not own quantified vars");
+
+        let boundary = CallBoundary::new();
+        boundary
+            .context()
+            .defer_quantified(outside_handle)
+            .expect("a context backed by a boundary owns quantified vars");
+        let boundary_var = Var::new(&uniques);
+        boundary.defer_quantified(QuantifiedHandle(vec![boundary_var]));
+
+        let (handles, captures) = boundary.into_parts();
+        assert_eq!(handles.len(), 2);
+        assert_eq!(handles[0].vars(), &[outside_var]);
+        assert_eq!(handles[1].vars(), &[boundary_var]);
+        assert!(captures.overload.is_empty());
+        assert!(captures.generic.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "CallBoundary dropped without being consumed")]
+    fn call_boundary_must_be_consumed() {
+        drop(CallBoundary::new());
+    }
+
+    #[test]
+    fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
+        let solver = Solver::new(false, true, false, false, false, false);
+        let uniques = UniqueFactory::new();
+        let range = TextRange::new(TextSize::new(1), TextSize::new(3));
+        let partial = solver.fresh_partial_contained(&uniques, range);
+        let outer = Var::new(&uniques);
+        solver
+            .variables
+            .lock()
+            .insert_fresh(outer, Variable::Answer(Type::Var(partial)));
+        let ty = Type::Var(outer);
+
+        let errors = solver.sanitize_type_vars(&ty, true);
+
+        assert!(matches!(
+            errors.as_slice(),
+            [PinError::ImplicitPartialContained(error_range)] if *error_range == range
+        ));
+        assert!(solver.force_var(partial).is_any());
+        assert_eq!(ty, Type::Var(outer));
+    }
+
+    fn quantified(kind: QuantifiedKind, index: u32) -> Quantified {
+        quantified_with_restriction(kind, index, Restriction::Unrestricted)
+    }
+
+    fn quantified_with_restriction(
+        kind: QuantifiedKind,
+        index: u32,
+        restriction: Restriction,
+    ) -> Quantified {
+        Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("test"),
+                AnchorIndex::new(TextRange::default(), index),
+                QuantifiedOrigin::SyntheticCallableResidual,
+            ),
+            Name::new(match kind {
+                QuantifiedKind::IntVar => "S",
+                QuantifiedKind::TypeVar => "T",
+                QuantifiedKind::ParamSpec | QuantifiedKind::TypeVarTuple => {
+                    unreachable!("test only creates scalar quantifieds")
+                }
+            }),
+            kind,
+            None,
+            restriction,
+            PreInferenceVariance::Invariant,
+        )
+    }
+
+    fn fake_array(targs: TArgs) -> ClassType {
+        let module = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test")),
+            Arc::new("fake module contents".to_owned()),
+        );
+        ClassType::new(
+            Class::new(
+                ClassDefIndex(0),
+                Identifier::new(Name::new("Array"), TextRange::empty(TextSize::new(0))),
+                NestingContext::toplevel(),
+                module,
+                None,
+                false,
+            ),
+            targs,
+        )
+    }
+
+    #[test]
+    fn expand_with_bounds_canonicalizes_solved_int_literals() {
+        let (solver, var) = solver_with_answer(LitInt::new(2).to_implicit_type());
+        let mut ty = Type::Int(Int::add(Type::Var(var), Type::Int(Int::Literal(1))));
+
+        solver.expand_with_bounds(&mut ty);
+
+        assert_eq!(ty, Type::Int(Int::Literal(3)));
+    }
+
+    #[test]
+    fn expand_with_bounds_canonicalizes_solved_gradual_int() {
+        let (solver, var) = solver_with_answer(Type::Any(AnyStyle::Explicit));
+        let mut ty = Type::Int(Int::mul(Type::Int(Int::Literal(2)), Type::Var(var)));
+
+        solver.expand_with_bounds(&mut ty);
+
+        assert_eq!(ty, gradual_size());
+    }
+
+    #[test]
+    fn expand_with_bounds_preserves_quantified_int_leaves() {
+        let cases = [QuantifiedKind::IntVar, QuantifiedKind::TypeVar];
+        for (index, kind) in cases.into_iter().enumerate() {
+            let quantified = quantified(kind, index as u32);
+            let quantified_ty = Type::Quantified(Box::new(quantified));
+            let (solver, var) = solver_with_answer(quantified_ty.clone());
+            let mut ty = Type::Int(Int::add(Type::Var(var), Type::Int(Int::Literal(1))));
+
+            solver.expand_with_bounds(&mut ty);
+
+            assert_eq!(
+                ty,
+                Type::Int(Int::add(Type::Int(Int::Literal(1)), quantified_ty)),
+            );
+        }
+    }
+
+    #[test]
+    fn expand_with_bounds_canonicalizes_int_inside_tuple_splice() {
+        let quantified_ty = Type::Quantified(Box::new(quantified(QuantifiedKind::IntVar, 0)));
+        let raw_compound = Type::Int(Int::add(quantified_ty.clone(), quantified_ty));
+        let expected_compound = canonicalize(raw_compound.clone());
+        assert_ne!(raw_compound, expected_compound);
+
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![raw_compound])));
+        let mut ty = Type::Tuple(Tuple::unpacked(
+            vec![Type::Int(Int::Literal(1))],
+            Type::Var(var),
+            vec![Type::Int(Int::Literal(3))],
+        ));
+
+        solver.expand_with_bounds(&mut ty);
+
+        assert_eq!(
+            ty,
+            Type::Tuple(Tuple::unpacked(
+                vec![Type::Int(Int::Literal(1))],
+                Type::Tuple(Tuple::Concrete(vec![expected_compound])),
+                vec![Type::Int(Int::Literal(3))],
+            ))
+        );
+    }
+
+    #[test]
+    fn expand_with_bounds_does_not_simplify_non_int_types() {
+        let union = Type::Union(Box::new(Union {
+            members: vec![Type::None, Type::None],
+            display_name: None,
+        }));
+        let (solver, var) = solver_with_answer(union.clone());
+        let mut ty = Type::Var(var);
+
+        solver.expand_with_bounds(&mut ty);
+
+        assert_eq!(ty, union);
+    }
+
+    #[test]
+    fn simplify_mut_flattens_reachable_concrete_tuple_unpack() {
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![Type::Int(
+            Int::Literal(2),
+        )])));
+        let mut ty = Type::Tuple(Tuple::unpacked(
+            vec![Type::Int(Int::Literal(1))],
+            Type::Var(var),
+            vec![Type::Int(Int::Literal(3))],
+        ));
+
+        solver.expand_mut(&mut ty);
+
+        assert_eq!(
+            ty,
+            Type::Tuple(Tuple::Concrete(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_standalone_int_tuple() {
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ])));
+        let mut ty =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)])
+                .to_shape_arg_type();
+
+        solver.expand_mut(&mut ty);
+
+        assert_eq!(
+            ty,
+            IntTuple::from_types(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+                Type::Int(Int::Literal(4)),
+            ])
+            .to_shape_arg_type()
+        );
+    }
+
+    #[test]
+    fn simplify_mut_flattens_tuple_unpack_in_standalone_int_tuple() {
+        let nested = Type::Unpack(Box::new(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ]))));
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![nested])));
+        let mut ty =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)])
+                .to_shape_arg_type();
+
+        solver.expand_mut(&mut ty);
+
+        assert_eq!(
+            ty,
+            IntTuple::from_types(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+                Type::Int(Int::Literal(4)),
+            ])
+            .to_shape_arg_type()
+        );
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_inline_shaped_array() {
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![Type::Int(
+            Int::Literal(2),
+        )])));
+        let shape =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(3)]);
+        let mut ty = ShapedArrayType::new(fake_array(TArgs::default()), shape).to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        assert_eq!(
+            array.shape(),
+            IntTuple::from_types(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+            ])
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), None);
+    }
+
+    #[test]
+    fn simplify_mut_flattens_tuple_unpack_in_inline_shaped_array() {
+        let nested = Type::Unpack(Box::new(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ]))));
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![nested])));
+        let shape =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)]);
+        let mut ty = ShapedArrayType::new(fake_array(TArgs::default()), shape).to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        assert_eq!(
+            array.shape(),
+            IntTuple::from_types(vec![
+                Type::Int(Int::Literal(1)),
+                Type::Int(Int::Literal(2)),
+                Type::Int(Int::Literal(3)),
+                Type::Int(Int::Literal(4)),
+            ])
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), None);
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_concrete_tuple_carrier_as_first_class_shape_arg() {
+        let nested = Type::Unpack(Box::new(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ]))));
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![nested])));
+        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
+        let base_class = fake_array(TArgs::new(
+            Arc::new(TParams::new(vec![shape_param])),
+            vec![Type::Var(var)],
+        ));
+        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
+            .with_tuple_carrier_shape_arg(0)
+            .to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        let expected =
+            IntTuple::from_types(vec![Type::Int(Int::Literal(2)), Type::Int(Int::Literal(3))]);
+        assert_eq!(array.shape(), expected);
+        assert_eq!(
+            array.base_class.targs().as_slice()[0],
+            expected.to_shape_arg_type()
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), Some(0));
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_gradual_tuple_carrier_as_first_class_shape_arg() {
+        let (solver, var) =
+            solver_with_answer(Type::Tuple(Tuple::Unbounded(Box::new(gradual_size()))));
+        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
+        let base_class = fake_array(TArgs::new(
+            Arc::new(TParams::new(vec![shape_param])),
+            vec![Type::Var(var)],
+        ));
+        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
+            .with_tuple_carrier_shape_arg(0)
+            .to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        let expected = IntTuple::shapeless();
+        assert_eq!(array.shape(), expected);
+        assert_eq!(
+            array.base_class.targs().as_slice()[0],
+            expected.to_shape_arg_type()
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), Some(0));
+    }
+
+    #[test]
+    fn simplify_mut_normalizes_existing_first_class_tuple_carrier() {
+        let (solver, var) = solver_with_answer(Type::Tuple(Tuple::Concrete(vec![
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+        ])));
+        let shape =
+            IntTuple::unpacked(vec![Int::Literal(1)], Type::Var(var), vec![Int::Literal(4)]);
+        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
+        let base_class = fake_array(TArgs::new(
+            Arc::new(TParams::new(vec![shape_param])),
+            vec![shape.to_shape_arg_type()],
+        ));
+        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
+            .with_tuple_carrier_shape_arg(0)
+            .to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        let expected = IntTuple::from_types(vec![
+            Type::Int(Int::Literal(1)),
+            Type::Int(Int::Literal(2)),
+            Type::Int(Int::Literal(3)),
+            Type::Int(Int::Literal(4)),
+        ]);
+        assert_eq!(array.shape(), expected);
+        assert_eq!(
+            array.base_class.targs().as_slice()[0],
+            expected.to_shape_arg_type()
+        );
+        assert_eq!(array.tuple_carrier_shape_arg_index(), Some(0));
+    }
+
+    #[test]
+    fn simplify_mut_preserves_whole_shape_typevar_carrier_as_first_class_shape_arg() {
+        let carrier = Type::Quantified(Box::new(quantified(QuantifiedKind::TypeVar, 1)));
+        let (solver, var) = solver_with_answer(carrier.clone());
+        let shape_param = quantified(QuantifiedKind::TypeVar, 0);
+        let base_class = fake_array(TArgs::new(
+            Arc::new(TParams::new(vec![shape_param])),
+            vec![Type::Var(var)],
+        ));
+        let mut ty = ShapedArrayType::new(base_class, IntTuple::shapeless())
+            .with_tuple_carrier_shape_arg(0)
+            .to_type();
+
+        solver.expand_mut(&mut ty);
+
+        let Type::ShapedArray(array) = ty else {
+            panic!("expected shaped array")
+        };
+        let expected = IntTuple::unpacked(Vec::new(), carrier, Vec::new());
+        assert_eq!(array.shape(), expected);
+        assert_eq!(
+            array.base_class.targs().as_slice()[0],
+            expected.to_shape_arg_type()
+        );
+        assert_eq!(array.to_string(), "Array[T]");
+    }
+
+    #[test]
+    fn intvar_typevar_unification_preserves_intvar_kind() {
+        let cases = [
+            (
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Unrestricted,
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Unrestricted,
+            ),
+            (
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Bound(Type::any_implicit()),
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                true,
+                QuantifiedKind::IntVar,
+                Restriction::Unrestricted,
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                false,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+                true,
+                QuantifiedKind::IntVar,
+                Restriction::Unrestricted,
+            ),
+            (
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Bound(Type::any_implicit()),
+                true,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+            (
+                true,
+                QuantifiedKind::TypeVar,
+                Restriction::Bound(Type::any_implicit()),
+                false,
+                QuantifiedKind::IntVar,
+                Restriction::Bound(Type::any_implicit()),
+            ),
+        ];
+        for (index, (v1_quantified, k1, r1, v2_quantified, k2, r2)) in cases.into_iter().enumerate()
+        {
+            let solver = Solver::new(false, true, false, false, false, false);
+            let uniques = UniqueFactory::new();
+            let v1 = Var::new(&uniques);
+            let v2 = Var::new(&uniques);
+            let q1 = quantified_with_restriction(k1, (index * 2) as u32, r1);
+            let q2 = quantified_with_restriction(k2, (index * 2 + 1) as u32, r2);
+            let mut variables = solver.variables.lock();
+            variables.insert_fresh(
+                v1,
+                if v1_quantified {
+                    Variable::Quantified {
+                        quantified: q1,
+                        bounds: Bounds::new(),
+                    }
+                } else {
+                    Variable::PartialQuantified(q1)
+                },
+            );
+            variables.insert_fresh(
+                v2,
+                if v2_quantified {
+                    Variable::Quantified {
+                        quantified: q2,
+                        bounds: Bounds::new(),
+                    }
+                } else {
+                    Variable::PartialQuantified(q2)
+                },
+            );
+            let variable1 = variables.get(v1);
+            let variable2 = variables.get(v2);
+            let (x, y) = intvar_typevar_unify_order(v1, &variable1, v2, &variable2)
+                .expect("case should require IntVar-preserving unification");
+            drop(variable1);
+            drop(variable2);
+            variables.unify(x, y);
+
+            for var in [v1, v2] {
+                let current = variables.get(var);
+                assert!(match &*current {
+                    Variable::Quantified { quantified, .. } => {
+                        quantified.kind() == QuantifiedKind::IntVar
+                    }
+                    Variable::PartialQuantified(q) => q.kind() == QuantifiedKind::IntVar,
+                    _ => false,
+                });
+            }
+        }
     }
 }
