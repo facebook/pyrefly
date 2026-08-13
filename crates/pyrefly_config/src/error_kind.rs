@@ -347,6 +347,8 @@ pub enum ErrorKind {
     /// guaranteed. This is a separate error code from BadKeywordArgument to allow
     /// users to opt-in to this stricter check.
     PotentialBadKeywordArgument,
+    /// Accessing a protected class member from outside its defining class or a subclass.
+    PrivateUsage,
     /// A protocol attribute was first defined inside a method instead of the class body.
     ProtocolImplicitlyDefinedAttribute,
     /// Calling `.cuda()` on a `torch.Tensor` hard-codes the target device.

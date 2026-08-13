@@ -2856,6 +2856,67 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ) {
             return;
         }
+        if Ast::is_protected_attr(&expect.attr.id) {
+            if let Some(class_idx) = expect.class_idx {
+                let class_binding = self.get_idx(class_idx);
+                if let Some(owner) = class_binding.0.as_ref() {
+                    let mut found_declaration = false;
+                    let mut access_allowed = true;
+                    for ty in value_type.clone().into_unions() {
+                        let accessed_class = match ty {
+                            Type::ClassDef(cls) => Some(cls),
+                            Type::ClassType(cls) | Type::SelfType(cls) => {
+                                Some(cls.into_class_object())
+                            }
+                            Type::Type(inner) => match *inner {
+                                Type::ClassType(cls) | Type::SelfType(cls) => {
+                                    Some(cls.into_class_object())
+                                }
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let Some(accessed_class) = accessed_class else {
+                            continue;
+                        };
+                        let Some(member) = self
+                            .get_class_member_with_defining_class(&accessed_class, &expect.attr.id)
+                        else {
+                            continue;
+                        };
+                        found_declaration = true;
+                        if member.defining_class.module_path().is_interface() {
+                            continue;
+                        }
+                        if member.defining_class != *owner
+                            && !self
+                                .get_mro_for_class(owner)
+                                .ancestors_no_object()
+                                .iter()
+                                .any(|ancestor| ancestor.class_object() == &member.defining_class)
+                        {
+                            access_allowed = false;
+                        }
+                    }
+                    if found_declaration && access_allowed {
+                        return;
+                    }
+                }
+            }
+            if !self.has_static_attr(&value_type, &expect.attr.id) {
+                return;
+            }
+            self.error(
+                errors,
+                expect.attr.range(),
+                ErrorKind::PrivateUsage,
+                format!(
+                    "Protected attribute `{}` cannot be accessed outside of its defining class or a subclass",
+                    expect.attr.id
+                ),
+            );
+            return;
+        }
         if let Some(class_idx) = expect.class_idx {
             let class_binding = self.get_idx(class_idx);
             let Some(owner) = class_binding.0.as_ref() else {

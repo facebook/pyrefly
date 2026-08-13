@@ -399,7 +399,7 @@ impl RuleOverrides {
         add(self.report_operator_issue, ErrorKind::NotCallable);
         add(self.report_return_type, ErrorKind::BadReturn);
         add(self.report_return_type, ErrorKind::InvalidYield);
-        add(self.report_private_usage, ErrorKind::NoAccess);
+        add(self.report_private_usage, ErrorKind::PrivateUsage);
         add(self.report_deprecated, ErrorKind::Deprecated);
         add(
             self.report_incompatible_method_override,
@@ -737,6 +737,16 @@ executionEnvironments = [
         let pyr = serde_jsonrc::from_str::<PyrightConfig>(raw_file)?;
         let config = pyr.convert();
         assert!(!config.project_includes.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_report_private_usage_mapping() -> anyhow::Result<()> {
+        let pyr = serde_json::from_str::<PyrightConfig>(r#"{"reportPrivateUsage": "warning"}"#)?;
+        let config = pyr.convert();
+        let errors = config.root.errors.expect("expected a diagnostic override");
+        assert_eq!(errors.severity(ErrorKind::PrivateUsage), Severity::Warn);
+        assert_eq!(errors.severity(ErrorKind::NoAccess), Severity::Error);
         Ok(())
     }
 }

@@ -538,6 +538,10 @@ impl Ast {
         name.starts_with("__") && !name.ends_with("__")
     }
 
+    pub fn is_protected_attr(name: &Name) -> bool {
+        name.len() > 1 && name.starts_with('_') && !name.starts_with("__")
+    }
+
     // Parameters and variables that are prefixed (but not suffixed) with a single underscore
     // are potentially unused, so we should skip some diagnostics/errors.
     // Examples: `_`, `_x`
