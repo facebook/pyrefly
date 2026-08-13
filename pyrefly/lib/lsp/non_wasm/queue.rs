@@ -44,6 +44,8 @@ pub enum LspEvent {
     /// based on the latest `State`. The included config files are configs whose find
     /// caches should be invalidated. on the next run.
     RecheckFinished,
+    /// Re-register filesystem watchers after a config reload changes import paths.
+    RefreshFileWatchers,
     /// Inform the server that a request is cancelled.
     /// Server should know about this ASAP to avoid wasting time on cancelled requests.
     CancelRequest(RequestId),
@@ -71,6 +73,7 @@ impl LspEvent {
     pub fn describe(&self) -> String {
         match self {
             Self::RecheckFinished => "RecheckFinished".to_owned(),
+            Self::RefreshFileWatchers => "RefreshFileWatchers".to_owned(),
             Self::CancelRequest(_) => "CancelRequest".to_owned(),
             Self::InvalidateConfigFind => "InvalidateConfigFind".to_owned(),
             Self::DidOpenTextDocument(_) => "DidOpenTextDocument".to_owned(),
@@ -114,7 +117,9 @@ impl LspEvent {
 
     fn kind(&self) -> LspEventKind {
         match self {
-            Self::RecheckFinished | Self::CancelRequest(_) => LspEventKind::Priority,
+            Self::RecheckFinished | Self::RefreshFileWatchers | Self::CancelRequest(_) => {
+                LspEventKind::Priority
+            }
             Self::DidOpenTextDocument(_)
             | Self::DidChangeTextDocument(_)
             | Self::DidCloseTextDocument(_)

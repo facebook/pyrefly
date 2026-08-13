@@ -104,6 +104,7 @@ use crate::binding::metadata::BindingsMetadata;
 use crate::binding::scope::builtin_module_for_name;
 use crate::binding::table::TableKeyed;
 use crate::config::config::ConfigFile;
+use crate::config::environment::environment::PythonEnvironment;
 use crate::config::error_kind::ErrorKind;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
@@ -2279,6 +2280,15 @@ impl<'a> Transaction<'a> {
 
     /// Invalidate based on what a watcher told you.
     pub fn invalidate_events(&mut self, events: &CategorizedEvents) {
+        let interpreter_environment_changed = events.iter().any(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pth"))
+        });
+        if interpreter_environment_changed {
+            PythonEnvironment::clear_interpreter_cache();
+        }
+
         // If any files were added or removed, we need to invalidate the find step.
         if !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty() {
             self.invalidate_find();
@@ -2289,11 +2299,13 @@ impl<'a> Transaction<'a> {
         self.invalidate_disk(&files);
 
         // If any config files changed, we need to invalidate the config step.
-        if events.iter().any(|x| {
-            x.file_name()
-                .and_then(|x| x.to_str())
-                .is_some_and(|x| ConfigFile::CONFIG_FILE_NAMES.contains(&x))
-        }) {
+        if interpreter_environment_changed
+            || events.iter().any(|x| {
+                x.file_name()
+                    .and_then(|x| x.to_str())
+                    .is_some_and(|x| ConfigFile::CONFIG_FILE_NAMES.contains(&x))
+            })
+        {
             self.invalidate_config();
         }
     }

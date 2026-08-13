@@ -6,6 +6,10 @@
  */
 
 use std::collections::HashSet;
+#[cfg(unix)]
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use lsp_types::RegistrationParams;
 use lsp_types::Url;
@@ -177,6 +181,113 @@ fn test_consecutive_file_watcher_events() {
         .client
         .expect_publish_diagnostics_eventual_error_count(c_path.clone(), 1)
         .expect("Failed to receive diagnostics after file watcher events");
+
+    interaction.shutdown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn test_pth_change_refreshes_interpreter_paths() {
+    let root = get_test_files_root();
+    let project_root = root.path().join("pth_refresh");
+    let source_root = project_root.join("src");
+    let bin_root = project_root.join("bin");
+    let site_packages = bin_root.join("site-packages");
+    let workspace_package = project_root.join("workspace-package");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&site_packages).unwrap();
+    fs::create_dir_all(&workspace_package).unwrap();
+    fs::write(
+        source_root.join("main.py"),
+        "from dynamic_module import value\nprint(value)\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace_package.join("dynamic_module.py"),
+        "value: int = 1\n",
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("pyrefly.toml"),
+        "python-interpreter-path = \"../bin/python\"\n",
+    )
+    .unwrap();
+
+    let pth_path = site_packages.join("workspace.pth");
+    let environment_without_pth = json!({
+        "python_platform": "linux",
+        "python_version": "3.12.0",
+        "site_package_path": [site_packages],
+    });
+    let environment_with_pth = json!({
+        "python_platform": "linux",
+        "python_version": "3.12.0",
+        "site_package_path": [site_packages, workspace_package],
+    });
+    let interpreter_script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "-c" ]; then
+    if [ -f "{pth_path}" ]; then
+        cat <<'EOF'
+{environment_with_pth}
+EOF
+    else
+        cat <<'EOF'
+{environment_without_pth}
+EOF
+    fi
+else
+    exit 1
+fi
+"#,
+        pth_path = pth_path.display(),
+    );
+    let interpreter = bin_root.join("python");
+    fs::write(&interpreter, interpreter_script).unwrap();
+    let mut permissions = fs::metadata(&interpreter).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&interpreter, permissions).unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Url::from_file_path(root.path()).unwrap(),
+            )]),
+            file_watch: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("pth_refresh/src/main.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(source_root.join("main.py"), 1)
+        .unwrap();
+    let watched_patterns = expect_watched_files(&interaction).unwrap();
+    assert!(
+        watched_patterns
+            .iter()
+            .any(|pattern| pattern.ends_with("*.pth"))
+    );
+
+    fs::write(&pth_path, format!("{}\n", workspace_package.display())).unwrap();
+    interaction
+        .client
+        .file_created("pth_refresh/bin/site-packages/workspace.pth");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(source_root.join("main.py"), 0)
+        .unwrap();
+    let refreshed_patterns = expect_watched_files(&interaction).unwrap();
+    assert!(refreshed_patterns.iter().any(|pattern| {
+        pattern.contains(workspace_package.to_str().unwrap()) && pattern.ends_with("**/*.py")
+    }));
 
     interaction.shutdown().unwrap();
 }

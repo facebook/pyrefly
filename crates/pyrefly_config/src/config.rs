@@ -1194,6 +1194,12 @@ impl ConfigFile {
                         format!("**/*.{suffix}"),
                     ));
                 });
+            config.site_package_path().for_each(|site_packages| {
+                result.insert(WatchPattern::root(
+                    InternedPath::from_path(site_packages),
+                    "*.pth".to_owned(),
+                ));
+            });
         }
 
         for source_db in source_dbs {
@@ -2671,6 +2677,34 @@ output-format = "omit-errors"
 
         // test replace_imports_with_any special case None path
         assert!(config.replace_imports_with_any(None, ModuleName::from_str("root")));
+    }
+
+    #[test]
+    fn test_site_package_pth_files_are_watched() {
+        let tempdir = TempDir::new().unwrap();
+        let site_packages = tempdir.path().join("site-packages");
+        std::fs::create_dir(&site_packages).unwrap();
+        let mut config = ConfigFile {
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            python_environment: PythonEnvironment {
+                site_package_path: Some(vec![site_packages.clone()]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+        let mut configs = SmallSet::new();
+        configs.insert(ArcId::new(config));
+
+        assert!(
+            ConfigFile::get_paths_to_watch(&configs).contains(&WatchPattern::root(
+                InternedPath::from_path(&site_packages),
+                "*.pth".to_owned(),
+            ))
+        );
     }
 
     #[test]
