@@ -844,18 +844,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // ambiguity in overload selection. This matches pyright, mypy, and ty.
                 let owner = Owner::new();
                 let mut changed = false;
-                let should_materialize = |arg_range| {
+                let should_materialize = |arg_range, arg_ty: &Type| {
                     if spec_compliant {
                         return true;
                     }
-                    let mut param_types = matched_overloads
+                    let param_types = matched_overloads
                         .iter()
-                        .filter_map(|o| o.argmap.range_to_param.get(&arg_range).map(|p| &p.ty));
-                    let Some(first) = param_types.next() else {
+                        .filter_map(|o| o.argmap.range_to_param.get(&arg_range).map(|p| &p.ty))
+                        .collect::<Vec<_>>();
+                    let Some(first) = param_types.first() else {
                         // If we can't find the expected type, be conservative and assume there may be multiple.
                         return true;
                     };
-                    for t in param_types {
+                    // A nested gradual type can make both a specific overload and a later
+                    // `object` fallback match. Prefer the specific overload for ecosystem
+                    // compatibility, but keep a top-level `Any` ambiguous.
+                    if !arg_ty.is_any()
+                        && !matches!(first, Type::ClassType(cls) if cls.is_builtin("object"))
+                        && param_types
+                            .iter()
+                            .skip(1)
+                            .any(|t| matches!(t, Type::ClassType(cls) if cls.is_builtin("object")))
+                        && param_types.iter().skip(1).all(|t| {
+                            self.is_equivalent(first, t)
+                                || matches!(t, Type::ClassType(cls) if cls.is_builtin("object"))
+                        })
+                    {
+                        return false;
+                    }
+                    for t in param_types.iter().skip(1) {
                         if !self.is_equivalent(first, t) {
                             return true;
                         }
@@ -863,16 +880,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     false
                 };
                 let materialized_args = args.map(|arg| {
-                    let (materialized_arg, arg_changed) = if should_materialize(arg.range()) {
-                        arg.materialize(self, errors, &owner)
-                    } else {
-                        (arg.clone(), false)
+                    let arg_ty = match arg {
+                        CallArg::Arg(value) | CallArg::Star(value, _) => value.infer(self, errors),
                     };
+                    let (materialized_arg, arg_changed) =
+                        if should_materialize(arg.range(), &arg_ty) {
+                            arg.materialize(self, errors, &owner)
+                        } else {
+                            (arg.clone(), false)
+                        };
                     changed |= arg_changed;
                     materialized_arg
                 });
                 let materialized_keywords = keywords.map(|kw| {
-                    let (materialized_kw, kw_changed) = if should_materialize(kw.range()) {
+                    let kw_ty = kw.value.infer(self, errors);
+                    let (materialized_kw, kw_changed) = if should_materialize(kw.range(), &kw_ty) {
                         kw.materialize(self, errors, &owner)
                     } else {
                         (kw.clone(), false)

@@ -1656,6 +1656,62 @@ def g(x: tuple[Any, ...]):
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3977
+testcase!(
+    test_nested_any_with_object_fallback,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type, overload
+
+ShapeT = TypeVar("ShapeT", bound=tuple[int, ...])
+TypeT = TypeVar("TypeT")
+
+class Array(Generic[ShapeT, TypeT]):
+    pass
+
+def widen_shape(arr: Array[Any, TypeT]) -> Array[tuple[Any, ...], TypeT]: ...
+
+class MyClass:
+    @overload
+    def __eq__(self, other: Array[ShapeT, Any]) -> Array[ShapeT, bool]: ...
+    @overload
+    def __eq__(self, other: object) -> bool: ...
+    def __eq__(self, other: object) -> Any: ...
+
+def test(x: MyClass, concrete: Array[tuple[int], str], unknown: Any) -> None:
+    arr = widen_shape(concrete)
+    assert_type(x == arr, Array[tuple[Any, ...], bool])
+    # A top-level Any can match every overload and must remain ambiguous.
+    assert_type(x == unknown, Any)
+    "#,
+);
+
+testcase!(
+    test_nested_any_with_object_fallback_spec_compliant,
+    TestEnv::new().enable_spec_compliant_overloads(),
+    r#"
+from typing import Any, Generic, TypeVar, assert_type, overload
+
+ShapeT = TypeVar("ShapeT", bound=tuple[int, ...])
+TypeT = TypeVar("TypeT")
+
+class Array(Generic[ShapeT, TypeT]):
+    pass
+
+def widen_shape(arr: Array[Any, TypeT]) -> Array[tuple[Any, ...], TypeT]: ...
+
+class MyClass:
+    @overload
+    def __eq__(self, other: Array[ShapeT, Any]) -> Array[ShapeT, bool]: ...
+    @overload
+    def __eq__(self, other: object) -> bool: ...
+    def __eq__(self, other: object) -> Any: ...
+
+def test(x: MyClass, concrete: Array[tuple[int], str]) -> None:
+    arr = widen_shape(concrete)
+    assert_type(x == arr, Any)
+    "#,
+);
+
 testcase!(
     test_abstractmethod_does_not_need_implementation,
     r#"
