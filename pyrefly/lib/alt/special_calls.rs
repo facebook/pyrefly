@@ -153,6 +153,60 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         default
     }
 
+    /// `getattr(obj, "name", default?)`: keep the normal builtin call validation, but when the
+    /// attribute name is a string literal and the receiver is a class instance with a known
+    /// attribute path, return that attribute's type instead of typeshed's `Any`.
+    pub fn call_getattr(
+        &self,
+        raw_args: &[Expr],
+        args: &[CallArg],
+        callee_ty: Type,
+        keywords: &[CallKeyword],
+        func_range: TextRange,
+        arguments_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let default = self.freeform_call_infer(
+            callee_ty,
+            args,
+            keywords,
+            func_range,
+            arguments_range,
+            hint,
+            errors,
+        );
+        let [_, attr_expr, ..] = raw_args else {
+            unreachable!("getattr special-casing requires 2 or 3 positional arguments")
+        };
+        let Expr::StringLiteral(attr_literal) = attr_expr else {
+            return default;
+        };
+        let CallArg::Arg(obj_arg) = &args[0] else {
+            unreachable!("starred getattr receiver is excluded by the caller")
+        };
+        let suppress_errors = self.error_swallower();
+        let obj_ty = obj_arg.infer(self, &suppress_errors);
+        if !matches!(obj_ty, Type::ClassType(_)) {
+            return default;
+        }
+        let attr_name = Name::new(attr_literal.value.to_string());
+        if !self.has_attr(&obj_ty, &attr_name) {
+            return default;
+        }
+        let attr_ty =
+            self.attr_infer_for_type(&obj_ty, &attr_name, attr_expr.range(), errors, None);
+        if args.len() == 2 {
+            attr_ty
+        } else {
+            let CallArg::Arg(default_arg) = &args[2] else {
+                unreachable!("starred getattr default is excluded by the caller")
+            };
+            let default_ty = default_arg.infer(self, &suppress_errors);
+            self.unions(vec![attr_ty, default_ty])
+        }
+    }
+
     pub fn call_reveal_type(
         &self,
         args: &[Expr],

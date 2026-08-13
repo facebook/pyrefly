@@ -2500,6 +2500,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                     )
                 }
+                Some(CalleeKind::Function(FunctionKind::Def(func)))
+                    if func.has_toplevel_qname("builtins", "getattr")
+                        && (x.arguments.args.len() == 2 || x.arguments.args.len() == 3)
+                        && x.arguments.keywords.is_empty()
+                        && x.arguments.args.iter().all(|arg| !matches!(arg, Expr::Starred(_))) =>
+                {
+                    self.call_getattr(
+                        &x.arguments.args,
+                        &args,
+                        ty.clone(),
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range(),
+                        hint,
+                        errors,
+                    )
+                }
                 // `f.register(C)(impl)`: applying the tagged factory decorator by call.
                 _ if let Type::KwCall(kw) = ty
                     && matches!(&kw.func_metadata.kind, FunctionKind::SingleDispatchRegister(_))
