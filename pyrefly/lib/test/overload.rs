@@ -1713,6 +1713,24 @@ def test(x: MyClass, concrete: Array[tuple[int], str]) -> None:
 );
 
 testcase!(
+    test_dict_update_contextual_types_lambdas,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from typing import Any, Callable, Final
+
+ConfigValue = str | bool | int | list[str]
+ConfigParser = Callable[[Any], ConfigValue]
+
+base: Final[dict[str, ConfigParser]] = {}
+config = base.copy()
+config.update({
+    "string": lambda value: str(value),
+    "list": lambda value: [str(value)],
+})
+    "#,
+);
+
+testcase!(
     test_abstractmethod_does_not_need_implementation,
     r#"
 from typing import overload
