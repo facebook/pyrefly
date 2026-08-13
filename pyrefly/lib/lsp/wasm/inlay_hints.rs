@@ -384,6 +384,14 @@ impl<'a> Transaction<'a> {
                                 Self::get_unpacked_element_expr(&bindings, *unpack_idx, *pos);
                             (element_expr, true)
                         }
+                        Binding::UnpackedName(unpacked) => {
+                            let element_expr = Self::get_unpacked_element_expr(
+                                &bindings,
+                                unpacked.source,
+                                unpacked.position,
+                            );
+                            (element_expr, true)
+                        }
                         _ => (None, false),
                     };
                     // If the inferred type is a class type w/ no type arguments and the

@@ -2324,21 +2324,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Binding::PromoteForward(fwd) = binding {
             return Arc::new(self.resolve_promote_forward(*fwd));
         }
-        // Inline first-use pinning for NameAssign.
-        let mut type_info = if let Binding::NameAssign(na) = binding
-            && self.solver().infer_with_first_use
-            && na.def_idx.is_some()
-            && na.annotation.is_none()
-            && let FirstUse::UsedBy(first_use_idx) = &na.first_use
-        {
-            self.solve_binding_with_first_use_pinning(
-                binding,
-                na.def_idx.unwrap(),
-                *first_use_idx,
-                errors,
-            )
-        } else {
-            self.binding_to_type_info(binding, errors)
+        let first_use = match binding {
+            Binding::NameAssign(na) if na.def_idx.is_some() && na.annotation.is_none() => {
+                Some((&na.first_use, na.def_idx.unwrap()))
+            }
+            Binding::UnpackedName(unpacked) => Some((&unpacked.first_use, unpacked.def_idx)),
+            _ => None,
+        };
+        let mut type_info = match first_use {
+            Some((FirstUse::UsedBy(first_use_idx), def_idx))
+                if self.solver().infer_with_first_use =>
+            {
+                self.solve_binding_with_first_use_pinning(binding, def_idx, *first_use_idx, errors)
+            }
+            _ => self.binding_to_type_info(binding, errors),
         };
         type_info.visit_mut(&mut |ty| {
             self.pin_all_placeholder_types(ty, true, range, errors);
@@ -4408,9 +4407,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         pos: &UnpackedPosition,
         receiver: Option<&MultiTargetReceiver>,
+        raw_source: bool,
         errors: &ErrorCollector,
     ) -> Type {
-        let iterables = self.iterate(self.get_idx(to_unpack).ty(), range, errors, None);
+        let unpacked =
+            if raw_source && let Binding::UnpackSource(source) = self.bindings().get(to_unpack) {
+                match source.as_ref() {
+                    Binding::UnpackedValue(ann, source, range, pos, receiver) => {
+                        TypeInfo::of_ty(self.binding_to_type_unpacked_value(
+                            *ann,
+                            *source,
+                            *range,
+                            pos,
+                            receiver.as_deref(),
+                            true,
+                            errors,
+                        ))
+                    }
+                    source => self.binding_to_type_info(source, errors),
+                }
+            } else {
+                self.get_idx(to_unpack).arc_clone()
+            };
+        let iterables = self.iterate(unpacked.ty(), range, errors, None);
         let mut values = Vec::new();
         for iterable in iterables {
             values.push(match iterable {
@@ -5338,6 +5357,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn binding_to_type_info(&self, binding: &Binding, errors: &ErrorCollector) -> TypeInfo {
         match binding {
             Binding::Forward(k) | Binding::PatternCapture(k) => self.get_idx(*k).arc_clone(),
+            Binding::UnpackSource(source) => self.binding_to_type_info(source, errors),
             Binding::PromoteForward(k) => self.resolve_promote_forward(*k),
             Binding::ForwardToFirstUse(k) => {
                 if let Some(def_idx) = self.def_idx_for_forward_to_first_use(*k)
@@ -5784,6 +5804,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn binding_to_type(&self, binding: &Binding, errors: &ErrorCollector) -> Type {
         match binding {
             Binding::Forward(..)
+            | Binding::UnpackSource(..)
             | Binding::PatternCapture(..)
             | Binding::PromoteForward(..)
             | Binding::ForwardToFirstUse(..)
@@ -5942,8 +5963,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     *range,
                     pos,
                     receiver.as_deref(),
+                    false,
                     errors,
                 ),
+            Binding::UnpackedName(unpacked) => self.binding_to_type_unpacked_value(
+                unpacked.annotation,
+                unpacked.source,
+                unpacked.range,
+                &unpacked.position,
+                None,
+                true,
+                errors,
+            ),
             &Binding::Function {
                 decorated_idx,
                 mut pred_idx,

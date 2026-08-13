@@ -2221,6 +2221,18 @@ pub struct MultiTargetReceiver {
     pub idx: Idx<Key>,
 }
 
+/// A name target whose value is selected from an unpacking assignment.
+#[derive(Clone, Debug)]
+pub struct UnpackedName {
+    pub annotation: Option<Idx<KeyAnnotation>>,
+    pub source: Idx<Key>,
+    pub range: TextRange,
+    pub position: UnpackedPosition,
+    pub first_use: FirstUse,
+    /// The definition idx used for partial-answer lookup during first-use pinning.
+    pub def_idx: Idx<Key>,
+}
+
 /// Data for a type alias binding.
 #[derive(Clone, Debug)]
 pub struct TypeAliasBinding {
@@ -2354,6 +2366,9 @@ pub enum Binding {
     /// An expression, optionally with a Key saying what the type must be.
     /// The Key must be a type of types, e.g. `Type::Type`.
     Expr(Option<Idx<KeyAnnotation>>, Box<Expr>),
+    /// The shared source of an unpacking assignment. Placeholder types stay unpinned
+    /// until each name target is solved through its first semantic use.
+    UnpackSource(Box<Binding>),
     // This binding is created specifically for stand-alone `Stmt::Expr` statements.
     // Unlike the general `Expr` binding above, this separate binding allows us to
     // perform additional checks that are only relevant for expressions in `Stmt::Expr`,
@@ -2410,6 +2425,8 @@ pub enum Binding {
         UnpackedPosition,
         Option<Box<MultiTargetReceiver>>,
     ),
+    /// An unannotated name target participating in first-use inference.
+    UnpackedName(Box<UnpackedName>),
     /// A type where we have an annotation, but also a type we computed.
     /// If the annotation has a type inside it (e.g. `int` then use the annotation).
     /// If the annotation doesn't (e.g. it's `Final`), then use the binding.
@@ -2549,6 +2566,7 @@ impl DisplayWith<Bindings> for Binding {
         };
         match self {
             Self::Expr(a, x) => write!(f, "Expr({}, {})", ann(a), m.display(x)),
+            Self::UnpackSource(x) => write!(f, "UnpackSource({})", x.display_with(ctx)),
             Self::StmtExpr(x, _) => write!(f, "StmtExpr({})", m.display(x)),
             Self::MultiTargetAssign(a, idx, range, receiver) => {
                 write!(
@@ -2568,6 +2586,13 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, ")")
             }
+            Self::UnpackedName(x) => write!(
+                f,
+                "UnpackedName({}, {}, {:?})",
+                ann(&x.annotation),
+                ctx.display(x.source),
+                x.position
+            ),
             Self::TypeVar(x) => {
                 let (a, name, call, kind) = x.as_ref();
                 write!(f, "{kind}({}, {name}, {})", ann(a), m.display(call))
@@ -2933,9 +2958,11 @@ impl Binding {
             // class-shaped — match the `NameAssign` path above.
             Binding::MultiTargetAssign(_, _, _, Some(_))
             | Binding::UnpackedValue(_, _, _, _, Some(_)) => Some(SymbolKind::Class),
+            Binding::UnpackedName(_) => Some(SymbolKind::Variable),
             Binding::UnpackedValue(_, _, _, _, None) => Some(SymbolKind::Variable),
             Binding::AugAssign(_, _) => Some(SymbolKind::Variable),
             Binding::Expr(_, _)
+            | Binding::UnpackSource(_)
             | Binding::StmtExpr(_, _)
             | Binding::MultiTargetAssign(_, _, _, None)
             | Binding::ReturnExplicit(_)

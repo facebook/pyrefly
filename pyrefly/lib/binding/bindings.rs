@@ -1792,7 +1792,7 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    /// Follow Forward chains to find a NameAssign with partial type support.
+    /// Follow Forward chains to find a binding with partial type support.
     ///
     /// Returns (default_idx, Some((def_idx, first_use))) if a NameAssign with
     /// `def_idx.is_some()` is found, or (default_idx, None) otherwise.
@@ -1819,6 +1819,9 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 Some(Binding::NameAssign(na)) if na.def_idx.is_some() => {
                     return (current, Some((current, na.first_use.clone())));
+                }
+                Some(Binding::UnpackedName(unpacked)) => {
+                    return (current, Some((current, unpacked.first_use.clone())));
                 }
                 _ => {
                     return (current, None);
@@ -1850,10 +1853,14 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    /// Mark a NameAssign as used by a specific binding for first-use pinning.
+    /// Mark a partial type binding as used by a specific binding for first-use pinning.
     fn mark_first_use(&mut self, def_idx: Idx<Key>, user_idx: Idx<Key>) {
-        if let Some(Binding::NameAssign(na)) = self.idx_to_binding_mut(def_idx) {
-            na.first_use = FirstUse::UsedBy(user_idx);
+        match self.idx_to_binding_mut(def_idx) {
+            Some(Binding::NameAssign(na)) => na.first_use = FirstUse::UsedBy(user_idx),
+            Some(Binding::UnpackedName(unpacked)) => {
+                unpacked.first_use = FirstUse::UsedBy(user_idx);
+            }
+            _ => unreachable!("partial type binding must support first-use tracking"),
         }
     }
 
@@ -1862,10 +1869,16 @@ impl<'a> BindingsBuilder<'a> {
     /// This is used when looking up names in static type contexts or for narrowing,
     /// where we don't want to pin partial types. Should be called after `lookup_name`.
     pub fn mark_does_not_pin_if_first_use(&mut self, def_idx: Idx<Key>) {
-        if let Some(Binding::NameAssign(na)) = self.idx_to_binding_mut(def_idx)
-            && matches!(na.first_use, FirstUse::Undetermined)
-        {
-            na.first_use = FirstUse::DoesNotPin;
+        match self.idx_to_binding_mut(def_idx) {
+            Some(Binding::NameAssign(na)) if matches!(na.first_use, FirstUse::Undetermined) => {
+                na.first_use = FirstUse::DoesNotPin;
+            }
+            Some(Binding::UnpackedName(unpacked))
+                if matches!(unpacked.first_use, FirstUse::Undetermined) =>
+            {
+                unpacked.first_use = FirstUse::DoesNotPin;
+            }
+            _ => {}
         }
     }
 
@@ -2033,6 +2046,7 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::NameAssign(..)
                     | Binding::MultiTargetAssign(..)
                     | Binding::UnpackedValue(..)
+                    | Binding::UnpackedName(..)
                     | Binding::AugAssign(..)
                     | Binding::AnnotatedType(..)
                     | Binding::IterableValueLoop(..)

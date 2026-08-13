@@ -37,6 +37,7 @@ use crate::binding::binding::NameAssign;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
+use crate::binding::binding::UnpackedName;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -88,8 +89,10 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, unpacked.usage())
         }
-        let unpack_idx =
-            self.insert_binding_current(unpacked, make_binding(assigned.as_deref(), None));
+        let unpack_idx = self.insert_binding_current(
+            unpacked,
+            Binding::UnpackSource(Box::new(make_binding(assigned.as_deref(), None))),
+        );
 
         // An unpacking has zero or one splats (starred expressions). Without a splat the
         // source length is pinned exactly; with one it is only a lower bound.
@@ -575,6 +578,18 @@ impl<'a> BindingsBuilder<'a> {
         }
         let binding = make_binding(assigned.as_deref(), ann);
         let binding = match (receiver_idx, binding) {
+            (None, Binding::UnpackedValue(None, source, range, position, None))
+                if self.infer_with_first_use() =>
+            {
+                Binding::UnpackedName(Box::new(UnpackedName {
+                    annotation: None,
+                    source,
+                    range,
+                    position,
+                    first_use: FirstUse::Undetermined,
+                    def_idx: user.idx(),
+                }))
+            }
             (Some(idx), Binding::MultiTargetAssign(a, rhs, range, _)) => {
                 let receiver = Box::new(MultiTargetReceiver {
                     name: name.id.clone(),
