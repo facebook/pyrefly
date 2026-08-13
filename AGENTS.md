@@ -55,14 +55,15 @@ Coding style: All code must be clean, documented and minimal. That means:
   complicated work at all.
 - If some code looks heavyweight, perhaps with lots of conditionals, then think
   harder for a more elegant way of achieving it.
-- **Unreachable states must panic, not silently degrade.** Do not use defensive
-  programming to handle states that should be impossible. If a match arm, Option,
-  or Result should never occur given the surrounding invariants, use
-  `unreachable!("explanation")` or `.expect("explanation")` — never
-  `_ => default`, `.unwrap_or_default()`, or silent fallbacks. A type checker
-  that silently produces wrong results is far worse than one that crashes with a
-  clear message. Silent fallbacks hide bugs and confuse maintainers by making
-  unreachable states look reachable.
+- **Avoid unreachable state.** It is a code smell for a state that ought to be
+  impossible due to surrounding invariants to look reachable.
+  - Prefer to either encode the invariants in the Rust types so that the
+    unreachable state is inexpressible, or refactor so that the code does not
+    depend on implicit assumptions.
+  - As a last resort, use `unreachable!("explanation")` or
+    `.expect("explanation")` to make assumptions explicit.
+  - Never hide the unreachable state through a silent fallback like
+    `_ => default` or `.unwrap_or_default()`.
 - Check for existing helpers in the `pyrefly_types` crate before manually
   creating or destructuring a `Type`.
 - Minimize the number of places `Expr` nodes are passed around and the number of
@@ -72,6 +73,9 @@ Coding style: All code must be clean, documented and minimal. That means:
   inline qualified paths (e.g., write `use crate::foo::Bar;` and then `Bar`,
   not `crate::foo::Bar` inline). The only exception is when there is a name
   collision between two imports, which is rare.
+- **Line-level code quality matters:** Sloppy code introduces unnecessary reviewer
+  overhead. Even if a piece of code is logically correct, it is not ready for
+  review until it is also clean, elegant, and maintainable.
 
 ## Comments and Documentation
 
@@ -91,13 +95,14 @@ Coding style: All code must be clean, documented and minimal. That means:
 
 ## Commit Messages
 
+The purpose of a commit message is to convey a commit's intent and rationale to the reader.
+Use simple, plain language; keep it concise; and avoid jargon.
+
 Do not write a laundry list of implementation changes. Focus on:
 
 - **Why**: what problem or design gap motivated the change
 - **What** (high level): the approach or solution, not individual file edits
 - **Why it works**: how the code changes realize the solution
-
-A reader should be able to understand the intent and rationale from the commit message, without following all the code changes in details.
 
 ## Development environments
 
