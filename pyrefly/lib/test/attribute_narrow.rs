@@ -278,6 +278,37 @@ class Env:
 );
 
 testcase!(
+    test_attr_assignment_preserves_isinstance_narrow,
+    r#"
+class UIElement: pass
+
+class LayoutDOM(UIElement):
+    sizing_mode: str | None = None
+
+def set_sizing_mode(item: UIElement, sizing_mode: str) -> None:
+    if isinstance(item, UIElement):
+        return
+    if not isinstance(item, LayoutDOM):
+        raise ValueError
+    item.sizing_mode = sizing_mode
+"#,
+);
+
+testcase!(
+    test_attr_assignment_preserves_typeis_narrow,
+    r#"
+import inspect
+from types import FunctionType
+from typing import Any
+
+def set_annotations(function: FunctionType) -> None:
+    annotations: dict[str, Any] = {}
+    if inspect.ismethod(function):
+        function.__func__.__annotations__ = annotations
+"#,
+);
+
+testcase!(
     bug = "TODO(stroxler) We should fine-tune descriptor narrowing more; this is not high-priority",
     test_descriptor_narrowing,
     r#"

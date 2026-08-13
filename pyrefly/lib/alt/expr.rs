@@ -95,6 +95,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::int_from_slice;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -432,38 +433,84 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !narrowed.is_never() {
             return narrowed;
         }
-        self.expr_infer_without_narrowing(x, errors).into_ty()
+        self.expr_infer_without_impossible_narrowing(x, errors)
+            .into_ty()
     }
 
-    fn expr_infer_without_narrowing(&self, x: &Expr, errors: &ErrorCollector) -> TypeInfo {
+    fn expr_infer_without_impossible_narrowing(
+        &self,
+        x: &Expr,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
         match x {
             Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => {
                 let key = Key::BoundName(ShortIdentifier::expr_name(name));
                 let mut idx = self.bindings().key_to_idx(&key);
                 let mut gas = Gas::new(100);
+                let mut narrows = Vec::new();
                 loop {
                     if gas.stop() {
                         break;
                     }
                     match self.bindings().get(idx) {
-                        Binding::Forward(next)
-                        | Binding::PatternCapture(next)
-                        | Binding::Narrow(next, _, _) => idx = *next,
+                        Binding::Forward(next) | Binding::PatternCapture(next) => idx = *next,
+                        Binding::Narrow(next, op, location) => {
+                            narrows.push((op.as_ref(), location.range()));
+                            idx = *next;
+                        }
                         Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
                         _ => break,
                     }
                 }
-                TypeInfo::of_ty(self.get_idx(idx).ty().clone())
+                let mut type_info = TypeInfo::of_ty(self.get_idx(idx).ty().clone());
+                for (op, range) in narrows.into_iter().rev() {
+                    let narrowed = self.narrow(&type_info, op, range, errors);
+                    if !narrowed.ty().is_never() {
+                        type_info = narrowed;
+                    } else if Self::is_positive_type_narrow(op) {
+                        // A positive runtime check is still useful after an earlier, contradictory
+                        // narrow made the declared type impossible.
+                        let object =
+                            TypeInfo::of_ty(self.heap.mk_class_type(self.stdlib.object().clone()));
+                        let narrowed = self.narrow(&object, op, range, errors);
+                        if !narrowed.ty().is_never() {
+                            type_info = narrowed;
+                        }
+                    }
+                }
+                type_info
             }
             Expr::Attribute(attr) => {
-                let base = self.expr_infer_without_narrowing(&attr.value, errors);
+                let base = self.expr_infer_without_impossible_narrowing(&attr.value, errors);
                 self.attr_access_infer(attr, &base, errors)
             }
             Expr::Subscript(subscript) => {
-                let base = self.expr_infer_without_narrowing(&subscript.value, errors);
-                self.subscript_infer(&base, &subscript.slice, subscript.range(), errors)
+                let base = self.expr_infer_without_impossible_narrowing(&subscript.value, errors);
+                self.subscript_infer(
+                    &base,
+                    &subscript.slice,
+                    subscript.range(),
+                    TypeFormContext::TypeExpression,
+                    errors,
+                )
             }
             _ => TypeInfo::of_ty(self.expr_infer(x, errors)),
+        }
+    }
+
+    fn is_positive_type_narrow(op: &NarrowOp) -> bool {
+        match op {
+            NarrowOp::Atomic(
+                None,
+                AtomicNarrowOp::IsInstance(..)
+                | AtomicNarrowOp::IsSubclass(..)
+                | AtomicNarrowOp::TypeEq(..)
+                | AtomicNarrowOp::TypeGuard(..)
+                | AtomicNarrowOp::TypeIs(..)
+                | AtomicNarrowOp::Call(..),
+            ) => true,
+            NarrowOp::And(ops) | NarrowOp::Or(ops) => ops.iter().any(Self::is_positive_type_narrow),
+            _ => false,
         }
     }
 
