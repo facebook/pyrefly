@@ -892,29 +892,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 ann
             }
-            _ => {
-                let ann_ty = self.expr_untype(x, type_form_context, errors);
-                if let Type::SpecialForm(special_form) = ann_ty
-                    && !type_form_context.is_valid_unparameterized_annotation(special_form)
-                {
-                    if special_form.can_be_subscripted() {
-                        self.error(
-                            errors,
-                            x.range(),
-                            ErrorKind::InvalidAnnotation,
-                            format!("Expected a type argument for `{special_form}`"),
-                        );
-                    } else {
-                        self.error(
-                            errors,
-                            x.range(),
-                            ErrorKind::InvalidAnnotation,
-                            format!("`{special_form}` is not allowed in this context"),
-                        );
-                    }
-                }
-                Annotation::new_type(ann_ty)
-            }
+            _ => Annotation::new_type(self.expr_untype(x, type_form_context, errors)),
         }
     }
 
@@ -6723,10 +6701,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             TypeFormContext::TypeArgument
                 | TypeFormContext::GenericBase
                 | TypeFormContext::ParamSpecDefault
-        ) && matches!(
-            ty,
-            Type::Concatenate(_, _) | Type::ParamSpecValue(_) | Type::ParamSpec(_) | Type::Ellipsis
-        ) {
+        ) && ty.is_kind_param_spec()
+        {
             return self.error(
                 errors,
                 range,
@@ -6734,10 +6710,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("`{ty}` is not allowed in this context"),
             );
         }
+        // We check tuple/callable/generic type arguments separately, so exclude those
+        // to avoid emitting duplicate errors.
         if !matches!(
             type_form_context,
             TypeFormContext::TupleOrCallableParam | TypeFormContext::TypeArgument
-        ) && matches!(ty, Type::TypeVarTuple(_))
+        ) && ty.is_kind_type_var_tuple()
         {
             // Determine whether we're simply missing an `Unpack[...]` or the TypeVarTuple isn't allowed at all in this context.
             let tmp_collector = self.error_collector();
@@ -6784,38 +6762,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     ErrorKind::InvalidAnnotation,
                     format!("`{special_form}` is not allowed in this context"),
-                );
-            }
-        }
-        if let Type::Quantified(quantified) = &ty {
-            if quantified.is_param_spec()
-                && !matches!(
-                    type_form_context,
-                    TypeFormContext::TypeArgument
-                        | TypeFormContext::GenericBase
-                        | TypeFormContext::ParamSpecDefault
-                )
-            {
-                return self.error(
-                    errors,
-                    range,
-                    ErrorKind::InvalidAnnotation,
-                    "`ParamSpec` is not allowed in this context".to_owned(),
-                );
-            }
-            // We check tuple/callable/generic type arguments separately, so exclude those
-            // to avoid emitting duplicate errors.
-            if quantified.is_type_var_tuple()
-                && !matches!(
-                    type_form_context,
-                    TypeFormContext::TupleOrCallableParam | TypeFormContext::TypeArgument
-                )
-            {
-                return self.error(
-                    errors,
-                    range,
-                    ErrorKind::InvalidAnnotation,
-                    "`TypeVarTuple` must be unpacked".to_owned(),
                 );
             }
         }
