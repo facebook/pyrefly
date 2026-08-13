@@ -1667,6 +1667,44 @@ Completion Results:
 }
 
 #[test]
+fn kwargs_completion_pydantic_constructor_ignores_inherited_unannotated_new() {
+    let sqlmodel = r#"
+from typing import Any
+from pydantic import BaseModel
+
+class SQLModel(BaseModel):
+    def __new__(cls, *args: Any, **kwargs: Any):
+        return object.__new__(cls)
+
+    def __init__(self, **data: Any) -> None: ...
+"#;
+    let main = r#"
+from sqlmodel import SQLModel
+
+class A(SQLModel):
+    a: int
+    b: str
+
+A(
+# ^
+"#;
+    let pydantic_path =
+        std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
+    let mut test_env = TestEnv::new_with_site_package_paths(&[&pydantic_path]);
+    test_env.add("sqlmodel", sqlmodel);
+    test_env.add("main", main);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let report =
+        get_default_test_report()(&state, &handle("main"), extract_cursors_for_test(main)[0]);
+    assert!(report.contains("- (Variable) a=:"), "{report}");
+    assert!(report.contains("- (Variable) b=:"), "{report}");
+    assert!(!report.contains("args="), "{report}");
+    assert!(!report.contains("kwargs="), "{report}");
+}
+
+#[test]
 fn kwargs_completion_dunder_call_metaclass_constructor() {
     let code = r#"
 class Meta(type):

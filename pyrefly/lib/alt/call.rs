@@ -1124,6 +1124,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Tracks whether we've already recorded a trace for IDE features.
         // Priority: metaclass __call__ > overridden __new__ > __init__.
         let mut recorded_trace = false;
+        let prefer_init_trace = self.constructor_prefers_init_over_inherited_new(&cls);
         let errors = self.error_collector();
         if let Some(ret) = self.call_metaclass(
             &cls,
@@ -1220,7 +1221,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         AttributeReferenceKind::ConstructorCall,
                     );
                 }
-                if !recorded_trace {
+                if !recorded_trace && !prefer_init_trace {
                     self.record_resolved_trace(arguments_range, &new_method);
                     recorded_trace = true;
                 }
@@ -2268,6 +2269,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             (default_constructor(), false)
         };
+        if overrides_init && self.constructor_prefers_init_over_inherited_new(cls) {
+            // An inherited catch-all `__new__` should not obscure a more useful `__init__`
+            // signature. Direct construction still checks both methods independently.
+            return init_attr_ty;
+        }
         if !overrides_new && overrides_init {
             // If `__init__` is overridden and `__new__` is inherited from object, use `__init__`
             init_attr_ty

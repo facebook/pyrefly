@@ -2169,6 +2169,51 @@ Person("Alice", 25)
 }
 
 #[test]
+fn hover_on_pydantic_constructor_ignores_inherited_unannotated_new() {
+    let sqlmodel = r#"
+from typing import Any
+from pydantic import BaseModel
+
+class SQLModel(BaseModel):
+    def __new__(cls, *args: Any, **kwargs: Any):
+        return object.__new__(cls)
+
+    def __init__(self, **data: Any) -> None: ...
+"#;
+    let main = r#"
+from sqlmodel import SQLModel
+
+class A(SQLModel):
+    a: int
+    b: str
+
+value = A
+#       ^
+A(a=1, b="")
+#^
+"#;
+    let pydantic_path =
+        std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
+    let mut test_env = TestEnv::new_with_site_package_paths(&[&pydantic_path]);
+    test_env.add("sqlmodel", sqlmodel);
+    test_env.add("main", main);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    for position in extract_cursors_for_test(main) {
+        let report = get_test_report(&state, &handle("main"), position);
+        assert!(
+            report.contains("a:") && report.contains("b:"),
+            "Expected Pydantic constructor hover to show synthesized fields, got: {report}"
+        );
+        assert!(
+            !report.contains("*args: Any") && !report.contains("**kwargs: Any"),
+            "Expected Pydantic constructor hover to hide inherited broad __new__, got: {report}"
+        );
+    }
+}
+
+#[test]
 fn hover_on_namedtuple_constructor_shows_field_signature() {
     let code = r#"
 from typing import NamedTuple
