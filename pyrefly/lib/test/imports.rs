@@ -2344,3 +2344,47 @@ testcase!(
 from bar import a
 "#,
 );
+
+fn env_implicit_reexport_unresolvable_all() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+a: int = 1
+b: int = 2
+c: int = 3
+d: int = 4
+e: int = 5
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import a
+from foo import b as b
+from foo import c
+from foo import d
+from foo import e
+f: int = 4
+__all__ = ["c", "e"]
+__all__.append("d")
+__all__.remove("e")
+for name in ["f"]:
+    __all__.append(name)  # E: `__all__` could not be statically analyzed
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport_unresolvable_all,
+    env_implicit_reexport_unresolvable_all().enable_implicit_reexport_error(),
+    r#"
+from bar import a  # E: `a` is not exported from module `bar`
+from bar import b
+from bar import c
+from bar import d
+from bar import e  # E: `e` is not exported from module `bar`
+from bar import f
+"#,
+);

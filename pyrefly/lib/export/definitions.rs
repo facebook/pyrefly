@@ -806,19 +806,15 @@ impl DefinitionsBuilder {
                                 self.inner.dunder_all.entries.extend(entries);
                             }
                             None => {
-                                self.inner.dunder_all = DunderAll {
-                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
-                                    entries: Vec::new(),
-                                };
+                                self.inner.dunder_all.kind =
+                                    DunderAllKind::Unresolvable(arguments.args[0].range());
                             }
                         },
                         "append" => match DunderAllEntry::as_item(&arguments.args[0]) {
                             Some(entry) => self.inner.dunder_all.entries.push(entry),
                             None => {
-                                self.inner.dunder_all = DunderAll {
-                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
-                                    entries: Vec::new(),
-                                };
+                                self.inner.dunder_all.kind =
+                                    DunderAllKind::Unresolvable(arguments.args[0].range());
                             }
                         },
                         "remove" => {
