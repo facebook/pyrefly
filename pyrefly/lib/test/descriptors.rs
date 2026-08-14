@@ -103,6 +103,23 @@ def f(c: C):
 );
 
 testcase!(
+    test_overloaded_property_class_access_preserves_narrow_self,
+    r#"
+from typing import LiteralString, overload, reveal_type
+class C(str):
+    @property
+    @overload
+    def foo(self: LiteralString) -> int: ...
+    @property
+    @overload
+    def foo(self: str) -> str: ...
+    @property
+    def foo(self: str) -> int | str: ...
+reveal_type(C.foo)  # E: revealed type: Overload[ (self: LiteralString) -> int (self: str) -> str ]
+    "#,
+);
+
+testcase!(
     test_abstract_property,
     r#"
 from typing import assert_type
@@ -130,7 +147,7 @@ class C:
 def f(c: C):
     assert_type(c.foo, int)
     c.foo = "42"
-    reveal_type(C.foo)  # E: revealed type: (self: C, value: str)
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: str) -> None
     "#,
 );
 
@@ -187,7 +204,7 @@ class C:
 def f(c: C) -> None:
     assert_type(c.foo, int)
     c.foo = 1
-    reveal_type(C.foo)  # E: revealed type: (self: C, value: int)
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: int) -> None
     del c.foo
     "#,
 );
@@ -332,15 +349,24 @@ class MethodInitialized:
     def __init__(self) -> None:
         self.device = Device()
 
-def f(a: AnnotationOnly, m: MethodInitialized) -> None:
+class AnnotatedAndMethodInitialized:
+    device: Device
+    def __init__(self) -> None:
+        self.device = Device()
+
+def f(a: AnnotationOnly, m: MethodInitialized, am: AnnotatedAndMethodInitialized) -> None:
     # Annotation-only descriptor: writes are rejected (no `__set__`).
     a.device = Device()  # E: Attribute `device` of class `AnnotationOnly` is a read-only descriptor with no `__set__` and cannot be set
     # Method-initialized: plain instance attribute, write allowed.
     m.device = Device()
+    # An annotation does not install a descriptor on the class when the field is
+    # initialized on the instance.
+    am.device = Device()
     # Annotation-only descriptor: read invokes `__get__` and returns int.
     assert_type(a.device, int)
     # Method-initialized: read returns the attribute itself.
     assert_type(m.device, Device)
+    assert_type(am.device, Device)
     "#,
 );
 
@@ -810,6 +836,33 @@ class B[T: A]:
 );
 
 testcase!(
+    test_overloaded_descriptor_get_preserves_specialized_owner,
+    r#"
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, assert_type, overload
+
+Storage: TypeAlias = Literal["python", "pyarrow"]
+StorageT = TypeVar("StorageT", bound=Storage)
+_StorageT = TypeVar("_StorageT", bound=Storage | None, default=None)
+
+class _CatStorageDescriptor:
+    @overload
+    def __get__(self, instance: Cat[None], owner: type[Cat[None]]) -> Storage: ...
+    @overload
+    def __get__(
+        self, instance: Cat[StorageT], owner: type[Cat[StorageT]]
+    ) -> StorageT: ...
+
+    def __get__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class Cat(Generic[_StorageT]):
+    storage = _CatStorageDescriptor()
+
+def main(cat: Cat[Literal["pyarrow"]]) -> None:
+    assert_type(cat.storage, Literal["pyarrow"])
+    "#,
+);
+
+testcase!(
     test_property_constructor_non_callable_arg,
     r#"
 from typing import Any, assert_type
@@ -863,7 +916,7 @@ def f(c: C):
     assert_type(c.foo, int)
     c.foo = "42"
     c.foo = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str`
-    reveal_type(C.foo)  # E: revealed type: (self: C, value: str)
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: str) -> None
     "#,
 );
 
@@ -945,10 +998,10 @@ def f(c: C):
     "#,
 );
 
+// A `__get__` whose type is itself a descriptor must not recurse forever; the
+// read falls back to the descriptor's instance type, so the call below is reported
+// as not callable rather than overflowing the stack.
 testcase!(
-    // A `__get__` whose type is itself a descriptor must not recurse forever; the
-    // read falls back to the descriptor's instance type, so the call below is reported
-    // as not callable rather than overflowing the stack.
     test_self_referential_descriptor_get_no_crash,
     r#"
 class C:
@@ -960,9 +1013,44 @@ C.__get__()  # E: Expected a callable, got `C`
     "#,
 );
 
+// A protocol used as a decorator return type that defines both `__call__` and
+// `__get__` is a descriptor: attribute access must go through `__get__`, not be
+// treated as a callback protocol. See GitHub issue #3345.
 testcase!(
-    // Assignment resolves a descriptor through its getter too, so the same guard keeps
-    // the write path from overflowing the stack.
+    test_callable_descriptor_protocol,
+    r#"
+from typing import Any, Callable, Concatenate, Protocol, Self, assert_type, overload
+
+
+class Method[**P, R](Protocol):
+    def __call__(self, __self__: Any, /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type[Any]) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Any, owner: type[Any] | None = None) -> Callable[P, R]: ...
+
+    def __get__(self, instance: Any | None, owner: type[Any] | None = None) -> Self | Callable[P, R]: ...
+
+
+def wrap[**P, R](method: Callable[Concatenate[Any, P], R]) -> Method[P, R]: ...
+
+
+class Foo:
+    @wrap
+    def bar(self) -> None: ...
+
+
+def f(foo: Foo) -> None:
+    assert_type(foo.bar, Callable[[], None])
+    foo.bar()
+    "#,
+);
+
+// Assignment resolves a descriptor through its getter too, so the same guard keeps
+// the write path from overflowing the stack.
+testcase!(
     test_self_referential_descriptor_set_no_crash,
     r#"
 class C:
@@ -977,5 +1065,49 @@ class Host:
     x: C = C()
 def f(h: Host) -> None:
     h.x = 5  # E: Expected a callable, got `C`
+    "#,
+);
+
+testcase!(
+    test_access_property_on_metaclass,
+    r#"
+class DTypeMeta(type):
+    @property
+    def time_unit(cls) -> str: ...
+
+class DType: ...
+
+class Datetime(DType, metaclass=DTypeMeta):
+    __slots__ = ("time_unit",)
+    def __init__(self, time_unit: str = "us") -> None:
+        self.time_unit: str = time_unit
+
+def get_unit(dtype: DType | type[DType]):
+    if (
+        isinstance(dtype, type)
+        and issubclass(dtype, Datetime)
+        or isinstance(dtype, Datetime)
+    ):
+        return dtype.time_unit
+    "#,
+);
+
+testcase!(
+    test_delete_only_data_descriptor_on_metaclass,
+    r#"
+from typing import assert_type
+
+class DeleteOnlyDescriptor:
+    def __delete__(self, instance: object) -> None: ...
+
+class Meta(type):
+    value = DeleteOnlyDescriptor()
+
+class C(metaclass=Meta):
+    __slots__ = ("value",)
+    def __init__(self) -> None:
+        self.value: int = 0
+
+assert_type(C.value, DeleteOnlyDescriptor)
     "#,
 );

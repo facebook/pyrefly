@@ -203,6 +203,10 @@ def get_pyrefly_command(executable: Path | None) -> list[str]:
         "--python-version",
         "3.13.0",
         "--min-severity=warn",
+        # The conformance suite exercises dataclass descriptor patterns in a way that is
+        # inconsistent with the runtime.
+        # Disable this error until https://github.com/python/typing/pull/2299 is merged
+        "--ignore=bad-dataclass-descriptor",
     ]
 
 

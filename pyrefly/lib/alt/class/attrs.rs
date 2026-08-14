@@ -10,8 +10,8 @@
 //! module implements the behaviors that diverge from plain dataclasses, including: init-parameter
 //! renaming (stripping leading underscores), the `auto_attribs` defaults per decorator flavor,
 //! `eq`/`order`/`cmp` validation, `on_setattr`/`setters.frozen` read-only detection,
-//! `converters.optional` handling, `@x.default` decorator return-type checks, and the
-//! `assoc`/`fields`/`fields_dict` runtime helpers.
+//! `converters.optional`/`converters.pipe` handling, `@x.default` decorator return-type checks, `@x.converter`
+//! decorator input types, and the `assoc`/`fields`/`fields_dict` runtime helpers.
 
 use std::sync::Arc;
 
@@ -39,12 +39,13 @@ use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
-use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyUndecoratedFunction;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::types::callable::FunctionKind;
+use crate::types::callable::Param;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::function::FunctionKind;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::DataclassKeywords;
 use crate::types::keywords::TypeMap;
@@ -70,8 +71,11 @@ pub(crate) fn is_attrs_setters_frozen(ty: &Type) -> bool {
     if let Type::Function(f) = ty
         && let FunctionKind::Def(id) = &f.metadata.kind
     {
-        id.name.as_str() == "frozen"
-            && matches!(id.module.name().as_str(), "attr.setters" | "attrs.setters")
+        id.qname.id().as_str() == "frozen"
+            && matches!(
+                id.qname.module_name().as_str(),
+                "attr.setters" | "attrs.setters"
+            )
     } else {
         false
     }
@@ -84,8 +88,11 @@ pub(crate) fn is_attrs_setters_pipe(ty: &Type) -> bool {
     if let Type::Function(f) = ty
         && let FunctionKind::Def(id) = &f.metadata.kind
     {
-        id.name.as_str() == "pipe"
-            && matches!(id.module.name().as_str(), "attr.setters" | "attrs.setters")
+        id.qname.id().as_str() == "pipe"
+            && matches!(
+                id.qname.module_name().as_str(),
+                "attr.setters" | "attrs.setters"
+            )
     } else {
         false
     }
@@ -101,7 +108,7 @@ fn attrs_type_is_frozen_setter(ty: &Type) -> bool {
         Type::Tuple(Tuple::Concrete(elts)) => elts.iter().any(attrs_type_is_frozen_setter),
         Type::Tuple(Tuple::Unbounded(elt)) => attrs_type_is_frozen_setter(elt),
         Type::Tuple(Tuple::Unpacked(unpacked)) => {
-            let (prefix, middle, suffix) = &**unpacked;
+            let (prefix, middle, suffix) = unpacked.parts();
             prefix.iter().any(attrs_type_is_frozen_setter)
                 || attrs_type_is_frozen_setter(middle)
                 || suffix.iter().any(attrs_type_is_frozen_setter)
@@ -177,8 +184,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field_specifiers.iter().any(|callee| {
             matches!(callee,
                 CalleeKind::Function(FunctionKind::Def(id))
-                    if id.module.name() == ModuleName::attr()
-                        || id.module.name() == ModuleName::attrs()
+                    if id.qname.module_name() == ModuleName::attr()
+                        || id.qname.module_name() == ModuleName::attrs()
             )
         })
     }
@@ -257,6 +264,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
+    }
+
+    /// The `__init__` input type from a `@<field>.converter` method. attrs invokes it as
+    /// `converter(self, field, value)`, so the `value` (third positional) parameter's type is the
+    /// converter's input; falls back to `Any` when that parameter is absent or unannotated.
+    pub(crate) fn attrs_converter_decorator_param(&self, method_range: TextRange) -> Type {
+        let func = self.get(&KeyUndecoratedFunction(ShortIdentifier::from_text_range(
+            method_range,
+        )));
+        func.params
+            .iter()
+            .filter_map(|p| match p {
+                Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => Some(ty.clone()),
+                _ => None,
+            })
+            .nth(2)
+            .unwrap_or_else(|| self.heap.mk_any_implicit())
     }
 
     /// attrs rejects two `eq`/`order`/`cmp` combinations at runtime (`ValueError`), on both the
@@ -454,10 +478,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn attrs_attribute_class(&self) -> Option<Class> {
         let name = Name::new_static("Attribute");
         for module in [ModuleName::attr(), ModuleName::attrs()] {
-            if self.exports.export_exists(module, &name)
-                && let Type::ClassDef(cls) = self
-                    .get_from_export(module, None, &KeyExport(name.clone()))
-                    .as_ref()
+            if let Some(Type::ClassDef(cls)) =
+                self.try_get_from_export(module, name.clone()).as_deref()
             {
                 return Some(cls.clone());
             }
@@ -484,12 +506,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         attrs_type_is_frozen_setter(&self.expr_infer(expr, &self.error_swallower()))
     }
 
-    /// `attr.converters.optional(c)` wraps an inner converter so the field also accepts `None`.
-    /// Returns `<c's input> | None` when `converter=` is such a call, else `None` so the caller
-    /// falls back to plain converter handling.
-    pub(crate) fn attrs_converters_optional_param(
+    /// The `__init__` input for an `attr.converters`/`attrs.converters` combinator `converter=`:
+    /// `optional(c)` adds `None` to `c`'s input; `pipe(c1, ...)` uses `c1`'s (it runs first);
+    /// `default_if_none(...)` passes non-`None` values through, so it is `annotated_field_ty | None`.
+    /// `None` for any other `converter=`.
+    ///
+    /// `annotated_field_ty` is the field's declared type annotation, if the field has one.
+    pub(crate) fn attrs_converters_combinator_param(
         &self,
         args: &Arguments,
+        annotated_field_ty: Option<&Type>,
         errors: &ErrorCollector,
     ) -> Option<Type> {
         let kw = args.keywords.iter().find(|kw| {
@@ -500,14 +526,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Expr::Call(call) = &kw.value else {
             return None;
         };
+        // These converters are overloaded, so match on the resolved definition identity via
+        // `callee_kind` (which looks through overloads) rather than a bare `Type::Function`.
+        let Some(CalleeKind::Function(FunctionKind::Def(id))) =
+            self.expr_infer(&call.func, errors).callee_kind()
+        else {
+            return None;
+        };
         if !matches!(
-            self.expr_infer(&call.func, errors).callee_kind(),
-            Some(CalleeKind::Function(FunctionKind::AttrsConvertersOptional))
+            id.qname.module_name().as_str(),
+            "attr.converters" | "attrs.converters"
         ) {
             return None;
         }
-        let inner = call.arguments.args.first()?;
-        let inner_ty = self.expr_infer(inner, errors);
-        Some(self.union(self.get_converter_param(&inner_ty), self.heap.mk_none()))
+        let first_input =
+            |hint| {
+                Some(self.get_converter_param(
+                    &self.expr_infer(call.arguments.args.first()?, errors),
+                    hint,
+                ))
+            };
+        match id.qname.id().as_str() {
+            // `optional(c)` feeds `c`'s output straight to the field, so its type parameters solve
+            // against the annotation.
+            "optional" => Some(self.union(first_input(annotated_field_ty)?, self.heap.mk_none())),
+            // In `pipe(c1, ...)`, `c1`'s output feeds the next converter, not the field, so the
+            // annotation must not solve `c1`'s type parameters (only the last output must match it).
+            "pipe" => first_input(None),
+            "default_if_none" => Some(self.union(annotated_field_ty?.clone(), self.heap.mk_none())),
+            _ => None,
+        }
     }
 }

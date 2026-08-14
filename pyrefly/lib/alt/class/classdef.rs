@@ -67,6 +67,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def_index: ClassDefIndex,
         x: &ClassDefData,
         parent: &NestingContext,
+        is_protocol: bool,
         tparams_require_binding: bool,
         errors: &ErrorCollector,
     ) -> Class {
@@ -82,6 +83,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             parent.dupe(),
             self.module().dupe(),
             precomputed_tparams,
+            is_protocol,
         )
     }
 
@@ -97,6 +99,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             parent.dupe(),
             self.module().dupe(),
             Some(Arc::new(TParams::default())),
+            false,
         )
     }
 

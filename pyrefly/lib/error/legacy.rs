@@ -90,6 +90,51 @@ impl LegacyErrors {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct BaselineError {
+    pub column: usize,
+    pub path: String,
+    /// The kebab-case name of the error kind.
+    pub name: String,
+    concise_description: String,
+    #[serde(default = "default_severity")]
+    severity: String,
+    /// Optional notebook cell number for errors in notebook files
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cell: Option<usize>,
+}
+
+impl BaselineError {
+    fn from_error(relative_to: &Path, error: &Error) -> Self {
+        let error_range = error.display_range();
+        let error_path = error.path().as_path();
+        Self {
+            column: error_range.start.column().get() as usize,
+            cell: error_range.start.cell().map(|cell| cell.get() as usize),
+            path: error_path
+                .relativize_from(relative_to)
+                .to_string_lossy()
+                .replace('\\', "/"), // Normalize Windows backslashes so baseline files are consistent across platforms
+            name: error.error_kind().to_name().to_owned(),
+            concise_description: error.msg_header().to_owned(),
+            severity: severity_to_str(error.severity()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct BaselineErrors {
+    pub errors: Vec<BaselineError>,
+}
+
+impl BaselineErrors {
+    pub fn from_errors(relative_to: &Path, errors: &[Error]) -> Self {
+        Self {
+            errors: errors.map(|e| BaselineError::from_error(relative_to, e)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

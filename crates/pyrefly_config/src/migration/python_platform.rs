@@ -18,13 +18,15 @@ pub struct PythonPlatformConfig;
 impl ConfigOptionMigrater for PythonPlatformConfig {
     fn migrate_from_mypy(
         &self,
-        _mypy_cfg: &Ini,
-        _pyrefly_cfg: &mut ConfigFile,
+        mypy_cfg: &Ini,
+        pyrefly_cfg: &mut ConfigFile,
     ) -> anyhow::Result<()> {
-        // mypy doesn't have a field for the Python platform
-        Err(anyhow::anyhow!(
-            "mypy does not support platform configuration"
-        ))
+        let platform = mypy_cfg
+            .get("mypy", "platform")
+            .ok_or_else(|| anyhow::anyhow!("No platform found in mypy config"))?;
+
+        pyrefly_cfg.python_environment.python_platform = Some(PythonPlatform::new(&platform));
+        Ok(())
     }
 
     fn migrate_from_pyright(
@@ -56,13 +58,27 @@ mod tests {
 
     #[test]
     fn test_migrate_from_mypy() {
-        let mypy_cfg = Ini::new();
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "platform", Some("win32".to_owned()));
 
+        let mut pyrefly_cfg = ConfigFile::default();
+        PythonPlatformConfig
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("mypy platform should migrate");
+
+        assert_eq!(
+            pyrefly_cfg.python_environment.python_platform,
+            Some(PythonPlatform::windows())
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_empty() {
+        let mypy_cfg = Ini::new();
         let mut pyrefly_cfg = ConfigFile::default();
         let default_platform = pyrefly_cfg.python_environment.python_platform.clone();
 
-        let python_platform_config = PythonPlatformConfig;
-        let result = python_platform_config.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        let result = PythonPlatformConfig.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_err());
         assert_eq!(
@@ -78,6 +94,7 @@ mod tests {
             ("Linux", PythonPlatform::linux()),
             ("Windows", PythonPlatform::windows()),
             ("Darwin", PythonPlatform::mac()),
+            ("All", PythonPlatform::All),
         ];
 
         for (platform_name, expected_platform) in test_cases {
