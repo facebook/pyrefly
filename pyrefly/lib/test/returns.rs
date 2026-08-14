@@ -1014,6 +1014,34 @@ def f() -> Any:
 );
 
 testcase!(
+    test_no_any_return_explicit_no_error_when_return_type_is_object,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def f(x: Any) -> object:
+    return x
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit_no_error_when_return_type_is_object,
+    crate::test::util::TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+ObjectAlias = object
+
+def get_implicit_any(x):
+  return x
+
+def direct() -> object:
+  return get_implicit_any(3)
+
+def aliased() -> ObjectAlias:
+  return get_implicit_any(3)
+"#,
+);
+
+testcase!(
     test_no_any_return_explicit_no_error_when_no_return_annotation,
     crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
     r#"
