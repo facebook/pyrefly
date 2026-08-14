@@ -1348,29 +1348,35 @@ impl ConfigFile {
         // file or CLI flag). If not, we auto-discover a `typings/` directory below.
         let site_package_path_set = self.python_environment.site_package_path.is_some();
 
-        if self.interpreters.python_interpreter_find_cmd.is_some()
-            && (matches!(
-                self.interpreters.python_interpreter_path,
-                Some(ConfigOrigin::CommandLine(_) | ConfigOrigin::ConfigFile(_))
-            ) || self.interpreters.fallback_python_interpreter_name.is_some()
-                || self.interpreters.conda_environment.is_some()
-                || self.interpreters.skip_interpreter_query)
-        {
+        let mut interpreter_selections = Vec::new();
+        if matches!(
+            self.interpreters.python_interpreter_path.as_ref(),
+            Some(ConfigOrigin::CommandLine(_) | ConfigOrigin::ConfigFile(_))
+        ) {
+            interpreter_selections.push("python-interpreter-path");
+        }
+        if self.interpreters.python_interpreter_find_cmd.is_some() {
+            interpreter_selections.push("python-interpreter-find-cmd");
+        }
+        if self.interpreters.fallback_python_interpreter_name.is_some() {
+            interpreter_selections.push("fallback-python-interpreter-name");
+        }
+        if self.interpreters.conda_environment.is_some() {
+            interpreter_selections.push("conda-environment");
+        }
+        if self.interpreters.skip_interpreter_query {
+            interpreter_selections.push("skip-interpreter-query");
+        }
+        if interpreter_selections.len() > 1 {
             configure_errors.push(anyhow::anyhow!(
-                "`python-interpreter-find-cmd` cannot be combined with another interpreter selection option."
+                "Only one interpreter selection option can be set, but found: {}.",
+                interpreter_selections.join(", ")
             ));
         }
 
         if self.interpreters.skip_interpreter_query {
             self.python_environment.set_empty_to_default();
         } else {
-            if self.interpreters.python_interpreter_path.is_some()
-                && self.interpreters.fallback_python_interpreter_name.is_some()
-            {
-                configure_errors.push(anyhow::anyhow!(
-                        "`python-interpreter-path` and `fallback-python-interpreter-name` both set, but only one can be used."
-                ));
-            }
             match self.interpreters.find_interpreter(project_root.as_deref()) {
                 Ok(interpreter) => {
                     let (env, error) = PythonEnvironment::get_interpreter_env(&interpreter);
@@ -1620,15 +1626,6 @@ impl ConfigFile {
             configure_errors.extend(validate(site_package_path.as_ref(), "site-package-path"));
         }
         configure_errors.extend(validate(&self.search_path_from_file, "search-path"));
-
-        if self.interpreters.python_interpreter_path.is_some()
-            && self.interpreters.conda_environment.is_some()
-            && self.interpreters.python_interpreter_find_cmd.is_none()
-        {
-            configure_errors.push(anyhow::anyhow!(
-                     "Cannot use both `python-interpreter-path` and `conda-environment`. Finding environment info using `python-interpreter-path`.",
-             ));
-        }
 
         if let ConfigSource::File(path) = &self.source {
             configure_errors
@@ -1950,6 +1947,7 @@ mod tests {
     use super::*;
     use crate::base::ExtraConfigs;
     use crate::base::UntypedDefBehavior;
+    use crate::environment::interpreters::InterpreterDiscoveryCommand;
     use crate::error_kind::ErrorKind;
     use crate::error_kind::Severity;
     use crate::module_wildcard::ModuleWildcard;
@@ -2629,14 +2627,19 @@ output-format = "omit-errors"
             r#"python-interpreter-find-cmd = ["poetry", "env", "info", "-e"]"#,
         )
         .unwrap();
+        let expected = ["poetry", "env", "info", "-e"].map(str::to_owned);
         assert_eq!(
-            config.interpreters.python_interpreter_find_cmd,
-            Some(vec![
-                "poetry".to_owned(),
-                "env".to_owned(),
-                "info".to_owned(),
-                "-e".to_owned(),
-            ])
+            config.interpreters.python_interpreter_find_cmd.as_deref(),
+            Some(expected.as_slice())
+        );
+        let serialized = toml::to_string(&config).unwrap();
+        assert_eq!(ConfigFile::parse_config(&serialized).unwrap(), config);
+
+        let error = ConfigFile::parse_config(r#"python-interpreter-find-cmd = []"#).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`python-interpreter-find-cmd` must contain a program")
         );
     }
 
@@ -3558,43 +3561,61 @@ output-format = "omit-errors"
     }
 
     #[test]
-    fn test_python_interpreter_conda_environment() {
-        let mut config = ConfigFile {
-            interpreters: Interpreters {
-                python_interpreter_path: Some(ConfigOrigin::config(PathBuf::new())),
-                fallback_python_interpreter_name: None,
-                python_interpreter_find_cmd: None,
-                conda_environment: Some(ConfigOrigin::config("".to_owned())),
-                skip_interpreter_query: false,
-            },
-            ..Default::default()
-        };
+    fn test_interpreter_selection_options_are_mutually_exclusive() {
+        let selections = [
+            "python-interpreter-path",
+            "python-interpreter-find-cmd",
+            "fallback-python-interpreter-name",
+            "conda-environment",
+            "skip-interpreter-query",
+        ];
 
-        let validation_errors = config.configure();
+        for (first_index, first) in selections.iter().enumerate() {
+            for second in &selections[first_index + 1..] {
+                let mut interpreters = Interpreters::default();
+                for selection in [first, second] {
+                    match *selection {
+                        "python-interpreter-path" => {
+                            interpreters.python_interpreter_path =
+                                Some(ConfigOrigin::config(PathBuf::from("ignored")));
+                        }
+                        "python-interpreter-find-cmd" => {
+                            interpreters.python_interpreter_find_cmd = Some(
+                                InterpreterDiscoveryCommand::try_from(vec!["ignored".to_owned()])
+                                    .unwrap(),
+                            );
+                        }
+                        "fallback-python-interpreter-name" => {
+                            interpreters.fallback_python_interpreter_name =
+                                Some(ConfigOrigin::config("ignored".to_owned()));
+                        }
+                        "conda-environment" => {
+                            interpreters.conda_environment =
+                                Some(ConfigOrigin::config("ignored".to_owned()));
+                        }
+                        "skip-interpreter-query" => {
+                            interpreters.skip_interpreter_query = true;
+                        }
+                        _ => unreachable!("all interpreter selections are covered"),
+                    }
+                }
 
-        assert!(
-             validation_errors.iter().any(|e| {
-                 e.get_message() == "Cannot use both `python-interpreter-path` and `conda-environment`. Finding environment info using `python-interpreter-path`."
-             })
-         );
-    }
-
-    #[test]
-    fn test_python_interpreter_find_cmd_is_mutually_exclusive() {
-        let mut config = ConfigFile {
-            interpreters: Interpreters {
-                python_interpreter_find_cmd: Some(vec!["ignored".to_owned()]),
-                skip_interpreter_query: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let validation_errors = config.configure();
-        assert!(validation_errors.iter().any(|error| {
-            error.get_message()
-                == "`python-interpreter-find-cmd` cannot be combined with another interpreter selection option."
-        }));
+                let mut config = ConfigFile {
+                    interpreters,
+                    ..Default::default()
+                };
+                let expected = format!(
+                    "Only one interpreter selection option can be set, but found: {first}, {second}."
+                );
+                assert!(
+                    config
+                        .configure()
+                        .iter()
+                        .any(|error| error.get_message() == expected),
+                    "missing validation error for {first} and {second}"
+                );
+            }
+        }
     }
 
     #[test]

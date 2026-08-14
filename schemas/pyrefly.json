@@ -182,6 +182,14 @@
           "description": "The Python interpreter to query when attempting to autoconfigure Python environment values (site-package-path, python-platform, python-version).",
           "type": "string"
         },
+        "python-interpreter-find-cmd": {
+          "description": "A program and its arguments that print the path of the Python interpreter to query.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
         "fallback-python-interpreter-name": {
           "description": "The Python interpreter, available on your $PATH, to use. Pyrefly will perform 'which <your command>', and automatically fill in python-interpreter-path for you with the found path.",
           "type": "string"

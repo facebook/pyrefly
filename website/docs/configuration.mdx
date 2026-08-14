@@ -1216,8 +1216,8 @@ We look for an interpreter with the following logic:
 3. Use [`python-interpreter-path`](#python-interpreter-path),
    [`python-interpreter-find-cmd`](#python-interpreter-find-cmd),
    [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
-   [`conda-environment`](#conda-environment) if either are set in a config file.
-   Both cannot be set in a config at the same time.
+   [`conda-environment`](#conda-environment) if any are set in a config file.
+   Only one of these options can be set in a configuration.
 4. Starting from the project root, look for `pyvenv.cfg` in the root itself or in a
    `.venv`, `venv`, or `env` directory. If none is found, repeat the search in each
    ancestor directory up to the filesystem root, preferring the nearest match. Pyrefly

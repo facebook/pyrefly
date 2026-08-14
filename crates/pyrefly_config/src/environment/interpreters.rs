@@ -6,23 +6,64 @@
  */
 
 use std::fmt::Display;
+use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::Command;
 use std::sync::LazyLock;
 
+#[cfg(not(target_arch = "wasm32"))]
 use anyhow::Context;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_with::skip_serializing_none;
 #[cfg(not(target_arch = "wasm32"))]
 use which::which;
+#[cfg(not(target_arch = "wasm32"))]
+use which::which_in;
 
 use crate::environment::active_environment::ActiveEnvironment;
 use crate::environment::conda;
 use crate::environment::environment::PythonEnvironment;
 use crate::environment::venv;
 use crate::util::ConfigOrigin;
+
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
+#[serde(try_from = "Vec<String>", into = "Vec<String>")]
+pub(crate) struct InterpreterDiscoveryCommand(Vec<String>);
+
+impl TryFrom<Vec<String>> for InterpreterDiscoveryCommand {
+    type Error = &'static str;
+
+    fn try_from(parts: Vec<String>) -> Result<Self, Self::Error> {
+        if parts.is_empty() {
+            Err("`python-interpreter-find-cmd` must contain a program")
+        } else {
+            Ok(Self(parts))
+        }
+    }
+}
+
+impl From<InterpreterDiscoveryCommand> for Vec<String> {
+    fn from(command: InterpreterDiscoveryCommand) -> Self {
+        command.0
+    }
+}
+
+impl Deref for InterpreterDiscoveryCommand {
+    type Target = [String];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Display for InterpreterDiscoveryCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.join(" "))
+    }
+}
 
 #[skip_serializing_none]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
@@ -41,7 +82,7 @@ pub struct Interpreters {
     pub(crate) fallback_python_interpreter_name: Option<ConfigOrigin<String>>,
 
     /// Command whose stdout is the path to the Python interpreter.
-    pub(crate) python_interpreter_find_cmd: Option<Vec<String>>,
+    pub(crate) python_interpreter_find_cmd: Option<InterpreterDiscoveryCommand>,
 
     pub(crate) conda_environment: Option<ConfigOrigin<String>>,
 
@@ -61,20 +102,11 @@ impl Display for Interpreters {
                 python_interpreter_path: None,
                 python_interpreter_find_cmd: Some(cmd),
                 ..
-            } => write!(f, "interpreter from command `{}`", cmd.join(" ")),
+            } => write!(f, "interpreter from command `{cmd}`"),
             Self {
                 python_interpreter_path: None,
                 ..
             } => write!(f, "<none found successfully>"),
-            Self {
-                conda_environment: Some(conda),
-                python_interpreter_path: Some(path),
-                ..
-            } => write!(
-                f,
-                "conda environment {conda} with interpreter at {}",
-                path.display()
-            ),
             Self {
                 fallback_python_interpreter_name: Some(cmd),
                 python_interpreter_path: Some(path),
@@ -83,6 +115,24 @@ impl Display for Interpreters {
                 f,
                 "interpreter at path {} (from `which {cmd}`)",
                 path.display(),
+            ),
+            Self {
+                python_interpreter_find_cmd: Some(cmd),
+                python_interpreter_path: Some(path),
+                ..
+            } => write!(
+                f,
+                "interpreter at path {} (from command `{cmd}`)",
+                path.display(),
+            ),
+            Self {
+                conda_environment: Some(conda),
+                python_interpreter_path: Some(path),
+                ..
+            } => write!(
+                f,
+                "conda environment {conda} with interpreter at {}",
+                path.display()
             ),
             Self {
                 python_interpreter_path: Some(path),
@@ -124,7 +174,7 @@ impl Interpreters {
         &self,
         path: Option<&Path>,
     ) -> anyhow::Result<ConfigOrigin<PathBuf>> {
-        let python_interpreter = self.interpreter_path_or_cmd(path)?;
+        let python_interpreter = self.interpreter_path_or_cmd()?;
         if let Some(interpreter @ ConfigOrigin::CommandLine(_)) = python_interpreter {
             return Ok(interpreter);
         }
@@ -137,6 +187,17 @@ impl Interpreters {
 
         if let Some(interpreter @ ConfigOrigin::ConfigFile(_)) = python_interpreter {
             return Ok(interpreter);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(command) = self.python_interpreter_find_cmd.as_deref() {
+            let interpreter = Self::find_interpreter_from_command(command, path)?;
+            return Ok(ConfigOrigin::auto(interpreter));
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.python_interpreter_find_cmd.is_some() {
+            return Err(anyhow::anyhow!(
+                "`python-interpreter-find-cmd` is not supported on WebAssembly"
+            ));
         }
         if let Some(conda_env @ ConfigOrigin::ConfigFile(_)) = &self.conda_environment {
             return conda_env
@@ -182,17 +243,9 @@ impl Interpreters {
         ))
     }
 
-    fn interpreter_path_or_cmd(
-        &self,
-        working_directory: Option<&Path>,
-    ) -> anyhow::Result<Option<ConfigOrigin<PathBuf>>> {
+    fn interpreter_path_or_cmd(&self) -> anyhow::Result<Option<ConfigOrigin<PathBuf>>> {
         if self.python_interpreter_path.is_some() {
             return Ok(self.python_interpreter_path.clone());
-        }
-        if self.python_interpreter_find_cmd.is_some() {
-            return self
-                .find_interpreter_from_command(working_directory)
-                .map(Some);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(cmd) = &self.fallback_python_interpreter_name {
@@ -204,19 +257,18 @@ impl Interpreters {
         Ok(self.python_interpreter_path.clone())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn find_interpreter_from_command(
-        &self,
+        command_parts: &[String],
         working_directory: Option<&Path>,
-    ) -> anyhow::Result<ConfigOrigin<PathBuf>> {
-        let command_parts = self
-            .python_interpreter_find_cmd
-            .as_deref()
-            .context("`python-interpreter-find-cmd` is not configured")?;
-        let Some((program, args)) = command_parts.split_first() else {
-            return Err(anyhow::anyhow!(
-                "`python-interpreter-find-cmd` must contain at least one argument"
-            ));
-        };
+    ) -> anyhow::Result<PathBuf> {
+        let program = &command_parts[0];
+        let args = &command_parts[1..];
+        let program = match working_directory {
+            Some(root) => which_in(program, std::env::var_os("PATH"), root),
+            None => which(program),
+        }
+        .with_context(|| "Could not resolve the Python interpreter discovery command")?;
 
         let mut command = Command::new(program);
         command.args(args);
@@ -260,7 +312,7 @@ impl Interpreters {
         {
             interpreter = working_directory.join(interpreter);
         }
-        Ok(ConfigOrigin::auto(interpreter))
+        Ok(interpreter)
     }
 
     /// Get the first executable interpreter available on the path.
@@ -287,6 +339,9 @@ impl Interpreters {
 
 #[cfg(test)]
 mod test {
+    #[cfg(windows)]
+    use std::fs;
+
     use pyrefly_util::test_path::TestPath;
     use tempfile::TempDir;
     use tempfile::tempdir;
@@ -320,6 +375,16 @@ mod test {
     /// Produces a conda environment name that should not actually be possible in conda.
     fn fake_conda_name() -> String {
         "../././".to_owned()
+    }
+
+    fn discovery_command(parts: &[&str]) -> InterpreterDiscoveryCommand {
+        InterpreterDiscoveryCommand::try_from(
+            parts
+                .iter()
+                .map(|part| (*part).to_owned())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -367,6 +432,16 @@ mod test {
             ..Default::default()
         };
 
+        assert_eq!(
+            interpreters.find_interpreter(Some(tempdir.path())).unwrap(),
+            python_interpreter
+        );
+
+        let interpreters = Interpreters {
+            python_interpreter_path: Some(python_interpreter.clone()),
+            python_interpreter_find_cmd: Some(discovery_command(&["does-not-exist"])),
+            ..Default::default()
+        };
         assert_eq!(
             interpreters.find_interpreter(Some(tempdir.path())).unwrap(),
             python_interpreter
@@ -441,22 +516,75 @@ mod test {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
-    fn test_find_interpreter_from_command() {
+    fn test_interpreter_find_command_resolves_relative_output() {
         let tempdir = tempdir().unwrap();
+
+        #[cfg(unix)]
+        let command = discovery_command(&["sh", "-c", "printf 'venv/bin/python\\n'"]);
+        #[cfg(windows)]
+        let command = discovery_command(&["cmd", "/C", "echo venv\\Scripts\\python.exe"]);
+
         let interpreters = Interpreters {
-            python_interpreter_find_cmd: Some(vec![
-                "sh".to_owned(),
-                "-c".to_owned(),
-                "printf 'venv/bin/python\\n'".to_owned(),
-            ]),
+            python_interpreter_find_cmd: Some(command),
+            conda_environment: Some(ConfigOrigin::config(fake_conda_name())),
+            ..Default::default()
+        };
+
+        #[cfg(unix)]
+        let expected = tempdir.path().join("venv/bin/python");
+        #[cfg(windows)]
+        let expected = tempdir.path().join("venv\\Scripts\\python.exe");
+
+        assert_eq!(
+            interpreters.find_interpreter(Some(tempdir.path())).unwrap(),
+            ConfigOrigin::auto(expected)
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn test_interpreter_find_command_uses_working_directory() {
+        let tempdir = tempdir().unwrap();
+
+        #[cfg(unix)]
+        let command = discovery_command(&["sh", "-c", "pwd"]);
+        #[cfg(windows)]
+        let command = discovery_command(&["cmd", "/C", "cd"]);
+
+        let interpreters = Interpreters {
+            python_interpreter_find_cmd: Some(command),
+            ..Default::default()
+        };
+        let interpreter = interpreters.find_interpreter(Some(tempdir.path())).unwrap();
+
+        assert_eq!(
+            interpreter.as_path().canonicalize().unwrap(),
+            tempdir.path().canonicalize().unwrap(),
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_interpreter_find_command_resolves_relative_program() {
+        let tempdir = tempdir().unwrap();
+        let tools = tempdir.path().join("tools");
+        fs::create_dir(&tools).unwrap();
+        fs::copy(which("cmd").unwrap(), tools.join("find-python.exe")).unwrap();
+
+        let interpreters = Interpreters {
+            python_interpreter_find_cmd: Some(discovery_command(&[
+                "tools\\find-python.exe",
+                "/C",
+                "echo venv\\Scripts\\python.exe",
+            ])),
             ..Default::default()
         };
 
         assert_eq!(
             interpreters.find_interpreter(Some(tempdir.path())).unwrap(),
-            ConfigOrigin::auto(tempdir.path().join("venv/bin/python"))
+            ConfigOrigin::auto(tempdir.path().join("venv\\Scripts\\python.exe")),
         );
     }
 
@@ -464,11 +592,11 @@ mod test {
     #[test]
     fn test_interpreter_find_command_must_return_one_path() {
         let interpreters = Interpreters {
-            python_interpreter_find_cmd: Some(vec![
-                "sh".to_owned(),
-                "-c".to_owned(),
-                "printf 'first\\nsecond\\n'".to_owned(),
-            ]),
+            python_interpreter_find_cmd: Some(discovery_command(&[
+                "sh",
+                "-c",
+                "printf 'first\\nsecond\\n'",
+            ])),
             ..Default::default()
         };
 
@@ -480,11 +608,11 @@ mod test {
     #[test]
     fn test_interpreter_find_command_reports_failure() {
         let interpreters = Interpreters {
-            python_interpreter_find_cmd: Some(vec![
-                "sh".to_owned(),
-                "-c".to_owned(),
-                "printf 'manager failed' >&2; exit 7".to_owned(),
-            ]),
+            python_interpreter_find_cmd: Some(discovery_command(&[
+                "sh",
+                "-c",
+                "printf 'manager failed' >&2; exit 7",
+            ])),
             ..Default::default()
         };
 
@@ -492,5 +620,19 @@ mod test {
         let message = error.to_string();
         assert!(message.contains("failed with status"));
         assert!(message.contains("manager failed"));
+    }
+
+    #[test]
+    fn test_interpreter_display_includes_discovery_command() {
+        let interpreters = Interpreters {
+            python_interpreter_path: Some(ConfigOrigin::auto(PathBuf::from("/resolved/python"))),
+            python_interpreter_find_cmd: Some(discovery_command(&["poetry", "env", "info", "-e"])),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            interpreters.to_string(),
+            "interpreter at path /resolved/python (from command `poetry env info -e`)"
+        );
     }
 }
