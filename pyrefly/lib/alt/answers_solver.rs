@@ -574,7 +574,7 @@ impl CalcStack {
         let stack_len = self.stack.borrow().len();
         let mut scc_stack = self.scc_stack.borrow_mut();
         if let Some(scc) = scc_stack.last()
-            && matches!(scc.owner, SccOwner::Phase0(_))
+            && matches!(scc.owner, SccOwner::Phase0(_) | SccOwner::Caller(_))
             && stack_len <= scc.bottom_pos_inclusive + 1
         {
             let completed = scc_stack.pop().unwrap();
@@ -855,7 +855,8 @@ impl CalcStack {
                 );
                 return;
             };
-            let is_iteration_0 = top_scc.iterative.iteration == 0;
+            let needs_completion_check =
+                matches!(top_scc.owner, SccOwner::Phase0(_) | SccOwner::Caller(_));
             top_scc.node_state.insert(
                 target.dupe(),
                 SccNodeState::Done {
@@ -864,13 +865,11 @@ impl CalcStack {
                     traces,
                 },
             );
-            is_iteration_0
+            needs_completion_check
         };
-        // During iteration 0 (Phase 0 discovery), SCC members are driven by the
-        // normal recursive call chain, not by drive_all_iteration_members. We need
-        // completion detection to trigger iterative_resolve_scc when the last
-        // member finishes. During iteration >= 1, completion is managed by the
-        // iteration loop in iterative_resolve_scc.
+        // Without a driver, SCC members are completing through the normal
+        // recursive call chain. This includes phase-zero discovery and an
+        // absorbed caller to which an iterative driver relinquished control.
         if needs_completion_check {
             self.check_scc_completion();
         }
@@ -950,25 +949,25 @@ impl CalcStack {
         self.scc_stack.borrow_mut().push(scc);
     }
 
-    /// Pop the top SCC from the SCC stack and return it.
+    /// Take the top SCC if it is ready for this driver to inspect.
     ///
-    /// Used by the iteration driver between iterations to extract the SCC
-    /// for mutation before pushing it back with updated iteration state.
-    ///
-    /// Panics if the SCC stack is empty.
-    fn pop_scc(&self) -> Scc {
-        self.scc_stack
-            .borrow_mut()
-            .pop()
-            .expect("pop_scc: SCC stack is empty")
-    }
-
-    fn top_scc_owner(&self) -> SccOwner {
-        self.scc_stack
-            .borrow()
-            .last()
-            .expect("top_scc_owner: SCC stack is empty")
-            .owner
+    /// A merge may transfer ownership to an older driver or expand the SCC to
+    /// include this driver's active caller. In the latter case, transfer
+    /// ownership to that caller so its completion starts a new driver.
+    fn take_top_scc_for_driver(&self, driver: SccDriver) -> Option<Scc> {
+        let stack_len = self.stack.borrow().len();
+        let mut scc_stack = self.scc_stack.borrow_mut();
+        let scc = scc_stack
+            .last_mut()
+            .expect("take_top_scc_for_driver: SCC stack is empty");
+        if scc.owner != SccOwner::Driver(driver.0) {
+            return None;
+        }
+        if stack_len > scc.bottom_pos_inclusive {
+            scc.owner = SccOwner::Caller(driver.0);
+            return None;
+        }
+        scc_stack.pop()
     }
 
     /// Returns true if the top SCC's iteration state has `merge_happened` set.
@@ -1175,21 +1174,24 @@ impl SccNodeState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SccOwner {
+    /// The recursive calculation that first discovered the SCC. Its completion
+    /// starts the initial iterative fixpoint driver.
     Phase0(u64),
+    /// An iterative fixpoint driver. The identifier distinguishes nested
+    /// drivers so merging SCCs preserves the oldest suspended continuation.
     Driver(u64),
+    /// An active caller absorbed while an iterative driver was running. The
+    /// driver has returned, and this caller's completion starts a new driver.
+    Caller(u64),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SccDriver(u64);
 
 impl SccOwner {
     fn id(self) -> u64 {
         match self {
-            Self::Phase0(id) | Self::Driver(id) => id,
-        }
-    }
-
-    fn start_driver(self) -> Self {
-        match self {
-            Self::Phase0(id) => Self::Driver(id),
-            Self::Driver(_) => panic!("iterative SCC already has a driver"),
+            Self::Phase0(id) | Self::Driver(id) | Self::Caller(id) => id,
         }
     }
 }
@@ -1236,6 +1238,15 @@ impl Display for Scc {
 }
 
 impl Scc {
+    fn start_driver(&mut self) -> SccDriver {
+        let id = match self.owner {
+            SccOwner::Phase0(id) | SccOwner::Caller(id) => id,
+            SccOwner::Driver(_) => panic!("iterative SCC already has a driver"),
+        };
+        self.owner = SccOwner::Driver(id);
+        SccDriver(id)
+    }
+
     #[allow(clippy::mutable_key_type)] // CalcId's Hash impl doesn't depend on mutable parts
     fn new(raw: Vec1<CalcId>, calc_stack_vec: &[CalcId], owner: SccOwner) -> Self {
         let detected_at = raw.first().dupe();
@@ -2693,8 +2704,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// nested calculation returns.
     #[allow(clippy::mutable_key_type)]
     fn iterative_resolve_scc(&self, mut scc: Scc) {
-        let owner = scc.owner.start_driver();
-        scc.owner = owner;
+        let driver = scc.start_driver();
         let mut demotions: u32 = 0;
         let mut exceeded_max_iterations = false;
 
@@ -2713,14 +2723,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "iterative SCC disappeared while its driver was active"
             );
 
-            // A merge with an SCC owned by an older driver transfers ownership
-            // to that driver. Leave the merged SCC on the stack for it.
-            if self.stack().top_scc_owner() != owner {
+            // Take the SCC to inspect its iteration outcome. A merge may have
+            // transferred it to an older driver or absorbed an active caller;
+            // either case leaves the SCC on the stack for later completion.
+            let Some(completed) = self.stack().take_top_scc_for_driver(driver) else {
                 return;
-            }
-
-            // Pop the SCC to inspect its iteration outcome.
-            scc = self.stack().pop_scc();
+            };
+            scc = completed;
 
             // Check for demotion: if SCC membership expanded, restart at
             // iteration 1 with fresh state.
@@ -3577,6 +3586,39 @@ mod scc_tests {
         ids.iter()
             .map(|id| (id.dupe(), SccNodeState::Fresh))
             .collect()
+    }
+
+    #[test]
+    fn test_driver_defers_scc_with_live_member_frame() {
+        let member = CalcId::for_test("m", 0);
+        let calc_stack = make_calc_stack(&[member.dupe()]);
+        let mut scc = make_test_scc(fresh_nodes(&[member.dupe()]), member.dupe(), 0);
+        scc.iterative.iteration = 2;
+        scc.owner = SccOwner::Driver(0);
+        calc_stack.scc_stack.borrow_mut().push(scc);
+
+        assert!(calc_stack.take_top_scc_for_driver(SccDriver(0)).is_none());
+        assert_eq!(calc_stack.scc_stack.borrow()[0].owner, SccOwner::Caller(0));
+
+        let answer: Arc<dyn Any + Send + Sync> = Arc::new(Arc::new(42usize));
+        calc_stack.set_iteration_node_done(&member, answer, None, None);
+        let mut completed = calc_stack
+            .pop_and_take_completed_scc()
+            .expect("caller completion should release the SCC");
+        assert_eq!(completed.start_driver(), SccDriver(0));
+    }
+
+    #[test]
+    fn test_driver_takes_scc_with_unrelated_outer_frame() {
+        let outer = CalcId::for_test("m", 0);
+        let member = CalcId::for_test("m", 1);
+        let calc_stack = make_calc_stack(&[outer]);
+        let mut scc = make_test_scc(fresh_nodes(&[member.dupe()]), member, 1);
+        scc.owner = SccOwner::Driver(0);
+        calc_stack.scc_stack.borrow_mut().push(scc);
+
+        assert!(calc_stack.take_top_scc_for_driver(SccDriver(0)).is_some());
+        assert!(calc_stack.sccs_is_empty());
     }
 
     #[test]
