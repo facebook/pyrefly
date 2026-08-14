@@ -3007,55 +3007,33 @@
       "column": 11,
       "concise_description": "Expected 1 type argument for `ClassVar`, got 2",
       "description": "Expected 1 type argument for `ClassVar`, got 2",
-      "line": 38,
+      "line": 40,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 29,
-      "stop_line": 38
+      "stop_line": 40
     },
     {
       "code": -2,
       "column": 14,
       "concise_description": "Number literal cannot be used in annotations",
       "description": "Number literal cannot be used in annotations",
-      "line": 39,
+      "line": 41,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 15,
-      "stop_line": 39
+      "stop_line": 41
     },
     {
       "code": -2,
       "column": 14,
       "concise_description": "Could not find name `var`",
       "description": "Could not find name `var`\n  Did you mean `var1`?",
-      "line": 40,
+      "line": 42,
       "name": "unknown-name",
       "severity": "error",
       "stop_column": 17,
-      "stop_line": 40
-    },
-    {
-      "code": -2,
-      "column": 20,
-      "concise_description": "`ClassVar` arguments may not contain any type variables",
-      "description": "`ClassVar` arguments may not contain any type variables",
-      "line": 45,
-      "name": "invalid-annotation",
-      "severity": "error",
-      "stop_column": 21,
-      "stop_line": 45
-    },
-    {
-      "code": -2,
-      "column": 20,
-      "concise_description": "`ClassVar` arguments may not contain any type variables",
-      "description": "`ClassVar` arguments may not contain any type variables",
-      "line": 46,
-      "name": "invalid-annotation",
-      "severity": "error",
-      "stop_column": 27,
-      "stop_line": 46
+      "stop_line": 42
     },
     {
       "code": -2,
@@ -3065,173 +3043,217 @@
       "line": 47,
       "name": "invalid-annotation",
       "severity": "error",
-      "stop_column": 36,
+      "stop_column": 21,
       "stop_line": 47
+    },
+    {
+      "code": -2,
+      "column": 20,
+      "concise_description": "`ClassVar` arguments may not contain any type variables",
+      "description": "`ClassVar` arguments may not contain any type variables",
+      "line": 48,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 27,
+      "stop_line": 48
+    },
+    {
+      "code": -2,
+      "column": 20,
+      "concise_description": "`ClassVar` arguments may not contain any type variables",
+      "description": "`ClassVar` arguments may not contain any type variables",
+      "line": 49,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 36,
+      "stop_line": 49
     },
     {
       "code": -2,
       "column": 33,
       "concise_description": "`dict[@_, @_]` is not assignable to `list[str]`",
       "description": "`dict[@_, @_]` is not assignable to `list[str]`",
-      "line": 52,
+      "line": 54,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 35,
-      "stop_line": 52
+      "stop_line": 54
     },
     {
       "code": -2,
       "column": 17,
       "concise_description": "`ClassVar` may not be nested inside `Final`",
       "description": "`ClassVar` may not be nested inside `Final`",
-      "line": 54,
+      "line": 56,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 30,
-      "stop_line": 54
+      "stop_line": 56
     },
     {
       "code": -2,
       "column": 17,
       "concise_description": "`ClassVar` is not allowed in this context",
       "description": "`ClassVar` is not allowed in this context",
-      "line": 55,
+      "line": 57,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 30,
-      "stop_line": 55
+      "stop_line": 57
     },
     {
       "code": -2,
       "column": 26,
       "concise_description": "`ClassVar` is only allowed inside a class body",
       "description": "`ClassVar` is only allowed inside a class body",
-      "line": 69,
+      "line": 71,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 34,
-      "stop_line": 69
+      "stop_line": 71
     },
     {
       "code": -2,
       "column": 26,
       "concise_description": "`ClassVar` is not allowed in this context",
       "description": "`ClassVar` is not allowed in this context",
-      "line": 69,
+      "line": 71,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 39,
-      "stop_line": 69
+      "stop_line": 71
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "`ClassVar` is only allowed inside a class body",
       "description": "`ClassVar` is only allowed inside a class body",
-      "line": 70,
+      "line": 72,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 20,
-      "stop_line": 70
+      "stop_line": 72
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "`ClassVar` is not allowed in this context",
       "description": "`ClassVar` is not allowed in this context",
-      "line": 70,
+      "line": 72,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 25,
-      "stop_line": 70
+      "stop_line": 72
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "Cannot set field `xx`",
       "description": "Cannot set field `xx`\n  A ClassVar may not be mutated from an instance of the class",
-      "line": 71,
+      "line": 73,
       "name": "read-only",
       "severity": "error",
       "stop_column": 16,
-      "stop_line": 71
+      "stop_line": 73
     },
     {
       "code": -2,
       "column": 26,
       "concise_description": "`ClassVar` is only allowed inside a class body",
       "description": "`ClassVar` is only allowed inside a class body",
-      "line": 73,
+      "line": 75,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 34,
-      "stop_line": 73
+      "stop_line": 75
     },
     {
       "code": -2,
       "column": 26,
       "concise_description": "`ClassVar` is not allowed in this context",
       "description": "`ClassVar` is not allowed in this context",
-      "line": 73,
+      "line": 75,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 39,
-      "stop_line": 73
+      "stop_line": 75
     },
     {
       "code": -2,
       "column": 8,
       "concise_description": "`ClassVar` is only allowed inside a class body",
       "description": "`ClassVar` is only allowed inside a class body",
-      "line": 77,
+      "line": 79,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 16,
-      "stop_line": 77
+      "stop_line": 79
     },
     {
       "code": -2,
       "column": 8,
       "concise_description": "`ClassVar` is not allowed in this context",
       "description": "`ClassVar` is not allowed in this context",
-      "line": 77,
+      "line": 79,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 21,
-      "stop_line": 77
+      "stop_line": 79
     },
     {
       "code": -2,
       "column": 20,
       "concise_description": "`ClassVar` is not allowed in this context",
       "description": "`ClassVar` is not allowed in this context",
-      "line": 78,
+      "line": 80,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 33,
-      "stop_line": 78
+      "stop_line": 80
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "`ClassVar` may not be used for TypedDict members",
+      "description": "`ClassVar` may not be used for TypedDict members",
+      "line": 89,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 6,
+      "stop_line": 89
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "`ClassVar` may not be used for NamedTuple members",
+      "description": "`ClassVar` may not be used for NamedTuple members",
+      "line": 94,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 6,
+      "stop_line": 94
     },
     {
       "code": -2,
       "column": 1,
       "concise_description": "Cannot set field `stats`",
       "description": "Cannot set field `stats`\n  A ClassVar may not be mutated from an instance of the class",
-      "line": 111,
+      "line": 127,
       "name": "read-only",
       "severity": "error",
       "stop_column": 19,
-      "stop_line": 111
+      "stop_line": 127
     },
     {
       "code": -2,
       "column": 13,
       "concise_description": "`ProtoAImpl` is not assignable to `ProtoA`",
       "description": "`ProtoAImpl` is not assignable to `ProtoA`\n  `ProtoAImpl.x` is not a ClassVar, but `ProtoA.x` is",
-      "line": 140,
+      "line": 156,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 25,
-      "stop_line": 140
+      "stop_line": 156
     }
   ],
   "classes_override.py": [
@@ -3289,6 +3311,28 @@
       "severity": "error",
       "stop_column": 18,
       "stop_line": 89
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Class member `ChildC2.__init__` overrides parent class `ParentC` in an inconsistent manner",
+      "description": "Class member `ChildC2.__init__` overrides parent class `ParentC` in an inconsistent manner\n  `ChildC2.__init__` has type `(self: ChildC2, x: str) -> None`, which is not assignable to `(self: ChildC2, x: int) -> None`, the type of `ParentC.__init__`\n  Signature mismatch:\n  expected: def __init__(self: ChildC2, x: int) -> None: ...\n                                           ^^^ parameters\n  found:    def __init__(self: ChildC2, x: str) -> None: ...\n                                           ^^^ parameters",
+      "line": 135,
+      "name": "bad-override",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 135
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Class member `ChildC2.__new__` overrides parent class `ParentC` in an inconsistent manner",
+      "description": "Class member `ChildC2.__new__` overrides parent class `ParentC` in an inconsistent manner\n  `ChildC2.__new__` has type `[Self@ChildC2: ChildC2](cls: type[Self@ChildC2], x: str) -> ChildC2`, which is not assignable to `(cls: type[ChildC2], x: int) -> ParentC`, the type of `ParentC.__new__`\n  Signature mismatch:\n  expected: def __new__(cls: type[ChildC2], x: int) -> ParentC: ...\n                                  ^^^^^^^^^^^^^^^^     ^^^^^^^ return type\n                                  |\n                                  parameters\n  found:    def __new__(cls: type[Self@ChildC2], x: str) -> ChildC2: ...\n                                  ^^^^^^^^^^^^^^^^^^^^^     ^^^^^^^ return type\n                                  |\n                                  parameters",
+      "line": 138,
+      "name": "bad-override",
+      "severity": "error",
+      "stop_column": 16,
+      "stop_line": 138
     }
   ],
   "constructors_call_init.py": [
@@ -5276,11 +5320,11 @@
       "column": 20,
       "concise_description": "assert_type(CustomFlags, Literal[CustomFlags.FLAG3]) failed",
       "description": "assert_type(CustomFlags, Literal[CustomFlags.FLAG3]) failed",
-      "line": 53,
+      "line": 56,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 51,
-      "stop_line": 53
+      "stop_line": 56
     }
   ],
   "enums_member_names.py": [
@@ -5971,6 +6015,52 @@
       "stop_line": 56
     }
   ],
+  "generics_mixed_variance_inference.py": [
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "`Mixed[bool, *tuple[()], []]` is not assignable to `Mixed[int, *tuple[()], []]`",
+      "description": "`Mixed[bool, *tuple[()], []]` is not assignable to `Mixed[int, *tuple[()], []]`",
+      "line": 13,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 39,
+      "stop_line": 13
+    },
+    {
+      "code": -2,
+      "column": 27,
+      "concise_description": "`Mixed[int, object, []]` is not assignable to `Mixed[int, int, []]`",
+      "description": "`Mixed[int, object, []]` is not assignable to `Mixed[int, int, []]`",
+      "line": 16,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 51,
+      "stop_line": 16
+    },
+    {
+      "code": -2,
+      "column": 27,
+      "concise_description": "`Mixed[int, bool, []]` is not assignable to `Mixed[int, int, []]`",
+      "description": "`Mixed[int, bool, []]` is not assignable to `Mixed[int, int, []]`",
+      "line": 17,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 49,
+      "stop_line": 17
+    },
+    {
+      "code": -2,
+      "column": 25,
+      "concise_description": "`Mixed[int, *tuple[()], [object]]` is not assignable to `Mixed[int, *tuple[()], [int]]`",
+      "description": "`Mixed[int, *tuple[()], [object]]` is not assignable to `Mixed[int, *tuple[()], [int]]`",
+      "line": 20,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 47,
+      "stop_line": 20
+    }
+  ],
   "generics_paramspec_basic.py": [
     {
       "code": -2,
@@ -6472,6 +6562,327 @@
       "severity": "error",
       "stop_column": 18,
       "stop_line": 61
+    }
+  ],
+  "generics_paramspec_variance.py": [
+    {
+      "code": -2,
+      "column": 39,
+      "concise_description": "`InvariantParamSpec[[object]]` is not assignable to `InvariantParamSpec[[int]]`",
+      "description": "`InvariantParamSpec[[object]]` is not assignable to `InvariantParamSpec[[int]]`",
+      "line": 15,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 67,
+      "stop_line": 15
+    },
+    {
+      "code": -2,
+      "column": 39,
+      "concise_description": "`ContravariantParamSpec[[object]]` is not assignable to `ContravariantParamSpec[[int]]`",
+      "description": "`ContravariantParamSpec[[object]]` is not assignable to `ContravariantParamSpec[[int]]`",
+      "line": 22,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 71,
+      "stop_line": 22
+    },
+    {
+      "code": -2,
+      "column": 39,
+      "concise_description": "`CovariantParamSpec[[int]]` is not assignable to `CovariantParamSpec[[object]]`",
+      "description": "`CovariantParamSpec[[int]]` is not assignable to `CovariantParamSpec[[object]]`",
+      "line": 31,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 64,
+      "stop_line": 31
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "`InitP[[b: int]]` is not assignable to attribute `t` with type `InitP[[a: int]]`",
+      "description": "`InitP[[b: int]]` is not assignable to attribute `t` with type `InitP[[a: int]]`\n  Positional parameter name mismatch: got `a`, want `b`",
+      "line": 65,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 65
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "`InitP[[a: int = 1]]` is not assignable to attribute `t` with type `InitP[[a: int]]`",
+      "description": "`InitP[[a: int = 1]]` is not assignable to attribute `t` with type `InitP[[a: int]]`",
+      "line": 67,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 67
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "`InitP[[a: int, b: str]]` is not assignable to attribute `t` with type `InitP[[a: int]]`",
+      "description": "`InitP[[a: int, b: str]]` is not assignable to attribute `t` with type `InitP[[a: int]]`",
+      "line": 69,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 69
+    },
+    {
+      "code": -2,
+      "column": 13,
+      "concise_description": "`OutitP[[*, a: int]]` is not assignable to attribute `t` with type `OutitP[[a: int]]`",
+      "description": "`OutitP[[*, a: int]]` is not assignable to attribute `t` with type `OutitP[[a: int]]`",
+      "line": 84,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 84
+    },
+    {
+      "code": -2,
+      "column": 13,
+      "concise_description": "`OutitP[[a: int, /]]` is not assignable to attribute `t` with type `OutitP[[a: int]]`",
+      "description": "`OutitP[[a: int, /]]` is not assignable to attribute `t` with type `OutitP[[a: int]]`",
+      "line": 86,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 86
+    },
+    {
+      "code": -2,
+      "column": 13,
+      "concise_description": "`OutitP[[b: int]]` is not assignable to attribute `t` with type `OutitP[[a: int]]`",
+      "description": "`OutitP[[b: int]]` is not assignable to attribute `t` with type `OutitP[[a: int]]`\n  Positional parameter name mismatch: got `b`, want `a`",
+      "line": 88,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 88
+    },
+    {
+      "code": -2,
+      "column": 13,
+      "concise_description": "`OutitP[[a: int, b: str]]` is not assignable to attribute `t` with type `OutitP[[a: int]]`",
+      "description": "`OutitP[[a: int, b: str]]` is not assignable to attribute `t` with type `OutitP[[a: int]]`",
+      "line": 92,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 92
+    },
+    {
+      "code": -2,
+      "column": 24,
+      "concise_description": "Unexpected keyword argument `contravariant` to ParamSpec",
+      "description": "Unexpected keyword argument `contravariant` to ParamSpec",
+      "line": 97,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 42,
+      "stop_line": 97
+    },
+    {
+      "code": -2,
+      "column": 26,
+      "concise_description": "Unexpected keyword argument `covariant` to ParamSpec",
+      "description": "Unexpected keyword argument `covariant` to ParamSpec",
+      "line": 98,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 40,
+      "stop_line": 98
+    },
+    {
+      "code": -2,
+      "column": 30,
+      "concise_description": "Unexpected keyword argument `infer_variance` to ParamSpec",
+      "description": "Unexpected keyword argument `infer_variance` to ParamSpec",
+      "line": 99,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 49,
+      "stop_line": 99
+    },
+    {
+      "code": -2,
+      "column": 28,
+      "concise_description": "Unexpected keyword argument `covariant` to ParamSpec",
+      "description": "Unexpected keyword argument `covariant` to ParamSpec",
+      "line": 100,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 42,
+      "stop_line": 100
+    },
+    {
+      "code": -2,
+      "column": 44,
+      "concise_description": "Unexpected keyword argument `contravariant` to ParamSpec",
+      "description": "Unexpected keyword argument `contravariant` to ParamSpec",
+      "line": 100,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 62,
+      "stop_line": 100
+    },
+    {
+      "code": -2,
+      "column": 28,
+      "concise_description": "Unexpected keyword argument `covariant` to ParamSpec",
+      "description": "Unexpected keyword argument `covariant` to ParamSpec",
+      "line": 101,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 42,
+      "stop_line": 101
+    },
+    {
+      "code": -2,
+      "column": 44,
+      "concise_description": "Unexpected keyword argument `infer_variance` to ParamSpec",
+      "description": "Unexpected keyword argument `infer_variance` to ParamSpec",
+      "line": 101,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 63,
+      "stop_line": 101
+    },
+    {
+      "code": -2,
+      "column": 28,
+      "concise_description": "Unexpected keyword argument `contravariant` to ParamSpec",
+      "description": "Unexpected keyword argument `contravariant` to ParamSpec",
+      "line": 102,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 46,
+      "stop_line": 102
+    },
+    {
+      "code": -2,
+      "column": 48,
+      "concise_description": "Unexpected keyword argument `infer_variance` to ParamSpec",
+      "description": "Unexpected keyword argument `infer_variance` to ParamSpec",
+      "line": 102,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 67,
+      "stop_line": 102
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "`InvariantParamSpecOld[[bool]]` is not assignable to variable `in_out_old` with type `InvariantParamSpecOld[[int]]`",
+      "description": "`InvariantParamSpecOld[[bool]]` is not assignable to variable `in_out_old` with type `InvariantParamSpecOld[[int]]`",
+      "line": 110,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 43,
+      "stop_line": 110
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "`InvariantParamSpecOld[[object]]` is not assignable to variable `in_out_old` with type `InvariantParamSpecOld[[int]]`",
+      "description": "`InvariantParamSpecOld[[object]]` is not assignable to variable `in_out_old` with type `InvariantParamSpecOld[[int]]`",
+      "line": 111,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 45,
+      "stop_line": 111
+    },
+    {
+      "code": -2,
+      "column": 49,
+      "concise_description": "`ContravariantParamSpecOld[[int]]` is not assignable to `ContravariantParamSpecOld[[object]]`",
+      "description": "`ContravariantParamSpecOld[[int]]` is not assignable to `ContravariantParamSpecOld[[object]]`",
+      "line": 121,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 81,
+      "stop_line": 121
+    },
+    {
+      "code": -2,
+      "column": 46,
+      "concise_description": "`ContravariantParamSpecOld[[object]]` is not assignable to `ContravariantParamSpecOld[[int]]`",
+      "description": "`ContravariantParamSpecOld[[object]]` is not assignable to `ContravariantParamSpecOld[[int]]`",
+      "line": 122,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 81,
+      "stop_line": 122
+    },
+    {
+      "code": -2,
+      "column": 43,
+      "concise_description": "`CovariantParamSpecOld[[object]]` is not assignable to `CovariantParamSpecOld[[int]]`",
+      "description": "`CovariantParamSpecOld[[object]]` is not assignable to `CovariantParamSpecOld[[int]]`",
+      "line": 132,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 74,
+      "stop_line": 132
+    },
+    {
+      "code": -2,
+      "column": 46,
+      "concise_description": "`CovariantParamSpecOld[[int]]` is not assignable to `CovariantParamSpecOld[[object]]`",
+      "description": "`CovariantParamSpecOld[[int]]` is not assignable to `CovariantParamSpecOld[[object]]`",
+      "line": 133,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 74,
+      "stop_line": 133
+    },
+    {
+      "code": -2,
+      "column": 63,
+      "concise_description": "`InferredContravariantParamSpecOld[[int]]` is not assignable to `InferredContravariantParamSpecOld[[object]]`",
+      "description": "`InferredContravariantParamSpecOld[[int]]` is not assignable to `InferredContravariantParamSpecOld[[object]]`",
+      "line": 142,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 103,
+      "stop_line": 142
+    },
+    {
+      "code": -2,
+      "column": 60,
+      "concise_description": "`InferredContravariantParamSpecOld[[object]]` is not assignable to `InferredContravariantParamSpecOld[[int]]`",
+      "description": "`InferredContravariantParamSpecOld[[object]]` is not assignable to `InferredContravariantParamSpecOld[[int]]`",
+      "line": 143,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 103,
+      "stop_line": 143
+    },
+    {
+      "code": -2,
+      "column": 57,
+      "concise_description": "`InferredCovariantParamSpecOld[[object]]` is not assignable to `InferredCovariantParamSpecOld[[int]]`",
+      "description": "`InferredCovariantParamSpecOld[[object]]` is not assignable to `InferredCovariantParamSpecOld[[int]]`",
+      "line": 151,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 96,
+      "stop_line": 151
+    },
+    {
+      "code": -2,
+      "column": 60,
+      "concise_description": "`InferredCovariantParamSpecOld[[int]]` is not assignable to `InferredCovariantParamSpecOld[[object]]`",
+      "description": "`InferredCovariantParamSpecOld[[int]]` is not assignable to `InferredCovariantParamSpecOld[[object]]`",
+      "line": 152,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 96,
+      "stop_line": 152
     }
   ],
   "generics_scoping.py": [
@@ -7460,88 +7871,77 @@
       "column": 34,
       "concise_description": "Argument `Height` is not assignable to parameter `shape` with type `tuple[*@_]` in function `Array.__init__`",
       "description": "Argument `Height` is not assignable to parameter `shape` with type `tuple[*@_]` in function `Array.__init__`",
-      "line": 42,
+      "line": 43,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 43,
-      "stop_line": 42
+      "stop_line": 43
     },
     {
       "code": -2,
       "column": 35,
       "concise_description": "`Array[Batch, Width]` is not assignable to `Array[Batch, Height, Width]`",
       "description": "`Array[Batch, Width]` is not assignable to `Array[Batch, Height, Width]`",
-      "line": 43,
+      "line": 44,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 62,
-      "stop_line": 43
+      "stop_line": 44
     },
     {
       "code": -2,
       "column": 41,
       "concise_description": "`Array[Time, Batch, Width, Height]` is not assignable to `Array[Time, Batch, Height, Width]`",
       "description": "`Array[Time, Batch, Width, Height]` is not assignable to `Array[Time, Batch, Height, Width]`",
-      "line": 44,
+      "line": 45,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 2,
-      "stop_line": 46
+      "stop_line": 47
     },
     {
       "code": -2,
       "column": 22,
       "concise_description": "`TypeVarTuple` must be unpacked",
       "description": "`TypeVarTuple` must be unpacked",
-      "line": 52,
+      "line": 53,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 27,
-      "stop_line": 52
+      "stop_line": 53
     },
     {
       "code": -2,
       "column": 37,
       "concise_description": "`TypeVarTuple` must be unpacked",
       "description": "`TypeVarTuple` must be unpacked",
-      "line": 53,
+      "line": 54,
       "name": "invalid-type-var-tuple",
       "severity": "error",
       "stop_column": 42,
-      "stop_line": 53
+      "stop_line": 54
     },
     {
       "code": -2,
       "column": 34,
       "concise_description": "`TypeVarTuple` must be unpacked",
       "description": "`TypeVarTuple` must be unpacked",
-      "line": 56,
+      "line": 57,
       "name": "invalid-type-var-tuple",
       "severity": "error",
       "stop_column": 39,
-      "stop_line": 56
+      "stop_line": 57
     },
     {
       "code": -2,
       "column": 24,
       "concise_description": "`TypeVarTuple` must be unpacked",
       "description": "`TypeVarTuple` must be unpacked",
-      "line": 59,
+      "line": 60,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 29,
-      "stop_line": 59
-    },
-    {
-      "code": -2,
-      "column": 27,
-      "concise_description": "Unexpected keyword argument `covariant` to TypeVarTuple",
-      "description": "Unexpected keyword argument `covariant` to TypeVarTuple",
-      "line": 65,
-      "name": "invalid-type-var-tuple",
-      "severity": "error",
-      "stop_column": 41,
-      "stop_line": 65
+      "stop_line": 60
     },
     {
       "code": -2,
@@ -7608,6 +8008,17 @@
       "severity": "error",
       "stop_column": 13,
       "stop_line": 107
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Type parameters for class may not have more than one TypeVarTuple",
+      "description": "Type parameters for class may not have more than one TypeVarTuple",
+      "line": 111,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 111
     }
   ],
   "generics_typevartuple_callable.py": [
@@ -7704,6 +8115,459 @@
       "severity": "error",
       "stop_column": 29,
       "stop_line": 30
+    }
+  ],
+  "generics_typevartuple_variance.py": [
+    {
+      "code": -2,
+      "column": 45,
+      "concise_description": "`InvariantTypeVarTuple[int]` is not assignable to `InvariantTypeVarTuple[object]`",
+      "description": "`InvariantTypeVarTuple[int]` is not assignable to `InvariantTypeVarTuple[object]`",
+      "line": 14,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 73,
+      "stop_line": 14
+    },
+    {
+      "code": -2,
+      "column": 42,
+      "concise_description": "`InvariantTypeVarTuple[object]` is not assignable to `InvariantTypeVarTuple[int]`",
+      "description": "`InvariantTypeVarTuple[object]` is not assignable to `InvariantTypeVarTuple[int]`",
+      "line": 15,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 73,
+      "stop_line": 15
+    },
+    {
+      "code": -2,
+      "column": 64,
+      "concise_description": "`InvariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `InvariantTypeVarTuple[*tuple[int, ...]]`",
+      "description": "`InvariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `InvariantTypeVarTuple[*tuple[int, ...]]`",
+      "line": 17,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 108,
+      "stop_line": 17
+    },
+    {
+      "code": -2,
+      "column": 70,
+      "concise_description": "`InvariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `InvariantTypeVarTuple[*tuple[object, ...]]`",
+      "description": "`InvariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `InvariantTypeVarTuple[*tuple[object, ...]]`",
+      "line": 18,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 111,
+      "stop_line": 18
+    },
+    {
+      "code": -2,
+      "column": 58,
+      "concise_description": "`InvariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `InvariantTypeVarTuple[int]`",
+      "description": "`InvariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `InvariantTypeVarTuple[int]`",
+      "line": 20,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 99,
+      "stop_line": 20
+    },
+    {
+      "code": -2,
+      "column": 71,
+      "concise_description": "`InvariantTypeVarTuple[int]` is not assignable to `InvariantTypeVarTuple[*tuple[int, ...]]`",
+      "description": "`InvariantTypeVarTuple[int]` is not assignable to `InvariantTypeVarTuple[*tuple[int, ...]]`",
+      "line": 21,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 99,
+      "stop_line": 21
+    },
+    {
+      "code": -2,
+      "column": 53,
+      "concise_description": "`ContravariantTypeVarTuple[object, int]` is not assignable to `ContravariantTypeVarTuple[object, object]`",
+      "description": "`ContravariantTypeVarTuple[object, int]` is not assignable to `ContravariantTypeVarTuple[object, object]`",
+      "line": 28,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 93,
+      "stop_line": 28
+    },
+    {
+      "code": -2,
+      "column": 42,
+      "concise_description": "`ContravariantTypeVarTuple[object]` is not assignable to `ContravariantTypeVarTuple[int]`",
+      "description": "`ContravariantTypeVarTuple[object]` is not assignable to `ContravariantTypeVarTuple[int]`",
+      "line": 29,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 77,
+      "stop_line": 29
+    },
+    {
+      "code": -2,
+      "column": 64,
+      "concise_description": "`ContravariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[int, ...]]`",
+      "description": "`ContravariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[int, ...]]`",
+      "line": 30,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 112,
+      "stop_line": 30
+    },
+    {
+      "code": -2,
+      "column": 70,
+      "concise_description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[object, ...]]`",
+      "description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[object, ...]]`",
+      "line": 31,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 115,
+      "stop_line": 31
+    },
+    {
+      "code": -2,
+      "column": 58,
+      "concise_description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[int]`",
+      "description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[int]`",
+      "line": 33,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 103,
+      "stop_line": 33
+    },
+    {
+      "code": -2,
+      "column": 71,
+      "concise_description": "`ContravariantTypeVarTuple[int]` is not assignable to `ContravariantTypeVarTuple[*tuple[int, ...]]`",
+      "description": "`ContravariantTypeVarTuple[int]` is not assignable to `ContravariantTypeVarTuple[*tuple[int, ...]]`",
+      "line": 34,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 103,
+      "stop_line": 34
+    },
+    {
+      "code": -2,
+      "column": 39,
+      "concise_description": "`CovariantTypeVarTuple[object]` is not assignable to `CovariantTypeVarTuple[int]`",
+      "description": "`CovariantTypeVarTuple[object]` is not assignable to `CovariantTypeVarTuple[int]`",
+      "line": 42,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 70,
+      "stop_line": 42
+    },
+    {
+      "code": -2,
+      "column": 42,
+      "concise_description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[object]`",
+      "description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[object]`",
+      "line": 43,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 70,
+      "stop_line": 43
+    },
+    {
+      "code": -2,
+      "column": 50,
+      "concise_description": "`CovariantTypeVarTuple[bool, bool]` is not assignable to `CovariantTypeVarTuple[int, int]`",
+      "description": "`CovariantTypeVarTuple[bool, bool]` is not assignable to `CovariantTypeVarTuple[int, int]`",
+      "line": 44,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 86,
+      "stop_line": 44
+    },
+    {
+      "code": -2,
+      "column": 50,
+      "concise_description": "`CovariantTypeVarTuple[bool, object]` is not assignable to `CovariantTypeVarTuple[int, int]`",
+      "description": "`CovariantTypeVarTuple[bool, object]` is not assignable to `CovariantTypeVarTuple[int, int]`",
+      "line": 45,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 88,
+      "stop_line": 45
+    },
+    {
+      "code": -2,
+      "column": 50,
+      "concise_description": "`CovariantTypeVarTuple[object, bool]` is not assignable to `CovariantTypeVarTuple[int, int]`",
+      "description": "`CovariantTypeVarTuple[object, bool]` is not assignable to `CovariantTypeVarTuple[int, int]`",
+      "line": 46,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 88,
+      "stop_line": 46
+    },
+    {
+      "code": -2,
+      "column": 50,
+      "concise_description": "`CovariantTypeVarTuple[object, object]` is not assignable to `CovariantTypeVarTuple[int, int]`",
+      "description": "`CovariantTypeVarTuple[object, object]` is not assignable to `CovariantTypeVarTuple[int, int]`",
+      "line": 47,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 90,
+      "stop_line": 47
+    },
+    {
+      "code": -2,
+      "column": 61,
+      "concise_description": "`CovariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `CovariantTypeVarTuple[*tuple[int, ...]]`",
+      "description": "`CovariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `CovariantTypeVarTuple[*tuple[int, ...]]`",
+      "line": 48,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 105,
+      "stop_line": 48
+    },
+    {
+      "code": -2,
+      "column": 67,
+      "concise_description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[*tuple[object, ...]]`",
+      "description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[*tuple[object, ...]]`",
+      "line": 49,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 108,
+      "stop_line": 49
+    },
+    {
+      "code": -2,
+      "column": 55,
+      "concise_description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[int]`",
+      "description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[int]`",
+      "line": 51,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 96,
+      "stop_line": 51
+    },
+    {
+      "code": -2,
+      "column": 68,
+      "concise_description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[*tuple[int, ...]]`",
+      "description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[*tuple[int, ...]]`",
+      "line": 52,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 96,
+      "stop_line": 52
+    },
+    {
+      "code": -2,
+      "column": 35,
+      "concise_description": "Unexpected keyword argument `infer_variance` to TypeVarTuple",
+      "description": "Unexpected keyword argument `infer_variance` to TypeVarTuple",
+      "line": 55,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 54,
+      "stop_line": 55
+    },
+    {
+      "code": -2,
+      "column": 33,
+      "concise_description": "Unexpected keyword argument `covariant` to TypeVarTuple",
+      "description": "Unexpected keyword argument `covariant` to TypeVarTuple",
+      "line": 56,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 47,
+      "stop_line": 56
+    },
+    {
+      "code": -2,
+      "column": 49,
+      "concise_description": "Unexpected keyword argument `contravariant` to TypeVarTuple",
+      "description": "Unexpected keyword argument `contravariant` to TypeVarTuple",
+      "line": 56,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 67,
+      "stop_line": 56
+    },
+    {
+      "code": -2,
+      "column": 33,
+      "concise_description": "Unexpected keyword argument `covariant` to TypeVarTuple",
+      "description": "Unexpected keyword argument `covariant` to TypeVarTuple",
+      "line": 57,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 47,
+      "stop_line": 57
+    },
+    {
+      "code": -2,
+      "column": 49,
+      "concise_description": "Unexpected keyword argument `infer_variance` to TypeVarTuple",
+      "description": "Unexpected keyword argument `infer_variance` to TypeVarTuple",
+      "line": 57,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 68,
+      "stop_line": 57
+    },
+    {
+      "code": -2,
+      "column": 33,
+      "concise_description": "Unexpected keyword argument `contravariant` to TypeVarTuple",
+      "description": "Unexpected keyword argument `contravariant` to TypeVarTuple",
+      "line": 58,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 51,
+      "stop_line": 58
+    },
+    {
+      "code": -2,
+      "column": 53,
+      "concise_description": "Unexpected keyword argument `infer_variance` to TypeVarTuple",
+      "description": "Unexpected keyword argument `infer_variance` to TypeVarTuple",
+      "line": 58,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 72,
+      "stop_line": 58
+    },
+    {
+      "code": -2,
+      "column": 45,
+      "concise_description": "`InvariantTypeVarTupleOld[int]` is not assignable to `InvariantTypeVarTupleOld[object]`",
+      "description": "`InvariantTypeVarTupleOld[int]` is not assignable to `InvariantTypeVarTupleOld[object]`",
+      "line": 68,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 76,
+      "stop_line": 68
+    },
+    {
+      "code": -2,
+      "column": 42,
+      "concise_description": "`InvariantTypeVarTupleOld[object]` is not assignable to `InvariantTypeVarTupleOld[int]`",
+      "description": "`InvariantTypeVarTupleOld[object]` is not assignable to `InvariantTypeVarTupleOld[int]`",
+      "line": 69,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 76,
+      "stop_line": 69
+    },
+    {
+      "code": -2,
+      "column": 29,
+      "concise_description": "Unexpected keyword argument `contravariant` to TypeVarTuple",
+      "description": "Unexpected keyword argument `contravariant` to TypeVarTuple",
+      "line": 73,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 47,
+      "stop_line": 73
+    },
+    {
+      "code": -2,
+      "column": 52,
+      "concise_description": "`ContravariantTypeVarTupleOld[int]` is not assignable to `ContravariantTypeVarTupleOld[object]`",
+      "description": "`ContravariantTypeVarTupleOld[int]` is not assignable to `ContravariantTypeVarTupleOld[object]`",
+      "line": 83,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 87,
+      "stop_line": 83
+    },
+    {
+      "code": -2,
+      "column": 49,
+      "concise_description": "`ContravariantTypeVarTupleOld[object]` is not assignable to `ContravariantTypeVarTupleOld[int]`",
+      "description": "`ContravariantTypeVarTupleOld[object]` is not assignable to `ContravariantTypeVarTupleOld[int]`",
+      "line": 84,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 87,
+      "stop_line": 84
+    },
+    {
+      "code": -2,
+      "column": 31,
+      "concise_description": "Unexpected keyword argument `covariant` to TypeVarTuple",
+      "description": "Unexpected keyword argument `covariant` to TypeVarTuple",
+      "line": 87,
+      "name": "invalid-type-var-tuple",
+      "severity": "error",
+      "stop_column": 45,
+      "stop_line": 87
+    },
+    {
+      "code": -2,
+      "column": 46,
+      "concise_description": "`CovariantTypeVarTupleOld[object]` is not assignable to `CovariantTypeVarTupleOld[int]`",
+      "description": "`CovariantTypeVarTupleOld[object]` is not assignable to `CovariantTypeVarTupleOld[int]`",
+      "line": 97,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 80,
+      "stop_line": 97
+    },
+    {
+      "code": -2,
+      "column": 49,
+      "concise_description": "`CovariantTypeVarTupleOld[int]` is not assignable to `CovariantTypeVarTupleOld[object]`",
+      "description": "`CovariantTypeVarTupleOld[int]` is not assignable to `CovariantTypeVarTupleOld[object]`",
+      "line": 98,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 80,
+      "stop_line": 98
+    },
+    {
+      "code": -2,
+      "column": 66,
+      "concise_description": "`InferredContravariantTypeVarTupleOld[int]` is not assignable to `InferredContravariantTypeVarTupleOld[object]`",
+      "description": "`InferredContravariantTypeVarTupleOld[int]` is not assignable to `InferredContravariantTypeVarTupleOld[object]`",
+      "line": 107,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 109,
+      "stop_line": 107
+    },
+    {
+      "code": -2,
+      "column": 63,
+      "concise_description": "`InferredContravariantTypeVarTupleOld[object]` is not assignable to `InferredContravariantTypeVarTupleOld[int]`",
+      "description": "`InferredContravariantTypeVarTupleOld[object]` is not assignable to `InferredContravariantTypeVarTupleOld[int]`",
+      "line": 108,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 109,
+      "stop_line": 108
+    },
+    {
+      "code": -2,
+      "column": 60,
+      "concise_description": "`InferredCovariantTypeVarTupleOld[object]` is not assignable to `InferredCovariantTypeVarTupleOld[int]`",
+      "description": "`InferredCovariantTypeVarTupleOld[object]` is not assignable to `InferredCovariantTypeVarTupleOld[int]`",
+      "line": 116,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 102,
+      "stop_line": 116
+    },
+    {
+      "code": -2,
+      "column": 63,
+      "concise_description": "`InferredCovariantTypeVarTupleOld[int]` is not assignable to `InferredCovariantTypeVarTupleOld[object]`",
+      "description": "`InferredCovariantTypeVarTupleOld[int]` is not assignable to `InferredCovariantTypeVarTupleOld[object]`",
+      "line": 117,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 102,
+      "stop_line": 117
     }
   ],
   "generics_upper_bound.py": [
@@ -8150,6 +9014,17 @@
       "severity": "error",
       "stop_column": 66,
       "stop_line": 194
+    },
+    {
+      "code": -2,
+      "column": 31,
+      "concise_description": "`ShouldBeCovariant7[object]` is not assignable to `ShouldBeCovariant7[int]`",
+      "description": "`ShouldBeCovariant7[object]` is not assignable to `ShouldBeCovariant7[int]`",
+      "line": 205,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 59,
+      "stop_line": 205
     }
   ],
   "historical_positional.py": [
@@ -9724,6 +10599,28 @@
       "severity": "error",
       "stop_column": 38,
       "stop_line": 341
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "`Concrete7_Bad1` is not assignable to `Template7`",
+      "description": "`Concrete7_Bad1` is not assignable to `Template7`\n  `Concrete7_Bad1.val1` is not a ClassVar, but `Template7.val1` is",
+      "line": 369,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 38,
+      "stop_line": 369
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "`Concrete7_Bad2` is not assignable to `Template7`",
+      "description": "`Concrete7_Bad2` is not assignable to `Template7`\n  Protocol `Template7` requires attribute `val1`",
+      "line": 370,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 38,
+      "stop_line": 370
     }
   ],
   "protocols_explicit.py": [
@@ -10172,80 +11069,91 @@
   "protocols_variance.py": [
     {
       "code": -2,
+      "column": 20,
+      "concise_description": "Unexpected keyword argument `contravariant` to ParamSpec",
+      "description": "Unexpected keyword argument `contravariant` to ParamSpec",
+      "line": 15,
+      "name": "invalid-param-spec",
+      "severity": "error",
+      "stop_column": 38,
+      "stop_line": 15
+    },
+    {
+      "code": -2,
       "column": 7,
       "concise_description": "Type variable `T1` in class `AnotherBox` is declared as invariant, but could be covariant based on its usage",
       "description": "Type variable `T1` in class `AnotherBox` is declared as invariant, but could be covariant based on its usage",
-      "line": 21,
+      "line": 22,
       "name": "variance-mismatch",
       "severity": "warn",
       "stop_column": 17,
-      "stop_line": 21
+      "stop_line": 22
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "Type variable `T3` in class `Protocol2` is declared as invariant, but could be contravariant based on its usage",
       "description": "Type variable `T3` in class `Protocol2` is declared as invariant, but could be contravariant based on its usage",
-      "line": 40,
+      "line": 41,
       "name": "variance-mismatch",
       "severity": "warn",
       "stop_column": 16,
-      "stop_line": 40
+      "stop_line": 41
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "Type variable `T1` in class `Protocol4` is declared as invariant, but could be contravariant based on its usage",
       "description": "Type variable `T1` in class `Protocol4` is declared as invariant, but could be contravariant based on its usage",
-      "line": 56,
+      "line": 57,
       "name": "variance-mismatch",
       "severity": "warn",
       "stop_column": 16,
-      "stop_line": 56
+      "stop_line": 57
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "Type variable `T1_co` is covariant but is used in contravariant position",
       "description": "Type variable `T1_co` is covariant but is used in contravariant position",
-      "line": 62,
+      "line": 63,
       "name": "invalid-variance",
       "severity": "error",
       "stop_column": 11,
-      "stop_line": 62
+      "stop_line": 63
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "Type variable `T1` in class `Protocol6` is declared as invariant, but could be covariant based on its usage",
       "description": "Type variable `T1` in class `Protocol6` is declared as invariant, but could be covariant based on its usage",
-      "line": 66,
+      "line": 67,
       "name": "variance-mismatch",
       "severity": "warn",
       "stop_column": 16,
-      "stop_line": 66
+      "stop_line": 67
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "Type variable `T1_contra` is contravariant but is used in covariant position",
       "description": "Type variable `T1_contra` is contravariant but is used in covariant position",
-      "line": 72,
+      "line": 73,
       "name": "invalid-variance",
       "severity": "error",
       "stop_column": 11,
-      "stop_line": 72
+      "stop_line": 73
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "Type variable `T1` in class `Protocol12` is declared as invariant, but could be covariant based on its usage",
       "description": "Type variable `T1` in class `Protocol12` is declared as invariant, but could be covariant based on its usage",
-      "line": 104,
+      "line": 105,
       "name": "variance-mismatch",
       "severity": "warn",
       "stop_column": 17,
-      "stop_line": 104
+      "stop_line": 105
     }
   ],
   "qualifiers_annotated.py": [
@@ -10682,146 +11590,168 @@
     },
     {
       "code": -2,
+      "column": 5,
+      "concise_description": "`Final` may not be used for TypedDict members",
+      "description": "`Final` may not be used for TypedDict members",
+      "line": 131,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 6,
+      "stop_line": 131
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "`Final` may not be used for NamedTuple members",
+      "description": "`Final` may not be used for NamedTuple members",
+      "line": 136,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 6,
+      "stop_line": 136
+    },
+    {
+      "code": -2,
       "column": 2,
       "concise_description": "Missing argument `x` in function `N.__new__`",
       "description": "Missing argument `x` in function `N.__new__`",
-      "line": 134,
+      "line": 148,
       "name": "missing-argument",
       "severity": "error",
       "stop_column": 7,
-      "stop_line": 134
+      "stop_line": 148
     },
     {
       "code": -2,
       "column": 2,
       "concise_description": "Missing argument `y` in function `N.__new__`",
       "description": "Missing argument `y` in function `N.__new__`",
-      "line": 134,
+      "line": 148,
       "name": "missing-argument",
       "severity": "error",
       "stop_column": 7,
-      "stop_line": 134
+      "stop_line": 148
     },
     {
       "code": -2,
       "column": 3,
       "concise_description": "Unexpected keyword argument `a` in function `N.__new__`",
       "description": "Unexpected keyword argument `a` in function `N.__new__`",
-      "line": 134,
+      "line": 148,
       "name": "unexpected-keyword",
       "severity": "error",
       "stop_column": 4,
-      "stop_line": 134
+      "stop_line": 148
     },
     {
       "code": -2,
       "column": 5,
       "concise_description": "Argument `Literal['']` is not assignable to parameter `x` with type `int` in function `N.__new__`",
       "description": "Argument `Literal['']` is not assignable to parameter `x` with type `int` in function `N.__new__`",
-      "line": 135,
+      "line": 149,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 7,
-      "stop_line": 135
+      "stop_line": 149
     },
     {
       "code": -2,
       "column": 11,
       "concise_description": "Argument `Literal['']` is not assignable to parameter `y` with type `int` in function `N.__new__`",
       "description": "Argument `Literal['']` is not assignable to parameter `y` with type `int` in function `N.__new__`",
-      "line": 135,
+      "line": 149,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 13,
-      "stop_line": 135
+      "stop_line": 149
     },
     {
       "code": -2,
       "column": 11,
       "concise_description": "Cannot assign to variable `ID1` because it is marked final",
       "description": "Cannot assign to variable `ID1` because it is marked final",
-      "line": 141,
+      "line": 155,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 12,
-      "stop_line": 141
+      "stop_line": 155
     },
     {
       "code": -2,
       "column": 5,
       "concise_description": "Cannot assign to variable `x` because it is marked final",
       "description": "Cannot assign to variable `x` because it is marked final",
-      "line": 145,
+      "line": 159,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 11,
-      "stop_line": 145
+      "stop_line": 159
     },
     {
       "code": -2,
       "column": 15,
       "concise_description": "Cannot assign to variable `x` because it is marked final",
       "description": "Cannot assign to variable `x` because it is marked final",
-      "line": 147,
+      "line": 161,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 16,
-      "stop_line": 147
+      "stop_line": 161
     },
     {
       "code": -2,
       "column": 14,
       "concise_description": "Cannot assign to variable `x` because it is marked final",
       "description": "Cannot assign to variable `x` because it is marked final",
-      "line": 149,
+      "line": 163,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 23,
-      "stop_line": 149
+      "stop_line": 163
     },
     {
       "code": -2,
       "column": 10,
       "concise_description": "Cannot assign to variable `x` because it is marked final",
       "description": "Cannot assign to variable `x` because it is marked final",
-      "line": 152,
+      "line": 166,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 26,
-      "stop_line": 152
+      "stop_line": 166
     },
     {
       "code": -2,
       "column": 5,
       "concise_description": "Cannot assign to variable `x` because it is marked final",
       "description": "Cannot assign to variable `x` because it is marked final",
-      "line": 155,
+      "line": 169,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 11,
-      "stop_line": 155
+      "stop_line": 169
     },
     {
       "code": -2,
       "column": 1,
       "concise_description": "Cannot assign to `TEN` because it is imported as final",
       "description": "Cannot assign to `TEN` because it is imported as final",
-      "line": 166,
+      "line": 180,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 4,
-      "stop_line": 166
+      "stop_line": 180
     },
     {
       "code": -2,
       "column": 1,
       "concise_description": "Cannot assign to `PI` because it is imported as final",
       "description": "Cannot assign to `PI` because it is imported as final",
-      "line": 170,
+      "line": 184,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 3,
-      "stop_line": 170
+      "stop_line": 184
     }
   ],
   "qualifiers_final_decorator.py": [
@@ -11018,6 +11948,41 @@
       "severity": "error",
       "stop_column": 16,
       "stop_line": 13
+    }
+  ],
+  "specialtypes_sentinels.py": [
+    {
+      "code": -2,
+      "column": 20,
+      "concise_description": "Default `<MISSING>` is not assignable to parameter `x` with type `int`",
+      "description": "Default `<MISSING>` is not assignable to parameter `x` with type `int`",
+      "line": 14,
+      "name": "bad-function-definition",
+      "severity": "error",
+      "stop_column": 27,
+      "stop_line": 14
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Argument `Cls.Cls.IN_CLASS` is not assignable to parameter `x` with type `int | <MISSING> | SPECIAL` in function `func2`",
+      "description": "Argument `Cls.Cls.IN_CLASS` is not assignable to parameter `x` with type `int | <MISSING> | SPECIAL` in function `func2`",
+      "line": 36,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 36
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Argument `<MISSING>` is not assignable to parameter `x` with type `int | Cls.Cls.IN_CLASS` in function `func3`",
+      "description": "Argument `<MISSING>` is not assignable to parameter `x` with type `int | Cls.Cls.IN_CLASS` in function `func3`",
+      "line": 39,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 14,
+      "stop_line": 39
     }
   ],
   "specialtypes_type.py": [
