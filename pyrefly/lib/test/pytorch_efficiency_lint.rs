@@ -47,7 +47,7 @@ fn add_shape_extensions(e: &mut TestEnv) {
 from typing import Any
 
 shaped_array: Any
-class SizeTuple:
+class IntTuple:
     def __class_getitem__(cls, params: Any) -> Any: ...
 "#,
     );
@@ -59,10 +59,10 @@ fn shaped_array_env_with_lint() -> TestEnv {
     e.add(
         "arrays",
         r#"
-from shape_extensions import SizeTuple, shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Array[Shape: SizeTuple]:
+class Array[Shape: IntTuple]:
     def item(self) -> int | float: ...
     def cuda(self) -> "Array[Shape]": ...
     def to(self, device: object) -> "Array[Shape]": ...
@@ -77,12 +77,12 @@ fn decorated_torch_env_with_lint() -> TestEnv {
     e.add(
         "torch",
         r#"
-from shape_extensions import SizeTuple, shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 class device: ...
 
 @shaped_array(shape="Shape")
-class Tensor[Shape: SizeTuple]:
+class Tensor[Shape: IntTuple]:
     def item(self) -> int | float: ...
     def to(self, device: device) -> "Tensor[Shape]": ...
     def cuda(self) -> "Tensor[Shape]": ...

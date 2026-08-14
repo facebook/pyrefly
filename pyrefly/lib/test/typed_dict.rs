@@ -229,6 +229,29 @@ def f(c: C | Any):
 );
 
 testcase!(
+    test_typed_dict_str_enum_key,
+    r#"
+from enum import StrEnum
+from typing import assert_type, TypedDict
+
+class MyEnum(StrEnum):
+    i = "i"
+    j = "j"
+
+class MyDict(TypedDict):
+    i: int
+
+my_d = MyDict(i=1)
+my_d[MyEnum.i] = 2
+my_d[MyEnum.i] = "bad"  # E: `Literal['bad']` is not assignable to TypedDict key `i` with type `int`
+my_d[MyEnum.j] = 2  # E: TypedDict `MyDict` does not have key `j`
+my_d[MyEnum.i.name] = 2
+assert_type(my_d[MyEnum.i], int)
+my_d[MyEnum.j]  # E: TypedDict `MyDict` does not have key `j`
+    "#,
+);
+
+testcase!(
     test_typed_dict_readonly_partial_update,
     r#"
 from typing import Never, NotRequired, TypedDict, ReadOnly
@@ -2322,7 +2345,7 @@ test(other=int, default="") # E: Argument `Literal['']` is not assignable to par
 testcase!(
     test_typed_dict_contains_narrowing,
     r#"
-from typing import TypedDict, Literal, reveal_type
+from typing import Literal, TypedDict, assert_type
 
 class AClient: ...
 class BClient: ...
@@ -2334,7 +2357,7 @@ class Clients(TypedDict):
 
 def test_in(clients: Clients, name: str):
     if name in clients:
-        reveal_type(name)  # E: revealed type: Literal['a', 'b']
+        assert_type(name, Literal['a', 'b'])
         client = clients[name]
     else:
         client = GenericClient()
@@ -2342,20 +2365,20 @@ def test_in(clients: Clients, name: str):
 
 def test_not_in(clients: Clients, name: str):
     if name not in clients:
-        reveal_type(name)  # E: revealed type: str
+        assert_type(name, str)
         return GenericClient()
     # name is narrowed in the else branch
-    reveal_type(name)  # E: revealed type: Literal['a', 'b']
+    assert_type(name, Literal['a', 'b'])
     client = clients[name]
 
 def test_literal_union_in(clients: Clients, name: Literal['a', 'b', 'c']):
     # Test narrowing a literal union with 'in'
     if name in clients:
-        reveal_type(name)  # E: revealed type: Literal['a', 'b']
+        assert_type(name, Literal['a', 'b'])
         client = clients[name]
     else:
         # Only 'c' remains outside the TypedDict
-        reveal_type(name)  # E: revealed type: Literal['c']
+        assert_type(name, Literal['c'])
         client = GenericClient()
     return client
 
@@ -2363,10 +2386,10 @@ def test_literal_union_not_in(clients: Clients, name: Literal['a', 'b', 'c']):
     # Test narrowing a literal union with 'not in'
     if name not in clients:
         # Only 'c' is not in the TypedDict
-        reveal_type(name)  # E: revealed type: Literal['c']
+        assert_type(name, Literal['c'])
         return GenericClient()
     # 'a' and 'b' remain
-    reveal_type(name)  # E: revealed type: Literal['a', 'b']
+    assert_type(name, Literal['a', 'b'])
     client = clients[name]
     return client
 "#,
@@ -2375,7 +2398,7 @@ def test_literal_union_not_in(clients: Clients, name: Literal['a', 'b', 'c']):
 testcase!(
     test_typed_dict_contains_narrowing_inheritance,
     r#"
-from typing import TypedDict, Literal, reveal_type
+from typing import Literal, TypedDict, assert_type
 
 class Base(TypedDict):
     a: int
@@ -2386,20 +2409,20 @@ class Extended(Base):
 def test_inherited_in(e: Extended, k: str):
     # Should narrow to all keys including inherited ones
     if k in e:
-        reveal_type(k)  # E: revealed type: Literal['a', 'b']
+        assert_type(k, Literal['a', 'b'])
 
 def test_inherited_not_in(e: Extended, k: Literal['a', 'b', 'c']):
     if k not in e:
-        reveal_type(k)  # E: revealed type: Literal['c']
+        assert_type(k, Literal['c'])
     else:
-        reveal_type(k)  # E: revealed type: Literal['a', 'b']
+        assert_type(k, Literal['a', 'b'])
 "#,
 );
 
 testcase!(
     test_typed_dict_contains_narrowing_empty,
     r#"
-from typing import TypedDict, Literal, reveal_type
+from typing import Never, TypedDict, assert_type
 
 class Empty(TypedDict):
     pass
@@ -2407,16 +2430,16 @@ class Empty(TypedDict):
 def test_empty_in(e: Empty, k: str):
     # Empty TypedDict - `in` check is always false, so type narrows to Never
     if k in e:
-        reveal_type(k)  # E: revealed type: Never
+        assert_type(k, Never)
     else:
-        reveal_type(k)  # E: revealed type: str
+        assert_type(k, str)
 
 def test_empty_not_in(e: Empty, k: str):
     # Empty TypedDict - `not in` check is always true, type is unchanged
     if k not in e:
-        reveal_type(k)  # E: revealed type: str
+        assert_type(k, str)
     else:
-        reveal_type(k)  # E: revealed type: Never
+        assert_type(k, Never)
 "#,
 );
 

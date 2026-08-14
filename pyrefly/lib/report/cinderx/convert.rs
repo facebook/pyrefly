@@ -312,7 +312,7 @@ pub(crate) fn type_to_structured(
                     vec![type_to_structured(inner, table, pending_class_traits)]
                 }
                 pyrefly_types::tuple::Tuple::Unpacked(unpacked) => {
-                    let (prefix, middle, suffix) = &**unpacked;
+                    let (prefix, middle, suffix) = unpacked.parts();
                     let mut indices: Vec<usize> = prefix
                         .iter()
                         .map(|e| type_to_structured(e, table, pending_class_traits))
@@ -435,8 +435,11 @@ pub(crate) fn type_to_structured(
         | Type::Sentinel(_)
         | Type::ElementOfTypeVarTuple(_)
         | Type::ShapedArray(_)
+        | Type::IntTuple(_)
         | Type::NNModule(_)
-        | Type::Size(_)
-        | Type::Dim(_) => insert_simple_other_form("typing.Any", table),
+        | Type::DataFrame(_)
+        | Type::Series(_)
+        | Type::Int(_)
+        | Type::TypeLevelDslCall(_) => insert_simple_other_form("typing.Any", table),
     }
 }

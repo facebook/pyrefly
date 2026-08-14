@@ -14,11 +14,11 @@ Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new rel
 
 ## What you get out of the box
 
-When you first install Pyrefly without a configuration file, it uses the **basic preset** by default. This shows only high-confidence errors that are very likely to indicate real bugs or crashes, like syntax errors and missing imports. Other diagnostics are silenced.
+When you first install Pyrefly without a Pyrefly configuration, it automatically looks for a nearby mypy or Pyright configuration to migrate in memory. If it does not find one, or migration fails, Pyrefly uses the **basic preset**. This shows only high-confidence errors that are very likely to indicate real bugs or crashes, like syntax errors and missing imports. Other diagnostics are silenced.
 
-The basic preset is useful immediately, without setup. You don't need to understand Python typing concepts to benefit. Open a file in VS Code with the Pyrefly extension and you'll get inlay hints, go-to-definition, and the curated error set right away. The status bar shows `Pyrefly (Basic)` so you know which preset is active.
+The basic preset is useful immediately, without setup. You don't need to understand Python typing concepts to benefit. Open a file in VS Code with the Pyrefly extension and you'll get inlay hints, go-to-definition, and the curated error set right away. When the fallback is active, the status bar shows `Pyrefly (Basic)` so you know which preset is active.
 
-If you already have a `mypy.ini`, `pyrightconfig.json`, or a `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml`, Pyrefly automatically migrates that configuration the first time it runs in your project. The status bar will show `Pyrefly (Legacy)` (mypy migration) or `Pyrefly (Default)` (pyright migration) accordingly. Nothing is written to disk during the migration; running `pyrefly init` later will commit the same migration permanently.
+If Pyrefly finds a `mypy.ini`, `pyrightconfig.json`, or a `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml`, the status bar instead shows `Pyrefly (Legacy)` (mypy migration) or `Pyrefly (Default)` (Pyright migration). Nothing is written to disk during the migration; running `pyrefly init` later will commit the same migration permanently.
 
 To unlock full type checking and pin your configuration, run `pyrefly init`. This writes a `pyrefly.toml` (or updates `pyproject.toml`) and explicitly migrates any existing mypy/pyright settings. After running `pyrefly init`, common knobs to tune include:
 

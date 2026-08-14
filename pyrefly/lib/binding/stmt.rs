@@ -10,6 +10,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
@@ -48,15 +49,20 @@ use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
+use crate::binding::binding::SuppressedException;
 use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::polars::polars_column_mutation;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
+use crate::binding::scope::TerminationKind;
 use crate::config::error_kind::ErrorKind;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::special::SpecialExport;
@@ -84,7 +90,7 @@ pub(crate) fn is_special_import_function(name: &str) -> bool {
 fn special_type_var_kind(special: SpecialExport) -> Option<QuantifiedKind> {
     match special {
         SpecialExport::TypeVar => Some(QuantifiedKind::TypeVar),
-        SpecialExport::SymVar => Some(QuantifiedKind::SymVar),
+        SpecialExport::IntVar => Some(QuantifiedKind::IntVar),
         _ => None,
     }
 }
@@ -149,9 +155,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(&mut test, &mut Usage::NonPinningValue(None));
         let narrow_ops = NarrowOps::from_expr(self, Some(&test));
         let static_test = self.sys_info.evaluate_bool(&test);
-        let test_clone = test.clone();
-        self.insert_binding(Key::Anon(test_range), Binding::Expr(None, Box::new(test)));
-        self.insert_binding(KeyExpect::Bool(test_range), BindingExpect::Bool(test_clone));
+        self.insert_binding(KeyExpect::Bool(test_range), BindingExpect::Bool(test));
         if let Some(mut msg_expr) = msg {
             let mut base = self.scopes.clone_current_flow();
             // Negate the narrowing of the test expression when typechecking
@@ -177,7 +181,8 @@ impl<'a> BindingsBuilder<'a> {
             &Usage::NonPinningValue(None),
         );
         if let Some(false) = static_test {
-            self.scopes.mark_flow_termination(true);
+            self.scopes
+                .mark_flow_termination(TerminationKind::StaticTest);
         }
     }
 
@@ -199,12 +204,12 @@ impl<'a> BindingsBuilder<'a> {
         let module_name_str = module_path.replace('/', ".");
         let m = ModuleName::from_string(module_name_str);
 
-        // Determine import style: "*" or absent → wildcard, otherwise aliased.
+        // Determine import style: "*", empty, or absent → wildcard, otherwise aliased.
         let alias = args.get(1).and_then(|arg| match arg {
             Expr::StringLiteral(lit) => Some(lit.value.to_str()),
             _ => None,
         });
-        let is_wildcard = alias.is_none() || alias == Some("*");
+        let is_wildcard = alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
 
         if is_wildcard {
             // Equivalent to `from <module> import *`.
@@ -332,11 +337,11 @@ impl<'a> BindingsBuilder<'a> {
         // The constraints (i.e., any positional arguments after the first)
         // and some keyword arguments are types.
         for arg in iargs {
-            if self.as_direct_shape_symvar(arg) {
+            if self.as_direct_shape_intvar(arg) {
                 self.error(
                     arg.range(),
                     ErrorKind::InvalidTypeVar,
-                    "`SymVar` cannot be used as a TypeVar constraint".to_owned(),
+                    "`IntVar` cannot be used as a TypeVar constraint".to_owned(),
                 );
                 self.ensure_expr(arg, static_type_usage);
                 continue;
@@ -347,12 +352,12 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(id) = &kw.arg
                 && (id.id == "bound" || id.id == "default")
             {
-                if self.as_direct_shape_symvar(&kw.value) {
+                if self.as_direct_shape_intvar(&kw.value) {
                     let role = if id.id == "bound" { "bound" } else { "default" };
                     self.error(
                         kw.value.range(),
                         ErrorKind::InvalidTypeVar,
-                        format!("`SymVar` cannot be used as a TypeVar {role}"),
+                        format!("`IntVar` cannot be used as a TypeVar {role}"),
                     );
                     self.ensure_expr(&mut kw.value, static_type_usage);
                     continue;
@@ -686,7 +691,7 @@ impl<'a> BindingsBuilder<'a> {
                 "Invalid `return` outside of a function".to_owned(),
             );
         }
-        self.scopes.mark_flow_termination(false);
+        self.scopes.mark_flow_termination(TerminationKind::Jump);
     }
 
     /// Evaluate the statements and update the bindings.
@@ -895,7 +900,7 @@ impl<'a> BindingsBuilder<'a> {
                     {
                         match special {
                             SpecialExport::TypeVar
-                            | SpecialExport::SymVar
+                            | SpecialExport::IntVar
                             | SpecialExport::ParamSpec
                             | SpecialExport::TypeVarTuple => {
                                 let ident = Ast::expr_name_identifier(name.clone());
@@ -1160,7 +1165,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::For(mut x) => {
                 if x.is_async
                     && !self.scopes.is_in_async_def()
-                    && !self.module_info.path().is_notebook()
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),
@@ -1247,6 +1252,7 @@ impl<'a> BindingsBuilder<'a> {
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
+                let mut following_runtime_only_branch = false;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
                     self.bind_narrow_ops(
@@ -1281,6 +1287,15 @@ impl<'a> BindingsBuilder<'a> {
                         }
                     }
                     is_first_branch = false;
+                    let later_branches_are_type_checking = test
+                        .as_ref()
+                        .is_some_and(SysInfo::is_not_type_checking_guard);
+                    let is_type_checking_branch = (test.is_none() && following_runtime_only_branch)
+                        || test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
+                    // Record this before any early `continue`: a `not TYPE_CHECKING` guard
+                    // always evaluates statically to `false`, so its branch is skipped below,
+                    // yet the following `else` branch must still be treated as type-checking-only.
+                    following_runtime_only_branch |= later_branches_are_type_checking;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
@@ -1308,7 +1323,13 @@ impl<'a> BindingsBuilder<'a> {
                         &Usage::NonPinningValue(None),
                     );
                     negated_prev_ops.and_all(new_narrow_ops.negate());
-                    self.stmts(body, parent);
+                    if is_type_checking_branch {
+                        self.type_checking_depth += 1;
+                        self.stmts(body, parent);
+                        self.type_checking_depth -= 1;
+                    } else {
+                        self.stmts(body, parent);
+                    }
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
                         exhaustive = true;
@@ -1344,7 +1365,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::With(x) => {
                 if x.is_async
                     && !self.scopes.is_in_async_def()
-                    && !self.module_info.path().is_notebook()
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),
@@ -1353,6 +1374,12 @@ impl<'a> BindingsBuilder<'a> {
                     );
                 }
                 let kind = IsAsync::new(x.is_async);
+                let with_range = x.range();
+                // Whether the `with` itself is reachable, which we must record before
+                // visiting the body: a terminator in the body marks the flow dead, and
+                // we must not resurrect a flow that was already dead beforehand.
+                let reachable = !self.scopes.is_definitely_unreachable();
+                let mut contexts = Vec::with_capacity(x.items.len());
                 for mut item in x.items {
                     let item_range = item.range();
                     let expr_range = item.context_expr.range();
@@ -1362,13 +1389,14 @@ impl<'a> BindingsBuilder<'a> {
                         context,
                         Binding::Expr(None, Box::new(item.context_expr)),
                     );
+                    contexts.push(context_idx);
                     if let Some(mut opts) = item.optional_vars {
                         let make_binding =
                             |ann| Binding::ContextValue(ann, context_idx, expr_range, kind);
                         self.bind_target_no_expr(&mut opts, &make_binding);
                     } else {
                         self.insert_binding(
-                            Key::Anon(item_range),
+                            Key::ContextValue(item_range),
                             Binding::ContextValue(None, context_idx, expr_range, kind),
                         );
                     }
@@ -1376,6 +1404,35 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.enter_with();
                 self.stmts(x.body, parent);
                 self.scopes.exit_with();
+                // An exception raised in the body may be suppressed by the context
+                // manager, in which case control flow resumes after the `with`. That
+                // depends on the type of `__exit__`, so defer the decision to solving.
+                // A `return`/`break`/`continue` also runs `__exit__`, but its return
+                // value is ignored for those, so they always leave the `with`.
+                let terminated = self.scopes.has_terminated();
+                // A body that did not terminate syntactically may still end in a `Never`
+                // expression, e.g. a `NoReturn` call, which raises or diverges.
+                let body = if terminated {
+                    None
+                } else {
+                    self.scopes.last_stmt_expr()
+                };
+                let suppressible = if terminated {
+                    self.scopes.terminated_by_raise()
+                } else {
+                    body.is_some()
+                };
+                if reachable && suppressible {
+                    let key = self.insert_binding(
+                        Key::SuppressedException(with_range),
+                        Binding::SuppressedException(Box::new(SuppressedException {
+                            contexts: contexts.into_boxed_slice(),
+                            kind,
+                            body,
+                        })),
+                    );
+                    self.scopes.resume_after_with(key);
+                }
             }
             Stmt::Match(x) => {
                 self.stmt_match(x, parent);
@@ -1401,7 +1458,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     // If there's no exception raised, don't bother checking the cause.
                 }
-                self.scopes.mark_flow_termination(false);
+                self.scopes.mark_flow_termination(TerminationKind::Raise);
             }
             Stmt::Try(x) => {
                 self.start_fork_and_branch(x.range);
@@ -1626,6 +1683,17 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Expr(mut x) => {
                 let mut current = self.declare_current_idx(Key::StmtExpr(x.value.range()));
                 self.ensure_expr(&mut x.value, current.usage());
+                // Rebind bare-name receivers after in-place column mutations.
+                let mutated_receiver = if let Expr::Call(call) = &*x.value
+                    && let Expr::Attribute(func) = &*call.func
+                    && let Expr::Name(receiver) = &*func.value
+                    && let Some(kind) =
+                        polars_column_mutation(func.attr.id.as_str(), &call.arguments)
+                {
+                    Some((receiver.id.clone(), func.attr.range, kind))
+                } else {
+                    None
+                };
                 let special_export = if let Expr::Call(ExprCall { func, .. }) = &*x.value {
                     self.as_special_export(func)
                 } else {
@@ -1635,6 +1703,21 @@ impl<'a> BindingsBuilder<'a> {
                     .insert_binding_current(current, Binding::StmtExpr(x.value, special_export));
                 // Track this StmtExpr as the trailing statement for type-based termination
                 self.scopes.set_last_stmt_expr(Some(key));
+                if let Some((name, range, kind)) = mutated_receiver {
+                    let mut narrow_ops = NarrowOps::new();
+                    narrow_ops.0.insert(
+                        name,
+                        (
+                            NarrowOp::Atomic(None, AtomicNarrowOp::PolarsColumnMutation(kind)),
+                            range,
+                        ),
+                    );
+                    self.bind_narrow_ops(
+                        &narrow_ops,
+                        NarrowUseLocation::Span(range),
+                        &Usage::NonPinningValue(None),
+                    );
+                }
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {

@@ -17,13 +17,13 @@ use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::function::FuncMetadata;
+use crate::types::function::Function;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
 
@@ -34,6 +34,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Some(class_fields) = self.get_class_fields(cls) else {
             return SmallSet::new();
         };
+        // Names NamedTuple reserves for its own machinery. Overriding any of them in
+        // the class body is a runtime error
+        const RESERVED: &[&str] = &[
+            "__getnewargs__",
+            "_asdict",
+            "_field_defaults",
+            "_fields",
+            "_make",
+            "_replace",
+            "_source",
+        ];
+        for name in class_fields.class_body_fields() {
+            if RESERVED.contains(&name.as_str())
+                && let Some(range) = class_fields.field_decl_range(name)
+            {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadClassDefinition,
+                    format!("Cannot override NamedTuple reserved attribute `{name}`"),
+                );
+            }
+        }
         let mut elements = Vec::with_capacity(class_fields.len());
         for name in class_fields.names() {
             if !class_fields.is_field_annotated(name) {
@@ -199,7 +222,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             dunder::ITER,
             params,
             self.heap
-                .mk_class_type(self.stdlib.iterable(self.unions(element_types))),
+                .mk_class_type(self.stdlib.iterator(self.unions(element_types))),
         );
         ClassSynthesizedField::new(ty)
     }

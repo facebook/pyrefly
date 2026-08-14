@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use dupe::Dupe;
 use pretty_assertions::assert_eq;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::function::FuncDefIndex;
 use ruff_python_ast::name::Name;
 
 use crate::report::pysa::call_graph::Target;
@@ -1638,9 +1638,9 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
                         required: true,
                     }],
                     PysaType::new(
-                        "typing.Iterable[Unknown]".to_owned(),
+                        "typing.Iterator[Unknown]".to_owned(),
                         ClassNamesFromType::from_classes(
-                            vec![get_class_ref("typing", "Iterable", context)],
+                            vec![get_class_ref("typing", "Iterator", context)],
                             true,
                         ),
                     ),
@@ -1659,7 +1659,7 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
                         FunctionParameter::Pos {
                             name: "_cls".into(),
                             annotation: PysaType::new(
-                                "builtins.type[test.MyTuple]".to_owned(),
+                                "type[test.MyTuple]".to_owned(),
                                 ClassNamesFromType::from_class(
                                     &get_class("test", "MyTuple", context),
                                     context,

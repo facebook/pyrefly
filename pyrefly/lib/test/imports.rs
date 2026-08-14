@@ -681,6 +681,38 @@ assert_type(x, LiteralString)
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2517
+testcase!(
+    test_import_string_ascii_uppercase_dict_keys,
+    r#"
+from string import ascii_uppercase
+from typing import assert_type
+
+letter_to_index = {char: i for i, char in enumerate(ascii_uppercase)}
+assert_type(letter_to_index, dict[str, int])
+
+def encode(message: str) -> list[int]:
+    result = []
+    for letter in message:
+        result.append(letter_to_index[letter])
+    return result
+"#,
+);
+
+// A `dict[LiteralString, int]` annotation pins the key type, so the inferred dict
+// literal keys must stay `LiteralString` (dict is invariant in its key) rather than
+// being widened to `str`.
+testcase!(
+    test_dict_literal_string_key_hint_preserved,
+    r#"
+from typing import LiteralString, assert_type
+
+def f(k: LiteralString) -> None:
+    d: dict[LiteralString, int] = {k: 1}
+    assert_type(d, dict[LiteralString, int])
+"#,
+);
+
 fn env_from_self_import_mod_in_package() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path(
@@ -741,10 +773,7 @@ from typing import reveal_type
 
 def test():
     i = Interpret()
-    # Deliberately don't specify the type of i.x, as sometimes
-    # it works out to None, sometimes Unknown.
-    # Plenty of errors here.
-    reveal_type(i.x) # E:
+    reveal_type(i.x) # E: revealed type: Unknown
 "#,
 );
 
@@ -1252,9 +1281,9 @@ def abs(x: object) -> str: ...
     )
 }
 
+// A name defined in both the stdlib `builtins` and the user's `__builtins__.pyi`
+// resolves to the user's `__builtins__` definition, which shadows the stdlib one.
 testcase!(
-    // A name defined in both the stdlib `builtins` and the user's `__builtins__.pyi`
-    // resolves to the user's `__builtins__` definition, which shadows the stdlib one.
     test_extra_builtins_shadows_builtin,
     env_extra_builtins_shadows_builtin(),
     r#"
@@ -2035,6 +2064,18 @@ assert_type(c.value, int)
 "#,
 );
 
+// Test import_python with empty string second argument (treated as wildcard).
+testcase!(
+    test_import_python_empty_string_wildcard,
+    env_import_thrift(),
+    r#"
+from typing import assert_type
+import_python("service/types.thrift", "")
+c = MyConfig()
+assert_type(c.value, int)
+"#,
+);
+
 // Test import_thrift with dot separators.
 testcase!(
     test_import_thrift_dot_separator,
@@ -2244,5 +2285,62 @@ testcase!(
     r#"
 from pkg import my_typing as mt
 x: mt.Annotated[int, "metadata"] = 5
+"#,
+);
+
+fn env_implicit_reexport() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+a: int = 1
+b: int = 2
+c: int = 3
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import a
+from foo import b as b
+from foo import c
+d: int = 4
+__all__ = ["c"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport,
+    env_implicit_reexport().enable_implicit_reexport_error(),
+    r#"
+from bar import a  # E: `a` is not exported from module `bar`
+from bar import b
+from bar import c
+from bar import d
+"#,
+);
+
+testcase!(
+    test_implicit_reexport_off_by_default,
+    env_implicit_reexport(),
+    r#"
+from bar import a
+"#,
+);
+
+fn env_implicit_reexport_wildcard() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add("foo", "a: int = 1");
+    t.add("bar", "from foo import *");
+    t
+}
+
+testcase!(
+    test_implicit_reexport_wildcard_ok,
+    env_implicit_reexport_wildcard().enable_implicit_reexport_error(),
+    r#"
+from bar import a
 "#,
 );

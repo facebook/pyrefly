@@ -48,6 +48,31 @@ def g(p: P, c1: C1, c2: C2, c3: C3, c4: C4, c5: C5) -> None:
 );
 
 testcase!(
+    test_protocol_metaclass_assignability,
+    r#"
+from abc import ABCMeta
+from typing import Protocol, _ProtocolMeta
+
+abc_meta: ABCMeta = Protocol
+protocol_meta: _ProtocolMeta = Protocol
+"#,
+);
+
+testcase!(
+    test_protocol_metaclass_invalid_inheritance,
+    r#"
+from enum import Enum
+from typing import Protocol
+
+class M(type): ...
+class P(Protocol): ...
+
+class A(P, metaclass=M): ...  # E: has metaclass `M` which is not compatible with metaclass `_ProtocolMeta`
+class E(Enum, P): ...  # E: has metaclass `EnumMeta` from base class `Enum` which is not compatible with metaclass `_ProtocolMeta` from base class `P`
+    "#,
+);
+
+testcase!(
     test_proxy_method_direct_call_and_attribute_access,
     proxy_method_env(),
     r#"
@@ -1001,17 +1026,159 @@ Concrete()  # E: Cannot instantiate `Concrete`
 );
 
 testcase!(
+    test_protocol_dtype_like_overload_ignores_getattribute,
+    r#"
+from typing import Protocol, TypeVar, assert_type, overload
+
+T_co = TypeVar("T_co", covariant=True)
+
+class DType[T]: ...
+
+class SupportsDType(Protocol[T_co]):
+    @property
+    def dtype(self) -> T_co: ...
+
+type DTypeLike[T] = type[T] | DType[T] | SupportsDType[DType[T]]
+
+class ScalarA: ...
+class ScalarB: ...
+
+@overload
+def make(dtype: DTypeLike[ScalarA]) -> ScalarA: ...
+@overload
+def make(dtype: DTypeLike[ScalarB]) -> ScalarB: ...
+def make(dtype: object) -> object: ...
+
+assert_type(make(ScalarB), ScalarB)
+"#,
+);
+
+testcase!(
     test_protocol_getattr,
     r#"
-from typing import Protocol
-class P(Protocol):
+from typing import Protocol, assert_type
+class P1(Protocol):
     x: int
-def f(proto: P) -> None: ...
+
+class P2(Protocol):
+    def __getattr__(self, attr: str) -> int: ...
+
+class P3(Protocol):
+    @property
+    def x(self) -> int: ...
+
+class P4(Protocol):
+    def __setattr__(self, attr: str, value: int) -> None: ...
+
+class P5(Protocol):
+    def __getattribute__(self, attr: str) -> int: ...
+
+class P6(Protocol):
+    def __add__(self, other: int) -> int: ...
+
+class C1:
+    def __getattr__(self, attr: str) -> int: ...
+
+class C2:
+    x: int
+
+class C3:
+    def __getattr__(self, attr: str) -> int: ...
+    def __setattr__(self, attr: str, value: int) -> None: ...
+
+class C4:
+    __slots__ = ()
+    def __getattr__(self, attr: str) -> int: ...
+
+class C5:
+    def __getattribute__(self, attr: str) -> int: ...
+
+class C6:
+    def __getattribute__(self, attr: str) -> str: ...
+    def __getattr__(self, attr: str) -> int: ...
+
+class C7: ...
+
+# Ordinary attribute access still uses fallback for operator-named attributes.
+assert_type(C1().__add__, int)
+# Fallback hooks alone only provide read-only members.
+p1: P1 = C1()  # E: `C1` is not assignable to `P1`
+p1 = C2()
+p1 = C3()
+p1 = C4()  # E: `C4` is not assignable to variable `p1` with type `P1`
+p1 = C5()  # E: `C5` is not assignable to variable `p1` with type `P1`
+# Read-only properties are satisfied by either custom fallback hook.
+p3: P3 = C1()
+p3 = C4()
+p3 = C5()
+p3 = C6()  # E: `C6` is not assignable to variable `p3` with type `P3`
+p3 = C7()  # E: `C7` is not assignable to variable `p3` with type `P3`
+# Attribute hooks cannot synthesize themselves or each other.
+p2: P2 = C1()
+p2 = C2()  # E: `C2` is not assignable to variable `p2` with type `P2`
+p4: P4 = C1()  # E: `C1` is not assignable to `P4`
+p5: P5 = C1()  # E: `C1` is not assignable to `P5`
+# Operator methods are not synthesized by attribute fallback hooks.
+p6: P6 = C1()  # E: `C1` is not assignable to `P6`
+p6 = C5()  # E: `C5` is not assignable to variable `p6` with type `P6`
+    "#,
+);
+
+testcase!(
+    bug = "Metaclass `__getattr__` should satisfy read-only protocol members",
+    test_protocol_metaclass_getattr,
+    r#"
+from typing import Protocol, assert_type
+
+class P(Protocol):
+    @property
+    def m(self) -> int: ...
+
+class Meta(type):
+    def __getattr__(cls, name: str) -> int: ...
+
+class WithMeta(metaclass=Meta): ...
+
+assert_type(WithMeta.m, int)
+x: P = WithMeta  # E: `type[WithMeta]` is not assignable to `P`
+    "#,
+);
+
+testcase!(
+    bug = "Protocol fallback should require `__getattr__` to accept `str`",
+    test_protocol_getattr_parameter_type,
+    r#"
+from typing import Protocol
+
+class P(Protocol):
+    @property
+    def x(self) -> int: ...
 
 class C:
-    def __getattr__(self, name: str) -> int: ...
+    def __getattr__(self, name: int) -> int: ...
 
-f(C()) # E: Argument `C` is not assignable to parameter `proto` with type `P`
+p: P = C()
+    "#,
+);
+
+testcase!(
+    bug = "Operator protocol compatibility through `__getattr__` differs from mypy",
+    test_protocol_getattr_operator_mypy_compatibility,
+    r#"
+from collections.abc import Callable
+from typing import Protocol
+
+class HasAdd(Protocol):
+    def __add__(self, other: int) -> int: ...
+
+class C:
+    def __getattr__(self, attr: str) -> Callable[[int], int]:
+        return lambda x: x
+
+def f(p: HasAdd) -> None: ...
+
+f(C())  # E: `C.__add__` is read-only, but `HasAdd.__add__` is read-write
+C() + 1  # E: `+` is not supported between `C` and `Literal[1]`
     "#,
 );
 
@@ -1855,4 +2022,15 @@ def g(a: Arr[float, str]) -> HasM:
     # apply and `Arr[float, str]` does not satisfy `HasM`.
     return a  # E: not assignable to declared return type
 "#,
+);
+
+testcase!(
+    test_nested_function_default_is_checked,
+    r#"
+from typing import Protocol
+class A(Protocol):
+    def f(self):
+        def g(x: int = ...):  # E: not assignable
+            pass
+    "#,
 );

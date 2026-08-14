@@ -21,6 +21,7 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::keywords::get_expression_keywords;
 use pyrefly_python::keywords::get_keywords;
+use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -171,6 +172,33 @@ pub(crate) fn supports_snippet_completions(capabilities: &lsp_types::ClientCapab
         .and_then(|c| c.completion_item.as_ref())
         .and_then(|ci| ci.snippet_support)
         .unwrap_or(false)
+}
+
+/// Offers `name=` for one keyword argument, deduplicating against `seen`.
+///
+/// Names that cannot be written as a keyword argument are dropped. A functional
+/// `TypedDict` may declare members from arbitrary strings — both directly, as in
+/// `TypedDict("M", {"class": int})`, and via the parameters synthesized for its
+/// constructor — and inserting those would not parse.
+fn push_kwarg_completion(
+    name: &Name,
+    ty: &Type,
+    seen: &mut SmallSet<(String, String)>,
+    completions: &mut Vec<RankedCompletion>,
+) {
+    if !is_valid_identifier(name.as_str()) {
+        return;
+    }
+    let label = format!("{}=", name.as_str());
+    let detail = ty.to_string();
+    if seen.insert((label.clone(), detail.clone())) {
+        completions.push(RankedCompletion::new(CompletionItem {
+            label,
+            detail: Some(detail),
+            kind: Some(CompletionItemKind::VARIABLE),
+            ..Default::default()
+        }));
+    }
 }
 
 impl Transaction<'_> {
@@ -363,22 +391,30 @@ impl Transaction<'_> {
                             | Param::PosOnly(Some(name), ty, _)
                             | Param::KwOnly(name, ty, _)
                             | Param::Varargs(Some(name), ty) => {
-                                let label = format!("{}=", name.as_str());
-                                let detail = ty.to_string();
-                                if name.as_str() != "self"
-                                    && seen.insert((label.clone(), detail.clone()))
+                                if name.as_str() != "self" {
+                                    push_kwarg_completion(&name, &ty, &mut seen, completions);
+                                }
+                            }
+                            // `**kwargs: Unpack[TypedDict]` accepts each field as a keyword
+                            // argument, so offer the fields rather than `kwargs` itself.
+                            Param::Kwargs(_, ref ty)
+                                if let Some(typed_dict) = ty.unpacked_typed_dict() =>
+                            {
+                                for (name, field) in self
+                                    .ad_hoc_solve(
+                                        handle,
+                                        "completion_typed_dict_kwargs",
+                                        |solver| solver.type_order().typed_dict_fields(typed_dict),
+                                    )
+                                    .into_iter()
+                                    .flatten()
                                 {
-                                    completions.push(RankedCompletion::new(CompletionItem {
-                                        label,
-                                        detail: Some(detail),
-                                        kind: Some(CompletionItemKind::VARIABLE),
-                                        ..Default::default()
-                                    }));
+                                    push_kwarg_completion(&name, &field.ty, &mut seen, completions);
                                 }
                             }
                             Param::Varargs(None, _)
-                            | Param::Kwargs(_, _)
-                            | Param::PosOnly(None, _, _) => {}
+                            | Param::PosOnly(None, _, _)
+                            | Param::Kwargs(..) => {}
                         }
                     }
                 }
@@ -456,10 +492,10 @@ impl Transaction<'_> {
             .finding()
         {
             let builtin_exports = self.get_exports(&builtin_handle);
+            let matcher = SkimMatcherV2::default().smart_case();
             for (name, location) in builtin_exports.iter() {
                 if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .smart_case()
+                    && matcher
                         .fuzzy_match(name.as_str(), identifier.as_str())
                         .is_none()
                 {
@@ -517,6 +553,7 @@ impl Transaction<'_> {
         if let Some(bindings) = self.get_bindings(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
+            let matcher = SkimMatcherV2::default();
             for idx in bindings.available_definitions(position) {
                 let key = bindings.idx_to_key(idx);
                 let binding = bindings.get(idx);
@@ -529,9 +566,7 @@ impl Transaction<'_> {
                     _ => continue,
                 };
                 if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .fuzzy_match(label, identifier.as_str())
-                        .is_none()
+                    && matcher.fuzzy_match(label, identifier.as_str()).is_none()
                 {
                     continue;
                 }
@@ -641,7 +676,7 @@ impl Transaction<'_> {
             if identifier_text.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
                 return;
             }
-            for (handle_to_import_from, name, export) in self
+            for (_, handle_to_import_from, name, export) in self
                 .search_exports_fuzzy(identifier_text, custom_thread_pool)
                 .unwrap_or_default()
             {
@@ -658,7 +693,7 @@ impl Transaction<'_> {
                         self.config_finder(),
                         handle.dupe(),
                         handle_to_import_from,
-                        &name,
+                        name.as_str(),
                         import_format,
                     );
                     let import_text_edit = TextEdit {
@@ -676,12 +711,12 @@ impl Transaction<'_> {
                     || is_deprecated_stdlib_alias(
                         handle.sys_info().version(),
                         &imported_module,
-                        &name,
+                        name.as_str(),
                     );
 
                 completions.push(RankedCompletion {
                     item: CompletionItem {
-                        label: name,
+                        label: name.to_string(),
                         detail: Some(detail_text),
                         kind: export
                             .symbol_kind
@@ -1042,6 +1077,10 @@ impl Transaction<'_> {
             .and_then(Self::identifier_from_covering_nodes)
         {
             Some(IdentifierWithContext {
+                context: IdentifierContext::AliasDefinition,
+                ..
+            }) => return (Vec::new(), false),
+            Some(IdentifierWithContext {
                 identifier,
                 context:
                     IdentifierContext::ImportedName {
@@ -1183,7 +1222,7 @@ impl Transaction<'_> {
                 let skip_value_completions = covering_nodes
                     .as_deref()
                     .is_some_and(|nodes| Self::is_typing_keyword_argument_name(nodes, position));
-                if !skip_value_completions {
+                if !skip_value_completions && !is_method_def {
                     let at_statement_start = matches!(
                         covering_nodes.as_deref().and_then(|nodes| nodes.get(1)),
                         Some(AnyNodeRef::StmtExpr(_))
@@ -1191,6 +1230,7 @@ impl Transaction<'_> {
                     let expression_only =
                         matches!(context, IdentifierContext::Expr(_)) && !at_statement_start;
                     Self::add_keyword_completions(handle, expression_only, &mut result);
+                    let local_completion_start = result.len();
                     let has_local_completions = self.add_local_variable_completions(
                         handle,
                         Some(&identifier),
@@ -1198,7 +1238,18 @@ impl Transaction<'_> {
                         expected_type.as_ref(),
                         &mut result,
                     );
-                    if auto_import && !has_local_completions {
+                    // Compare case-insensitively so a prefix-matching local
+                    // suppresses the auto-import even when the case differs.
+                    let identifier_lower = identifier.as_str().to_lowercase();
+                    let has_prefix_local_completion =
+                        result[local_completion_start..].iter().any(|completion| {
+                            completion
+                                .item
+                                .label
+                                .to_lowercase()
+                                .starts_with(&identifier_lower)
+                        });
+                    if auto_import && !has_prefix_local_completion {
                         self.add_autoimport_completions(
                             handle,
                             &identifier,

@@ -15,12 +15,12 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
-use crate::callable::FuncFlags;
-use crate::callable::FuncMetadata;
-use crate::callable::Function;
-use crate::callable::FunctionKind;
 use crate::callable::Params;
 use crate::callable::PrefixParam;
+use crate::function::FuncFlags;
+use crate::function::FuncMetadata;
+use crate::function::Function;
+use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
 use crate::quantified::Quantified;
 use crate::simplify::unions;

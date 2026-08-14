@@ -28,14 +28,17 @@ name with the `--config`/`-c` flag, but they will not be automatically found by
 
 Both absolute and config-relative paths are supported.
 
+The [Bazel integration](./bazel.mdx) does not read these configuration files;
+configure its aspect instead.
+
 ## Unconfigured projects
 
-On the command-line, when no `pyrefly.toml` or `[tool.pyrefly]` section governs the file being checked, Pyrefly synthesizes a configuration on the fly:
+On the command line, when no `pyrefly.toml` or `[tool.pyrefly]` section governs the file being checked, Pyrefly automatically selects a synthesized configuration:
 
-- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml` is found nearby, Pyrefly automatically migrates it and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
-- Otherwise Pyrefly uses the same [**basic preset**](#preset-basic) the IDE uses. This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.). Other diagnostics are silenced.
+- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml` is found nearby, Pyrefly migrates it in memory and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
+- If no migratable configuration is found, or migration fails, Pyrefly uses the [**basic preset**](#preset-basic). This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.); other diagnostics are silenced.
 
-For the IDE equivalent of this behavior, including how to override it, see [`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode).
+This automatic selection behavior is not a preset, so `auto` is not a valid value for [`preset`](#preset) or `--preset`. For the IDE equivalent, including how to override automatic selection, see [`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode).
 
 :::info
 Want full type-check squiggles by default? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`).
@@ -107,8 +110,7 @@ configuration file. More precisely:
    looks like `/x/y/z/a/b/c`, we can walk up the components of `a.b.c` to find a root at
    `/x/y/z`.
 
-Note that only `pyrefly.toml` and `pyproject.toml` are parsed for config options, but we look for
-additional files that mark the root of a project to aid import resolution.
+`pyrefly.toml` and the `[tool.pyrefly]` section of `pyproject.toml` are parsed as native Pyrefly configuration. In an unconfigured project, `mypy.ini`, `pyrightconfig.json`, and the `[tool.mypy]` / `[tool.pyright]` sections of `pyproject.toml` may also be parsed and migrated in memory. Other files found during the search only mark the project root for import resolution.
 
 For project checking mode, the 'start location' is current working directory. For single-file checking mode,
 the start location is the directory containing each file to be type checked, and
@@ -117,10 +119,7 @@ we find the config for each file matched by the pattern provided.
 If a `pyrefly.toml` is found, it is parsed and used for type checking, and will
 return an error to the user on invalid types, syntax, values, or unknown config options.
 
-If a `pyproject.toml` is found, Pyrefly will use the `[tool.pyrefly]`
-section if it exists, otherwise it will assume a default config.
-The same errors will be returned as when loading a `pyrefly.toml` if
-the config is invalid.
+If a `pyproject.toml` with `[tool.pyrefly]` is found, Pyrefly parses and uses that section. The same errors are returned as when loading an invalid `pyrefly.toml`. Without `[tool.pyrefly]`, Pyrefly migrates `[tool.mypy]` or `[tool.pyright]` in memory if present; otherwise it uses the [`basic` preset](#preset-basic).
 
 ### Providing a Config in Single-File Mode
 
@@ -217,6 +216,23 @@ so you can fully specify your `project-excludes` in case we get it wrong.
 - Type: `bool`
 - Default: `false`
 - Flag equivalent: `--disable-project-excludes-heuristics`
+
+### `coverage`
+
+Include/exclude overrides used only by the `pyrefly coverage` commands, for when the set of
+files to report coverage on differs from the set of files to type check (e.g. to skip tests or
+vendored code). `coverage.includes` takes precedence over [`project-includes`](#project-includes)
+and `coverage.excludes` over [`project-excludes`](#project-excludes); each falls back to the
+project setting when unset.
+
+- Type: table with `includes` and `excludes` keys, each a list of
+  [filesystem glob patterns](#filesystem-globbing)
+- Default: `project-includes` / `project-excludes`
+- Flag equivalent: none, though `--project-excludes` takes precedence over `coverage.excludes`
+- Notes:
+    - Like the project globs, these are not consulted when passing in `FILES...`.
+    - `coverage.excludes` gets the same default excludes appended as `project-excludes` does,
+      unless [`disable-project-excludes-heuristics`](#disable-project-excludes-heuristics) is set.
 
 ### `search-path`
 
@@ -334,11 +350,16 @@ against
 [`sys.platform`](https://docs.python.org/3/library/sys.html#sys.platform)
 values.
 
-- Type: string
+- Type: string or list of strings
 - Default: result from [Environment Autoconfiguration](#environment-autoconfiguration), or
   "linux" if the Python interpreter cannot be queried
-- Flag equivalent: `--python-platform`
+- Flag equivalent: `--python-platform`, which can be passed multiple times
 - Equivalent configs: `pythonPlatform` in Pyright, `platform` in mypy
+
+Use `python-platform = "all"` to avoid pruning platform-specific branches, or
+provide a list such as `python-platform = ["linux", "win32"]` to type check
+branches that may run on any of those platforms. On the CLI, pass
+`--python-platform` once per platform.
 
 ### `python-version`
 
@@ -514,15 +535,18 @@ min-severity = "warn"
 Default format for `pyrefly check` error output when `--output-format` is not
 set on the CLI.
 
-- Type: `"min-text" | "full-text" | "json" | "github" | "junit-xml" | "omit-errors"`
+- Type: `"min-text" | "full-text" | "json" | "github" | "junit-xml" | "code-climate" | "sarif" | "omit-errors"`
 - Default: `full-text`
 - Flag equivalent: `--output-format`
 - Notes:
     - `output-format` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
-    - A CLI `--output-format` flag still takes precedence over the config value.
+    - A CLI `--output-format` flag takes precedence over the config value and sets
+      the default for every `--output` without a format prefix.
     - `"junit-xml"` emits a JUnit XML `<testsuites>` report suitable for CI
       dashboards (Jenkins, GitLab MR widgets, CircleCI, Azure DevOps, etc.).
+    - `"sarif"` emits a SARIF 2.1.0 report suitable for static-analysis
+      integrations.
 
 ### `preset`
 
@@ -541,7 +565,7 @@ Silences every error kind. Other settings (scalar flags, behavior settings) are 
 
 #### Preset: `basic`
 
-A minimal-checking preset used by default in projects without a Pyrefly configuration and in the LSP. Enables parse errors plus a small set of high-confidence, locally-fixable checks. Stricter checks like override validation, annotation completeness, and broader call-shape or assignment validation are disabled.
+A minimal-checking preset used when automatic configuration selection finds no migratable mypy/pyright configuration (or migration fails). It can also be selected explicitly with `preset = "basic"`, `--preset basic`, or the IDE's `"basic"` type-checking mode. It enables parse errors plus a small set of high-confidence, locally-fixable checks. Stricter checks like override validation, annotation completeness, and broader call-shape or assignment validation are disabled.
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
 - Enables (as errors): [`bad-class-definition`](./error-kinds.mdx#bad-class-definition), [`bad-instantiation`](./error-kinds.mdx#bad-instantiation), [`bad-keyword-argument`](./error-kinds.mdx#bad-keyword-argument), [`bad-raise`](./error-kinds.mdx#bad-raise), [`bad-unpacking`](./error-kinds.mdx#bad-unpacking), [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`invalid-literal`](./error-kinds.mdx#invalid-literal), [`invalid-super-call`](./error-kinds.mdx#invalid-super-call), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`not-async`](./error-kinds.mdx#not-async), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unexpected-positional-argument`](./error-kinds.mdx#unexpected-positional-argument), [`unknown-name`](./error-kinds.mdx#unknown-name), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
@@ -551,7 +575,7 @@ A minimal-checking preset used by default in projects without a Pyrefly configur
 
 A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely — type-checking behavior will still differ between the two tools — this preset just disables a few checks that mypy does not have, so migrating users aren't hit with new errors for classes of issues mypy never flagged.
 
-- Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`
+- Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`legacy-overload-expansion`](#legacy-overload-expansion) `= true`
 - Disables: [`bad-override-mutable-attribute`](./error-kinds.mdx#bad-override-mutable-attribute), [`bad-override-param-name`](./error-kinds.mdx#bad-override-param-name), [`unbound-name`](./error-kinds.mdx#unbound-name)
 
 #### Preset: `default`
@@ -565,7 +589,7 @@ The default Pyrefly configuration. Equivalent to having no preset at all.
 Enables additional error codes on top of the default for stricter checking.
 
 - Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
-- Enables (as errors): [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
+- Enables (as errors): [`direct-abstract-base-instantiation`](./error-kinds.mdx#direct-abstract-base-instantiation), [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`open-unpacking`](./error-kinds.mdx#open-unpacking), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
 
 #### Preset: `all`
 
@@ -787,6 +811,29 @@ When set to `true`, parameter list compatibility is checked strictly even when
 - Default: `false`
 - Flag equivalent: `--strict-callable-subtyping`
 
+### `treat-all-caps-as-final`
+
+Treat `ALL_CAPS` names as final after their first assignment, in any scope
+(module, class, or function body). When enabled, assigning to the same constant
+name again emits a `bad-assignment` error, similar to writing an explicit
+`Final` annotation.
+
+```python
+FOO = 1
+FOO = 2  # error
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2  # error
+```
+
+Names inside function bodies and non-constant names are unaffected.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--treat-all-caps-as-final`
+- Equivalent configs: `reportConstantRedefinition` in Pyright
+
 ### `untyped-def-behavior` (deprecated)
 
 :::warning
@@ -988,16 +1035,28 @@ and values that can be overridden here.
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
 
-### `pytorch-efficiency-lints`
+### `pytorch-efficiency-lints` (deprecated)
+
+:::warning
+This option is deprecated. Set the
+[`pytorch-efficiency-lints`](./error-kinds.mdx#pytorch-efficiency-lints) error
+kind in [`[errors]`](#errors) instead:
+
+```toml
+[errors]
+pytorch-efficiency-lints = "warn"
+```
+:::
 
 Enable PyTorch efficiency lints that detect common GPU performance anti-patterns
-in training code. When `true`, all `pytorch-efficiency-lint-*` error kinds are
-enabled at `warn` severity. You can override individual lint severities in
-[`[errors]`](#errors).
+in training code. When `true`, this is shorthand for setting the umbrella error
+kind [`pytorch-efficiency-lints`](./error-kinds.mdx#pytorch-efficiency-lints) to
+`warn`, which cascades to every sub-kind below. You can override individual lint
+severities in [`[errors]`](#errors).
 
 - Type: `bool`
 - Default: `false`
-- Flag equivalent: `--pytorch-efficiency-lints`
+- Flag equivalent: `--pytorch-efficiency-lints` (also deprecated; use `--warn=pytorch-efficiency-lints`)
 
 The following lints are enabled by this flag:
 
@@ -1020,6 +1079,17 @@ Controls whether Pyrefly uses spec-compliant overload evaluation semantics.
 When `false` (the default), Pyrefly attempts to resolve ambiguous calls
 precisely. When `true`, overload evaluation follows the typing spec exactly,
 falling back to `Any` more frequently.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: none
+
+### `legacy-overload-expansion`
+
+Expands union arguments to narrow an overloaded call that already matched a
+single overload. A union member that matches an overload returning `Never` is
+dropped from the result, so the call returns a narrower type. This behavior is
+off by default and is enabled by the [`legacy`](#preset-legacy) preset.
 
 - Type: `bool`
 - Default: `false`

@@ -219,7 +219,7 @@ def test_identity():
 
 
 def test_conv1d():
-    # S, P, D bound from constructor args via _Dim[T]
+    # S, P, D bound from constructor args via _Int[T]
     conv = nn.Conv1d(16, 32, kernel_size=3, padding=1)
     x: Tensor[[4, 16, 100]] = torch.randn(4, 16, 100)
     y = conv(x)
@@ -237,7 +237,7 @@ def test_conv2d_default_stride():
 
 
 def test_conv2d_padding():
-    # S, P, D bound from constructor args via _Dim[T]
+    # S, P, D bound from constructor args via _Int[T]
     conv = nn.Conv2d(3, 64, kernel_size=3, padding=1)
     x: Tensor[[4, 3, 32, 32]] = torch.randn(4, 3, 32, 32)
     y = conv(x)
@@ -246,7 +246,7 @@ def test_conv2d_padding():
 
 
 def test_conv2d_stride():
-    # S, P, D bound from constructor args via _Dim[T]
+    # S, P, D bound from constructor args via _Int[T]
     conv = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
     x: Tensor[[4, 64, 32, 32]] = torch.randn(4, 64, 32, 32)
     y = conv(x)
@@ -255,7 +255,7 @@ def test_conv2d_stride():
 
 
 def test_conv_transpose2d():
-    # S, P, D bound from constructor args via _Dim[T]
+    # S, P, D bound from constructor args via _Int[T]
     conv = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)
     x: Tensor[[4, 128, 16, 16]] = torch.randn(4, 128, 16, 16)
     y = conv(x)

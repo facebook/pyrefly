@@ -12,7 +12,7 @@ import torch
 import torch.linalg
 import torch.nn
 import torch.nn.functional as F
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 from torch import Tensor
 
 # ============================================================================
@@ -20,7 +20,7 @@ from torch import Tensor
 # ============================================================================
 
 
-def preprocess_batch[B: SymVar, D: SymVar](
+def preprocess_batch[B: IntVar, D: IntVar](
     batch: Tensor[[B, D]], mean: Tensor[[D]], std: Tensor[[D]]
 ) -> Tensor[[B, D]]:
     """Normalize batch - works for ANY batch size"""
@@ -33,7 +33,7 @@ def preprocess_batch[B: SymVar, D: SymVar](
     return normalized
 
 
-def process_features[B: SymVar](
+def process_features[B: IntVar](
     features: Tensor[[B, 768]], weights: Tensor[[768, 512]], bias: Tensor[[512]]
 ) -> Tensor[[B, 512]]:
     """Linear layer with generic batch size"""
@@ -72,7 +72,7 @@ def test_batch_pipeline():
 # ============================================================================
 
 
-def concat_datasets[N1: SymVar, N2: SymVar, N3: SymVar, D: SymVar](
+def concat_datasets[N1: IntVar, N2: IntVar, N3: IntVar, D: IntVar](
     dataset1: Tensor[[N1, D]], dataset2: Tensor[[N2, D]], dataset3: Tensor[[N3, D]]
 ) -> Tensor[[(N1 + N2) + N3, D]]:
     """Concatenate three datasets with different sizes"""
@@ -101,7 +101,7 @@ def test_concat_multiple_sources():
 # ============================================================================
 
 
-def scaled_dot_product_attention[B: SymVar, T: SymVar, D: SymVar](
+def scaled_dot_product_attention[B: IntVar, T: IntVar, D: IntVar](
     queries: Tensor[[B, T, D]], keys: Tensor[[B, T, D]], values: Tensor[[B, T, D]]
 ) -> Tensor[[B, T, D]]:
     """Attention with variable sequence length T"""
@@ -135,7 +135,7 @@ def test_attention_mechanism():
 # ============================================================================
 
 
-def cnn_features[B: SymVar, H: SymVar, W: SymVar](
+def cnn_features[B: IntVar, H: IntVar, W: IntVar](
     images: Tensor[[B, 3, H, W]],
 ) -> Tensor[[B, 64, H, W]]:
     """CNN feature extraction preserving spatial dimensions"""
@@ -152,7 +152,7 @@ def cnn_features[B: SymVar, H: SymVar, W: SymVar](
     return relu2
 
 
-def flatten_for_classifier[B: SymVar, C: SymVar, H: SymVar, W: SymVar](
+def flatten_for_classifier[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
     features: Tensor[[B, C, H, W]],
 ) -> Tensor[[B * C * H * W]]:
     """Flatten CNN features for classification"""
@@ -179,7 +179,7 @@ def test_cnn_pipeline():
 # ============================================================================
 
 
-def process_sequences[B: SymVar, T: SymVar, D: SymVar](
+def process_sequences[B: IntVar, T: IntVar, D: IntVar](
     sequences: Tensor[[B, T, D]], embeddings: Tensor[[D, D]]
 ) -> Tensor[[B, T, D]]:
     """Process variable-length sequences"""
@@ -193,7 +193,7 @@ def process_sequences[B: SymVar, T: SymVar, D: SymVar](
     return activated
 
 
-def pool_sequences[B: SymVar, T: SymVar, D: SymVar](
+def pool_sequences[B: IntVar, T: IntVar, D: IntVar](
     sequences: Tensor[[B, T, D]],
 ) -> Tensor[[B, D]]:
     """Pool over sequence dimension"""
@@ -222,7 +222,7 @@ def test_sequence_processing():
 # ============================================================================
 
 
-def augment_batch[N: SymVar](
+def augment_batch[N: IntVar](
     images: Tensor[[N, 3, 224, 224]],
 ) -> Tensor[[N * 2, 3, 224, 224]]:
     """Augment doubles batch size using tile"""
@@ -246,7 +246,7 @@ def test_augmentation():
 # ============================================================================
 
 
-def fuse_features[B: SymVar, C: SymVar, H: SymVar, W: SymVar](
+def fuse_features[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
     high_res: Tensor[[B, C, H, W]], low_res: Tensor[[B, C, H, W]]
 ) -> Tensor[[B, C, H, W]]:
     """Fuse features at same resolution"""
@@ -273,7 +273,7 @@ def test_feature_fusion():
 # ============================================================================
 
 
-def batched_queries[B: SymVar, N: SymVar, D: SymVar](
+def batched_queries[B: IntVar, N: IntVar, D: IntVar](
     queries: Tensor[[B, N, D]], database: Tensor[[B, 1000, D]]
 ) -> Tensor[[B, N, 1000]]:
     """Compute similarity scores for N queries against database"""
@@ -300,7 +300,9 @@ def test_batched_queries():
 # ============================================================================
 
 
-def spatial_to_sequence[B: SymVar](spatial_features: Tensor[[B, 256, 7, 7]]) -> Tensor:
+def spatial_to_sequence[B: IntVar](
+    spatial_features: Tensor[[B, 256, 7, 7]],
+) -> Tensor:
     """Convert spatial features to sequence (flatten spatial dimensions)"""
     # Permute may not fully support symbolic yet, returning shapeless
     transposed = spatial_features.permute(0, 2, 3, 1)
@@ -325,7 +327,7 @@ def test_spatial_to_sequence():
 # ============================================================================
 
 
-def split_heads[B: SymVar, T: SymVar](
+def split_heads[B: IntVar, T: IntVar](
     x: Tensor[[B, T, 512]],
     num_heads: int,  # 8 heads
 ) -> Tensor[[B * 8, T, 512]]:
@@ -350,7 +352,7 @@ def test_multi_head_split():
 # ============================================================================
 
 
-def gather_batches[N: SymVar, M: SymVar, K: SymVar, D: SymVar](
+def gather_batches[N: IntVar, M: IntVar, K: IntVar, D: IntVar](
     batch1: Tensor[[N, D]], batch2: Tensor[[M, D]], batch3: Tensor[[K, D]]
 ) -> Tensor[[(N + M) + K, D]]:
     """Gather multiple batches into single batch"""
@@ -358,7 +360,7 @@ def gather_batches[N: SymVar, M: SymVar, K: SymVar, D: SymVar](
     return combined
 
 
-def process_combined[Total: SymVar, D: SymVar](
+def process_combined[Total: IntVar, D: IntVar](
     combined: Tensor[[Total, D]],
 ) -> Tensor[[Total, D]]:
     """Process combined batch"""
@@ -386,7 +388,9 @@ def test_gather_and_process():
 # ============================================================================
 
 
-def flatten_images[B: SymVar](images: Tensor[[B, 3, 224, 224]]) -> Tensor[[B * 150528]]:
+def flatten_images[B: IntVar](
+    images: Tensor[[B, 3, 224, 224]],
+) -> Tensor[[B * 150528]]:
     """Flatten images completely (3 * 224 * 224 = 150,528)"""
     return images.flatten()
 
@@ -405,7 +409,7 @@ def test_flatten_images():
 # ============================================================================
 
 
-def compute_statistics[B: SymVar, T: SymVar, D: SymVar](
+def compute_statistics[B: IntVar, T: IntVar, D: IntVar](
     data: Tensor[[B, T, D]],
 ) -> tuple[Tensor[[B, D]], Tensor[[B, D]]]:
     """Compute mean and std over sequence dimension"""
@@ -418,7 +422,7 @@ def compute_statistics[B: SymVar, T: SymVar, D: SymVar](
     return mean, std
 
 
-def normalize_with_stats[B: SymVar, T: SymVar, D: SymVar](
+def normalize_with_stats[B: IntVar, T: IntVar, D: IntVar](
     data: Tensor[[B, T, D]], mean: Tensor[[B, D]], std: Tensor[[B, D]]
 ) -> Tensor[[B, T, D]]:
     """Normalize using computed statistics"""
@@ -450,7 +454,7 @@ def test_statistics_normalization():
 # ============================================================================
 
 
-def downsample_stage[B: SymVar](features: Tensor[[B, 64, 56, 56]]) -> Tensor:
+def downsample_stage[B: IntVar](features: Tensor[[B, 64, 56, 56]]) -> Tensor:
     """Downsample with stride=2 (returns shapeless - formula needs symbolic division)"""
     weight: Tensor[[128, 64, 3, 3]] = torch.randn(128, 64, 3, 3)
     # Stride=2 halves spatial dimensions: 56/2 = 28
@@ -475,7 +479,7 @@ def test_downsampling():
 # ============================================================================
 
 
-def prepare_for_linear[B: SymVar](
+def prepare_for_linear[B: IntVar](
     features: Tensor[[B, 512, 7, 7]],
 ) -> Tensor[[B * 25088]]:
     """Flatten CNN features (512 * 7 * 7 = 25,088)"""
@@ -496,13 +500,13 @@ def test_prepare_for_linear():
 # ============================================================================
 
 
-def batch_inverse[B: SymVar](matrices: Tensor[[B, 10, 10]]) -> Tensor[[B, 10, 10]]:
+def batch_inverse[B: IntVar](matrices: Tensor[[B, 10, 10]]) -> Tensor[[B, 10, 10]]:
     """Compute inverse for batch of matrices"""
     # torch.linalg.inv preserves all dimensions
     return torch.linalg.inv(matrices)
 
 
-def batch_solve[B: SymVar](
+def batch_solve[B: IntVar](
     A: Tensor[[B, 10, 10]], b: Tensor[[B, 10, 5]]
 ) -> Tensor[[B, 10, 5]]:
     """Solve linear systems for batch"""
@@ -529,7 +533,7 @@ def test_batched_linear_algebra():
 # ============================================================================
 
 
-def complete_cnn_pipeline[B: SymVar](
+def complete_cnn_pipeline[B: IntVar](
     inputs: Tensor[[B, 3, 224, 224]],
 ) -> Tensor[[B * 3211264]]:
     """Complete CNN pipeline: conv → relu → flatten"""
@@ -561,7 +565,7 @@ def test_complete_cnn_pipeline():
 # ============================================================================
 
 
-def multi_head_attention_einsum[B: SymVar, T: SymVar, H: SymVar, D: SymVar](
+def multi_head_attention_einsum[B: IntVar, T: IntVar, H: IntVar, D: IntVar](
     queries: Tensor[[B, H, T, D]],  # [batch, heads, seq_len, head_dim]
     keys: Tensor[[B, H, T, D]],
     values: Tensor[[B, H, T, D]],
@@ -596,7 +600,7 @@ def test_multi_head_attention_einsum():
 # ============================================================================
 
 
-def bilinear_pooling[B: SymVar, C: SymVar, H: SymVar, W: SymVar](
+def bilinear_pooling[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
     features_a: Tensor[[B, C, H, W]], features_b: Tensor[[B, C, H, W]]
 ) -> Tensor[[B, C, C]]:
     """Bilinear pooling for visual question answering / fine-grained recognition"""
@@ -628,14 +632,16 @@ def test_bilinear_pooling():
 # ============================================================================
 
 
-def process_sample[H: SymVar, W: SymVar](image: Tensor[[3, H, W]]) -> Tensor[[3, H, W]]:
+def process_sample[H: IntVar, W: IntVar](
+    image: Tensor[[3, H, W]],
+) -> Tensor[[3, H, W]]:
     """Process a single image"""
     # Apply some transformation (simplified)
     processed: Tensor[[3, H, W]] = torch.relu(image)
     return processed
 
 
-def process_batch_individually[B: SymVar, H: SymVar, W: SymVar](
+def process_batch_individually[B: IntVar, H: IntVar, W: IntVar](
     batch: Tensor[[B, 3, H, W]],
 ) -> list:
     """Process each sample in batch individually using unbind"""
@@ -664,7 +670,7 @@ def test_unbind_processing():
 # ============================================================================
 
 
-def tensor_network_contraction[N: SymVar, M: SymVar, K: SymVar, L: SymVar](
+def tensor_network_contraction[N: IntVar, M: IntVar, K: IntVar, L: IntVar](
     tensor_a: Tensor[[N, M, K]], tensor_b: Tensor[[K, L, M]], tensor_c: Tensor[[L, N]]
 ) -> Tensor[[]]:
     """Complex tensor contraction (used in physics, tensor networks)"""
@@ -694,7 +700,7 @@ def test_tensor_network():
 # ============================================================================
 
 
-def batched_outer_product[B: SymVar, N: SymVar, M: SymVar](
+def batched_outer_product[B: IntVar, N: IntVar, M: IntVar](
     vectors_a: Tensor[[B, N]], vectors_b: Tensor[[B, M]]
 ) -> Tensor[[B, N, M]]:
     """Compute outer product for each sample in batch"""
@@ -718,7 +724,7 @@ def test_batched_outer_product():
 # ============================================================================
 
 
-def extract_batch_diagonals[B: SymVar, N: SymVar](
+def extract_batch_diagonals[B: IntVar, N: IntVar](
     matrices: Tensor[[B, N, N]],
 ) -> Tensor[[B, N]]:
     """Extract diagonal from each matrix in batch"""
@@ -727,7 +733,7 @@ def extract_batch_diagonals[B: SymVar, N: SymVar](
     return diagonals
 
 
-def batch_trace[B: SymVar, N: SymVar](matrices: Tensor[[B, N, N]]) -> Tensor[[B]]:
+def batch_trace[B: IntVar, N: IntVar](matrices: Tensor[[B, N, N]]) -> Tensor[[B]]:
     """Compute trace for each matrix in batch"""
     # 'bii->b' sums diagonal for each batch element
     traces: Tensor[[B]] = torch.einsum("bii->b", matrices)
@@ -752,7 +758,7 @@ def test_diagonal_operations():
 # ============================================================================
 
 
-def cross_attention_einsum[B: SymVar, Tq: SymVar, Tkv: SymVar, D: SymVar](
+def cross_attention_einsum[B: IntVar, Tq: IntVar, Tkv: IntVar, D: IntVar](
     queries: Tensor[[B, Tq, D]],  # Query sequence
     keys: Tensor[[B, Tkv, D]],  # Key-value sequence (different length!)
     values: Tensor[[B, Tkv, D]],
@@ -785,7 +791,7 @@ def test_cross_attention():
 # ============================================================================
 
 
-def pairwise_dot_products[B: SymVar, N: SymVar, M: SymVar, D: SymVar](
+def pairwise_dot_products[B: IntVar, N: IntVar, M: IntVar, D: IntVar](
     points_a: Tensor[[B, N, D]], points_b: Tensor[[B, M, D]]
 ) -> Tensor[[B, N, M]]:
     """Compute dot products between all pairs of points"""

@@ -14,20 +14,20 @@ use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Initialize;
 use lsp_types::request::Request as _;
 use lsp_types::request::WorkspaceConfiguration;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::commands::lsp::LspArgs;
-use pyrefly::lsp::non_wasm::protocol::Message;
-use pyrefly::lsp::non_wasm::protocol::Notification;
-use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::Notification;
+use pyrefly_lsp_test::Request;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
+use pyrefly_lsp_test::object_model::LspMessageError;
 use pyrefly_util::stdlib::register_stdlib_paths;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspInteractionArgs;
-use crate::object_model::LspMessageError;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn require_markdown_initialize(interaction: &LspInteraction) {
     let settings = InitializeSettings {
@@ -217,6 +217,44 @@ fn test_baseline_diagnostic_is_hint() {
                 && severity_count(items, lsp_types::DiagnosticSeverity::ERROR) == 1
         })
         .expect("Failed to receive hint diagnostic");
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_baselined_unused_type_ignore_is_hint() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_unused_type_ignore");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("bad.py");
+
+    interaction
+        .client
+        .diagnostic("bad.py")
+        .expect_response_with(|response| {
+            let DocumentDiagnosticReportResult::Report(report) = response else {
+                return false;
+            };
+            let lsp_types::DocumentDiagnosticReport::Full(full) = report else {
+                return false;
+            };
+            let items = &full.full_document_diagnostic_report.items;
+            items.len() == 1
+                && items[0].code
+                    == Some(lsp_types::NumberOrString::String(
+                        "unused-type-ignore".to_owned(),
+                    ))
+                && items[0].severity == Some(lsp_types::DiagnosticSeverity::HINT)
+        })
+        .expect("Failed to receive baselined unused-type-ignore diagnostic");
 
     interaction.shutdown().unwrap();
 }
@@ -1802,7 +1840,7 @@ fn test_no_diagnostics_for_non_open_files_in_open_files_only_mode() {
     // publishDiagnostics URI it sees and only terminates on the shutdown response,
     // ensuring no messages are silently consumed.
     let shutdown_handle = interaction.client.send_shutdown();
-    let shutdown_id = shutdown_handle.id.clone();
+    let shutdown_id = shutdown_handle.id().clone();
     let mut diagnostics_uris: Vec<Url> = Vec::new();
     interaction
         .client

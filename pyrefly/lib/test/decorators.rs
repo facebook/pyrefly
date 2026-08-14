@@ -29,7 +29,7 @@ testcase!(
     test_abstract_method_implicit_return,
     r#"
 import abc
-class Foo:
+class Foo(abc.ABC):
     @abc.abstractmethod
     def foo(self) -> str:
         """
@@ -108,14 +108,14 @@ assert_type(y, Literal["bar"])
 testcase!(
     test_parameter_type_inferred_from_decorator,
     r#"
-from typing import Callable, reveal_type
+from typing import Callable, assert_type
 
 def enforce_int_arg(func: Callable[[int], None]) -> Callable[[int], None]:
     return func
 
 @enforce_int_arg
 def takes_inferred(i) -> None:
-    reveal_type(i)  # E: revealed type: int
+    assert_type(i, int)
     "#,
 );
 
@@ -529,6 +529,23 @@ class A:
 );
 
 testcase!(
+    test_total_ordering_inherited_rich_cmp,
+    r#"
+from functools import total_ordering
+from typing import reveal_type
+
+class Base:
+    def __lt__(self, other: "Base") -> bool: ...
+
+@total_ordering
+class Child(Base):
+    pass
+
+reveal_type(Child.__gt__)  # E: revealed type: (self: Child, other: Base) -> bool
+    "#,
+);
+
+testcase!(
     test_total_ordering_dataclass,
     r#"
 from dataclasses import dataclass
@@ -587,9 +604,9 @@ reveal_type(A.__ge__)  # E: revealed type: (self: A, other: object) -> bool
 testcase!(
     test_abstract_method_skip_return,
     r#"
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 
-class C:
+class C(ABC):
         @abstractmethod
         def m1(self) -> int:
             return NotImplemented

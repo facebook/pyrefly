@@ -91,9 +91,12 @@ impl<'a> BindingsBuilder<'a> {
         let unpack_idx =
             self.insert_binding_current(unpacked, make_binding(assigned.as_deref(), None));
 
-        // An unpacking has zero or one splats (starred expressions).
+        // An unpacking has zero or one splats (starred expressions). Without a splat the
+        // source length is pinned exactly; with one it is only a lower bound.
         let mut splat = false;
         let len = elts.len();
+        let has_star = elts.iter().any(|e| matches!(e, Expr::Starred(_)));
+        let num_targets = if has_star { len - 1 } else { len };
         for (i, e) in elts.iter_mut().enumerate() {
             match e {
                 Expr::Starred(e) => {
@@ -112,12 +115,14 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_target_no_expr(&mut e.value, &make_nested_binding);
                 }
                 _ => {
-                    let unpacked_position = if splat {
+                    let unpacked_position = if !has_star {
+                        UnpackedPosition::ExactIndex(i, num_targets)
+                    } else if splat {
                         // If we've encountered a splat, we no longer know how many values have been consumed
                         // from the front, but we know how many are left at the back.
-                        UnpackedPosition::ReverseIndex(len - i)
+                        UnpackedPosition::ReverseIndex(len - i, num_targets)
                     } else {
-                        UnpackedPosition::Index(i)
+                        UnpackedPosition::Index(i, num_targets)
                     };
                     let make_nested_binding = |ann| {
                         Binding::UnpackedValue(ann, unpack_idx, range, unpacked_position, None)
@@ -126,10 +131,10 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
         }
-        let expect = if splat {
-            SizeExpectation::Ge(elts.len() - 1)
+        let expect = if has_star {
+            SizeExpectation::Ge(num_targets)
         } else {
-            SizeExpectation::Eq(elts.len())
+            SizeExpectation::Eq(num_targets)
         };
         self.insert_binding(
             KeyExpect::UnpackedLength(range),

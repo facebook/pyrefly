@@ -54,6 +54,11 @@ bad-return = true
 missing-import = "warn"
 invalid-argument = "error"
 
+# Coverage command include/exclude overrides
+[tool.pyrefly.coverage]
+includes = ["src/**"]
+excludes = ["src/vendored/**"]
+
 # SubConfig example 1: Test files
 [[tool.pyrefly.sub-config]]
 matches = "**/tests/**"

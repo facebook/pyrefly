@@ -10,14 +10,14 @@ Investigate @ operator bug with symbolic dimensions
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
 # Test 1: Does transpose preserve shapes?
-def test_transpose[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
+def test_transpose[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Check if transpose returns correct shape"""
     y = x.transpose(0, 1)
     # Should be [M, N]
@@ -37,7 +37,7 @@ def test_matmul_literal():
 
 
 # Test 3: Does @ work with symbolic dimensions?
-def test_matmul_symbolic[N: SymVar, M: SymVar, K: SymVar](
+def test_matmul_symbolic[N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[N, M]], b: Tensor[[M, K]]
 ):
     """Matmul with all symbolic dimensions"""
@@ -50,7 +50,7 @@ test_matmul_symbolic(torch.randn(5, 10), torch.randn(10, 7))
 
 
 # Test 4: Does @ work with mixed literal and symbolic?
-def test_matmul_mixed[N: SymVar](a: Tensor[[N, 10]]):
+def test_matmul_mixed[N: IntVar](a: Tensor[[N, 10]]):
     """Matmul with mixed literal and symbolic"""
     b: Tensor[[10, 7]] = torch.randn(10, 7)
     c = a @ b
@@ -62,7 +62,7 @@ test_matmul_mixed(torch.randn(5, 10))
 
 
 # Test 5: Does torch.matmul work differently than @?
-def test_torch_matmul[N: SymVar, M: SymVar, K: SymVar](
+def test_torch_matmul[N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[N, M]], b: Tensor[[M, K]]
 ):
     """Test torch.matmul function"""

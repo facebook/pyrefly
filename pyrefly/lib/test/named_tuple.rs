@@ -346,8 +346,8 @@ class Pair2[T](NamedTuple):
     y: T
 
 def test(p: Pair, p2: Pair2[bytes]):
-    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterable[int | str]
-    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterable[bytes | int]
+    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterator[int | str]
+    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterator[bytes | int]
     "#,
 );
 
@@ -470,15 +470,21 @@ Tup = namedtuple("Tup", ["a", "b"], defaults=(1, 2, 3))  # E: Too many defaults:
 testcase!(
     test_named_tuple_dunder_unpack,
     r#"
-from typing import NamedTuple
+from typing import NamedTuple, assert_type
+
 class A(NamedTuple):
     a: int
     b: str
-    def __repr__(self) -> str:
-        return "A"
 
-def test(x: A) -> None:
+    def test_unpack_self(self) -> None:
+        a, b = self
+        assert_type(a, int)
+        assert_type(b, str)
+
+def test_unpack(x: A) -> None:
     a, b = x
+    assert_type(a, int)
+    assert_type(b, str)
 "#,
 );
 
@@ -734,6 +740,42 @@ fn test_named_tuple_in_malformed_for_target() {
     let _ = testcase_for_macro(
         TestEnv::new(),
         "from typing import NamedTuple\n\nfor NamedTuple(\"\n",
+        file!(),
+        line!(),
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4177
+#[test]
+fn test_named_tuple_in_malformed_with_item() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nwith NamedTuple('\n",
+        file!(),
+        line!(),
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4447
+#[test]
+fn test_named_tuple_in_assert() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nassert NamedTuple('\n",
+        file!(),
+        line!(),
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4459
+#[test]
+fn test_named_tuple_in_match_subject() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nmatch NamedTuple('\n",
         file!(),
         line!(),
     );
@@ -1049,7 +1091,6 @@ assert_type(o, ImplementedModel)
 
 // https://github.com/facebook/pyrefly/issues/2924
 testcase!(
-    bug = "Should reject overriding reserved NamedTuple methods like _asdict and _make",
     test_named_tuple_reserved_method_override,
     r#"
 from typing import NamedTuple
@@ -1058,12 +1099,26 @@ class Record(NamedTuple):
     name: str
     value: int
 
-    def _asdict(self) -> dict[str, object]:
+    def _asdict(self) -> dict[str, object]:  # E: Cannot override NamedTuple reserved attribute `_asdict`
         return {}
 
     @classmethod
-    def _make(cls, iterable: object) -> "Record":
+    def _make(cls, iterable: object) -> "Record":  # E: Cannot override NamedTuple reserved attribute `_make`
         return cls("", 0)
+"#,
+);
+
+testcase!(
+    test_named_tuple_regular_method_ok,
+    r#"
+from typing import NamedTuple
+
+class Record(NamedTuple):
+    name: str
+    value: int
+
+    def describe(self) -> str:
+        return f"{self.name}={self.value}"
 "#,
 );
 

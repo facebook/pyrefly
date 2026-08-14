@@ -22,9 +22,9 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::class::ClassDefIndex;
 use pyrefly_types::class::ClassFields;
+use pyrefly_types::function::FuncDefIndex;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::display::DisplayWithCtx;
@@ -59,6 +59,8 @@ use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::BindingDjangoRelationClass;
+use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
@@ -69,7 +71,9 @@ use crate::binding::binding::ImportBinding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecoratedFunction;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
@@ -80,6 +84,7 @@ use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LambdaParamId;
 use crate::binding::binding::LastStmt;
+use crate::binding::binding::LegacyTParamBinding;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
@@ -99,6 +104,7 @@ use crate::binding::scope::UnusedImport;
 use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
+use crate::binding::scope::is_constant_name;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
 use crate::config::error_kind::ErrorKind;
@@ -196,6 +202,7 @@ table! {
 #[derive(Clone, Debug)]
 struct BindingsInner {
     module_info: ModuleInfo,
+    sys_info: SysInfo,
     table: BindingTable,
     metadata: Arc<BindingsMetadata>,
     /// Multi-line ranges and ignore-all directives, computed from the AST
@@ -287,9 +294,11 @@ pub struct BindingsBuilder<'a> {
     /// In CLI batch-check mode this is false to avoid wasted work.
     pub analyze_unannotated_for_ide: bool,
     pub infer_return_types: InferReturnTypes,
+    pub treat_all_caps_as_final: bool,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
+    django_relation_classes: Vec<BindingDjangoRelationClass>,
     semantic_checker: SemanticSyntaxChecker,
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
     pytest_info: Option<crate::binding::pytest::PytestBindingInfo>,
@@ -309,6 +318,7 @@ pub struct BindingsBuilder<'a> {
     /// set by `stmts()` and consumed by namedtuple synthesis in `stmt()`.
     pub adjacent_namedtuple_defaults: Option<Vec<Expr>>,
     pub promote_ranges: SmallSet<TextRange>,
+    pub type_checking_depth: usize,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -351,6 +361,7 @@ impl Bindings {
         let module_info = Module::new(module_name, module_path, contents);
         Self(Arc::new(BindingsInner {
             module_info,
+            sys_info: SysInfo::default(),
             table: Default::default(),
             metadata: Arc::new(BindingsMetadata::new()),
             module_ranges: Arc::new(ModuleRanges {
@@ -380,6 +391,10 @@ impl Bindings {
 
     pub fn module(&self) -> &ModuleInfo {
         &self.0.module_info
+    }
+
+    pub fn sys_info(&self) -> &SysInfo {
+        &self.0.sys_info
     }
 
     pub fn metadata(&self) -> &Arc<BindingsMetadata> {
@@ -548,7 +563,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for lambda parameter `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -564,7 +579,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for parameter `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -583,7 +598,7 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for return type `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
+                name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
@@ -604,6 +619,7 @@ impl Bindings {
         check_unannotated_defs: bool,
         analyze_unannotated_for_ide: bool,
         infer_return_types: InferReturnTypes,
+        treat_all_caps_as_final: bool,
     ) -> Self {
         let pytest_info = PytestBindingInfo::from_module(&x);
         // Compute module ranges from the AST before consuming it. These are
@@ -621,14 +637,16 @@ impl Bindings {
             type_alias_count: 0,
             await_context: AwaitContext::General,
             has_docstring: Ast::has_docstring(&x),
-            scopes: Scopes::module(x.range, enable_trace),
+            scopes: Scopes::module(x.range, enable_trace, module_info.path().is_interface()),
             table: Default::default(),
             check_unannotated_defs,
             analyze_unannotated_for_ide,
             infer_return_types,
+            treat_all_caps_as_final,
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
+            django_relation_classes: Vec::new(),
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
             pytest_info,
@@ -639,6 +657,7 @@ impl Bindings {
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
+            type_checking_depth: 0,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -734,8 +753,15 @@ impl Bindings {
             }
         }
         let module_deletes = scope_trace.module_deletes().clone();
+        builder.table.insert(
+            KeyDjangoRelations,
+            BindingDjangoRelations {
+                classes: builder.django_relation_classes.into_boxed_slice(),
+            },
+        );
         Self(Arc::new(BindingsInner {
             module_info,
+            sys_info: builder.sys_info,
             table: builder.table,
             metadata: Arc::new(builder.metadata),
             module_ranges,
@@ -801,6 +827,7 @@ impl Bindings {
             | SemanticSyntaxErrorKind::NamedExpressionInComprehensionIterable
             | SemanticSyntaxErrorKind::NamedExpressionInClassBodyComprehension
             | SemanticSyntaxErrorKind::TypeParameterDefaultOrder(_)
+            | SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern
             | SemanticSyntaxErrorKind::ReturnInGenerator => false,
         }
     }
@@ -1107,6 +1134,20 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    pub fn record_django_relation_class(
+        &mut self,
+        class_idx: Idx<KeyClass>,
+        fields: Vec<Idx<KeyClassField>>,
+    ) {
+        if !fields.is_empty() {
+            self.django_relation_classes
+                .push(BindingDjangoRelationClass {
+                    class_idx,
+                    fields: fields.into_boxed_slice(),
+                });
+        }
+    }
+
     pub(crate) fn with_await_context<R>(
         &mut self,
         ctx: AwaitContext,
@@ -1255,11 +1296,11 @@ impl<'a> BindingsBuilder<'a> {
         self.as_special_export_inner(e, &mut visited_names, &mut visited_keys)
     }
 
-    pub fn as_direct_shape_symvar(&self, e: &Expr) -> bool {
+    pub fn as_direct_shape_intvar(&self, e: &Expr) -> bool {
         let shape_extensions = ModuleName::from_str("shape_extensions");
         match e {
             Expr::Name(name) => {
-                if name.id == "SymVar" && self.module_info.name() == shape_extensions {
+                if name.id == "IntVar" && self.module_info.name() == shape_extensions {
                     return true;
                 }
                 matches!(
@@ -1267,12 +1308,12 @@ impl<'a> BindingsBuilder<'a> {
                     Some((
                         _,
                         FlowStyle::Import(module, upstream_name)
-                    )) if module == shape_extensions && upstream_name == "SymVar"
+                    )) if module == shape_extensions && upstream_name == "IntVar"
                 )
             }
             Expr::Attribute(ExprAttribute {
                 value, attr: name, ..
-            }) if name == "SymVar" => {
+            }) if name == "IntVar" => {
                 let Expr::Name(base_name) = &**value else {
                     return false;
                 };
@@ -1800,8 +1841,8 @@ impl<'a> BindingsBuilder<'a> {
             // intercept_lookup which wraps them in PossibleLegacyTParam.
             // By finalize time we can follow through to the original
             // binding to check whether it's actually a type alias.
-            Binding::PossibleLegacyTParam(tparam_idx, _)
-                if let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) =>
+            Binding::PossibleLegacyTParam(legacy_tparam, _)
+                if let Some(legacy_binding) = self.idx_to_binding(legacy_tparam.first_key()) =>
             {
                 self.follow_to_type_alias(legacy_binding.idx())
             }
@@ -1882,8 +1923,14 @@ impl<'a> BindingsBuilder<'a> {
         if name.is_empty() {
             return None;
         }
-        self.check_for_type_alias_redefinition(name, idx);
-        self.check_for_imported_final_reassignment(name, idx);
+        // Suppress the ALL_CAPS check when a more specific check already reported
+        // on this reassignment, to avoid emitting two overlapping errors. Both
+        // checks are always run so their own diagnostics are unaffected.
+        let type_alias_reported = self.check_for_type_alias_redefinition(name, idx);
+        let imported_final_reported = self.check_for_imported_final_reassignment(name, idx);
+        if !type_alias_reported && !imported_final_reported {
+            self.check_for_all_caps_final_reassignment(name, idx);
+        }
         let name = Hashed::new(name);
         let write_info = self
             .scopes
@@ -1901,32 +1948,38 @@ impl<'a> BindingsBuilder<'a> {
         write_info.annotation
     }
 
-    fn check_for_type_alias_redefinition(&self, name: &Name, idx: Idx<Key>) {
-        let prev_idx = self.scopes.current_flow_idx(name);
-        if let Some(prev_idx) = prev_idx {
-            if matches!(
-                self.idx_to_binding(prev_idx),
-                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
-            ) {
-                self.error(
-                    self.idx_to_key(idx).range(),
-                    ErrorKind::Redefinition,
-                    format!("Cannot redefine existing type alias `{name}`",),
-                )
-            } else if matches!(
-                self.idx_to_binding(idx),
-                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
-            ) {
-                self.error(
-                    self.idx_to_key(idx).range(),
-                    ErrorKind::Redefinition,
-                    format!("Cannot redefine existing name `{name}` as a type alias",),
-                );
-            }
+    /// Returns `true` if an error was reported for this reassignment.
+    fn check_for_type_alias_redefinition(&self, name: &Name, idx: Idx<Key>) -> bool {
+        let Some(prev_idx) = self.scopes.current_flow_idx(name) else {
+            return false;
+        };
+        if matches!(
+            self.idx_to_binding(prev_idx),
+            Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
+        ) {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorKind::Redefinition,
+                format!("Cannot redefine existing type alias `{name}`"),
+            );
+            return true;
         }
+        if matches!(
+            self.idx_to_binding(idx),
+            Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
+        ) {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorKind::Redefinition,
+                format!("Cannot redefine existing name `{name}` as a type alias"),
+            );
+            return true;
+        }
+        false
     }
 
-    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+    /// Returns `true` if an error was reported for this reassignment.
+    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) -> bool {
         let prev_idx = self.scopes.current_flow_idx(name);
         if let Some(prev_idx) = prev_idx
             && let Some(Binding::Import(prev)) = self.idx_to_binding(prev_idx)
@@ -1938,7 +1991,7 @@ impl<'a> BindingsBuilder<'a> {
                 && cur.module == prev.module
                 && cur.name == prev.name
             {
-                return;
+                return false;
             }
             let prev_origin = self.lookup.export_origin(prev.module, &prev.name);
             if prev_origin.is_final {
@@ -1947,15 +2000,70 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(Binding::Import(cur)) = self.idx_to_binding(idx)
                     && self.lookup.export_origin(cur.module, &cur.name).origin == prev_origin.origin
                 {
-                    return;
+                    return false;
                 }
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorKind::BadAssignment,
                     format!("Cannot assign to `{name}` because it is imported as final"),
                 );
+                return true;
             }
         }
+        false
+    }
+
+    fn check_for_all_caps_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+        if !self.treat_all_caps_as_final
+            || !is_constant_name(name)
+            || self.scopes.is_final_in_current_scope(name)
+        {
+            return;
+        }
+        // Only bindings that count as a value reassignment should fire. Imports
+        // are included, so re-imports of a constant fire; type parameters
+        // (`class C[T, T]`) and function/class definitions (including overload
+        // chains) are not. Those non-assignment bindings are inserted before
+        // `bind_name`, so they are visible here and skipped. A plain assignment's
+        // `NameAssign` is inserted *after* `bind_name` (it needs the annotation
+        // this returns), so it shows up as `None` and correctly falls through.
+        if let Some(binding) = self.idx_to_binding(idx)
+            && !matches!(
+                binding,
+                Binding::NameAssign(..)
+                    | Binding::MultiTargetAssign(..)
+                    | Binding::UnpackedValue(..)
+                    | Binding::AugAssign(..)
+                    | Binding::AnnotatedType(..)
+                    | Binding::IterableValueLoop(..)
+                    | Binding::ContextValue(..)
+                    | Binding::ExceptionHandler(..)
+                    | Binding::Import(..)
+            )
+        {
+            return;
+        }
+        // A prior *initialized* value must already exist for this to be a
+        // reassignment. This runs before `define_in_current_flow`, so
+        // `current_flow_style` reflects the entry from before this binding. A
+        // bare annotation (`FOO: int`) leaves an uninitialized entry whose first
+        // real assignment is not a reassignment.
+        match self.scopes.current_flow_style(name) {
+            None
+            | Some(
+                FlowStyle::Uninitialized
+                | FlowStyle::PossiblyUninitialized
+                | FlowStyle::MaybeInitialized(_),
+            ) => return,
+            Some(_) => {}
+        }
+        self.error(
+            self.idx_to_key(idx).range(),
+            ErrorKind::BadAssignment,
+            format!(
+                "Cannot assign to variable `{name}` because it is marked final due to `treat-all-caps-as-final`"
+            ),
+        );
     }
 
     pub fn type_params(&mut self, x: &mut TypeParams) -> SmallSet<Name> {
@@ -1998,29 +2106,29 @@ impl<'a> BindingsBuilder<'a> {
                     let mut kind = QuantifiedKind::TypeVar;
                     if let Some(bound_expr) = &mut tv.bound {
                         if let Expr::Tuple(tuple) = &mut **bound_expr {
-                            let mut invalid_symvar_constraint = false;
+                            let mut invalid_intvar_constraint = false;
                             let mut constraint_exprs = Vec::new();
                             for constraint in &mut tuple.elts {
-                                if self.as_direct_shape_symvar(constraint) {
+                                if self.as_direct_shape_intvar(constraint) {
                                     self.error(
                                         constraint.range(),
                                         ErrorKind::InvalidTypeVar,
-                                        "`SymVar` cannot be used as a TypeVar constraint"
+                                        "`IntVar` cannot be used as a TypeVar constraint"
                                             .to_owned(),
                                     );
-                                    invalid_symvar_constraint = true;
+                                    invalid_intvar_constraint = true;
                                     self.ensure_expr(constraint, &mut usage);
                                 } else {
                                     self.ensure_type_with_usage(constraint, &mut None, &mut usage);
                                     constraint_exprs.push(constraint.clone());
                                 }
                             }
-                            if !invalid_symvar_constraint {
+                            if !invalid_intvar_constraint {
                                 constraints = Some((constraint_exprs, bound_expr.range()))
                             }
-                        } else if self.as_direct_shape_symvar(bound_expr) {
+                        } else if self.as_direct_shape_intvar(bound_expr) {
                             self.ensure_expr(bound_expr, &mut usage);
-                            kind = QuantifiedKind::SymVar;
+                            kind = QuantifiedKind::IntVar;
                         } else {
                             self.ensure_type_with_usage(bound_expr, &mut None, &mut usage);
                             bound = Some((**bound_expr).clone());
@@ -2344,6 +2452,18 @@ impl<'a> BindingsBuilder<'a> {
                         initialized,
                     };
                 }
+                // A legacy TypeVar that is already a type parameter of an enclosing class is out of
+                // scope when referenced from a nested class. Leave it as a raw type variable so it is
+                // flagged as out of scope.
+                if self
+                    .scopes
+                    .legacy_tparam_out_of_scope_in_nested_class(&name.id)
+                {
+                    return TParamLookupResult::NotTParam {
+                        idx: original_idx,
+                        initialized,
+                    };
+                }
                 match self.lookup_legacy_tparam_from_idx(id, original_idx, has_scoped_type_params) {
                     Some(possible_tparam) => TParamLookupResult::MaybeTParam(possible_tparam),
                     None => TParamLookupResult::NotTParam {
@@ -2398,16 +2518,13 @@ impl<'a> BindingsBuilder<'a> {
         // `CheckLegacyTypeParam`, and return the `Idx<Key>`.
         let tparam_idx = Self::make_legacy_tparam(&id, original_binding, original_idx)
             .map(|(k, v)| self.insert_binding(k, v))?;
+        let legacy_tparam = match &id {
+            LegacyTParamId::Name(_) => LegacyTParamBinding::Parameter(tparam_idx),
+            LegacyTParamId::Attr(..) => LegacyTParamBinding::Module(Vec1::new(tparam_idx)),
+        };
         let idx = self.insert_binding(
             id.as_possible_legacy_tparam_key(),
-            Binding::PossibleLegacyTParam(
-                tparam_idx,
-                if has_scoped_type_params {
-                    Some(id.range())
-                } else {
-                    None
-                },
-            ),
+            Binding::PossibleLegacyTParam(Box::new(legacy_tparam), has_scoped_type_params),
         );
         Some(PossibleTParam {
             id,
@@ -2470,13 +2587,36 @@ impl<'a> BindingsBuilder<'a> {
     /// of those names point at legacy (pre-PEP-695) type variable declarations, in which
     /// case the name should be treated as a Quantified type parameter inside this scope.
     pub fn add_name_definitions(&mut self, legacy_tparams: &LegacyTParamCollector) {
+        // Module attributes sharing a base collapse onto one scope entry, so its binding must
+        // retain every possible legacy type parameter hosted by that module.
+        let mut by_base: SmallMap<Name, (Vec1<Idx<KeyLegacyTypeParam>>, Key)> = SmallMap::new();
         for entry in legacy_tparams.legacy_tparams.values() {
-            match entry {
-                TParamLookupResult::MaybeTParam(possible_tparam) => {
-                    self.scopes
-                        .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
+            if let TParamLookupResult::MaybeTParam(possible_tparam) = entry {
+                self.scopes
+                    .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
+                if !matches!(possible_tparam.id, LegacyTParamId::Attr(..)) {
+                    continue;
                 }
-                _ => {}
+                let base = possible_tparam.id.as_identifier().id.clone();
+                // The surviving scope entry is the last one added, so track its key.
+                let key = possible_tparam.id.as_possible_legacy_tparam_key();
+                if let Some((keys, entry_key)) = by_base.get_mut(&base) {
+                    keys.push(possible_tparam.tparam_idx);
+                    *entry_key = key;
+                } else {
+                    by_base.insert(base, (Vec1::new(possible_tparam.tparam_idx), key));
+                }
+            }
+        }
+        for (_base, (keys, entry_key)) in by_base {
+            if keys.len() > 1 {
+                self.insert_binding_overwrite(
+                    entry_key,
+                    Binding::PossibleLegacyTParam(
+                        Box::new(LegacyTParamBinding::Module(keys)),
+                        legacy_tparams.has_scoped_tparams,
+                    ),
+                );
             }
         }
     }

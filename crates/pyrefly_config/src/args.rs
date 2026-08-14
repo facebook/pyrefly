@@ -92,7 +92,7 @@ pub struct EnvironmentArgs {
 
     /// The platform any `sys.platform` checks should evaluate against.
     #[arg(long)]
-    pub(crate) python_platform: Option<PythonPlatform>,
+    pub(crate) python_platform: Option<Vec<PythonPlatform>>,
 
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
@@ -124,7 +124,7 @@ pub struct EnvironmentArgs {
     pub(crate) skip_interpreter_query: bool,
 
     /// Override the bundled typeshed with a custom path.
-    #[arg(long)]
+    #[arg(long, value_parser = absolute_path_parser)]
     pub(crate) typeshed_path: Option<PathBuf>,
 }
 
@@ -160,7 +160,8 @@ impl EnvironmentArgs {
             config.synthesized_preset_reason = Some(SynthesizedPresetReason::UserOverride);
         }
         if let Some(x) = &self.python_platform {
-            config.python_environment.python_platform = Some(x.clone());
+            config.python_environment.python_platform =
+                Some(PythonPlatform::new_platforms(x.iter().cloned()));
         }
         if let Some(x) = &self.python_version {
             config.python_environment.python_version = Some(*x);
@@ -314,6 +315,7 @@ pub struct ConfigOverrideArgs {
     /// How to handle when recursion depth limit is exceeded.
     #[arg(long)]
     recursion_overflow_handler: Option<RecursionOverflowHandler>,
+    /// Deprecated: use `--warn=pytorch-efficiency-lints` instead.
     /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
     #[arg(long)]
     pytorch_efficiency_lints: Option<bool>,
@@ -352,6 +354,23 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     spec_compliant_overloads: Option<bool>,
+    /// Whether to expand union arguments to narrow an already-matched overloaded call.
+    /// Off by default.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    legacy_overload_expansion: Option<bool>,
+    /// Treat ALL_CAPS names as final after their first assignment.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    treat_all_caps_as_final: Option<bool>,
 }
 
 impl ConfigOverrideArgs {
@@ -503,6 +522,12 @@ impl ConfigOverrideArgs {
         if let Some(x) = &self.spec_compliant_overloads {
             config.root.spec_compliant_overloads = Some(*x);
         }
+        if let Some(x) = &self.legacy_overload_expansion {
+            config.root.legacy_overload_expansion = Some(*x);
+        }
+        if let Some(x) = &self.treat_all_caps_as_final {
+            config.root.treat_all_caps_as_final = Some(*x);
+        }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {
                 error_config.set_error_severity(*error_kind, Severity::Error);
@@ -527,6 +552,11 @@ impl ConfigOverrideArgs {
         if self.tensor_shapes.is_some() {
             errors.push(ConfigError::warn(anyhow::anyhow!(
                 "`--tensor-shapes` is deprecated and has no effect. Tensor shape support is enabled when `shape_extensions` is resolvable."
+            )));
+        }
+        if self.pytorch_efficiency_lints.is_some() {
+            errors.push(ConfigError::warn(anyhow::anyhow!(
+                "`--pytorch-efficiency-lints` is deprecated. Set `--warn=pytorch-efficiency-lints` instead."
             )));
         }
         (ArcId::new(config), errors)
@@ -556,5 +586,49 @@ impl ConfigOverrideArgs {
         if self.infer_return_types.is_none() {
             self.infer_return_types = Some(value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_python_platform_flags_merge() {
+        let args = ConfigOverrideArgs::parse_from([
+            "pyrefly",
+            "--python-platform",
+            "linux",
+            "--python-platform",
+            "win32",
+        ]);
+        args.validate().unwrap();
+        let (config, errors) = args.override_config(ConfigFile::default());
+        assert!(errors.is_empty());
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::new_many(vec![
+                "linux".to_owned(),
+                "win32".to_owned()
+            ]))
+        );
+    }
+
+    #[test]
+    fn repeated_python_platform_flags_all_wins() {
+        let args = ConfigOverrideArgs::parse_from([
+            "pyrefly",
+            "--python-platform",
+            "all",
+            "--python-platform",
+            "linux",
+        ]);
+        args.validate().unwrap();
+        let (config, errors) = args.override_config(ConfigFile::default());
+        assert!(errors.is_empty());
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::All)
+        );
     }
 }

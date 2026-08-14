@@ -13,18 +13,21 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::time::Instant;
 
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::locked_map::LockedMap;
+use pyrefly_util::timer::Timer;
 use regex::Regex;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
 const PKGUTIL_DETECTION_MAX_BYTES: usize = 4096;
+/// A `partial` marker is only ever the literal `partial`, so a small cap is
+/// plenty; the cap also stops a third-party `py.typed` from dictating read size.
+const PY_TYPED_DETECTION_MAX_BYTES: usize = 128;
 
 pub trait ModuleResolutionObserver {
     fn observe_stat(&self, elapsed_ns: u64);
@@ -35,9 +38,9 @@ fn timed_stat(observer: Option<&dyn ModuleResolutionObserver>, f: impl FnOnce() 
     match observer {
         None => f(),
         Some(observer) => {
-            let start = Instant::now();
+            let start = Timer::start();
             let result = f();
-            observer.observe_stat(start.elapsed().as_nanos() as u64);
+            observer.observe_stat(start.elapsed_nanos());
             result
         }
     }
@@ -63,25 +66,49 @@ static PKGUTIL_EXTEND_PATH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         .expect("PKGUTIL_EXTEND_PATH_PATTERN regex should be valid")
 });
 
-fn is_pkgutil_namespace(init_path: &Path, observer: Option<&dyn ModuleResolutionObserver>) -> bool {
-    let start = observer.map(|_| Instant::now());
-    let Ok(mut file) = std::fs::File::open(init_path) else {
-        return false;
-    };
-    let mut buf = [0u8; PKGUTIL_DETECTION_MAX_BYTES];
+/// Read up to `buf.len()` bytes from the start of `path` into `buf`, returning
+/// the number of bytes read. The read is capped at the buffer size so a
+/// third-party file cannot force an unbounded read. Returns `None` if the file
+/// cannot be opened or read; the read is timed when an `observer` is given.
+fn read_capped(
+    path: &Path,
+    buf: &mut [u8],
+    observer: Option<&dyn ModuleResolutionObserver>,
+) -> Option<usize> {
+    let start = observer.map(|_| Timer::start());
+    let mut file = std::fs::File::open(path).ok()?;
     let mut total = 0;
     while total < buf.len() {
         match file.read(&mut buf[total..]) {
             Ok(0) => break,
             Ok(n) => total += n,
-            Err(_) => return false,
+            Err(_) => return None,
         }
     }
     if let Some(observer) = observer {
-        observer.observe_read(start.unwrap().elapsed().as_nanos() as u64);
+        observer.observe_read(start.unwrap().elapsed_nanos());
     }
-    let contents = String::from_utf8_lossy(&buf[..total]);
-    PKGUTIL_EXTEND_PATH_PATTERN.is_match(&contents)
+    Some(total)
+}
+
+fn is_pkgutil_namespace(init_path: &Path, observer: Option<&dyn ModuleResolutionObserver>) -> bool {
+    let mut buf = [0u8; PKGUTIL_DETECTION_MAX_BYTES];
+    read_capped(init_path, &mut buf, observer).is_some_and(|total| {
+        PKGUTIL_EXTEND_PATH_PATTERN.is_match(&String::from_utf8_lossy(&buf[..total]))
+    })
+}
+
+fn is_partial_py_typed(
+    py_typed_path: &Path,
+    observer: Option<&dyn ModuleResolutionObserver>,
+) -> bool {
+    let mut buf = [0u8; PY_TYPED_DETECTION_MAX_BYTES];
+    read_capped(py_typed_path, &mut buf, observer).is_some_and(|total| {
+        // If the read filled the buffer we cannot tell EOF from truncation, so the
+        // file is larger than any bare `partial` marker (or was truncated) — reject
+        // rather than trust a prefix that happens to trim to `partial`.
+        total < buf.len() && String::from_utf8_lossy(&buf[..total]).trim() == "partial"
+    })
 }
 
 /// Cache of directory listings to avoid repeated stat() calls during module resolution.
@@ -93,7 +120,12 @@ fn is_pkgutil_namespace(init_path: &Path, observer: Option<&dyn ModuleResolution
 /// resolution transaction or replace it when file changes are observed.
 #[derive(Default)]
 pub struct DirEntryCache {
-    cache: LockedMap<PathBuf, Option<Arc<SmallMap<OsString, bool>>>>,
+    /// Cached directory listings: maps a directory to its entries (name -> is_dir).
+    entry_cache: LockedMap<PathBuf, Option<Arc<SmallMap<OsString, bool>>>>,
+    /// Cached `pkgutil.extend_path` namespace-package check, keyed by `__init__` path.
+    pkgutil_cache: LockedMap<PathBuf, bool>,
+    /// Cached partial-package marker check, keyed by `py.typed` path.
+    partial_py_typed_cache: LockedMap<PathBuf, bool>,
 }
 
 impl Debug for DirEntryCache {
@@ -105,8 +137,39 @@ impl Debug for DirEntryCache {
 impl DirEntryCache {
     pub fn new() -> Self {
         Self {
-            cache: LockedMap::new(),
+            entry_cache: LockedMap::new(),
+            pkgutil_cache: LockedMap::new(),
+            partial_py_typed_cache: LockedMap::new(),
         }
+    }
+
+    /// Cached form of [`is_pkgutil_namespace`], keyed by `__init__` path.
+    fn is_pkgutil_namespace(
+        &self,
+        init_path: &Path,
+        observer: Option<&dyn ModuleResolutionObserver>,
+    ) -> bool {
+        let key = init_path.to_path_buf();
+        if let Some(cached) = self.pkgutil_cache.get(&key) {
+            return *cached;
+        }
+        let result = is_pkgutil_namespace(init_path, observer);
+        self.pkgutil_cache.insert(key, result);
+        result
+    }
+
+    fn is_partial_py_typed(
+        &self,
+        py_typed_path: &Path,
+        observer: Option<&dyn ModuleResolutionObserver>,
+    ) -> bool {
+        let key = py_typed_path.to_path_buf();
+        if let Some(cached) = self.partial_py_typed_cache.get(&key) {
+            return *cached;
+        }
+        let result = is_partial_py_typed(py_typed_path, observer);
+        self.partial_py_typed_cache.insert(key, result);
+        result
     }
 
     pub fn file_exists(&self, path: &Path) -> bool {
@@ -132,12 +195,12 @@ impl DirEntryCache {
 
     fn get_entries(&self, dir: &Path) -> Option<Arc<SmallMap<OsString, bool>>> {
         let key = dir.to_path_buf();
-        if let Some(cached) = self.cache.get(&key) {
+        if let Some(cached) = self.entry_cache.get(&key) {
             return cached.clone();
         }
         let listing = Self::read_dir_entries(dir);
-        self.cache.insert(key.clone(), listing);
-        self.cache.get(&key).and_then(|v| v.clone())
+        self.entry_cache.insert(key.clone(), listing);
+        self.entry_cache.get(&key).and_then(|v| v.clone())
     }
 
     fn read_dir_entries(dir: &Path) -> Option<Arc<SmallMap<OsString, bool>>> {
@@ -214,6 +277,31 @@ impl FindResult {
         }
     }
 
+    fn stub_package_is_partial(
+        &self,
+        dir_cache: &DirEntryCache,
+        observer: Option<&dyn ModuleResolutionObserver>,
+    ) -> bool {
+        match self {
+            FindResult::RegularPackage(_, package_dir) => {
+                dir_cache.is_partial_py_typed(&package_dir.join("py.typed"), observer)
+            }
+            FindResult::LegacyNamespacePackage(init_path, _) => {
+                init_path.parent().is_some_and(|package_dir| {
+                    dir_cache.is_partial_py_typed(&package_dir.join("py.typed"), observer)
+                })
+            }
+            FindResult::ImplicitNamespacePackage(package_dirs) => {
+                package_dirs.iter().any(|package_dir| {
+                    dir_cache.is_partial_py_typed(&package_dir.join("py.typed"), observer)
+                })
+            }
+            FindResult::SingleFilePyiModule(_)
+            | FindResult::SingleFilePyModule(_)
+            | FindResult::CompiledModule(_) => false,
+        }
+    }
+
     pub fn module_path(self) -> Option<ModulePath> {
         match self {
             FindResult::SingleFilePyiModule(path)
@@ -283,7 +371,7 @@ fn find_one_part_in_root(
         for candidate_init_suffix in candidate_init_suffixes {
             let init_path = candidate_dir.join(candidate_init_suffix);
             if timed_stat(observer, || dir_cache.file_exists(&init_path)) {
-                if is_pkgutil_namespace(&init_path, observer) {
+                if dir_cache.is_pkgutil_namespace(&init_path, observer) {
                     return Some(FindResult::LegacyNamespacePackage(
                         init_path,
                         Vec1::new(candidate_dir),
@@ -541,8 +629,33 @@ where
 
 #[derive(Debug, Default)]
 pub struct ModuleSearchResult {
-    pub stub_result: Option<FindResult>,
+    pub stub_result: Option<StubSearchResult>,
     pub normal_result: Option<FindResult>,
+}
+
+#[derive(Debug)]
+pub enum StubSearchResult {
+    /// The stub package provides a module for this import: either a concrete
+    /// package/module file, or a namespace from a stub that is not marked
+    /// `partial` (and so shadows the runtime). It is preferred over the runtime
+    /// package, preserving the normal `.pyi`-before-`.py` precedence.
+    Provides(FindResult),
+    /// A partial stub whose lookup landed on a bare namespace directory: it does
+    /// not itself provide this module, so the runtime package is preferred. The
+    /// namespace roots are retained as a fallback for when no runtime module
+    /// exists, and to merge with a runtime namespace of the same name.
+    Transparent(Vec1<PathBuf>),
+}
+
+impl StubSearchResult {
+    pub fn into_find_result(self) -> FindResult {
+        match self {
+            StubSearchResult::Provides(result) => result,
+            StubSearchResult::Transparent(namespaces) => {
+                FindResult::ImplicitNamespacePackage(namespaces)
+            }
+        }
+    }
 }
 
 pub fn find_module_results<'a, I>(
@@ -567,7 +680,30 @@ where
         phantom_paths,
         dir_cache,
         observer,
-    );
+    )
+    .map(|result| {
+        // A namespace package below the top-level stub package is always
+        // incomplete; otherwise the top-level stub package's `py.typed` decides.
+        // The top-level lookup is only performed when the cheap namespace check
+        // does not already settle it, and it reuses the populated directory cache.
+        let is_partial = (!rest.is_empty()
+            && matches!(&result, FindResult::ImplicitNamespacePackage(_)))
+            || find_one_part(
+                &stub_first,
+                include.clone(),
+                style_filter,
+                &mut None,
+                dir_cache,
+                observer,
+            )
+            .is_some_and(|(top_level, _)| top_level.stub_package_is_partial(dir_cache, observer));
+        match result {
+            FindResult::ImplicitNamespacePackage(namespaces) if is_partial => {
+                StubSearchResult::Transparent(namespaces)
+            }
+            result => StubSearchResult::Provides(result),
+        }
+    });
     let normal_result = find_module_components(
         first,
         rest,
@@ -613,7 +749,10 @@ impl ModuleResolver {
             None,
         );
         match (result.normal_result, result.stub_result) {
-            (_, Some(stub_result)) => stub_result.module_path(),
+            (Some(normal_result), Some(StubSearchResult::Transparent(_))) => {
+                normal_result.module_path()
+            }
+            (_, Some(stub_result)) => stub_result.into_find_result().module_path(),
             (Some(normal_result), None) => normal_result.module_path(),
             (None, None) => None,
         }
@@ -862,6 +1001,63 @@ mod tests {
         padding.push_str("__path__ = pkgutil.extend_path(__path__, __name__)\n");
         std::fs::write(&init_truncated, &padding).unwrap();
         assert!(!is_pkgutil_namespace(&init_truncated, None));
+    }
+
+    #[test]
+    fn test_partial_py_typed_detection() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // `partial` followed by whitespace that fills the read cap and then real
+        // content: the read-back prefix trims to `partial`, so this must not be
+        // mistaken for a valid marker.
+        let truncated = format!("partial\n{}extra", " ".repeat(PY_TYPED_DETECTION_MAX_BYTES));
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file_with_contents("partial.py.typed", "partial\n"),
+                TestPath::file_with_contents("complete.py.typed", ""),
+                TestPath::file_with_contents("invalid.py.typed", "not-partial\n"),
+                TestPath::file_with_contents("truncated.py.typed", &truncated),
+            ],
+        );
+
+        let cache = DirEntryCache::new();
+        assert!(cache.is_partial_py_typed(&root.join("partial.py.typed"), None));
+        assert!(!cache.is_partial_py_typed(&root.join("complete.py.typed"), None));
+        assert!(!cache.is_partial_py_typed(&root.join("invalid.py.typed"), None));
+        assert!(!cache.is_partial_py_typed(&root.join("truncated.py.typed"), None));
+    }
+
+    #[test]
+    fn test_module_resolver_merges_partial_stub_package() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "foo",
+                    vec![TestPath::file("__init__.py"), TestPath::file("bar.py")],
+                ),
+                TestPath::dir(
+                    "foo-stubs",
+                    vec![
+                        TestPath::file_with_contents("py.typed", "partial\n"),
+                        TestPath::file("bar.pyi"),
+                    ],
+                ),
+            ],
+        );
+
+        let resolver = ModuleResolver::new([root.to_path_buf()]);
+        assert_eq!(
+            resolver.resolve(ModuleName::from_str("foo"), None),
+            Some(ModulePath::filesystem(root.join("foo/__init__.py"))),
+        );
+        assert_eq!(
+            resolver.resolve(ModuleName::from_str("foo.bar"), None),
+            Some(ModulePath::filesystem(root.join("foo-stubs/bar.pyi"))),
+        );
     }
 
     #[test]

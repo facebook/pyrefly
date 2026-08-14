@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::environment::finder::walk_interpreter;
+use crate::environment::finder::walk_interpreter_pruned;
 
 const CONFIG_FILE: &str = "pyvenv.cfg";
 /// How deep within a project root should we attempt to search for a valid Python executable?
@@ -16,6 +16,11 @@ const CONFIG_FILE: &str = "pyvenv.cfg";
 const SEARCH_DEPTH: usize = 3;
 const CANDIDATE_DIRS: &[&str] = &[".venv", "venv"];
 pub const ENV_VAR: &str = "VIRTUAL_ENV";
+
+/// A venv root is any directory holding a `pyvenv.cfg`.
+fn is_venv_root(dir: &Path) -> bool {
+    dir.join(CONFIG_FILE).exists()
+}
 
 fn has_standard_relative_config(interp: &Path) -> bool {
     interp
@@ -50,13 +55,17 @@ fn find_standard_interpreter(root: &Path) -> Option<PathBuf> {
 }
 
 fn find_in_dir(root: &Path) -> Option<PathBuf> {
-    if root.join(CONFIG_FILE).exists()
+    if is_venv_root(root)
         && let Some(interpreter) = find_standard_interpreter(root)
     {
         return Some(interpreter);
     }
 
-    let interpreters = walk_interpreter(root, SEARCH_DEPTH).collect::<Vec<PathBuf>>();
+    let interpreters = walk_interpreter_pruned(root, SEARCH_DEPTH, |entry| {
+        let dir = entry.path();
+        entry.depth() <= 1 || is_venv_root(dir) || dir.parent().is_some_and(is_venv_root)
+    })
+    .collect::<Vec<PathBuf>>();
 
     if interpreters.is_empty() {
         return None;
@@ -75,14 +84,14 @@ fn find_in_dir(root: &Path) -> Option<PathBuf> {
 }
 
 fn find_in_root(root: &Path) -> Option<PathBuf> {
-    if root.join(CONFIG_FILE).exists() {
+    if is_venv_root(root) {
         return find_in_dir(root);
     }
 
     CANDIDATE_DIRS
         .iter()
         .map(|candidate| root.join(candidate))
-        .filter(|path| path.join(CONFIG_FILE).exists())
+        .filter(|path| is_venv_root(path))
         .find_map(|path| find_in_dir(&path))
 }
 
@@ -387,6 +396,90 @@ mod tests {
         );
 
         assert_eq!(find(&project_root), None);
+    }
+
+    #[test]
+    fn test_find_venv_nested_in_subdir() {
+        // A venv in a subdirectory (not at the root or a `.venv`/`venv` candidate) is reached
+        // only by the walk, so the prune must descend into a depth-2 dir that is itself a venv
+        // root. Reachability is still bounded by `max_depth`, measured from the search root:
+        //   * `subdir/.venv/python`     -> interpreter at depth 3 => found (nonstandard layout)
+        //   * `subdir/.venv/bin/python` -> interpreter at depth 4 => not found (exceeds depth)
+        let interp_name = interp_name("");
+
+        // Standard layout: interpreter under `bin`.
+        // (depth 4 > max_depth, so not found).
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("pyrefly.toml"),
+                TestPath::dir(
+                    "subdir",
+                    vec![TestPath::dir(
+                        ".venv",
+                        vec![
+                            TestPath::file(CONFIG_FILE),
+                            TestPath::dir("bin", vec![TestPath::file(&interp_name)]),
+                        ],
+                    )],
+                ),
+            ],
+        );
+        assert_eq!(find(root), None);
+
+        // Nonstandard layout: interpreter directly under the nested venv root.
+        // (depth 3 <= max_depth, still found).
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("pyrefly.toml"),
+                TestPath::dir(
+                    "subdir",
+                    vec![TestPath::dir(
+                        ".venv",
+                        vec![TestPath::file(CONFIG_FILE), TestPath::file(&interp_name)],
+                    )],
+                ),
+            ],
+        );
+        assert_eq!(
+            find(root),
+            Some(root.join("subdir/.venv").join(&interp_name)),
+        );
+    }
+
+    #[test]
+    fn test_find_venv_beside_deep_source_tree() {
+        // A nonstandard venv name doesn't take the `CANDIDATE_DIRS` fast path; the pruned
+        // walk still needs to find the venv while pruning the deep sibling source tree.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let interp_name = interp_name("");
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("pyrefly.toml"),
+                TestPath::dir(
+                    "src",
+                    vec![TestPath::dir(
+                        "pkg",
+                        vec![TestPath::dir("sub", vec![TestPath::file("mod.py")])],
+                    )],
+                ),
+                TestPath::dir(
+                    "my-venv",
+                    vec![
+                        TestPath::file(CONFIG_FILE),
+                        TestPath::dir("bin", vec![TestPath::file(&interp_name)]),
+                    ],
+                ),
+            ],
+        );
+        assert_eq!(find(root), Some(root.join("my-venv/bin").join(interp_name)));
     }
 
     #[test]
