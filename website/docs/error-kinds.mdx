@@ -1420,7 +1420,7 @@ del Ex.meaning  # no-access
 
 Default severity: `ignore`
 
-Umbrella error code for cases where a returned expression is `Any` in a function declared to return a concrete type. Enabling this catches places where `Any` silently bypasses the function's declared return type.
+Umbrella error code for cases where a returned expression is `Any` in a function declared to return a concrete type other than `object`. Enabling this catches places where `Any` silently bypasses the function's declared return type. Returning `Any` as `object` is allowed because every runtime value is an object, so this does not weaken the return type's guarantee.
 
 Concrete diagnostics are emitted under one of the more specific sub-kinds:
 - [`no-any-return-explicit`](#no-any-return-explicit)
@@ -1430,7 +1430,7 @@ Concrete diagnostics are emitted under one of the more specific sub-kinds:
 
 Default severity: `ignore`
 
-The returned expression has type `Any`, but the function is declared to return a concrete type. The returned `Any` originates from an explicit annotation or other introduction into the type system.
+The returned expression has type `Any`, but the function is declared to return a concrete type other than `object`. The returned `Any` originates from an explicit annotation or other introduction into the type system.
 
 This is a sub-kind of [no-any-return](#no-any-return): suppressing `no-any-return` also suppresses this error.
 
@@ -1452,7 +1452,7 @@ def get_typed_port(config: dict[str, object]) -> int:
 
 Default severity: `ignore`
 
-The returned expression was inferred as `Any` (e.g., from an untyped import or missing stub), but the function's return annotation is a concrete type. This usually indicates that adding type information at an untyped boundary would restore type precision.
+The returned expression was inferred as `Any` (e.g., from an untyped import or missing stub), but the function's return annotation is a concrete type other than `object`. This usually indicates that adding type information at an untyped boundary would restore type precision.
 
 This is a sub-kind of [no-any-return](#no-any-return): suppressing `no-any-return` also suppresses this error.
 
