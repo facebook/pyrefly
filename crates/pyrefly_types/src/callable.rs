@@ -404,12 +404,6 @@ impl PrefixParam {
         }
     }
 
-    pub fn ty_mut(&mut self) -> &mut Type {
-        match self {
-            Self::PosOnly(_, ty, _) | Self::Pos(_, ty, _) => ty,
-        }
-    }
-
     /// Convert to a positional-only `Param`. Per the typing spec, params in
     /// `Concatenate` are positional-only at the call site. This is also appropriate
     /// for ParamSpec forwarding where prefix params must be passed positionally.

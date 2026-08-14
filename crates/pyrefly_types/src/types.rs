@@ -964,7 +964,10 @@ impl Visit for Type {
             Type::ParamSpec(x) => x.visit(f),
             Type::TypeVarTuple(x) => x.visit(f),
             Type::SpecialForm(x) => x.visit(f),
-            Type::Concatenate(x, _) => x.visit(f),
+            Type::Concatenate(prefix, pspec) => {
+                prefix.visit(f);
+                pspec.visit(f);
+            }
             Type::ParamSpecValue(x) => x.visit(f),
             Type::Args(x) => x.visit(f),
             Type::Kwargs(x) => x.visit(f),
@@ -1024,7 +1027,10 @@ impl VisitMut for Type {
             Type::ParamSpec(x) => x.visit_mut(f),
             Type::TypeVarTuple(x) => x.visit_mut(f),
             Type::SpecialForm(x) => x.visit_mut(f),
-            Type::Concatenate(x, _) => x.visit_mut(f),
+            Type::Concatenate(prefix, pspec) => {
+                prefix.visit_mut(f);
+                pspec.visit_mut(f);
+            }
             Type::ParamSpecValue(x) => x.visit_mut(f),
             Type::Args(x) => x.visit_mut(f),
             Type::Kwargs(x) => x.visit_mut(f),
