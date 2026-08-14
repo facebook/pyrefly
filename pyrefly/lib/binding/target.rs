@@ -582,7 +582,6 @@ impl<'a> BindingsBuilder<'a> {
                 if self.infer_with_first_use() =>
             {
                 Binding::UnpackedName(Box::new(UnpackedName {
-                    annotation: None,
                     source,
                     range,
                     position,

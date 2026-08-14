@@ -5967,7 +5967,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                 ),
             Binding::UnpackedName(unpacked) => self.binding_to_type_unpacked_value(
-                unpacked.annotation,
+                None,
                 unpacked.source,
                 unpacked.range,
                 &unpacked.position,

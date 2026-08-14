@@ -2224,7 +2224,6 @@ pub struct MultiTargetReceiver {
 /// A name target whose value is selected from an unpacking assignment.
 #[derive(Clone, Debug)]
 pub struct UnpackedName {
-    pub annotation: Option<Idx<KeyAnnotation>>,
     pub source: Idx<Key>,
     pub range: TextRange,
     pub position: UnpackedPosition,
@@ -2588,8 +2587,7 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::UnpackedName(x) => write!(
                 f,
-                "UnpackedName({}, {}, {:?})",
-                ann(&x.annotation),
+                "UnpackedName({}, {:?})",
                 ctx.display(x.source),
                 x.position
             ),
