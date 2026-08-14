@@ -1197,21 +1197,19 @@ impl ClassField {
     fn dataclass_flags_of(&self, heap: &TypeHeap) -> DataclassFieldKeywords {
         match &self.0 {
             ClassFieldInner::Property { .. } => DataclassFieldKeywords::new(),
-            // Class-body-initialized descriptors have a default value (the descriptor instance).
-            // Other descriptors (annotation-only, stub, etc.) do not.
-            ClassFieldInner::Descriptor {
-                descriptor:
-                    Descriptor {
-                        initialization: ClassFieldInitialization::ClassBody(_),
-                        ..
-                    },
-                ..
-            } => {
-                let mut kws = DataclassFieldKeywords::new();
-                kws.default = Some(heap.mk_any_implicit());
-                kws
-            }
-            ClassFieldInner::Descriptor { .. } => DataclassFieldKeywords::new(),
+            ClassFieldInner::Descriptor { descriptor, .. } => match &descriptor.initialization {
+                ClassFieldInitialization::ClassBody(Some(field_flags)) => (**field_flags).clone(),
+                // An ordinary descriptor assignment has the descriptor instance as its default.
+                ClassFieldInitialization::ClassBody(None) => {
+                    let mut kws = DataclassFieldKeywords::new();
+                    kws.default = Some(heap.mk_any_implicit());
+                    kws
+                }
+                ClassFieldInitialization::Method
+                | ClassFieldInitialization::ClassMethod
+                | ClassFieldInitialization::Uninitialized
+                | ClassFieldInitialization::Magic => DataclassFieldKeywords::new(),
+            },
             ClassFieldInner::Method { .. } => DataclassFieldKeywords::new(),
             ClassFieldInner::ProxyMethod { .. } => DataclassFieldKeywords::new(),
             ClassFieldInner::NestedClass { .. } => DataclassFieldKeywords::new(),

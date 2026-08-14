@@ -699,6 +699,44 @@ DatasetMetadata()
     "#,
 );
 
+testcase!(
+    test_descriptor_field_specifier_in_dataclass_transform,
+    r#"
+from typing import Any, assert_type, dataclass_transform
+
+class Stored[T]:
+    def __get__(self, instance: object | None, owner: type | None) -> T: ...
+    def __set__(self, instance: object, value: T) -> None: ...
+
+def column[T](**options: Any) -> Stored[T]: ...
+
+@dataclass_transform(field_specifiers=(column,), kw_only_default=True)
+class Entity: ...
+
+class Product(Entity):
+    sku: Stored[str] = column(alias="code")
+    quantity: Stored[int] = column()
+    internal_id: Stored[int] = column(init=False)
+    rating: Stored[int] = column(default=0)
+    labels: Stored[list[str]] = column(default_factory=list)
+    price: Stored[float] = column(kw_only=False)
+
+product = Product(9.99, code="item", quantity=2)
+Product(9.99, code="item", quantity=2, rating=5, labels=["sale"])
+
+assert_type(product.sku, str)
+assert_type(product.quantity, int)
+assert_type(product.internal_id, int)
+assert_type(product.rating, int)
+assert_type(product.labels, list[str])
+assert_type(product.price, float)
+
+Product(code="item", quantity=2)  # E: Missing argument `price`
+Product(9.99, code="item")  # E: Missing argument `quantity`
+Product(9.99, code="item", quantity=2, internal_id=1)  # E: Unexpected keyword argument `internal_id`
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/1803
 testcase!(
     test_set_instance_attribute,
