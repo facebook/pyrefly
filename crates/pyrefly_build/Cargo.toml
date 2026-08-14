@@ -27,7 +27,7 @@ vec1 = { version = "1.12.1", features = ["serde"] }
 pretty_assertions = { version = "1.4.1", features = ["alloc"], default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-which = "4.2.4"
+which = "8.0.5"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fbcode_build)"]}

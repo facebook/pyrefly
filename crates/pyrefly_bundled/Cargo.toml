@@ -13,7 +13,7 @@ build = "build.rs"
 anyhow = "1.0.104"
 starlark_map = "0.14.2"
 tar = "0.4.46"
-zstd = "0.13"
+zstd = "0.13.3"
 
 [build-dependencies]
 sha2 = "0.10.6"

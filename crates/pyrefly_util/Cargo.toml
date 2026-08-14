@@ -43,7 +43,7 @@ strsim = "0.11.1"
 thin-vec = "0.2.18"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry"], default-features = false }
-uuid = { version = "1.17", features = ["js", "rng-getrandom", "v4"] }
+uuid = { version = "1.24.0", features = ["js", "rng-getrandom", "v4"] }
 vec1 = { version = "1.12.1", features = ["serde"] }
 web-time = "1.1.0"
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
@@ -54,7 +54,7 @@ static_assertions = "1.1.0"
 tempfile = "3.27.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-watchman_client = "0.9.0"
+watchman_client = "0.9"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fbcode_build)"]}
