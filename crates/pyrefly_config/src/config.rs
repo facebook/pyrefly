@@ -798,9 +798,24 @@ impl ConfigFile {
         let hidden_dir_filter = if self.disable_project_excludes_heuristics {
             HiddenDirFilter::Disabled
         } else {
-            match root {
-                Some(r) => HiddenDirFilter::RelativeTo(vec![r.to_path_buf()]),
-                None => HiddenDirFilter::All,
+            // Hidden ancestors above the project's own roots must not hide
+            // the project's files: check components relative to every
+            // include root, plus the import root. The import root alone is
+            // not enough — a src-layout project's `import_root` is `src/`,
+            // and an include outside it (`tests/check.py`) would fall back
+            // to the absolute path, where a checkout under a hidden
+            // directory (`~/.codex/worktrees/…`, `.claude/worktrees/…`)
+            // has every component chain hidden. Deliberately independent of
+            // `use_ignore_files`: turning ignore files off must not make
+            // hidden-directory filtering stricter.
+            let mut roots = includes.roots();
+            if let Some(import_root) = self.import_root.as_deref() {
+                roots.push(import_root.to_path_buf());
+            }
+            if roots.is_empty() {
+                HiddenDirFilter::All
+            } else {
+                HiddenDirFilter::RelativeTo(roots)
             }
         };
         FilteredGlobs::new(includes, project_excludes, root, hidden_dir_filter)
@@ -1890,6 +1905,7 @@ mod tests {
     use std::fs;
 
     use pretty_assertions::assert_eq;
+    use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
     use tempfile::TempDir;
     use toml::Table;
@@ -3367,7 +3383,10 @@ output-format = "omit-errors"
                 globs(&["covered/**"]),
                 globs(&excludes),
                 None,
-                HiddenDirFilter::All,
+                // Hidden-directory filtering is relative to the include
+                // roots, so a project under a hidden directory still sees
+                // its own files.
+                HiddenDirFilter::RelativeTo(globs(&["covered/**"]).roots()),
             )
         };
 
@@ -3403,6 +3422,34 @@ output-format = "omit-errors"
             config.get_filtered_globs(Some(globs(&["custom_excludes"])), ConfigScope::Coverage),
             expected(&["custom_excludes"])
         );
+    }
+
+    #[test]
+    fn test_hidden_dir_filter_is_relative_to_every_include_root() {
+        // A src-layout project checked out under a hidden directory: hidden
+        // ancestors above the project's roots must not hide its own files,
+        // including includes outside `import_root` (here, `tests/`).
+        let project = PathBuf::from("/checkout/.claude/worktrees/wt");
+        let mut config = ConfigFile {
+            project_includes: Globs::new_with_root(
+                &project,
+                vec!["src".to_owned(), "tests".to_owned()],
+            )
+            .unwrap(),
+            import_root: Some(project.join("src")),
+            ..Default::default()
+        };
+        config.interpreters.skip_interpreter_query = true;
+        config.configure();
+
+        for use_ignore_files in [true, false] {
+            config.use_ignore_files = use_ignore_files;
+            let globs = config.get_filtered_globs(None, ConfigScope::Default);
+            assert!(globs.covers(&project.join("src/m.py")));
+            assert!(globs.covers(&project.join("tests/check.py")));
+            // Hidden directories *within* the project are still excluded.
+            assert!(!globs.covers(&project.join("src/.venv/lib/m.py")));
+        }
     }
 
     #[test]
