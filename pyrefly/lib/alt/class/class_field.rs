@@ -1130,17 +1130,20 @@ impl ClassField {
     /// descriptor range and type. Used for
     /// dataclass validation, where we typically disallow non-data descriptors but certain
     /// edge cases (where instance shadows are assignable to the `__get__` return type) are ok.
-    /// Uninitialized descriptors are excluded because there is no actual descriptor
-    /// object on the class to conflict with dataclass field initialization.
+    /// Descriptors excluded from the generated `__init__` cannot be shadowed by its writes.
     pub fn non_data_descriptor_info(&self) -> Option<(TextRange, ClassType)> {
         match &self.0 {
             ClassFieldInner::Descriptor { descriptor, .. }
                 if !descriptor.setter
                     && !descriptor.deleter
-                    && matches!(
-                        descriptor.initialization,
-                        ClassFieldInitialization::ClassBody(_)
-                    ) =>
+                    && match &descriptor.initialization {
+                        ClassFieldInitialization::ClassBody(None) => true,
+                        ClassFieldInitialization::ClassBody(Some(field_flags)) => field_flags.init,
+                        ClassFieldInitialization::Method
+                        | ClassFieldInitialization::ClassMethod
+                        | ClassFieldInitialization::Uninitialized
+                        | ClassFieldInitialization::Magic => false,
+                    } =>
             {
                 Some((descriptor.range, descriptor.cls.clone()))
             }
@@ -1150,15 +1153,16 @@ impl ClassField {
 
     /// For a data descriptor with a `__set__`, get the descriptor range
     /// and class type. Used for dataclass validation to check that the class-level `__get__`
-    /// return type is compatible with `__set__`. Uninitialized descriptors are excluded
-    /// because there is no class-level descriptor instance to act as an implicit default.
+    /// return type is compatible with `__set__`. Only ordinary descriptor assignments use
+    /// the class-level descriptor value as an implicit default; field specifiers provide their
+    /// own default semantics.
     pub fn data_descriptor_info(&self) -> Option<(TextRange, ClassType)> {
         match &self.0 {
             ClassFieldInner::Descriptor { descriptor, .. }
                 if descriptor.setter
                     && matches!(
                         descriptor.initialization,
-                        ClassFieldInitialization::ClassBody(_)
+                        ClassFieldInitialization::ClassBody(None)
                     ) =>
             {
                 Some((descriptor.range, descriptor.cls.clone()))

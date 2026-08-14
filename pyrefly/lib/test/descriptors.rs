@@ -737,6 +737,42 @@ Product(9.99, code="item", quantity=2, internal_id=1)  # E: Unexpected keyword a
     "#,
 );
 
+testcase!(
+    test_descriptor_field_specifier_validation_flags,
+    r#"
+from typing import Any, assert_type, dataclass_transform
+
+class Data:
+    def __get__(self, obj: object | None, owner: type | None) -> str: ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class NonData:
+    def __get__(self, obj: object | None, owner: type | None) -> str: ...
+
+def data_field(**kwargs: Any) -> Data: ...
+def non_data_field(**kwargs: Any) -> NonData: ...
+
+@dataclass_transform(field_specifiers=(data_field, non_data_field))
+class Model: ...
+
+class Safe(Model):
+    required: Data = data_field()
+    defaulted: Data = data_field(default=0)
+    no_init: Data = data_field(init=False)
+    readonly: NonData = non_data_field(init=False)
+
+safe = Safe(required=1)
+Safe(required=1, defaulted=2)
+assert_type(safe.required, str)
+assert_type(safe.defaulted, str)
+assert_type(safe.no_init, str)
+assert_type(safe.readonly, str)
+
+class Unsafe(Model):
+    value: NonData = non_data_field()  # E: Cannot set field `value` to non-data descriptor `NonData`\n  Hint: add a `__set__` method to make `NonData` a data descriptor
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/1803
 testcase!(
     test_set_instance_attribute,
