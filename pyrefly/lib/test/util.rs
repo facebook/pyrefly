@@ -694,15 +694,6 @@ impl TestEnv {
         transaction.as_mut().run(&handles, self.run_require, None);
         state.commit_transaction(transaction, None);
         subscriber.finish();
-        let project_root = PathBuf::new();
-        print_errors(
-            project_root.as_path(),
-            &state
-                .transaction()
-                .get_errors(handles.iter())
-                .collect_errors()
-                .ordinary,
-        );
         (state, move |module| {
             let name = ModuleName::from_str(module);
             Handle::new(
