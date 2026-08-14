@@ -8,10 +8,20 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+fn proxy_method_env() -> TestEnv {
+    TestEnv::one_with_path(
+        "shape_extensions",
+        "shape_extensions/__init__.pyi",
+        r#"
+class ProxyMethod[T]: ...
+"#,
+    )
+}
+
 testcase!(
     test_protocol,
     r#"
-from typing import Protocol
+from typing import Final, Protocol
 class P(Protocol):
     x: int
     y: str
@@ -38,9 +48,693 @@ def g(p: P, c1: C1, c2: C2, c3: C3, c4: C4, c5: C5) -> None:
 );
 
 testcase!(
-    test_protocol_base,
+    test_protocol_metaclass_assignability,
+    r#"
+from abc import ABCMeta
+from typing import Protocol, _ProtocolMeta
+
+abc_meta: ABCMeta = Protocol
+protocol_meta: _ProtocolMeta = Protocol
+"#,
+);
+
+testcase!(
+    test_protocol_metaclass_invalid_inheritance,
+    r#"
+from enum import Enum
+from typing import Protocol
+
+class M(type): ...
+class P(Protocol): ...
+
+class A(P, metaclass=M): ...  # E: has metaclass `M` which is not compatible with metaclass `_ProtocolMeta`
+class E(Enum, P): ...  # E: has metaclass `EnumMeta` from base class `Enum` which is not compatible with metaclass `_ProtocolMeta` from base class `P`
+    "#,
+);
+
+testcase!(
+    test_proxy_method_direct_call_and_attribute_access,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+
+class A(Base):
+    def forward(self, x: int) -> str: ...
+
+a = A()
+assert_type(a(1), str)
+assert_type(a.__call__(1), str)
+a("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_proxy_method_forward_ref_annotation,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: "ProxyMethod['forward']"
+    def forward(self, x: int) -> str: ...
+
+base = Base()
+assert_type(base(1), str)
+base("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_proxy_method_import_alias_is_direct_annotation,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod as PM
+
+class Base:
+    __call__: PM["forward"]
+    def forward(self, x: int) -> str: ...
+
+base = Base()
+assert_type(base(1), str)
+"#,
+);
+
+testcase!(
+    test_proxy_method_special_dunder_lookup,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class ValidGetitem:
+    __getitem__: ProxyMethod["get"]
+    def get(self, x: int) -> str: ...
+
+class MissingGetitem:
+    __getitem__: ProxyMethod["get"]
+
+valid = ValidGetitem()
+assert_type(valid[0], str)
+valid["bad"]  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+MissingGetitem()[0]  # E: Proxy method `__getitem__` of class `MissingGetitem` cannot resolve target method `get`
+"#,
+);
+
+testcase!(
+    test_proxy_method_len_dunder_lookup,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class ValidLen:
+    __len__: ProxyMethod["length"]
+    def length(self) -> int: ...
+
+class MissingLen:
+    __len__: ProxyMethod["length"]
+
+assert_type(len(ValidLen()), int)
+len(MissingLen())  # E: Argument `MissingLen` is not assignable to parameter `obj` with type `Sized`
+"#,
+);
+
+testcase!(
+    test_proxy_method_super_access,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+    def forward(self, x: int) -> str: ...
+
+class Child(Base):
+    def call_super(self) -> str:
+        return super().__call__(1)
+
+assert_type(Child().call_super(), str)
+"#,
+);
+
+testcase!(
+    test_proxy_method_source_form_uses_target_not_body,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+    def __call__(self, x: str) -> int: ...
+    def forward(self, x: int) -> str: ...
+
+base = Base()
+assert_type(base(1), str)
+assert_type(base.__call__(1), str)
+base("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_proxy_method_valid_self_call,
+    proxy_method_env(),
+    r#"
+from typing import Self, assert_type
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+    def forward(self: Self, x: int) -> str: ...
+    def call_self(self: Self) -> str:
+        return self(1)
+
+base = Base()
+assert_type(base.call_self(), str)
+"#,
+);
+
+testcase!(
+    test_proxy_method_protocol_matching,
+    proxy_method_env(),
+    r#"
+from collections.abc import Callable
+from typing import Protocol
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+
+class A(Base):
+    def forward(self, x: int) -> str: ...
+
+class Callback(Protocol):
+    def __call__(self, x: int) -> str: ...
+
+class BadCallback(Protocol):
+    def __call__(self, x: str) -> str: ...
+
+ok: Callback = A()
+bad: BadCallback = A()  # E: `A` is not assignable to `BadCallback`
+callable_ok: Callable[[int], str] = A()
+callable_bad: Callable[[str], str] = A()  # E: `A` is not assignable to `(str) -> str`
+"#,
+);
+
+testcase!(
+    bug = "`ProxyMethod` override checks should compare against the forwarded signature",
+    test_proxy_method_subclass_call_override_wins,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+
+class Child(Base):
+    def __call__(self, x: str) -> int: ...
+    def forward(self, x: int) -> str: ...
+
+child = Child()
+assert_type(child("x"), int)
+child(1)  # E: Argument `Literal[1]` is not assignable to parameter `x` with type `str`
+"#,
+);
+
+testcase!(
+    test_proxy_method_quoted_annotation,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: "ProxyMethod['forward']"
+    def forward(self, x: int) -> str: ...
+
+base = Base()
+assert_type(base(1), str)
+base("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_proxy_method_target_lookup_uses_receiver_class,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class ForwardBase:
+    def forward(self, x: int) -> object: ...
+
+class DeclaresProxy(ForwardBase):
+    __call__: ProxyMethod["forward"]
+
+class OverridesTarget(DeclaresProxy):
+    def forward(self, x: int) -> str: ...
+
+declares = DeclaresProxy()
+assert_type(declares(1), object)
+declares("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+
+overrides = OverridesTarget()
+assert_type(overrides(1), str)
+overrides("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_proxy_method_non_call_dunder,
+    proxy_method_env(),
+    r#"
+from collections.abc import Iterator
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class IterProxy:
+    __iter__: ProxyMethod["iter_impl"]
+    def iter_impl(self) -> Iterator[int]: ...
+
+class BrokenIterProxy:
+    __iter__: ProxyMethod["missing"]
+
+assert_type(iter(IterProxy()), Iterator[int])
+BrokenIterProxy().__iter__  # E: Proxy method `__iter__` of class `BrokenIterProxy` cannot resolve target method `missing`
+"#,
+);
+
+testcase!(
+    test_proxy_method_generic_target_substitution,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class Box[T]:
+    __call__: ProxyMethod["forward"]
+    def forward(self, x: T) -> T: ...
+
+box = Box[int]()
+assert_type(box(1), int)
+box("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_proxy_method_generic_protocol_matching,
+    proxy_method_env(),
     r#"
 from typing import Protocol
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+    def forward[T](self, x: T) -> T: ...
+
+class GenericCallback(Protocol):
+    def __call__[T](self, x: T) -> T: ...
+
+class BadCallback(Protocol):
+    def __call__(self, x: str) -> int: ...
+
+ok: GenericCallback = Base()
+bad: BadCallback = Base()  # E: `Base` is not assignable to `BadCallback`
+"#,
+);
+
+testcase!(
+    test_proxy_method_target_method_kinds,
+    proxy_method_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import ProxyMethod
+
+class StaticTarget:
+    __call__: ProxyMethod["forward"]
+    @staticmethod
+    def forward(x: int) -> str: ...
+
+class ClassTarget:
+    __call__: ProxyMethod["forward"]
+    @classmethod
+    def forward(cls, x: int) -> str: ...
+
+class PropertyTarget:
+    __call__: ProxyMethod["forward"]
+    @property
+    def forward(self) -> int: ...
+
+StaticTarget()()  # E: Proxy method `__call__` of class `StaticTarget` cannot resolve target method `forward`
+ClassTarget()()  # E: Proxy method `__call__` of class `ClassTarget` cannot resolve target method `forward`
+PropertyTarget()()  # E: Proxy method `__call__` of class `PropertyTarget` cannot resolve target method `forward`
+"#,
+);
+
+testcase!(
+    test_proxy_method_overloaded_target,
+    proxy_method_env(),
+    r#"
+from typing import assert_type, overload
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+    @overload
+    def forward(self, x: int) -> str: ...
+    @overload
+    def forward(self, x: str) -> int: ...
+    def forward(self, x: int | str) -> str | int: ...
+
+base = Base()
+assert_type(base(1), str)
+assert_type(base("x"), int)
+base(None)  # E: No matching overload found for function `Base.forward`
+"#,
+);
+
+testcase!(
+    test_proxy_method_non_method_target,
+    proxy_method_env(),
+    r#"
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+    forward: int
+
+Base().__call__  # E: Proxy method `__call__` of class `Base` cannot resolve target method `forward`
+Base()()  # E: Proxy method `__call__` of class `Base` cannot resolve target method `forward`
+"#,
+);
+
+testcase!(
+    test_proxy_method_rejects_proxy_chain_and_self_reference,
+    proxy_method_env(),
+    r#"
+from shape_extensions import ProxyMethod
+
+class Chain:
+    __call__: ProxyMethod["forward"]
+    forward: ProxyMethod["other"]
+    def other(self, x: int) -> str: ...
+
+class SelfReference:
+    __call__: ProxyMethod["__call__"]
+
+Chain()()  # E: Proxy method `__call__` of class `Chain` cannot resolve target method `forward`
+SelfReference()()  # E: Proxy method `__call__` of class `SelfReference` cannot resolve target method `__call__`
+"#,
+);
+
+testcase!(
+    test_proxy_method_missing_target_is_not_getattr_fallback,
+    proxy_method_env(),
+    r#"
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+    def __getattr__(self, name: str) -> object: ...
+
+Base()()  # E: Proxy method `__call__` of class `Base` cannot resolve target method `forward`
+Base().__call__  # E: Proxy method `__call__` of class `Base` cannot resolve target method `forward`
+"#,
+);
+
+testcase!(
+    test_proxy_method_invalid_target_union_receiver_reports_proxy_error,
+    proxy_method_env(),
+    r#"
+from shape_extensions import ProxyMethod
+
+class Broken:
+    __call__: ProxyMethod["forward"]
+
+class Other:
+    pass
+
+def f(x: Broken | Other) -> object:
+    return x()  # E: Proxy method `__call__` of class `Broken` cannot resolve target method `forward`  # E: Expected a callable, got `Other`
+"#,
+);
+
+testcase!(
+    test_proxy_method_invalid_self_call_reports_proxy_error,
+    proxy_method_env(),
+    r#"
+from typing import Self
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+    def call_self(self: Self) -> object:
+        return self()  # E: Proxy method `__call__` of class `Base` cannot resolve target method `forward`
+"#,
+);
+
+testcase!(
+    test_proxy_method_valid_target_class_access_is_instance_only,
+    proxy_method_env(),
+    r#"
+from shape_extensions import ProxyMethod
+
+class Base:
+    __call__: ProxyMethod["forward"]
+    def forward(self, x: int) -> str: ...
+
+Base.__call__  # E: Proxy method `__call__` of class `Base` can only be accessed on instances
+"#,
+);
+
+testcase!(
+    test_proxy_method_invalid_annotations,
+    proxy_method_env(),
+    r#"
+from typing import Final
+from shape_extensions import ProxyMethod
+
+class NonString:
+    __call__: ProxyMethod[123]  # E: `ProxyMethod` target must be a string literal
+
+class MultipleTargets:
+    __call__: ProxyMethod["forward", "other"]  # E: `ProxyMethod` requires exactly one string literal target
+
+class Bare:
+    __call__: ProxyMethod  # E: `ProxyMethod` target must be a string literal
+
+class InvalidIdentifier:
+    __call__: ProxyMethod["not-an-id"]  # E: `ProxyMethod` target must be a non-empty ASCII identifier
+
+class Wrapped:
+    __call__: Final[ProxyMethod["forward"]]  # E: Final attribute declared in class body must be initialized with a value or in `__init__`  # E: `ProxyMethod` may not be wrapped in another annotation
+"#,
+);
+
+testcase!(
+    test_proxy_method_rejects_protocol_initializer_and_alias,
+    proxy_method_env(),
+    r#"
+from typing import Final, Protocol
+from shape_extensions import ProxyMethod
+
+type AliasProxy = ProxyMethod["forward"]  # E: `ProxyMethod` is only valid as a direct class member annotation
+CallProxy = ProxyMethod["forward"]
+
+class P(Protocol):
+    __call__: ProxyMethod["forward"]  # E: `ProxyMethod` cannot be declared in protocols
+
+class Meta(type):
+    __call__: ProxyMethod["make"]  # E: `ProxyMethod` cannot be declared in metaclasses
+    def make(cls) -> object: ...
+
+class Initialized:
+    __call__: ProxyMethod["forward"] = ProxyMethod()  # E: `ProxyMethod` class member annotations may not have class-body initializers
+    def forward(self, x: int) -> str: ...
+
+class Aliased:
+    __call__: CallProxy  # E: `ProxyMethod` must be used directly as a class member annotation
+    def forward(self, x: int) -> str: ...
+
+class QualifiedAlias:
+    __call__: Final[CallProxy]  # E: Final attribute declared in class body must be initialized with a value or in `__init__`  # E: `ProxyMethod` must be used directly as a class member annotation
+    def forward(self, x: int) -> str: ...
+"#,
+);
+
+testcase!(
+    test_proxy_method_rejects_non_class_member_annotations,
+    proxy_method_env(),
+    r#"
+from shape_extensions import ProxyMethod, ProxyMethod as PM
+
+module_value: ProxyMethod["forward"]  # E: `ProxyMethod` is only valid as a direct class member annotation
+module_bare: ProxyMethod  # E: `ProxyMethod` is only valid as a direct class member annotation
+
+def takes_proxy(x: ProxyMethod["forward"]) -> None: ...  # E: `ProxyMethod` is only valid as a direct class member annotation
+def takes_proxy_bare(x: PM) -> None: ...  # E: `ProxyMethod` is only valid as a direct class member annotation
+
+def returns_proxy() -> ProxyMethod["forward"]: ...  # E: `ProxyMethod` is only valid as a direct class member annotation
+def returns_proxy_bare() -> PM: ...  # E: `ProxyMethod` is only valid as a direct class member annotation
+
+def local() -> None:
+    local_value: ProxyMethod["forward"]  # E: `ProxyMethod` is only valid as a direct class member annotation
+
+CallProxy = ProxyMethod["forward"]
+alias_hidden: CallProxy  # E: `ProxyMethod` is only valid as a direct class member annotation
+
+class Base:
+    def method(self) -> None:
+        self.__call__: ProxyMethod["forward"]  # E: `ProxyMethod` is only valid as a direct class member annotation
+        self.other: list[ProxyMethod["forward"]]  # E: `ProxyMethod` is only valid as a direct class member annotation
+
+Base().method()
+"#,
+);
+
+testcase!(
+    test_proxy_method_attribute_annotation_rejection_preserves_other_attribute_annotation_context,
+    proxy_method_env(),
+    r#"
+from typing import ClassVar, Final
+
+class Base:
+    def method(self) -> None:
+        self.class_var: ClassVar[int]
+        self.final_no_value: Final
+"#,
+);
+
+testcase!(
+    test_proxy_method_name_is_not_special_by_itself,
+    proxy_method_env(),
+    r#"
+class ProxyMethod[T]: ...
+
+module_value: ProxyMethod[int]
+
+class Base:
+    value: ProxyMethod[int]
+
+def takes_proxy(x: ProxyMethod[int]) -> None: ...
+
+def returns_proxy() -> ProxyMethod[int]: ...
+
+def local() -> None:
+    local_value: ProxyMethod[int]
+"#,
+);
+
+testcase!(
+    test_proxy_method_rejects_wrappers_and_decorated_source_form,
+    proxy_method_env(),
+    r#"
+import functools
+from typing import Annotated
+from shape_extensions import ProxyMethod, ProxyMethod as PM
+
+class Wrapped:
+    __call__: Annotated[ProxyMethod["forward"], "meta"]  # E: `ProxyMethod` may not be wrapped in another annotation
+    def forward(self, x: int) -> str: ...
+
+class ListWrapped:
+    __call__: list[ProxyMethod["forward"]]  # E: `ProxyMethod` may not be wrapped in another annotation
+    def forward(self, x: int) -> str: ...
+
+class AliasListWrapped:
+    __call__: list[PM["forward"]]  # E: `ProxyMethod` may not be wrapped in another annotation
+    def forward(self, x: int) -> str: ...
+
+class StaticSource:
+    __call__: ProxyMethod["forward"]  # E: `ProxyMethod` source-form declarations require an ordinary instance method body
+    @staticmethod
+    def __call__(x: str) -> int: ...
+    def forward(self, x: int) -> str: ...
+
+class ClassSource:
+    __call__: ProxyMethod["forward"]  # E: `ProxyMethod` source-form declarations require an ordinary instance method body
+    @classmethod
+    def __call__(cls, x: str) -> int: ...
+    def forward(self, x: int) -> str: ...
+
+class PropertySource:
+    __call__: ProxyMethod["forward"]  # E: `ProxyMethod` source-form declarations require an ordinary instance method body
+    @property
+    def __call__(self) -> int: ...
+    def forward(self, x: int) -> str: ...
+
+class CachedPropertySource:
+    __call__: ProxyMethod["forward"]  # E: `ProxyMethod` source-form declarations require an ordinary instance method body
+    @functools.cached_property
+    def __call__(self) -> int: ...
+    def forward(self, x: int) -> str: ...
+"#,
+);
+
+testcase!(
+    test_proxy_method_rejects_constructor_and_post_init_names,
+    proxy_method_env(),
+    r#"
+from shape_extensions import ProxyMethod
+
+class InitProxy:
+    __init__: ProxyMethod["init_impl"]  # E: `ProxyMethod` cannot be declared on `__init__`
+    def init_impl(self) -> None: ...
+
+class NewProxy:
+    __new__: ProxyMethod["new_impl"]  # E: `ProxyMethod` cannot be declared on `__new__`
+    def new_impl(cls) -> object: ...
+
+class PostInitProxy:
+    __post_init__: ProxyMethod["post_init_impl"]  # E: `ProxyMethod` cannot be declared on `__post_init__`
+    def post_init_impl(self) -> None: ...
+"#,
+);
+
+testcase!(
+    test_proxy_method_rejects_namedtuple_and_typeddict,
+    proxy_method_env(),
+    r#"
+from typing import NamedTuple, TypedDict
+from shape_extensions import ProxyMethod
+
+class NT(NamedTuple):
+    call: ProxyMethod["forward"]  # E: `ProxyMethod` cannot be declared in typed dictionaries or named tuples
+
+class TD(TypedDict):
+    call: ProxyMethod["forward"]  # E: `ProxyMethod` cannot be declared in typed dictionaries or named tuples
+"#,
+);
+
+testcase!(
+    test_proxy_method_dataclass_is_not_field,
+    proxy_method_env(),
+    r#"
+from dataclasses import dataclass
+from shape_extensions import ProxyMethod
+
+@dataclass
+class Base:
+    __call__: ProxyMethod["forward"]
+    def forward(self, x: int) -> str: ...
+
+Base()
+Base(1)  # E: Expected 0 positional arguments, got 1
+"#,
+);
+
+testcase!(
+    test_protocol_base,
+    r#"
+from typing import Final, Protocol
 class C1:
     x: int
     y: str
@@ -332,17 +1026,159 @@ Concrete()  # E: Cannot instantiate `Concrete`
 );
 
 testcase!(
+    test_protocol_dtype_like_overload_ignores_getattribute,
+    r#"
+from typing import Protocol, TypeVar, assert_type, overload
+
+T_co = TypeVar("T_co", covariant=True)
+
+class DType[T]: ...
+
+class SupportsDType(Protocol[T_co]):
+    @property
+    def dtype(self) -> T_co: ...
+
+type DTypeLike[T] = type[T] | DType[T] | SupportsDType[DType[T]]
+
+class ScalarA: ...
+class ScalarB: ...
+
+@overload
+def make(dtype: DTypeLike[ScalarA]) -> ScalarA: ...
+@overload
+def make(dtype: DTypeLike[ScalarB]) -> ScalarB: ...
+def make(dtype: object) -> object: ...
+
+assert_type(make(ScalarB), ScalarB)
+"#,
+);
+
+testcase!(
     test_protocol_getattr,
     r#"
-from typing import Protocol
-class P(Protocol):
+from typing import Protocol, assert_type
+class P1(Protocol):
     x: int
-def f(proto: P) -> None: ...
+
+class P2(Protocol):
+    def __getattr__(self, attr: str) -> int: ...
+
+class P3(Protocol):
+    @property
+    def x(self) -> int: ...
+
+class P4(Protocol):
+    def __setattr__(self, attr: str, value: int) -> None: ...
+
+class P5(Protocol):
+    def __getattribute__(self, attr: str) -> int: ...
+
+class P6(Protocol):
+    def __add__(self, other: int) -> int: ...
+
+class C1:
+    def __getattr__(self, attr: str) -> int: ...
+
+class C2:
+    x: int
+
+class C3:
+    def __getattr__(self, attr: str) -> int: ...
+    def __setattr__(self, attr: str, value: int) -> None: ...
+
+class C4:
+    __slots__ = ()
+    def __getattr__(self, attr: str) -> int: ...
+
+class C5:
+    def __getattribute__(self, attr: str) -> int: ...
+
+class C6:
+    def __getattribute__(self, attr: str) -> str: ...
+    def __getattr__(self, attr: str) -> int: ...
+
+class C7: ...
+
+# Ordinary attribute access still uses fallback for operator-named attributes.
+assert_type(C1().__add__, int)
+# Fallback hooks alone only provide read-only members.
+p1: P1 = C1()  # E: `C1` is not assignable to `P1`
+p1 = C2()
+p1 = C3()
+p1 = C4()  # E: `C4` is not assignable to variable `p1` with type `P1`
+p1 = C5()  # E: `C5` is not assignable to variable `p1` with type `P1`
+# Read-only properties are satisfied by either custom fallback hook.
+p3: P3 = C1()
+p3 = C4()
+p3 = C5()
+p3 = C6()  # E: `C6` is not assignable to variable `p3` with type `P3`
+p3 = C7()  # E: `C7` is not assignable to variable `p3` with type `P3`
+# Attribute hooks cannot synthesize themselves or each other.
+p2: P2 = C1()
+p2 = C2()  # E: `C2` is not assignable to variable `p2` with type `P2`
+p4: P4 = C1()  # E: `C1` is not assignable to `P4`
+p5: P5 = C1()  # E: `C1` is not assignable to `P5`
+# Operator methods are not synthesized by attribute fallback hooks.
+p6: P6 = C1()  # E: `C1` is not assignable to `P6`
+p6 = C5()  # E: `C5` is not assignable to variable `p6` with type `P6`
+    "#,
+);
+
+testcase!(
+    bug = "Metaclass `__getattr__` should satisfy read-only protocol members",
+    test_protocol_metaclass_getattr,
+    r#"
+from typing import Protocol, assert_type
+
+class P(Protocol):
+    @property
+    def m(self) -> int: ...
+
+class Meta(type):
+    def __getattr__(cls, name: str) -> int: ...
+
+class WithMeta(metaclass=Meta): ...
+
+assert_type(WithMeta.m, int)
+x: P = WithMeta  # E: `type[WithMeta]` is not assignable to `P`
+    "#,
+);
+
+testcase!(
+    bug = "Protocol fallback should require `__getattr__` to accept `str`",
+    test_protocol_getattr_parameter_type,
+    r#"
+from typing import Protocol
+
+class P(Protocol):
+    @property
+    def x(self) -> int: ...
 
 class C:
-    def __getattr__(self, name: str) -> int: ...
+    def __getattr__(self, name: int) -> int: ...
 
-f(C()) # E: Argument `C` is not assignable to parameter `proto` with type `P`
+p: P = C()
+    "#,
+);
+
+testcase!(
+    bug = "Operator protocol compatibility through `__getattr__` differs from mypy",
+    test_protocol_getattr_operator_mypy_compatibility,
+    r#"
+from collections.abc import Callable
+from typing import Protocol
+
+class HasAdd(Protocol):
+    def __add__(self, other: int) -> int: ...
+
+class C:
+    def __getattr__(self, attr: str) -> Callable[[int], int]:
+        return lambda x: x
+
+def f(p: HasAdd) -> None: ...
+
+f(C())  # E: `C.__add__` is read-only, but `HasAdd.__add__` is read-write
+C() + 1  # E: `+` is not supported between `C` and `Literal[1]`
     "#,
 );
 
@@ -678,6 +1514,18 @@ class X:
         return "42"
 isinstance(X(), Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
 issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
+"#,
+);
+
+testcase!(
+    test_runtime_checkable_protocol_never_no_unsafe_overlap,
+    r#"
+from collections.abc import Iterable
+from typing import Never
+
+def f(x: Never) -> None:
+    if isinstance(x, Iterable):
+        pass
 "#,
 );
 
@@ -1034,4 +1882,155 @@ def main2(s: Series[timedelta]) -> None:
     td = timedelta(1)
     assert_type(s / td, Series[float])
 "#,
+);
+
+testcase!(
+    test_protocol_overloaded_generic_self_referencing_protocol_terminates,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+S = TypeVar("S", covariant=True)
+R = TypeVar("R", covariant=True)
+
+
+class Lens(Protocol[S, R]):
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /) -> R2: ...
+
+
+class BaseLens(Lens[S, R], Protocol):
+    def at(self) -> Lens[S, R]:
+        return self
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_generic_self_mutual_recursion_terminates,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+S = TypeVar("S", covariant=True)
+
+
+class A(Protocol[S]):
+    @overload
+    def __call__[S2, R2](self: B[S2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: B[S2], state: S2, /) -> R2: ...
+
+
+class B(Protocol[S]):
+    @overload
+    def __call__[S2, R2](self: A[S2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: A[S2], state: S2, /) -> R2: ...
+
+
+class Impl(A[S], B[S], Protocol):
+    def at(self) -> A[S]:
+        return self
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_generic_self_non_conforming_still_rejected,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+S = TypeVar("S", covariant=True)
+R = TypeVar("R", covariant=True)
+
+
+class Lens(Protocol[S, R]):
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /) -> R2: ...
+    def extra(self) -> int: ...
+
+
+class HasCallNoExtra(Protocol[S, R]):
+    @overload
+    def __call__[S2, R2](self: HasCallNoExtra[S2, R2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: HasCallNoExtra[S2, R2], state: S2, /) -> R2: ...
+
+
+def f(x: HasCallNoExtra[int, str]) -> Lens[int, str]:
+    return x  # E: not assignable to declared return type
+"#,
+);
+
+testcase!(
+    test_protocol_overload_typevar_self_kept,
+    r#"
+from typing import Protocol, overload
+
+class C:
+    @overload
+    def f[S](self: S, x: int) -> S: ...
+    @overload
+    def f(self, x: str) -> str: ...
+    def f(self, x: int | str) -> object: ...
+
+class P(Protocol):
+    def f(self, x: int) -> object: ...
+
+p: P = C()  # the `self: S` overload binds S=C, satisfying P
+"#,
+);
+
+testcase!(
+    test_protocol_overload_parameterized_self_kept,
+    r#"
+from typing import Protocol, overload
+
+class Arr[S, T]:
+    @overload
+    def astype[S2, T2](self: Arr[S2, T2], dtype: int) -> Arr[S2, T2]: ...
+    @overload
+    def astype(self, dtype: str) -> bytes: ...
+    def astype(self, dtype: object) -> object: ...
+
+class HasAstype(Protocol):
+    def astype(self, dtype: int) -> object: ...
+
+def g(a: Arr[int, float]) -> HasAstype:
+    return a  # the `self: Arr[S2, T2]` overload binds to the receiver, satisfying P
+"#,
+);
+
+testcase!(
+    test_protocol_overload_partially_concrete_self_filtered,
+    r#"
+from typing import Protocol, overload
+
+class Arr[S, T]:
+    @overload
+    def m[S2](self: Arr[S2, int], x: int) -> int: ...
+    @overload
+    def m(self, x: str) -> str: ...
+    def m(self, x: object) -> object: ...
+
+class HasM(Protocol):
+    def m(self, x: int) -> int: ...
+
+def g(a: Arr[float, str]) -> HasM:
+    # `self: Arr[S2, int]` pins T=int; receiver has T=str, so that overload does not
+    # apply and `Arr[float, str]` does not satisfy `HasM`.
+    return a  # E: not assignable to declared return type
+"#,
+);
+
+testcase!(
+    test_nested_function_default_is_checked,
+    r#"
+from typing import Protocol
+class A(Protocol):
+    def f(self):
+        def g(x: int = ...):  # E: not assignable
+            pass
+    "#,
 );

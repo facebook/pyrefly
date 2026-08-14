@@ -1,0 +1,384 @@
+---
+title: Pants Integration
+slug: /pants
+description: Run Pyrefly type checking over Pants Python targets with the pants-pyrefly plugin
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Pants Integration
+
+The [Pants](https://www.pantsbuild.org/) integration is provided by the
+community plugin [`pants-pyrefly`](https://github.com/tague/pants-pyrefly)
+(available on [PyPI](https://pypi.org/project/pants-pyrefly/); check there for
+the latest version). Installing it makes Pyrefly a checker in the Pants
+[`check`](https://www.pantsbuild.org/stable/docs/python/goals/check) goal, so
+`pants check ::` type-checks your repository.
+
+Pants downloads the official prebuilt Pyrefly binary (pinned by SHA256) and runs
+it hermetically in a sandbox. Instead of maintaining a `pyrefly.toml`
+`search-path` by hand, the plugin derives Pyrefly's first-party search paths
+from your Pants source roots and points Pyrefly at a venv built from each
+target's resolved third-party requirements, so imports resolve the same way they
+do at runtime.
+
+## When to use it
+
+- Your Python code is already built with Pants and you want `pants check` to
+  type-check it with Pyrefly, using the same source roots, resolves, and
+  interpreter constraints Pants already knows about.
+- You are moving a Pants repo off mypy and want the migration to happen through
+  Pants — config conversion, incremental adoption, and CI gating — rather than
+  as a separate out-of-band `pyrefly` invocation.
+
+If you do not use Pants, use [`pyrefly check`](./configuration.mdx) as before.
+
+Unlike the [Bazel integration](./bazel.mdx), the Pants plugin *does* read
+`pyrefly.toml` (or `pyproject.toml` `[tool.pyrefly]`): strictness and
+per-directory policy stay in your Pyrefly config, while the plugin supplies the
+build-graph facts — search paths, interpreter, and the file list — plus a few
+reporting overrides (`output_format`, `min_severity`, `only`, `baseline`) that
+it passes on the command line, where they take precedence over the config file.
+
+## Setup
+
+### 1. Install the plugin
+
+Add the plugin and enable its backend in `pants.toml`. Keep your existing
+`pants.backend.python` entry; `pants_pyrefly` is added alongside it:
+
+```toml
+[GLOBAL]
+plugins = ["pants-pyrefly==PANTS_PYREFLY_VERSION"]
+backend_packages.add = [
+    "pants.backend.python",
+    "pants_pyrefly",
+]
+```
+
+Replace `PANTS_PYREFLY_VERSION` with the latest
+[release](https://pypi.org/project/pants-pyrefly/). The published wheel is pure
+Python and declares no `pantsbuild.pants` dependency, so one release installs
+into any supported Pants version; see the plugin's
+[compatibility table](https://github.com/tague/pants-pyrefly#pants-compatibility)
+for the supported Pants range and the Pyrefly version each plugin release pins.
+
+To pin a different Pyrefly than the plugin's default, set `[pyrefly].version`
+(with matching `[pyrefly].known_versions`).
+
+To vendor the plugin instead — for rapid iteration or to pin to an exact source
+state — copy `pants-plugins/pants_pyrefly/` into your repo and load it the way
+in-repo plugins are normally loaded:
+
+```toml
+[GLOBAL]
+pythonpath = ["%(buildroot)s/pants-plugins"]
+backend_packages.add = ["pants.backend.python", "pants_pyrefly"]
+```
+
+If you keep plugin code in its own resolve, add it there and run
+`pants generate-lockfiles`.
+
+### 2. Create a Pyrefly config
+
+`pants pyrefly-init` wraps [`pyrefly init`](./configuration.mdx). Running it
+through Pants means the plugin supplies the Pyrefly binary, so you do not need
+Pyrefly installed separately:
+
+```shell
+pants pyrefly-init
+```
+
+If your build root has a `pyproject.toml`, this adds a `[tool.pyrefly]` table to
+it; otherwise it creates a `pyrefly.toml`. Either way it refuses to overwrite an
+existing Pyrefly config — remove that first to regenerate.
+
+**Migrating an existing checker?** If the repo has a mypy configuration, `init`
+translates it instead of writing defaults; go to
+[Bootstrapping from Mypy](#bootstrapping-a-configuration-from-mypy) below and
+run that section's command *instead* of the bare `pants pyrefly-init` above,
+since `init` will not overwrite the config a plain run just wrote. Pyright
+configurations are also migrated, but only from `[tool.pyright]` in
+`pyproject.toml`: the plugin does not stage `pyrightconfig.json` into the
+sandbox, so a config in that file is invisible to `pyrefly-init`.
+
+Checking policy — strictness, per-directory overrides, error suppression — is
+configured here as documented in [Configuration](./configuration.mdx), not on
+the plugin. The plugin discovers this file automatically; use `[pyrefly].config`
+to point at a non-standard path.
+
+### 3. Run
+
+```shell
+# one subtree
+pants check path/to/dir::
+
+# whole repo
+pants check ::
+```
+
+Diagnostics are printed in Pyrefly's usual format, and anything at or above the
+reporting threshold — `error` by default, or whatever `[pyrefly].min_severity`
+sets — fails the goal. Targets are partitioned by resolve and interpreter
+constraints, and each partition gets its own Pyrefly invocation against the
+interpreter and requirements for that partition. If Pyrefly itself fails (an
+exit code other than "clean" or "found errors"), the plugin reports that as a
+tool failure rather than as type errors.
+
+If more than one checker is enabled (during a mypy transition, for example),
+scope the goal to one of them. `--only` belongs to `check`, so it goes after the
+goal name:
+
+```shell
+pants check --only=pyrefly ::
+```
+
+### 4. Configure your editor
+
+Pyrefly ships an [LSP server](./IDE.mdx), but on its own it does not know your
+Pants source roots, so first-party imports will not resolve. Write them into
+your Pyrefly config as `search-path`, along with the `python-version` your
+interpreter constraints imply:
+
+```shell
+pants pyrefly-lsp-config
+```
+
+For third-party imports, point your editor's interpreter at an exported venv
+(`pants export --resolve=python-default`). If your Pyrefly config lives in
+`pyproject.toml` under `[tool.pyrefly]`, the goal prints the keys to add rather
+than writing a `pyrefly.toml` that would shadow it.
+
+:::note
+
+Pyrefly *adds* a config file's `search-path` to whatever is passed on the
+command line rather than replacing it, so the roots written here are also in
+effect during `pants check`. That is usually harmless, but if one of them is the
+build root (`.`), it re-exposes every file under a second module name inside the
+sandbox — the exact problem the staging described in
+[How it works](#how-it-works) exists to prevent. If `check` starts reporting
+duplicate-module errors right after you run this goal, that is the cause.
+
+:::
+
+## Configuration
+
+Options live in the `[pyrefly]` subsystem in `pants.toml`, and each has a
+corresponding command-line flag:
+
+| Option | Description |
+| --- | --- |
+| `skip` | Don't run Pyrefly during `check`. |
+| `args` | Extra arguments passed to Pyrefly, e.g. `--pyrefly-args='--python-version 3.12'`. |
+| `output_format` | Override Pyrefly's output format — any value [`--output-format`](./configuration.mdx#output-format) accepts, e.g. `json`, `github` (GitHub Actions annotations), `junit-xml`, `sarif`. |
+| `min_severity` | Only report errors at or above this severity: `ignore`, `info`, `warn`, `error`. |
+| `only` | Only report these [error kinds](./error-kinds.mdx), e.g. `bad-assignment`. Useful for triaging one category at a time. |
+| `config` / `config_discovery` | Point at a Pyrefly config in a non-standard location, or turn off automatic discovery. |
+| `baseline` | Path to a Pyrefly baseline JSON; `check` then reports only errors new since the baseline. |
+| `extra_type_stubs` | Stub-only packages to add to the type-check environment without making them runtime dependencies, e.g. `types-requests`. Resolved directly rather than from a lockfile, so pin versions. |
+| `version` / `known_versions` / `url_template` | Pin or override the downloaded Pyrefly binary. |
+
+Opt an individual target out of Pyrefly with the `skip_pyrefly` field:
+
+```python
+python_sources(skip_pyrefly=True)
+```
+
+`config`, `config_discovery`, `extra_type_stubs`, and the binary-pinning options
+are advanced; `pants help-advanced pyrefly` lists them alongside
+`[pyrefly].interpreter_constraints`, the fallback used for targets that declare
+none of their own. See also the plugin's
+[Configuration section](https://github.com/tague/pants-pyrefly#configuration).
+
+## Bootstrapping a configuration from Mypy
+
+Pyrefly can read an existing mypy configuration and produce an equivalent
+`pyrefly.toml`, so you start from your repo's established strictness and
+per-module policy rather than from Pyrefly's defaults.
+
+The migration reads mypy's own config files: `mypy.ini`, or `[tool.mypy]` in
+`pyproject.toml`. Two things it will not pick up:
+
+- **`setup.cfg`.** Pyrefly's migration does not read it; move a `[mypy]` section
+  there into `mypy.ini` first.
+- **Pants's mypy subsystem options.** `[mypy].args` and friends in `pants.toml`
+  are Pants configuration rather than mypy configuration. If that is where all
+  your mypy settings live, there is nothing on disk to migrate and you should
+  configure Pyrefly from scratch instead.
+
+### 1. Install alongside Mypy
+
+Follow [Install the plugin](#1-install-the-plugin) above, but keep the mypy
+backend enabled during the transition so you can run both checkers and compare
+their output:
+
+```toml
+[GLOBAL]
+backend_packages.add = [
+    "pants.backend.python",
+    "pants.backend.python.typecheck.mypy",   # keep during the transition
+    "pants_pyrefly",
+]
+```
+
+`pants check ::` now runs both. Scope to one with `check`'s `--only`:
+
+```shell
+pants check --only=pyrefly ::
+pants check --only=mypy ::
+```
+
+### 2. Convert the config
+
+```shell
+pants pyrefly-init --pyrefly-init-migrate-from=mypy
+```
+
+This runs `pyrefly init --migrate-from mypy` and writes the translated settings
+to `pyrefly.toml`. Passing `mypy` explicitly forces mypy as the source; with no
+flag, `init` auto-detects (mypy, then Pyright).
+
+When `init` detects a mypy config it selects the
+[`legacy` preset](./configuration.mdx#preset-legacy), which turns off a few
+checks mypy does not have so the first Pyrefly run does not bury you in error
+classes mypy never flagged. Behavior still differs between the two checkers; the
+preset narrows the gap rather than closing it.
+
+Review the generated config — the mapping is close but not one-to-one. Broad
+settings like `ignore_missing_imports`, per-module overrides, and strictness
+flags carry over. **mypy plugins do not**: Pyrefly has no plugin system, so a
+`plugins = ` entry is dropped.
+
+For most of the widely used mypy plugins this does not matter, because Pyrefly
+supports the same libraries natively and automatically —
+[Pydantic](./pydantic.mdx), [Django](./django.mdx)'s ORM, [attrs](./attrs.mdx),
+and [DataFrames](./dataframes.mdx). Where a plugin has no native counterpart —
+SQLAlchemy's declarative-ORM plugin is the common case, and Pydantic v1, which
+Pyrefly deliberately does not support — the dynamic attributes it synthesized
+will surface as errors, and stub packages such as `sqlalchemy2-stubs` only
+partly bridge the gap. For those packages, either suppress the errors, fold them
+into a baseline, or keep mypy enabled for just those packages during the
+transition.
+
+[Migrating from Mypy](./migrating-from-mypy.mdx) covers the checker-level
+differences — command-line equivalents, suppression syntax, and behavioral
+divergences — independently of Pants.
+
+### 3. Adopt incrementally with a baseline
+
+A large codebase will have pre-existing errors under a stricter configuration.
+Record them in a
+[baseline](./error-suppressions.mdx#baseline-files-experimental) so `check` only
+fails on *new* ones. Set the path in `pants.toml` — the plugin materializes the
+baseline into its sandbox only when `[pyrefly].baseline` names it, so a
+`baseline` key in `pyrefly.toml` has no effect here — and commit the file:
+
+```toml
+[pyrefly]
+baseline = "build-support/pyrefly-baseline.json"
+```
+
+```shell
+pants pyrefly-update-baseline ::   # record current errors
+pants check ::                     # now reports only errors introduced since
+```
+
+Re-run `pants pyrefly-update-baseline` as you fix errors to ratchet the baseline
+down.
+
+Prefer inline suppressions? `pants pyrefly-suppress ::` rewrites the targeted
+files in place, adding a `# pyrefly: ignore` comment on the line above each
+error (see [Error Suppressions](./error-suppressions.mdx)); delete them as you
+fix, or run `pants pyrefly-suppress --pyrefly-suppress-remove-unused ::` to
+strip stale ones. It edits your working tree, so run it on a clean checkout. A
+baseline file and inline suppressions solve the same problem — pick one.
+
+### 4. Track progress
+
+`pants pyrefly-coverage` reports the share of typable symbols that have a
+non-`Any` type — Pyrefly's **strict** coverage, not the looser metric that
+counts `Any` as covered (see [Measuring Type Coverage](./report.mdx) for both).
+It works well as a migration ratchet in CI, though its threshold is therefore
+not comparable to a `pyrefly coverage check --fail-under` number:
+
+```shell
+pants pyrefly-coverage ::
+pants pyrefly-coverage --pyrefly-coverage-fail-under=80 ::
+```
+
+### 5. Remove Mypy
+
+Once Pyrefly is green (or a baseline established) and CI gates on it, drop
+`pants.backend.python.typecheck.mypy` from `backend_packages` and delete the
+mypy configuration.
+
+## Goals
+
+Besides participating in `check`, the plugin adds these goals:
+
+| Goal | Purpose |
+| --- | --- |
+| `pyrefly-init` | Bootstrap `pyrefly.toml`, migrating a mypy or Pyright config when present. |
+| `pyrefly-lsp-config` | Write Pants's source roots into `pyrefly.toml` as `search-path` for the IDE/LSP. |
+| `pyrefly-update-baseline` | Record current errors in the baseline named by `[pyrefly].baseline`. |
+| `pyrefly-suppress` | Add (or, with `--remove-unused`, strip) inline `# pyrefly: ignore` comments. |
+| `pyrefly-coverage` | Report type coverage, optionally failing under a threshold. |
+| `pyrefly-dump-config` | Print the effective Pyrefly configuration Pants assembles. Diagnostic only. |
+
+## How it works
+
+Each partition of targets — grouped by resolve and interpreter constraints —
+gets one Pyrefly invocation over that partition's sources.
+
+- **First-party code** resolves through `--search-path`, the analogue of
+  `MYPYPATH`, derived from your Pants source roots. Because Pants gives each
+  file exactly one source root while Pyrefly makes a file importable under
+  *every* search path containing it, nested source roots would otherwise give a
+  module two identities. The plugin removes the nesting structurally: it
+  re-stages each source root's files into its own non-nesting sibling directory
+  in the sandbox and passes
+  [`--disable-search-path-heuristics`](configuration.mdx#disable-search-path-heuristics),
+  then maps the synthetic paths back to real repo paths in diagnostics, baseline
+  files, and `suppress` edits — so it is invisible in the output. The diagnostic
+  goals (`pyrefly-coverage`, `pyrefly-dump-config`, `pyrefly-lsp-config`) skip
+  the staging and pass your real roots, deduplicated to each file's nearest
+  root; `[pyrefly].exclude_source_roots` force-drops a root on that path only,
+  and has no effect on `check`.
+- **Third-party dependencies** are materialized into a venv, and Pyrefly's
+  `--python-interpreter-path` points at it, so Pyrefly discovers `site-packages`
+  and the target Python version exactly as `import` would at runtime.
+
+When imports or the interpreter resolve differently than you expect, dump the
+configuration Pants actually assembles:
+
+```shell
+pants pyrefly-dump-config ::               # whole repo
+pants pyrefly-dump-config src/project::    # a subtree
+```
+
+This runs Pyrefly's `dump-config` over the same partitions and file list as
+`check`, so it is the right tool for confirming which config file, interpreter,
+and source roots a given target resolves against. Two differences from `check`
+worth knowing when you read the output: `dump-config` does not re-stage sources,
+so the `search-path` it prints is your real source roots (nearest-root deduped)
+rather than the synthetic sandbox roots `check` passes; and the reporting
+options — `output_format`, `min_severity`, `only`, `baseline`, and
+`[pyrefly].args` — apply to `check` only, so they do not appear here.
+
+Common causes of resolution problems:
+
+- **A first-party module reports a missing import** — it is not reachable from a
+  source root. `pants roots` lists them.
+- **A third-party package reports a missing import** — the requirement is not in
+  that target's resolve, or it ships no types. Add it as a dependency; add
+  stub-only packages through `[pyrefly].extra_type_stubs`.
+- **A whole partition fails to find an interpreter** — no installed interpreter
+  matches that partition's `interpreter_constraints`.
+
+For implementation details and the plugin's compatibility promise, see the
+[`pants-pyrefly` README](https://github.com/tague/pants-pyrefly).

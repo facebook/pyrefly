@@ -578,10 +578,10 @@ from typing import *
 Ts = TypeVarTuple('Ts')
 P = ParamSpec('P')
 t1: TypeAlias = Unpack[TypedDict]  # E: `Unpack` is not allowed in this context # E: `TypedDict` is not allowed in this context
-t2: TypeAlias = P  # E: `ParamSpec` is not allowed in this context
+t2: TypeAlias = P  # E: `P` is not allowed in this context
 t3: TypeAlias = Unpack[Ts]  # E: `Unpack` is not allowed in this context
 t4: TypeAlias = Literal  # E: Expected a type argument for `Literal`
-t5: TypeAlias = Ts  # E: `TypeVarTuple` must be unpacked
+t5: TypeAlias = Ts  # E: `TypeVarTuple` is not allowed in this context
 t6: TypeAlias = Generic  # E: Expected a type argument for `Generic`
 t7: TypeAlias = Protocol  # E: Expected a type argument for `Protocol`
 t8: TypeAlias = Generic[int]  # E: `Generic` is not allowed in this context
@@ -691,8 +691,8 @@ testcase!(
 from typing import ParamSpec, TypeVarTuple, Unpack
 P = ParamSpec('P')
 Ts = TypeVarTuple('Ts')
-Error1 = type[P]  # E: `ParamSpec` is not allowed
-Error2 = type[Ts]  # E: `TypeVarTuple` must be unpacked
+Error1 = type[P]  # E: `P` is not allowed
+Error2 = type[Ts]  # E: `TypeVarTuple` is not allowed in this context
 Error3 = type[Unpack[Ts]]  # E: `Unpack` is not allowed
     "#,
 );

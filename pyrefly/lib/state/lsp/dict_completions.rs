@@ -6,6 +6,7 @@
  */
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
@@ -24,9 +25,12 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::polars_specials::is_dataframe_column_method;
 use crate::binding::binding::Key;
 use crate::binding::narrow::int_from_slice;
 use crate::lsp::wasm::completion::RankedCompletion;
+use crate::state::lsp::TransactionHandle;
 use crate::state::state::Transaction;
 use crate::types::types::Type;
 
@@ -36,6 +40,12 @@ enum DictKeyLiteralContext {
     /// Examples: `cfg["na|"]`, `cfg.get("na|")`.
     KeyAccess {
         base_expr: Expr,
+        literal: ExprStringLiteral,
+    },
+    /// A string literal in a call containing a DataFrame expression.
+    /// Examples: `df.select("na|")`, `df.select(col("na|"))`.
+    CallArgument {
+        source_expr: Expr,
         literal: ExprStringLiteral,
     },
     /// A key literal inside a dict literal being constructed.
@@ -55,31 +65,10 @@ impl DictKeyLiteralContext {
     /// `None` for `BareSubscript`, where there is no string to bound the cursor to.
     fn literal_range(&self) -> Option<TextRange> {
         match self {
-            Self::KeyAccess { literal, .. } | Self::DictLiteral { literal, .. } => {
-                Some(literal.range())
-            }
+            Self::KeyAccess { literal, .. }
+            | Self::CallArgument { literal, .. }
+            | Self::DictLiteral { literal, .. } => Some(literal.range()),
             Self::BareSubscript { .. } => None,
-        }
-    }
-
-    fn base_range(&self) -> TextRange {
-        // For key access, we want the container expression's type.
-        // For dict literals, we want the literal's contextual type (e.g. a TypedDict in
-        // `cfg: Config = {"na|": 1}`), which is attached to the literal's range.
-        match self {
-            Self::KeyAccess { base_expr, .. } | Self::BareSubscript { base_expr } => {
-                base_expr.range()
-            }
-            Self::DictLiteral { dict, .. } => dict.range(),
-        }
-    }
-
-    fn base_expr(&self) -> Option<&Expr> {
-        match self {
-            Self::KeyAccess { base_expr, .. } | Self::BareSubscript { base_expr } => {
-                Some(base_expr)
-            }
-            Self::DictLiteral { .. } => None,
         }
     }
 
@@ -91,6 +80,61 @@ impl DictKeyLiteralContext {
 }
 
 impl<'a> Transaction<'a> {
+    fn named_target_type(&self, handle: &Handle, expr: &Expr) -> Option<Type> {
+        let Expr::Name(name) = expr else {
+            return None;
+        };
+        let short_id = ShortIdentifier::expr_name(name);
+        let bindings = self.get_bindings(handle)?;
+        let bound_key = Key::BoundName(short_id);
+        if bindings.is_valid_key(&bound_key) {
+            return self.get_type(handle, &bound_key);
+        }
+        let def_key = Key::Definition(short_id);
+        if bindings.is_valid_key(&def_key) {
+            self.get_type(handle, &def_key)
+        } else {
+            None
+        }
+    }
+
+    fn dict_literal_expected_type(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        dict: &ExprDict,
+    ) -> Option<Type> {
+        for node in Ast::locate_node(module, dict.range().start()) {
+            match node {
+                AnyNodeRef::StmtAnnAssign(assign)
+                    if assign
+                        .value
+                        .as_ref()
+                        .is_some_and(|value| value.range() == dict.range()) =>
+                {
+                    return self.named_target_type(handle, assign.target.as_ref());
+                }
+                AnyNodeRef::StmtAssign(assign)
+                    if assign.value.range() == dict.range() && assign.targets.len() == 1 =>
+                {
+                    return self.named_target_type(handle, &assign.targets[0]);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn dict_literal_contextual_type(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        dict: &ExprDict,
+    ) -> Option<Type> {
+        self.dict_literal_expected_type(handle, module, dict)
+            .or_else(|| self.get_type_trace(handle, dict.range()))
+    }
+
     fn type_contains_typed_dict(ty: &Type) -> bool {
         match ty {
             Type::TypedDict(_) | Type::PartialTypedDict(_) => true,
@@ -99,10 +143,152 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn typed_dict_members(base_type: Type) -> Vec<Type> {
+        let mut members = Vec::new();
+        let mut stack = vec![base_type];
+        while let Some(ty) = stack.pop() {
+            match ty {
+                Type::TypedDict(_) | Type::PartialTypedDict(_) => members.push(ty),
+                Type::Union(u) => stack.extend(u.members),
+                _ => {}
+            }
+        }
+        members
+    }
+
+    fn typed_dict_member_field_maps<'b>(
+        solver: &AnswersSolver<TransactionHandle<'b>>,
+        members: Vec<Type>,
+    ) -> Vec<(Type, BTreeMap<String, Type>)> {
+        members
+            .into_iter()
+            .filter_map(|member| {
+                let typed_dict = match &member {
+                    Type::TypedDict(td) | Type::PartialTypedDict(td) => td,
+                    _ => return None,
+                };
+                let fields = solver
+                    .type_order()
+                    .typed_dict_fields(typed_dict)
+                    .into_iter()
+                    .map(|(name, field)| (name.to_string(), field.ty))
+                    .collect();
+                Some((member, fields))
+            })
+            .collect()
+    }
+
+    fn narrowed_typed_dict_members_for_dict_literal(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        dict: &ExprDict,
+        skip_key_range: Option<TextRange>,
+        skip_value_range: Option<TextRange>,
+    ) -> Option<Vec<Type>> {
+        let base_type = self.dict_literal_contextual_type(handle, module, dict)?;
+        self.ad_hoc_solve(handle, "dict_literal_typed_dict_members", |solver| {
+            let members = Self::typed_dict_members(base_type);
+            if members.is_empty() {
+                return Vec::new();
+            }
+            let member_fields = Self::typed_dict_member_field_maps(&solver, members);
+            let narrowed = member_fields
+                .iter()
+                .filter(|(_, fields)| {
+                    dict.items.iter().all(|item| {
+                        let Some(key_expr) = item.key.as_ref() else {
+                            return true;
+                        };
+                        let value_expr = &item.value;
+                        let Expr::StringLiteral(key_lit) = key_expr else {
+                            return true;
+                        };
+                        if skip_key_range == Some(key_lit.range())
+                            || skip_value_range == Some(value_expr.range())
+                        {
+                            return true;
+                        }
+                        let Some(field_ty) = fields.get(key_lit.value.to_str()) else {
+                            return false;
+                        };
+                        let Some(value_ty) = self.get_type_trace(handle, value_expr.range()) else {
+                            return true;
+                        };
+                        solver.is_subset_eq(&value_ty, field_ty)
+                    })
+                })
+                .map(|(member, _)| member.clone())
+                .collect::<Vec<_>>();
+            if narrowed.is_empty() {
+                member_fields
+                    .into_iter()
+                    .map(|(member, _)| member)
+                    .collect()
+            } else {
+                narrowed
+            }
+        })
+    }
+
+    fn typed_dict_field_type_from_members(
+        &self,
+        handle: &Handle,
+        members: Vec<Type>,
+        key: &str,
+    ) -> Option<Type> {
+        self.ad_hoc_solve(handle, "typed_dict_field_type", |solver| {
+            let field_types = Self::typed_dict_member_field_maps(&solver, members)
+                .into_iter()
+                .filter_map(|(_, fields)| fields.get(key).cloned())
+                .collect::<Vec<_>>();
+            match field_types.len() {
+                0 => None,
+                1 => field_types.into_iter().next(),
+                _ => Some(solver.unions(field_types)),
+            }
+        })
+        .flatten()
+    }
+
+    fn dict_literal_present_keys(
+        dict: &ExprDict,
+        skip_key_range: Option<TextRange>,
+    ) -> BTreeSet<String> {
+        dict.items
+            .iter()
+            .filter_map(|item| {
+                let Expr::StringLiteral(lit) = item.key.as_ref()? else {
+                    return None;
+                };
+                (skip_key_range != Some(lit.range())).then(|| lit.value.to_string())
+            })
+            .collect()
+    }
+
+    fn type_is_dataframe(ty: &Type) -> bool {
+        match ty {
+            Type::DataFrame(_) => true,
+            Type::Union(u) => {
+                let (first, rest) = u
+                    .members
+                    .split_first()
+                    .expect("a union must contain at least one member");
+                Self::type_is_dataframe(first) && rest.iter().all(Self::type_is_dataframe)
+            }
+            _ => false,
+        }
+    }
+
     fn expr_has_typed_dict_type(&self, handle: &Handle, expr: &Expr) -> bool {
         self.get_type_trace(handle, expr.range())
             .map(|ty| Self::type_contains_typed_dict(&ty))
             .unwrap_or(false)
+    }
+
+    fn expr_has_dataframe_type(&self, handle: &Handle, expr: &Expr) -> bool {
+        self.get_type_trace(handle, expr.range())
+            .is_some_and(|ty| Self::type_is_dataframe(&ty))
     }
 
     /// Extracts typed dict access from `.get()` method calls.
@@ -205,8 +391,8 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<DictKeyLiteralContext> {
         // Prefer direct key access (`d["k"]` / `d.get("k")`) so we can reuse the base
-        // expression for facet-based completions, then dict literal keys, and finally
-        // an empty subscript slot (`d[|]`) with no key string typed yet.
+        // expression for facet-based completions, then dict literal keys, surrounding
+        // calls, and finally an empty subscript slot (`d[|]`) with no key string typed yet.
         if let Some((base_expr, literal)) =
             self.dict_key_string_literal_at(handle, module, position)
         {
@@ -214,10 +400,60 @@ impl<'a> Transaction<'a> {
         } else if let Some((dict, literal)) = Self::dict_literal_string_literal_at(module, position)
         {
             Some(DictKeyLiteralContext::DictLiteral { dict, literal })
+        } else if let Some((source_expr, literal)) =
+            self.dataframe_call_argument_string_literal_at(handle, module, position)
+        {
+            Some(DictKeyLiteralContext::CallArgument {
+                source_expr,
+                literal,
+            })
         } else {
             Self::bare_subscript_base_at(module, position)
                 .map(|base_expr| DictKeyLiteralContext::BareSubscript { base_expr })
         }
+    }
+
+    fn dataframe_call_argument_string_literal_at(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
+    ) -> Option<(Expr, ExprStringLiteral)> {
+        let nodes = Ast::locate_node(module, position);
+        let literal = nodes.iter().find_map(|node| match node {
+            AnyNodeRef::ExprStringLiteral(literal) => Some((*literal).clone()),
+            _ => None,
+        })?;
+        let literal_range = literal.range();
+        let mut best: Option<(TextSize, Expr)> = None;
+
+        for node in nodes {
+            let AnyNodeRef::ExprCall(call) = node else {
+                continue;
+            };
+            if !(call.range().start() <= literal_range.start()
+                && literal_range.end() <= call.range().end())
+            {
+                continue;
+            }
+            let Expr::Attribute(attr) = call.func.as_ref() else {
+                continue;
+            };
+            if !is_dataframe_column_method(attr.attr.id.as_str())
+                || !self.expr_has_dataframe_type(handle, attr.value.as_ref())
+            {
+                continue;
+            }
+            let call_len = call.range().len();
+            if best
+                .as_ref()
+                .is_none_or(|(best_len, _)| call_len < *best_len)
+            {
+                best = Some((call_len, attr.value.as_ref().clone()));
+            }
+        }
+
+        best.map(|(_, source_expr)| (source_expr, literal))
     }
 
     fn dict_literal_string_literal_at(
@@ -271,6 +507,58 @@ impl<'a> Transaction<'a> {
         best.map(|(_, _, dict, literal)| (dict, literal))
     }
 
+    fn dict_literal_value_string_literal_at(
+        module: &ModModule,
+        position: TextSize,
+    ) -> Option<(ExprDict, ExprStringLiteral, ExprStringLiteral)> {
+        let nodes = Ast::locate_node(module, position);
+        let mut best: Option<(u8, TextSize, ExprDict, ExprStringLiteral, ExprStringLiteral)> = None;
+        for node in nodes {
+            let AnyNodeRef::ExprDict(dict) = node else {
+                continue;
+            };
+            let mut best_in_dict: Option<(u8, TextSize, ExprStringLiteral, ExprStringLiteral)> =
+                None;
+            for item in &dict.items {
+                let Some(Expr::StringLiteral(key_lit)) = item.key.as_ref() else {
+                    continue;
+                };
+                let Expr::StringLiteral(value_lit) = &item.value else {
+                    continue;
+                };
+                let (priority, dist) = Self::string_literal_priority(position, value_lit.range());
+                let should_update = match &best_in_dict {
+                    Some((best_prio, best_dist, _, _)) => {
+                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                    }
+                    None => true,
+                };
+                if should_update {
+                    best_in_dict = Some((priority, dist, key_lit.clone(), value_lit.clone()));
+                    if priority == 0 && dist == TextSize::from(0) {
+                        break;
+                    }
+                }
+            }
+            let Some((priority, dist, key_lit, value_lit)) = best_in_dict else {
+                continue;
+            };
+            let should_update = match &best {
+                Some((best_prio, best_dist, _, _, _)) => {
+                    priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                }
+                None => true,
+            };
+            if should_update {
+                best = Some((priority, dist, dict.clone(), key_lit, value_lit));
+                if priority == 0 && dist == TextSize::from(0) {
+                    break;
+                }
+            }
+        }
+        best.map(|(_, _, dict, key_lit, value_lit)| (dict, key_lit, value_lit))
+    }
+
     fn expression_facets(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
         let mut facets = Vec::new();
         let mut current = expr;
@@ -306,23 +594,75 @@ impl<'a> Transaction<'a> {
     ) -> Option<BTreeMap<String, Type>> {
         self.ad_hoc_solve(handle, "typed_dict_keys", |solver| {
             let mut map = BTreeMap::new();
-            let mut stack = vec![base_type];
-            while let Some(ty) = stack.pop() {
-                match ty {
-                    Type::TypedDict(td) | Type::PartialTypedDict(td) => {
-                        for (name, field) in solver.type_order().typed_dict_fields(&td) {
-                            map.entry(name.to_string())
-                                .or_insert_with(|| field.ty.clone());
-                        }
-                    }
-                    Type::Union(u) => {
-                        stack.extend(u.members);
-                    }
-                    _ => {}
+            for member in Self::typed_dict_members(base_type) {
+                let typed_dict = match member {
+                    Type::TypedDict(td) | Type::PartialTypedDict(td) => td,
+                    _ => continue,
+                };
+                for (name, field) in solver.type_order().typed_dict_fields(&typed_dict) {
+                    map.entry(name.to_string())
+                        .or_insert_with(|| field.ty.clone());
                 }
             }
             map
         })
+    }
+
+    pub(crate) fn add_dict_value_literal_completions(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
+        completions: &mut Vec<RankedCompletion>,
+    ) {
+        let Some((dict, key_lit, value_lit)) =
+            Self::dict_literal_value_string_literal_at(module, position)
+        else {
+            return;
+        };
+        if position < value_lit.range().start() || position > value_lit.range().end() {
+            return;
+        }
+        let Some(members) = self.narrowed_typed_dict_members_for_dict_literal(
+            handle,
+            module,
+            &dict,
+            Some(key_lit.range()),
+            Some(value_lit.range()),
+        ) else {
+            return;
+        };
+        let Some(field_ty) =
+            self.typed_dict_field_type_from_members(handle, members, key_lit.value.to_str())
+        else {
+            return;
+        };
+        Self::add_literal_completions_from_type(&field_ty, completions, true);
+    }
+
+    fn collect_dataframe_columns(ty: &Type) -> Option<BTreeSet<String>> {
+        match ty {
+            Type::DataFrame(schema) => Some(
+                schema
+                    .columns
+                    .iter()
+                    .map(|(name, _)| name.to_string())
+                    .collect(),
+            ),
+            Type::Union(u) => {
+                let (first, rest) = u
+                    .members
+                    .split_first()
+                    .expect("a union must contain at least one member");
+                let mut columns = Self::collect_dataframe_columns(first)?;
+                for member in rest {
+                    let member_columns = Self::collect_dataframe_columns(member)?;
+                    columns.retain(|name| member_columns.contains(name));
+                }
+                Some(columns)
+            }
+            _ => None,
+        }
     }
 
     /// Adds dict key completions for the given position. Handles a key string being
@@ -353,8 +693,55 @@ impl<'a> Transaction<'a> {
                 return false;
             }
         }
-        let suggestions =
-            self.dict_key_suggestions(handle, context.base_expr(), context.base_range());
+        let mut suggestions = BTreeMap::new();
+        match &context {
+            DictKeyLiteralContext::KeyAccess { base_expr, .. }
+            | DictKeyLiteralContext::BareSubscript { base_expr } => self
+                .extend_dict_key_suggestions(
+                    handle,
+                    Some(base_expr),
+                    base_expr.range(),
+                    &mut suggestions,
+                ),
+            DictKeyLiteralContext::CallArgument { source_expr, .. } => self
+                .extend_dict_key_suggestions(
+                    handle,
+                    Some(source_expr),
+                    source_expr.range(),
+                    &mut suggestions,
+                ),
+            DictKeyLiteralContext::DictLiteral { dict, literal } => {
+                let members = self.narrowed_typed_dict_members_for_dict_literal(
+                    handle,
+                    module,
+                    dict,
+                    Some(literal.range()),
+                    None,
+                );
+                let narrowed_type = members.as_ref().and_then(|members| {
+                    self.ad_hoc_solve(handle, "dict_literal_typed_dict_union", |solver| {
+                        match members.len() {
+                            0 => None,
+                            1 => members.first().cloned(),
+                            _ => Some(solver.unions(members.clone())),
+                        }
+                    })
+                    .flatten()
+                });
+                if let Some(base_type) = narrowed_type
+                    && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
+                {
+                    let present_keys = Self::dict_literal_present_keys(dict, Some(literal.range()));
+                    for (key, ty) in typed_keys {
+                        if !present_keys.contains(&key) {
+                            suggestions.insert(key, Some(ty));
+                        }
+                    }
+                } else {
+                    self.extend_dict_key_suggestions(handle, None, dict.range(), &mut suggestions);
+                }
+            }
+        }
         if suggestions.is_empty() {
             return false;
         }
@@ -375,16 +762,15 @@ impl<'a> Transaction<'a> {
         None
     }
 
-    /// Collects the known string keys for a dict-like base: explicit keys recorded as
-    /// facets on the base's binding, plus TypedDict fields from the base's type.
-    fn dict_key_suggestions(
+    /// Adds known string keys for a dict-like base: explicit keys recorded as facets,
+    /// TypedDict fields, and DataFrame columns that are safe across every union member.
+    fn extend_dict_key_suggestions(
         &self,
         handle: &Handle,
         base_expr: Option<&Expr>,
         base_range: TextRange,
-    ) -> BTreeMap<String, Option<Type>> {
-        let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
-
+        suggestions: &mut BTreeMap<String, Option<Type>>,
+    ) {
         if let Some(base_expr) = base_expr
             && let Some(bindings) = self.get_bindings(handle)
         {
@@ -428,18 +814,21 @@ impl<'a> Transaction<'a> {
 
         // For key access we query the container expression; for literals we query the
         // literal itself to pick up contextual TypedDict typing from assignments.
-        if let Some(base_type) = self.get_type_trace(handle, base_range)
-            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
-        {
-            for (key, ty) in typed_keys {
-                let entry = suggestions.entry(key).or_insert(None);
-                if entry.is_none() {
-                    *entry = Some(ty);
+        if let Some(base_type) = self.get_type_trace(handle, base_range) {
+            if let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type.clone()) {
+                for (key, ty) in typed_keys {
+                    let entry = suggestions.entry(key).or_insert(None);
+                    if entry.is_none() {
+                        *entry = Some(ty);
+                    }
+                }
+            }
+            if let Some(columns) = Self::collect_dataframe_columns(&base_type) {
+                for column in columns {
+                    suggestions.entry(column).or_insert(None);
                 }
             }
         }
-
-        suggestions
     }
 
     fn push_dict_key_completions(

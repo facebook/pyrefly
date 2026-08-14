@@ -615,6 +615,7 @@ fn return_shim_callees(
 }
 
 static TEST_MODULE_NAME: &str = "test";
+static SHAPE_EXTENSIONS_MODULE_NAME: &str = "shape_extensions";
 
 #[macro_export]
 macro_rules! call_graph_testcase {
@@ -645,6 +646,31 @@ def bar():
             vec![(
                 "3:3-3:8",
                 regular_call_callees(vec![create_call_target("test.bar", TargetType::Function)]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_flag_receiver_uses_builtin_domain,
+    SHAPE_EXTENSIONS_MODULE_NAME,
+    r#"
+class Flag[T]: ...
+
+def foo[K: Flag[int]](k: K):
+  k.bit_length()
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "shape_extensions.foo",
+            vec![(
+                "5:3-5:17",
+                regular_call_callees(vec![
+                    create_call_target("builtins.int.bit_length", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.int", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
             )],
         )]
     }

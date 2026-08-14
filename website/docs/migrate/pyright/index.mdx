@@ -1,0 +1,200 @@
+---
+title: Migrate from Pyright
+slug: /migrating-from-pyright
+description:
+    'Move a Python project from Pyright or Pylance to Pyrefly: install
+    alongside, convert pyrightconfig.json, review diagnostic mappings, and roll
+    out with suppressions or a baseline.'
+keywords:
+    - migrate from pyright
+    - pyright to pyrefly
+    - pyright alternative
+    - pylance alternative
+    - pyrightconfig migration
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+For most projects migrating from Pyright to Pyrefly is fairly simple. Install
+Pyrefly, use `pyrefly init` to convert `pyrightconfig.json` and review what it
+produced. You do not need to change editor defaults or delete the JSON file to
+get started.
+
+If your project uses execution environments or sets
+`typeCheckingMode = "strict"`, follow this page first and then read the
+[linked guide](#going-further) for that case.
+
+## 1. Install Pyrefly and convert your config
+
+```sh
+# uv
+uv add --dev pyrefly
+
+# pip
+python -m pip install pyrefly
+```
+
+```sh
+pyrefly init
+```
+
+That is the migration. `pyrefly init` finds your `pyrightconfig.json` or
+`[tool.pyright]` section and writes the equivalent `pyrefly.toml` or
+`[tool.pyrefly]`, preserving `include` and `exclude`, `extraPaths`, `stubPath`,
+`pythonVersion` and `pythonPlatform`, the recognized `report*` diagnostic
+severities, and the diagnostic overrides inside execution environments. Pass a
+path to migrate a project other than the current directory, and see
+`pyrefly init --help` for more options.
+
+Your `pyrightconfig.json` is left in place. Pyrefly only reads its own config
+once one exists, so both checkers keep working and you can back out at any
+point.
+
+## 2. Check the config was mapped correctly
+
+Read the generated config line by line before committing it. Some configs may
+not have been mapped exactly. `extends`, virtual-environment selection,
+`typeshedPath`, `defineConstant`, and the strict inference toggles are not
+preserved automatically. See the
+[Pyright config reference](config-reference.mdx) to check if any of your config
+values were missed and need manual adjustment.
+
+Alongside your converted settings, `pyrefly init` writes:
+
+```toml
+infer-with-first-use = false
+```
+
+so that empty containers and otherwise unsolved type variables behave more like
+Pyright, which infers `Any` for them. Remove the setting only after reviewing
+the resulting inference changes.
+
+### Diagnostic severities
+
+Many Pyright rules are umbrellas that fan out to several Pyrefly error kinds, so
+one migrated severity enables or disables several kinds at once:
+
+| Pyright rule                 | Pyrefly kinds                                                                                                                                                                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reportCallIssue`            | `missing-argument`, `bad-argument-count`, `unexpected-positional-argument`, `unexpected-keyword`, `bad-keyword-argument`, `no-matching-overload`, `incompatible-overload-residual`, `not-callable` |
+| `reportAttributeAccessIssue` | `missing-attribute`, `missing-module-attribute`, `no-access`, `read-only`                                                                                                                          |
+| `reportInvalidTypeForm`      | `invalid-annotation`, `invalid-literal`, `invalid-type-alias`, `not-a-type`                                                                                                                        |
+| `reportAssignmentType`       | `bad-assignment`, `bad-unpacking`, `bad-typed-dict-key`                                                                                                                                            |
+| `reportReturnType`           | `bad-return`, `invalid-yield`                                                                                                                                                                      |
+
+Broad `none` and `false` settings deserve the most attention, since they switch
+off more in Pyrefly than they did in Pyright. The
+[Pyright diagnostic reference](diagnostics-reference.mdx) has the complete
+mapping, along with the severity conversion table and the BasedPyright rules the
+converter also recognizes.
+
+Pyright's linter-like rules, covering unused imports, duplicate imports,
+implicit string concatenation, mutable defaults, and naming, have no Pyrefly
+equivalent. Keep those with Ruff or another linter.
+
+### Execution environments
+
+This is the one place a Pyright project can be structurally incompatible with a
+single Pyrefly config. An execution environment can change import search paths,
+the Python version, the Python platform, and diagnostic severities. Pyrefly
+[sub-configs](../../configuration.mdx#sub-configs) carry only a limited set of
+path-specific overrides, so the converter turns the diagnostic overrides into
+sub-configs and drops the rest.
+
+Go through the environments in your `pyrightconfig.json` one at a time and
+compare each against the generated config. Where two environments differ only in
+diagnostic severities, sub-configs cover it. Where they differ in Python
+version, platform, or search paths, they cannot be expressed in one config, so
+give each subproject its own Pyrefly configuration file.
+
+## 3. Handle the new errors and drop Pyright
+
+With the config settled, run both checkers on the same commit and compare:
+
+```sh
+pyright
+pyrefly check
+```
+
+You may still find some differences in error output as Pyrefly implements the
+type system independently of Pyright and will not reproduce its diagnostics
+exactly.
+
+Classify each difference rather than counting them: a true bug, an inference
+difference, a framework behavior gap, a config gap, or a Pyright-specific lint.
+Pyrefly and Pyright often describe the same scenario at different levels of
+granularity, so the goal is equivalent policy rather than identical labels.
+
+Include framework-heavy code in the comparison. Pyrefly models
+[Pydantic](../../pydantic.mdx), [Django](../../django.mdx), and
+[attrs](../../attrs.mdx) inside the checker and the language server rather than
+relying on stubs alone, so generated model constructors, ORM fields and
+relationships, validation modes, converters, and editor autocomplete are worth
+testing directly.
+
+Pyright automatically imports builtins defined in `__builtins__.pyi` at the
+project root or in the `stubPath` directory, which defaults to `./typings`.
+Pyrefly supports this too: the `stubPath` directory needs to appear in
+`site-package-path`, which is where `pyrefly init` puts it.
+
+Once you know what the differences are, decide how to absorb the ones you are
+not fixing up front. Start with suppressions. `pyrefly suppress` inserts
+comments across the project for you, and `# pyrefly: ignore[bad-assignment]`
+silences a single line:
+
+```sh
+pyrefly suppress
+```
+
+The comments live next to the code they apply to, so the remaining work stays
+visible and can be cleared file by file. If Pyright already places its own
+comments on the line before an error, use
+`pyrefly suppress --comment-location=same-line` to avoid conflicts.
+
+If your codebase is large enough that suppression comments would mean churn
+across thousands of lines, use a
+[baseline](../../error-suppressions.mdx#baseline-files-experimental) instead:
+
+```sh
+pyrefly check --baseline="pyrefly-baseline.json" --update-baseline
+pyrefly check --baseline="pyrefly-baseline.json"
+```
+
+A baseline records the current errors in a file rather than in your source, and
+blocks only newly introduced errors while still showing the suppressed
+diagnostics in the IDE.
+
+Whichever you choose, Pyrefly respects `# type: ignore` by default. To also
+honor Pyright's ignores during the transition:
+
+```toml
+enabled-ignores = ["type", "pyright", "pyrefly"]
+```
+
+Keep that temporary and remove obsolete Pyright ignores once the migration
+stabilizes. See the [error suppression docs](../../error-suppressions.mdx).
+
+Once CI is green on Pyrefly alone and the team is happy with the editor
+experience, drop Pyright: remove it from your dependencies and CI, delete
+`pyrightconfig.json` or the `[tool.pyright]` section, and narrow
+`enabled-ignores` back to `["type", "pyrefly"]`. Then clear the suppressions or
+the baseline as you go with `pyrefly suppress --remove-unused`.
+
+## Going further
+
+| If your project                                            | Read                                                 |
+| ---------------------------------------------------------- | ---------------------------------------------------- |
+| Sets `typeCheckingMode = "strict"` or a `strict` path list | [Pyright strict mode](strict-mode.mdx)               |
+| Reports `reportMissingImports`                             | [`reportMissingImports`](missing-imports.mdx)        |
+| Reports `reportUnknownMemberType`                          | [`reportUnknownMemberType`](unknown-member-type.mdx) |
+| Needs the full option-by-option mapping                    | [Pyright config reference](config-reference.mdx)     |
+| Needs the full diagnostic mapping                          | [Pyright diagnostics](diagnostics-reference.mdx)     |
+
+If a specific diagnostic, execution-environment setup, or configuration option
+is what stops you from adopting Pyrefly, please
+[open an issue](https://github.com/facebook/pyrefly/issues).

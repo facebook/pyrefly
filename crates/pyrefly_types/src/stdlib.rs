@@ -71,6 +71,7 @@ pub struct Stdlib {
     exception_group: Option<StdlibResult<(Class, Arc<TParams>)>>,
     list: StdlibResult<(Class, Arc<TParams>)>,
     dict: StdlibResult<(Class, Arc<TParams>)>,
+    partial: StdlibResult<(Class, Arc<TParams>)>,
     deque: StdlibResult<(Class, Arc<TParams>)>,
     frozenset: StdlibResult<(Class, Arc<TParams>)>,
     dict_items: StdlibResult<(Class, Arc<TParams>)>,
@@ -79,7 +80,9 @@ pub struct Stdlib {
     mapping: StdlibResult<(Class, Arc<TParams>)>,
     set: StdlibResult<(Class, Arc<TParams>)>,
     tuple: StdlibResult<(Class, Arc<TParams>)>,
+    enumerate: StdlibResult<(Class, Arc<TParams>)>,
     iterable: StdlibResult<(Class, Arc<TParams>)>,
+    iterator: StdlibResult<(Class, Arc<TParams>)>,
     async_iterable: StdlibResult<(Class, Arc<TParams>)>,
     async_iterator: StdlibResult<(Class, Arc<TParams>)>,
     mutable_sequence: StdlibResult<(Class, Arc<TParams>)>,
@@ -110,14 +113,15 @@ pub struct Stdlib {
     sentinel: StdlibResult<ClassType>,
     traceback_type: StdlibResult<ClassType>,
     builtins_type: StdlibResult<ClassType>,
-    /// Introduced in Python 3.10.
-    ellipsis_type: Option<StdlibResult<ClassType>>,
+    /// At runtime, `types.EllipsisType` is new in 3.10, but typeshed defines it unconditionally.
+    ellipsis_type: StdlibResult<ClassType>,
     /// Moved from `_typeshed` to `types` in 3.10.
     none_type: StdlibResult<ClassType>,
     function_type: StdlibResult<ClassType>,
     method_type: StdlibResult<ClassType>,
     module_type: StdlibResult<ClassType>,
     enum_meta: StdlibResult<ClassType>,
+    protocol_meta: StdlibResult<ClassType>,
     enum_flag: StdlibResult<ClassType>,
     enum_class: StdlibResult<ClassType>,
     /// A fallback class that contains attributes that all NamedTuple subclasses share. Note that
@@ -233,6 +237,7 @@ impl Stdlib {
                 .then(|| lookup_generic(builtins, "ExceptionGroup", 1)),
             list: lookup_generic(builtins, "list", 1),
             dict: lookup_generic(builtins, "dict", 2),
+            partial: lookup_generic(ModuleName::from_str("functools"), "partial", 1),
             deque: lookup_generic(ModuleName::collections(), "deque", 1),
             frozenset: lookup_generic(builtins, "frozenset", 1),
             dict_items: lookup_generic(collections_abc, "dict_items", 2),
@@ -240,12 +245,12 @@ impl Stdlib {
             dict_values: lookup_generic(collections_abc, "dict_values", 2),
             set: lookup_generic(builtins, "set", 1),
             tuple: lookup_generic(builtins, "tuple", 1),
+            enumerate: lookup_generic(builtins, "enumerate", 1),
             builtins_type: lookup_concrete(builtins, "type"),
-            ellipsis_type: version
-                .at_least(3, 10)
-                .then(|| lookup_concrete(types, "EllipsisType")),
+            ellipsis_type: lookup_concrete(types, "EllipsisType"),
             none_type: lookup_concrete(none_location, "NoneType"),
             iterable: lookup_generic(typing, "Iterable", 1),
+            iterator: lookup_generic(typing, "Iterator", 1),
             async_iterable: lookup_generic(typing, "AsyncIterable", 1),
             async_iterator: lookup_generic(typing, "AsyncIterator", 1),
             mutable_sequence: lookup_generic(typing, "MutableSequence", 1),
@@ -271,6 +276,7 @@ impl Stdlib {
             module_type: lookup_concrete(types, "ModuleType"),
             mapping: lookup_generic(typing, "Mapping", 2),
             enum_meta: lookup_concrete(enum_, "EnumMeta"),
+            protocol_meta: lookup_concrete(typing, "_ProtocolMeta"),
             enum_flag: lookup_concrete(enum_, "Flag"),
             enum_class: lookup_concrete(enum_, "Enum"),
             named_tuple_fallback: lookup_concrete(type_checker_internals, "NamedTupleFallback"),
@@ -336,6 +342,10 @@ impl Stdlib {
         Self::primitive(&self.enum_meta)
     }
 
+    pub fn protocol_meta(&self) -> &ClassType {
+        Self::primitive(&self.protocol_meta)
+    }
+
     pub fn enum_flag(&self) -> &ClassType {
         Self::primitive(&self.enum_flag)
     }
@@ -352,8 +362,8 @@ impl Stdlib {
         Self::primitive(&self.typed_dict_fallback)
     }
 
-    pub fn ellipsis_type(&self) -> Option<&ClassType> {
-        Some(Self::primitive(self.ellipsis_type.as_ref()?))
+    pub fn ellipsis_type(&self) -> &ClassType {
+        Self::primitive(&self.ellipsis_type)
     }
 
     pub fn none_type(&self) -> &ClassType {
@@ -454,8 +464,16 @@ impl Stdlib {
         Self::apply(&self.tuple, vec![x])
     }
 
+    pub fn enumerate(&self, x: Type) -> ClassType {
+        Self::apply(&self.enumerate, vec![x])
+    }
+
     pub fn list(&self, x: Type) -> ClassType {
         Self::apply(&self.list, vec![x])
+    }
+
+    pub fn partial(&self, ret: Type) -> ClassType {
+        Self::apply(&self.partial, vec![ret])
     }
 
     pub fn list_object(&self) -> &Class {
@@ -512,6 +530,10 @@ impl Stdlib {
 
     pub fn iterable(&self, x: Type) -> ClassType {
         Self::apply(&self.iterable, vec![x])
+    }
+
+    pub fn iterator(&self, x: Type) -> ClassType {
+        Self::apply(&self.iterator, vec![x])
     }
 
     pub fn async_iterable(&self, x: Type) -> ClassType {
