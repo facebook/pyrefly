@@ -28,6 +28,7 @@ use pyrefly_build::BuildSystem;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::Target;
+use pyrefly_derive::ConfigKeys;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ignore::Tool;
@@ -39,6 +40,7 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::config_keys::ConfigKeys as _;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
@@ -98,6 +100,7 @@ impl SubConfig {
 /// Config overrides for the `pyrefly coverage` commands.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(ConfigKeys)]
 #[serde(rename_all = "kebab-case")]
 pub struct CoverageConfig {
     /// Takes precedence over `project_includes` when set.
@@ -108,6 +111,7 @@ pub struct CoverageConfig {
 
     /// Any unknown config items
     #[serde(default, flatten)]
+    #[config_keys(skip)]
     pub(crate) extras: ExtraConfigs,
 }
 
@@ -525,6 +529,7 @@ impl ImportLookupPathPart<'_> {
 
 #[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize, Clone, Derivative)]
+#[derive(ConfigKeys)]
 #[serde(rename_all = "kebab-case")]
 #[derivative(PartialEq, Eq)]
 pub struct ConfigFile {
@@ -830,90 +835,12 @@ impl ConfigFile {
     }
 }
 
-// The key/alias constants below only rank the "did you mean" SUGGESTION;
-// unknown-key DETECTION is serde-derived (the flatten `extras` catch-all) and cannot drift.
-/// `ConfigBase` keys, valid both at the top level and inside a `[[sub-config]]`
-/// block. Used only to suggest a "did you mean" for unrecognized keys, so a
-/// missing entry merely weakens a hint — it never silences the warning itself.
-/// Kept in sync with `ConfigBase` by `test_known_config_keys_cover_serialized_fields`.
-const CONFIG_BASE_KEYS: &[&str] = &[
-    "errors",
-    "permissive-ignores",
-    "enabled-ignores",
-    "replace-imports-with-any",
-    "ignore-missing-imports",
-    "untyped-def-behavior",
-    "check-unannotated-defs",
-    "infer-return-types",
-    "disable-type-errors-in-ide",
-    "ignore-errors-in-generated-code",
-    "infer-with-first-use",
-    "pytorch-efficiency-lints",
-    "recursion-depth-limit",
-    "recursion-overflow-handler",
-    "strict-callable-subtyping",
-    "strict-partial-subtyping",
-    "spec-compliant-overloads",
-    "legacy-overload-expansion",
-    "treat-all-caps-as-final",
-];
-
-/// Deprecated spellings of `ConfigBase` keys accepted by serde, paired with the canonical key to suggest.
-const CONFIG_BASE_KEY_ALIASES: &[(&str, &str)] = &[
-    ("replace_imports_with_any", "replace-imports-with-any"),
-    ("untyped_def_behavior", "untyped-def-behavior"),
-    (
-        "ignore_errors_in_generated_code",
-        "ignore-errors-in-generated-code",
-    ),
-];
-
-/// Keys valid only at the top level of a config (not inside `[[sub-config]]`):
-/// project-wide settings plus the flattened interpreter and Python-environment
-/// options. The full top-level key set is this list plus `CONFIG_BASE_KEYS`.
-const TOP_LEVEL_ONLY_CONFIG_KEYS: &[&str] = &[
-    "project-includes",
-    "project-excludes",
-    "disable-project-excludes-heuristics",
-    "search-path",
-    "disable-search-path-heuristics",
-    "enable-fallback-search-path",
-    "typeshed-path",
-    "baseline",
-    "output-format",
-    "preset",
-    "sub-config",
-    "coverage",
-    "use-ignore-files",
-    "build-system",
-    "min-severity",
-    "skip-lsp-config-indexing",
-    "extra-file-extensions",
-    "python-interpreter-path",
-    "fallback-python-interpreter-name",
-    "conda-environment",
-    "skip-interpreter-query",
-    "python-platform",
-    "python-version",
-    "site-package-path",
-];
-
-/// Deprecated spellings of top-level-only keys accepted by serde, paired with the canonical key to suggest.
-const TOP_LEVEL_ONLY_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
-    ("project_includes", "project-includes"),
-    ("project_excludes", "project-excludes"),
-    ("search_path", "search-path"),
-    ("sub_config", "sub-config"),
-    ("python_interpreter", "python-interpreter-path"),
-    ("python-interpreter", "python-interpreter-path"),
-    ("python_platform", "python-platform"),
-    ("python_version", "python-version"),
-    ("site_package_path", "site-package-path"),
-];
-
-/// Keys valid inside a `[coverage]` table.
-/// Kept in sync with `CoverageConfig` by `test_known_config_keys_cover_serialized_fields`.
-const COVERAGE_CONFIG_KEYS: &[&str] = &["includes", "excludes"];
+// The candidate key sets and the deprecated-alias sets that rank the "did you
+// mean" SUGGESTION are both derived from the config structs via
+// `#[derive(ConfigKeys)]`, so they can't drift from the fields (see
+// `ConfigBase::config_keys()` and `ConfigBase::config_key_aliases()`).
+// Unknown-key DETECTION is independent of both -- it is serde-derived (the
+// flatten `extras` catch-all) and cannot drift.
 
 impl ConfigFile {
     pub const PYREFLY_FILE_NAME: &str = "pyrefly.toml";
@@ -1863,19 +1790,13 @@ impl ConfigFile {
             anyhow!("Unknown config key `{key}`{location}{suggestion}")
         }
 
-        let top_level: Vec<&str> = TOP_LEVEL_ONLY_CONFIG_KEYS
-            .iter()
-            .chain(CONFIG_BASE_KEYS)
-            .copied()
-            .collect();
-        let sub_config: Vec<&str> = once("matches")
-            .chain(CONFIG_BASE_KEYS.iter().copied())
-            .collect();
-        let top_level_aliases: Vec<(&str, &str)> = TOP_LEVEL_ONLY_CONFIG_KEY_ALIASES
-            .iter()
-            .chain(CONFIG_BASE_KEY_ALIASES)
-            .copied()
-            .collect();
+        // `ConfigFile` flattens `Interpreters`, `PythonEnvironment`, and (as
+        // `root`) `ConfigBase`, so its derived keys are the full top-level set.
+        let top_level = ConfigFile::config_keys();
+        let coverage = CoverageConfig::config_keys();
+        let sub_config: Vec<&str> = once("matches").chain(ConfigBase::config_keys()).collect();
+        let top_level_aliases = ConfigFile::config_key_aliases();
+        let sub_config_aliases = ConfigBase::config_key_aliases();
 
         let mut warnings: Vec<anyhow::Error> = self
             .root
@@ -1889,7 +1810,7 @@ impl ConfigFile {
                 .extras
                 .0
                 .keys()
-                .map(|key| message(key, COVERAGE_CONFIG_KEYS, &[], " in coverage config")),
+                .map(|key| message(key, &coverage, &[], " in coverage config")),
         );
         for sub in &self.sub_configs {
             let location = format!(" in sub config matching {}", sub.matches);
@@ -1898,7 +1819,7 @@ impl ConfigFile {
                     .extras
                     .0
                     .keys()
-                    .map(|key| message(key, &sub_config, CONFIG_BASE_KEY_ALIASES, &location)),
+                    .map(|key| message(key, &sub_config, &sub_config_aliases, &location)),
             );
         }
         warnings
@@ -2071,6 +1992,7 @@ mod tests {
     use std::fs;
 
     use pretty_assertions::assert_eq;
+    use pyrefly_util::config_keys::ConfigKeys;
     use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
     use tempfile::TempDir;
@@ -4492,8 +4414,8 @@ replace_imports_with_any = ["foo"]
 
     #[test]
     fn test_known_config_aliases_are_consistent() {
-        // Every serde `alias` must (a) point at a canonical key present in its scope's keys
-        // constant, so the "did you mean" suggestion resolves, and (b) still be honored by serde,
+        // Every serde `alias` must (a) point at a canonical key present in its scope's derived
+        // keys, so the "did you mean" suggestion resolves, and (b) still be honored by serde,
         // so the alias maps back to its field instead of landing in `extras`. The sync test
         // (`test_known_config_keys_cover_serialized_fields`) deliberately does not cover aliases.
         fn alias_toml_value(alias: &str) -> &'static str {
@@ -4514,17 +4436,14 @@ replace_imports_with_any = ["foo"]
         }
 
         for (aliases, canonical_keys) in [
-            (CONFIG_BASE_KEY_ALIASES, CONFIG_BASE_KEYS),
-            (
-                TOP_LEVEL_ONLY_CONFIG_KEY_ALIASES,
-                TOP_LEVEL_ONLY_CONFIG_KEYS,
-            ),
+            (ConfigBase::config_key_aliases(), ConfigBase::config_keys()),
+            (ConfigFile::config_key_aliases(), ConfigFile::config_keys()),
         ] {
-            for (alias, canonical) in aliases {
+            for (alias, canonical) in &aliases {
                 // (a) The suggested canonical key must be a real key in the same scope.
                 assert!(
                     canonical_keys.contains(canonical),
-                    "alias `{alias}` suggests `{canonical}`, absent from its keys constant"
+                    "alias `{alias}` suggests `{canonical}`, absent from its scope's derived keys"
                 );
                 // (b) serde must still accept the alias, so no unknown-key warning fires.
                 let toml = format!("{alias} = {}\n", alias_toml_value(alias));
@@ -4556,10 +4475,15 @@ replace_imports_with_any = ["foo"]
                 .collect()
         }
 
+        fn derived_keys(keys: Vec<&'static str>) -> HashSet<String> {
+            keys.into_iter().map(|key| key.to_owned()).collect()
+        }
+
         // These exhaustive fixtures make adding a field to any config scope a compile error until
-        // the fixture is updated; the assertions below then force the candidate lists to cover every
-        // *serialized* key. Serde `alias`es and `skip_serializing` fields are not enforced here —
-        // keep those in sync with the candidate lists by hand.
+        // the fixture is updated; the assertions below then prove `#[derive(ConfigKeys)]` produces
+        // exactly serde's serialized key set for each scope. Serde `alias`es never serialize, so the
+        // derive omits them (as does serde); `skip_serializing` fields (e.g. `interpreter_stdlib_path`)
+        // are set to non-defaults here to prove both sides drop them.
         let base = ConfigBase {
             errors: Some(Default::default()),
             permissive_ignores: Some(false),
@@ -4584,14 +4508,11 @@ replace_imports_with_any = ["foo"]
         };
         assert_eq!(
             serialized_keys(&base),
-            CONFIG_BASE_KEYS
-                .iter()
-                .map(|key| (*key).to_owned())
-                .collect()
+            derived_keys(ConfigBase::config_keys())
         );
 
         let top_level = ConfigFile {
-            source: ConfigSource::Synthetic,
+            source: ConfigSource::Synthetic(None),
             project_includes: Globs::new(vec!["src/**".to_owned()]).unwrap(),
             project_excludes: Globs::new(vec!["generated/**".to_owned()]).unwrap(),
             disable_project_excludes_heuristics: true,
@@ -4603,6 +4524,7 @@ replace_imports_with_any = ["foo"]
             enable_fallback_search_path: true,
             typeshed_path: Some(PathBuf::from("typeshed")),
             baseline: Some(PathBuf::from("baseline.json")),
+            baseline_error_level: Some(Severity::Warn),
             output_format: Some(OutputFormat::Json),
             interpreters: Interpreters {
                 python_interpreter_path: Some(ConfigOrigin::config(PathBuf::from("python"))),
@@ -4618,7 +4540,9 @@ replace_imports_with_any = ["foo"]
                 interpreter_stdlib_path: vec![PathBuf::from("stdlib")],
             },
             preset: Some(Preset::Default),
-            root: ConfigBase::default(),
+            // Fully populated so the flattened `ConfigBase` keys serialize, letting this fixture
+            // exercise the whole top-level key set that `ConfigFile::config_keys()` derives.
+            root: base,
             sub_configs: vec![SubConfig {
                 matches: Glob::new("src/**".to_owned()).unwrap(),
                 settings: ConfigBase::default(),
@@ -4638,10 +4562,7 @@ replace_imports_with_any = ["foo"]
         };
         assert_eq!(
             serialized_keys(&top_level),
-            TOP_LEVEL_ONLY_CONFIG_KEYS
-                .iter()
-                .map(|key| (*key).to_owned())
-                .collect()
+            derived_keys(ConfigFile::config_keys())
         );
 
         let coverage = CoverageConfig {
@@ -4651,10 +4572,7 @@ replace_imports_with_any = ["foo"]
         };
         assert_eq!(
             serialized_keys(&coverage),
-            COVERAGE_CONFIG_KEYS
-                .iter()
-                .map(|key| (*key).to_owned())
-                .collect()
+            derived_keys(CoverageConfig::config_keys())
         );
     }
 }

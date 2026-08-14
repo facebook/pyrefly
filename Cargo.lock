@@ -2315,6 +2315,7 @@ dependencies = [
  "pretty_assertions",
  "pulldown-cmark",
  "pyrefly_build",
+ "pyrefly_derive",
  "pyrefly_python",
  "pyrefly_util",
  "regex",
