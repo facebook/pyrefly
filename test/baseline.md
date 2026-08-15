@@ -343,6 +343,26 @@ ERROR new.py:2:12-13: * [bad-return] (glob)
 [1]
 ```
 
+## Baseline error levels do not increase a finding's severity
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_warning && \
+> printf 'x: str = 1\n' > $TMPDIR/baseline_warning/warning.py && \
+> printf 'baseline = "baseline.json"\n[errors]\nbad-assignment = "warn"\n' > $TMPDIR/baseline_warning/pyrefly.toml && \
+> cd $TMPDIR/baseline_warning && \
+> $PYREFLY check --update-baseline --min-severity=warn --summary=none --output-format=omit-errors >/dev/null 2>/dev/null; \
+> $JQ -r '.errors[0].severity' baseline.json
+warn
+[0]
+```
+
+```scrut {output_stream: stdout}
+$ cd $TMPDIR/baseline_warning && \
+> $PYREFLY check warning.py --baseline-error-level=error --min-severity=warn --summary=none --output-format=min-text
+ WARN warning.py:1:10-11: * [bad-assignment] [baselined] (glob)
+[1]
+```
+
 ## `--only` filters baselined and new findings
 
 ```scrut {output_stream: stdout}

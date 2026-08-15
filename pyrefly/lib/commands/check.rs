@@ -1603,7 +1603,7 @@ impl CheckArgs {
                 .iter()
                 .filter(|e| only.contains(&e.error_kind()))
                 .map(|e| {
-                    e.with_severity(baseline_error_level)
+                    e.with_severity(e.severity().min(baseline_error_level))
                         .with_baseline_status(BaselineStatus::Matched)
                 })
                 .collect()
@@ -1612,7 +1612,7 @@ impl CheckArgs {
                 .baseline
                 .iter()
                 .map(|e| {
-                    e.with_severity(baseline_error_level)
+                    e.with_severity(e.severity().min(baseline_error_level))
                         .with_baseline_status(BaselineStatus::Matched)
                 })
                 .collect()
