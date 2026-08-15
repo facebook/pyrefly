@@ -40,7 +40,7 @@ serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw
 starlark_map = "0.14.2"
 static_interner = { version = "0.1.3", features = ["dupe"] }
 strsim = "0.11.1"
-thin-vec = "0.2.18"
+thin-vec = "0.2.19"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry"], default-features = false }
 uuid = { version = "1.24.0", features = ["js", "rng-getrandom", "v4"] }
