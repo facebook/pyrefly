@@ -38,6 +38,8 @@ class ConcreteShape(Shape[int]):
         return 0
 
 shape = Shape[int]()  # E: Cannot instantiate `Shape`
+ShapeCtor = Shape[int]
+shape_from_alias = ShapeCtor()  # E: Cannot instantiate `Shape`
 
 def construct(cls: type[Shape[int]]) -> Shape[int]:
     return cls()

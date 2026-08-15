@@ -1488,6 +1488,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             Type::ClassDef(cls) => {
                                 literal_types.push(Type::type_of(self.promote_silently(&cls)));
                             }
+                            Type::SpecializedClass(cls) => {
+                                literal_types.push(Type::type_of(Type::ClassType(cls)));
+                            }
                             // Already-wrapped type[X] expressions pass through.
                             Type::Type(ref f) if matches!(&**f, Type::ClassType(_)) => {
                                 literal_types.push(expr_ty);
@@ -1556,6 +1559,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             // distribute_over_union below).
                             Type::ClassDef(cls) => {
                                 literal_types.push(Type::type_of(self.promote_silently(&cls)));
+                            }
+                            Type::SpecializedClass(cls) => {
+                                literal_types.push(Type::type_of(Type::ClassType(cls)));
                             }
                             Type::Type(ref f) if matches!(&**f, Type::ClassType(_)) => {
                                 literal_types.push(expr_ty);
