@@ -737,6 +737,12 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_qname(cls.qname())?;
                 output.write_str("]")
             }
+            Type::SpecializedClass(class_type) => {
+                output.write_str("type[")?;
+                output.write_qname(class_type.qname())?;
+                output.write_targs(class_type.targs())?;
+                output.write_str("]")
+            }
             Type::ClassType(class_type)
                 if class_type.qname().module_name().as_str() == "builtins"
                     && class_type.qname().id().as_str() == "tuple"

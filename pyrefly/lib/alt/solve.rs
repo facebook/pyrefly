@@ -2745,7 +2745,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ) || matches!(&result_ty, Type::Type(f) if matches!(&**f, Type::ClassType(_))))
                         || {
                             let callable_ty = self.expr_infer(&call.func, &swallower);
-                            matches!(&callable_ty, Type::ClassDef(_))
+                            matches!(&callable_ty, Type::ClassDef(_) | Type::SpecializedClass(_))
                         }
                 } else {
                     false
@@ -5777,7 +5777,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // when there is no annotation, so that `mylist = list` is treated
         // like a value assignment rather than a type alias?
         match ty {
-            Type::Type(_)
+            Type::SpecializedClass(_)
+            | Type::Type(_)
             | Type::TypeVar(_)
             | Type::ParamSpec(_)
             | Type::TypeVarTuple(_)

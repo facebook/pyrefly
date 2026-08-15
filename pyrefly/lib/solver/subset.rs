@@ -1777,6 +1777,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (_, Type::ClassType(want)) if want.is_builtin("object") => {
                 Ok(()) // everything is an instance of `object`
             }
+            (Type::SpecializedClass(got), want) => {
+                self.is_subset_eq(&Type::type_of(Type::ClassType(got.clone())), want)
+            }
+            (got, Type::SpecializedClass(want)) => {
+                self.is_subset_eq(got, &Type::type_of(Type::ClassType(want.clone())))
+            }
             (got_ty, want_ty)
                 if let Some(got_alias) = as_type_alias(got_ty)
                     && let Some(want_alias) = as_type_alias(want_ty) =>

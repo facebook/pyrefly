@@ -408,7 +408,7 @@ pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
                 SymbolKind::Method
             }
         }
-        Type::ClassDef(_) | Type::Type(_) => SymbolKind::Class,
+        Type::ClassDef(_) | Type::SpecializedClass(_) | Type::Type(_) => SymbolKind::Class,
         Type::TypeAlias(_) | Type::UntypedAlias(_) => SymbolKind::TypeAlias,
         Type::Module(_) => SymbolKind::Module,
         _ => SymbolKind::Attribute,
@@ -1961,7 +1961,7 @@ impl<'a> Transaction<'a> {
             let symbol_kind = match type_ {
                 Type::Callable(_) | Type::Function(_) => SymbolKind::Function,
                 Type::BoundMethod(_) => SymbolKind::Method,
-                Type::ClassDef(_) | Type::Type(_) => SymbolKind::Class,
+                Type::ClassDef(_) | Type::SpecializedClass(_) | Type::Type(_) => SymbolKind::Class,
                 Type::Module(_) => SymbolKind::Module,
                 Type::TypeAlias(_) => SymbolKind::TypeAlias,
                 _ => *symbol_kind,

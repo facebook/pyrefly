@@ -56,7 +56,7 @@ pub(crate) struct CallInfo {
 }
 
 pub(crate) fn is_constructor_call(callee_type: Type) -> bool {
-    matches!(callee_type, Type::ClassDef(_))
+    matches!(callee_type, Type::ClassDef(_) | Type::SpecializedClass(_))
         || matches!(callee_type, Type::Type(t) if matches!(*t, Type::ClassType(_)))
 }
 

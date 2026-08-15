@@ -381,6 +381,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 _ => unreachable!(),
             },
+            Type::SpecializedClass(cls) => CallTargetLookup::Ok(Box::new(CallTarget::Class(
+                cls,
+                ConstructorKind::SpecializedClass,
+                None,
+            ))),
             Type::Type(f) if matches!(&*f, Type::ClassType(_)) => {
                 let Type::ClassType(cls) = *f else {
                     unreachable!("guarded by matches! above")
@@ -2311,7 +2316,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         x: &ExprCall,
         mut callee_ty: Type,
-        direct_class_specialization: bool,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
@@ -2594,32 +2598,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     hint,
                     errors,
                 ),
-                _ if direct_class_specialization => {
-                    let mut call_target = self.as_call_target_or_error(
-                        ty.clone(),
-                        CallStyle::FreeForm,
-                        x.func.range(),
-                        errors,
-                        None,
-                    );
-                    if let CallTarget::Class(_, constructor_kind, _) = &mut call_target
-                        && *constructor_kind == ConstructorKind::TypeOfClass
-                    {
-                        *constructor_kind = ConstructorKind::SpecializedClass;
-                    }
-                    self.call_infer_with_callee_range(
-                        call_target,
-                        &args,
-                        &kws,
-                        x.arguments.range(),
-                        Some(x.func.range()),
-                        errors,
-                        errors,
-                        None,
-                        hint,
-                        None,
-                    )
-                }
                 _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
             }});
             // TypeIs and TypeGuard functions return bool at runtime
