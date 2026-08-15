@@ -961,6 +961,37 @@ def f(x: M | None) -> M:
 );
 
 testcase!(
+    test_getattribute_does_not_provide_dunder_bool,
+    r#"
+# The same rule applies to a custom `__getattribute__`: implicit `__bool__`
+# lookups go through the type, not the instance's `__getattribute__`, so a
+# `__getattribute__` returning a non-callable type must not make an instance
+# look like it has a non-callable `__bool__`.
+class Tensor: ...
+class M:
+    def __getattribute__(self, name: str) -> "Tensor | M": ...
+
+def f(x: M | None) -> M:
+    return x or M()
+    "#,
+);
+
+testcase!(
+    test_inherited_getattr_does_not_provide_dunder_bool,
+    r#"
+# The `__getattr__` fallback must be disabled for implicit `__bool__` even when
+# `__getattr__` is inherited from a base class rather than defined directly.
+class Tensor: ...
+class Base:
+    def __getattr__(self, name: str) -> "Tensor | Base": ...
+class Sub(Base): ...
+
+def f(x: Sub | None) -> Sub:
+    return x or Sub()
+    "#,
+);
+
+testcase!(
     test_object_setattr_wrong_signature,
     r#"
 from typing import assert_type

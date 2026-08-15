@@ -1980,7 +1980,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Otherwise a class with a `__getattr__` returning a non-callable type would be treated as
             // defining a non-callable `__bool__` and wrongly reported as `not-callable` (see #4467).
             if self
-                .type_of_magic_dunder_attr(ty, &dunder::BOOL, range, errors, None, "as_bool", false)?
+                .type_of_magic_dunder_attr(
+                    ty,
+                    &dunder::BOOL,
+                    range,
+                    errors,
+                    None,
+                    "as_bool",
+                    false,
+                )?
                 .is_never()
             {
                 return None;
