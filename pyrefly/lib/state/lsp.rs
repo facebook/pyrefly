@@ -4344,13 +4344,20 @@ impl<'a> Transaction<'a> {
         let source = module.lined_buffer().contents();
         let mut offset = TextSize::from(0);
 
-        for line in source.lines() {
+        for line_with_ending in source.split_inclusive('\n') {
+            let line_without_lf = line_with_ending
+                .strip_suffix('\n')
+                .unwrap_or(line_with_ending);
+            let line = line_without_lf
+                .strip_suffix('\r')
+                .unwrap_or(line_without_lf);
             if let Some(comment_pos) = pyrefly_python::ignore::find_comment_start_in_line(line) {
                 let comment_start = offset + TextSize::from(comment_pos as u32);
                 let comment_end = offset + TextSize::from(line.len() as u32);
                 ranges.push(TextRange::new(comment_start, comment_end));
             }
-            offset += TextSize::from((line.len() + 1) as u32);
+            offset += TextSize::try_from(line_with_ending.len())
+                .expect("source line length must fit in TextSize");
         }
 
         ranges

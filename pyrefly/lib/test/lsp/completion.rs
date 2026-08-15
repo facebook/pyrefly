@@ -3766,6 +3766,32 @@ x = sys.version
 }
 
 #[test]
+fn completion_before_comment_with_crlf_line_endings() {
+    let code = concat!(
+        "class Foo:\r\n",
+        "    x: int\r\n",
+        "foo = Foo()\r\n",
+        "foo.\r\n",
+        "# comment\r\n",
+    );
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = TextSize::try_from(
+        code.find("foo.\r\n").expect("completion line must exist") + "foo.".len(),
+    )
+    .expect("completion position must fit in TextSize");
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+
+    assert!(
+        completions.iter().any(|item| item.label == "x"),
+        "Expected attribute completions before a comment, got {completions:?}"
+    );
+}
+
+#[test]
 fn completion_sorts_incompatible_call_argument_last() {
     let code = r#"
 class Base:
