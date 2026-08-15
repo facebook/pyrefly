@@ -209,6 +209,12 @@
           "description": "Path to a baseline file for suppressing existing errors.",
           "type": "string"
         },
+        "baseline-error-level": {
+          "description": "Severity assigned to errors that match the baseline.",
+          "type": "string",
+          "enum": ["ignore", "info", "warn", "error"],
+          "default": "ignore"
+        },
         "build-system": {
           "description": "Pyrefly supports integrating into build systems to discover targets to type check and their dependencies. Currently supports Buck2 and custom queries.",
           "type": "object",

@@ -317,6 +317,7 @@ impl Errors {
     /// When `classify_stale_entries` is true, returns the number of baseline entries
     /// that are definitely unused together with all entries that should be retained.
     /// Ordinary checks skip that filesystem work and return empty maintenance data.
+    /// The final return value records whether a baseline was loaded for comparison.
     ///
     /// A baseline path that exists but cannot be read or parsed is a hard error
     /// rather than being silently ignored, so a corrupt baseline surfaces instead
@@ -328,9 +329,10 @@ impl Errors {
         baseline_path: Option<&Path>,
         relative_to: &Path,
         classify_stale_entries: bool,
-    ) -> anyhow::Result<(usize, Vec<BaselineError>)> {
+    ) -> anyhow::Result<(usize, Vec<BaselineError>, bool)> {
         let mut unused_baseline_entries = 0;
         let mut retained_baseline_entries = Vec::new();
+        let mut baseline_loaded = false;
         if let Some(baseline_path) = baseline_path
             && baseline_path.exists()
         {
@@ -351,15 +353,21 @@ impl Errors {
                 let result = processor.into_pruning_result(&checked_paths);
                 unused_baseline_entries = result.unused_entry_count;
                 retained_baseline_entries = result.retained_entries;
+                baseline_loaded = true;
             } else {
                 let processor = BaselineProcessor::from_file(baseline_path, relative_to)
                     .with_context(|| {
                         format!("failed to read baseline file `{}`", baseline_path.display())
                     })?;
                 processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
+                baseline_loaded = true;
             }
         }
-        Ok((unused_baseline_entries, retained_baseline_entries))
+        Ok((
+            unused_baseline_entries,
+            retained_baseline_entries,
+            baseline_loaded,
+        ))
     }
 
     /// Collect display errors for the language server, partitioned by whether or not they

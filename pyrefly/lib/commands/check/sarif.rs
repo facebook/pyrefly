@@ -29,6 +29,7 @@ use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::lined_buffer::DisplayRange;
 use serde::Serialize;
 
+use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 
 const SCHEMA_URL: &str = "https://json.schemastore.org/sarif-2.1.0.json";
@@ -92,6 +93,8 @@ struct SarifResult {
     locations: Vec<Location>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     related_locations: Vec<Location>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline_state: Option<SarifBaselineState>,
 }
 
 #[derive(Serialize)]
@@ -135,6 +138,13 @@ enum Level {
     Note,
     Warning,
     Error,
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum SarifBaselineState {
+    New,
+    Unchanged,
 }
 
 /// `Ignore` maps to `none`, which in a rule's `defaultConfiguration` means the rule
@@ -315,6 +325,11 @@ fn errors_to_sarif(version: &str, relative_to: &Path, errors: &[Error]) -> anyho
                         )
                     })
                     .collect(),
+                baseline_state: match error.baseline_status() {
+                    BaselineStatus::Unmatched => Some(SarifBaselineState::New),
+                    BaselineStatus::Matched => Some(SarifBaselineState::Unchanged),
+                    BaselineStatus::NotConfigured | BaselineStatus::NotCompared => None,
+                },
             }
         })
         .collect();
@@ -509,6 +524,46 @@ mod tests {
         assert!(sarif.runs[0].results.is_empty());
         // A dropped diagnostic must not leave its rule behind either.
         assert!(sarif.runs[0].tool.driver.rules.is_empty());
+    }
+
+    #[test]
+    fn conversion_maps_baseline_provenance() {
+        let errors = vec![
+            sample_error(
+                PathBuf::from("/repo/matched.py"),
+                "x\n",
+                0,
+                1,
+                "matched",
+                ErrorKind::BadAssignment,
+            )
+            .with_baseline_status(BaselineStatus::Matched),
+            sample_error(
+                PathBuf::from("/repo/new.py"),
+                "x\n",
+                0,
+                1,
+                "new",
+                ErrorKind::BadAssignment,
+            )
+            .with_baseline_status(BaselineStatus::Unmatched),
+        ];
+
+        let json = to_json(Path::new("/repo"), &errors);
+        assert_eq!(json["runs"][0]["results"][0]["baselineState"], "unchanged");
+        assert_eq!(json["runs"][0]["results"][1]["baselineState"], "new");
+
+        let not_compared = sample_error(
+            PathBuf::from("/repo/uncompared.py"),
+            "x\n",
+            0,
+            1,
+            "uncompared",
+            ErrorKind::BadAssignment,
+        )
+        .with_baseline_status(BaselineStatus::NotCompared);
+        let json = to_json(Path::new("/repo"), &[not_compared]);
+        assert!(json["runs"][0]["results"][0].get("baselineState").is_none());
     }
 
     #[test]

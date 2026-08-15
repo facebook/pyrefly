@@ -13,6 +13,7 @@ use pyrefly_util::prelude::SliceExt;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 
 pub(crate) fn severity_to_str(severity: Severity) -> String {
@@ -48,6 +49,9 @@ pub struct LegacyError {
     /// This field is not part of Pyre1 error format. But it's useful for Pyrefly clients
     #[serde(default = "default_severity")]
     severity: String,
+    /// Whether the error matched a configured baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    baselined: Option<bool>,
     /// Optional notebook cell number for errors in notebook files
     #[serde(skip_serializing_if = "Option::is_none")]
     cell: Option<usize>,
@@ -73,6 +77,11 @@ impl LegacyError {
             description: error.msg(),
             concise_description: error.msg_header().to_owned(),
             severity: severity_to_str(error.severity()),
+            baselined: match error.baseline_status() {
+                BaselineStatus::NotConfigured => None,
+                BaselineStatus::NotCompared | BaselineStatus::Unmatched => Some(false),
+                BaselineStatus::Matched => Some(true),
+            },
         }
     }
 }
@@ -165,5 +174,38 @@ mod tests {
         );
         let legacy = LegacyError::from_error(Path::new("/repo/src"), &error);
         assert_eq!(legacy.path, "../libs/foo.py");
+    }
+
+    #[test]
+    fn test_baseline_provenance_is_optional() {
+        let module = Module::new(
+            ModuleName::from_str("foo"),
+            ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
+            Arc::new("x = 1\n".to_owned()),
+        );
+        let error = Error::new(
+            module,
+            TextRange::new(TextSize::new(0), TextSize::new(1)),
+            "err".to_owned(),
+            Vec::new(),
+            ErrorKind::BadAssignment,
+        );
+
+        let without_baseline =
+            serde_json::to_value(LegacyError::from_error(Path::new("/repo"), &error)).unwrap();
+        assert!(without_baseline.get("baselined").is_none());
+
+        let matched = error.clone().with_baseline_status(BaselineStatus::Matched);
+        assert_eq!(
+            serde_json::to_value(LegacyError::from_error(Path::new("/repo"), &matched)).unwrap()["baselined"],
+            true
+        );
+
+        let not_compared = error.with_baseline_status(BaselineStatus::NotCompared);
+        assert_eq!(
+            serde_json::to_value(LegacyError::from_error(Path::new("/repo"), &not_compared))
+                .unwrap()["baselined"],
+            false
+        );
     }
 }

@@ -78,6 +78,7 @@ use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::code_climate::CodeClimateIssues;
+use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 use crate::error::error::ErrorRenderer;
 use crate::error::error::print_error_counts;
@@ -380,6 +381,10 @@ struct OutputArgs {
     #[arg(long, value_name = "BASELINE_FILE")]
     baseline: Option<PathBuf>,
 
+    /// Severity assigned to errors that match the baseline. Defaults to "ignore".
+    #[arg(long, value_enum)]
+    baseline_error_level: Option<Severity>,
+
     /// When specified, emit a sorted/formatted JSON of the errors to the baseline file
     #[arg(long, group = "baseline_action")]
     update_baseline: bool,
@@ -476,6 +481,9 @@ impl OutputArgs {
         if self.baseline.is_none() {
             self.baseline = config.baseline.clone();
         }
+        if self.baseline_error_level.is_none() {
+            self.baseline_error_level = config.baseline_error_level;
+        }
         if self.output_format.is_none() {
             self.output_format = config.output_format;
         }
@@ -486,6 +494,10 @@ impl OutputArgs {
 
     fn output_format(&self) -> OutputFormat {
         self.output_format.unwrap_or_default()
+    }
+
+    fn baseline_error_level(&self) -> Severity {
+        self.baseline_error_level.unwrap_or(Severity::Ignore)
     }
 
     /// Resolve the effective progress bar style, taking deprecated flags into account.
@@ -872,6 +884,11 @@ fn github_actions_command(error: &Error) -> Option<String> {
     let command = severity_to_github_command(error.severity())?;
     let range = error.display_range();
     let file = path_to_unix_string(error.path().as_path());
+    let baseline_marker = if error.baseline_status() == BaselineStatus::Matched {
+        " [baselined]"
+    } else {
+        ""
+    };
     let params = format!(
         "file={},line={},col={},endLine={},endColumn={},title={}",
         escape_workflow_property(&file),
@@ -879,7 +896,10 @@ fn github_actions_command(error: &Error) -> Option<String> {
         range.start.column().get(),
         range.end.line_within_file().get(),
         range.end.column().get(),
-        escape_workflow_property(&format!("Pyrefly {}", error.error_kind().to_name())),
+        escape_workflow_property(&format!(
+            "Pyrefly {}{baseline_marker}",
+            error.error_kind().to_name()
+        )),
     );
     let message = escape_workflow_data(&error.msg());
     Some(format!("::{command} {params}::{message}"))
@@ -1200,6 +1220,7 @@ impl CheckArgs {
 
         // Project-level output settings can come from config when CLI flags are absent.
         if (self.output.baseline.is_none()
+            || self.output.baseline_error_level.is_none()
             || self.output.output_format.is_none()
             || self.output.min_severity.is_none())
             && let Some(handle) = loaded_handles.first()
@@ -1251,6 +1272,7 @@ impl CheckArgs {
 
         // Project-level output settings can come from config when CLI flags are absent.
         if self.output.baseline.is_none()
+            || self.output.baseline_error_level.is_none()
             || self.output.output_format.is_none()
             || self.output.min_severity.is_none()
         {
@@ -1304,6 +1326,7 @@ impl CheckArgs {
 
         // Track which output settings were explicitly set on the CLI.
         let cli_provided_baseline = self.output.baseline.is_some();
+        let cli_provided_baseline_error_level = self.output.baseline_error_level.is_some();
         let cli_provided_min_severity = self.output.min_severity.is_some();
         let cli_provided_output_format = self.output.output_format.is_some();
 
@@ -1316,7 +1339,10 @@ impl CheckArgs {
             // Inherit project-level output settings from config on every iteration
             // to pick up config file changes when the CLI did not override them.
             // Reset non-CLI-provided fields first so updated config values are applied.
-            if (!cli_provided_baseline || !cli_provided_output_format || !cli_provided_min_severity)
+            if (!cli_provided_baseline
+                || !cli_provided_baseline_error_level
+                || !cli_provided_output_format
+                || !cli_provided_min_severity)
                 && let Some(handle) = loaded_handles.first()
             {
                 if !cli_provided_baseline {
@@ -1324,6 +1350,9 @@ impl CheckArgs {
                 }
                 if !cli_provided_output_format {
                     self.output.output_format = None;
+                }
+                if !cli_provided_baseline_error_level {
+                    self.output.baseline_error_level = None;
                 }
                 if !cli_provided_min_severity {
                     self.output.min_severity = None;
@@ -1501,12 +1530,13 @@ impl CheckArgs {
         // Pass pre-collected errors to avoid redundant error collection.
         let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display(&collected);
         collected.ordinary.extend(unused_ignore_errors.ordinary);
-        let (unused_baseline_entries, retained_baseline_entries) = match loads.apply_baseline(
-            &mut collected,
-            self.output.baseline.as_deref(),
-            relative_to.as_path(),
-            self.output.prune_baseline || self.output.error_stale_baseline,
-        ) {
+        let (unused_baseline_entries, retained_baseline_entries, baseline_loaded) = match loads
+            .apply_baseline(
+                &mut collected,
+                self.output.baseline.as_deref(),
+                relative_to.as_path(),
+                self.output.prune_baseline || self.output.error_stale_baseline,
+            ) {
             Ok(result) => result,
             // `--update-baseline` regenerates the baseline from the current run, so
             // a missing or unreadable existing baseline is not fatal. Log the
@@ -1517,27 +1547,75 @@ impl CheckArgs {
                 debug!(
                     "ignoring unreadable baseline while regenerating it with `--update-baseline`: {e:#}"
                 );
-                (0, Vec::new())
+                (0, Vec::new(), false)
             }
             Err(e) => return Err(e),
         };
         let errors = collected;
-        let (directives, ordinary_errors) = if let Some(only) = &self.output.only {
-            let only = only.iter().collect::<SmallSet<_>>();
-            (
-                errors
-                    .directives
-                    .into_iter()
-                    .filter(|e| only.contains(&e.error_kind()))
-                    .collect(),
-                errors
-                    .ordinary
-                    .into_iter()
-                    .filter(|e| only.contains(&e.error_kind()))
-                    .collect(),
-            )
+        let baseline_status = if self.output.baseline.is_none() {
+            BaselineStatus::NotConfigured
+        } else if baseline_loaded {
+            BaselineStatus::Unmatched
         } else {
-            (errors.directives, errors.ordinary)
+            BaselineStatus::NotCompared
+        };
+        let (directives, ordinary_errors): (Vec<Error>, Vec<Error>) =
+            if let Some(only) = &self.output.only {
+                let only = only.iter().collect::<SmallSet<_>>();
+                (
+                    errors
+                        .directives
+                        .into_iter()
+                        .filter(|e| only.contains(&e.error_kind()))
+                        .map(|e| e.with_baseline_status(baseline_status))
+                        .collect(),
+                    errors
+                        .ordinary
+                        .into_iter()
+                        .filter(|e| only.contains(&e.error_kind()))
+                        .map(|e| e.with_baseline_status(baseline_status))
+                        .collect(),
+                )
+            } else {
+                (
+                    errors
+                        .directives
+                        .into_iter()
+                        .map(|e| e.with_baseline_status(baseline_status))
+                        .collect(),
+                    errors
+                        .ordinary
+                        .into_iter()
+                        .map(|e| e.with_baseline_status(baseline_status))
+                        .collect(),
+                )
+            };
+
+        // Baseline matches are cloned for display. Baseline maintenance uses the
+        // original severity and baseline representation.
+        let baseline_error_level = self.output.baseline_error_level();
+        let displayed_baseline_errors = if baseline_error_level == Severity::Ignore {
+            Vec::new()
+        } else if let Some(only) = &self.output.only {
+            let only = only.iter().collect::<SmallSet<_>>();
+            errors
+                .baseline
+                .iter()
+                .filter(|e| only.contains(&e.error_kind()))
+                .map(|e| {
+                    e.with_severity(baseline_error_level)
+                        .with_baseline_status(BaselineStatus::Matched)
+                })
+                .collect()
+        } else {
+            errors
+                .baseline
+                .iter()
+                .map(|e| {
+                    e.with_severity(baseline_error_level)
+                        .with_baseline_status(BaselineStatus::Matched)
+                })
+                .collect()
         };
 
         // Filter by minimum severity. Directives are not subject to this
@@ -1547,9 +1625,13 @@ impl CheckArgs {
         // via `--min-severity` should not get a suppression comment written
         // into source.
         let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
-        let (ordinary_errors, hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
+        let (ordinary_errors, mut hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
             .into_iter()
             .partition(|e| e.severity() >= min_severity);
+        let (baseline_errors, hidden_baseline_errors): (Vec<_>, Vec<_>) = displayed_baseline_errors
+            .into_iter()
+            .partition(|e| e.severity() >= min_severity);
+        hidden_errors.extend(hidden_baseline_errors);
 
         // Suppress operates on ordinary diagnostics only — directives are
         // structurally excluded since they live in `directives`, not `ordinary_errors`.
@@ -1627,8 +1709,10 @@ impl CheckArgs {
 
         // Directives always display, but only affect the exit code when they
         // meet the user's severity threshold.
+        let baselined_diagnostics_count = baseline_errors.len();
         let diagnostics_count = config_errors_count
             + ordinary_errors.len()
+            + baseline_errors.len()
             + directives
                 .iter()
                 .filter(|e| e.severity() >= min_severity)
@@ -1638,6 +1722,7 @@ impl CheckArgs {
         // name, path, and source range so output preserves file/line
         // interleaving across modules.
         let mut output_errors = ordinary_errors;
+        output_errors.extend(baseline_errors);
         output_errors.extend(directives);
         output_errors.sort_by_cached_key(|e| {
             (
@@ -1694,6 +1779,19 @@ impl CheckArgs {
             let mut parts = vec![count(diagnostics_count, label)];
             if suppress_count > 0 {
                 parts.push(format!("{} suppressed", number_thousands(suppress_count)));
+            }
+            let reports_omit_errors = if self.output.output.is_empty() {
+                output_format == OutputFormat::OmitErrors
+            } else {
+                self.output.output.iter().any(|output| {
+                    output.format.unwrap_or(output_format) == OutputFormat::OmitErrors
+                })
+            };
+            if reports_omit_errors && baselined_diagnostics_count > 0 {
+                parts.push(format!(
+                    "{} baselined",
+                    number_thousands(baselined_diagnostics_count)
+                ));
             }
             if !hidden_errors.is_empty() {
                 let mut hidden_warnings = 0;
@@ -1888,6 +1986,19 @@ mod tests {
     }
 
     #[test]
+    fn github_actions_command_marks_baselined_errors() {
+        let error = sample_error("bad".into())
+            .with_severity(Severity::Warn)
+            .with_baseline_status(BaselineStatus::Matched);
+        let command = github_actions_command(&error).unwrap();
+        assert!(command.starts_with("::warning "), "{command}");
+        assert!(
+            command.contains("title=Pyrefly bad-assignment [baselined]"),
+            "{command}"
+        );
+    }
+
+    #[test]
     fn escape_helpers_follow_workflow_spec() {
         assert_eq!(
             escape_workflow_data("line1\nline2\r% done"),
@@ -1908,13 +2019,13 @@ mod tests {
 
     #[test]
     fn full_text_with_github_output_format_writes_both() {
-        let errors = vec![sample_error("bad".into())];
+        let errors = vec![sample_error("bad".into()).with_baseline_status(BaselineStatus::Matched)];
         let mut buf = Vec::new();
         write_error_full_text_with_github(&mut buf, ColorChoice::Never, Path::new("/"), &errors)
             .unwrap();
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("ERROR bad [bad-assignment]"));
-        assert!(output.contains("::error file=/repo/foo.py"));
+        assert!(output.contains("ERROR bad [bad-assignment] [baselined]"));
+        assert!(output.contains("title=Pyrefly bad-assignment [baselined]"));
         assert!(output.ends_with("::bad\n"));
     }
 
@@ -2107,6 +2218,33 @@ mod tests {
         output.inherit_defaults_from_config(&config);
 
         assert_eq!(output.output_format(), OutputFormat::MinText);
+    }
+
+    #[test]
+    fn baseline_error_level_cli_and_config_precedence() {
+        let mut inherited = OutputArgs::parse_from(["pyrefly-check"]);
+        assert_eq!(inherited.baseline_error_level(), Severity::Ignore);
+        inherited.inherit_defaults_from_config(&ConfigFile {
+            baseline_error_level: Some(Severity::Warn),
+            ..Default::default()
+        });
+        assert_eq!(inherited.baseline_error_level(), Severity::Warn);
+
+        // Watch mode clears inherited values before reloading project configuration.
+        inherited.baseline_error_level = None;
+        inherited.inherit_defaults_from_config(&ConfigFile {
+            baseline_error_level: Some(Severity::Info),
+            ..Default::default()
+        });
+        assert_eq!(inherited.baseline_error_level(), Severity::Info);
+
+        let mut overridden =
+            OutputArgs::parse_from(["pyrefly-check", "--baseline-error-level=error"]);
+        overridden.inherit_defaults_from_config(&ConfigFile {
+            baseline_error_level: Some(Severity::Warn),
+            ..Default::default()
+        });
+        assert_eq!(overridden.baseline_error_level(), Severity::Error);
     }
 
     #[test]
