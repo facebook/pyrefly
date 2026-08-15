@@ -74,7 +74,7 @@ starlark_map = "0.14.2"
 static_assertions = "1.1.0"
 tempfile = "3.27.0"
 thin-vec = "0.2.19"
-tokio = { version = "1.52.4", features = ["macros", "rt"] }
+tokio = { version = "1.53.1", features = ["macros", "rt"] }
 toml = { version = "1.1.4", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tsp_types = { path = "../crates/tsp_types" }
