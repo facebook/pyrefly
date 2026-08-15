@@ -47,6 +47,7 @@ use crate::error::error::Error;
 use crate::error::expectation::Expectation;
 use crate::error::legacy::BaselineError;
 use crate::error::style::ErrorStyle;
+use crate::error::suppress::SuppressionUsage;
 use crate::state::load::Load;
 
 /// Extracts `(start_line, end_line)` ranges for all multi-line strings from
@@ -512,15 +513,10 @@ impl Errors {
         ignore_collection
     }
 
-    /// Collects errors for unused ignore comments.
-    /// Returns a vector of errors with ErrorKind::UnusedIgnore for each
-    /// suppression comment that doesn't suppress any actual error.
-    /// Accepts pre-collected errors to avoid redundant error collection.
-    pub fn collect_unused_ignore_errors(&self, collected: &CollectedErrors) -> Vec<Error> {
-        let mut unused_errors = Vec::new();
-
-        // Build a map of which error codes were suppressed on each line, keyed by module path.
-        // Key: module_path, Value: map from line number to set of suppressed error codes
+    fn suppressed_codes_by_module<'a>(
+        &'a self,
+        collected: &'a CollectedErrors,
+    ) -> SmallMap<&'a ModulePath, SmallMap<LineNumber, SmallSet<String>>> {
         let mut suppressed_codes_by_module: SmallMap<
             &ModulePath,
             SmallMap<LineNumber, SmallSet<String>>,
@@ -614,6 +610,59 @@ impl Errors {
                 }
             }
         }
+
+        suppressed_codes_by_module
+    }
+
+    pub fn collect_suppression_usage(&self, collected: &CollectedErrors) -> Vec<SuppressionUsage> {
+        let suppressed_codes_by_module = self.suppressed_codes_by_module(collected);
+        let mut reports = Vec::new();
+        for (load, _, config) in &self.loads {
+            let module = &load.module_info;
+            let module_path = module.path();
+            let enabled_ignores = config.enabled_ignores(module_path.as_path());
+            let module_suppressed_codes = suppressed_codes_by_module.get(&module_path);
+            for (applies_to_line, suppressions) in module.ignore().iter() {
+                for supp in suppressions {
+                    let tool = supp.tool();
+                    if !enabled_ignores.contains(&tool) {
+                        continue;
+                    }
+                    let tool = match tool {
+                        Tool::Pyrefly => "pyrefly",
+                        Tool::Pyre => "pyre",
+                        Tool::Type => "type",
+                        _ => continue,
+                    };
+                    let mut codes = supp.error_codes().to_vec();
+                    codes.sort();
+                    let mut used_codes: Vec<String> = module_suppressed_codes
+                        .and_then(|m| m.get(applies_to_line))
+                        .into_iter()
+                        .flat_map(|codes| codes.iter().cloned())
+                        .collect();
+                    used_codes.sort();
+                    reports.push(SuppressionUsage {
+                        path: module_path.as_path().to_path_buf(),
+                        line: supp.comment_line().to_zero_indexed() as usize,
+                        comment_offset: supp.comment_offset(),
+                        tool: tool.to_owned(),
+                        codes,
+                        used_codes,
+                    });
+                }
+            }
+        }
+        reports
+    }
+
+    /// Collects errors for unused ignore comments.
+    /// Returns a vector of errors with ErrorKind::UnusedIgnore for each
+    /// suppression comment that doesn't suppress any actual error.
+    /// Accepts pre-collected errors to avoid redundant error collection.
+    pub fn collect_unused_ignore_errors(&self, collected: &CollectedErrors) -> Vec<Error> {
+        let mut unused_errors = Vec::new();
+        let suppressed_codes_by_module = self.suppressed_codes_by_module(collected);
 
         // Iterate over each module and check for unused ignores
         for (load, _, config) in &self.loads {
@@ -753,49 +802,9 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| (load.module_info.path(), config))
             .collect();
-        let unused_ignore_name = ErrorKind::UnusedIgnore.to_name();
-        let unused_ignore_suppression_lines_by_path: SmallMap<&ModulePath, SmallSet<LineNumber>> =
-            self.loads
-                .iter()
-                .filter_map(|(load, _, config)| {
-                    let path = load.module_info.path();
-                    if !config
-                        .enabled_ignores(path.as_path())
-                        .contains(&Tool::Pyrefly)
-                    {
-                        return None;
-                    }
-                    let lines: SmallSet<LineNumber> = load
-                        .module_info
-                        .ignore()
-                        .iter()
-                        .flat_map(|(_, suppressions)| suppressions.iter())
-                        .filter(|supp| {
-                            supp.tool() == Tool::Pyrefly
-                                && supp
-                                    .error_codes()
-                                    .iter()
-                                    .any(|code| code == unused_ignore_name)
-                        })
-                        .map(|supp| supp.comment_line())
-                        .collect();
-                    if lines.is_empty() {
-                        None
-                    } else {
-                        Some((path, lines))
-                    }
-                })
-                .collect();
 
         for error in unused_errors {
             let path = error.path();
-            let line = error.display_range().start.line_within_file();
-            if unused_ignore_suppression_lines_by_path
-                .get(&path)
-                .is_some_and(|lines| lines.contains(&line))
-            {
-                continue;
-            }
             if let Some(config) = config_by_path.get(&path) {
                 let error_config = config.get_error_config(path.as_path());
                 let severity = error_config.display_config.severity(error.error_kind());
@@ -845,10 +854,10 @@ mod tests {
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
-    use pyrefly_python::ast::Ast;
-    use pyrefly_python::module::Module;
     use pyrefly_config::error_kind::ErrorKind;
     use pyrefly_config::error_kind::Severity;
+    use pyrefly_python::ast::Ast;
+    use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
@@ -985,7 +994,7 @@ def f() -> int:
     }
 
     #[test]
-    fn test_unused_ignore_suppresses_itself_for_display() {
+    fn test_unused_ignore_does_not_suppress_itself_for_display() {
         let contents = r#"
 def f() -> int:
     # pyrefly: ignore[unused-ignore]
@@ -995,12 +1004,13 @@ def f() -> int:
         let collected = errors.collect_errors();
         assert_eq!(errors.collect_unused_ignore_errors(&collected).len(), 1);
         let display = errors.collect_unused_ignore_errors_for_display(&collected);
-        assert!(display.ordinary.is_empty());
+        assert_eq!(display.ordinary.len(), 1);
+        assert!(display.ordinary[0].msg().contains("unused-ignore"));
         assert!(display.disabled.is_empty());
     }
 
     #[test]
-    fn test_unused_ignore_suppresses_mixed_unused_codes_for_display() {
+    fn test_unused_ignore_does_not_suppress_mixed_unused_codes_for_display() {
         let contents = r#"
 def f() -> int:
     # pyrefly: ignore[bad-return, unused-ignore]
@@ -1012,8 +1022,27 @@ def f() -> int:
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("bad-return"));
         let display = errors.collect_unused_ignore_errors_for_display(&collected);
-        assert!(display.ordinary.is_empty());
+        assert_eq!(display.ordinary.len(), 1);
+        assert!(display.ordinary[0].msg().contains("bad-return"));
         assert!(display.disabled.is_empty());
+    }
+
+    #[test]
+    fn test_suppression_usage_reports_used_codes() {
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore[bad-override, bad-return]
+    return ""
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let report = errors.collect_suppression_usage(&collected);
+
+        assert_eq!(report.len(), 1);
+        assert_eq!(report[0].tool, "pyrefly");
+        assert_eq!(report[0].codes, ["bad-override", "bad-return"]);
+        assert!(report[0].used_codes.contains(&"bad-return".to_owned()));
+        assert!(!report[0].used_codes.contains(&"bad-override".to_owned()));
     }
 
     #[test]
