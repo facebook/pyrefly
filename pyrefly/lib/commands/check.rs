@@ -303,6 +303,9 @@ struct OutputArgs {
     /// and LookupExport calls). Useful for analyzing laziness properties.
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_demand_tree: Option<PathBuf>,
+    /// Generate a JSON report of suppression comments and which codes they used in this run.
+    #[arg(long, value_name = "OUTPUT_FILE")]
+    report_suppressions: Option<PathBuf>,
     /// Generate a CinderX-format type report (experimental, internal-only).
     #[arg(long, value_name = "OUTPUT_DIR", hide = true)]
     report_cinderx: Option<PathBuf>,
@@ -1498,6 +1501,12 @@ impl CheckArgs {
         let output_format = self.output.output_format();
 
         let mut collected = loads.collect_errors();
+        if let Some(path) = &self.output.report_suppressions {
+            let report = loads.collect_suppression_usage(&collected);
+            let mut writer = BufWriter::new(File::create(path)?);
+            serde_json::to_writer_pretty(&mut writer, &report)?;
+            writer.write_all(b"\n")?;
+        }
         // Pass pre-collected errors to avoid redundant error collection.
         let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display(&collected);
         collected.ordinary.extend(unused_ignore_errors.ordinary);

@@ -177,6 +177,26 @@ This will add ` # pyrefly: ignore` comments to your code that will enable you to
 
 By default, `--remove-unused` removes Pyrefly and Pyre ignores and preserves `# type: ignore` comments because they may be shared with other type checkers. `--remove-unused=pyrefly` is equivalent to the bare flag. Use `pyrefly suppress --remove-unused=type` to remove only unused `# type: ignore` comments, or `pyrefly suppress --remove-unused=all` to remove all three kinds.
 
+Projects that check the same source tree under multiple Python environments can
+aggregate unused-ignore removal across those runs. First, write a suppression
+usage report for each environment:
+
+```
+pyrefly check --report-suppressions py310-suppressions.json
+pyrefly check --report-suppressions py313-suppressions.json
+```
+
+Then pass every report to `suppress --remove-unused`:
+
+```
+pyrefly suppress --remove-unused \
+  --json py310-suppressions.json \
+  --json py313-suppressions.json
+```
+
+A suppression code is removed only if it was unused in every report. If a code
+suppresses an error in any checked environment, Pyrefly keeps it.
+
 :::tip
 If your project uses other tools that place suppression comments on the line before the error (e.g. other type checkers or linters), use `pyrefly suppress --comment-location=same-line` in step 1 to avoid conflicts.
 :::
