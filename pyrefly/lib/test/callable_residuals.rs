@@ -322,7 +322,7 @@ class Wrapper[**P, R]:
 def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](x: R) -> R
 assert_type(wrapper(1), int)
 "#,
 );
@@ -345,7 +345,7 @@ def wrap[**P, R](f: Callable[P, R]) -> Wrapper[P, R]:
 def f[S](x: S) -> S: ...
 wrapper = wrap(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](x: R) -> R
 assert_type(wrapper(1), int)
 "#,
 );
@@ -363,7 +363,7 @@ class Wrapper[**P, R]:
 def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
 reveal_type(wrapper)  # E: revealed type: Wrapper[[x: GenericResidual@R], GenericResidual@R]
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](x: R) -> R
 "#,
 );
 
@@ -451,7 +451,7 @@ class Wrapper[**P, R]:
 ctor = identity(Wrapper)
 reveal_type(ctor)  # E: revealed type: [**P, R](fn: (ParamSpec(P)) -> R) -> Wrapper[P, R]
 identity2 = ctor(identity)
-reveal_type(identity2.__call__)  # E: revealed type: [**P, R](self: Wrapper[[x: (ParamSpec(P)) -> R], (ParamSpec(P)) -> R], x: (ParamSpec(P)) -> R) -> (ParamSpec(P)) -> R
+reveal_type(identity2.__call__)  # E: revealed type: [**P, R](x: (ParamSpec(P)) -> R) -> (ParamSpec(P)) -> R
 "#,
 );
 

@@ -932,7 +932,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `(self: B, x: TA2) -> None`, which is not assignable to `(self: B, x: TA1) -> None`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `(x: TA2) -> None`, which is not assignable to `(x: TA1) -> None`, the type of `A.f`
         pass
     "#,
 );
@@ -2030,7 +2030,7 @@ class Base:
         pass
 
 class ChildNarrowed(Base):
-    p: B  # E: `ChildNarrowed.p` has type `B`, which is not assignable from `(self: ChildNarrowed, value: A) -> None`, the property setter for `Base.p`
+    p: B  # E: `ChildNarrowed.p` has type `B`, which is not assignable from `(value: A) -> None`, the property setter for `Base.p`
 
 class ChildSuppressed(Base):
     p: B  # pyrefly: ignore[bad-override-mutable-attribute]
@@ -2046,7 +2046,7 @@ class ChildWidened(Base):
 # Property-to-property override with narrowed setter.
 class ChildPropertyNarrowedSetter(Base):
     @property
-    def p(self) -> A:  # E: The property setter for `ChildPropertyNarrowedSetter.p` has type `(self: ChildPropertyNarrowedSetter, value: B) -> None`, which is not assignable from `(self: ChildPropertyNarrowedSetter, value: A) -> None`, the property setter for `Base.p`
+    def p(self) -> A:  # E: The property setter for `ChildPropertyNarrowedSetter.p` has type `(value: B) -> None`, which is not assignable from `(value: A) -> None`, the property setter for `Base.p`
         return A()
     @p.setter
     def p(self, value: B) -> None:
