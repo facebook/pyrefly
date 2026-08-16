@@ -764,6 +764,11 @@ pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_file_extensions: Vec<String>,
 
+    /// Modules that contain Django model definitions. Reverse relationships declared in these
+    /// modules are available across module boundaries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub django_model_modules: Vec<ModuleName>,
+
     /// Runtime-only metadata. Populated by `resolve_unconfigured_config`
     /// when this `ConfigFile` was synthesized rather than loaded from a
     /// `pyrefly.toml` / `[tool.pyrefly]` section, and by the `--preset`
@@ -824,6 +829,7 @@ impl Default for ConfigFile {
             output_format: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
+            django_model_modules: Vec::new(),
             synthesized_preset_reason: None,
             extended_config_paths: Vec::new(),
         }
@@ -2676,6 +2682,7 @@ mod tests {
                 min_severity: None,
                 skip_lsp_config_indexing: false,
                 extra_file_extensions: Vec::new(),
+                django_model_modules: Vec::new(),
                 synthesized_preset_reason: None,
                 extended_config_paths: Vec::new(),
             }
@@ -3017,6 +3024,7 @@ mod tests {
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
+            django_model_modules: Vec::new(),
             synthesized_preset_reason: None,
             extended_config_paths: Vec::new(),
         };
@@ -3097,6 +3105,7 @@ mod tests {
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
+            django_model_modules: Vec::new(),
             synthesized_preset_reason: None,
             extended_config_paths: Vec::new(),
         };
@@ -3981,6 +3990,19 @@ output-format = "omit-errors"
         let config_str = r#"preset = "legacy""#;
         let config: ConfigFile = toml::from_str(config_str).unwrap();
         assert_eq!(config.preset, Some(Preset::Legacy));
+    }
+
+    #[test]
+    fn test_django_model_modules_deserialization() {
+        let config: ConfigFile =
+            toml::from_str(r#"django-model-modules = ["authors.models", "books.models"]"#).unwrap();
+        assert_eq!(
+            config.django_model_modules,
+            vec![
+                ModuleName::from_str("authors.models"),
+                ModuleName::from_str("books.models"),
+            ]
+        );
     }
 
     #[test]
