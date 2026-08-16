@@ -112,6 +112,10 @@ NEGATIVE_TEST_CASES: list[tuple[str, str]] = [
         'skip-interpreter-query = "yes"',
     ),
     (
+        "django_model_modules_as_string",
+        'django-model-modules = "accounts.models"',
+    ),
+    (
         "recursion_depth_limit_as_string",
         'recursion-depth-limit = "10"',
     ),

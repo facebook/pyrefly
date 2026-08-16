@@ -851,6 +851,27 @@ at the cost of some language server features that rely on a full project index.
 - Default: `false`
 - Flag equivalent: none
 
+### `django-model-modules`
+
+Lists modules that declare Django models. Pyrefly uses these modules to discover reverse
+relationships whose source and target models are defined in different modules. Relationships
+between models in the same module are discovered automatically.
+
+```toml
+django-model-modules = [
+  "accounts.models",
+  "articles.models",
+]
+```
+
+List every module that directly contains model definitions with `ForeignKey`, `OneToOneField`, or
+`ManyToManyField` relationships. Pyrefly loads only the listed modules when it needs cross-module
+reverse relationships; it does not scan all project or currently loaded modules.
+
+- Type: list of module names
+- Default: `[]`
+- Flag equivalent: none
+
 ### `replace-imports-with-any`
 
 Instruct Pyrefly to unconditionally replace the given [`ModuleGlob`](#module-globbing)s
@@ -1725,6 +1746,8 @@ disable-search-path-heuristics = false
 enable-fallback-search-path = false
 # do not include any third-party packages (except those provided by an interpreter)
 site-package-path = []
+# no modules are searched for cross-module Django reverse relationships
+django-model-modules = []
 
 ###### configuring your python environment
 
