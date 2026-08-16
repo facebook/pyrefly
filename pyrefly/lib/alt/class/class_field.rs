@@ -2969,6 +2969,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             None
         };
+        if !inferred_from_method
+            && direct_annotation.is_none()
+            && self
+                .get_metadata_for_class(class)
+                .is_django_rest_framework_serializer()
+            && let ExprOrBinding::Expr(e) = value
+        {
+            let inferred_ty = self.attribute_expr_infer(e, None, name, &self.error_swallower());
+            let is_declared_field = match &inferred_ty {
+                Type::ClassType(field) => iter::once(field)
+                    .chain(
+                        self.get_mro_for_class(field.class_object())
+                            .ancestors_no_object(),
+                    )
+                    .any(|field| {
+                        field.class_object().has_toplevel_qname(
+                            ModuleName::rest_framework_fields().as_str(),
+                            "Field",
+                        )
+                    }),
+                _ => false,
+            };
+            if is_declared_field {
+                // SerializerMetaclass removes declared fields from the class namespace, so an
+                // inherited Field attribute with the same name is not being reassigned.
+                return (
+                    self.attribute_expr_infer(e, None, name, errors),
+                    None,
+                    IsInherited::No,
+                );
+            }
+        }
         // Otherwise, analyze the value to determine the type
         let (inherited_ty, inherited_annotation) =
             self.get_inherited_type_and_annotation(class, name);
