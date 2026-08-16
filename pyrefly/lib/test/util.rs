@@ -191,6 +191,7 @@ pub struct TestEnv {
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     replace_imports_with_any: Vec<String>,
+    django_model_modules: Vec<ModuleName>,
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
     /// IDE features (indexing, hover) are enabled. Defaults to `Require::Everything`.
     run_require: Require,
@@ -251,6 +252,7 @@ impl TestEnv {
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             replace_imports_with_any: Vec::new(),
+            django_model_modules: Vec::new(),
             run_require: Require::Everything,
         }
     }
@@ -564,6 +566,11 @@ impl TestEnv {
         self
     }
 
+    pub fn with_django_model_modules(mut self, modules: &[&str]) -> Self {
+        self.django_model_modules = modules.iter().map(|x| ModuleName::from_str(x)).collect();
+        self
+    }
+
     pub fn with_version(mut self, version: PythonVersion) -> Self {
         self.version = version;
         self
@@ -761,6 +768,7 @@ impl TestEnv {
             errors.set_error_severity(ErrorKind::UnknownVariableType, Severity::Error);
         }
         config.extra_file_extensions = self.extra_file_extensions.clone();
+        config.django_model_modules = self.django_model_modules.clone();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {
             sourcedb.insert(*name, path.dupe());
