@@ -3763,13 +3763,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // precedence over inferred expr type.
                         annot_ty.unwrap_or(expr_ty)
                     }
-                } else if style == &AnnotationStyle::ForwardedInitial
-                    && expr_ty.is_any()
+                } else if matches!(
+                    style,
+                    AnnotationStyle::ForwardedInitial | AnnotationStyle::Forwarded
+                ) && expr_ty.is_any()
                     && let Some(annot) = annot_ty
                 {
-                    // First assignment after a bare annotation: if the expression
-                    // is Any, preserve the declared type since Any provides no
-                    // useful narrowing information.
+                    // Assigning `Any` to a variable with a declared type keeps the
+                    // declared type: `Any` carries no information to narrow with, so
+                    // taking it would only discard the annotation. This holds both for
+                    // the first assignment after a bare annotation and for later
+                    // reassignments of an already-initialized variable.
                     annot
                 } else {
                     // For reassignment or non-Any expressions, the expression
