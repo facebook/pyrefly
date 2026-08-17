@@ -66,10 +66,8 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
 use crate::binding::binding::Binding;
-use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::ImportBinding;
 use crate::binding::binding::Key;
-use crate::binding::binding::KeyLegacyTypeParam;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::types::AnyStyle;
@@ -121,31 +119,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn binding_for_name(&self, name: &ruff_python_ast::ExprName) -> Option<&Binding> {
-        let key = Key::BoundName(ShortIdentifier::expr_name(name));
-        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
-        Some(self.bindings().get(idx))
-    }
-
-    fn binding_following_forwards(&self, mut idx: Idx<Key>) -> &Binding {
+    fn binding_origin(&self, mut idx: Idx<Key>) -> &Binding {
         for _ in 0..16 {
             match self.bindings().get(idx) {
                 Binding::Forward(inner)
                 | Binding::PromoteForward(inner)
                 | Binding::ForwardToFirstUse(inner) => idx = *inner,
+                Binding::PossibleLegacyTParam(legacy_tparam, _) => {
+                    idx = self.bindings().get(legacy_tparam.first_key()).idx()
+                }
                 binding => return binding,
             }
         }
-        unreachable!("exceeded forward-binding depth limit while resolving jaxtyping wrapper")
+        unreachable!("exceeded binding depth limit while resolving jaxtyping origin")
     }
 
-    fn binding_for_name_following_forwards(
-        &self,
-        name: &ruff_python_ast::ExprName,
-    ) -> Option<&Binding> {
+    fn binding_origin_for_name(&self, name: &ruff_python_ast::ExprName) -> Option<&Binding> {
         let key = Key::BoundName(ShortIdentifier::expr_name(name));
         let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
-        Some(self.binding_following_forwards(idx))
+        Some(self.binding_origin(idx))
     }
 
     fn import_is_jaxtyping_wrapper(import: &ImportBinding) -> bool {
@@ -156,21 +148,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn name_is_jaxtyping_wrapper(&self, name: &ruff_python_ast::ExprName) -> bool {
-        self.binding_for_name(name)
-            .is_some_and(|binding| self.binding_is_jaxtyping_wrapper_origin(binding))
-            || self
-                .binding_for_name_following_forwards(name)
-                .is_some_and(|binding| self.binding_is_jaxtyping_wrapper_origin(binding))
+        self.binding_origin_for_name(name)
+            .is_some_and(|binding| match binding {
+                Binding::Import(import) => Self::import_is_jaxtyping_wrapper(import),
+                _ => false,
+            })
     }
 
     fn is_jaxtyping_module_expr(&self, expr: &Expr) -> bool {
         if let Expr::Name(name) = expr
-            && (self
-                .binding_for_name(name)
-                .is_some_and(|binding| self.binding_is_jaxtyping_module(binding))
-                || self
-                    .binding_for_name_following_forwards(name)
-                    .is_some_and(|binding| self.binding_is_jaxtyping_module(binding)))
+            && self
+                .binding_origin_for_name(name)
+                .is_some_and(|binding| match binding {
+                    Binding::Module(module) => module.0.as_str() == "jaxtyping",
+                    Binding::Import(import) => {
+                        import.module.as_str() == "jaxtyping" && import.name.as_str() == "jaxtyping"
+                    }
+                    _ => false,
+                })
         {
             return true;
         }
@@ -181,62 +176,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if module.parts().len() == 1
                     && module.parts()[0].as_str() == "jaxtyping"
         )
-    }
-
-    fn binding_is_jaxtyping_module(&self, binding: &Binding) -> bool {
-        match binding {
-            Binding::Module(module) => module.0.as_str() == "jaxtyping",
-            Binding::Import(import) => {
-                import.module.as_str() == "jaxtyping" && import.name.as_str() == "jaxtyping"
-            }
-            Binding::PossibleLegacyTParam(legacy_tparam, _) => legacy_tparam
-                .keys()
-                .iter()
-                .any(|key| self.legacy_tparam_is_jaxtyping_module(*key)),
-            _ => false,
-        }
-    }
-
-    fn binding_is_jaxtyping_wrapper_origin(&self, binding: &Binding) -> bool {
-        match binding {
-            Binding::Import(import) => Self::import_is_jaxtyping_wrapper(import),
-            Binding::Forward(idx)
-            | Binding::PromoteForward(idx)
-            | Binding::ForwardToFirstUse(idx) => {
-                self.binding_is_jaxtyping_wrapper_origin(self.binding_following_forwards(*idx))
-            }
-            Binding::PossibleLegacyTParam(legacy_tparam, _) => legacy_tparam
-                .keys()
-                .iter()
-                .any(|key| self.legacy_tparam_is_jaxtyping_wrapper_origin(*key)),
-            _ => false,
-        }
-    }
-
-    fn legacy_tparam_is_jaxtyping_wrapper_origin(&self, key: Idx<KeyLegacyTypeParam>) -> bool {
-        match self.bindings().get(key) {
-            BindingLegacyTypeParam::ParamKeyed(idx) => {
-                self.binding_is_jaxtyping_wrapper_origin(self.binding_following_forwards(*idx))
-            }
-            BindingLegacyTypeParam::ModuleKeyed(idx, attrs)
-                if attrs.len() == 1
-                    && JAXTYPING_WRAPPERS
-                        .iter()
-                        .any(|wrapper| attrs.last().as_str() == *wrapper) =>
-            {
-                self.binding_is_jaxtyping_module(self.binding_following_forwards(*idx))
-            }
-            BindingLegacyTypeParam::ModuleKeyed(_, _) => false,
-        }
-    }
-
-    fn legacy_tparam_is_jaxtyping_module(&self, key: Idx<KeyLegacyTypeParam>) -> bool {
-        match self.bindings().get(key) {
-            BindingLegacyTypeParam::ParamKeyed(idx) => {
-                self.binding_is_jaxtyping_module(self.binding_following_forwards(*idx))
-            }
-            BindingLegacyTypeParam::ModuleKeyed(_, _) => false,
-        }
     }
 
     /// Parse an origin-aware jaxtyping type form such as `Float[Tensor, "batch"]`.
