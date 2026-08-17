@@ -398,13 +398,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Narrow a type by removing values identity-equal to `right` (`is not` semantics).
     fn narrow_is_not(&self, ty: &Type, right: &Type) -> Type {
         self.distribute_over_union(ty, |t| match (t, right) {
-            (_, Type::None | Type::Ellipsis) if self.literal_equal(t, right) => {
-                self.heap.mk_never()
-            }
-            (_, Type::Literal(f))
-                if matches!(f.value, Lit::Bool(_) | Lit::Enum(_))
-                    && self.literal_equal(t, right) =>
-            {
+            (_, right) if Self::is_identity_literal(right) && Self::literal_equal(t, right) => {
                 self.heap.mk_never()
             }
             (Type::Sentinel(s1), Type::Sentinel(s2)) if s1 == s2 => self.heap.mk_never(),
@@ -1068,22 +1062,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &FacetChain::new(Vec1::new(facet.clone())),
                 range,
             );
-            match right {
-                Type::None | Type::Ellipsis => {
-                    if self.is_subset_eq(right, &facet_ty) {
-                        t.clone()
-                    } else {
-                        self.heap.mk_never()
-                    }
-                }
-                Type::Literal(f) if matches!(f.value, Lit::Bool(_) | Lit::Enum(_)) => {
-                    if self.is_subset_eq(right, &facet_ty) {
-                        t.clone()
-                    } else {
-                        self.heap.mk_never()
-                    }
-                }
-                _ => t.clone(),
+            if Self::is_identity_literal(right) && !self.is_subset_eq(right, &facet_ty) {
+                self.heap.mk_never()
+            } else {
+                t.clone()
             }
         })
     }
@@ -1103,13 +1085,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &FacetChain::new(Vec1::new(facet.clone())),
                 range,
             );
-            let is_identity_literal = |ty: &Type| {
-                matches!(ty, Type::None | Type::Ellipsis)
-                    || matches!(ty, Type::Literal(f) if matches!(f.value, Lit::Bool(_) | Lit::Enum(_)))
-            };
-            if is_identity_literal(&facet_ty)
-                && is_identity_literal(right)
-                && self.literal_equal(right, &facet_ty)
+            if Self::is_identity_literal(&facet_ty)
+                && Self::is_identity_literal(right)
+                && Self::literal_equal(right, &facet_ty)
             {
                 self.heap.mk_never()
             } else {
@@ -1164,15 +1142,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &FacetChain::new(Vec1::new(facet.clone())),
                         range,
                     );
-                    match right {
-                        Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_) => {
-                            if self.is_subset_eq(&right, &facet_ty) {
-                                t.clone()
-                            } else {
-                                self.heap.mk_never()
-                            }
-                        }
-                        _ => t.clone(),
+                    if Self::is_literal(&right) && !self.is_subset_eq(&right, &facet_ty) {
+                        self.heap.mk_never()
+                    } else {
+                        t.clone()
                     }
                 }))
             }
@@ -1185,12 +1158,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &FacetChain::new(Vec1::new(facet.clone())),
                         range,
                     );
-                    match (&facet_ty, &right) {
-                        (
-                            Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_),
-                            Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_),
-                        ) if self.literal_equal(&right, &facet_ty) => self.heap.mk_never(),
-                        _ => t.clone(),
+                    if Self::is_literal(&facet_ty)
+                        && Self::is_literal(&right)
+                        && Self::literal_equal(&right, &facet_ty)
+                    {
+                        self.heap.mk_never()
+                    } else {
+                        t.clone()
                     }
                 }))
             }
@@ -1547,7 +1521,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let mut result = t.clone();
                         for right in &literal_types {
                             match (t, right) {
-                                (_, _) if self.literal_equal(t, right) => {
+                                (_, _) if Self::literal_equal(t, right) => {
                                     result = self.heap.mk_never();
                                 }
                                 // We intentionally do NOT subtract class objects
@@ -1590,7 +1564,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .collect();
                     return self.distribute_over_union(ty, |t| {
                         for key_type in &key_types {
-                            if self.literal_equal(t, key_type) {
+                            if Self::literal_equal(t, key_type) {
                                 return self.heap.mk_never();
                             }
                         }
@@ -1761,10 +1735,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::Eq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(
-                    right,
-                    Type::Literal(_) | Type::None | Type::Ellipsis | Type::Sentinel(_)
-                ) {
+                if Self::is_literal(&right) {
                     self.intersect(ty, &right)
                 } else {
                     ty.clone()
@@ -1772,12 +1743,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::NotEq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(
-                    right,
-                    Type::Literal(_) | Type::None | Type::Ellipsis | Type::Sentinel(_)
-                ) {
+                if Self::is_literal(&right) {
                     self.distribute_over_union(ty, |t| match (t, &right) {
-                        (_, _) if self.literal_equal(t, &right) => self.heap.mk_never(),
+                        (_, _) if Self::literal_equal(t, &right) => self.heap.mk_never(),
                         (Type::ClassType(cls), Type::Literal(lit))
                             if cls.is_builtin("bool")
                                 && let Lit::Bool(b) = &lit.value =>
@@ -2502,7 +2470,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn literal_equal(&self, left: &Type, right: &Type) -> bool {
+    fn is_literal(ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_)
+        )
+    }
+
+    /// Is `ty` a literal with a stable memory address?
+    /// This determines whether some narrowing operations are safe.
+    fn is_identity_literal(ty: &Type) -> bool {
+        match ty {
+            Type::None | Type::Ellipsis => true,
+            Type::Literal(f) => matches!(f.value, Lit::Bool(_) | Lit::Enum(_)),
+            _ => false,
+        }
+    }
+
+    fn literal_equal(left: &Type, right: &Type) -> bool {
         match (left, right) {
             (Type::None, Type::None) => true,
             (Type::Ellipsis, Type::Ellipsis) => true,
