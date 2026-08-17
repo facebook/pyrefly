@@ -1107,50 +1107,6 @@ class MyTest(Any):
 "#,
 );
 
-testcase!(
-    test_field_using_method_scope_type_variable,
-    r#"
-from typing import assert_type, Any
-
-class C:
-    def __init__[R](self, field: R):
-        self.field = field  # E: Attribute `field` cannot depend on type variable `R`, which is not in the scope of class `C`
-
-c = C("test")
-assert_type(c.field, Any)
-"#,
-);
-
-// Note the difference between this and test_set_attribute_to_class_scope_type_variable.
-// `R` in `__init__` here refers to a method-scoped type variable that shadows a class-scoped one.
-testcase!(
-    test_illegal_type_variable_with_name_shadowing,
-    r#"
-class C[R]:
-    def __init__[R](self, field: R):  # E: Type parameter `R` shadows a type parameter of the same name from an enclosing scope
-        self.field = field  # E: Attribute `field` cannot depend on type variable `R`, which is not in the scope of class `C`
-"#,
-);
-
-// Note the difference between this and test_illegal_type_variable_with_name_shadowing.
-// `R` in `__init__` here refers to the class-scoped `R``.
-testcase!(
-    test_set_attribute_to_class_scope_type_variable,
-    r#"
-from typing import Generic, TypeVar
-
-R = TypeVar("R")
-
-class C1(Generic[R]):
-    def __init__(self, field: R):
-        self.field = field
-
-class C2[R]:
-    def __init__(self, field: R):
-        self.field = field
-"#,
-);
-
 // https://github.com/facebook/pyrefly/issues/2204
 testcase!(
     test_generic_function_assigned_to_attribute,

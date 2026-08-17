@@ -83,6 +83,7 @@ mod tsp;
 mod tuple;
 mod type_alias;
 mod type_var_tuple;
+mod type_variable_scope;
 mod typed_dict;
 mod typeform;
 mod typing_self;

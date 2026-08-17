@@ -42,20 +42,6 @@ def test(cls: type[T]) -> None:
 "#,
 );
 
-testcase!(
-    test_tyvar_mix,
-    r#"
-from typing import TypeVar, assert_type
-U = TypeVar("U")
-def foo[T](
-      x: U  # E: Type parameter U is not included in the type parameter list
-    ) -> U:
-    return x
-
-assert_type(foo(1), int)
-"#,
-);
-
 // This test exercises an edge case where naively using type analysis on base classes
 // can cause problems in the interaction of tparams validation and recursion.
 testcase!(
@@ -480,20 +466,6 @@ testcase!(
     r#"
 class A[T]:  # E: Cannot use type parameter lists on Python 3.8 (syntax was added in Python 3.12)
     x: T
-    "#,
-);
-
-testcase!(
-    test_shadowing_scoped_type_vars,
-    r#"
-from typing import TypeVar, Generic
-class C0[T]:
-    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
-        return x
-T = TypeVar("T")
-class C1(Generic[T]):
-    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
-        return x
     "#,
 );
 
