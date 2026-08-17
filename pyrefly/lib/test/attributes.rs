@@ -1471,6 +1471,45 @@ class C:
 );
 
 testcase!(
+    test_protected_attribute_access,
+    r#"
+class A:
+    _protected: int = 0
+
+    def reveal(self, other: "A") -> int:
+        return self._protected + other._protected
+
+outside_instance = A()._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+outside_class = A._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+
+class B(A):
+    inherited = A._protected
+
+    def reveal(self, other: A) -> int:
+        return self._protected + other._protected
+
+class Unrelated:
+    def leak(self, a: A) -> int:
+        return a._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+"#,
+);
+
+testcase!(
+    test_same_named_protected_attribute_from_unrelated_class,
+    r#"
+class A:
+    _protected: int = 0
+
+class B(A):
+    def leak(self, other: "Unrelated") -> int:
+        return other._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+
+class Unrelated:
+    _protected: int = 0
+"#,
+);
+
+testcase!(
     test_private_attribute_inside_class,
     r#"
 class A:

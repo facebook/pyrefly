@@ -1690,6 +1690,21 @@ opts: Options = {}
 f(name="test", **opts)  # E: Multiple values for argument `name`
 ```
 
+## private-usage
+
+The `private-usage` error is reported when a protected class member, whose name starts with a
+single underscore, is accessed from outside its defining class or a subclass.
+
+```python
+class Service:
+    def _reset(self) -> None: ...
+
+Service()._reset()  # private-usage
+```
+
+Protected member access is allowed within the defining class and its subclasses. Double-underscore
+private attributes are checked separately under [`no-access`](#no-access).
+
 ## protocol-implicitly-defined-attribute
 
 Protocols must declare the attributes they require directly in the class body. Assigning to a new `self` attribute inside a protocol method introduces a member that implementations of the protocol would never be required to provide.

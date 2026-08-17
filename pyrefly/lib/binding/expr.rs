@@ -1183,13 +1183,16 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn check_private_attribute_usage(&mut self, attr: &ExprAttribute) {
-        if !Ast::is_mangled_attr(&attr.attr.id) {
+        if !Ast::is_mangled_attr(&attr.attr.id) && !Ast::is_protected_attr(&attr.attr.id) {
             return;
         }
         let expect = PrivateAttributeAccessCheck {
             value: (*attr.value).clone(),
             attr: attr.attr.clone(),
-            class_idx: self.scopes.current_method_context(),
+            class_idx: self
+                .scopes
+                .current_class_key()
+                .or_else(|| self.scopes.current_method_context()),
         };
         self.insert_binding(
             KeyExpect::PrivateAttributeAccess(attr.attr.range()),
