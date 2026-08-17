@@ -42,6 +42,11 @@ let docsSidebar = [
         items: ['installation', 'configuration'],
     },
     {
+        type: 'doc' as const,
+        id: 'compare',
+        label: 'Compare Type Checkers',
+    },
+    {
         type: 'category' as const,
         label: 'Migrating to Pyrefly',
         description:
