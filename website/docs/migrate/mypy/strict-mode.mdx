@@ -1,0 +1,104 @@
+---
+title: Mypy Strict Mode in Pyrefly
+slug: /migrate/mypy/strict-mode
+description:
+    Translate mypy strict mode into a reviewed Pyrefly configuration without
+    assuming that the two strict bundles are identical.
+keywords:
+    - mypy strict
+    - mypy strict mode
+    - pyrefly strict
+    - mypy strict pyproject
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Mypy's `strict = true` and Pyrefly's `preset = "strict"` are both strictness
+bundles, but they are not the same bundle, and each evolves on its own schedule.
+Decide which of the two goals below you have before you configure anything.
+
+## Goal 1: preserve the checks you have today
+
+Let `pyrefly init` generate a mypy-oriented starting point, then review the
+composite behavior explicitly:
+
+```toml
+preset = "legacy"
+check-unannotated-defs = true
+infer-return-types = "never"
+```
+
+Mypy strict includes `check_untyped_defs`, so `check-unannotated-defs = true` is
+part of a faithful strict migration. The converter maps mypy's strictness flags
+onto Pyrefly error kinds, but it does not expand the strict bundle into behavior
+settings, and the [`legacy` preset](../../configuration.mdx#preset-legacy)
+defaults `check-unannotated-defs` to `false`. Set it explicitly rather than
+inheriting the preset default.
+
+## Goal 2: adopt Pyrefly-native strictness
+
+Once the migration is stable, this is a fresh policy decision rather than a
+translation:
+
+```toml
+preset = "strict"
+```
+
+The [`strict` preset](../../configuration.mdx#preset-strict) sets
+`strict-callable-subtyping = true` and enables
+[`implicit-any`](../../error-kinds.mdx#implicit-any) (which covers every
+implicit-`Any` sub-kind),
+[`missing-override-decorator`](../../error-kinds.mdx#missing-override-decorator),
+[`potential-bad-keyword-argument`](../../error-kinds.mdx#potential-bad-keyword-argument),
+[`unused-ignore`](../../error-kinds.mdx#unused-ignore), and
+[`direct-abstract-base-instantiation`](../../error-kinds.mdx#direct-abstract-base-instantiation).
+
+## What the converter does with mypy strict
+
+| Mypy strict behavior                      | Generated or closest Pyrefly policy             | Review                                                                           |
+| ----------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------- |
+| Returning `Any` from a typed function     | `no-any-return = "error"`                       | Close mapping; Pyrefly splits implicit and explicit return `Any` internally      |
+| Redundant casts                           | `redundant-cast = "warn"`                       | Generated at warning severity                                                    |
+| Untyped or incompletely typed definitions | `implicit-any-parameter` + `unannotated-return` | Two Pyrefly policies stand in for several mypy flags                             |
+| Missing generic arguments                 | `implicit-any = "error"`                        | Broader than `implicit-any-type-argument` alone                                  |
+| Checking unannotated function bodies      | Not expanded by the converter                   | Set `check-unannotated-defs = true` yourself                                     |
+| Explicit `Any`                            | `explicit-any`                                  | Only when `disallow_any_explicit` is set; mypy `strict` alone does not enable it |
+| Unused ignores                            | `unused-type-ignore` / `unused-ignore`          | Not part of the mypy converter map; add by hand                                  |
+| Explicit override requirement             | `missing-override-decorator`                    | Manual, unless you adopt the Pyrefly strict preset                               |
+
+## A hand-tuned compatibility config
+
+Use specific kinds when the umbrella is broader than you want:
+
+```toml
+preset = "legacy"
+check-unannotated-defs = true
+infer-return-types = "never"
+
+[errors]
+implicit-any-parameter = "error"
+implicit-any-type-argument = "error"
+unannotated-return = "error"
+no-any-return = "error"
+redundant-cast = "warn"
+```
+
+Then consider adding the policies mypy strict does not cover:
+
+```toml
+[errors]
+missing-override-decorator = "error"
+unused-type-ignore = "error"
+```
+
+## Related guides
+
+- [Migrate from mypy](index.mdx)
+- [Mypy config reference](config-reference.mdx)
+- [Mypy error codes](error-codes.mdx)
+- [Pyrefly presets](../../configuration.mdx#preset)

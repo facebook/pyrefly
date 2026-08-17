@@ -1,0 +1,94 @@
+---
+title: Migrating to Pyrefly
+slug: /migrating-to-pyrefly
+description:
+    Start here to move a Python project to Pyrefly from mypy or Pyright, with
+    automatic config conversion, parallel CI, and a suppression or baseline
+    rollout.
+keywords:
+    - migrate to pyrefly
+    - python type checker migration
+    - mypy to pyrefly
+    - pyright to pyrefly
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Pyrefly is designed to be adopted incrementally. You can install it beside your
+current checker, keep both in CI, and drop the old one once the team has
+accepted the differences.
+
+## Pick your starting point
+
+- **[Migrate from mypy](mypy/index.mdx)** for a project configured with
+  `mypy.ini`, `setup.cfg`, or `[tool.mypy]`.
+- **[Migrate from Pyright](pyright/index.mdx)** for a project configured with
+  `pyrightconfig.json` or `[tool.pyright]`, including Pylance users.
+
+Both guides follow the same shape: install Pyrefly and convert the config, check
+the mapping is faithful, then handle the remaining errors and drop your old
+checker.
+
+## The short version
+
+1. Install Pyrefly alongside your current checker:
+
+    ```sh
+    # uv
+    uv add --dev pyrefly
+
+    # pip
+    python -m pip install pyrefly
+    ```
+
+2. Convert your existing mypy or Pyright config into a native Pyrefly one:
+
+    ```sh
+    pyrefly init
+    ```
+
+    Read the generated config before committing it. Not every setting has an
+    exact Pyrefly equivalent, and unrecognized ones are skipped without a
+    warning. The guides above cover what to check.
+
+3. Type check with the config you just generated:
+
+    ```sh
+    pyrefly check
+    ```
+
+    Your existing config is left in place, so both checkers can keep working
+    while you review the result.
+
+4. Decide how to handle any new errors introduced by differing checker behavior.
+   Pyrefly offers two ways to clear the signal without fixing everything up
+   front:
+
+    - [Suppression comments](../error-suppressions.mdx#error-suppression-comments)
+      silence errors inline with `# pyrefly: ignore`, and `pyrefly suppress`
+      adds them across the project in bulk.
+    - A [baseline](../error-suppressions.mdx#baseline-files-experimental)
+      records the current errors in a file, so CI reports only newly introduced
+      ones and your source stays untouched. This is useful if you are migrating
+      a very large codebase.
+
+5. When you're ready, remove your old type checker and any unused ignore
+   comments.
+
+## Reference material
+
+Each guide links to the detail it needs, and the full mappings are also
+available directly:
+
+| Coming from | Configuration                                            | Diagnostics                                              |
+| ----------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| mypy        | [Mypy config reference](mypy/config-reference.mdx)       | [Mypy error codes](mypy/error-codes.mdx)                 |
+| Pyright     | [Pyright config reference](pyright/config-reference.mdx) | [Pyright diagnostics](pyright/diagnostics-reference.mdx) |
+
+If config migration goes wrong for your project, please
+[let us know](https://github.com/facebook/pyrefly/issues).

@@ -45,11 +45,22 @@ let docsSidebar = [
         type: 'category' as const,
         label: 'Migrating to Pyrefly',
         description:
-            'Never used a type system before or just new to Pyrefly? Start here!',
+            'Move an existing project from mypy or Pyright, one step at a time',
         collapsed: false,
         items: [
-            'migrating-to-pyrefly',
-            'migrating-from-mypy',
+            'migrate/index',
+            {
+                type: 'category' as const,
+                label: 'From mypy',
+                items: [
+                    'migrate/mypy/index',
+                    'migrate/mypy/plugins',
+                    'migrate/mypy/strict-mode',
+                    'migrate/mypy/ignore-missing-imports',
+                    'migrate/mypy/config-reference',
+                    'migrate/mypy/error-codes',
+                ],
+            },
             {
                 type: 'category' as const,
                 label: 'From Pyright',
