@@ -212,6 +212,12 @@ enum OverloadWitnessPruningDecision {
     Surviving(SmallSet<usize>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OverloadPruningSubsetMode {
+    Probe,
+    Commit,
+}
+
 type OverloadPruningByWitness = HashMap<OverloadResidualIdentity, OverloadWitnessPruningDecision>;
 
 #[derive(Clone, Debug)]
@@ -1389,7 +1395,7 @@ impl Solver {
         let _specialization_errors = self.finish_quantified_with_pruning(
             vs,
             false,
-            &mut |_got, _want| Ok(()),
+            &mut |_constraints, _mode| true,
             &mut WitnessCaptures::default(),
         );
 
@@ -1775,44 +1781,41 @@ impl Solver {
         }
     }
 
-    fn branch_bounds_compatibility_check(
+    /// Collect compatibility constraints without mutating the captured branch value.
+    fn branch_compatibility_constraints(
         &self,
-        branch_value: &mut Variable,
+        branch_value: &Variable,
         solved_ty: &Type,
-        is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-    ) -> bool {
-        let bounds = match branch_value {
-            Variable::Quantified { bounds, .. } | Variable::Unwrap(bounds) => bounds,
+    ) -> Vec<(Type, Type)> {
+        match branch_value {
+            Variable::Quantified { bounds, .. } | Variable::Unwrap(bounds) => {
+                let mut constraints = Vec::with_capacity(bounds.lower.len() + bounds.upper.len());
+                constraints.extend(bounds.lower.iter().map(|lower| {
+                    let lower = self
+                        .sanitize_self_referential_vars(lower, solved_ty)
+                        .unwrap_or_else(|| lower.clone());
+                    (lower, solved_ty.clone())
+                }));
+                constraints.extend(bounds.upper.iter().map(|upper| {
+                    let upper = self
+                        .sanitize_self_referential_vars(upper, solved_ty)
+                        .unwrap_or_else(|| upper.clone());
+                    (solved_ty.clone(), upper)
+                }));
+                constraints
+            }
             Variable::Answer(branch_ty) | Variable::ResidualAnswer { ty: branch_ty, .. } => {
                 // If this branch already collapsed to a concrete type, treat
                 // compatibility as type equivalence against the solved type.
-                return is_subset(branch_ty, solved_ty).is_ok()
-                    && is_subset(solved_ty, branch_ty).is_ok();
+                vec![
+                    (branch_ty.clone(), solved_ty.clone()),
+                    (solved_ty.clone(), branch_ty.clone()),
+                ]
             }
-            Variable::PartialQuantified(q) => {
-                let answer = normalize_answer_for_kind(q.kind(), Cow::Borrowed(solved_ty));
-                *branch_value = Variable::Answer(answer);
-                return true;
-            }
-            Variable::PartialContained(_) | Variable::Recursive => {
-                // During the overload branch probe, the captured Quantified var
-                // was unified with a partial/recursive var. Pin it to the solved
-                // type so downstream materialization sees a concrete answer. These
-                // vars do not retain a QuantifiedKind, so any IntVar answer was
-                // already normalized before capture.
-                *branch_value = Variable::Answer(solved_ty.clone());
-                return true;
-            }
-        };
-        // The captured bounds may reference self-referential vars; sanitize them before testing
-        // compatibility so a degenerate cycle does not spuriously prune a valid branch.
-        bounds.lower.iter().all(|lower| {
-            let sanitized = self.sanitize_self_referential_vars(lower, solved_ty);
-            is_subset(sanitized.as_ref().unwrap_or(lower), solved_ty).is_ok()
-        }) && bounds.upper.iter().all(|upper| {
-            let sanitized = self.sanitize_self_referential_vars(upper, solved_ty);
-            is_subset(solved_ty, sanitized.as_ref().unwrap_or(upper)).is_ok()
-        })
+            Variable::PartialQuantified(_)
+            | Variable::PartialContained(_)
+            | Variable::Recursive => Vec::new(),
+        }
     }
 
     /// Replace any placeholder var whose answer mentions the var itself with the solved type.
@@ -1858,39 +1861,71 @@ impl Solver {
             .unwrap_or_else(|| Name::new("unknown"))
     }
 
-    fn compute_overload_pruning_by_witness(
+    /// Prune overload captures only when the boundary contains exactly one witness.
+    /// Multiple witnesses may share inference variables, so pruning them independently would
+    /// make the result depend on capture order.
+    fn prune_overload_witnesses(
         &self,
         solved_vars: &SmallMap<Var, SolvedVarInfo>,
-        overload_witness_captures: &mut OverloadWitnessCapturesByHash,
-        is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
+        overload_witness_captures: &OverloadWitnessCapturesByHash,
+        check_subset: &mut dyn FnMut(&[(Type, Type)], OverloadPruningSubsetMode) -> bool,
     ) -> OverloadPruningByWitness {
-        overload_witness_captures
-            .iter_mut()
-            .filter_map(|(witness_hash, branch_captures)| {
-                let identity = OverloadResidualIdentity {
-                    witness_hash: *witness_hash,
-                };
-                let mut surviving_by_witness: Option<SmallSet<usize>> = None;
-                let mut solved_constraints = Vec::new();
-                for (var, solved_var) in solved_vars {
-                    let mut surviving_for_solved_var = SmallSet::new();
-                    let mut saw_var_in_witness = false;
-                    for capture in branch_captures.iter_mut() {
-                        let Some(branch_value) = capture.values.get_mut(var) else {
-                            continue;
-                        };
-                        saw_var_in_witness = true;
-                        if self.branch_bounds_compatibility_check(
-                            branch_value,
+        let mut witnesses = overload_witness_captures.iter();
+        let (Some((witness_hash, branch_captures)), None) = (witnesses.next(), witnesses.next())
+        else {
+            return HashMap::new();
+        };
+        let identity = OverloadResidualIdentity {
+            witness_hash: *witness_hash,
+        };
+        let solved_vars_in_witness = solved_vars
+            .iter()
+            .filter_map(|(&var, solved_var)| {
+                branch_captures
+                    .iter()
+                    .any(|capture| capture.values.contains_key(&var))
+                    .then_some((var, solved_var))
+            })
+            .collect::<Vec<_>>();
+        if solved_vars_in_witness.is_empty() {
+            return HashMap::new();
+        }
+
+        let surviving_branches = branch_captures
+            .iter()
+            .filter_map(|capture| {
+                let constraints = solved_vars_in_witness.iter().try_fold(
+                    Vec::new(),
+                    |mut constraints, (var, solved_var)| {
+                        constraints.extend(self.branch_compatibility_constraints(
+                            capture.values.get(var)?,
                             &solved_var.solved_ty,
-                            is_subset,
-                        ) {
-                            surviving_for_solved_var.insert(capture.branch_index);
-                        }
-                    }
-                    if !saw_var_in_witness {
-                        continue;
-                    }
+                        ));
+                        Some(constraints)
+                    },
+                )?;
+                check_subset(&constraints, OverloadPruningSubsetMode::Probe)
+                    .then_some((capture.branch_index, constraints))
+            })
+            .collect::<Vec<_>>();
+
+        if let [(_, constraints)] = surviving_branches.as_slice()
+            && !check_subset(constraints, OverloadPruningSubsetMode::Commit)
+        {
+            // A later rejected probe can consume the remaining subset gas, so commit may fail
+            // even though this branch's earlier probe succeeded. Abandon pruning rather than
+            // report resource exhaustion as an incompatible overload.
+            return HashMap::new();
+        }
+
+        let surviving_branch_indices = surviving_branches
+            .into_iter()
+            .map(|(branch_index, _)| branch_index)
+            .collect::<SmallSet<_>>();
+        let decision = if surviving_branch_indices.is_empty() {
+            let mut solved_constraints = solved_vars_in_witness
+                .iter()
+                .map(|(var, solved_var)| {
                     let quantified_name = branch_captures
                         .iter()
                         .find_map(|capture| {
@@ -1902,29 +1937,19 @@ impl Solver {
                             })
                         })
                         .unwrap_or_else(|| Name::new("unknown"));
-                    solved_constraints.push(OverloadSolvedConstraint {
+                    OverloadSolvedConstraint {
                         quantified_name,
                         solved_ty: solved_var.solved_ty.clone(),
-                    });
-                    if let Some(existing_surviving) = surviving_by_witness.as_mut() {
-                        existing_surviving.retain(|idx| surviving_for_solved_var.contains(idx));
-                    } else {
-                        surviving_by_witness = Some(surviving_for_solved_var);
                     }
-                }
-                let surviving_branch_indices = surviving_by_witness?;
-                solved_constraints
-                    .sort_by(|left, right| left.quantified_name.cmp(&right.quantified_name));
-                let decision = if surviving_branch_indices.is_empty() {
-                    OverloadWitnessPruningDecision::AllPruned(OverloadAllPrunedCause {
-                        solved_constraints,
-                    })
-                } else {
-                    OverloadWitnessPruningDecision::Surviving(surviving_branch_indices)
-                };
-                Some((identity, decision))
-            })
-            .collect()
+                })
+                .collect::<Vec<_>>();
+            solved_constraints
+                .sort_by(|left, right| left.quantified_name.cmp(&right.quantified_name));
+            OverloadWitnessPruningDecision::AllPruned(OverloadAllPrunedCause { solved_constraints })
+        } else {
+            OverloadWitnessPruningDecision::Surviving(surviving_branch_indices)
+        };
+        HashMap::from([(identity, decision)])
     }
 
     /// Finish a specific quantified set, resolving type variables to their
@@ -1988,11 +2013,14 @@ impl Solver {
         if vs.0.is_empty() {
             return Ok(());
         }
+        let boundary_vars = vs.0.clone();
         let mut subset = self.subset(type_order);
         self.finish_quantified_with_pruning(
             vs,
             infer_with_first_use,
-            &mut |got, want| subset.is_subset_eq_probe_for_pruning(got, want),
+            &mut |constraints, mode| {
+                subset.check_subset_constraints_for_pruning(&boundary_vars, constraints, mode)
+            },
             &mut captures,
         )
     }
@@ -2038,13 +2066,13 @@ impl Solver {
 
     /// Core quantified-finishing implementation.
     ///
-    /// The injected `is_subset` callback controls whether/how overload branch
-    /// pruning compatibility is checked.
+    /// `check_subset` probes all constraints for each candidate overload branch, then commits the
+    /// complete sequence for a unique survivor.
     fn finish_quantified_with_pruning(
         &self,
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
-        is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
+        check_subset: &mut dyn FnMut(&[(Type, Type)], OverloadPruningSubsetMode) -> bool,
         captures: &mut WitnessCaptures,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let mut err = Vec::new();
@@ -2084,8 +2112,8 @@ impl Solver {
         drop(lock);
 
         let overload_pruning_by_witness = if has_overload_captures {
-            let lock = self.variables.lock();
-            let solved_vars: SmallMap<Var, SolvedVarInfo> =
+            let solved_vars = {
+                let lock = self.variables.lock();
                 vs.0.iter()
                     .filter_map(|&v| match &*lock.get(v) {
                         Variable::Answer(solved_ty) => Some((
@@ -2097,13 +2125,32 @@ impl Solver {
                         )),
                         _ => None,
                     })
-                    .collect();
-            drop(lock);
-            self.compute_overload_pruning_by_witness(
-                &solved_vars,
-                &mut captures.overload,
-                is_subset,
-            )
+                    .collect()
+            };
+            let pruning =
+                self.prune_overload_witnesses(&solved_vars, &captures.overload, check_subset);
+
+            // Partial captures impose no compatibility constraint, but materialization still
+            // needs their concrete solved value after pruning finishes.
+            for capture in captures.overload.values_mut().flatten() {
+                for (var, branch_value) in &mut capture.values {
+                    let Some(solved_var) = solved_vars.get(var) else {
+                        continue;
+                    };
+                    let answer = match branch_value {
+                        Variable::PartialQuantified(q) => normalize_answer_for_kind(
+                            q.kind(),
+                            Cow::Borrowed(&solved_var.solved_ty),
+                        ),
+                        Variable::PartialContained(_) | Variable::Recursive => {
+                            solved_var.solved_ty.clone()
+                        }
+                        _ => continue,
+                    };
+                    *branch_value = Variable::Answer(answer);
+                }
+            }
+            pruning
         } else {
             HashMap::new()
         };
@@ -3229,40 +3276,46 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         self.witness_deferred_vars = deferred_vars;
     }
 
-    /// Run a speculative subset check used only for overload-branch pruning in
-    /// quantified finishing.
+    /// Check one overload branch's constraints as a transaction during quantified finishing.
     ///
-    /// Why this exists:
-    /// Pruning asks "would this branch be compatible with the solved type?" so we
-    /// can trim impossible overload residual branches before final materialization.
-    ///
-    /// Why we snapshot:
-    /// `is_subset_eq` is not pure - it can pin vars, refine bounds, and update
-    /// subset/protocol/witness side-state. None of those probe side effects are
-    /// semantically part of the real solve path, so we snapshot and restore the
-    /// relevant local state after each probe.
-    fn is_subset_eq_probe_for_pruning(
+    /// A probe always restores its inference side effects. A failed commit does the same; only a
+    /// successful commit retains them.
+    fn check_subset_constraints_for_pruning(
         &mut self,
-        got: &Type,
-        want: &Type,
-    ) -> Result<(), SubsetError> {
-        let mut vars: SmallSet<Var> = got.collect_maybe_placeholder_vars().into_iter().collect();
-        vars.extend(want.collect_maybe_placeholder_vars());
-        let vars = vars.into_iter().collect::<Vec<_>>();
-        let vars_snapshot = self.solver.snapshot_vars(&vars);
+        boundary_vars: &[Var],
+        constraints: &[(Type, Type)],
+        mode: OverloadPruningSubsetMode,
+    ) -> bool {
+        if constraints.is_empty() {
+            return true;
+        }
+        // Captured bounds may refer to placeholder vars owned by a surrounding boundary.
+        let mut vars: SmallSet<Var> = boundary_vars.iter().copied().collect();
+        for (got, want) in constraints {
+            vars.extend(got.collect_maybe_placeholder_vars());
+            vars.extend(want.collect_maybe_placeholder_vars());
+        }
+        let vars_snapshot = self
+            .solver
+            .snapshot_vars(&vars.into_iter().collect::<Vec<_>>());
         let cache_snapshot = self.subset_cache.clone();
         self.subset_cache.clear();
         let protocol_assumptions = self.class_protocol_assumptions.clone();
         let deferred_vars = self.snapshot_witness_deferred_vars();
         let coinductive_assumptions_used = self.coinductive_assumptions_used;
-        let result =
-            self.with_active_call_context(CallContext::outside(), |me| me.is_subset_eq(got, want));
-        self.solver.restore_vars(vars_snapshot);
-        self.subset_cache = cache_snapshot;
-        self.class_protocol_assumptions = protocol_assumptions;
-        self.restore_witness_deferred_vars(deferred_vars);
-        self.coinductive_assumptions_used = coinductive_assumptions_used;
-        result
+        let compatible = self.with_active_call_context(CallContext::outside(), |me| {
+            constraints
+                .iter()
+                .all(|(got, want)| me.is_subset_eq(got, want).is_ok())
+        });
+        if !compatible || mode == OverloadPruningSubsetMode::Probe {
+            self.solver.restore_vars(vars_snapshot);
+            self.subset_cache = cache_snapshot;
+            self.class_protocol_assumptions = protocol_assumptions;
+            self.restore_witness_deferred_vars(deferred_vars);
+            self.coinductive_assumptions_used = coinductive_assumptions_used;
+        }
+        compatible
     }
 
     pub fn is_consistent(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {

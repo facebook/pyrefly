@@ -596,6 +596,22 @@ reveal_type(result)  # E: revealed type: Overload[ (int) -> object (str) -> obje
 );
 
 testcase!(
+    test_overload_pruning_commits_nested_generic_constraints,
+    r#"
+from typing import Any, Iterable, assert_type, overload
+
+@overload
+def collect() -> list[Any]: ...
+@overload
+def collect[T](xs: Iterable[T]) -> list[T]: ...
+def collect(xs: Any = ()) -> Any: ...
+
+rows: list[list[int]] = [[1], [2]]
+assert_type(list(map(collect, rows)), list[list[int]])
+"#,
+);
+
+testcase!(
     test_overload_pruning_eliminates_all_branches_float_str_vs_int,
     r#"
 from typing import Callable, overload, reveal_type
