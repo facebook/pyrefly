@@ -19,6 +19,11 @@ that an error is related to. Every error has exactly one kind.
 The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
 
+Coming from another type checker? See the
+[mypy error-code mapping](./migrate/mypy/error-codes.mdx) and the
+[Pyright diagnostic mapping](./migrate/pyright/diagnostics-reference.mdx) for how those
+diagnostics correspond to the kinds below.
+
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
 - **ignore**: the diagnostic is not emitted
 - **info**: the diagnostic shows up blue in the IDE

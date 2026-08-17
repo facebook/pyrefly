@@ -100,6 +100,7 @@ pyrefly suppress --comment-location=same-line
 Pyrefly also supports storing errors in a baseline file. Any errors matching the baseline will be ignored and only new errors will be reported.
 This is useful when introducing type checking to a project for the first time, or when rolling out changes that require many suppression comments.
 This feature is inspired by tools like [basedpyright](https://docs.basedpyright.com/latest/benefits-over-pyright/baseline/) and [Android Studio](https://developer.android.com/studio/write/lint#snapshot).
+A baseline is the recommended starting point when migrating a large codebase from [mypy](./migrate/mypy/index.mdx) or [Pyright](./migrate/pyright/index.mdx).
 
 To generate (or re-generate) the baseline file:
 

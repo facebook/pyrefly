@@ -20,6 +20,8 @@ The basic preset is useful immediately, without setup. You don't need to underst
 
 If Pyrefly finds a `mypy.ini`, `pyrightconfig.json`, or a `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml`, the status bar instead shows `Pyrefly (Legacy)` (mypy migration) or `Pyrefly (Default)` (Pyright migration). Nothing is written to disk during the migration; running `pyrefly init` later will commit the same migration permanently.
 
+For what that migration does and does not preserve, see [migrating from mypy](../migrating-from-mypy) and [migrating from Pyright](../migrating-from-pyright).
+
 To unlock full type checking and pin your configuration, run `pyrefly init`. This writes a `pyrefly.toml` (or updates `pyproject.toml`) and explicitly migrates any existing mypy/pyright settings. After running `pyrefly init`, common knobs to tune include:
 
 - `check-unannotated-defs`: type-check the bodies of unannotated functions.
