@@ -1974,9 +1974,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         ty.as_bool().or_else(|| {
-            // If the object defines `__bool__`, we can check if it returns a statically known value
+            // If the object defines `__bool__`, we can check if it returns a statically known value.
+            // Implicit dunder lookups are resolved on the type and do not go through `__getattr__`,
+            // so disable the `__getattr__` fallback here.
             if self
-                .type_of_magic_dunder_attr(ty, &dunder::BOOL, range, errors, None, "as_bool", true)?
+                .type_of_magic_dunder_attr(
+                    ty,
+                    &dunder::BOOL,
+                    range,
+                    errors,
+                    None,
+                    "as_bool",
+                    false,
+                )?
                 .is_never()
             {
                 return None;
