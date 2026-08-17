@@ -171,6 +171,25 @@ def len() -> Expr: ...
 "#,
     );
     env.add_with_path(
+        "polars.expr.whenthen",
+        "polars/expr/whenthen.pyi",
+        r#"
+from polars.expr.expr import Expr
+class When:
+    def then(self, statement: object) -> "Then": ...
+class Then(Expr):
+    def otherwise(self, statement: object) -> Expr: ...
+"#,
+    );
+    env.add_with_path(
+        "polars.functions.whenthen",
+        "polars/functions/whenthen.pyi",
+        r#"
+from polars.expr.whenthen import When
+def when(*predicates: object, **constraints: object) -> When: ...
+"#,
+    );
+    env.add_with_path(
         "polars.schema",
         "polars/schema.pyi",
         r#"
@@ -187,6 +206,7 @@ from polars.functions.eager import concat as concat
 from polars.functions.col import col as col
 from polars.functions.lit import lit as lit
 from polars.functions.len import len as len
+from polars.functions.whenthen import when as when
 from polars.io.csv.functions import read_csv as read_csv, scan_csv as scan_csv
 from polars.expr.expr import Expr as Expr
 from polars.schema import Schema as Schema
@@ -2457,14 +2477,15 @@ reveal_type(df.drop("*"))  # E: revealed type: DataFrame
 "#,
 );
 
+// See https://github.com/facebook/pyrefly/issues/4565.
 testcase!(
-    test_select_method_keyword_falls_back,
+    test_select_method_keyword_tracks_schema,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.select(b="x"))  # E: revealed type: DataFrame
+reveal_type(df.select(b=pl.col("a")))  # E: revealed type: DataFrame[b: Int64]
 "#,
 );
 
@@ -3339,6 +3360,79 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 reveal_type(df.with_columns(pl.Series()))  # E: revealed type: DataFrame
+"#,
+);
+
+// See https://github.com/facebook/pyrefly/issues/4565.
+testcase!(
+    test_with_columns_positional_alias_tracks_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(pl.col("a").alias("c")))  # E: revealed type: DataFrame[a: Int64, c: Int64]
+"#,
+);
+
+// The exact reproduction from https://github.com/facebook/pyrefly/issues/4565: a positional
+// conditional expression. Depends on both the positional/keyword fix above and the
+// when/then/otherwise recognition in `polars_expr_has_single_output`.
+testcase!(
+    test_with_columns_positional_when_then_otherwise_tracks_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"units": [12]})
+reveal_type(df.with_columns(pl.when(pl.col("units") > 10).then(pl.lit("high")).otherwise(pl.lit("low")).alias("bucket")))  # E: revealed type: DataFrame[units: Int64, bucket: Unknown]
+"#,
+);
+
+testcase!(
+    test_select_mixed_positional_and_keyword_tracks_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("a").alias("z"), w=pl.col("b")))  # E: revealed type: DataFrame[z: Int64, w: String]
+"#,
+);
+
+testcase!(
+    test_with_columns_mixed_positional_and_keyword_tracks_schema,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.with_columns(pl.col("a").alias("z"), w=pl.col("b")))  # E: revealed type: DataFrame[a: Int64, b: String, z: Int64, w: String]
+"#,
+);
+
+// A positional arg's new column is not visible to a sibling keyword in the same call — every
+// argument resolves against the pre-call schema, matching Polars' parallel-evaluation semantics
+// already established for keyword-only calls.
+testcase!(
+    test_with_columns_positional_new_column_not_visible_to_sibling_keyword,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(pl.col("a").alias("b"), c=pl.col("b")))  # E: revealed type: DataFrame[a: Int64, b: Int64, c: Unknown] # E: Column `b` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_with_columns_keyword_when_then_otherwise,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"units": [12]})
+reveal_type(df.with_columns(bucket=pl.when(pl.col("units") > 10).then(pl.lit("high")).otherwise(pl.lit("low"))))  # E: revealed type: DataFrame[units: Int64, bucket: Unknown]
 "#,
 );
 
