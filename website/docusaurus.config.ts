@@ -94,9 +94,23 @@ async function generateLlmsTxt({ content, routes, outDir }, context) {
     const currentVersionDocsRoutes = (
         allDocsRouteConfig.props.version as Record<string, unknown>
     ).docs as Record<string, Record<string, unknown>>;
-    // for every single docs route we now parse a path (which is the key) and a title
-    const docsRecords = Object.entries(currentVersionDocsRoutes).map(([path, record]) => {
-        return `- [${record.title}](${path}): ${record.description}`;
+    // `currentVersionDocsRoutes` is keyed by doc id and carries no permalink, so a page with a
+    // custom `slug:` in front matter would otherwise be listed at its id rather than its URL.
+    // The individual doc routes do have the permalink, keyed by source file, and a doc's id is
+    // its source path relative to the docs directory with the extension removed.
+    const permalinksByDocId = new Map<string, string>();
+    for (const docRoute of allDocsRouteConfig.routes?.[0]?.routes ?? []) {
+        const sourceFilePath = docRoute.metadata?.sourceFilePath;
+        if (sourceFilePath == null) {
+            continue;
+        }
+        const docId = sourceFilePath
+            .replace(/^docs\//, "")
+            .replace(/\.mdx?$/, "");
+        permalinksByDocId.set(docId, docRoute.path);
+    }
+    const docsRecords = Object.entries(currentVersionDocsRoutes).map(([id, record]) => {
+        return `- [${record.title}](${permalinksByDocId.get(id) ?? id}): ${record.description}`;
     });
     const llmsTxt = `# ${context.siteConfig.title}\n\n## Docs\n\n${docsRecords.join("\n")}`;
     const llmsTxtPath = path.join(outDir, "llms.txt");
