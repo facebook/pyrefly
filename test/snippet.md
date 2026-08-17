@@ -187,3 +187,14 @@ $ $PYREFLY --help | grep "snippet"
   snippet      Check a Python code snippet
 [0]
 ```
+
+## Snippets can read from stdin
+
+```scrut
+$ cat <<EOF | $PYREFLY snippet -
+> x: int = 1
+> def foo(x: float) -> None:
+>   return x > 1.0
+> foo(x)
+[0]
+```
