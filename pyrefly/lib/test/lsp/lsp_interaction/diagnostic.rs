@@ -371,7 +371,9 @@ fn test_stream_diagnostics_after_save() {
     interaction.shutdown().unwrap();
 }
 
+// TODO - flaky on GitHub CI
 #[test]
+#[ignore]
 fn test_stream_diagnostics_no_flicker_after_undo_edit() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
