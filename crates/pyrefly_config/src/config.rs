@@ -603,8 +603,12 @@ pub struct ConfigFile {
     pub typeshed_path: Option<PathBuf>,
 
     /// Path to baseline file for comparing type errors.
-    /// Errors matching the baseline are suppressed.
+    /// Errors matching the baseline are suppressed by default.
     pub baseline: Option<PathBuf>,
+
+    /// Severity assigned to errors that match the baseline.
+    /// Defaults to `ignore`.
+    pub baseline_error_level: Option<Severity>,
 
     /// Default error output format for CLI checks when `--output-format` is not set.
     pub output_format: Option<OutputFormat>,
@@ -719,6 +723,7 @@ impl Default for ConfigFile {
             use_ignore_files: true,
             typeshed_path: None,
             baseline: None,
+            baseline_error_level: None,
             min_severity: None,
             output_format: None,
             skip_lsp_config_indexing: false,
@@ -2067,6 +2072,7 @@ mod tests {
                 },
                 typeshed_path: None,
                 baseline: None,
+                baseline_error_level: None,
                 min_severity: None,
                 skip_lsp_config_indexing: false,
                 extra_file_extensions: Vec::new(),
@@ -2391,6 +2397,7 @@ mod tests {
             },
             typeshed_path: Some(PathBuf::from(typeshed)),
             baseline: Some(PathBuf::from("baseline.json")),
+            baseline_error_level: None,
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
@@ -2462,6 +2469,7 @@ mod tests {
             },
             typeshed_path: Some(expected_typeshed),
             baseline: Some(test_path.join("baseline.json")),
+            baseline_error_level: None,
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
@@ -2548,9 +2556,11 @@ mod tests {
     fn test_baseline_config_parsing() {
         let config_str = r#"
 baseline = "baseline.json"
+baseline-error-level = "warn"
 "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(config.baseline, Some(PathBuf::from("baseline.json")));
+        assert_eq!(config.baseline_error_level, Some(Severity::Warn));
     }
 
     #[test]
