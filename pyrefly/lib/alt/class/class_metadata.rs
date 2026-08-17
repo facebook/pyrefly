@@ -69,13 +69,13 @@ use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassExpr;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
-use crate::binding::binding::BindingShapedArrayMetadata;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::ShapedArrayMetadata;
 use crate::binding::django::DjangoFieldInfo;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::PydanticConfigDict;
@@ -155,7 +155,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         pydantic_before_validator_fields: &[Name],
         django_field_info: &DjangoFieldInfo,
         capture_init: Option<&[Name]>,
-        shaped_array_metadata: Option<&BindingShapedArrayMetadata>,
+        shaped_array_metadata: Option<&ShapedArrayMetadata>,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         // Get class decorators.
@@ -576,10 +576,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn shaped_array_shape(
         &self,
         cls: &Class,
-        metadata: Option<&BindingShapedArrayMetadata>,
+        metadata: Option<&ShapedArrayMetadata>,
         errors: &ErrorCollector,
     ) -> Option<Quantified> {
-        let BindingShapedArrayMetadata { shape_name, range } = metadata?;
+        let ShapedArrayMetadata { shape_name, range } = metadata?;
         let tparams = self.get_class_tparams(cls);
         match tparams.iter().find(|param| param.name() == shape_name) {
             Some(param) if param.is_type_var() => Some(param.clone()),

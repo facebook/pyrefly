@@ -52,7 +52,6 @@ use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingExpect;
-use crate::binding::binding::BindingShapedArrayMetadata;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingVariance;
 use crate::binding::binding::ClassBinding;
@@ -74,6 +73,7 @@ use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
+use crate::binding::binding::ShapedArrayMetadata;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -600,7 +600,7 @@ impl<'a> BindingsBuilder<'a> {
     fn extract_shaped_array_metadata(
         &mut self,
         decorators: &[Decorator],
-    ) -> Option<Box<BindingShapedArrayMetadata>> {
+    ) -> Option<Box<ShapedArrayMetadata>> {
         let mut metadata = None;
         let mut seen_shaped_array = false;
         for decorator in decorators {
@@ -693,7 +693,7 @@ impl<'a> BindingsBuilder<'a> {
                 continue;
             };
             if !invalid {
-                metadata = Some(Box::new(BindingShapedArrayMetadata {
+                metadata = Some(Box::new(ShapedArrayMetadata {
                     shape_name: Name::new(shape.value.to_str()),
                     range: shape_keyword.value.range(),
                 }));

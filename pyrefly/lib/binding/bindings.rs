@@ -59,12 +59,12 @@ use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
-use crate::binding::binding::BindingDjangoRelationClass;
 use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BranchInfo;
+use crate::binding::binding::DjangoRelationClass;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::ImportBinding;
@@ -298,7 +298,7 @@ pub struct BindingsBuilder<'a> {
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
-    django_relation_classes: Vec<BindingDjangoRelationClass>,
+    django_relation_classes: Vec<DjangoRelationClass>,
     semantic_checker: SemanticSyntaxChecker,
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
     pytest_info: Option<crate::binding::pytest::PytestBindingInfo>,
@@ -1140,11 +1140,10 @@ impl<'a> BindingsBuilder<'a> {
         fields: Vec<Idx<KeyClassField>>,
     ) {
         if !fields.is_empty() {
-            self.django_relation_classes
-                .push(BindingDjangoRelationClass {
-                    class_idx,
-                    fields: fields.into_boxed_slice(),
-                });
+            self.django_relation_classes.push(DjangoRelationClass {
+                class_idx,
+                fields: fields.into_boxed_slice(),
+            });
         }
     }
 

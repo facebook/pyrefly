@@ -3376,7 +3376,7 @@ impl DisplayWith<Bindings> for BindingClassChecks {
 
 /// Information about a class that is marked as using array shapes (for shape typing).
 #[derive(Clone, Debug)]
-pub struct BindingShapedArrayMetadata {
+pub struct ShapedArrayMetadata {
     pub shape_name: Name,
     pub range: TextRange,
 }
@@ -3406,7 +3406,7 @@ pub struct BindingClassMetadata {
     /// `@uses_shape_dsl(..., capture_init=[...])` on a `forward` method.
     pub capture_init: Option<Box<[Name]>>,
     /// Shape parameter requested by `@shaped_array(shape="...")`.
-    pub shaped_array_metadata: Option<Box<BindingShapedArrayMetadata>>,
+    pub shaped_array_metadata: Option<Box<ShapedArrayMetadata>>,
 }
 
 impl DisplayWith<Bindings> for BindingClassMetadata {
@@ -3422,11 +3422,11 @@ impl DisplayWith<Bindings> for BindingClassMetadata {
 /// Binding for Django relations in a module, used to synthesize reverse relationships.
 #[derive(Clone, Debug)]
 pub struct BindingDjangoRelations {
-    pub classes: Box<[BindingDjangoRelationClass]>,
+    pub classes: Box<[DjangoRelationClass]>,
 }
 
 #[derive(Clone, Debug)]
-pub struct BindingDjangoRelationClass {
+pub struct DjangoRelationClass {
     pub class_idx: Idx<KeyClass>,
     pub fields: Box<[Idx<KeyClassField>]>,
 }
