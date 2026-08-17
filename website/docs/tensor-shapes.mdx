@@ -71,9 +71,10 @@ a few annotations at class and function boundaries.
 
 You can write tensor types with integer dimensions — `Tensor[[3, 4]]` is a
 2D tensor with shape `(3, 4)`. This works for modules too: `nn.Linear[3, 4]`
-takes `Tensor[[*Elements[Bs], 3]]` as input and returns
-`Tensor[[*Elements[Bs], 4]]` — any number of leading dimensions, then the
-fixed feature dimension.
+accepts a tensor with any number of leading dimensions followed by a `3`,
+and returns one with the same leading dimensions followed by a `4` — see
+[Variadic dimensions with `Elements`](./tensor-shapes-reference.mdx#variadic-dimensions-with-elements)
+in the Reference page for the syntax that expresses this.
 
 **`Int[X]`** bridges runtime integer values to the type level. When
 `x: Tensor[[3, 4]]`, then `x.shape` has type `tuple[Int[3], Int[4]]` — you
