@@ -387,7 +387,6 @@ reveal_type(c.x)  # E: revealed type: Unknown
 );
 
 testcase!(
-    bug = "Generic class constructors don't work with ParamSpec",
     test_param_spec_generic_constructor,
     r#"
 from typing import Callable, reveal_type
@@ -398,7 +397,7 @@ class C[T]:
   def __init__(self, x: T) -> None:
     self.x = x
 c2 = identity(C)
-reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
+reveal_type(c2)  # E: revealed type: [T](x: T) -> C[T]
 x: C[int] = c2(1)
 "#,
 );
@@ -435,7 +434,6 @@ assert_type(identity(C)(1), C[int])
 );
 
 testcase!(
-    bug = "Constructor identity still erases ParamSpec/return generics to Ellipsis/Unknown (and/or partial types)",
     test_callable_class_constructor_identity,
     r#"
 from typing import Callable, reveal_type
@@ -451,9 +449,36 @@ class Wrapper[**P, R]:
         return self.fn(*args, **kwargs)
 
 ctor = identity(Wrapper)
-reveal_type(ctor)  # E: revealed type: (fn: (...) -> Unknown) -> Wrapper[Ellipsis, Unknown]
+reveal_type(ctor)  # E: revealed type: [**P, R](fn: (ParamSpec(P)) -> R) -> Wrapper[P, R]
 identity2 = ctor(identity)
-reveal_type(identity2.__call__)  # E: revealed type: (Wrapper[Ellipsis, Unknown], ...) -> Unknown
+reveal_type(identity2.__call__)  # E: revealed type: [**P, R](self: Wrapper[[x: (ParamSpec(P)) -> R], (ParamSpec(P)) -> R], x: (ParamSpec(P)) -> R) -> (ParamSpec(P)) -> R
+"#,
+);
+
+testcase!(
+    test_overloaded_constructor_return_only_class_tparam,
+    r#"
+from collections import defaultdict
+
+def consume(metrics: dict[str, list[float]]) -> None: ...
+
+metrics = defaultdict(list)
+metrics["runtime"].append(1.0)
+consume(metrics)
+"#,
+);
+
+testcase!(
+    test_constructor_overload_with_specialized_self,
+    r#"
+import contextlib
+from typing import Any, Callable
+
+null_context = contextlib.nullcontext
+
+def consume(
+    factory: Callable[[], contextlib.AbstractContextManager[Any]] = null_context,
+) -> None: ...
 "#,
 );
 

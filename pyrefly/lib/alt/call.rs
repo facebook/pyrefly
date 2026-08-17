@@ -2192,19 +2192,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn constructor_to_callable(&self, cls: &ClassType) -> Type {
         let new_attr_ty = self.get_dunder_new(cls, false);
-        self.constructor_to_callable_impl(cls, new_attr_ty, false)
+        let init_attr_ty = self.get_dunder_init(cls, false);
+        self.constructor_to_callable_impl(cls, new_attr_ty, init_attr_ty, false)
     }
 
     /// Convert a bare class definition while keeping its type parameters generic.
     pub fn constructor_to_callable_for_class_def(&self, cls: &ClassType) -> Option<Type> {
-        let new_attr_ty = self.get_dunder_new_for_class_def(cls)?;
-        Some(self.constructor_to_callable_impl(cls, Some(new_attr_ty), true))
+        let new_attr_ty = self.get_dunder_new_for_class_def(cls);
+        let init_attr_ty = self.get_dunder_init_for_class_def(cls);
+        if new_attr_ty.is_none() && init_attr_ty.is_none() {
+            return None;
+        }
+        Some(self.constructor_to_callable_impl(cls, new_attr_ty, init_attr_ty, true))
     }
 
     fn constructor_to_callable_impl(
         &self,
         cls: &ClassType,
         new_attr_ty: Option<Type>,
+        init_attr_ty: Option<Type>,
         preserve_class_tparams: bool,
     ) -> Type {
         let class_type = self.heap.mk_class_type(cls.clone());
@@ -2250,11 +2256,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (default_constructor(), false)
         };
         // Check the __init__ method and whether it comes from object or has been overridden
-        let (init_attr_ty, overrides_init) = if let Some(t) = self.get_dunder_init(cls, false) {
+        let (init_attr_ty, overrides_init) = if let Some(t) = init_attr_ty {
             // Try to strip self param and set return type (for generic handling)
-            let t = if let Type::BoundMethod(ref method) = t
-                && let Some(bound) = self.bind_dunder_init_for_callable(method)
-            {
+            let bound = if preserve_class_tparams {
+                self.bind_dunder_init_for_class_def(&t, cls.clone())
+            } else if let Type::BoundMethod(ref method) = t {
+                self.bind_dunder_init_for_callable(method)
+            } else {
+                None
+            };
+            let t = if let Some(bound) = bound {
                 bound
             } else {
                 // Fallback: just set the return type without stripping self

@@ -4961,35 +4961,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Get `__new__` through class access when its non-receiver parameters use class type params.
-    pub fn get_dunder_new_for_class_def(&self, cls: &ClassType) -> Option<Type> {
-        let new_member =
-            self.get_class_member_with_defining_class(cls.class_object(), &dunder::NEW)?;
-        if new_member.is_defined_on("builtins", "object") {
+    fn get_constructor_method_for_class_def(&self, cls: &ClassType, name: &Name) -> Option<Type> {
+        if self.get_class_tparams(cls.class_object()).is_empty() {
             return None;
         }
-        let new_ty = self
-            .as_class_attribute_inner(
-                &dunder::NEW,
-                &new_member.value,
-                &ClassBase::ClassDef(cls.clone()),
-                None,
-            )
-            .as_instance_method()?;
-        let class_tparams = self.get_class_tparams(cls.class_object());
-        let mut uses_class_tparam = false;
-        new_ty.visit_toplevel_callable(|callable| {
-            if let Some(callable) = callable.strip_first_param() {
-                let mut quantifieds = SmallSet::new();
-                callable
-                    .params
-                    .visit(&mut |ty| ty.collect_quantifieds(&mut quantifieds));
-                uses_class_tparam |= class_tparams
-                    .iter()
-                    .any(|tparam| quantifieds.contains(tparam));
-            }
-        });
-        uses_class_tparam.then_some(new_ty)
+        let member = self.get_class_member_with_defining_class(cls.class_object(), name)?;
+        if member.is_defined_on("builtins", "object") {
+            return None;
+        }
+        self.as_class_attribute_inner(name, &member.value, &ClassBase::ClassDef(cls.clone()), None)
+            .as_instance_method()
+    }
+
+    /// Get `__new__` through generic class-definition access.
+    pub fn get_dunder_new_for_class_def(&self, cls: &ClassType) -> Option<Type> {
+        self.get_constructor_method_for_class_def(cls, &dunder::NEW)
+    }
+
+    /// Get `__init__` through generic class-definition access.
+    pub fn get_dunder_init_for_class_def(&self, cls: &ClassType) -> Option<Type> {
+        self.get_constructor_method_for_class_def(cls, &dunder::INIT)
     }
 
     fn get_dunder_init_helper(&self, instance: &Instance, get_object_init: bool) -> Option<Type> {

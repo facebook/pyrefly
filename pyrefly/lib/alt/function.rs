@@ -2610,14 +2610,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Strips the first parameter and sets the return type to the first param's type.
     /// Does not instantiate type variables (they should be inferred at the call site).
     pub fn bind_dunder_init_for_callable(&self, m: &BoundMethod) -> Option<Type> {
-        let mut func_type = m.func.clone().as_type();
+        self.bind_dunder_init_type(m.func.clone().as_type(), &m.obj)
+    }
+
+    /// Bind `__init__` while keeping class type parameters used by the constructor callable.
+    pub fn bind_dunder_init_for_class_def(&self, t: &Type, cls: ClassType) -> Option<Type> {
+        let class_tparams = self.get_class_tparams(cls.class_object());
+        let mut bound = self.bind_dunder_init_type(t.clone(), &self.heap.mk_class_type(cls))?;
+        self.expand_mut(&mut bound);
+        Some(self.normalize_class_constructor_tparams(bound, class_tparams.as_ref()))
+    }
+
+    fn bind_dunder_init_type(&self, mut func_type: Type, obj: &Type) -> Option<Type> {
         // For each callable, set its return type to its first param's type (i.e. `self`).
         func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
             if let Some(self_type) = c.get_first_param() {
                 c.ret = self_type.clone();
             }
         });
-        self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
+        self.bind_function(&func_type, obj, true, &mut |_, _| false)
     }
 
     /// Strip the first parameter from a BoundMethodType and optionally instantiate
