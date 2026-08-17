@@ -466,7 +466,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     got.with_ty(want.clone())
                 }
             }
-            ExprExpectation::Check { .. } => self.expr_infer_impl(x, None, options.errors),
+            // `want` is `Any` here, so the check above is skipped: it always succeeds.
+            // Succeeding trivially never solves the placeholder an empty display leaves
+            // behind, which then survives into an answer and is reported as an implicit
+            // `Any` the expectation had already absorbed. Pin it instead. Containment
+            // keeps this to placeholders `x` minted itself, so a name whose type is
+            // still open keeps its own diagnostic.
+            ExprExpectation::Check { .. } => {
+                let got = self.expr_infer_impl(x, None, options.errors);
+                self.solver()
+                    .pin_contained_placeholders_within(got.ty(), x.range());
+                got
+            }
             ExprExpectation::Infer(hint) => self.expr_infer_impl(x, hint, options.errors),
         }
     }
