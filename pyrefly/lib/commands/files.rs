@@ -202,12 +202,12 @@ fn get_globs_and_config_for_project(
                 path.display(),
             );
         }
-        ConfigSource::Synthetic => {
+        ConfigSource::Synthetic(_) => {
             info!("Checking current directory with auto configuration");
         }
     }
     let current_dir = std::env::current_dir().ok();
-    if let Some(project_dir) = config.source.root().or(current_dir.as_deref())
+    if let Some(project_dir) = config.source.root_from_file().or(current_dir.as_deref())
         && let Some(home_dir) = std::env::home_dir()
         && home_dir.starts_with(project_dir)
         && *config.includes(scope) == ConfigFile::default_project_includes().from_root(project_dir)

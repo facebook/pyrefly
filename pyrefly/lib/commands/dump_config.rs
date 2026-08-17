@@ -124,7 +124,7 @@ fn dump_config(
     for (config, files) in configs_to_files.into_iter() {
         let config_env = clap_env("CONFIG");
         match &config.source {
-            ConfigSource::Synthetic => {
+            ConfigSource::Synthetic(_) => {
                 println!("Default configuration");
             }
             ConfigSource::PythonToolMarker(path)

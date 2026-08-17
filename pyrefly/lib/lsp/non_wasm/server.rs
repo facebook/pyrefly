@@ -2832,7 +2832,7 @@ impl Server {
             );
             config
                 .source
-                .root()
+                .root_from_file()
                 .and_then(|p| Url::from_file_path(p).ok())
         } else {
             None
@@ -2848,7 +2848,7 @@ impl Server {
         );
         let cwd = config
             .source
-            .root()
+            .root_from_file()
             .map(std::path::Path::to_path_buf)
             .or_else(|| {
                 self.workspaces
@@ -3030,7 +3030,7 @@ impl Server {
             return TypeErrorDisplayStatus::DisabledInIdeConfig;
         }
         match &config.source {
-            ConfigSource::Synthetic
+            ConfigSource::Synthetic(_)
             | ConfigSource::PythonToolMarker(_)
             | ConfigSource::Marker(_)
             | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,

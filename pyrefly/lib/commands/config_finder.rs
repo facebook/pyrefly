@@ -314,6 +314,7 @@ pub fn standard_config_finder(
                             let fallback_search_path =
                                 FallbackSearchPath::Explicit(cache_ancestors.get_ancestors(parent));
                             let mut config = ConfigFile {
+                                source: ConfigSource::Synthetic(Some(parent.to_owned())),
                                 project_includes: ConfigFile::default_project_includes(),
                                 // We use `fallback_search_path` because otherwise a user with `/sys` on their
                                 // computer (all of them) will override `sys.version` in preference to typeshed.
@@ -468,7 +469,10 @@ mod tests {
             ModuleName::from_str("foo.bar"),
             ModulePath::filesystem(root.join("no_config/foo/bar.py")),
         );
-        assert_eq!(config_file.source, ConfigSource::Synthetic);
+        assert_eq!(
+            config_file.source,
+            ConfigSource::Synthetic(Some(root.join("no_config")))
+        );
         assert_eq!(
             config_file.search_path().cloned().collect::<Vec<_>>(),
             Vec::<PathBuf>::new()
@@ -505,7 +509,10 @@ mod tests {
             ModuleName::unknown(),
             ModulePath::namespace(root.join("no_config/foo")),
         );
-        assert_eq!(config_file.source, ConfigSource::Synthetic);
+        assert_eq!(
+            config_file.source,
+            ConfigSource::Synthetic(Some(root.join("no_config/foo")))
+        );
         assert_eq!(config_file.search_path_from_file, Vec::<PathBuf>::new());
         assert_eq!(
             config_file.fallback_search_path,
@@ -523,7 +530,10 @@ mod tests {
             ModuleName::unknown(),
             ModulePath::filesystem(root.join("no_config/foo/bar.py")),
         );
-        assert_eq!(config_file.source, ConfigSource::Synthetic);
+        assert_eq!(
+            config_file.source,
+            ConfigSource::Synthetic(Some(root.join("no_config/foo")))
+        );
         assert_eq!(config_file.search_path_from_file, Vec::<PathBuf>::new());
         assert_eq!(
             config_file.fallback_search_path,
@@ -713,7 +723,10 @@ mod tests {
             &ModulePath::filesystem(root.join("pkg/mod.py")),
         );
 
-        assert_eq!(config.source, ConfigSource::Synthetic);
+        assert_eq!(
+            config.source,
+            ConfigSource::Synthetic(Some(root.to_path_buf()))
+        );
         assert_eq!(config.preset, Some(Preset::Basic));
         assert_eq!(
             config.synthesized_preset_reason,

@@ -392,7 +392,7 @@ impl Errors {
             let processor = baseline_processors.entry(config.id()).or_insert_with(|| {
                 let relative_to = config
                     .source
-                    .root()
+                    .root_from_file()
                     .or_else(|| baseline_path.parent())
                     .unwrap_or_else(|| Path::new(""));
                 BaselineProcessor::from_file(baseline_path, relative_to).ok()

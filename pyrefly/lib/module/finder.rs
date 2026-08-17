@@ -2801,7 +2801,7 @@ mod tests {
 
     #[test]
     fn test_find_import_uses_typeshed_third_party_without_config() {
-        let mut config = get_config(ConfigSource::Synthetic);
+        let mut config = get_config(ConfigSource::Synthetic(None));
         let config_root = std::env::current_dir().unwrap();
         config.rewrite_with_path_to_config(&config_root);
 
@@ -2870,7 +2870,7 @@ mod tests {
 
     #[test]
     fn test_find_import_prefixes_handles_typeshed_third_party() {
-        let mut config_synthetic = get_config(ConfigSource::Synthetic);
+        let mut config_synthetic = get_config(ConfigSource::Synthetic(None));
         let config_root = std::env::current_dir().unwrap();
         config_synthetic.rewrite_with_path_to_config(&config_root);
 
@@ -2920,7 +2920,7 @@ mod tests {
 
     #[test]
     fn test_missing_stubs_error_not_created_without_real_config() {
-        let config_synthetic = get_config(ConfigSource::Synthetic);
+        let config_synthetic = get_config(ConfigSource::Synthetic(None));
         let result_synthetic = find_import_filtered(
             &config_synthetic,
             ModuleName::from_str("requests"),
@@ -3186,7 +3186,7 @@ mod tests {
         // Set up empty site package directory (no actual 'requests' package)
         TestPath::setup_test_directory(root, vec![TestPath::dir("site_packages", vec![])]);
 
-        let mut config = get_config(ConfigSource::Synthetic);
+        let mut config = get_config(ConfigSource::Synthetic(None));
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
@@ -3223,7 +3223,7 @@ mod tests {
             )],
         );
 
-        let mut config = get_config(ConfigSource::Synthetic);
+        let mut config = get_config(ConfigSource::Synthetic(None));
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
@@ -3337,7 +3337,7 @@ mod tests {
                 ..Default::default()
             },
             search_path_from_file: search_path,
-            source: ConfigSource::Synthetic,
+            source: ConfigSource::Synthetic(None),
             // Disable fallback search path heuristics to avoid extra phantom paths
             disable_search_path_heuristics: true,
             ..Default::default()

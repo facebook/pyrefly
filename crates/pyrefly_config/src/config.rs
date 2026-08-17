@@ -156,7 +156,7 @@ pub enum SynthesizedPresetReason {
 }
 
 /// Where did this config come from?
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ConfigSource {
     /// This config was read from a file
     File(PathBuf),
@@ -175,8 +175,15 @@ pub enum ConfigSource {
     /// are defaults, but we respect the file's location for project root detection (similar
     /// to `Marker`).
     FailedParse(PathBuf),
-    #[default]
-    Synthetic,
+    /// This config was synthesized without an on-disk source. The optional path is the inferred
+    /// project root, when one is known.
+    Synthetic(Option<PathBuf>),
+}
+
+impl Default for ConfigSource {
+    fn default() -> Self {
+        Self::Synthetic(None)
+    }
 }
 
 #[derive(
@@ -214,13 +221,15 @@ pub enum OutputFormat {
 }
 
 impl ConfigSource {
-    pub fn root(&self) -> Option<&Path> {
-        match &self {
+    /// The config root marked by a config or marker file
+    pub fn root_from_file(&self) -> Option<&Path> {
+        match self {
             Self::File(path)
             | Self::PythonToolMarker(path)
             | Self::Marker(path)
             | Self::FailedParse(path) => path.parent(),
-            Self::Synthetic => None,
+            // Synthetic roots are deliberately excluded
+            Self::Synthetic(_) => None,
         }
     }
 }
@@ -684,7 +693,7 @@ impl Default for ConfigFile {
     /// An empty `ConfigFile`
     fn default() -> Self {
         ConfigFile {
-            source: ConfigSource::Synthetic,
+            source: ConfigSource::Synthetic(None),
             project_includes: Default::default(),
             project_excludes: Default::default(),
             interpreters: Interpreters {
@@ -724,6 +733,7 @@ impl ConfigFile {
     /// project root that we're falling back to after failing to otherwise find an import.
     pub fn init_at_root(root: &Path, layout: &ProjectLayout, fallback: bool) -> Self {
         let mut result = Self {
+            source: ConfigSource::Synthetic(Some(root.to_path_buf())),
             project_includes: Self::default_project_includes(),
             root: ConfigBase::default_for_ide_without_config(),
             ..Default::default()
@@ -1187,7 +1197,7 @@ impl ConfigFile {
             if let Some(source_db) = &config.source_db {
                 source_dbs.insert(source_db);
             }
-            if let Some(config_root) = config.source.root() {
+            if let Some(config_root) = config.source.root_from_file() {
                 let config_root = InternedPath::from_path(config_root);
                 ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
                     result.insert(WatchPattern::root(config_root, format!("**/{config}")));
@@ -1307,7 +1317,7 @@ impl ConfigFile {
                     "Performed grouped source db query for configs at {:?}",
                     configs_and_files
                         .iter()
-                        .filter_map(|x| x.0.source.root())
+                        .filter_map(|x| x.0.source.root_from_file())
                         .collect::<Vec<_>>(),
                 );
                 reloaded_source_dbs.insert(source_db.dupe());
@@ -1336,7 +1346,10 @@ impl ConfigFile {
                         "`python-interpreter-path` and `fallback-python-interpreter-name` both set, but only one can be used."
                 ));
             }
-            match self.interpreters.find_interpreter(self.source.root()) {
+            match self
+                .interpreters
+                .find_interpreter(self.source.root_from_file())
+            {
                 Ok(interpreter) => {
                     let (env, error) = PythonEnvironment::get_interpreter_env(&interpreter);
                     self.python_environment.override_empty(env);
@@ -1361,7 +1374,7 @@ impl ConfigFile {
         // applies even when an interpreter query succeeds. A `Synthetic` config
         // has no on-disk root to anchor `typings/` to, so we skip discovery
         // rather than fall back to a CWD-relative path.
-        if !site_package_path_set && let Some(root) = self.source.root() {
+        if !site_package_path_set && let Some(root) = self.source.root_from_file() {
             let typings = root.join("typings");
             if typings.exists() {
                 self.python_environment
@@ -1559,12 +1572,12 @@ impl ConfigFile {
         // the config root. The two guard conditions enforce non-clobber and
         // skip-synthetic invariants — `matches!(_, Empty)` so we don't
         // overwrite the build-system path's `DirectoryRelative` set above,
-        // and `source.root().is_some()` so we skip the `Synthetic` case
-        // that `init_at_root(fallback = true)` already handles with
+        // and `source.root_from_file().is_some()` so we skip the `Synthetic`
+        // case that `init_at_root(fallback = true)` already handles with
         // `Explicit` paths.
         if self.enable_fallback_search_path
             && matches!(self.fallback_search_path, FallbackSearchPath::Empty)
-            && let Some(config_root) = self.source.root()
+            && let Some(config_root) = self.source.root_from_file()
         {
             self.fallback_search_path = FallbackSearchPath::DirectoryRelative(
                 DirectoryRelativeFallbackSearchPathCache::new(Some(config_root.to_path_buf())),
@@ -1962,7 +1975,7 @@ mod tests {
         assert_eq!(
             config,
             ConfigFile {
-                source: ConfigSource::Synthetic,
+                source: ConfigSource::Synthetic(None),
                 project_includes: Globs::new(vec![
                     "tests".to_owned(),
                     "./implementation".to_owned()
@@ -2350,7 +2363,7 @@ mod tests {
         };
         let interpreter = "venv/bin/python3".to_owned();
         let mut config = ConfigFile {
-            source: ConfigSource::Synthetic,
+            source: ConfigSource::Synthetic(None),
             project_includes: Globs::new(vec!["path1/**".to_owned(), "path2/path3".to_owned()])
                 .unwrap(),
             project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]).unwrap(),
@@ -2424,7 +2437,7 @@ mod tests {
         config.rewrite_with_path_to_config(&test_path);
 
         let expected_config = ConfigFile {
-            source: ConfigSource::Synthetic,
+            source: ConfigSource::Synthetic(None),
             project_includes: Globs::new(project_includes_vec).unwrap(),
             project_excludes: Globs::new(project_excludes_vec).unwrap(),
             interpreters: Interpreters {
@@ -3431,6 +3444,7 @@ output-format = "omit-errors"
         // including includes outside `import_root` (here, `tests/`).
         let project = PathBuf::from("/checkout/.claude/worktrees/wt");
         let mut config = ConfigFile {
+            source: ConfigSource::Synthetic(Some(project.clone())),
             project_includes: Globs::new_with_root(
                 &project,
                 vec!["src".to_owned(), "tests".to_owned()],
@@ -3790,7 +3804,7 @@ output-format = "omit-errors"
     /// enabled (e.g. via `--enable-fallback-search-path`). Such configs have
     /// no config root to bound the walk, and the unconfigured-project path
     /// (`init_at_root(fallback = true)`) already supplies their fallback as
-    /// `Explicit` paths. The `source.root().is_some()` guard in `configure()`
+    /// `Explicit` paths. The `source.root_from_file().is_some()` guard in `configure()`
     /// enforces this; this test pins the invariant against future refactors.
     #[test]
     fn test_fallback_search_path_not_set_for_synthetic_config() {
@@ -3803,7 +3817,7 @@ output-format = "omit-errors"
             ..Default::default()
         };
         // A default config is synthesized (no on-disk source).
-        assert!(matches!(config.source, ConfigSource::Synthetic));
+        assert!(matches!(config.source, ConfigSource::Synthetic(_)));
 
         config.configure();
 
@@ -3922,7 +3936,7 @@ output-format = "omit-errors"
         );
         assert!(!errors.is_empty(), "Expected errors for invalid TOML");
         // The config should still respect the file's location for project root detection.
-        assert_eq!(config.source.root(), Some(root.path()));
+        assert_eq!(config.source.root_from_file(), Some(root.path()));
     }
 
     #[test]
