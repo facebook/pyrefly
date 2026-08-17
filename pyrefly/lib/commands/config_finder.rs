@@ -340,13 +340,16 @@ pub fn standard_config_finder(
 #[cfg(test)]
 mod tests {
 
+    use std::fs;
     use std::ops::Deref as _;
 
     use pretty_assertions::assert_eq;
     use pyrefly_config::args::ConfigOverrideArgs;
+    use pyrefly_config::config::ConfigScope;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_name::ModuleNameWithKind;
     use pyrefly_python::module_path::ModulePath;
+    use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
@@ -744,6 +747,29 @@ mod tests {
             matches!(config.fallback_search_path, FallbackSearchPath::Explicit(_)),
             "carry-over lost `fallback_search_path` from input config; got {:?}",
             config.fallback_search_path,
+        );
+    }
+
+    #[test]
+    fn test_unconfigured_project_under_hidden_dir_is_not_excluded() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path().join(".codex/worktrees/wt/project");
+        fs::create_dir_all(&root).unwrap();
+        TestPath::setup_test_directory(
+            &root,
+            vec![TestPath::dir("pkg", vec![TestPath::file("mod.py")])],
+        );
+
+        let finder = default_config_finder(None);
+        let config = finder.python_file(
+            ModuleNameWithKind::guaranteed(ModuleName::from_str("pkg.mod")),
+            &ModulePath::filesystem(root.join("pkg/mod.py")),
+        );
+
+        assert!(
+            config
+                .get_filtered_globs(None, ConfigScope::Default)
+                .covers(&root.join("pkg/mod.py"))
         );
     }
 
