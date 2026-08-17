@@ -1,0 +1,107 @@
+---
+title: Pyright Strict Mode in Pyrefly
+slug: /migrate/pyright/strict-mode
+description:
+    Translate Pyright strict type checking into Pyrefly presets and explicit
+    error severities, including path-specific strict rules.
+keywords:
+    - pyright strict
+    - pyright strict mode
+    - typeCheckingMode strict
+    - pyrefly strict
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Pyright strict mode and Pyrefly strict mode are both useful policy bundles, but
+they do not enable the same checks. Treat "strict" as a name for two different
+policies rather than a setting to copy across.
+
+## Global strict mode
+
+Pyright:
+
+```json
+{
+    "typeCheckingMode": "strict"
+}
+```
+
+Pyrefly starting point:
+
+```toml
+preset = "strict"
+infer-with-first-use = false
+```
+
+`infer-with-first-use = false` keeps empty-container and unsolved-type-variable
+inference closer to Pyright; it is also what `pyrefly init` writes when it
+converts a Pyright config. Then review your explicit `report*` overrides using
+the [diagnostic mapping](diagnostics-reference.mdx).
+
+## Why the presets differ
+
+Pyright strict mode enables its own collection of `report*` rules, including
+several linter-like checks. Pyrefly's
+[`strict` preset](../../configuration.mdx#preset-strict) instead sets
+`strict-callable-subtyping = true` and enables these error kinds:
+
+- [`implicit-any`](../../error-kinds.mdx#implicit-any), which covers every
+  implicit-`Any` sub-kind;
+- [`missing-override-decorator`](../../error-kinds.mdx#missing-override-decorator);
+- [`potential-bad-keyword-argument`](../../error-kinds.mdx#potential-bad-keyword-argument);
+- [`unused-ignore`](../../error-kinds.mdx#unused-ignore);
+- [`direct-abstract-base-instantiation`](../../error-kinds.mdx#direct-abstract-base-instantiation).
+
+Keep Ruff or another linter for the Pyright rules about unused imports,
+duplicate imports, implicit string concatenation, mutable defaults, and naming.
+Pyrefly does not try to absorb them.
+
+## Path-specific strict mode
+
+Pyright:
+
+```json
+{
+    "strict": ["src/core"]
+}
+```
+
+Pyrefly cannot put `preset = "strict"` inside a `[[sub-config]]`, so encode the
+policies you care about explicitly:
+
+```toml
+[[sub-config]]
+matches = "src/core/**"
+
+[sub-config.errors]
+implicit-any = "error"
+missing-override-decorator = "error"
+unused-ignore = "error"
+potential-bad-keyword-argument = "error"
+```
+
+The result is an explicit policy you can extend after comparing both tools,
+rather than a recreation of Pyright strict mode. If a subtree also needs a
+different Python version, platform, or import roots, give it its own
+configuration file instead.
+
+## Broad Pyright rules still need review
+
+Strict mode turns on broad rules such as `reportCallIssue`,
+`reportAttributeAccessIssue`, and `reportGeneralTypeIssues`. Pyrefly splits the
+first two into many specific kinds and has no single equivalent for the last
+one, so review the generated `[errors]` table rather than trusting the word
+"strict".
+
+## Related guides
+
+- [Migrate from Pyright](index.mdx)
+- [Pyright config reference](config-reference.mdx)
+- [Pyright diagnostics](diagnostics-reference.mdx)
+- [Pyrefly presets](../../configuration.mdx#preset)

@@ -50,7 +50,18 @@ let docsSidebar = [
         items: [
             'migrating-to-pyrefly',
             'migrating-from-mypy',
-            'migrating-from-pyright',
+            {
+                type: 'category' as const,
+                label: 'From Pyright',
+                items: [
+                    'migrate/pyright/index',
+                    'migrate/pyright/strict-mode',
+                    'migrate/pyright/missing-imports',
+                    'migrate/pyright/unknown-member-type',
+                    'migrate/pyright/config-reference',
+                    'migrate/pyright/diagnostics-reference',
+                ],
+            },
         ],
     },
     {
