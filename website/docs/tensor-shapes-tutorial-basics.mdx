@@ -64,7 +64,7 @@ Make the dimension parameters into `Int[...]` and add class-level type
 parameters:
 
 ```python
-class BaselineActor[S, A](nn.Module):
+class BaselineActor[S: IntVar, A: IntVar](nn.Module):
     def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(state_size, 400)
@@ -83,7 +83,7 @@ The forward method has one dynamic dimension — **batch size** — that
 varies across calls. Make it a method-level type parameter:
 
 ```python
-def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
     h1 = F.relu(self.fc1(state))
     h2 = F.relu(self.fc2(h1))
     return torch.tanh(self.out(h2))
@@ -97,13 +97,13 @@ method-level param (bound per call).
 Add `assert_type` after each intermediate to verify what pyrefly infers:
 
 ```python
-def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
     h1 = F.relu(self.fc1(state))
-    assert_type(h1, Tensor[B, 400])
+    assert_type(h1, Tensor[[B, 400]])
     h2 = F.relu(self.fc2(h1))
-    assert_type(h2, Tensor[B, 400])
+    assert_type(h2, Tensor[[B, 400]])
     act = torch.tanh(self.out(h2))
-    assert_type(act, Tensor[B, A])
+    assert_type(act, Tensor[[B, A]])
     return act
 ```
 
@@ -124,12 +124,12 @@ the shape annotations are consistent end-to-end:
 def test_baseline_actor():
     actor = BaselineActor(24, 4)
     state = torch.randn(8, 24)
-    # pyrefly infers: Tensor[8, 24]
+    # pyrefly infers: Tensor[[8, 24]]
     act = actor(state)
-    # pyrefly infers: Tensor[8, 4]
+    # pyrefly infers: Tensor[[8, 4]]
 ```
 
-Use concrete dimensions in tests (`Tensor[8, 24]`, not generic `Tensor[B, S]`)
+Use concrete dimensions in tests (`Tensor[[8, 24]]`, not generic `Tensor[[B, S]]`)
 so the type checker verifies the full shape calculation.
 
 ## The complete port
@@ -146,23 +146,23 @@ import TabItem from '@theme/TabItem';
     import torch.nn as nn
     import torch.nn.functional as F
     from torch import Tensor
-    from shape_extensions import Int
+    from shape_extensions import Int, IntVar
 
 
-    class BaselineActor[S, A](nn.Module):
+    class BaselineActor[S: IntVar, A: IntVar](nn.Module):
         def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
             super().__init__()
             self.fc1 = nn.Linear(state_size, 400)
             self.fc2 = nn.Linear(400, 400)
             self.out = nn.Linear(400, action_size)
 
-        def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+        def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
             h1 = F.relu(self.fc1(state))
-            # pyrefly infers: Tensor[B, 400]
+            # pyrefly infers: Tensor[[B, 400]]
             h2 = F.relu(self.fc2(h1))
-            # pyrefly infers: Tensor[B, 400]
+            # pyrefly infers: Tensor[[B, 400]]
             act = torch.tanh(self.out(h2))
-            # pyrefly infers: Tensor[B, A]
+            # pyrefly infers: Tensor[[B, A]]
             return act
     ```
   </TabItem>
