@@ -2758,7 +2758,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(start) = start_expr {
             let int_ty = self.heap.mk_class_type(self.stdlib.int().clone());
             let start_ty = self.expr_infer(start, errors);
-            self.check_type(&start_ty, &int_ty, start.range(), errors, &|| {
+            self.check_type_as_call_argument(&start_ty, &int_ty, start.range(), errors, &|| {
                 TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
                     Some(Name::new_static("start")),
                     None,

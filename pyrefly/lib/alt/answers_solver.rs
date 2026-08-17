@@ -84,7 +84,6 @@ use crate::error::error::ErrorQuickFix;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
-use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallContext;
 use crate::solver::solver::PinError;
 use crate::solver::solver::SubsetError;
@@ -108,7 +107,13 @@ enum JaxtypingQuantifiedKey {
 pub struct TypeCheckOptions<'a, 'subset> {
     errors: &'a ErrorCollector,
     context: &'a dyn Fn() -> TypeCheckContext,
-    call_context: Option<&'a CallContext<'subset>>,
+    call_context: TypeCheckCallContext<'a, 'subset>,
+}
+
+enum TypeCheckCallContext<'a, 'subset> {
+    NoCall,
+    ArgumentOutsideCall,
+    Call(&'a CallContext<'subset>),
 }
 
 impl<'a, 'subset> TypeCheckOptions<'a, 'subset> {
@@ -116,12 +121,12 @@ impl<'a, 'subset> TypeCheckOptions<'a, 'subset> {
         Self {
             errors,
             context,
-            call_context: None,
+            call_context: TypeCheckCallContext::NoCall,
         }
     }
 
     pub fn with_call_context(mut self, call_context: &'a CallContext<'subset>) -> Self {
-        self.call_context = Some(call_context);
+        self.call_context = TypeCheckCallContext::Call(call_context);
         self
     }
 }
@@ -3109,6 +3114,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.check_type_with_options(got, want, loc, TypeCheckOptions::new(errors, tcc))
     }
 
+    /// Check `got` against `want` as an argument outside a call boundary.
+    pub fn check_type_as_call_argument(
+        &self,
+        got: &Type,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+    ) -> bool {
+        self.check_type_with_options(
+            got,
+            want,
+            loc,
+            TypeCheckOptions {
+                errors,
+                context: tcc,
+                call_context: TypeCheckCallContext::ArgumentOutsideCall,
+            },
+        )
+    }
+
     /// Check if `got` matches `want`.
     pub fn check_type_with_options(
         &self,
@@ -3120,23 +3146,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Record expected type for LSP query
         self.record_expected_type_trace(loc, want);
 
-        let subset_result = match options.call_context {
-            Some(call_context) => {
-                self.solver()
-                    .is_subset_eq(got, want, self.type_order(), Some(call_context))
+        let outside_call_context;
+        let call_context = match options.call_context {
+            TypeCheckCallContext::Call(call_context) => Some(call_context),
+            TypeCheckCallContext::ArgumentOutsideCall => {
+                outside_call_context = CallContext::for_argument_outside_call();
+                Some(&outside_call_context)
             }
-            None => match (options.context)().kind {
-                TypeCheckKind::CallArgument(..)
-                | TypeCheckKind::CallVarArgs(..)
-                | TypeCheckKind::CallKwArgs(..)
-                | TypeCheckKind::CallUnpackKwArg(..) => {
-                    let call_context = CallContext::outside().with_argument_side(ArgumentSide::Got);
-                    self.solver()
-                        .is_subset_eq(got, want, self.type_order(), Some(&call_context))
-                }
-                _ => self.is_subset_eq_with_reason(got, want),
-            },
+            TypeCheckCallContext::NoCall => None,
         };
+        let subset_result = self
+            .solver()
+            .is_subset_eq(got, want, self.type_order(), call_context);
         match subset_result {
             Ok(()) => {
                 self.check_string_as_iterable(got, want, loc, options.errors);

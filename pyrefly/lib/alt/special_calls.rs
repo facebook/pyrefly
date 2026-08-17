@@ -602,7 +602,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 );
             } else {
-                self.check_type(
+                self.check_type_as_call_argument(
                     &class_info_ty,
                     &self.heap.mk_class_type(self.stdlib.builtins_type().clone()),
                     range,
@@ -667,7 +667,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if matches!(func_kind, FunctionKind::IsSubclass) {
             let ty = self.expr_infer(object_or_class_expr, errors);
             // Verify that the `cls` argument has type `type`.
-            self.check_type(
+            self.check_type_as_call_argument(
                 &ty,
                 &self.heap.mk_class_type(self.stdlib.builtins_type().clone()),
                 object_or_class_expr.range(),

@@ -1148,7 +1148,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let unpacked_param_tuple =
                 self.heap
                     .mk_unpacked_tuple(Vec::new(), unpacked_param_ty.clone(), Vec::new());
-            self.check_type(
+            self.check_type_as_call_argument(
                 &unpacked_args_ty,
                 &unpacked_param_tuple,
                 arguments_range,

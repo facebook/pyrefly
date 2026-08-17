@@ -3113,6 +3113,11 @@ impl<'subset> CallContext<'subset> {
         Self::default()
     }
 
+    /// Context for checking a call argument without a call boundary.
+    pub fn for_argument_outside_call() -> Self {
+        Self::outside().with_argument_side(ArgumentSide::Got)
+    }
+
     pub(crate) fn defer_quantified(
         &self,
         handle: QuantifiedHandle,

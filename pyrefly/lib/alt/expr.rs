@@ -2287,16 +2287,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut iargs = x.arguments.args.iter();
         if let Some(arg) = iargs.next() {
             let expected_ty = self.stdlib.str().clone().to_type();
-            let arg_ty = self.expr_check(
-                arg,
-                Some((&expected_ty, &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
-                        Some(Name::new_static("name")),
-                        None,
-                    ))
-                })),
-                errors,
-            );
+            let call_context = CallContext::for_argument_outside_call();
+            let arg_ty = self
+                .expr_with_options(
+                    arg,
+                    ExprOptions::check(
+                        &expected_ty,
+                        errors,
+                        errors,
+                        &|| {
+                            TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                                Some(Name::new_static("name")),
+                                None,
+                            ))
+                        },
+                        Some(&call_context),
+                    ),
+                )
+                .into_ty();
             if let Type::Literal(lit) = arg_ty
                 && let Literal {
                     value: Lit::Str(s), ..
