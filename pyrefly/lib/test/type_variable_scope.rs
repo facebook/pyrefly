@@ -464,3 +464,118 @@ class C(Generic[T]):
         list[T]()  # OK: T is in scope in a method of the generic class
 "#,
 );
+
+testcase!(
+    bug = "Wrong/missing errors on legacy type vars",
+    test_class_typevar_shadowing_enclosing_type_var,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class A(Generic[T]):
+    class B(Generic[T]): ...  # missing error
+
+def f(x: T) -> T:
+    class C(Generic[T]): ...  # wrong error  # E: Redundant type parameter declaration
+    return x
+
+class D[T]:
+    class E[T]: ...  # E: shadows
+
+def g[T](x: T) -> T:
+    class F[T]: ...  # E: shadows
+    return x
+    "#,
+);
+
+testcase!(
+    bug = "Missing error on legacy type vars",
+    test_function_typevar_shadowing_enclosing_typevar,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+
+T = TypeVar("T")
+
+class A(Generic[T]):
+    class B:
+        # This `T` is not allowed to refer to `A.T` from the outer class scope, so it must be
+        # function-scoped.
+        def f(self, x: T) -> T: ...  # missing error
+
+class C[T]:
+    class D:
+        def f[T](self, x: T) -> T: ...  # E: shadows
+
+# We don't allow shadowing because it's confusing, but we resolve the signatures correctly regardless.
+reveal_type(A.B.f)  # E: [T](self: A.B, x: T) -> T
+reveal_type(C.D.f)  # E: [T](self: C.D, x: T) -> T
+    "#,
+);
+
+testcase!(
+    bug = "Missing errors on scoped type vars",
+    test_outer_class_typevar_is_out_of_scope_in_default_and_body,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+
+LegacyOuter = TypeVar("LegacyOuter")
+LegacyInner = TypeVar("LegacyInner", default=LegacyOuter)
+
+class A(Generic[LegacyOuter]):
+    class B(Generic[LegacyInner]):  # E: refers to out-of-scope type parameter
+        x: LegacyOuter  # E: not in scope
+        y: LegacyInner
+
+assert_type(A.B().x, Any)
+assert_type(A.B().y, Any)
+
+class C[Outer]:
+    class D[Inner = Outer]:  # missing error
+        x: Outer  # missing error
+        y: Inner
+
+assert_type(C.D().x, Any)  # E: assert_type(Outer, Any)
+assert_type(C.D().y, Any)  # E: assert_type(Outer, Any)
+    "#,
+);
+
+testcase!(
+    bug = "Missing error on scoped type vars",
+    test_outer_class_typevar_is_out_of_scope_in_bases,
+    r#"
+from typing import Generic, TypeVar
+
+LegacyT = TypeVar("LegacyT")
+
+class A(Generic[LegacyT]):
+    class B(list[LegacyT]):  # E: not in scope
+        pass
+
+class C[T]:
+    class D(list[T]):  # missing error
+        pass
+    "#,
+);
+
+testcase!(
+    test_outer_function_typevar_is_in_scope,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+LegacyT = TypeVar("LegacyT")
+
+def f(x: LegacyT):
+    class A:
+        x: LegacyT
+    return A.x
+
+def g[T](x: T):
+    class A:
+        x: T
+    return A.x
+
+assert_type(f(0), int)
+assert_type(g(0), int)
+    "#,
+);
