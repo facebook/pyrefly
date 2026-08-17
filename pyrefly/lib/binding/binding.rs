@@ -9,7 +9,6 @@ use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
-use std::slice;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -2320,35 +2319,6 @@ pub struct ImportFallback {
     pub is_unreachable: bool,
 }
 
-/// The legacy type parameter(s) a `Binding::PossibleLegacyTParam` may resolve to. Each key
-/// carries its own original binding and attribute path, so this only records the grouping.
-#[derive(Clone, Debug)]
-pub enum LegacyTParamBinding {
-    /// A bare name (`T`), which is never grouped with any other.
-    Parameter(Idx<KeyLegacyTypeParam>),
-    /// The attributes of a module reference (`foo.T`, `foo.P`, ...), which all collapse onto
-    /// the one `foo` scope entry.
-    Module(Vec1<Idx<KeyLegacyTypeParam>>),
-}
-
-impl LegacyTParamBinding {
-    pub fn keys(&self) -> &[Idx<KeyLegacyTypeParam>] {
-        match self {
-            Self::Parameter(key) => slice::from_ref(key),
-            Self::Module(keys) => keys.as_slice(),
-        }
-    }
-
-    /// Any member of the group will do when we only need to follow the name back to the
-    /// binding it was intercepted from: they are all attributes of the same module.
-    pub fn first_key(&self) -> Idx<KeyLegacyTypeParam> {
-        match self {
-            Self::Parameter(key) => *key,
-            Self::Module(keys) => *keys.first(),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Binding {
     /// An expression, optionally with a Key saying what the type must be.
@@ -2474,10 +2444,7 @@ pub enum Binding {
     /// The flag records that this function / class has scoped type parameters, in which case
     /// the use of legacy type parameters is invalid; the error is reported at the range of
     /// whichever key it applies to.
-    ///
-    /// Module references may host multiple legacy type parameters because all their attributes
-    /// collapse onto one base-name scope entry.
-    PossibleLegacyTParam(Box<LegacyTParamBinding>, bool),
+    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, bool),
     /// An assignment to a name.
     NameAssign(Box<NameAssign>),
     /// A type alias (legacy, scoped, or `TypeAliasType` call).
@@ -2676,14 +2643,7 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "TypeParameter({}, {}, ..)", tp.identity, tp.kind)
             }
             Self::PossibleLegacyTParam(legacy_tparam, _) => {
-                write!(f, "PossibleLegacyTParam(")?;
-                for (i, key) in legacy_tparam.keys().iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", ctx.display(*key))?;
-                }
-                write!(f, ")")
+                write!(f, "PossibleLegacyTParam({})", ctx.display(*legacy_tparam))
             }
             Self::AnnotatedType(k1, k2) => {
                 write!(
@@ -3503,9 +3463,19 @@ impl DisplayWith<Bindings> for BindingClassSubscriptSymmetry {
 pub enum BindingLegacyTypeParam {
     /// The key points directly to an expression that may be a legacy type parameter.
     ParamKeyed(Idx<Key>),
-    /// The key points to a module with attribute(s) that may be a legacy type parameter.
-    /// Supports multi-level dotted access (e.g. `mod.T` or `pkg.mod.T`).
-    ModuleKeyed(Idx<Key>, Box<Vec1<Name>>),
+    ModuleKeyed(Box<LegacyTypeParamModule>),
+}
+
+/// A module attribute that may be a legacy type parameter. For `pkg.mod.T`, `base` is
+/// the binding for the local name `pkg`, and `attrs` contains `mod` and `T`.
+#[derive(Clone, Debug)]
+pub struct LegacyTypeParamModule {
+    /// The original binding for the dotted reference's base name.
+    pub base: Idx<Key>,
+    /// The attribute path from the base name to the possible type parameter.
+    pub attrs: Vec1<Name>,
+    /// The preceding binding for the same base name, if any.
+    pub prior: Option<Idx<Key>>,
 }
 
 impl DisplayWith<Bindings> for BindingLegacyTypeParam {
@@ -3513,10 +3483,13 @@ impl DisplayWith<Bindings> for BindingLegacyTypeParam {
         write!(f, "BindingLegacyTypeParam(")?;
         match self {
             Self::ParamKeyed(k) => write!(f, "{}", ctx.display(*k)),
-            Self::ModuleKeyed(k, attrs) => {
-                write!(f, "{}", ctx.display(*k))?;
-                for attr in attrs.iter() {
+            Self::ModuleKeyed(module) => {
+                write!(f, "{}", ctx.display(module.base))?;
+                for attr in module.attrs.iter() {
                     write!(f, ".{}", attr)?;
+                }
+                if let Some(prior) = module.prior {
+                    write!(f, ", prior={}", ctx.display(prior))?;
                 }
                 Ok(())
             }
@@ -3529,7 +3502,7 @@ impl BindingLegacyTypeParam {
     pub fn idx(&self) -> Idx<Key> {
         match self {
             Self::ParamKeyed(idx) => *idx,
-            Self::ModuleKeyed(idx, _) => *idx,
+            Self::ModuleKeyed(module) => module.base,
         }
     }
 }

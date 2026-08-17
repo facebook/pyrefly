@@ -84,7 +84,7 @@ use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LambdaParamId;
 use crate::binding::binding::LastStmt;
-use crate::binding::binding::LegacyTParamBinding;
+use crate::binding::binding::LegacyTypeParamModule;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
@@ -1841,7 +1841,7 @@ impl<'a> BindingsBuilder<'a> {
             // By finalize time we can follow through to the original
             // binding to check whether it's actually a type alias.
             Binding::PossibleLegacyTParam(legacy_tparam, _)
-                if let Some(legacy_binding) = self.idx_to_binding(legacy_tparam.first_key()) =>
+                if let Some(legacy_binding) = self.idx_to_binding(*legacy_tparam) =>
             {
                 self.follow_to_type_alias(legacy_binding.idx())
             }
@@ -2517,13 +2517,9 @@ impl<'a> BindingsBuilder<'a> {
         // `CheckLegacyTypeParam`, and return the `Idx<Key>`.
         let tparam_idx = Self::make_legacy_tparam(&id, original_binding, original_idx)
             .map(|(k, v)| self.insert_binding(k, v))?;
-        let legacy_tparam = match &id {
-            LegacyTParamId::Name(_) => LegacyTParamBinding::Parameter(tparam_idx),
-            LegacyTParamId::Attr(..) => LegacyTParamBinding::Module(Vec1::new(tparam_idx)),
-        };
         let idx = self.insert_binding(
             id.as_possible_legacy_tparam_key(),
-            Binding::PossibleLegacyTParam(Box::new(legacy_tparam), has_scoped_type_params),
+            Binding::PossibleLegacyTParam(tparam_idx, has_scoped_type_params),
         );
         Some(PossibleTParam {
             id,
@@ -2569,10 +2565,11 @@ impl<'a> BindingsBuilder<'a> {
             LegacyTParamId::Attr(_, attrs) => match binding {
                 Some(Binding::Module(..) | Binding::Import(..)) | None => Some((
                     KeyLegacyTypeParam(ShortIdentifier::new(attrs.last())),
-                    BindingLegacyTypeParam::ModuleKeyed(
-                        original_idx,
-                        Box::new(attrs.mapped_ref(|a| a.id.clone())),
-                    ),
+                    BindingLegacyTypeParam::ModuleKeyed(Box::new(LegacyTypeParamModule {
+                        base: original_idx,
+                        attrs: attrs.mapped_ref(|a| a.id.clone()),
+                        prior: None,
+                    })),
                 )),
                 Some(_) => None,
             },
@@ -2586,36 +2583,21 @@ impl<'a> BindingsBuilder<'a> {
     /// of those names point at legacy (pre-PEP-695) type variable declarations, in which
     /// case the name should be treated as a Quantified type parameter inside this scope.
     pub fn add_name_definitions(&mut self, legacy_tparams: &LegacyTParamCollector) {
-        // Module attributes sharing a base collapse onto one scope entry, so its binding must
-        // retain every possible legacy type parameter hosted by that module.
-        let mut by_base: SmallMap<Name, (Vec1<Idx<KeyLegacyTypeParam>>, Key)> = SmallMap::new();
+        // Module attributes sharing a base are chained so that each subsequent possible legacy
+        // type parameter points at the previous.
+        let mut module_heads: SmallMap<Name, Idx<Key>> = SmallMap::new();
         for entry in legacy_tparams.legacy_tparams.values() {
             if let TParamLookupResult::MaybeTParam(possible_tparam) = entry {
+                if let BindingLegacyTypeParam::ModuleKeyed(module) = self
+                    .idx_to_binding_mut(possible_tparam.tparam_idx)
+                    .expect("a possible legacy type parameter should have a binding")
+                {
+                    let base = possible_tparam.id.as_identifier().id.clone();
+                    module.prior = module_heads.get(&base).copied();
+                    module_heads.insert(base, possible_tparam.idx);
+                }
                 self.scopes
                     .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
-                if !matches!(possible_tparam.id, LegacyTParamId::Attr(..)) {
-                    continue;
-                }
-                let base = possible_tparam.id.as_identifier().id.clone();
-                // The surviving scope entry is the last one added, so track its key.
-                let key = possible_tparam.id.as_possible_legacy_tparam_key();
-                if let Some((keys, entry_key)) = by_base.get_mut(&base) {
-                    keys.push(possible_tparam.tparam_idx);
-                    *entry_key = key;
-                } else {
-                    by_base.insert(base, (Vec1::new(possible_tparam.tparam_idx), key));
-                }
-            }
-        }
-        for (_base, (keys, entry_key)) in by_base {
-            if keys.len() > 1 {
-                self.insert_binding_overwrite(
-                    entry_key,
-                    Binding::PossibleLegacyTParam(
-                        Box::new(LegacyTParamBinding::Module(keys)),
-                        legacy_tparams.has_scoped_tparams,
-                    ),
-                );
             }
         }
     }

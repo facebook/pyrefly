@@ -426,16 +426,9 @@ impl Static {
                     found.last_range = last_range;
                 }
                 if matches!(style, StaticStyle::PossibleLegacyTParam) {
-                    // This case is reachable when the same module has multiple attributes accessed
-                    // on it, each of which produces a separate possible-legacy-tparam binding that
-                    // narrows a different attribute.
-                    //
-                    // At the moment, this is a flaw in the design - we really should have all
-                    // of the narrows, but that is currently not possible.
-                    //
-                    // For now, we'll let the last one win: this is arbitrary, but is probably more
-                    // compatible with a future in which the `BindingsBuilder` tracks multiple attributes
-                    // and combines them properly.
+                    // Static scopes are keyed by name, so `foo.T` and `foo.P` must share the
+                    // `foo` entry. The caller links their bindings before each upsert, making
+                    // the last entry the chain head while preserving all attribute narrows.
                     found.style = style;
                     found.range = range;
                 } else {

@@ -115,7 +115,6 @@ use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
-use crate::binding::binding::LegacyTParamBinding;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::MultiTargetReceiver;
 use crate::binding::binding::NoneIfRecursive;
@@ -373,18 +372,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<LegacyTypeParameterLookup> {
         let maybe_parameter = match binding {
             BindingLegacyTypeParam::ParamKeyed(k) => self.get_idx(*k),
-            BindingLegacyTypeParam::ModuleKeyed(k, attrs) => {
+            BindingLegacyTypeParam::ModuleKeyed(module) => {
                 // Errors in attribute lookup are reported elsewhere.
-                attrs.iter().fold(self.get_idx(*k), |acc, attr| {
-                    self.attr_infer(
-                        &acc,
-                        attr,
-                        TextRange::default(),
-                        &self.error_swallower(),
-                        None,
-                    )
-                    .into()
-                })
+                module
+                    .attrs
+                    .iter()
+                    .fold(self.get_idx(module.base), |acc, attr| {
+                        self.attr_infer(
+                            &acc,
+                            attr,
+                            TextRange::default(),
+                            &self.error_swallower(),
+                            None,
+                        )
+                        .into()
+                    })
             }
         };
         // Use the scope_anchor (the KeyLegacyTypeParam's own range, i.e. the first occurrence
@@ -5235,7 +5237,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     #[inline(never)]
     fn binding_to_type_info_possible_legacy_tparam(
         &self,
-        legacy_tparam: &LegacyTParamBinding,
+        key: Idx<KeyLegacyTypeParam>,
         has_scoped_tparams: bool,
         errors: &ErrorCollector,
     ) -> TypeInfo {
@@ -5258,27 +5260,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
         };
-        match legacy_tparam {
-            LegacyTParamBinding::Parameter(key) => TypeInfo::of_ty(resolve(*key)),
-            LegacyTParamBinding::Module(keys) => {
-                // Each key points at a module whose attr chain may end in a legacy type
+        match self.bindings().get(key) {
+            BindingLegacyTypeParam::ParamKeyed(_) => TypeInfo::of_ty(resolve(key)),
+            BindingLegacyTypeParam::ModuleKeyed(binding) => {
+                // `base` points at a module whose attr chain may end in a legacy type
                 // variable that needs to be replaced with a QuantifiedValue. Since the
                 // binding is for the module itself, we use the mechanism for attribute
                 // ("facet") type narrowing to change the type produced when the final
-                // attr is accessed. All the keys are attributes of the same module, so we
-                // start from that module and narrow it at every hosted tparam's facet.
-                let mut module = (*self.get_idx(self.bindings().get(*keys.first()).idx())).clone();
-                for &key in keys {
-                    let ty = resolve(key);
-                    if matches!(ty, Type::QuantifiedValue(_)) {
-                        let BindingLegacyTypeParam::ModuleKeyed(_, attrs) =
-                            self.bindings().get(key)
-                        else {
-                            unreachable!("a grouped legacy tparam is a module attribute")
-                        };
-                        let facets = attrs.mapped_ref(|a| FacetKind::Attribute(a.clone()));
-                        module = module.with_narrow(&facets, ty);
-                    }
+                // attr is accessed.
+                let base = binding.prior.unwrap_or(binding.base);
+                let mut module = (*self.get_idx(base)).clone();
+                let ty = resolve(key);
+                if matches!(ty, Type::QuantifiedValue(_)) {
+                    let facets = binding
+                        .attrs
+                        .mapped_ref(|a| FacetKind::Attribute(a.clone()));
+                    module = module.with_narrow(&facets, ty);
                 }
                 module
             }
@@ -5350,7 +5347,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::PossibleLegacyTParam(legacy_tparam, has_scoped_tparams) => self
                 .binding_to_type_info_possible_legacy_tparam(
-                    legacy_tparam,
+                    *legacy_tparam,
                     *has_scoped_tparams,
                     errors,
                 ),

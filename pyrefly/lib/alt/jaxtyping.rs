@@ -126,7 +126,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | Binding::PromoteForward(inner)
                 | Binding::ForwardToFirstUse(inner) => idx = *inner,
                 Binding::PossibleLegacyTParam(legacy_tparam, _) => {
-                    idx = self.bindings().get(legacy_tparam.first_key()).idx()
+                    idx = self.bindings().get(*legacy_tparam).idx()
                 }
                 binding => return binding,
             }
