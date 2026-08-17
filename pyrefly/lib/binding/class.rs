@@ -284,7 +284,7 @@ impl<'a> BindingsBuilder<'a> {
             metadata => metadata,
         };
 
-        let mut legacy = Some(LegacyTParamCollector::new(x.type_params.is_some()));
+        let mut legacy = LegacyTParamCollector::new(x.type_params.is_some());
         let bases = x.bases().map(|base| {
             let mut base = base.clone();
             // If this base was pre-synthesized as a namedtuple, return the synthesized base
@@ -312,7 +312,6 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {}
             }
             // If it's really obvious this can't be a legacy type var then don't even record it.
-            let mut none = None;
             let legacy = match &base {
                 Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                     // Syntactically, this may be a legacy type var.
@@ -325,12 +324,12 @@ impl<'a> BindingsBuilder<'a> {
                         // This definitely isn't a legacy type var: it's a reference to a scoped
                         // type var. Note that even if there exists a legacy type var with the same
                         // name, the scoped type var shadows it.
-                        &mut none
+                        None
                     } else {
-                        &mut legacy
+                        Some(&mut legacy)
                     }
                 }
-                _ => &mut none,
+                _ => None,
             };
             self.ensure_type_with_usage(
                 &mut base,
@@ -424,8 +423,7 @@ impl<'a> BindingsBuilder<'a> {
             BindingClassSynthesizedFields(class_indices.class_idx),
         );
 
-        let legacy_tparam_collector = legacy.unwrap();
-        self.add_name_definitions(&legacy_tparam_collector);
+        self.add_name_definitions(&legacy);
 
         self.scopes.push(Scope::class_body(
             x.range,
@@ -516,7 +514,7 @@ impl<'a> BindingsBuilder<'a> {
 
         // Insert a `KeyTParams` / `BindingTParams` pair, but only if there is at least
         // one generic base class - otherwise, it is not possible that legacy tparams are used.
-        let legacy_tparams = legacy_tparam_collector.lookup_keys();
+        let legacy_tparams = legacy.lookup_keys();
         let tparams_require_binding = !legacy_tparams.is_empty();
         if tparams_require_binding {
             let scoped_type_params = mem::take(&mut x.type_params);
@@ -1526,7 +1524,7 @@ impl<'a> BindingsBuilder<'a> {
                 .map(|((name, range, annotation), default)| {
                     let bound_default = default.map(ExprOrBinding::Expr);
                     if let Some(mut ann) = annotation {
-                        self.ensure_type(&mut ann, &mut None);
+                        self.ensure_type(&mut ann, None);
                         (name, range, Some(ann), bound_default)
                     } else {
                         (name, range, None, bound_default)
@@ -1564,7 +1562,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(func, class_object.usage());
         self.ensure_expr(new_type_name, class_object.usage());
         self.check_functional_definition_name(&name.id, new_type_name, ErrorKind::InvalidArgument);
-        self.ensure_type(base, &mut None);
+        self.ensure_type(base, None);
         self.synthesize_class_def(
             class_name,
             class_object,
@@ -1632,7 +1630,7 @@ impl<'a> BindingsBuilder<'a> {
                         if let Some(key) = &mut item.key {
                             self.ensure_expr(key, class_object.usage());
                         }
-                        self.ensure_type(&mut item.value, &mut None);
+                        self.ensure_type(&mut item.value, None);
                         match (&item.key, &item.value) {
                             (Some(Expr::StringLiteral(k)), v) => {
                                 Some((k.value.to_string(), k.range(), Some(v.clone()), None))

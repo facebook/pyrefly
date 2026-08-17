@@ -346,7 +346,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(arg, static_type_usage);
                 continue;
             }
-            self.ensure_type(arg, &mut None);
+            self.ensure_type(arg, None);
         }
         for kw in call.arguments.keywords.iter_mut() {
             if let Some(id) = &kw.arg
@@ -362,7 +362,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.ensure_expr(&mut kw.value, static_type_usage);
                     continue;
                 }
-                self.ensure_type(&mut kw.value, &mut None);
+                self.ensure_type(&mut kw.value, None);
             } else {
                 self.ensure_expr(&mut kw.value, static_type_usage);
             }
@@ -390,7 +390,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(id) = &kw.arg
                 && id.id == "default"
             {
-                self.ensure_type(&mut kw.value, &mut None);
+                self.ensure_type(&mut kw.value, None);
             } else {
                 self.ensure_expr(&mut kw.value, static_type_usage);
             }
@@ -448,7 +448,7 @@ impl<'a> BindingsBuilder<'a> {
     fn ensure_type_alias_type_args(
         &mut self,
         call: &mut ExprCall,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: &mut LegacyTParamCollector,
     ) {
         // Type var declarations are static types only; skip them for first-usage type inference.
         let static_type_usage = &mut Usage::StaticTypeInformation {
@@ -462,7 +462,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         // The second argument is the type
         if let Some(expr) = iargs.next() {
-            self.ensure_type_with_usage(expr, tparams_builder, &mut Usage::TypeAliasRhs);
+            self.ensure_type_with_usage(expr, Some(tparams_builder), &mut Usage::TypeAliasRhs);
         }
         // There shouldn't be any other positional arguments
         for arg in iargs {
@@ -474,14 +474,14 @@ impl<'a> BindingsBuilder<'a> {
                 && let Expr::Tuple(type_params) = &mut kw.value
             {
                 for type_param in type_params.elts.iter_mut() {
-                    self.ensure_type(type_param, &mut None);
+                    self.ensure_type(type_param, None);
                 }
             } else if let Some(id) = &kw.arg
                 && id.id == "value"
             {
                 self.ensure_type_with_usage(
                     &mut kw.value,
-                    tparams_builder,
+                    Some(tparams_builder),
                     &mut Usage::TypeAliasRhs,
                 );
             } else {
@@ -603,7 +603,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn assign_type_alias_type(&mut self, name: &ExprName, call: &mut ExprCall) {
-        let mut collector = Some(LegacyTParamCollector::new(false));
+        let mut collector = LegacyTParamCollector::new(false);
         self.ensure_type_alias_type_args(call, &mut collector);
         let assigned = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
         let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
@@ -620,7 +620,7 @@ impl<'a> BindingsBuilder<'a> {
             name: name.id.clone(),
             tparams: TypeAliasParams::TypeAliasType {
                 declared_params: type_params,
-                legacy_params: collector.unwrap().lookup_keys().into_boxed_slice(),
+                legacy_params: collector.lookup_keys().into_boxed_slice(),
             },
             key_type_alias: idx_type_alias,
             range: call.range(),
@@ -637,9 +637,9 @@ impl<'a> BindingsBuilder<'a> {
     ) -> Idx<KeyAnnotation> {
         let ann_key = KeyAnnotation::Annotation(ShortIdentifier::new(name));
         if self.scopes.in_class_body() {
-            self.ensure_class_member_type(annotation, &mut None);
+            self.ensure_class_member_type(annotation, None);
         } else {
-            self.ensure_type(annotation, &mut None);
+            self.ensure_type(annotation, None);
         }
         let ann_val = if let Some(special) = SpecialForm::new(&name.id, annotation) {
             // Special case `_: SpecialForm` declarations (this mainly affects some names declared in `typing.pyi`)
@@ -882,7 +882,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::AnnAssign(mut x) => match *x.target {
                 Expr::Name(name) => {
                     if Ast::is_synthesized_empty_name(&name) {
-                        self.ensure_type(&mut x.annotation, &mut None);
+                        self.ensure_type(&mut x.annotation, None);
                         if let Some(value) = x.value {
                             self.bind_single_name_assign(
                                 &Ast::expr_name_identifier(name),
@@ -995,7 +995,7 @@ impl<'a> BindingsBuilder<'a> {
                 Expr::Attribute(attr) => {
                     let mut attr = attr;
                     let attr_name = attr.attr.id.clone();
-                    self.ensure_type(&mut x.annotation, &mut None);
+                    self.ensure_type(&mut x.annotation, None);
                     let ann_key = self.insert_binding(
                         KeyAnnotation::AttrAnnotation(x.annotation.range()),
                         BindingAnnotation::AnnotateExpr(
@@ -1132,7 +1132,7 @@ impl<'a> BindingsBuilder<'a> {
                     if let Some(params) = &mut x.type_params {
                         self.type_params(params);
                     }
-                    self.ensure_type_with_usage(&mut x.value, &mut None, &mut Usage::TypeAliasRhs);
+                    self.ensure_type_with_usage(&mut x.value, None, &mut Usage::TypeAliasRhs);
                     // Pop the type alias scope before binding the definition
                     self.scopes.pop();
                     let range = x.value.range();

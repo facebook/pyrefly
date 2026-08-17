@@ -277,14 +277,14 @@ impl<'a> BindingsBuilder<'a> {
     /// does not require a mutable ref.
     pub fn ensure_expr_name(&mut self, x: &ExprName, usage: &mut Usage) -> Idx<Key> {
         let name = Ast::expr_name_identifier(x.clone());
-        self.ensure_name(&name, usage, &mut None)
+        self.ensure_name(&name, usage, None)
     }
 
     fn ensure_name(
         &mut self,
         name: &Identifier,
         usage: &mut Usage,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> Idx<Key> {
         self.ensure_name_in_type(name, usage, tparams_builder, false)
     }
@@ -293,14 +293,13 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         name: &Identifier,
         usage: &mut Usage,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
         is_runtime_evaluated_annotation: bool,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             name,
             usage,
             tparams_builder
-                .as_mut()
                 .map(|tparams_builder| (tparams_builder, LegacyTParamId::Name(name.clone()))),
             is_runtime_evaluated_annotation,
         )
@@ -311,12 +310,12 @@ impl<'a> BindingsBuilder<'a> {
         value: &Identifier,
         attrs: Vec1<Identifier>,
         usage: &mut Usage,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             value,
             usage,
-            tparams_builder.as_mut().map(|tparams_builder| {
+            tparams_builder.map(|tparams_builder| {
                 (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
             false,
@@ -731,7 +730,7 @@ impl<'a> BindingsBuilder<'a> {
                         // Only the first argument to Annotated[...] is a type; the rest are metadata.
                         self.ensure_type_impl(
                             &mut tup.elts[0],
-                            &mut None,
+                            None,
                             false,
                             false,
                             &mut type_usage,
@@ -748,7 +747,7 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.ensure_type_impl(
                             &mut *slice,
-                            &mut None,
+                            None,
                             false,
                             false,
                             &mut type_usage,
@@ -770,7 +769,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.ensure_expr(&mut *value, usage);
                     self.ensure_type_impl(
                         &mut *slice,
-                        &mut None,
+                        None,
                         false,
                         false,
                         &mut Usage::StaticTypeInformation {
@@ -924,7 +923,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_expr(&mut call.func, usage);
                         for (i, arg) in call.arguments.args.iter_mut().enumerate() {
                             if i == 1 {
-                                self.ensure_type(arg, &mut None);
+                                self.ensure_type(arg, None);
                             } else {
                                 self.ensure_expr(arg, usage);
                             }
@@ -938,7 +937,7 @@ impl<'a> BindingsBuilder<'a> {
                         // Forward-reference support in the first argument to a `cast` call.
                         self.ensure_expr(&mut call.func, usage);
                         if let Some(arg) = call.arguments.args.first_mut() {
-                            self.ensure_type(arg, &mut None)
+                            self.ensure_type(arg, None)
                         }
                         for arg in call.arguments.args.iter_mut().skip(1) {
                             self.ensure_expr(arg, usage);
@@ -947,7 +946,7 @@ impl<'a> BindingsBuilder<'a> {
                             if let Some(id) = &kw.arg
                                 && id.as_str() == "typ"
                             {
-                                self.ensure_type(&mut kw.value, &mut None);
+                                self.ensure_type(&mut kw.value, None);
                             } else {
                                 self.ensure_expr(&mut kw.value, usage);
                             }
@@ -958,7 +957,7 @@ impl<'a> BindingsBuilder<'a> {
                         // `TypeForm(expr)` — treat the argument as a type expression.
                         self.ensure_expr(&mut call.func, usage);
                         if let Some(arg) = call.arguments.args.first_mut() {
-                            self.ensure_type(arg, &mut None)
+                            self.ensure_type(arg, None)
                         }
                         for arg in call.arguments.args.iter_mut().skip(1) {
                             self.ensure_expr(arg, usage);
@@ -1153,7 +1152,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
-                self.ensure_name(&name, usage, &mut None);
+                self.ensure_name(&name, usage, None);
             }
             Expr::Yield(x) => {
                 self.record_yield(x.clone());
@@ -1208,7 +1207,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn ensure_type(
         &mut self,
         x: &mut Expr,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) {
         self.ensure_type_with_usage(
             x,
@@ -1222,7 +1221,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn ensure_class_member_type(
         &mut self,
         x: &mut Expr,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) {
         self.ensure_type_impl(
             x,
@@ -1241,7 +1240,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn ensure_type_with_usage(
         &mut self,
         x: &mut Expr,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
         usage: &mut Usage,
     ) {
         self.ensure_type_impl(x, tparams_builder, false, false, usage, false);
@@ -1250,7 +1249,7 @@ impl<'a> BindingsBuilder<'a> {
     fn ensure_type_impl(
         &mut self,
         x: &mut Expr,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
         in_string_literal: bool,
         check_runtime_name: bool,
         usage: &mut Usage,
@@ -1324,7 +1323,7 @@ impl<'a> BindingsBuilder<'a> {
                 // Only go inside the first argument to Annotated, the rest are non-type metadata.
                 self.ensure_type_impl(
                     &mut *value,
-                    tparams_builder,
+                    tparams_builder.as_deref_mut(),
                     in_string_literal,
                     check_runtime_name,
                     usage,
@@ -1352,7 +1351,7 @@ impl<'a> BindingsBuilder<'a> {
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                 self.ensure_type_impl(
                     &mut *value,
-                    tparams_builder,
+                    tparams_builder.as_deref_mut(),
                     in_string_literal,
                     true,
                     usage,
@@ -1483,7 +1482,7 @@ impl<'a> BindingsBuilder<'a> {
                 let name = Ast::expr_name_identifier(name_expr.clone());
                 let id = LegacyTParamId::Name(name.clone());
                 let resolved = tparams_builder
-                    .as_mut()
+                    .as_deref_mut()
                     .and_then(|tb| self.try_intercept_lookup(tb, &id));
                 // Same as above: args/kwargs attribute values are not type references.
                 let mut attr_value_usage = match *usage {
@@ -1492,11 +1491,7 @@ impl<'a> BindingsBuilder<'a> {
                     },
                     ref u => u.clone(),
                 };
-                if resolved.is_some() {
-                    self.ensure_name(&name, &mut attr_value_usage, tparams_builder);
-                } else {
-                    self.ensure_name(&name, &mut attr_value_usage, &mut None);
-                }
+                self.ensure_name(&name, &mut attr_value_usage, resolved.and(tparams_builder));
             }
             Expr::BinOp(ExprBinOp {
                 left,
@@ -1513,7 +1508,7 @@ impl<'a> BindingsBuilder<'a> {
                 // Recurse into children to handle string literal parsing
                 self.ensure_type_impl(
                     left,
-                    tparams_builder,
+                    tparams_builder.as_deref_mut(),
                     in_string_literal,
                     check_runtime_name,
                     usage,
@@ -1551,7 +1546,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => x.recurse_mut(&mut |x| {
                 self.ensure_type_impl(
                     x,
-                    tparams_builder,
+                    tparams_builder.as_deref_mut(),
                     in_string_literal,
                     check_runtime_name,
                     usage,
@@ -1577,7 +1572,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn ensure_type_opt(
         &mut self,
         x: Option<&mut Expr>,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) {
         if let Some(x) = x {
             self.ensure_type(x, tparams_builder);

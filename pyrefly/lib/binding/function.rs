@@ -333,7 +333,7 @@ impl<'a> BindingsBuilder<'a> {
         mut x: Expr,
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> (TextRange, Idx<KeyAnnotation>) {
         self.ensure_type(&mut x, tparams_builder);
         (
@@ -365,23 +365,23 @@ impl<'a> BindingsBuilder<'a> {
             self.type_params_with_owner(tparams, owner)
         });
 
-        let mut legacy = Some(LegacyTParamCollector::new(tparams.is_some()));
+        let mut legacy = LegacyTParamCollector::new(tparams.is_some());
 
         // We need to bind all the parameters expressions _after_ the type params, but before the parameter names,
         // which might shadow some types.
         for (param, default) in Ast::parameters_iter_mut(&mut x.parameters) {
-            self.ensure_type_opt(param.annotation.as_deref_mut(), &mut legacy);
+            self.ensure_type_opt(param.annotation.as_deref_mut(), Some(&mut legacy));
             if let Some(default) = default {
                 self.ensure_expr_opt(default.as_deref_mut(), usage);
             }
         }
 
-        let return_ann_with_range = mem::take(&mut x.returns)
-            .map(|e| self.to_return_annotation_with_range(*e, func_name, class_key, &mut legacy));
+        let return_ann_with_range = mem::take(&mut x.returns).map(|e| {
+            self.to_return_annotation_with_range(*e, func_name, class_key, Some(&mut legacy))
+        });
 
-        let legacy_tparam_collector = legacy.unwrap();
-        self.add_name_definitions(&legacy_tparam_collector);
-        let legacy_tparams = legacy_tparam_collector.lookup_keys();
+        self.add_name_definitions(&legacy);
+        let legacy_tparams = legacy.lookup_keys();
         (return_ann_with_range, legacy_tparams)
     }
 

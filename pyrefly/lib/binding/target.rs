@@ -608,7 +608,7 @@ impl<'a> BindingsBuilder<'a> {
                     && let Expr::StringLiteral(lit) = &kw.value
                     && lit.as_single_part_string().is_some()
                 {
-                    self.ensure_type(&mut kw.value, &mut None);
+                    self.ensure_type(&mut kw.value, None);
                 }
             }
         }
@@ -684,15 +684,17 @@ impl<'a> BindingsBuilder<'a> {
         let mut tparams = None;
         if ensure_assigned {
             if is_definitely_type_alias {
-                let mut legacy = Some(LegacyTParamCollector::new(false));
-                self.ensure_type_with_usage(&mut value, &mut legacy, &mut Usage::TypeAliasRhs);
-                if let Some(collector) = legacy {
-                    tparams = Some(collector.lookup_keys().into_boxed_slice());
-                }
+                let mut legacy = LegacyTParamCollector::new(false);
+                self.ensure_type_with_usage(
+                    &mut value,
+                    Some(&mut legacy),
+                    &mut Usage::TypeAliasRhs,
+                );
+                tparams = Some(legacy.lookup_keys().into_boxed_slice());
             } else if has_typeform_annotation && value.is_string_literal_expr() {
                 self.ensure_type_with_usage(
                     &mut value,
-                    &mut None,
+                    None,
                     &mut Usage::StaticTypeInformation {
                         is_annotation: false,
                     },

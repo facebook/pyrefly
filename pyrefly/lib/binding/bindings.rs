@@ -2119,7 +2119,7 @@ impl<'a> BindingsBuilder<'a> {
                                     invalid_intvar_constraint = true;
                                     self.ensure_expr(constraint, &mut usage);
                                 } else {
-                                    self.ensure_type_with_usage(constraint, &mut None, &mut usage);
+                                    self.ensure_type_with_usage(constraint, None, &mut usage);
                                     constraint_exprs.push(constraint.clone());
                                 }
                             }
@@ -2130,26 +2130,26 @@ impl<'a> BindingsBuilder<'a> {
                             self.ensure_expr(bound_expr, &mut usage);
                             kind = QuantifiedKind::IntVar;
                         } else {
-                            self.ensure_type_with_usage(bound_expr, &mut None, &mut usage);
+                            self.ensure_type_with_usage(bound_expr, None, &mut usage);
                             bound = Some((**bound_expr).clone());
                         }
                     }
                     if let Some(default_expr) = &mut tv.default {
-                        self.ensure_type_with_usage(default_expr, &mut None, &mut usage);
+                        self.ensure_type_with_usage(default_expr, None, &mut usage);
                         default = Some((**default_expr).clone());
                     }
                     kind
                 }
                 TypeParam::ParamSpec(x) => {
                     if let Some(default_expr) = &mut x.default {
-                        self.ensure_type_with_usage(default_expr, &mut None, &mut usage);
+                        self.ensure_type_with_usage(default_expr, None, &mut usage);
                         default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::ParamSpec
                 }
                 TypeParam::TypeVarTuple(x) => {
                     if let Some(default_expr) = &mut x.default {
-                        self.ensure_type_with_usage(default_expr, &mut None, &mut usage);
+                        self.ensure_type_with_usage(default_expr, None, &mut usage);
                         default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::TypeVarTuple
