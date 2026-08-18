@@ -218,16 +218,23 @@ mod test {
 
     use super::*;
 
+    fn test_venv_interpreter_name() -> &'static str {
+        if cfg!(windows) {
+            "python.exe"
+        } else {
+            "python3"
+        }
+    }
+
     fn setup_test_dir() -> TempDir {
         let tempdir = tempdir().unwrap();
         let root = tempdir.path();
-        let interpreter_suffix = if cfg!(windows) { ".exe" } else { "" };
         TestPath::setup_test_directory(
             root,
             vec![TestPath::dir(
                 "venv",
                 vec![
-                    TestPath::file(&format!("python3{interpreter_suffix}")),
+                    TestPath::file(test_venv_interpreter_name()),
                     TestPath::file("pyvenv.cfg"),
                 ],
             )],
@@ -341,7 +348,6 @@ mod test {
         let tempdir = setup_test_dir();
 
         let interpreters = Interpreters::default();
-        let interpreter_suffix = if cfg!(windows) { ".exe" } else { "" };
 
         unsafe {
             // clear this variable if it exists, since we can't test that in unit tests.
@@ -354,7 +360,8 @@ mod test {
             ConfigOrigin::auto(
                 tempdir
                     .path()
-                    .join(format!("venv/python3{interpreter_suffix}"))
+                    .join("venv")
+                    .join(test_venv_interpreter_name())
             )
         );
     }
