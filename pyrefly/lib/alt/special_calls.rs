@@ -192,15 +192,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
-        let default = self.freeform_call_infer(
-            callee_ty,
-            args,
-            keywords,
-            func_range,
-            arguments_range,
-            hint,
-            errors,
-        );
+        let default = self
+            .freeform_call_infer(
+                callee_ty,
+                args,
+                keywords,
+                func_range,
+                arguments_range,
+                hint,
+                errors,
+            )
+            .ty;
         let [_, attr_expr, ..] = raw_args else {
             unreachable!("getattr special-casing requires 2 or 3 positional arguments")
         };
