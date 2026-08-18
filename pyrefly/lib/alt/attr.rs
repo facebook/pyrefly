@@ -45,6 +45,7 @@ use crate::state::loader::FindingOrError;
 use crate::types::callable::Params;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::facet::FacetKind;
 use crate::types::function::FunctionKind;
 use crate::types::function::PropertyMetadata;
 use crate::types::function::PropertyRole;
@@ -53,6 +54,7 @@ use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::read_only::ReadOnlyReason;
+use crate::types::type_info::TypeInfo;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -948,7 +950,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         attr_base: AttributeBase,
         attr_name: &Name,
-        not_found: NotFoundOn,
+        missing_attribute: Option<NotFoundOn>,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -981,7 +983,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
-        if !(delattr_not_found.is_empty() && delattr_error.is_empty()) {
+        if let Some(not_found) = missing_attribute
+            && !(delattr_not_found.is_empty() && delattr_error.is_empty())
+        {
             self.error_with_context(
                 errors,
                 range,
@@ -1275,15 +1279,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn check_attr_delete(
         &self,
-        base: &Type,
+        base: &TypeInfo,
         attr_name: &Name,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) {
-        let Some(attr_base) = self.as_attribute_base(base.clone()) else {
-            InternalError::AttributeBaseUndefined(base.clone())
+        let facet = FacetKind::Attribute(attr_name.clone());
+        let narrowed_present =
+            base.type_at_facet(&facet).is_some() || base.has_value_less_presence(&facet);
+        let Some(attr_base) = self.as_attribute_base(base.ty().clone()) else {
+            InternalError::AttributeBaseUndefined(base.ty().clone())
                 .add_to(errors, range, attr_name, todo_ctx);
             return;
         };
@@ -1293,7 +1300,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.check_delattr(
                 attr_base.clone(),
                 attr_name,
-                not_found,
+                (!narrowed_present).then_some(not_found),
                 range,
                 errors,
                 context,
@@ -1311,7 +1318,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.check_delattr(
                         attr_base.clone(),
                         attr_name,
-                        not_found,
+                        (!narrowed_present).then_some(not_found),
                         range,
                         errors,
                         context,

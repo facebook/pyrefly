@@ -143,10 +143,14 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     /// Narrow a name to `Idx` if the name is defined in the current scope stack. Used
-    /// to handle attribute and subscript assignment narrows, which we want to allow whenever
+    /// to handle attribute and subscript mutation narrows, which we want to allow whenever
     /// the name was defined, but we don't want them to cause us to treat nonexistent names
     /// as defined downstream.
-    fn narrow_if_name_is_defined(&mut self, identifier: Identifier, narrowed_idx: Idx<Key>) {
+    pub(crate) fn narrow_if_name_is_defined(
+        &mut self,
+        identifier: Identifier,
+        narrowed_idx: Idx<Key>,
+    ) {
         let name = Hashed::new(&identifier.id);
         let usage = Usage::NonPinningValue(None);
         let name_is_defined = match self.look_up_name_for_read(name, &usage) {

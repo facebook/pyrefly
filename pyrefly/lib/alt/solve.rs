@@ -58,6 +58,7 @@ use crate::alt::class::attrs::is_attrs_nothing;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::class::variance_inference::VarianceMap;
+use crate::alt::expr::ExprOptions;
 use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassDisjointBase;
@@ -5245,6 +5246,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Handle `Binding::Delete` in binding_to_type_info.
+    /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
+    #[inline(never)]
+    fn binding_to_type_info_delete(
+        &self,
+        delete_target: &Expr,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
+        enum DeleteFacetUpdate {
+            Clear(Vec1<FacetKind>),
+            InvalidateIndexes(Vec<FacetKind>),
+        }
+
+        self.check_del_statement(delete_target, errors);
+        let Expr::Attribute(_) = delete_target else {
+            return TypeInfo::of_ty(self.heap.mk_any_implicit());
+        };
+        let (identifier, update) = if let Some((identifier, unresolved_chain)) =
+            identifier_and_chain_for_expr(delete_target)
+            && let Some(chain) = self.resolve_facet_chain(unresolved_chain)
+        {
+            (identifier, DeleteFacetUpdate::Clear(chain.facets().clone()))
+        } else if let Some((identifier, unresolved_facets)) =
+            identifier_and_chain_prefix_for_expr(delete_target)
+        {
+            let facets = unresolved_facets
+                .into_iter()
+                .map_while(|facet| self.resolve_facet_kind(facet))
+                .collect::<Vec<_>>();
+            (identifier, DeleteFacetUpdate::InvalidateIndexes(facets))
+        } else {
+            return TypeInfo::of_ty(self.heap.mk_any_implicit());
+        };
+        let mut type_info = self
+            .get(&Key::BoundName(ShortIdentifier::new(&identifier)))
+            .arc_clone();
+        match update {
+            DeleteFacetUpdate::Clear(facets) => type_info.update_for_assignment(&facets, None),
+            DeleteFacetUpdate::InvalidateIndexes(facets) => {
+                type_info.invalidate_all_indexes_for_assignment(&facets)
+            }
+        }
+        type_info
+    }
+
     /// Handle `Binding::PossibleLegacyTParam` in binding_to_type_info.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
@@ -5387,6 +5433,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::AssignToSubscript(x) => {
                 self.binding_to_type_info_assign_to_subscript(&x.0, &x.1, errors)
             }
+            Binding::Delete(x) => self.binding_to_type_info_delete(x, errors),
             Binding::OutOfScopeTypeParameter(source, range) => {
                 self.binding_to_type_info_out_of_scope_type_parameter(*source, *range, errors)
             }
@@ -5806,6 +5853,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Binding::Narrow(..)
             | Binding::AssignToAttribute(..)
             | Binding::AssignToSubscript(..)
+            | Binding::Delete(..)
             | Binding::OutOfScopeTypeParameter(..)
             | Binding::PossibleLegacyTParam(..) => {
                 // These forms require propagating attribute narrowing information, so they
@@ -6099,7 +6147,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Produce a placeholder type; it will not be used.
                 self.heap.mk_none()
             }
-            Binding::Delete(x) => self.check_del_statement(x, errors),
             Binding::Sentinel(x) => {
                 let (ann, name, nesting_context, call) = x.as_ref();
                 let ty = self
@@ -6843,13 +6890,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Type check a delete expression, including ensuring that the target of the
     /// delete is legal.
-    fn check_del_statement(&self, delete_target: &Expr, errors: &ErrorCollector) -> Type {
+    fn check_del_statement(&self, delete_target: &Expr, errors: &ErrorCollector) {
         match delete_target {
             Expr::Name(_) => {
                 self.expr_infer(delete_target, errors);
             }
             Expr::Attribute(attr) => {
-                let base = self.expr_infer(&attr.value, errors);
+                let base = self.expr_with_options(&attr.value, ExprOptions::infer(errors, None));
                 self.check_attr_delete(
                     &base,
                     &attr.attr.id,
@@ -6914,9 +6961,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
-        // This is a fallback in case a variable is defined *only* by a `del` - we'll use `Any` as
-        // the type for reads (i.e. `BoundName` / `Forward` key/binding pairs) in that case.
-        self.heap.mk_any_implicit()
     }
 
     pub fn expr_untype(

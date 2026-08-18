@@ -58,6 +58,7 @@ use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::polars::polars_column_mutation;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
@@ -719,10 +720,15 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.ensure_expr(target, delete_idx.usage());
                     }
-                    self.insert_binding_current(
+                    let idx = self.insert_binding_current(
                         delete_idx,
                         Binding::Delete(Box::new(target.clone())),
                     );
+                    if let Expr::Attribute(_) = target
+                        && let Some((identifier, _)) = identifier_and_chain_prefix_for_expr(target)
+                    {
+                        self.narrow_if_name_is_defined(identifier, idx);
+                    }
                 }
             }
             Stmt::Assign(ref x)

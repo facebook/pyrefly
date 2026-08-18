@@ -969,11 +969,12 @@ pub enum Key {
     /// The resulting type may not actually involve a legacy type param, since it may turn out I am
     /// some other kind of type.
     PossibleLegacyTParam(TextRange),
-    /// A `del` statement. It is a `Binding` associated with a the type `Any` because `del` defines a name in scope,
-    /// so we need to provide a `Key` for any reads of that name in the edge case where there is no other definition
+    /// A `del` statement.
     ///
-    /// This `Key` is *only* ever used if the variable has only a `del` but is not otherwise defined (which is
-    /// always a type error, since you cannot delete an uninitialized variable).
+    /// Deleting an attribute from a defined root uses this key to propagate the root's `TypeInfo`
+    /// after invalidating narrowing for the deleted facet. It also supplies implicit `Any` for
+    /// reads of a name defined only by `del`; those reads are errors because the name was never
+    /// initialized.
     Delete(TextRange),
     /// Match statement or if/elif chain that needs type-based exhaustiveness checking
     Exhaustive(ExhaustivenessKind, TextRange),
