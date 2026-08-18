@@ -605,7 +605,7 @@ fn env_enum_dots() -> TestEnv {
 from enum import IntEnum
 
 class Color(IntEnum):
-    RED = ... # E: Enum member `RED` has type `Ellipsis`, must match the `_value_` attribute annotation of `int`
+    RED = ... # E: Enum member `RED` has type `EllipsisType`, must match the `_value_` attribute annotation of `int`
     GREEN = "wrong" # E: Enum member `GREEN` has type `Literal['wrong']`, must match the `_value_` attribute annotation of `int`
 "#
     );

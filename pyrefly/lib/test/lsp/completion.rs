@@ -3725,8 +3725,8 @@ f().
 9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[@3]) -> None: ...
-- (Field) p: @3
+- (Method) m: def m(self: C[@12]) -> None: ...
+- (Field) p: @12
 "#
         .trim(),
         report.trim(),

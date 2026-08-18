@@ -230,7 +230,6 @@ impl TypeConverter<'_> {
             PyreflyType::None => {
                 self.convert_class_type(self.stdlib.none_type, TypeFlags::INSTANCE)
             }
-            PyreflyType::EllipsisValue => builtin("ellipsis"),
             PyreflyType::Ellipsis => builtin("ellipsis"),
 
             // --- Class instances (int, str, list[int], user-defined classes, etc.) ---

@@ -453,7 +453,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && !self
                     .get_class_fields(class)
                     .is_some_and(|f| f.contains(&dunder::NEW))
-                && (!matches!(ty, Type::EllipsisValue) || !self.module().path().is_interface())
+                && (!ty.is_ellipsis_value() || !self.module().path().is_interface())
             {
                 self.check_enum_value_annotation(ty, &enum_value_ty, name, range, errors);
             }

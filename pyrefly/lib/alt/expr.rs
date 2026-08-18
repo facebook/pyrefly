@@ -922,7 +922,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             Expr::BooleanLiteral(x) => Lit::from_boolean_literal(x).to_implicit_type(),
             Expr::NoneLiteral(_) => self.heap.mk_none(),
-            Expr::EllipsisLiteral(_) => self.heap.mk_ellipsis(),
+            Expr::EllipsisLiteral(_) => {
+                self.heap.mk_class_type(self.stdlib.ellipsis_type().clone())
+            }
             Expr::Starred(ExprStarred { value, .. }) => {
                 let ty = self.expr_untype(value, TypeFormContext::TypeArgument, errors);
                 self.heap.mk_unpack(ty)

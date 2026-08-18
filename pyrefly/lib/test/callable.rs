@@ -573,7 +573,7 @@ testcase!(
     test_default_ellipsis,
     r#"
 def stub(x: int = ...): ... # OK
-def err(x: int = ...): pass # E: Default `Ellipsis` is not assignable to parameter `x` with type `int`
+def err(x: int = ...): pass # E: Default `EllipsisType` is not assignable to parameter `x` with type `int`
 "#,
 );
 

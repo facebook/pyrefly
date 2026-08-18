@@ -2471,31 +2471,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn is_literal(ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::None | Type::EllipsisValue | Type::Literal(_) | Type::Sentinel(_)
-        )
+        match ty {
+            Type::None | Type::Literal(_) | Type::Sentinel(_) => true,
+            ty => ty.is_ellipsis_value(),
+        }
     }
 
     /// Is `ty` a literal with a stable memory address?
     /// This determines whether some narrowing operations are safe.
     fn is_identity_literal(ty: &Type) -> bool {
         match ty {
-            Type::None | Type::EllipsisValue => true,
+            Type::None => true,
             Type::Literal(f) => matches!(f.value, Lit::Bool(_) | Lit::Enum(_)),
-            _ => false,
+            ty => ty.is_ellipsis_value(),
         }
     }
 
     fn literal_equal(left: &Type, right: &Type) -> bool {
-        // `...` in value position and a `types.EllipsisType` annotation denote the same
-        // singleton, so treat the two representations as one for identity comparisons.
-        let is_ellipsis = |ty: &Type| match ty {
-            Type::EllipsisValue => true,
-            Type::ClassType(cls) => cls.has_qname("types", "EllipsisType"),
-            _ => false,
-        };
-        if is_ellipsis(left) && is_ellipsis(right) {
+        if left.is_ellipsis_value() && right.is_ellipsis_value() {
             return true;
         }
         match (left, right) {

@@ -1464,7 +1464,6 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("]")
             }
             Type::SpecialForm(x) => write!(output, "{x}"),
-            Type::EllipsisValue => output.write_str("Ellipsis"),
             Type::Ellipsis => output.write_str("..."),
             Type::Any(style) => match style {
                 AnyStyle::Explicit => self.maybe_fmt_with_module("typing", "Any", output),

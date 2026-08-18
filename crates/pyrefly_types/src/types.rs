@@ -884,8 +884,6 @@ pub enum Type {
     Type(Box<Type>),
     /// TypeForm[T] — a type form object (PEP 747).
     TypeForm(Box<Type>),
-    /// The type of a `...` value
-    EllipsisValue,
     /// A literal `...` in a type annotation (e.g., `Concatenate[int, ...]`)
     Ellipsis,
     Any(AnyStyle),
@@ -978,7 +976,7 @@ impl Visit for Type {
             Type::KwargsValue(x) => x.visit(f),
             Type::Type(x) => x.visit(f),
             Type::TypeForm(x) => x.visit(f),
-            Type::EllipsisValue | Type::Ellipsis => {}
+            Type::Ellipsis => {}
             Type::Any(x) => x.visit(f),
             Type::Never(x) => x.visit(f),
             Type::TypeAlias(x) => x.visit(f),
@@ -1041,7 +1039,7 @@ impl VisitMut for Type {
             Type::KwargsValue(x) => x.visit_mut(f),
             Type::Type(x) => x.visit_mut(f),
             Type::TypeForm(x) => x.visit_mut(f),
-            Type::EllipsisValue | Type::Ellipsis => {}
+            Type::Ellipsis => {}
             Type::Any(x) => x.visit_mut(f),
             Type::Never(x) => x.visit_mut(f),
             Type::TypeAlias(x) => x.visit_mut(f),
@@ -2171,6 +2169,13 @@ impl Type {
             Type::TypeVar(_) => true,
             _ => false,
         }
+    }
+
+    /// Returns true if this is the type of a `...` value, e.g., `x: int = ...`.
+    /// Note the difference with `Type::Ellipsis`, which represents `...` in a type annotation,
+    /// e.g., `x: Callable[Concatenate[int, ...], int]`.
+    pub fn is_ellipsis_value(&self) -> bool {
+        matches!(self, Type::ClassType(cls) if cls.has_qname("types", "EllipsisType"))
     }
 }
 

@@ -257,6 +257,30 @@ def f(x: EllipsisType):
 );
 
 testcase!(
+    test_ellipsis_unusual_construction,
+    r#"
+from types import EllipsisType
+from typing import assert_never, assert_type
+
+constructed: EllipsisType = EllipsisType()
+
+def f(x: int | EllipsisType) -> None:
+    if x is EllipsisType():
+        pass
+    else:
+        assert_type(x, int)
+
+def g(x: object) -> None:
+    if isinstance(x, EllipsisType):
+        assert_type(x, EllipsisType)
+        if x is ...:
+            pass
+        else:
+            assert_never(x)
+    "#,
+);
+
+testcase!(
     test_tri_enum,
     r#"
 from typing import assert_type, Literal

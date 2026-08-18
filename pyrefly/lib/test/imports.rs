@@ -1357,12 +1357,13 @@ testcase!(
     r#"
 from foo_stub import X
 from bar_source import Y
-from typing import Any, assert_type, reveal_type
+from types import EllipsisType
+from typing import Any, assert_type
 
 assert_type(X, Any)
 assert_type(X.anything, Any)
 
-reveal_type(Y)  # E: Ellipsis
+assert_type(Y, EllipsisType)
 Y.anything  # E: `EllipsisType` has no attribute `anything`
     "#,
 );

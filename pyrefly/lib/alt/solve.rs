@@ -6448,7 +6448,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Sentinel(sentinel) => Some(self.heap.mk_sentinel(sentinel)),
             Type::None => Some(self.heap.mk_none()), // Both a value and a type
-            Type::EllipsisValue => Some(Type::Ellipsis),
+            ty if ty.is_ellipsis_value() => Some(Type::Ellipsis),
             Type::Any(style) => Some(style.propagate()),
             Type::TypeAlias(ta) if matches!(&*ta, TypeAliasData::Value(_)) => {
                 let TypeAliasData::Value(ta) = *ta else {

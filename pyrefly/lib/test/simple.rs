@@ -2514,7 +2514,7 @@ def __getattr__(name: str) -> Any: ...
 testcase!(
     test_ellipsis_default_source,
     r#"
-def f(x: bool = ...):  # E: Default `Ellipsis` is not assignable to parameter `x` with type `bool`
+def f(x: bool = ...):  # E: Default `EllipsisType` is not assignable to parameter `x` with type `bool`
     pass
     "#,
 );

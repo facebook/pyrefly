@@ -403,7 +403,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ret.clone().deterministic_printing()
                     ),
                 );
-            } else if self.is_provably_disjoint(&val_type, &ret) {
+            // A `...` in a `.pyi` file is an omitted value rather than a literal `...`
+            } else if !(val_type.is_ellipsis_value() && self.module().path().is_interface())
+                && self.is_provably_disjoint(&val_type, &ret)
+            {
                 self.error(
                     errors,
                     range,

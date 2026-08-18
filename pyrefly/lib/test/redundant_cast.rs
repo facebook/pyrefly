@@ -267,3 +267,22 @@ def runtime_dict_representation(x: dict[str, object], movie: Movie) -> None:
     cast(dict[str, object], movie)
 "#,
 );
+
+fn env_with_pyi_ellipsis_cast() -> TestEnv {
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+from typing import cast
+class A:
+    x = cast(str, ...)
+    "#,
+    )
+}
+
+testcase!(
+    test_no_warning_on_ellipsis_cast_in_stub,
+    env_with_pyi_ellipsis_cast().enable_invalid_cast_warning(),
+    // Tests that we don't emit a spurious invalid-cast in foo.pyi
+    "import foo",
+);

@@ -175,7 +175,7 @@ from typing import assert_type
 from types import EllipsisType
 from foo import x
 assert_type(x, int)
-y: int = ...  # E: `Ellipsis` is not assignable to `int`
+y: int = ...  # E: `EllipsisType` is not assignable to `int`
 z: EllipsisType = ...
 "#,
 );

@@ -475,7 +475,6 @@ pub(super) fn type_to_indexed_shape(
         ),
         Type::None => indexed_named_leaf(table, "None"),
         Type::SpecialForm(special_form) => indexed_named_leaf(table, special_form.to_string()),
-        Type::EllipsisValue => indexed_named_leaf(table, "..."),
         Type::Ellipsis => indexed_named_leaf(table, "..."),
         Type::Materialization => indexed_named_leaf(table, "Materialization"),
         Type::Var(_) => indexed_named_leaf(table, "typing.Any"),
