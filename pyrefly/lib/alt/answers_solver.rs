@@ -23,7 +23,9 @@ use dupe::Dupe;
 use dupe::IterDupedExt;
 use fxhash::FxHashMap;
 use fxhash::FxHashSet;
+#[cfg(test)]
 use pyrefly_graph::calculation::Calculation;
+#[cfg(test)]
 use pyrefly_graph::calculation::ProposalResult;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::module_name::ModuleName;
@@ -51,6 +53,7 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::alt::answers::AnswerEntry;
+use crate::alt::answers::AnswerSlot;
 use crate::alt::answers::AnswerTable;
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
@@ -254,7 +257,7 @@ impl CalcStack {
     /// We pop before taking (not after) for lifecycle correctness: committed
     /// answers should correspond to fully unwound computations, so the stack
     /// must no longer contain the completing frame when results are written to
-    /// Calculation.
+    /// their shared slots.
     ///
     /// Note that the `+ 1` in `on_calculation_finished`'s completion check
     /// (`stack_len <= bottom_pos_inclusive + 1`) is unrelated to this ordering — it
@@ -268,9 +271,8 @@ impl CalcStack {
     /// Push a CalcId onto the stack and determine the binding action.
     ///
     /// This is purely thread-local: it manages the CalcStack and SCC state
-    /// without touching the cross-thread Calculation cell. Cycle detection
-    /// uses the thread-local stack exclusively; the Calculation proposal is
-    /// made by the caller (get_idx) before push.
+    /// without touching shared result slots. Cycle detection uses the
+    /// thread-local stack exclusively.
     fn push(&self, current: CalcId) -> BindingAction {
         let position = {
             let mut stack = self.stack.borrow_mut();
@@ -394,7 +396,7 @@ impl CalcStack {
     /// `push` returns `Calculate`). But during `K::solve`, a dependency chain
     /// can cycle back to this node, creating an SCC that includes it. After
     /// `K::solve` returns, this check catches that case so the answer is
-    /// stored in SCC-local state rather than written directly to Calculation.
+    /// stored in SCC-local state rather than published directly.
     fn is_scc_participant(&self, current: &CalcId) -> bool {
         let scc_stack = self.scc_stack.borrow();
         scc_stack
@@ -1050,8 +1052,7 @@ pub enum SccNodeState {
     /// error collector for thread-local SCC isolation.
     ///
     /// For SCC participants, the answer is stored here until the entire SCC
-    /// completes, at which point answers are committed to their respective
-    /// Calculation cells.
+    /// completes, at which point answers are published to their result slots.
     Done {
         answer: Arc<dyn Any + Send + Sync>,
         /// Errors collected during solving. None during Phase 0 (cold start).
@@ -1081,7 +1082,7 @@ impl SccNodeState {
 /// union. The `CalcStack::push` method performs all state checks and SCC
 /// mutations (like `merge_sccs`, `on_scc_detected`, `on_calculation_finished`),
 /// returning the action that `get_idx` should take. Push is purely thread-local
-/// and never touches the cross-thread Calculation cell.
+/// and never touches shared result slots.
 enum BindingAction {
     /// Calculate the binding and record the answer.
     /// Action: call `calculate_and_record_answer`
@@ -1682,30 +1683,60 @@ pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     jaxtyping_dims: RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
 }
 
-/// RAII guard that releases write locks on panic during SCC batch commit.
-///
-/// Holds a list of `CalcId`s whose Calculation cells have been write-locked.
-/// On drop (panic), calls `write_unlock_empty` on each to release the locks
-/// without writing values, preventing deadlocks. On success, call `disarm()`
-/// to clear the list so `drop` is a no-op.
-struct SccWriteLockGuard<'a, 'b, Ans: LookupAnswer> {
+/// Proof that this SCC owns the pending result slot for this calculation.
+/// Dropping the proof rolls back the reservation if it is still pending.
+pub struct ReservedSlot<'a, 'b, Ans: LookupAnswer> {
     solver: &'a AnswersSolver<'b, Ans>,
-    locked: Vec<CalcId>,
+    calc_id: CalcId,
+    /// Retains cross-module Answers if the module transitions to Solutions and
+    /// evicts them. Drop must still reach the pending slot to roll it back;
+    /// otherwise another thread waiting for publication could deadlock.
+    cross_module_answers: Option<Arc<Answers>>,
+    errors: Option<Arc<ErrorCollector>>,
+    traces: Option<TraceSideEffects>,
 }
 
-impl<Ans: LookupAnswer> Drop for SccWriteLockGuard<'_, '_, Ans> {
-    fn drop(&mut self) {
-        for calc_id in &self.locked {
-            self.solver.write_unlock_empty_single(calc_id);
-        }
+impl<Ans: LookupAnswer> ReservedSlot<'_, '_, Ans> {
+    pub(crate) fn calc_id(&self) -> &CalcId {
+        &self.calc_id
+    }
+
+    pub(crate) fn take_side_effects(
+        &mut self,
+    ) -> (Option<Arc<ErrorCollector>>, Option<TraceSideEffects>) {
+        (self.errors.take(), self.traces.take())
+    }
+
+    fn publish(&mut self) -> bool {
+        self.solver.publish_reserved_single(self)
     }
 }
 
-impl<Ans: LookupAnswer> SccWriteLockGuard<'_, '_, Ans> {
-    /// Disarm the guard after a successful commit. Clears the locked list
-    /// so `drop` does nothing.
-    fn disarm(mut self) {
-        self.locked.clear();
+impl<Ans: LookupAnswer> Drop for ReservedSlot<'_, '_, Ans> {
+    fn drop(&mut self) {
+        self.solver.rollback_reserved_if_pending_single(self);
+    }
+}
+
+/// Owns an SCC batch after its individual result slots have been reserved.
+/// Once publication starts, unwinding publishes the remainder because published
+/// results and their side effects cannot be rolled back. Before then, each
+/// `ReservedSlot` rolls itself back when dropped.
+struct SccReservationGuard<'a, 'b, Ans: LookupAnswer> {
+    reserved: Vec<ReservedSlot<'a, 'b, Ans>>,
+    committing: bool,
+}
+
+impl<Ans: LookupAnswer> Drop for SccReservationGuard<'_, '_, Ans> {
+    fn drop(&mut self) {
+        if self.committing {
+            for reserved in self.reserved.iter_mut().rev() {
+                // Avoid committing side effects while unwinding because that
+                // work can panic, which would abort during a second panic.
+                drop(reserved.take_side_effects());
+                reserved.publish();
+            }
+        }
     }
 }
 
@@ -2042,14 +2073,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return answer;
         }
 
-        let calculation = self.get_calculation(idx);
+        let slot = self.get_answer_slot(idx);
 
         // Fast path: if the value is already calculated, return it immediately
         // without constructing a CalcId or touching the CalcStack. This avoids
         // the CalcId Arc increment, position_of hash map insert/remove, RefCell
         // borrows, and SCC checks for the common case of re-reading an already-
         // solved binding.
-        if let Some(v) = calculation.get() {
+        if let Some(v) = slot.get_arc() {
             return v;
         }
 
@@ -2059,20 +2090,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(config) = self.recursion_limit_config()
             && self.stack().len() > config.limit as usize
         {
-            let result = self.handle_depth_overflow(&current, idx, calculation, config);
+            let result = self.handle_depth_overflow(&current, idx, slot, config);
             return result;
         }
 
-        // CalcStack is the sole source of truth for cycle detection.
-        // SAFETY: CalcStack::push immediately below detects a repeated CalcId
-        // before any recursive calculation is evaluated.
-        match unsafe { calculation.propose_calculation() } {
-            ProposalResult::Calculated(v) => return v,
-            ProposalResult::Calculatable => {}
-        }
-
         let mut result = match self.stack().push(current.dupe()) {
-            BindingAction::Calculate => self.calculate_and_record_answer(current, idx, calculation),
+            BindingAction::Calculate => self.calculate_and_record_answer(current, idx, slot),
             BindingAction::CycleBroken(r) => Arc::new(K::promote_recursive(self.heap, r)),
             BindingAction::SccLocalAnswer(type_erased) => {
                 // Downcast the type-erased answer back to Arc<K::Answer>.
@@ -2086,22 +2109,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
             }
             BindingAction::NeedsColdPlaceholder => self
-                .attempt_to_unwind_cycle_from_here(&current, idx, calculation)
+                .attempt_to_unwind_cycle_from_here(&current, idx, slot)
                 .unwrap_or_else(|r| Arc::new(K::promote_recursive(self.heap, r))),
         };
         if let Some(scc) = self.stack().pop_and_take_completed_scc() {
             self.iterative_resolve_scc(scc);
         }
-        // After SCC iteration, the Calculation cell may hold a newer answer
+        // After SCC iteration, the shared result slot may hold a newer answer
         // than what `calculate_and_record_answer` returned. This happens when
         // the current CalcId is an SCC member: in iterative mode, the answer
-        // is stored in SCC-local SccNodeState::Done (not in the Calculation cell)
+        // is stored in SCC-local SccNodeState::Done (not in the shared slot)
         // and `calculate_and_record_answer` returns the first-iteration answer.
         // After `iterative_resolve_scc` commits the final iterated answer to
-        // the Calculation cell, we must re-read it so that callers (like
+        // the result slot, we must re-read it so that callers (like
         // KeyExport nodes that depend on SCC members) see the SCC's final
         // answer rather than the stale pre-iteration answer.
-        if let Some(v) = calculation.get() {
+        if let Some(v) = slot.get_arc() {
             result = v;
         }
         result
@@ -2127,7 +2150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///   SCC-local state via `on_calculation_finished`.
     ///
     /// - **Not an SCC member** (direct path): The node is not in any SCC even
-    ///   after computation. The answer is written directly to `Calculation`.
+    ///   after computation. The answer is published directly to its result slot.
     ///
     /// Key invariant: at push time, we can determine that a node IS in an SCC
     /// (because its identity is tracked in an SCC's `node_state`), but we
@@ -2138,7 +2161,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         current: CalcId,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>>,
+        slot: &AnswerSlot<K::Answer>,
     ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -2194,7 +2217,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
             let answer = self.force_exported_answer::<K>(answer);
             // Also store in SccNodeState::Done for SCC-local isolation (the SCC
-            // uses these answers via SccLocalAnswer without touching Calculation).
+            // uses these answers via SccLocalAnswer without touching shared slots).
             let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
             let canonical_erased =
                 self.stack()
@@ -2207,12 +2230,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .expect("on_calculation_finished canonical answer downcast failed"),
             )
         } else {
-            // Not an SCC member even after computation: write directly to
-            // Calculation. No recursive placeholder can exist because
+            // Not an SCC member even after computation: publish directly to
+            // the result slot. No recursive placeholder can exist because
             // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
             self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
             let raw_answer = self.force_exported_answer::<K>(raw_answer);
-            let (answer, did_write) = calculation.record_value(raw_answer);
+            let (answer, did_write) = slot.record(raw_answer);
             if did_write {
                 self.base_errors.extend(local_errors);
                 // Publish trace side effects alongside errors.
@@ -2290,7 +2313,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// - Compares the answer to `previous_answers` via `answers_equal` and
     ///   calls `mark_iteration_changed` if they differ.
     /// - Stores the answer in `IterationSccNodeState::Done` (SCC-local), NOT in
-    ///   `Calculation`. The answer is only committed to `Calculation` when
+    ///   the shared result slot. The answer is only published there when
     ///   the iteration driver commits the final converged answers.
     fn calculate_and_record_answer_iterative<K: Solve<Ans>>(
         &self,
@@ -2429,7 +2452,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.stack().mark_iteration_changed();
         }
 
-        // Store in IterationSccNodeState::Done. Do NOT write to Calculation;
+        // Store in IterationSccNodeState::Done. Do NOT publish to the result slot;
         // that happens only when the iteration driver commits final answers.
         let errors = if self.stack().is_cold_iteration() {
             None
@@ -2449,56 +2472,65 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && bindings.module().path() == self.bindings().module().path()
     }
 
-    /// Acquire a write lock on a single Calculation cell.
-    /// Routes to same-module or cross-module depending on the CalcId.
-    fn write_lock_single(&self, calc_id: &CalcId) -> bool {
-        let CalcId(_, ref any_idx) = *calc_id;
-        if self.is_same_module(calc_id) {
-            dispatch_anyidx!(any_idx, self, write_lock_same_module)
-        } else {
-            self.answers.write_lock_in_module(calc_id)
-        }
-    }
-
-    /// Same-module write lock: acquire the write lock on a typed Calculation cell.
-    fn write_lock_same_module<K: Solve<Ans>>(&self, idx: Idx<K>) -> bool
-    where
-        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
-        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
-    {
-        self.get_calculation(idx).write_lock()
-    }
-
-    /// Write a value to a write-locked cell and release the lock, with error handling.
-    /// Routes to same-module or cross-module depending on the CalcId.
-    fn write_unlock_single(
+    /// Reserve a single result slot for SCC publication.
+    fn reserve_single(
         &self,
         calc_id: CalcId,
         answer: Arc<dyn Any + Send + Sync>,
         errors: Option<Arc<ErrorCollector>>,
         traces: Option<TraceSideEffects>,
-    ) -> bool {
+    ) -> Option<ReservedSlot<'_, 'a, Ans>> {
         let CalcId(_, ref any_idx) = calc_id;
-        if self.is_same_module(&calc_id) {
-            dispatch_anyidx!(
-                any_idx,
-                self,
-                write_unlock_same_module,
-                answer,
-                errors,
-                traces
-            )
+        let cross_module_answers = if self.is_same_module(&calc_id) {
+            if !dispatch_anyidx!(any_idx, self, reserve_same_module, answer) {
+                return None;
+            }
+            None
         } else {
-            self.answers
-                .write_unlock_in_module(calc_id, answer, errors, traces)
-        }
+            Some(self.answers.reserve_in_module(&calc_id, answer)?)
+        };
+        Some(ReservedSlot {
+            solver: self,
+            calc_id,
+            cross_module_answers,
+            errors,
+            traces,
+        })
     }
 
-    /// Same-module write unlock: write the answer and handle errors.
-    fn write_unlock_same_module<K: Solve<Ans>>(
+    fn reserve_same_module<K: Solve<Ans>>(
         &self,
         idx: Idx<K>,
         answer: Arc<dyn Any + Send + Sync>,
+    ) -> bool
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        let answer = Arc::unwrap_or_clone(
+            answer
+                .downcast::<Arc<K::Answer>>()
+                .expect("reserve_same_module: type mismatch in batch commit"),
+        );
+        self.get_answer_slot(idx).reserve(answer)
+    }
+
+    /// Publish a result slot previously reserved by this SCC.
+    fn publish_reserved_single(&self, reserved: &mut ReservedSlot<'_, '_, Ans>) -> bool {
+        let calc_id = reserved.calc_id().dupe();
+        let CalcId(_, ref any_idx) = calc_id;
+        if self.is_same_module(&calc_id) {
+            let (errors, traces) = reserved.take_side_effects();
+            // SAFETY: `reserved` proves that this SCC owns the pending slot.
+            unsafe { dispatch_anyidx!(any_idx, self, publish_reserved_same_module, errors, traces) }
+        } else {
+            self.answers.publish_reserved_in_module(reserved)
+        }
+    }
+
+    unsafe fn publish_reserved_same_module<K: Solve<Ans>>(
+        &self,
+        idx: Idx<K>,
         errors: Option<Arc<ErrorCollector>>,
         traces: Option<TraceSideEffects>,
     ) -> bool
@@ -2506,64 +2538,75 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        let typed_answer: Arc<K::Answer> = Arc::unwrap_or_clone(
-            answer
-                .downcast::<Arc<K::Answer>>()
-                .expect("write_unlock_same_module: type mismatch in batch commit"),
-        );
-        let calculation = self.get_calculation(idx);
-        let (_answer, did_write) = calculation.write_unlock(typed_answer);
-        if did_write {
-            if let Some(errors) = errors {
-                let errors = Arc::try_unwrap(errors).expect(
-                    "Arc<ErrorCollector> refcount > 1 during write_unlock; \
-                     errors would be silently lost.",
-                );
-                self.base_errors.extend(errors);
-            }
-            if let Some(traces) = traces {
-                self.current().merge_trace_side_effects(traces);
-            }
+        if let Some(errors) = errors {
+            let errors = Arc::try_unwrap(errors)
+                .expect("SCC errors Arc has unexpected extra references; errors would be lost");
+            self.base_errors.extend(errors);
         }
-        did_write
+        if let Some(traces) = traces {
+            self.current().merge_trace_side_effects(traces);
+        }
+        // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
+        // which proves ownership of this pending reservation.
+        unsafe { self.get_answer_slot(idx).publish_reserved() };
+        true
     }
 
-    /// Release a write lock without writing a value (panic cleanup).
-    /// Routes to same-module or cross-module depending on the CalcId.
-    fn write_unlock_empty_single(&self, calc_id: &CalcId) {
-        let CalcId(_, ref any_idx) = *calc_id;
-        if self.is_same_module(calc_id) {
-            dispatch_anyidx!(any_idx, self, write_unlock_empty_same_module)
+    /// Roll back a reservation if it is still pending.
+    fn rollback_reserved_if_pending_single(
+        &self,
+        reserved: &mut ReservedSlot<'_, '_, Ans>,
+    ) -> bool {
+        let calc_id = reserved.calc_id().dupe();
+        let CalcId(_, ref any_idx) = calc_id;
+        if self.is_same_module(&calc_id) {
+            // SAFETY: `reserved` proves that this SCC owns the pending slot.
+            unsafe { dispatch_anyidx!(any_idx, self, rollback_reserved_if_pending_same_module) }
         } else {
-            self.answers.write_unlock_empty_in_module(calc_id);
+            let answers = reserved
+                .cross_module_answers
+                .take()
+                .expect("cross-module reservation must retain its Answers");
+            answers.rollback_reserved_if_pending_preliminary(reserved)
         }
     }
 
-    /// Same-module write unlock empty: release the lock without writing.
-    fn write_unlock_empty_same_module<K: Solve<Ans>>(&self, idx: Idx<K>)
+    unsafe fn rollback_reserved_if_pending_same_module<K: Solve<Ans>>(&self, idx: Idx<K>) -> bool
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.get_calculation(idx).write_unlock_empty();
+        // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
+        // which proves ownership of this pending reservation.
+        unsafe { self.get_answer_slot(idx).rollback_reserved_if_pending() }
     }
 
-    /// Commit all final converged answers from an iteratively-solved SCC
-    /// to their respective Calculation cells using two-phase commit.
+    /// Commit final answers from an iteratively-solved SCC using ordered
+    /// result-slot reservations.
     ///
-    /// Phase 1: Lock all member Calculation cells (in CalcId order).
-    /// Phase 2: Write all answers via `write_unlock`.
+    /// The intended invariant is that workers computing the same recursive
+    /// component converge on the same SCC. Since every worker reserves members
+    /// in `CalcId` order and waits on pending reservations, the first worker to
+    /// reserve the lowest member serializes identical contenders and publishes
+    /// every answer in the SCC.
+    ///
+    /// We deliberately preserve a weaker invariant because workers might reach
+    /// publication with different SCCs. The iteration limit can stop workers
+    /// with different entrypoint-dependent partial SCCs. Even after convergence,
+    /// dependency edges can depend on provisional answers, so different
+    /// entrypoints could theoretically discover overlapping, non-identical SCCs.
+    /// Therefore losing any reservation, including the lowest member, does not
+    /// abandon the batch. Each worker attempts every member and publishes every
+    /// slot it reserves. If workers find disjoint SCCs for the same recursive
+    /// computation, this can mix results from different workers. That fallback
+    /// may produce strange typing behavior and is not proven correct; it only
+    /// prevents the exceptional case from blocking publication entirely.
     ///
     /// Called after the fixpoint iteration converges (or max iterations are
     /// reached).
     fn commit_final_answers(&self, scc: Scc) -> bool {
         // Collect Done members from node_state. BTreeMap iteration is already sorted by CalcId.
-        let members: Vec<(
-            CalcId,
-            Arc<dyn Any + Send + Sync>,
-            Option<Arc<ErrorCollector>>,
-            Option<TraceSideEffects>,
-        )> = scc
+        let members = scc
             .node_state
             .into_iter()
             .map(|(calc_id, node_state)| match node_state {
@@ -2580,31 +2623,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         calc_id, node_state,
                     );
                 }
-            })
-            .collect();
+            });
 
-        // Phase 1: Lock all cells.
-        let mut guard = SccWriteLockGuard {
-            solver: self,
-            locked: Vec::new(),
+        let member_count = members.len();
+        let mut guard = SccReservationGuard {
+            reserved: Vec::with_capacity(member_count),
+            committing: false,
         };
-        for (calc_id, _, _, _) in &members {
-            if self.write_lock_single(calc_id) {
-                guard.locked.push(calc_id.dupe());
+
+        // Different workers may discover overlapping, non-identical SCCs because
+        // dependency edges can depend on provisional answers. Reserve in global
+        // CalcId order to avoid deadlock, but skip slots already won by another
+        // worker. If disjoint SCCs are found, this fallback can mix results from
+        // different workers; that behavior is not proven correct.
+        for (calc_id, answer, errors, traces) in members {
+            if let Some(reserved) = self.reserve_single(calc_id, answer, errors, traces) {
+                guard.reserved.push(reserved);
             }
         }
 
-        // Phase 2: Write answers to locked cells + publish traces.
-        // Cells that weren't locked are already Calculated (write_lock
-        // returned false), so writing would be a no-op — skip them.
-        let mut did_write_any = false;
-        for (calc_id, answer, errors, traces) in members {
-            if guard.locked.contains(&calc_id) {
-                did_write_any |= self.write_unlock_single(calc_id, answer, errors, traces);
-            }
+        // Commit each winning member's side effects immediately before publishing
+        // its result. Reverse order keeps the lowest successfully reserved slot
+        // pending until every other result in this batch is visible.
+        let mut did_publish = false;
+        guard.committing = true;
+        while let Some(reserved) = guard.reserved.last_mut() {
+            did_publish |= reserved.publish();
+            guard.reserved.pop();
         }
-        guard.disarm();
-        did_write_any
+        did_publish
     }
 
     /// Drive a single iteration member by calling `get_idx` for its typed index.
@@ -2856,21 +2903,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// committed a final answer so we can skip the cycle-breaking entirely.
     ///
     /// Note: The placeholder is recorded in SCC-local state (SccNodeState::HasPlaceholder),
-    /// not in the Calculation cell. Each thread that hits the same cycle creates its
+    /// not in the shared result slot. Each thread that hits the same cycle creates its
     /// own placeholder. The final answer IS written thread-locally via SccNodeState::Done
-    /// and only committed to Calculation during batch commit when the SCC completes.
+    /// and only published to the result slot when the SCC completes.
     fn attempt_to_unwind_cycle_from_here<K: Solve<Ans>>(
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>>,
+        slot: &AnswerSlot<K::Answer>,
     ) -> Result<Arc<K::Answer>, Var>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         // Check if another thread already committed a final answer.
-        if let Some(v) = calculation.get() {
+        if let Some(v) = slot.get_arc() {
             return Ok(v);
         }
         // Create a recursive placeholder and store it only in SCC-local state.
@@ -2885,7 +2932,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>>,
+        slot: &AnswerSlot<K::Answer>,
         config: RecursionLimitConfig,
     ) -> Arc<K::Answer>
     where
@@ -2893,13 +2940,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         match config.handler {
-            RecursionOverflowHandler::BreakWithPlaceholder => self
-                .handle_depth_overflow_break_with_placeholder(
-                    current,
-                    idx,
-                    calculation,
-                    config.limit,
-                ),
+            RecursionOverflowHandler::BreakWithPlaceholder => {
+                self.handle_depth_overflow_break_with_placeholder(current, idx, slot, config.limit)
+            }
             RecursionOverflowHandler::PanicWithDebugInfo => {
                 self.handle_depth_overflow_panic_with_debug_info(idx, config.limit)
             }
@@ -2911,7 +2954,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>>,
+        slot: &AnswerSlot<K::Answer>,
         limit: u32,
     ) -> Arc<K::Answer>
     where
@@ -2930,7 +2973,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
             .emit();
         // Return recursive placeholder (same pattern as cycle handling)
-        self.attempt_to_unwind_cycle_from_here(current, idx, calculation)
+        self.attempt_to_unwind_cycle_from_here(current, idx, slot)
             .unwrap_or_else(|r| Arc::new(K::promote_recursive(self.heap, r)))
     }
 

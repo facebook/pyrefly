@@ -77,9 +77,9 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
-use crate::alt::answers::TraceSideEffects;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::CalcId;
+use crate::alt::answers_solver::ReservedSlot;
 use crate::alt::answers_solver::ThreadState;
 use crate::alt::traits::Solve;
 use crate::binding::binding::AnyExportedKey;
@@ -1865,7 +1865,7 @@ impl<'a> Transaction<'a> {
         };
 
         // Fast path: check if the answer is already computed in the
-        // Calculation cell. This avoids duping Arcs and constructing
+        // result slot. This avoids constructing
         // a TransactionHandle when the value is cached.
         if let Some(idx) = answers.0.key_to_idx_hashed_opt(key)
             && let Some(v) = answers.1.get_idx(idx)
@@ -2660,7 +2660,10 @@ enum TargetAnswers<'a> {
     },
     /// The target module's `Answers` have been evicted but `Solutions` exist.
     /// This is a benign race: another thread already solved everything, so the
-    /// caller's operation is redundant and can be safely skipped (return `true`).
+    /// caller's operation is redundant. Before reservation, an identical SCC
+    /// contender may simply have won. During a partial commit, this can also
+    /// happen when workers discovered overlapping, non-equivalent SCCs and the
+    /// other SCC completed the module without waiting on all of our members.
     Evicted,
 }
 
@@ -2760,7 +2763,7 @@ impl<'a> TransactionHandle<'a> {
 
     /// Look up a target module's Answers for a cross-module operation.
     ///
-    /// Both `commit_to_module` and `solve_idx_erased` need to:
+    /// Cross-module SCC publication and `solve_idx_erased` need to:
     ///   1. Resolve the target module from a `CalcId`.
     ///   2. Read the module's `Steps` under a read lock.
     ///   3. Handle the case where Answers have been evicted but Solutions
@@ -2806,13 +2809,13 @@ impl<'a> TransactionHandle<'a> {
             //   2. While our thread was solving the SCC using that duped
             //      Arc, another thread acquired the exclusive lock on the
             //      target module and ran `step_solutions`, which solves
-            //      all keys independently (Calculation cells allow
-            //      multi-thread parallel compute via `propose_calculation`).
+            //      all required keys independently (result slots allow
+            //      multi-thread first-write-wins publication).
             //   3. After computing Solutions, `demand` evicted the Answers
             //      as a memory optimization (`steps.answers.take()`),
             //      then released the exclusive lock.
             //   4. Our cross-module operation now reads `steps.answers`
-            //      and finds None — but the Calculation cells were already
+            //      and finds None — but the result slots were already
             //      filled by the other thread's `step_solutions`, so no
             //      data is lost. Our operation is redundant and can be
             //      safely skipped.
@@ -3074,37 +3077,6 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         res
     }
 
-    fn commit_to_module(
-        &self,
-        calc_id: CalcId,
-        answer: Arc<dyn Any + Send + Sync>,
-        errors: Option<Arc<ErrorCollector>>,
-    ) -> bool {
-        let CalcId(_, ref any_idx) = calc_id;
-        match self.lookup_target_answers(&calc_id) {
-            TargetAnswers::ModuleNotFound => false,
-            TargetAnswers::Evicted => true,
-            TargetAnswers::Available { answers, load, .. } => {
-                let did_write = answers.commit_preliminary(any_idx, answer);
-                // Only extend errors if this write won the first-write-wins race.
-                if did_write && let (Some(errors), Some(target_load)) = (errors, load) {
-                    // The errors Arc should have refcount 1 here: batch_commit_scc
-                    // consumes the Scc (moved into the method), and each SccNodeState::Done
-                    // is destructured by the for loop, so no other references remain.
-                    // If this invariant is violated, something is holding an unexpected
-                    // reference to the error collector, which could cause silent error
-                    // loss and nondeterministic output.
-                    let errors = Arc::try_unwrap(errors).expect(
-                        "cross-module batch commit: errors Arc has unexpected extra references; \
-                             the SCC should have been consumed, giving us sole ownership",
-                    );
-                    target_load.errors.extend(errors);
-                }
-                true
-            }
-        }
-    }
-
     fn solve_idx_erased(&self, calc_id: &CalcId, thread_state: &ThreadState) -> bool {
         let CalcId(_, ref any_idx) = *calc_id;
         match self.lookup_target_answers(calc_id) {
@@ -3137,49 +3109,47 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         }
     }
 
-    fn write_lock_in_module(&self, calc_id: &CalcId) -> bool {
-        let CalcId(_, ref any_idx) = *calc_id;
-        match self.lookup_target_answers(calc_id) {
-            TargetAnswers::ModuleNotFound => false,
-            TargetAnswers::Evicted => false,
-            TargetAnswers::Available { answers, .. } => answers.write_lock_preliminary(any_idx),
-        }
-    }
-
-    fn write_unlock_in_module(
+    fn reserve_in_module(
         &self,
-        calc_id: CalcId,
+        calc_id: &CalcId,
         answer: Arc<dyn Any + Send + Sync>,
-        errors: Option<Arc<ErrorCollector>>,
-        traces: Option<TraceSideEffects>,
-    ) -> bool {
-        let CalcId(_, ref any_idx) = calc_id;
-        match self.lookup_target_answers(&calc_id) {
-            TargetAnswers::ModuleNotFound | TargetAnswers::Evicted => false,
-            TargetAnswers::Available { answers, load, .. } => {
-                let did_write = answers.write_unlock_preliminary(any_idx, answer);
-                if did_write {
-                    if let (Some(errors), Some(target_load)) = (errors, load) {
-                        let errors = Arc::try_unwrap(errors).expect(
-                            "cross-module write_unlock: errors Arc has unexpected extra references",
-                        );
-                        target_load.errors.extend(errors);
-                    }
-                    if let Some(traces) = traces {
-                        answers.merge_trace_side_effects(traces);
-                    }
-                }
-                did_write
-            }
+    ) -> Option<Arc<Answers>> {
+        let CalcId(_, ref any_idx) = *calc_id;
+        match self.lookup_target_answers(calc_id) {
+            TargetAnswers::ModuleNotFound => None,
+            // An identical contender may already have published the whole SCC,
+            // or a worker with an overlapping, non-equivalent SCC may have
+            // completed this member's module while we were reserving ours.
+            TargetAnswers::Evicted => None,
+            TargetAnswers::Available { answers, .. } => answers
+                .reserve_preliminary(any_idx, answer)
+                .then_some(answers),
         }
     }
 
-    fn write_unlock_empty_in_module(&self, calc_id: &CalcId) {
-        let CalcId(_, ref any_idx) = *calc_id;
-        match self.lookup_target_answers(calc_id) {
-            TargetAnswers::ModuleNotFound | TargetAnswers::Evicted => {}
-            TargetAnswers::Available { answers, .. } => {
-                answers.write_unlock_empty_preliminary(any_idx);
+    fn publish_reserved_in_module(&self, reserved: &mut ReservedSlot<'_, '_, Self>) -> bool {
+        let calc_id = reserved.calc_id().dupe();
+        match self.lookup_target_answers(&calc_id) {
+            TargetAnswers::ModuleNotFound => false,
+            TargetAnswers::Evicted => {
+                // An identical contender would wait on our first shared pending
+                // slot. Reaching Solutions here therefore requires a worker with
+                // a non-equivalent SCC that did not need this reservation. Its
+                // result and side effects won; discard ours.
+                drop(reserved.take_side_effects());
+                false
+            }
+            TargetAnswers::Available { answers, load, .. } => {
+                let (errors, traces) = reserved.take_side_effects();
+                if let (Some(errors), Some(target_load)) = (errors, load) {
+                    let errors = Arc::try_unwrap(errors)
+                        .expect("cross-module SCC errors Arc has unexpected extra references");
+                    target_load.errors.extend(errors);
+                }
+                if let Some(traces) = traces {
+                    answers.merge_trace_side_effects(traces);
+                }
+                answers.publish_reserved_preliminary(reserved)
             }
         }
     }
