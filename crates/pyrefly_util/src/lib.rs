@@ -22,7 +22,6 @@
 #![deny(clippy::inefficient_to_string)]
 #![deny(clippy::str_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
-#![feature(const_type_name)]
 
 //! Utility functions that are not specific to the things Pyre does.
 
@@ -58,8 +57,10 @@ pub mod task_heap;
 pub mod telemetry;
 pub mod test_path;
 pub mod thread_pool;
+pub mod timer;
 pub mod trace;
 pub mod uniques;
+pub mod unix_path;
 pub mod upward_search;
 pub mod visit;
 pub mod watch_pattern;

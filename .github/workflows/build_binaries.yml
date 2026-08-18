@@ -201,6 +201,63 @@ jobs:
           name: wheels-${{ matrix.target }}
           path: pyrefly/dist
 
+  musllinux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+      - name: Build wheels
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: musllinux_1_2
+          args: --release --out dist
+          working-directory: pyrefly
+      - name: Build wheels aarch64
+        if: ${{ startsWith(matrix.target, 'aarch64') }}
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: musllinux_1_2
+          args: --release --out dist
+          working-directory: pyrefly
+        env:
+          # aarch64-linux builds need JEMALLOC_SYS_WITH_LG_PAGE=16, or they segfault.
+          # See https://github.com/facebook/pyrefly/issues/380
+          JEMALLOC_SYS_WITH_LG_PAGE: 16
+      - name: Test wheel
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/io -w /io \
+            --env PACKAGE_NAME --env BINARY_NAME \
+            alpine:latest sh -c '
+              apk add --no-cache python3
+              python3 -m venv .venv
+              .venv/bin/pip install "${PACKAGE_NAME}" --no-index --find-links pyrefly/dist/ --force-reinstall
+              .venv/bin/"${BINARY_NAME}" --version
+              .venv/bin/"${BINARY_NAME}" --help
+              .venv/bin/"${BINARY_NAME}" check test.py
+              .venv/bin/python -m "${BINARY_NAME}" --version
+            '
+      - name: Upload wheels
+        uses: actions/upload-artifact@v6
+        with:
+          name: wheels-${{ matrix.target }}
+          path: pyrefly/dist
+
   merge:
     name: Merge artifacts
     runs-on: ubuntu-latest
@@ -209,6 +266,7 @@ jobs:
       - macos
       - windows
       - linux
+      - musllinux
     steps:
       - name: Merge artifacts
         uses: actions/upload-artifact/merge@v4

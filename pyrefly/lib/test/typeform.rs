@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -63,6 +64,36 @@ def f(x: TypeForm) -> None:
 
 f(int)
 f(str)
+    "#,
+);
+
+testcase!(
+    test_typeform_string_forward_ref,
+    r#"
+from typing_extensions import TypeForm
+
+def f(x: TypeForm) -> None: ...
+def g(x: TypeForm[int | str]) -> None: ...
+
+f("int")
+g("int")
+g("str")
+f("not a type")  # E: Argument `Literal['not a type']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `f`
+f("UndefinedName")  # E: Argument `Literal['UndefinedName']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `f`
+    "#,
+);
+
+testcase!(
+    test_typeform_string_forward_ref_imported,
+    TestEnv::one("foo", "class MyClass: ..."),
+    r#"
+from typing_extensions import TypeForm
+from foo import MyClass
+
+def f(x: TypeForm) -> None: ...
+
+f("MyClass")
+f("UndefinedClass")  # E: Argument `Literal['UndefinedClass']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `f`
     "#,
 );
 
@@ -131,6 +162,16 @@ v: types.UnionType = str | None
 );
 
 testcase!(
+    test_typeform_generic_alias,
+    r#"
+import types
+
+# At runtime, list[int] creates a types.GenericAlias object.
+v: types.GenericAlias = list[int]
+    "#,
+);
+
+testcase!(
     test_typeform_generic_alias_string_type_argument_in_value_context,
     r#"
 from __future__ import annotations
@@ -155,5 +196,17 @@ x = Annotated[int, "meta"]
 
 # `dict.__dict__` is a runtime mappingproxy; string subscripting is a key lookup.
 dict.__dict__["fromkeys"]
+    "#,
+);
+
+testcase!(
+    test_type_alias_form,
+    r#"
+from typing import Literal
+from typing_extensions import TypeForm
+type Mode = Literal["A", "B"]
+X: TypeForm = Mode
+Y: TypeForm[Literal["A", "B"]] = Mode
+Z: TypeForm[Literal["C"]] = Mode # E:
     "#,
 );

@@ -12,17 +12,13 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::annotation::Annotation;
-use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FuncMetadata;
-use pyrefly_types::callable::Function;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
-use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
+use pyrefly_types::function::FuncMetadata;
+use pyrefly_types::function::FunctionKind;
 use pyrefly_types::keywords::DataclassFieldKeywords;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::Lit;
-use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -33,6 +29,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
+use crate::alt::class::class_field::DataclassMember;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
@@ -47,6 +44,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::FROZEN;
 use crate::binding::pydantic::FROZEN_DEFAULT;
+use crate::binding::pydantic::POPULATE_BY_NAME;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::pydantic::ROOT;
 use crate::binding::pydantic::STRICT;
@@ -54,7 +52,6 @@ use crate::binding::pydantic::STRICT_DEFAULT;
 use crate::binding::pydantic::VALIDATE_BY_ALIAS;
 use crate::binding::pydantic::VALIDATE_BY_NAME;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::types::Type;
 
@@ -137,20 +134,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         root_model_type: Type,
         has_strict: bool,
     ) -> ClassSynthesizedField {
-        let (root_requiredness, root_model_type) =
-            if root_model_type.is_any() || matches!(root_model_type, Type::Quantified(_)) {
-                (Required::Optional(None), root_model_type)
-            } else if has_strict {
-                (Required::Required, root_model_type)
-            } else {
-                (Required::Required, self.heap.mk_any_explicit())
-            };
+        let is_any_or_quantified =
+            root_model_type.is_any() || matches!(root_model_type, Type::Quantified(_));
+        let has_default = matches!(
+            self.get_dataclass_member(cls, &ROOT),
+            DataclassMember::Field(_, keywords) if keywords.default.is_some()
+        );
+        let root_requiredness = if is_any_or_quantified || has_default {
+            Required::Optional(None)
+        } else {
+            Required::Required
+        };
+        let root_model_type = if is_any_or_quantified || has_strict {
+            root_model_type
+        } else {
+            self.heap.mk_any_explicit()
+        };
         let root_param = Param::Pos(ROOT, root_model_type, root_requiredness);
         let params = vec![self.class_self_param(cls, false), root_param];
-        let ty = self.heap.mk_function(Function {
-            signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::method(cls, dunder::INIT),
-        });
+        let ty = self.synthesized_method(cls, dunder::INIT, params, self.heap.mk_none());
         ClassSynthesizedField::new(ty)
     }
 
@@ -203,8 +205,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Recursively expands nested RootModels (e.g., RootModel[RootModel[int]] expands to RootModel[int] | int).
     pub fn extract_root_model_inner_type(&self, ty: &Type) -> Option<Type> {
         match ty {
-            Type::Union(box Union { members: types, .. }) => {
-                let root_types: Vec<Type> = types
+            Type::Union(f) => {
+                let root_types: Vec<Type> = f
+                    .members
                     .iter()
                     .filter_map(|t| self.extract_root_model_inner_type(t))
                     .collect();
@@ -260,8 +263,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Handle both @dataclass and @dataclass(...) forms
         let is_pydantic_dataclass_metadata = |meta: &FuncMetadata| {
             matches!(&meta.kind, FunctionKind::Def(id)
-                if id.module.name() == ModuleName::pydantic_dataclasses()
-                    && id.name.as_str() == "dataclass")
+                if id.qname.module_name() == ModuleName::pydantic_dataclasses()
+                    && id.qname.id().as_str() == "dataclass")
         };
         let is_pydantic_dataclass = decorators.iter().any(|(decorator, _)| {
             decorator
@@ -282,10 +285,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .has_toplevel_qname(ModuleName::pydantic_settings().as_str(), "BaseSettings")
             });
 
+        // A pydantic *dataclass* is not a pydantic *model*, so an inherited `DataClass`
+        // kind must not route a subclass into the model classification below (which would
+        // default it to `BaseModel`). Keep it in the dataclass branch instead.
+        let has_pydantic_dataclass_base = bases_with_metadata.iter().any(|(_, metadata)| {
+            matches!(
+                metadata.pydantic_model_kind(),
+                Some(PydanticModelKind::DataClass)
+            )
+        });
+
         let is_pydantic_model = has_pydantic_base_model_base_class
-            || bases_with_metadata
-                .iter()
-                .any(|(_, metadata)| metadata.is_pydantic_model());
+            || bases_with_metadata.iter().any(|(_, metadata)| {
+                metadata.is_pydantic_model()
+                    && !matches!(
+                        metadata.pydantic_model_kind(),
+                        Some(PydanticModelKind::DataClass)
+                    )
+            });
 
         // If not a pydantic model, check if it's a pydantic dataclass
         if !is_pydantic_model {
@@ -298,10 +315,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // - Should there be two PydanticConfig variants, one for DataClasses and one for the remaining variants?
             // - Finally, should we add decorator plumbing here so we can detect keywords directly instead of through
             // the dataclass plumbing, which also has to then have extra checks to avoid overriding pydantic dataclasses with its own defaults?
-            if is_pydantic_dataclass {
+            if is_pydantic_dataclass || has_pydantic_dataclass_base {
                 return Some(PydanticConfig {
                     frozen: None,
                     validation_flags: PydanticValidationFlags::default(),
+                    validation_alias_generator: None,
                     extra: None,
                     strict: None,
                     pydantic_model_kind: PydanticModelKind::DataClass,
@@ -344,30 +362,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             strict,
             validate_by_name,
             validate_by_alias,
+            populate_by_name,
+            alias_generator,
         } = pydantic_config_dict;
 
         // Note: class keywords take precedence over ConfigDict keywords.
         // But another design choice is to error if there is a conflict. We can consider this design for v2.
 
-        let default_flags = PydanticValidationFlags::default();
+        // Keep explicitness because `populate_by_name` only applies when name validation is unset.
+        let mut merged_validate_by_name = self.resolve_bool_config_value(
+            &VALIDATE_BY_NAME,
+            keywords,
+            *validate_by_name,
+            bases_with_metadata,
+            |dm| dm.init_defaults.pydantic_validation_flags.validate_by_name,
+        );
+        let mut merged_validate_by_alias = self.resolve_bool_config_value(
+            &VALIDATE_BY_ALIAS,
+            keywords,
+            *validate_by_alias,
+            bases_with_metadata,
+            |dm| dm.init_defaults.pydantic_validation_flags.validate_by_alias,
+        );
+        // Inherited `populate_by_name` is already reflected in the normalized validation flags.
+        let merged_populate_by_name = self
+            .extract_bool_flag(keywords, &POPULATE_BY_NAME)
+            .or(*populate_by_name);
+
+        // When name validation is unset, Pydantic maps `populate_by_name` to
+        // `validate_by_name` and forces alias validation on.
+        if merged_validate_by_name.is_none()
+            && let Some(populate_by_name) = merged_populate_by_name
+        {
+            merged_validate_by_name = Some(populate_by_name);
+            merged_validate_by_alias = Some(true);
+        }
+
+        // Pydantic enables name validation when alias validation is disabled and name
+        // validation is otherwise unset. This runs after `populate_by_name` normalization.
+        if merged_validate_by_alias == Some(false) && merged_validate_by_name.is_none() {
+            merged_validate_by_name = Some(true);
+        }
+
         let validation_flags = PydanticValidationFlags {
-            validate_by_name: self.get_bool_config_value(
-                &VALIDATE_BY_NAME,
-                keywords,
-                *validate_by_name,
-                bases_with_metadata,
-                |dm| dm.init_defaults.init_by_name,
-                default_flags.validate_by_name,
-            ),
-            validate_by_alias: self.get_bool_config_value(
-                &VALIDATE_BY_ALIAS,
-                keywords,
-                *validate_by_alias,
-                bases_with_metadata,
-                |dm| dm.init_defaults.init_by_alias,
-                default_flags.validate_by_alias,
-            ),
+            validate_by_name: merged_validate_by_name,
+            validate_by_alias: merged_validate_by_alias,
         };
+        let validation_alias_generator = alias_generator.clone().or_else(|| {
+            self.find_inherited_keyword_value(bases_with_metadata, |dm| {
+                dm.init_defaults.alias_generator.clone()
+            })
+            .flatten()
+        });
 
         // Here, "ignore" and "allow" translate to true, while "forbid" translates to false.
         // With no keyword, the default is "true" and I default to "false" on a wrong keyword.
@@ -423,6 +469,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(PydanticConfig {
             frozen: Some(frozen),
             validation_flags,
+            validation_alias_generator,
             extra: Some(extra),
             strict: Some(strict),
             pydantic_model_kind,
@@ -433,7 +480,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.error(
             errors,
             range,
-            ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+            ErrorKind::InvalidLiteral,
             "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'".to_owned(),
         );
     }
@@ -447,12 +494,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         extract_from_metadata: impl Fn(&DataclassMetadata) -> bool,
         default: bool,
     ) -> bool {
-        // explicit keyword > explicit ConfigDict value > inherited > default
+        self.resolve_bool_config_value(
+            name,
+            keywords,
+            value_from_config_dict,
+            bases_with_metadata,
+            |dm| Some(extract_from_metadata(dm)),
+        )
+        .unwrap_or(default)
+    }
+
+    /// Resolve class keyword, ConfigDict, then inherited configuration without applying defaults.
+    fn resolve_bool_config_value(
+        &self,
+        name: &Name,
+        keywords: &[(Name, Annotation)],
+        value_from_config_dict: Option<bool>,
+        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        extract_from_metadata: impl Fn(&DataclassMetadata) -> Option<bool>,
+    ) -> Option<bool> {
         self.extract_bool_flag(keywords, name)
-            .unwrap_or(value_from_config_dict.unwrap_or_else(|| {
-                self.find_inherited_keyword_value(bases_with_metadata, extract_from_metadata)
-                    .unwrap_or(default)
-            }))
+            .or(value_from_config_dict)
+            .or_else(|| {
+                bases_with_metadata
+                    .iter()
+                    .filter(|(_, metadata)| metadata.is_pydantic_model())
+                    .find_map(|(_, metadata)| {
+                        metadata
+                            .dataclass_metadata()
+                            .and_then(&extract_from_metadata)
+                    })
+            })
     }
 
     fn extract_bool_flag(&self, keywords: &[(Name, Annotation)], key: &Name) -> Option<bool> {
@@ -484,7 +556,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    ErrorKind::BadArgumentType,
                     format!(
                         "Pydantic `{label}` value has type `{}`, which is not assignable to field type `{}`",
                         self.for_display(val.clone()),
@@ -525,7 +597,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    ErrorKind::BadArgumentType,
                     format!(
                         "Default value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
                         self.for_display(default_ty.clone()),
@@ -557,6 +629,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn extract_pydantic_field_from_annotation(
         &self,
         annot: Idx<KeyAnnotation>,
+        field_name: &Name,
         metadata: &ClassMetadata,
     ) -> Option<DataclassFieldKeywords> {
         let dm = metadata.dataclass_metadata()?;
@@ -572,7 +645,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
-                    && let Some(keywords) = self.compute_dataclass_field_initialization(call, dm)
+                    && let Some(keywords) =
+                        self.compute_dataclass_field_initialization(call, field_name, None, dm)
                 {
                     return Some(keywords);
                 }
@@ -701,7 +775,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    ErrorKind::BadArgumentType,
                     format!(
                         "Argument value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
                         self.for_display(value_ty.clone()),

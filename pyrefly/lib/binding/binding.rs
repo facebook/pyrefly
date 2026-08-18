@@ -9,27 +9,31 @@ use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
+use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
-use pyrefly_types::callable::PlaceholderBodyKind;
+use pyrefly_types::function::BodyKind;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasIndex;
+use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_util::assert_bytes;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::display::intersperse_iter;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -47,15 +51,18 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
+use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -75,10 +82,11 @@ use crate::binding::table::TableKeyed;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
-use crate::types::callable::FuncDefIndex;
+use crate::types::class::AttrsFieldSpecifierKind;
 use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
 use crate::types::equality::TypeEq;
+use crate::types::function::FuncDefIndex;
 use crate::types::globals::ImplicitGlobal;
 use crate::types::quantified::QuantifiedIdentity;
 use crate::types::quantified::QuantifiedKind;
@@ -92,16 +100,20 @@ use crate::types::types::Type;
 assert_words!(Key, 2);
 assert_bytes!(KeyExpect, 12);
 assert_bytes!(KeyTypeAlias, 4);
-assert_words!(KeyExport, 3);
+assert_words!(KeyExport, 2);
 assert_words!(KeyClass, 1);
 assert_bytes!(KeyTParams, 4);
 assert_bytes!(KeyClassBaseType, 4);
-assert_words!(KeyClassField, 4);
+assert_words!(KeyClassField, 3);
 assert_bytes!(KeyClassSynthesizedFields, 4);
+assert_bytes!(KeyClassChecks, 4);
 assert_bytes!(KeyAnnotation, 12);
 assert_bytes!(KeyClassMetadata, 4);
+assert_bytes!(KeyDjangoRelations, 0);
 assert_bytes!(KeyClassMro, 4);
+assert_bytes!(KeyClassDisjointBase, 4);
 assert_bytes!(KeyAbstractClassCheck, 4);
+assert_bytes!(KeyClassSubscriptSymmetry, 4);
 assert_words!(KeyLegacyTypeParam, 1);
 assert_words!(KeyYield, 1);
 assert_words!(KeyYieldFrom, 1);
@@ -110,21 +122,25 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 6);
-assert_words!(BindingExpect, 16);
-assert_words!(BindingTypeAlias, 7);
-assert_words!(BindingAnnotation, 15);
-assert_words!(BindingClass, 11);
-assert_words!(BindingTParams, 10);
+assert_words!(BindingExpect, 14);
+assert_words!(BindingTypeAlias, 6);
+assert_words!(BindingAnnotation, 13);
+assert_words!(BindingClass, 10);
+assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
-assert_words!(BindingClassMetadata, 11);
+assert_words!(BindingClassMetadata, 14);
+assert_words!(BindingDjangoRelations, 2);
 assert_bytes!(BindingClassMro, 4);
+assert_bytes!(BindingClassChecks, 4);
+assert_bytes!(BindingClassDisjointBase, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
+assert_bytes!(BindingClassSubscriptSymmetry, 4);
 assert_words!(BindingClassField, 11);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 10);
+assert_words!(BindingDecorator, 11);
 assert_bytes!(BindingDecoratedFunction, 20);
 assert_words!(BindingUndecoratedFunction, 18);
 
@@ -133,13 +149,12 @@ pub enum AnyIdx {
     Key(Idx<Key>),
     KeyExpect(Idx<KeyExpect>),
     KeyTypeAlias(Idx<KeyTypeAlias>),
-    KeyConsistentOverrideCheck(Idx<KeyConsistentOverrideCheck>),
     KeyClass(Idx<KeyClass>),
     KeyTParams(Idx<KeyTParams>),
     KeyClassBaseType(Idx<KeyClassBaseType>),
     KeyClassField(Idx<KeyClassField>),
     KeyVariance(Idx<KeyVariance>),
-    KeyVarianceCheck(Idx<KeyVarianceCheck>),
+    KeyClassChecks(Idx<KeyClassChecks>),
     KeyClassSynthesizedFields(Idx<KeyClassSynthesizedFields>),
     KeyExport(Idx<KeyExport>),
     KeyDecorator(Idx<KeyDecorator>),
@@ -148,8 +163,11 @@ pub enum AnyIdx {
     KeyUndecoratedFunctionRange(Idx<KeyUndecoratedFunctionRange>),
     KeyAnnotation(Idx<KeyAnnotation>),
     KeyClassMetadata(Idx<KeyClassMetadata>),
+    KeyDjangoRelations(Idx<KeyDjangoRelations>),
     KeyClassMro(Idx<KeyClassMro>),
+    KeyClassDisjointBase(Idx<KeyClassDisjointBase>),
     KeyAbstractClassCheck(Idx<KeyAbstractClassCheck>),
+    KeyClassSubscriptSymmetry(Idx<KeyClassSubscriptSymmetry>),
     KeyLegacyTypeParam(Idx<KeyLegacyTypeParam>),
     KeyYield(Idx<KeyYield>),
     KeyYieldFrom(Idx<KeyYieldFrom>),
@@ -182,9 +200,6 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyExpect(idx) => $self.$method::<$crate::binding::binding::KeyExpect>(*idx),
             AnyIdx::KeyTypeAlias(idx) => {
                 $self.$method::<$crate::binding::binding::KeyTypeAlias>(*idx)
-            }
-            AnyIdx::KeyConsistentOverrideCheck(idx) => {
-                $self.$method::<$crate::binding::binding::KeyConsistentOverrideCheck>(*idx)
             }
             AnyIdx::KeyClass(idx) => $self.$method::<$crate::binding::binding::KeyClass>(*idx),
             AnyIdx::KeyTParams(idx) => $self.$method::<$crate::binding::binding::KeyTParams>(*idx),
@@ -219,11 +234,20 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx)
             }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx)
+            }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx)
             }
+            AnyIdx::KeyClassDisjointBase(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassDisjointBase>(*idx)
+            }
             AnyIdx::KeyAbstractClassCheck(idx) => {
                 $self.$method::<$crate::binding::binding::KeyAbstractClassCheck>(*idx)
+            }
+            AnyIdx::KeyClassSubscriptSymmetry(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassSubscriptSymmetry>(*idx)
             }
             AnyIdx::KeyLegacyTypeParam(idx) => {
                 $self.$method::<$crate::binding::binding::KeyLegacyTypeParam>(*idx)
@@ -232,8 +256,8 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyYieldFrom(idx) => {
                 $self.$method::<$crate::binding::binding::KeyYieldFrom>(*idx)
             }
-            AnyIdx::KeyVarianceCheck(idx) => {
-                $self.$method::<$crate::binding::binding::KeyVarianceCheck>(*idx)
+            AnyIdx::KeyClassChecks(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassChecks>(*idx)
             }
         }
     };
@@ -246,9 +270,6 @@ macro_rules! dispatch_anyidx {
             }
             AnyIdx::KeyTypeAlias(idx) => {
                 $self.$method::<$crate::binding::binding::KeyTypeAlias>(*idx, $($args),+)
-            }
-            AnyIdx::KeyConsistentOverrideCheck(idx) => {
-                $self.$method::<$crate::binding::binding::KeyConsistentOverrideCheck>(*idx, $($args),+)
             }
             AnyIdx::KeyClass(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClass>(*idx, $($args),+)
@@ -289,11 +310,20 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx, $($args),+)
             }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx, $($args),+)
+            }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx, $($args),+)
             }
+            AnyIdx::KeyClassDisjointBase(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassDisjointBase>(*idx, $($args),+)
+            }
             AnyIdx::KeyAbstractClassCheck(idx) => {
                 $self.$method::<$crate::binding::binding::KeyAbstractClassCheck>(*idx, $($args),+)
+            }
+            AnyIdx::KeyClassSubscriptSymmetry(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassSubscriptSymmetry>(*idx, $($args),+)
             }
             AnyIdx::KeyLegacyTypeParam(idx) => {
                 $self.$method::<$crate::binding::binding::KeyLegacyTypeParam>(*idx, $($args),+)
@@ -304,8 +334,8 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyYieldFrom(idx) => {
                 $self.$method::<$crate::binding::binding::KeyYieldFrom>(*idx, $($args),+)
             }
-            AnyIdx::KeyVarianceCheck(idx) => {
-                $self.$method::<$crate::binding::binding::KeyVarianceCheck>(*idx, $($args),+)
+            AnyIdx::KeyClassChecks(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassChecks>(*idx, $($args),+)
             }
         }
     };
@@ -317,13 +347,12 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::Key(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyExpect(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyTypeAlias(idx) => write!(f, "{}", ctx.display(*idx)),
-            Self::KeyConsistentOverrideCheck(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClass(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyTParams(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassBaseType(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassField(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyVariance(idx) => write!(f, "{}", ctx.display(*idx)),
-            Self::KeyVarianceCheck(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyClassChecks(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassSynthesizedFields(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyExport(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyDecorator(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -332,8 +361,11 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyUndecoratedFunctionRange(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAnnotation(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMetadata(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyDjangoRelations(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMro(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyClassDisjointBase(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAbstractClassCheck(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyClassSubscriptSymmetry(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyLegacyTypeParam(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyYield(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyYieldFrom(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -352,8 +384,11 @@ pub enum AnyExportedKey {
     KeyVariance(KeyVariance),
     KeyExport(KeyExport),
     KeyClassMetadata(KeyClassMetadata),
+    KeyDjangoRelations(KeyDjangoRelations),
     KeyClassMro(KeyClassMro),
+    KeyClassDisjointBase(KeyClassDisjointBase),
     KeyAbstractClassCheck(KeyAbstractClassCheck),
+    KeyClassSubscriptSymmetry(KeyClassSubscriptSymmetry),
     KeyTypeAlias(KeyTypeAlias),
 }
 
@@ -363,7 +398,7 @@ pub enum AnyExportedKey {
 pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + 'static {
     const EXPORTED: bool = false;
     type Value: Debug + DisplayWith<Bindings>;
-    type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type> + Send + Sync;
+    type Answer: Clone + Debug + Display + TypeEq + Visit<Type> + VisitMut<Type> + Send + Sync;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx;
 
     /// Resolve the source range for this key, given access to the bindings.
@@ -435,17 +470,17 @@ impl Exported for KeyTypeAlias {
         AnyExportedKey::KeyTypeAlias(self.clone())
     }
 }
-impl Keyed for KeyConsistentOverrideCheck {
-    type Value = BindingConsistentOverrideCheck;
+impl Keyed for KeyClassChecks {
+    type Value = BindingClassChecks;
     type Answer = EmptyAnswer;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
-        AnyIdx::KeyConsistentOverrideCheck(idx)
+        AnyIdx::KeyClassChecks(idx)
     }
     fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
     where
         BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
     {
-        bindings.idx_to_key(bindings.get(idx).class_key).range()
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
     }
 }
 impl Keyed for KeyClass {
@@ -571,23 +606,6 @@ impl Exported for KeyVariance {
         AnyExportedKey::KeyVariance(self.clone())
     }
 }
-impl Keyed for KeyVarianceCheck {
-    const EXPORTED: bool = false;
-    type Value = BindingVarianceCheck;
-    type Answer = EmptyAnswer;
-    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
-        AnyIdx::KeyVarianceCheck(idx)
-    }
-    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
-    where
-        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
-    {
-        bindings.idx_to_key(bindings.get(idx).class_idx).range()
-    }
-    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
-        None
-    }
-}
 impl Keyed for KeyExport {
     const EXPORTED: bool = true;
     type Value = BindingExport;
@@ -697,6 +715,25 @@ impl Exported for KeyClassMetadata {
         AnyExportedKey::KeyClassMetadata(self.clone())
     }
 }
+impl Keyed for KeyDjangoRelations {
+    const EXPORTED: bool = true;
+    type Value = BindingDjangoRelations;
+    type Answer = DjangoReverseRelationIndex;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyDjangoRelations(idx)
+    }
+    fn range_with(_idx: Idx<Self>, _bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        TextRange::default()
+    }
+}
+impl Exported for KeyDjangoRelations {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyDjangoRelations(self.clone())
+    }
+}
 impl Keyed for KeyClassMro {
     const EXPORTED: bool = true;
     type Value = BindingClassMro;
@@ -719,6 +756,28 @@ impl Exported for KeyClassMro {
         AnyExportedKey::KeyClassMro(self.clone())
     }
 }
+impl Keyed for KeyClassDisjointBase {
+    const EXPORTED: bool = true;
+    type Value = BindingClassDisjointBase;
+    type Answer = ClassDisjointBase;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyClassDisjointBase(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
+    }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassDisjointBase(self.clone()))
+    }
+}
+impl Exported for KeyClassDisjointBase {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassDisjointBase(self.clone())
+    }
+}
 impl Keyed for KeyAbstractClassCheck {
     const EXPORTED: bool = true;
     type Value = BindingAbstractClassCheck;
@@ -739,6 +798,28 @@ impl Keyed for KeyAbstractClassCheck {
 impl Exported for KeyAbstractClassCheck {
     fn to_anykey(&self) -> AnyExportedKey {
         AnyExportedKey::KeyAbstractClassCheck(self.clone())
+    }
+}
+impl Keyed for KeyClassSubscriptSymmetry {
+    const EXPORTED: bool = true;
+    type Value = BindingClassSubscriptSymmetry;
+    type Answer = bool;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyClassSubscriptSymmetry(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
+    }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassSubscriptSymmetry(self.clone()))
+    }
+}
+impl Exported for KeyClassSubscriptSymmetry {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassSubscriptSymmetry(self.clone())
     }
 }
 impl Keyed for KeyLegacyTypeParam {
@@ -814,11 +895,14 @@ impl Ranged for NarrowUseLocation {
     }
 }
 
-/// Distinguishes between match statements and if/elif chains for exhaustiveness checking.
+/// Distinguishes between different kinds of exhaustiveness checking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExhaustivenessKind {
     Match,
     IfElif,
+    /// Coverage of a class pattern's sub-patterns over their matched slot types
+    /// (used to decide whether a refutable class pattern still narrows its class away).
+    ClassPatternCoverage,
 }
 
 /// Keys that refer to a `Type`.
@@ -846,12 +930,18 @@ pub enum Key {
     BoundName(ShortIdentifier),
     /// I am an expression that does not have a simple name but needs its type inferred.
     Anon(TextRange),
+    /// I am the assigned value for a structurally invalid assignment target.
+    InvalidTarget(TextRange),
     /// I am a narrowing operation created by a pattern in a match statement
     PatternNarrow(TextRange),
     /// I am an expression that appears in a statement. The range for this key is the range of the expr itself, which is different than the range of the stmt expr.
     StmtExpr(TextRange),
     /// I am an expression that appears in a `with` context.
     ContextExpr(TextRange),
+    /// I am the context manager value for a `with` item without an assignment target.
+    ContextValue(TextRange),
+    /// I am the subject value of a `match` statement.
+    MatchSubject(TextRange),
     /// I am the result of joining several branches.
     Phi(Box<(Name, TextRange)>),
     /// I am the result of narrowing a type. The two ranges are the range at which the operation is
@@ -887,6 +977,8 @@ pub enum Key {
     Delete(TextRange),
     /// Match statement or if/elif chain that needs type-based exhaustiveness checking
     Exhaustive(ExhaustivenessKind, TextRange),
+    /// A `with` statement whose body terminated, which needs type-based reachability checking
+    SuppressedException(TextRange),
 }
 
 impl Ranged for Key {
@@ -907,8 +999,11 @@ impl Ranged for Key {
             Self::ReturnType(x) => x.range(),
             Self::BoundName(x) => x.range(),
             Self::Anon(r) => *r,
+            Self::InvalidTarget(r) => *r,
             Self::StmtExpr(r) => *r,
             Self::ContextExpr(r) => *r,
+            Self::ContextValue(r) => *r,
+            Self::MatchSubject(r) => *r,
             Self::Phi(x) => x.1,
             Self::Narrow(x) => x.1,
             Self::Anywhere(x) => x.1,
@@ -920,6 +1015,7 @@ impl Ranged for Key {
             Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
+            Self::SuppressedException(r) => *r,
         }
     }
 }
@@ -936,8 +1032,11 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::FacetAssign(x) => write!(f, "Key::FacetAssign({})", short(x)),
             Self::BoundName(x) => write!(f, "Key::BoundName({})", short(x)),
             Self::Anon(r) => write!(f, "Key::Anon({})", ctx.display(r)),
+            Self::InvalidTarget(r) => write!(f, "Key::InvalidTarget({})", ctx.display(r)),
             Self::StmtExpr(r) => write!(f, "Key::StmtExpr({})", ctx.display(r)),
             Self::ContextExpr(r) => write!(f, "Key::ContextExpr({})", ctx.display(r)),
+            Self::ContextValue(r) => write!(f, "Key::ContextValue({})", ctx.display(r)),
+            Self::MatchSubject(r) => write!(f, "Key::MatchSubject({})", ctx.display(r)),
             Self::Phi(x) => write!(f, "Key::Phi({} {})", x.0, ctx.display(&x.1)),
             Self::Narrow(x) => {
                 write!(
@@ -963,6 +1062,9 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
             Self::Exhaustive(kind, r) => {
                 write!(f, "Key::Exhaustive({:?}, {})", kind, ctx.display(r))
+            }
+            Self::SuppressedException(r) => {
+                write!(f, "Key::SuppressedException({})", ctx.display(r))
             }
         }
     }
@@ -1003,8 +1105,9 @@ pub enum KeyExpect {
     /// Forward reference string literal in union type check.
     ForwardRefUnion(TextRange),
     /// A name used in annotation position that may be an invalid implicit alias.
-    // TODO: wire up insertion from finalize_bound_name
     ImplicitAliasCheck(TextRange),
+    /// Validate an implementation's implicit return against its annotation.
+    ValidateImplicitReturn(TextRange),
 }
 
 impl Ranged for KeyExpect {
@@ -1021,7 +1124,8 @@ impl Ranged for KeyExpect {
             | KeyExpect::PrivateAttributeAccess(range)
             | KeyExpect::UninitializedCheck(range)
             | KeyExpect::ForwardRefUnion(range)
-            | KeyExpect::ImplicitAliasCheck(range) => *range,
+            | KeyExpect::ImplicitAliasCheck(range)
+            | KeyExpect::ValidateImplicitReturn(range) => *range,
         }
     }
 }
@@ -1041,6 +1145,7 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::UninitializedCheck(r) => ("UninitializedCheck", r),
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
             KeyExpect::ImplicitAliasCheck(r) => ("ImplicitAliasCheck", r),
+            KeyExpect::ValidateImplicitReturn(r) => ("ValidateImplicitReturn", r),
         };
         write!(f, "KeyExpect::{}({})", name, ctx.display(range))
     }
@@ -1094,6 +1199,15 @@ pub enum BindingExpect {
         existing: Idx<KeyAnnotation>,
         name: Name,
     },
+    /// Validate a function implementation's implicit return without making the
+    /// published return type depend on the function body.
+    ValidateImplicitReturn {
+        annotation: Idx<KeyAnnotation>,
+        implicit_return: Idx<Key>,
+        is_async: bool,
+        is_generator: bool,
+        has_explicit_return: bool,
+    },
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
     /// A match statement that may be non-exhaustive at runtime.
@@ -1103,14 +1217,16 @@ pub enum BindingExpect {
     /// checked for exhaustiveness, only variables and chained subscripts/attributes of variables
     MatchExhaustiveness {
         subject_idx: Idx<Key>,
-        narrowing_subject: NarrowingSubject,
+        narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
         subject_range: TextRange,
+        // Should we show the raw expression of the match subject instead of the name?
+        show_subject_expr: bool,
     },
     /// A match case whose pattern may not overlap with the current subject type.
     MatchCaseReachability {
         subject_idx: Idx<Key>,
-        narrowing_subject: NarrowingSubject,
+        narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_case: (Box<NarrowOp>, TextRange),
         case_range: TextRange,
     },
@@ -1147,9 +1263,9 @@ pub enum BindingExpect {
     /// A local name used in annotation position whose definition has invalid
     /// annotation syntax. The error is emitted at solve time after checking
     /// semantic exemptions (TypeVar, functional TypedDict, etc.).
-    // TODO: wire up solve logic
     ImplicitAliasCheck {
-        name_assign_idx: Idx<Key>,
+        name: Name,
+        expr: Box<Expr>,
         problem: Box<str>,
     },
 }
@@ -1183,7 +1299,8 @@ impl DisplayWith<Bindings> for BindingExpect {
             Self::CheckRaisedException(RaisedException::WithoutCause(exc)) => {
                 write!(f, "RaisedException::WithoutCause({})", m.display(exc))
             }
-            Self::CheckRaisedException(RaisedException::WithCause(box (exc, cause))) => {
+            Self::CheckRaisedException(RaisedException::WithCause(exc_cause)) => {
+                let (exc, cause) = &**exc_cause;
                 write!(
                     f,
                     "RaisedException::WithCause({}, {})",
@@ -1201,6 +1318,16 @@ impl DisplayWith<Bindings> for BindingExpect {
                 ctx.display(*new),
                 ctx.display(*existing),
                 name
+            ),
+            Self::ValidateImplicitReturn {
+                annotation,
+                implicit_return,
+                ..
+            } => write!(
+                f,
+                "ValidateImplicitReturn({}, {})",
+                ctx.display(*annotation),
+                ctx.display(*implicit_return),
             ),
             Self::PrivateAttributeAccess(expectation) => write!(
                 f,
@@ -1267,15 +1394,8 @@ impl DisplayWith<Bindings> for BindingExpect {
                     m.display(range)
                 )
             }
-            Self::ImplicitAliasCheck {
-                name_assign_idx,
-                problem,
-            } => {
-                write!(
-                    f,
-                    "ImplicitAliasCheck({}, {problem})",
-                    ctx.display(*name_assign_idx),
-                )
+            Self::ImplicitAliasCheck { name, problem, .. } => {
+                write!(f, "ImplicitAliasCheck({name}, {problem})",)
             }
         }
     }
@@ -1323,7 +1443,7 @@ impl DisplayWith<Bindings> for BindingTypeAlias {
     }
 }
 
-#[derive(Debug, Clone, TypeEq, VisitMut, PartialEq, Eq)]
+#[derive(Debug, Clone, TypeEq, Visit, VisitMut, PartialEq, Eq)]
 pub struct EmptyAnswer;
 
 impl Display for EmptyAnswer {
@@ -1332,7 +1452,7 @@ impl Display for EmptyAnswer {
     }
 }
 
-#[derive(Debug, Clone, TypeEq, VisitMut, PartialEq, Eq)]
+#[derive(Debug, Clone, TypeEq, Visit, VisitMut, PartialEq, Eq)]
 pub struct NoneIfRecursive<T>(pub Option<T>);
 
 impl<T> Display for NoneIfRecursive<T>
@@ -1426,7 +1546,7 @@ impl DisplayWith<ModuleInfo> for KeyUndecoratedFunctionRange {
 
 /// Trivial answer type for KeyUndecoratedFunctionRange — just a copy of the
 /// binding value (the function's ShortIdentifier).
-#[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct UndecoratedFunctionRangeAnswer(pub ShortIdentifier);
 
 impl Display for UndecoratedFunctionRangeAnswer {
@@ -1522,23 +1642,13 @@ impl DisplayWith<ModuleInfo> for KeyVariance {
     }
 }
 
-// A key for checking variance violations (separate from KeyVariance to avoid cycles)
+// Side-effect checks for class-level diagnostics that do not produce downstream answers.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct KeyVarianceCheck(pub ClassDefIndex);
+pub struct KeyClassChecks(pub ClassDefIndex);
 
-impl DisplayWith<ModuleInfo> for KeyVarianceCheck {
+impl DisplayWith<ModuleInfo> for KeyClassChecks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
-        write!(f, "KeyVarianceCheck(class{})", self.0)
-    }
-}
-
-// An expectation that attributes in this class need checking for inconsistent override
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct KeyConsistentOverrideCheck(pub ClassDefIndex);
-
-impl DisplayWith<ModuleInfo> for KeyConsistentOverrideCheck {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
-        write!(f, "KeyConsistentOverrideCheck(class{})", self.0)
+        write!(f, "KeyClassChecks(class{})", self.0)
     }
 }
 
@@ -1587,6 +1697,22 @@ impl DisplayWith<ModuleInfo> for KeyClassMetadata {
     }
 }
 
+/// Key for Django reverse relationship metadata within a module.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyDjangoRelations;
+
+impl Ranged for KeyDjangoRelations {
+    fn range(&self) -> TextRange {
+        TextRange::default()
+    }
+}
+
+impl DisplayWith<ModuleInfo> for KeyDjangoRelations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyDjangoRelations")
+    }
+}
+
 /// Keys that refer to a class's `Mro` (which tracks its ancestors, in method
 /// resolution order).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1598,12 +1724,34 @@ impl DisplayWith<ModuleInfo> for KeyClassMro {
     }
 }
 
+/// Disjoint-base representative for a class, used for PEP 800 narrowing and
+/// downstream inheritance checks. Owned by `KeyClassDisjointBase`, not
+/// `KeyClassMro`, so generated dataclass-slot promotion can read the
+/// already-solved MRO without a binding cycle.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyClassDisjointBase(pub ClassDefIndex);
+
+impl DisplayWith<ModuleInfo> for KeyClassDisjointBase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyClassDisjointBase(class{})", self.0)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyAbstractClassCheck(pub ClassDefIndex);
 
 impl DisplayWith<ModuleInfo> for KeyAbstractClassCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyAbstractClassCheck(class{})", self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyClassSubscriptSymmetry(pub ClassDefIndex);
+
+impl DisplayWith<ModuleInfo> for KeyClassSubscriptSymmetry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyClassSubscriptSymmetry(class{})", self.0)
     }
 }
 
@@ -1657,12 +1805,17 @@ impl DisplayWith<ModuleInfo> for KeyYieldFrom {
     }
 }
 
+/// A target position within an unpacking assignment or sequence pattern. The second
+/// `usize` of each index variant is the source length the target list requires: the
+/// exact length for `ExactIndex`, or the minimum for `Index`/`ReverseIndex`.
 #[derive(Clone, Copy, Dupe, Debug)]
 pub enum UnpackedPosition {
-    /// Zero-based index
-    Index(usize),
-    /// A negative index, counting from the back
-    ReverseIndex(usize),
+    /// Zero-based index in an unpack with no star.
+    ExactIndex(usize, usize),
+    /// Zero-based index before a star.
+    Index(usize, usize),
+    /// A negative index counting from the back (always after a star).
+    ReverseIndex(usize, usize),
     /// Slice represented as an index from the front to an index from the back.
     /// Note that even though the second index is conceptually negative, we can
     /// represent it as an usize because it is always negative.
@@ -1727,18 +1880,10 @@ pub enum FunctionParameter {
     Unannotated(Idx<KeyUndecoratedFunction>, AnnotationTarget, Name),
 }
 
-/// Is the body of this function stubbed out (contains nothing but `...`)?
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TypeEq, VisitMut)]
-pub enum FunctionStubOrImpl {
-    /// The function body is `...`.
-    Stub,
-    /// The function body is not `...`.
-    Impl,
-}
-
 #[derive(Clone, Debug)]
 pub struct BindingDecorator {
     pub expr: Expr,
+    pub trailing_name: Option<Name>,
 }
 
 impl DisplayWith<Bindings> for BindingDecorator {
@@ -1805,21 +1950,29 @@ impl DisplayWith<Bindings> for BindingDecoratedFunction {
 pub struct BindingUndecoratedFunction {
     pub def_index: FuncDefIndex,
     pub def: FunctionDefData,
-    pub stub_or_impl: FunctionStubOrImpl,
-    /// `Some` if the function body is a single placeholder statement
-    /// (`raise NotImplementedError(...)` or `return NotImplemented`); `None` otherwise.
-    pub placeholder_body_kind: Option<PlaceholderBodyKind>,
+    /// Whether the function is defined in an `if TYPE_CHECKING:` block.
+    pub is_in_type_checking_block: bool,
+    /// The shape of the function body.
+    pub body_kind: BodyKind,
     /// `true` when the return type has no user-supplied annotation and will be
     /// inferred from the body (i.e. the corresponding `ReturnType` binding will
     /// use `ReturnTypeKind::ShouldInferType`).
     pub is_return_inferred: bool,
+    /// `true` when the body directly calls `super(...).<this function>(...)`.
+    pub calls_super_method: bool,
     pub class_key: Option<Idx<KeyClass>>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[Idx<KeyDecorator>]>,
-    pub module_style: ModuleStyle,
-    /// Dot-separated path of enclosing function names (e.g. `"f1"` for `f2` defined inside `f1`,
-    /// or `"f1.g1"` for two levels deep). `None` for top-level or class-method functions.
-    pub outer_funcs: Option<Name>,
+    pub parent: NestingContext,
+    /// When the function is decorated with `@shape_dsl_function`, this holds the
+    /// parsed DSL IR so the solver can produce `FunctionKind::ShapeDsl`.
+    pub shape_dsl_def: Option<Arc<ShapeDslFunction>>,
+    /// Validated source for a user-defined type-level shape DSL function.
+    pub type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
+    /// Identifier of the IR function passed as the first positional argument to
+    /// `@uses_shape_dsl(ir_fn)`. Extracted at binding time so the solver can
+    /// resolve it to a `FunctionKind::ShapeDsl` type.
+    pub uses_shape_dsl_ir_name: Option<ShortIdentifier>,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
@@ -1833,6 +1986,7 @@ pub struct ClassBinding {
     pub def: ClassDefData,
     pub def_index: ClassDefIndex,
     pub parent: NestingContext,
+    pub is_protocol: bool,
     /// Were we able to determine, using only syntactic analysis at bindings time,
     /// that there can be no legacy tparams? If no, we need a `BindingTParams`, if yes
     /// we can directly compute the `TParams` from the class def.
@@ -1852,15 +2006,8 @@ pub struct ReturnExplicit {
 
 #[derive(Clone, Debug)]
 pub enum ReturnTypeKind {
-    /// We have an explicit return annotation, and we should validate it against the implicit returns
-    ShouldValidateAnnotation {
-        range: TextRange,
-        annotation: Idx<KeyAnnotation>,
-        implicit_return: Idx<Key>,
-        is_generator: bool,
-        has_explicit_return: bool,
-    },
-    /// We have an explicit return annotation, and we should blindly trust it without any validation
+    /// The published return type comes from an explicit annotation. Checks against
+    /// the implementation are modeled as separate expectation bindings.
     ShouldTrustAnnotation {
         annotation: Idx<KeyAnnotation>,
         range: TextRange,
@@ -1884,7 +2031,6 @@ pub enum ReturnTypeKind {
 impl ReturnTypeKind {
     pub fn has_return_annotation(&self) -> bool {
         match self {
-            Self::ShouldValidateAnnotation { .. } => true,
             Self::ShouldTrustAnnotation { .. } => true,
             Self::ShouldReturnAny { .. } => false,
             Self::ShouldInferType { .. } => false,
@@ -1893,7 +2039,6 @@ impl ReturnTypeKind {
 
     pub fn should_infer_return(&self) -> bool {
         match self {
-            Self::ShouldValidateAnnotation { .. } => false,
             Self::ShouldTrustAnnotation { .. } => false,
             Self::ShouldReturnAny { .. } => false,
             Self::ShouldInferType { .. } => true,
@@ -2012,6 +2157,17 @@ pub enum TypeAliasParams {
     },
 }
 
+/// attrs specifier info for a class-body assignment whose RHS is a `field()` / `attr.ib()` call.
+/// The in-body value is typed `Any` so `@<field>.default`/`.validator`/`.converter` accesses resolve.
+#[derive(Clone, Copy, Debug)]
+pub struct AttrsSpecifier {
+    /// Legacy `attr.ib` accepts a positional `default`; kw-only `field` does not.
+    pub kind: AttrsFieldSpecifierKind,
+    /// The enclosing class, so solving can look up whether the field has a `@<field>.converter`
+    /// decorator (which intercepts the `default=` value, exempting it from the field-type check).
+    pub class_def_index: ClassDefIndex,
+}
+
 /// Data for a name assignment binding.
 #[derive(Clone, Debug)]
 pub struct NameAssign {
@@ -2020,6 +2176,8 @@ pub struct NameAssign {
     pub expr: Box<Expr>,
     pub legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
     pub is_in_function_scope: bool,
+    /// True if this assignment is directly in a class body.
+    pub is_class_body_assignment: bool,
     pub first_use: FirstUse,
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.
@@ -2036,6 +2194,8 @@ pub struct NameAssign {
     /// the textual assignment is still bound as a real `NameAssign` so the
     /// RHS remains available for its own diagnostics and bookkeeping.
     pub receiver_idx: Option<Idx<Key>>,
+    /// `Some` if the RHS is an attrs field specifier call (`field()` / `attr.ib()`).
+    pub attrs_field_specifier: Option<AttrsSpecifier>,
 }
 
 impl NameAssign {
@@ -2047,6 +2207,17 @@ impl NameAssign {
     pub fn is_pinned(&self) -> bool {
         self.annotation.is_some() || self.receiver_idx.is_some()
     }
+}
+
+/// Carries the canonical class identity for a receiver-constrained class
+/// rebind through `MultiTargetAssign` and `UnpackedValue` bindings. The `name`
+/// is the LHS being assigned to, and `idx` points at the canonical class-object
+/// binding of the original `class` definition. Invariants and semantics match
+/// `NameAssign::receiver_idx`.
+#[derive(Clone, Debug)]
+pub struct MultiTargetReceiver {
+    pub name: Name,
+    pub idx: Idx<Key>,
 }
 
 /// Data for a type alias binding.
@@ -2084,6 +2255,20 @@ pub struct AssignToAttribute {
 pub struct ExhaustiveBinding {
     pub kind: ExhaustivenessKind,
     pub narrow_entries: Vec<(Idx<Key>, Box<NarrowOp>, TextRange)>,
+}
+
+/// Data for the reachability of the code following a `with` statement whose body
+/// terminated with a `raise`
+#[derive(Clone, Debug)]
+pub struct SuppressedException {
+    /// The context expressions of the `with` items, outermost first. Any one of them
+    /// suppressing the exception is enough for control flow to resume.
+    pub contexts: Box<[Idx<Key>]>,
+    pub kind: IsAsync,
+    /// Set when the body did not syntactically terminate but ended in an expression
+    /// that may have type `Never` (e.g. a `NoReturn` call or a nested `with`). The body
+    /// only terminates if this solves to `Never`.
+    pub body: Option<Idx<Key>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -2147,9 +2332,24 @@ pub enum Binding {
     StmtExpr(Box<Expr>, Option<SpecialExport>),
     /// Propagate a type to a new binding. Takes an optional annotation to
     /// check against (which will override the computed type if they disagree).
-    MultiTargetAssign(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange),
-    /// TypeVar, ParamSpec, or TypeVarTuple
-    TypeVar(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
+    /// The optional `MultiTargetReceiver` carries the canonical class identity
+    /// when this is a receiver-constrained class rebind (`Other = Real = Dummy`),
+    /// so the solver can apply the same checks as a single-target rebind.
+    MultiTargetAssign(
+        Option<Idx<KeyAnnotation>>,
+        Idx<Key>,
+        TextRange,
+        Option<Box<MultiTargetReceiver>>,
+    ),
+    /// TypeVar or IntVar
+    TypeVar(
+        Box<(
+            Option<Idx<KeyAnnotation>>,
+            Identifier,
+            Box<ExprCall>,
+            QuantifiedKind,
+        )>,
+    ),
     ParamSpec(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
     TypeVarTuple(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
     /// An expression returned from a function.
@@ -2170,11 +2370,15 @@ pub enum Binding {
     ContextValue(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange, IsAsync),
     /// A value at a specific position in an unpacked iterable expression.
     /// Example: UnpackedValue(('a', 'b')), 1) represents 'b'.
+    /// The optional `MultiTargetReceiver` carries the canonical class identity
+    /// when this is a receiver-constrained class rebind (`Real, _ = (Dummy, 0)`),
+    /// so the solver can apply the same checks as a single-target rebind.
     UnpackedValue(
         Option<Idx<KeyAnnotation>>,
         Idx<Key>,
         TextRange,
         UnpackedPosition,
+        Option<Box<MultiTargetReceiver>>,
     ),
     /// A type where we have an annotation, but also a type we computed.
     /// If the annotation has a type inside it (e.g. `int` then use the annotation).
@@ -2191,23 +2395,25 @@ pub enum Binding {
     Global(ImplicitGlobal),
     /// A type parameter.
     TypeParameter(Box<TypeParameter>),
-    /// The type of a function. The fields are:
-    /// - A reference to the KeyDecoratedFunction that point to the def
-    /// - An optional reference to any previous function in the same flow by the same name;
-    ///   this is needed to fold `@overload` decorated defs into a single type.
-    /// - An optional reference to class metadata, which will be non-None when the function
-    ///   is defined within a class scope.
-    Function(
-        Idx<KeyDecoratedFunction>,
-        Option<Idx<Key>>,
-        Option<Idx<KeyClassMetadata>>,
-    ),
+    /// The type of a function.
+    Function {
+        /// A reference to the KeyDecoratedFunction that points to the def.
+        decorated_idx: Idx<KeyDecoratedFunction>,
+        /// An optional reference to any previous function in the same flow by the same name;
+        /// this is needed to fold `@overload` decorated defs into a single type.
+        pred_idx: Option<Idx<Key>>,
+        /// Whether the function is defined within a class scope.
+        in_class: bool,
+    },
     /// An import statement, typically with `Self::Import`.
     Import(Box<ImportBinding>),
     /// A class definition, points to a BindingClass and any decorators.
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
+    /// A definition boundary for a capture pattern. It forwards type information during solving,
+    /// but origin and definition lookups must not follow it through to the matched subject.
+    PatternCapture(Idx<Key>),
     /// Like Forward, but widens implicit literals.
     PromoteForward(Idx<Key>),
     /// A forward reference produced during first-use resolution of a partial type.
@@ -2235,10 +2441,10 @@ pub enum Binding {
     /// diagnostic.
     Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>, Option<TextRange>)>),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
-    /// The TextRange is optional and controls whether to produce an error
-    /// saying there are scoped type parameters for this function / class, and
-    /// therefore the use of legacy type parameters is invalid.
-    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, Option<TextRange>),
+    /// The flag records that this function / class has scoped type parameters, in which case
+    /// the use of legacy type parameters is invalid; the error is reported at the range of
+    /// whichever key it applies to.
+    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, bool),
     /// An assignment to a name.
     NameAssign(Box<NameAssign>),
     /// A type alias (legacy, scoped, or `TypeAliasType` call).
@@ -2286,6 +2492,19 @@ pub enum Binding {
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
+    /// The code following a `with` statement whose body terminated. An exception
+    /// raised in the body may be suppressed by the context manager, in which case
+    /// control flow resumes after the `with`.
+    /// Resolves to `Never` if the body terminates and no context manager suppresses.
+    SuppressedException(Box<SuppressedException>),
+    Sentinel(
+        Box<(
+            Option<Idx<KeyAnnotation>>,
+            Identifier,
+            NestingContext,
+            Box<ExprCall>,
+        )>,
+    ),
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -2298,18 +2517,27 @@ impl DisplayWith<Bindings> for Binding {
         match self {
             Self::Expr(a, x) => write!(f, "Expr({}, {})", ann(a), m.display(x)),
             Self::StmtExpr(x, _) => write!(f, "StmtExpr({})", m.display(x)),
-            Self::MultiTargetAssign(a, idx, range) => {
+            Self::MultiTargetAssign(a, idx, range, receiver) => {
                 write!(
                     f,
-                    "MultiTargetAssign({}, {}, {})",
+                    "MultiTargetAssign({}, {}, {}",
                     ann(a),
                     ctx.display(*idx),
                     m.display(range),
-                )
+                )?;
+                if let Some(receiver) = receiver {
+                    write!(
+                        f,
+                        ", receiver={}@{}",
+                        receiver.name,
+                        ctx.display(receiver.idx)
+                    )?;
+                }
+                write!(f, ")")
             }
             Self::TypeVar(x) => {
-                let (a, name, call) = x.as_ref();
-                write!(f, "TypeVar({}, {name}, {})", ann(a), m.display(call))
+                let (a, name, call, kind) = x.as_ref();
+                write!(f, "{kind}({}, {name}, {})", ann(a), m.display(call))
             }
             Self::ParamSpec(x) => {
                 let (a, name, call) = x.as_ref();
@@ -2318,6 +2546,10 @@ impl DisplayWith<Bindings> for Binding {
             Self::TypeVarTuple(x) => {
                 let (a, name, call) = x.as_ref();
                 write!(f, "TypeVarTuple({}, {name}, {})", ann(a), m.display(call))
+            }
+            Self::Sentinel(x) => {
+                let (a, name, _, call) = x.as_ref();
+                write!(f, "sentinel({}, {name}, {})", ann(a), m.display(call))
             }
             Self::ReturnExplicit(x) => {
                 write!(f, "ReturnExplicit({}, ", ann(&x.annot))?;
@@ -2350,10 +2582,12 @@ impl DisplayWith<Bindings> for Binding {
             Self::ContextValue(a, x, _, kind) => {
                 write!(f, "ContextValue({}, {}, {kind:?})", ann(a), ctx.display(*x))
             }
-            Self::UnpackedValue(a, x, range, pos) => {
+            Self::UnpackedValue(a, x, range, pos, receiver) => {
                 let pos = match pos {
-                    UnpackedPosition::Index(i) => i.to_string(),
-                    UnpackedPosition::ReverseIndex(i) => format!("-{i}"),
+                    UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => {
+                        i.to_string()
+                    }
+                    UnpackedPosition::ReverseIndex(i, _) => format!("-{i}"),
                     UnpackedPosition::Slice(i, j) => {
                         let end = match j {
                             0 => "".to_owned(),
@@ -2364,14 +2598,25 @@ impl DisplayWith<Bindings> for Binding {
                 };
                 write!(
                     f,
-                    "UnpackedValue({}, {}, {}, {})",
+                    "UnpackedValue({}, {}, {}, {}",
                     ann(a),
                     ctx.display(*x),
                     m.display(range),
                     pos
-                )
+                )?;
+                if let Some(receiver) = receiver {
+                    write!(
+                        f,
+                        ", receiver={}@{}",
+                        receiver.name,
+                        ctx.display(receiver.idx)
+                    )?;
+                }
+                write!(f, ")")
             }
-            Self::Function(x, _pred, _class) => write!(f, "Function({})", ctx.display(*x)),
+            Self::Function { decorated_idx, .. } => {
+                write!(f, "Function({})", ctx.display(*decorated_idx))
+            }
             Self::Import(x) => {
                 write!(
                     f,
@@ -2385,6 +2630,7 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
+            Self::PatternCapture(k) => write!(f, "PatternCapture({})", ctx.display(*k)),
             Self::PromoteForward(k) => write!(f, "PromoteForward({})", ctx.display(*k)),
             Self::ForwardToFirstUse(k) => {
                 write!(f, "ForwardToFirstUse({})", ctx.display(*k))
@@ -2396,8 +2642,8 @@ impl DisplayWith<Bindings> for Binding {
             Self::TypeParameter(tp) => {
                 write!(f, "TypeParameter({}, {}, ..)", tp.identity, tp.kind)
             }
-            Self::PossibleLegacyTParam(k, _) => {
-                write!(f, "PossibleLegacyTParam({})", ctx.display(*k))
+            Self::PossibleLegacyTParam(legacy_tparam, _) => {
+                write!(f, "PossibleLegacyTParam({})", ctx.display(*legacy_tparam))
             }
             Self::AnnotatedType(k1, k2) => {
                 write!(
@@ -2569,6 +2815,20 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, "])")
             }
+            Self::SuppressedException(x) => {
+                write!(f, "SuppressedException([")?;
+                for (i, idx) in x.contexts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ctx.display(*idx))?;
+                }
+                write!(f, "], {:?}, ", x.kind)?;
+                match x.body {
+                    Some(body) => write!(f, "{})", ctx.display(body)),
+                    None => write!(f, "terminated)"),
+                }
+            }
         }
     }
 }
@@ -2584,8 +2844,8 @@ impl Binding {
             | Binding::TypeParameter(_)
             | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
-            Binding::Function(_, _, class_metadata) => {
-                if class_metadata.is_some() {
+            Binding::Function { in_class, .. } => {
+                if *in_class {
                     Some(SymbolKind::Method)
                 } else {
                     Some(SymbolKind::Function)
@@ -2607,6 +2867,7 @@ impl Binding {
             Binding::NameAssign(x) if x.name.as_str() == x.name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }
+            Binding::Sentinel(_) => Some(SymbolKind::Constant),
             Binding::NameAssign(x) => {
                 if x.name
                     .as_str()
@@ -2621,18 +2882,25 @@ impl Binding {
             Binding::LambdaParameter(..) | Binding::FunctionParameter(_) => {
                 Some(SymbolKind::Parameter)
             }
+            Binding::PatternCapture(_) => Some(SymbolKind::Variable),
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
-            Binding::UnpackedValue(_, _, _, _) => Some(SymbolKind::Variable),
+            Binding::ContextValue(_, _, _, _) | Binding::ExceptionHandler(_, _) => {
+                Some(SymbolKind::Variable)
+            }
+            // Receiver-constrained multi-target / unpacked rebinds are
+            // class-shaped — match the `NameAssign` path above.
+            Binding::MultiTargetAssign(_, _, _, Some(_))
+            | Binding::UnpackedValue(_, _, _, _, Some(_)) => Some(SymbolKind::Class),
+            Binding::UnpackedValue(_, _, _, _, None) => Some(SymbolKind::Variable),
             Binding::AugAssign(_, _) => Some(SymbolKind::Variable),
             Binding::Expr(_, _)
             | Binding::StmtExpr(_, _)
-            | Binding::MultiTargetAssign(_, _, _)
+            | Binding::MultiTargetAssign(_, _, _, None)
             | Binding::ReturnExplicit(_)
             | Binding::ReturnImplicit(_)
             | Binding::ReturnType(_)
-            | Binding::ContextValue(_, _, _, _)
             | Binding::AnnotatedType(_, _)
             | Binding::None
             | Binding::Any(_)
@@ -2645,14 +2913,14 @@ impl Binding {
             | Binding::PatternMatchMapping(_, _)
             | Binding::PatternMatchClassPositional(_, _, _, _)
             | Binding::PatternMatchClassKeyword(_)
-            | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_)
             | Binding::AssignToAttribute(_)
             | Binding::UsageLink(_)
             | Binding::AssignToSubscript(_)
             | Binding::Delete(_)
             | Binding::ClassBodyUnknownName(_)
-            | Binding::Exhaustive(_) => None,
+            | Binding::Exhaustive(_)
+            | Binding::SuppressedException(_) => None,
         }
     }
 }
@@ -2704,13 +2972,13 @@ impl DisplayWith<Bindings> for BindingExport {
 
 /// Does an AnnAssign defining an Annotation have a value? Used to validate
 /// some qualifiers like `Final` that require an initial value.
-#[derive(Debug, Clone, Copy, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum AnnAssignHasValue {
     Yes,
     No,
 }
 
-#[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct AnnotationWithTarget {
     pub target: AnnotationTarget,
     pub annotation: Annotation,
@@ -2756,7 +3024,7 @@ impl Display for AnnotationWithTarget {
     }
 }
 
-#[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum AnnotationTarget {
     /// A function parameter with a type annotation
     Param(Name),
@@ -2767,6 +3035,8 @@ pub enum AnnotationTarget {
     /// An annotated assignment. For attribute assignments, the name is the attribute name ("attr" in "x.attr")
     /// Does the annotated assignment have an initial value?
     Assign(Name, AnnAssignHasValue),
+    /// An annotated attribute assignment. The name is the attribute name ("attr" in "x.attr").
+    AttrAssign(Name),
     /// A member of a class
     ClassMember(Name),
 }
@@ -2779,6 +3049,7 @@ impl Display for AnnotationTarget {
             Self::KwargsParam(name) => write!(f, "kwargs `{name}`"),
             Self::Return(name) => write!(f, "`{name}` return"),
             Self::Assign(name, _initialized) => write!(f, "variable `{name}`"),
+            Self::AttrAssign(name) => write!(f, "attribute `{name}`"),
             Self::ClassMember(name) => write!(f, "attribute `{name}`"),
         }
     }
@@ -2792,6 +3063,7 @@ impl AnnotationTarget {
             Self::KwargsParam(_) => TypeFormContext::ParameterKwargsAnnotation,
             Self::Return(_) => TypeFormContext::ReturnAnnotation,
             Self::Assign(_, is_initialized) => TypeFormContext::VarAnnotation(*is_initialized),
+            Self::AttrAssign(_) => TypeFormContext::ClassVarAnnotation,
             Self::ClassMember(_) => TypeFormContext::ClassVarAnnotation,
         }
     }
@@ -2860,7 +3132,7 @@ impl DisplayWith<Bindings> for BindingTParams {
 pub struct BindingClassBaseType {
     pub class_idx: Idx<KeyClass>,
     /// The base class list, as expressions.
-    pub bases: Box<[BaseClass]>,
+    pub bases: Arc<[BaseClass]>,
     pub is_new_type: bool,
 }
 
@@ -2901,6 +3173,7 @@ pub enum ClassFieldDefinition {
     MethodLike {
         definition: Idx<Key>,
         has_return_annotation: bool,
+        annotation: Option<Idx<KeyAnnotation>>,
     },
     /// A nested class definition within the class body.
     /// The definition field stores the Idx<Key> that points to the class binding.
@@ -2911,9 +3184,16 @@ pub enum ClassFieldDefinition {
     /// Implicitly defined in a method, without any explicit reference
     /// in the class body.
     DefinedInMethod {
-        value: Box<ExprOrBinding>,
+        values: Vec<ExprOrBinding>,
         annotation: Option<Idx<KeyAnnotation>>,
+        // Refers to the first method in which the attribute was assigned.
+        // We prioritize recognized constructors over normal methods; if there are multiple
+        // constructors, this refers to the first constructor processed.
         method: MethodThatSetsAttr,
+        // The combined receiver kind of this class field (upgraded to Class if any constructor
+        // assigns to it via `cls.`). We track this separately from `method` to avoid mutating
+        // the method descriptor's own metadata (e.g. keeping `__init__` as an instance method).
+        receiver_kind: MethodSelfKind,
     },
 }
 
@@ -2962,12 +3242,15 @@ impl DisplayWith<Bindings> for ClassFieldDefinition {
                     ctx.display(*definition),
                 )
             }
-            Self::DefinedInMethod { value, .. } => {
-                write!(
-                    f,
-                    "ClassFieldDefinition::DefinedInMethod({}, ..)",
-                    value.display_with(ctx),
-                )
+            Self::DefinedInMethod { values, .. } => {
+                write!(f, "ClassFieldDefinition::DefinedInMethod([")?;
+                for (i, v) in values.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", v.display_with(ctx))?;
+                }
+                write!(f, "], ..)")
             }
         }
     }
@@ -3037,32 +3320,25 @@ impl DisplayWith<Bindings> for BindingVariance {
     }
 }
 
-/// Binding for checking variance violations.
-/// This is separate from BindingVariance to avoid cycles when checking violations.
+/// Class-level diagnostics grouped behind one `EmptyAnswer` key.
+///
+/// Checks that produce answers used by downstream lookups should remain separate keys.
 #[derive(Clone, Debug)]
-pub struct BindingVarianceCheck {
+pub struct BindingClassChecks {
     pub class_idx: Idx<KeyClass>,
 }
 
-impl DisplayWith<Bindings> for BindingVarianceCheck {
+impl DisplayWith<Bindings> for BindingClassChecks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(f, "BindingVarianceCheck({})", ctx.display(self.class_idx))
+        write!(f, "BindingClassChecks({})", ctx.display(self.class_idx))
     }
 }
 
+/// Information about a class that is marked as using array shapes (for shape typing).
 #[derive(Clone, Debug)]
-pub struct BindingConsistentOverrideCheck {
-    pub class_key: Idx<KeyClass>,
-}
-
-impl DisplayWith<Bindings> for BindingConsistentOverrideCheck {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(
-            f,
-            "BindingConsistentOverrideCheck({})",
-            ctx.display(self.class_key)
-        )
-    }
+pub struct ShapedArrayMetadata {
+    pub shape_name: Name,
+    pub range: TextRange,
 }
 
 /// Binding for the class's metadata (anything obtained directly from base classes,
@@ -3071,11 +3347,11 @@ impl DisplayWith<Bindings> for BindingConsistentOverrideCheck {
 pub struct BindingClassMetadata {
     pub class_idx: Idx<KeyClass>,
     /// The base class list, as expressions.
-    pub bases: Box<[BaseClass]>,
+    pub bases: Arc<[BaseClass]>,
     /// The class keywords (these are keyword args that appear in the base class list, the
     /// Python runtime will dispatch most of them to the metaclass, but the metaclass
     /// itself can also potentially be one of these).
-    pub keywords: Box<[(Name, Expr)]>,
+    pub keywords: Box<[(Identifier, Expr)]>,
     /// The class decorators.
     pub decorators: Box<[Idx<KeyDecorator>]>,
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
@@ -3086,6 +3362,11 @@ pub struct BindingClassMetadata {
     pub pydantic_before_validator_fields: Box<[Name]>,
     /// Django-specific field information.
     pub django_field_info: Box<DjangoFieldInfo>,
+    /// `__init__` parameter names to capture for shape inference, extracted from
+    /// `@uses_shape_dsl(..., capture_init=[...])` on a `forward` method.
+    pub capture_init: Option<Box<[Name]>>,
+    /// Shape parameter requested by `@shaped_array(shape="...")`.
+    pub shaped_array_metadata: Option<Box<ShapedArrayMetadata>>,
 }
 
 impl DisplayWith<Bindings> for BindingClassMetadata {
@@ -3095,6 +3376,24 @@ impl DisplayWith<Bindings> for BindingClassMetadata {
             "BindingClassMetadata({}, ..)",
             ctx.display(self.class_idx)
         )
+    }
+}
+
+/// Binding for Django relations in a module, used to synthesize reverse relationships.
+#[derive(Clone, Debug)]
+pub struct BindingDjangoRelations {
+    pub classes: Box<[DjangoRelationClass]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DjangoRelationClass {
+    pub class_idx: Idx<KeyClass>,
+    pub fields: Box<[Idx<KeyClassField>]>,
+}
+
+impl DisplayWith<Bindings> for BindingDjangoRelations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &Bindings) -> fmt::Result {
+        write!(f, "BindingDjangoRelations(len={})", self.classes.len())
     }
 }
 
@@ -3108,6 +3407,24 @@ pub struct BindingClassMro {
 impl DisplayWith<Bindings> for BindingClassMro {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         write!(f, "BindingClassMro({}, ..)", ctx.display(self.class_idx))
+    }
+}
+
+/// Binding for the class's disjoint-base representative. The solver reads
+/// both metadata and MRO for `class_idx`; both must be available, so this
+/// binding must be inserted everywhere `BindingClassMro` is.
+#[derive(Clone, Debug)]
+pub struct BindingClassDisjointBase {
+    pub class_idx: Idx<KeyClass>,
+}
+
+impl DisplayWith<Bindings> for BindingClassDisjointBase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        write!(
+            f,
+            "BindingClassDisjointBase({})",
+            ctx.display(self.class_idx)
+        )
     }
 }
 
@@ -3127,24 +3444,57 @@ impl DisplayWith<Bindings> for BindingAbstractClassCheck {
 }
 
 #[derive(Clone, Debug)]
+pub struct BindingClassSubscriptSymmetry {
+    pub class_idx: Idx<KeyClass>,
+}
+
+impl DisplayWith<Bindings> for BindingClassSubscriptSymmetry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        write!(
+            f,
+            "BindingClassSubscriptSymmetry({})",
+            ctx.display(self.class_idx)
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
 /// A legacy type parameter (`T = typing.TypeVar("T")`).
 pub enum BindingLegacyTypeParam {
     /// The key points directly to an expression that may be a legacy type parameter.
     ParamKeyed(Idx<Key>),
-    /// The key points to a module with an attribute that may be a legacy type parameter.
-    ModuleKeyed(Idx<Key>, Box<Name>),
+    ModuleKeyed(Box<LegacyTypeParamModule>),
+}
+
+/// A module attribute that may be a legacy type parameter. For `pkg.mod.T`, `base` is
+/// the binding for the local name `pkg`, and `attrs` contains `mod` and `T`.
+#[derive(Clone, Debug)]
+pub struct LegacyTypeParamModule {
+    /// The original binding for the dotted reference's base name.
+    pub base: Idx<Key>,
+    /// The attribute path from the base name to the possible type parameter.
+    pub attrs: Vec1<Name>,
+    /// The preceding binding for the same base name, if any.
+    pub prior: Option<Idx<Key>>,
 }
 
 impl DisplayWith<Bindings> for BindingLegacyTypeParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(
-            f,
-            "BindingLegacyTypeParam({})",
-            match self {
-                Self::ParamKeyed(k) => format!("{}", ctx.display(*k)),
-                Self::ModuleKeyed(k, attr) => format!("{}.{attr}", ctx.display(*k)),
+        write!(f, "BindingLegacyTypeParam(")?;
+        match self {
+            Self::ParamKeyed(k) => write!(f, "{}", ctx.display(*k)),
+            Self::ModuleKeyed(module) => {
+                write!(f, "{}", ctx.display(module.base))?;
+                for attr in module.attrs.iter() {
+                    write!(f, ".{}", attr)?;
+                }
+                if let Some(prior) = module.prior {
+                    write!(f, ", prior={}", ctx.display(prior))?;
+                }
+                Ok(())
             }
-        )
+        }?;
+        write!(f, ")")
     }
 }
 
@@ -3152,7 +3502,7 @@ impl BindingLegacyTypeParam {
     pub fn idx(&self) -> Idx<Key> {
         match self {
             Self::ParamKeyed(idx) => *idx,
-            Self::ModuleKeyed(idx, _) => *idx,
+            Self::ModuleKeyed(module) => module.base,
         }
     }
 }

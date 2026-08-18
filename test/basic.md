@@ -34,11 +34,8 @@ $ touch $TMPDIR/pyrefly.toml && \
 ## No errors on our Python code
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check $PYREFLY_PY
+$ touch $(dirname $PYREFLY_PY)/pyrefly.toml && $PYREFLY check $PYREFLY_PY
  INFO 0 errors
-No `pyrefly.toml` found — using preset `basic`.
-Run `pyrefly init` to continue setting up Pyrefly.
-Docs: * (glob)
 [0]
 ```
 
@@ -124,7 +121,7 @@ the upward search.
 $ UPSELL_PROJ=$(mktemp -d -p /tmp upsell.XXXXXX) && \
 > echo "x = 1" > $UPSELL_PROJ/a.py && \
 > cd $UPSELL_PROJ && $PYREFLY check; cd / && rm -rf $UPSELL_PROJ
- INFO Checking current directory with default configuration
+ INFO Checking current directory with auto configuration
  INFO 0 errors* (glob)
 No `pyrefly.toml` found — using preset `basic`.
 Run `pyrefly init` to continue setting up Pyrefly.
@@ -185,7 +182,7 @@ $ MYPY_PARENT=$(mktemp -d -p /tmp upsell.XXXXXX) && \
 ---STDOUT---
 ERROR */app/views/bar.py:1:* (glob)
 ---STDERR---
- INFO Found `*/mypy.ini` marking project root, checking root directory with default configuration (glob)
+ INFO Found `*/mypy.ini` marking project root, checking root directory with auto configuration (glob)
  INFO 1 error* (glob)
 No `pyrefly.toml` found — using settings imported from your `mypy.ini` (preset: legacy).
 Run `pyrefly init` to continue setting up Pyrefly.
@@ -242,8 +239,42 @@ $ python3 -m venv $TMPDIR/venv && \
 > export site_packages=$($TMPDIR/venv/bin/python -c "import site; print(site.getsitepackages()[0])") && \
 > mkdir $site_packages/third_party && \
 > echo "x = 1" > $site_packages/third_party/test2.py && \
-> touch $TMPDIR/pyrefly.toml && \
 > $PYREFLY check $TMPDIR/test.py
+ INFO 0 errors* (glob)
+[0]
+```
+
+## We find a project venv without a config, including for imported files
+
+```scrut {output_stream: stderr}
+$ VENV_PROJECT=$(mktemp -d -p /tmp venv.XXXXXX) && \
+> python3 -m venv $VENV_PROJECT/venv && \
+> site_packages=$($VENV_PROJECT/venv/bin/python -c "import site; print(site.getsitepackages()[0])") && \
+> mkdir $site_packages/third_party && \
+> printf 'def f() -> int:\n    return 1\n' > $site_packages/third_party/test2.py && \
+> mkdir $VENV_PROJECT/pkg && touch $VENV_PROJECT/pkg/__init__.py && \
+> echo "from third_party.test2 import f; g = f" > $VENV_PROJECT/pkg/mod.py && \
+> echo "from pkg.mod import g; from typing import assert_type; assert_type(g(), int)" > $VENV_PROJECT/main.py && \
+> $PYREFLY check $VENV_PROJECT/main.py; STATUS=$?; rm -rf $VENV_PROJECT; exit $STATUS
+ INFO 0 errors* (glob)
+No `pyrefly.toml` found — using preset `basic`.
+Run `pyrefly init` to continue setting up Pyrefly.
+Docs: https://pyrefly.org/en/docs/installation/
+[0]
+```
+
+## We find an interpreter from an active Conda prefix
+
+```scrut {output_stream: stderr}
+$ CONDA_PROJECT=$(mktemp -d -p /tmp conda.XXXXXX) && \
+> python3 -m venv $CONDA_PROJECT/conda && \
+> site_packages=$($CONDA_PROJECT/conda/bin/python -c "import site; print(site.getsitepackages()[0])") && \
+> mkdir $site_packages/third_party && \
+> echo "x = 1" > $site_packages/third_party/test2.py && \
+> touch $CONDA_PROJECT/pyrefly.toml && \
+> echo "import third_party.test2" > $CONDA_PROJECT/test.py && \
+> env -u VIRTUAL_ENV CONDA_PREFIX=$CONDA_PROJECT/conda $PYREFLY check $CONDA_PROJECT/test.py; \
+> STATUS=$?; rm -rf $CONDA_PROJECT; exit $STATUS
  INFO 0 errors* (glob)
 [0]
 ```
@@ -254,5 +285,43 @@ $ python3 -m venv $TMPDIR/venv && \
 $ echo "x: str = 0" > $TMPDIR/test.py && \
 > $PYREFLY check $TMPDIR/test.py --warn=bad-assignment
  INFO 0 errors (1 warning not shown)* (glob)
+[0]
+```
+
+## Main help shows `coverage` subcommand and not the hidden `report` alias
+
+```scrut
+$ $PYREFLY --help | grep -E "^ +(coverage|  report)"
+  coverage     Type coverage commands
+[0]
+```
+
+## `pyrefly coverage report --help` shows correct usage
+
+```scrut
+$ $PYREFLY coverage report --help | grep "^Usage:"
+Usage: pyrefly coverage report [OPTIONS] [FILES]...
+[0]
+```
+
+## Deprecated `pyrefly report` alias emits a warning on stderr
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "def f(x: int) -> int: return x" > $TMPDIR/test.py && \
+> $PYREFLY report $TMPDIR/test.py 2>&1 | grep "warning:"
+warning: `pyrefly report` is deprecated; use `pyrefly coverage report` instead
+[0]
+```
+
+## `pyrefly coverage report` emits modules in a deterministic order across runs
+
+```scrut
+$ cd $TMPDIR && rm -rf detrepo && mkdir detrepo && cd detrepo && touch pyrefly.toml && \
+> for i in 1 2 3 4 5 6; do echo "def f$i() -> int: return $i" > "m$i.py"; done && \
+> $PYREFLY coverage report m1.py m2.py m3.py m4.py m5.py m6.py > a.json 2>/dev/null && \
+> $PYREFLY coverage report m1.py m2.py m3.py m4.py m5.py m6.py > b.json 2>/dev/null && \
+> diff a.json b.json && echo IDENTICAL
+IDENTICAL
 [0]
 ```

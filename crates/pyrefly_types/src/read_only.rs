@@ -29,6 +29,8 @@ pub enum ReadOnlyReason {
     ReadOnlyQualifier,
     /// Field is a frozen dataclass member
     FrozenDataclass,
+    /// Field is frozen by attrs `on_setattr=setters.frozen`
+    AttrsFrozen,
     /// Field is a NamedTuple member
     NamedTuple,
     /// Field is a ClassVar
@@ -39,8 +41,12 @@ pub enum ReadOnlyReason {
     Super,
     /// Field is marked as frozen via a ConfigDict
     PydanticFrozen,
+    /// Field is marked as frozen via pydantic Field(frozen=True)
+    PydanticFrozenField,
     /// Field is an enum member's value
     EnumMemberValue,
+    /// Field is only reachable through `__getattr__`, and the class has no `__setattr__`
+    Getattr,
 }
 
 impl ReadOnlyReason {
@@ -54,6 +60,9 @@ impl ReadOnlyReason {
             }
             ReadOnlyReason::ReadOnlyQualifier => "This field is marked as ReadOnly".to_owned(),
             ReadOnlyReason::FrozenDataclass => "This field is a frozen dataclass member".to_owned(),
+            ReadOnlyReason::AttrsFrozen => {
+                "This field is frozen by attrs `on_setattr=setters.frozen`".to_owned()
+            }
             ReadOnlyReason::NamedTuple => "This field is a NamedTuple member".to_owned(),
             ReadOnlyReason::ClassVar => {
                 "A ClassVar may not be mutated from an instance of the class".to_owned()
@@ -67,8 +76,14 @@ impl ReadOnlyReason {
             ReadOnlyReason::PydanticFrozen => {
                 "This field belongs to a frozen Pydantic model".to_owned()
             }
+            ReadOnlyReason::PydanticFrozenField => {
+                "This field is marked as frozen by Pydantic".to_owned()
+            }
             ReadOnlyReason::EnumMemberValue => {
                 "An enum member's value may not be modified".to_owned()
+            }
+            ReadOnlyReason::Getattr => {
+                "This field is only accessible through `__getattr__`, and the class has no `__setattr__`".to_owned()
             }
         }
     }

@@ -14,8 +14,8 @@
 //! - **nn.ModuleDict[TypedDict]**: When ModuleDict is parameterized with a TypedDict,
 //!   provide precise types for indexing and attribute access instead of generic `Module`.
 //!
-//! Note: nn.Module call forwarding (`__call__` → `forward`) is handled by
-//! `instance_as_dunder_call` in `class_field.rs`.
+//! Note: nn.Module call forwarding (`__call__` -> `forward`) is declared in
+//! the torch stubs with `shape_extensions.ProxyMethod`.
 
 use pyrefly_python::dunder;
 use pyrefly_types::literal::Lit;
@@ -35,7 +35,6 @@ use crate::alt::class::class_field::ClassAttribute;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::types::class::ClassType;
 
 pub fn is_nn_module_dict(cls: &ClassType) -> bool {
@@ -49,30 +48,12 @@ pub fn is_nn_sequential(cls: &ClassType) -> bool {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    /// Check if `cls` is or inherits from `torch.nn.Module`.
-    ///
-    /// Used by `instance_as_dunder_call` (in `class_field.rs`) to fall back to
-    /// `forward` when `__call__` is not found, matching PyTorch's runtime behavior
-    /// where `nn.Module.__call__` delegates to `self.forward()`.
-    pub fn is_nn_module_subclass(&self, cls: &ClassType) -> bool {
-        cls.class_object().has_toplevel_qname("torch.nn", "Module")
-            || self
-                .get_mro_for_class(cls.class_object())
-                .ancestors_no_object()
-                .iter()
-                .any(|ancestor| {
-                    ancestor
-                        .class_object()
-                        .has_toplevel_qname("torch.nn", "Module")
-                })
-    }
-
     /// Chain input through each module in an `nn.Sequential`.
     ///
     /// When `Sequential[M1, M2, M3]` is called with input `x`, threads `x` through
     /// `M1(x)`, then `M2(...)`, then `M3(...)`, returning the final type.
-    /// Each module is called directly: for nn.Module subclasses, `instance_as_dunder_call`
-    /// routes to `forward`; for Callable types, standard callable dispatch applies.
+    /// Each module is called directly: for nn.Module subclasses, the stubbed
+    /// `__call__` proxy routes to `forward`; for Callable types, standard callable dispatch applies.
     /// This preserves shape information across the chain instead of erasing it to `Tensor`.
     ///
     /// Returns `None` when module types are unknown (e.g., `Tuple::Unbounded`),
@@ -222,10 +203,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             // Check if the slice is a string literal
             let key_ty = self.expr_infer(slice, errors);
-            if let Type::Literal(box pyrefly_types::literal::Literal {
-                value: Lit::Str(field_name),
-                ..
-            }) = &key_ty
+            if let Type::Literal(f) = &key_ty
+                && let pyrefly_types::literal::Literal {
+                    value: Lit::Str(field_name),
+                    ..
+                } = &**f
             {
                 // Look up the field in the TypedDict
                 if let Some(metadata) = self
@@ -250,7 +232,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self.error(
                         errors,
                         slice.range(),
-                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        ErrorKind::BadTypedDictKey,
                         format!(
                             "ModuleDict key `{}` not found in TypedDict `{}`",
                             field_name,

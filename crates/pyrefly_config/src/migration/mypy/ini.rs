@@ -18,6 +18,7 @@ use crate::migration::ignore_missing_imports::IgnoreMissingImports;
 use crate::migration::project_excludes::ProjectExcludes;
 use crate::migration::project_includes::ProjectIncludes;
 use crate::migration::python_interpreter::PythonInterpreter;
+use crate::migration::python_platform::PythonPlatformConfig;
 use crate::migration::python_version::PythonVersionConfig;
 use crate::migration::search_path::SearchPath;
 use crate::migration::sub_configs::SubConfigs;
@@ -40,6 +41,7 @@ pub fn parse_mypy_config(ini_path: &Path) -> anyhow::Result<ConfigFile> {
         Box::new(ProjectIncludes),
         Box::new(ProjectExcludes),
         Box::new(PythonInterpreter),
+        Box::new(PythonPlatformConfig),
         Box::new(PythonVersionConfig),
         Box::new(IgnoreMissingImports),
         Box::new(SearchPath),
@@ -63,10 +65,13 @@ pub fn parse_mypy_config(ini_path: &Path) -> anyhow::Result<ConfigFile> {
 mod tests {
     use std::path::PathBuf;
 
+    use pyrefly_python::sys_info::PythonPlatform;
     use pyrefly_util::fs_anyhow;
     use pyrefly_util::globs::Globs;
 
     use super::*;
+    use crate::error_kind::ErrorKind;
+    use crate::error_kind::Severity;
 
     #[test]
     fn test_run_mypy() -> anyhow::Result<()> {
@@ -74,6 +79,9 @@ mod tests {
         let input_path = tmp.path().join("mypy.ini");
         // This config is derived from the pytorch mypy.ini.
         let mypy = r#"[mypy]
+platform = darwin
+check_untyped_defs = True
+allow_redefinition = True
 files =
     src,
     other_src,
@@ -107,6 +115,19 @@ ignore_missing_imports = True
         ])
         .unwrap();
         assert_eq!(cfg.project_includes, project_includes);
+        assert_eq!(
+            cfg.python_environment.python_platform,
+            Some(PythonPlatform::mac())
+        );
+        assert_eq!(cfg.root.check_unannotated_defs, Some(true));
+        assert_eq!(
+            cfg.root
+                .errors
+                .as_ref()
+                .expect("error overrides should migrate")
+                .severity(ErrorKind::Redefinition),
+            Severity::Ignore
+        );
 
         assert_eq!(
             cfg.search_path_from_file,
@@ -125,7 +146,7 @@ ignore_missing_imports = True
         .unwrap();
         assert_eq!(cfg.project_excludes, expected_excludes);
         assert_eq!(cfg.root.ignore_missing_imports.unwrap().len(), 5);
-        assert_eq!(cfg.root.replace_imports_with_any.unwrap().len(), 0);
+        assert_eq!(cfg.root.replace_imports_with_any, None);
         Ok(())
     }
 

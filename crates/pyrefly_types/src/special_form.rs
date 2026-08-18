@@ -59,11 +59,9 @@ pub enum SpecialForm {
 impl SpecialForm {
     pub fn new(name: &Name, annotation: &Expr) -> Option<Self> {
         if name.as_str() == "Generic" {
-            if let Expr::Subscript(ExprSubscript {
-                value: box Expr::Name(x),
-                slice: box Expr::Name(y),
-                ..
-            }) = annotation
+            if let Expr::Subscript(ExprSubscript { value, slice, .. }) = annotation
+                && let Expr::Name(x) = &**value
+                && let Expr::Name(y) = &**slice
                 && x.id == "type"
                 && y.id == "_Generic"
             {

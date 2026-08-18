@@ -23,11 +23,9 @@
 #![deny(clippy::mem_replace_option_with_some)]
 #![deny(clippy::str_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
-#![feature(box_patterns)]
-#![feature(closure_lifetime_binder)]
 
 pub mod alt;
-mod binding;
+pub mod binding;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub mod commands;
@@ -50,6 +48,7 @@ mod solver;
 pub mod state;
 #[cfg(not(target_arch = "wasm32"))]
 mod stubgen;
+#[cfg(test)]
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tsp;

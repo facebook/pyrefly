@@ -39,6 +39,7 @@ use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::state::CancellableTransaction;
 
 pub struct CallerInfo {
@@ -367,7 +368,7 @@ impl CancellableTransaction<'_> {
                         definition_kind.clone(),
                         patched_definition.range,
                         &patched_definition.module,
-                        true,
+                        ReferenceOptions::all(true),
                     )
                     .unwrap_or_default();
 

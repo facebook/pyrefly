@@ -280,6 +280,26 @@ assert_type(f([1], [2]), list[int])
 );
 
 testcase!(
+    test_overloaded_shadow_builtin_range,
+    r#"
+from typing import overload
+
+class Block[T]:
+    pass
+
+@overload
+def range(stop: int) -> Block[int]: ...
+@overload
+def range(stop: int, stop2: int) -> Block[int]: ...
+def range(stop: int, stop2: int | None = None) -> Block[int]:
+    return Block()
+
+def f() -> Block[int]:
+    return range(1)  # E: Returned type `Block[int] | range`
+"#,
+);
+
+testcase!(
     test_unordered_defs,
     r#"
 def f() -> int:
@@ -513,6 +533,195 @@ with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is ma
 );
 
 testcase!(
+    test_all_caps_as_final_reassign,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO = 1
+FOO = 2  # E: Cannot assign to variable `FOO` because it is marked final
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2  # E: Cannot assign to variable `LOCAL` because it is marked final
+
+Bar = 1
+Bar = 2
+"#,
+);
+
+testcase!(
+    test_all_caps_as_final_disabled_by_default,
+    r#"
+FOO = 1
+FOO = 2
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2
+"#,
+);
+
+fn env_all_caps_imported_final() -> TestEnv {
+    let mut t = TestEnv::new().enable_treat_all_caps_as_final();
+    t.add(
+        "foo",
+        r#"
+from typing import Final
+MAX_SIZE: Final = 42
+"#,
+    );
+    t
+}
+
+// Reassigning an ALL_CAPS name that is also imported as final would trigger both
+// the imported-final check and the ALL_CAPS check; only the former should report.
+testcase!(
+    test_all_caps_imported_final_single_error,
+    env_all_caps_imported_final(),
+    r#"
+from foo import MAX_SIZE
+MAX_SIZE = 10  # E: Cannot assign to `MAX_SIZE` because it is imported as final
+"#,
+);
+
+fn env_all_caps_imports() -> TestEnv {
+    let mut t = TestEnv::new().enable_treat_all_caps_as_final();
+    t.add(
+        "foo",
+        r#"
+from typing import Final
+MAX_SIZE: Final = 42
+DEFAULT_NAME = "abc"
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_all_caps_as_final_class_scope,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+class C:
+    ATTR = 1
+    ATTR = 2  # E: Cannot assign to variable `ATTR` because it is marked final
+"#,
+);
+
+// Assigning the same constant once per mutually-exclusive branch is not a
+// reassignment, so no error should fire.
+testcase!(
+    test_all_caps_as_final_branches,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+def f(cond: bool) -> None:
+    if cond:
+        MODE = 1
+    else:
+        MODE = 2
+    print(MODE)
+"#,
+);
+
+// A duplicate PEP 695 type parameter is not a value assignment, so it must
+// report only the duplicate-type-parameter error, not "marked final".
+testcase!(
+    test_all_caps_dup_type_param,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+class C[T, T]: ...  # E: duplicate type parameter
+"#,
+);
+
+// Overload chains rebind the function name but are function definitions, not
+// assignments, so an ALL_CAPS overloaded method must not be flagged.
+testcase!(
+    test_all_caps_overload_method,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+from typing import overload
+class C:
+    @overload
+    def METHOD(self, x: int) -> int: ...
+    @overload
+    def METHOD(self, x: str) -> str: ...
+    def METHOD(self, x): return x
+"#,
+);
+
+// Single-letter uppercase names are still constants: a genuine value
+// reassignment of one is flagged (only type parameters/defs are exempt).
+testcase!(
+    test_all_caps_single_letter_reassign,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+T = 1
+T = 2  # E: Cannot assign to variable `T` because it is marked final
+"#,
+);
+
+// Reassigning an ALL_CAPS type alias reports only the more specific
+// redefinition error, not an additional "marked final" error.
+testcase!(
+    test_all_caps_type_alias_single_error,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+from typing import TypeAlias
+FOO: TypeAlias = int
+FOO = str  # E: Cannot redefine existing type alias `FOO`
+
+type BAR = int
+BAR = str  # E: Cannot redefine existing type alias `BAR`
+"#,
+);
+
+testcase!(
+    test_all_caps_type_checking_branching,
+    env_all_caps_imports(),
+    r#"
+from typing import TYPE_CHECKING
+from foo import DEFAULT_NAME
+if TYPE_CHECKING:
+    from foo import MAX_SIZE
+    from foo import DEFAULT_NAME  # E: Cannot assign to variable `DEFAULT_NAME` because it is marked final
+else:
+    from foo import MAX_SIZE
+"#,
+);
+
+testcase!(
+    test_all_caps_classvar_behavior,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO: bool = True
+class A:
+    FOO: bool = False
+
+    def bar(self, b: bool) -> None:
+        FOO = b
+
+    def baz(self, b: bool) -> None:
+        global FOO
+        FOO = b  # E: Cannot assign to variable `FOO` because it is marked final due to `treat-all-caps-as-final`
+A.FOO = FOO
+"#,
+);
+
+testcase!(
+    test_all_caps_function_behavior,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO = True
+
+def bar(b: bool):
+    FOO = b
+
+def baz(b: bool):
+    global FOO
+    FOO = b  # E: Cannot assign to variable `FOO` because it is marked final due to `treat-all-caps-as-final`
+
+"#,
+);
+
+testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type
@@ -712,7 +921,7 @@ testcase!(
     r#"
 from typing import assert_type
 x1: dict[str, int] = {"foo": 1, **{"bar": 2}}
-x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `dict[str, int | str]` is not assignable to `dict[str, int]`
+x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `Literal['bar']` is not assignable to dict value type `int`
 assert_type({"foo": 1, **{"bar": "bar"}}, dict[str, int | str])
 {"foo": 1, **1}  # E: Expected a mapping, got Literal[1]
 "#,
@@ -952,6 +1161,34 @@ def test(
 );
 
 testcase!(
+    test_ellipsis_invalid_type_form,
+    r#"
+from typing import Callable, ParamSpec, TypeVar, Generic
+
+# `...` leaking into non-ParamSpec positions is rejected.
+class C1[T: ...]: ...                # E: `...` is not allowed in this context
+x1: list[...]                        # E: `...` cannot be used for type parameter
+x2: dict[int, ...]                   # E: `...` cannot be used for type parameter
+x3: type[...]                        # E: `...` is not allowed in this context
+TBad = TypeVar("TBad", bound=...)    # E: `...` is not allowed in this context
+
+# Still rejected via existing paths.
+def g() -> ...: ...                  # E: Expression cannot be used in annotations
+y_ret: Callable[..., ...]            # E: `...` is not a valid return type
+y_tup: tuple[...]                    # E: Invalid position for `...`
+
+# `...` remains valid where a ParamSpec or homogeneous tuple is expected.
+T = TypeVar("T")
+P = ParamSpec("P")
+ok1: Callable[..., int]
+ok2: tuple[int, ...]
+PD = ParamSpec("PD", default=...)
+class X(Generic[T, P]): ...
+def f(a: X[int, ...]) -> None: ...
+"#,
+);
+
+testcase!(
     test_invalid_type_arguments,
     r#"
 from typing import assert_type
@@ -1085,6 +1322,30 @@ def f(x: int | str) -> None:
 );
 
 testcase!(
+    test_kw_call_transparent_for_subtyping,
+    r#"
+from dataclasses import dataclass
+from typing import Any
+
+class Foo:
+    x: int = 0
+
+def takes_type_foo(cls: type[Foo]) -> None: ...
+
+def returns_type_foo() -> type[Foo]:
+    return dataclass(Foo)
+
+foo_cls: type[Foo] = dataclass(Foo)
+any_cls: type[Any] = dataclass(Foo)
+wrong_cls: type[int] = dataclass(Foo)  # E: `type[Foo]` is not assignable to `type[int]`
+takes_type_foo(dataclass(Foo))
+
+def make_dynamic_dataclass(base: type) -> type:
+    return dataclass(type(f"Dynamic{base.__name__}", (), {"__annotations__": {"x": int}}))
+"#,
+);
+
+testcase!(
     test_assert_nonetype,
     r#"
 from types import NoneType
@@ -1186,6 +1447,16 @@ assert_type(A, type[A])
 );
 
 testcase!(
+    test_assert_type_metaclass,
+    r#"
+from typing import assert_type
+class Meta(type): pass
+class A(metaclass=Meta): pass
+assert_type(A, Meta)  # E: assert_type(type[A], Meta) failed
+    "#,
+);
+
+testcase!(
     test_compare_int_str_error,
     r#"
 0 < "oops"  # E: Argument `Literal['oops']` is not assignable to parameter `value` with type `int`
@@ -1225,7 +1496,51 @@ a = True if # E: Parse
 testcase!(
     test_syntax_error_resulting_in_empty_defintion,
     r#"
-@:a=1 # E: Parse # E: Could not find name `a`
+@:a=1 # E: Parse
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_decorator_slice,
+    r#"
+@:[ # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_star,
+    r#"
+x = object()
+match x:
+    case [*]: # E: Parse
+        pass
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_bindings,
+    r#"
+x = object()
+match x:
+    case as: # E: Parse
+        pass
+match x:
+    case {**}: # E: Parse
+        pass
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_import_name,
+    r#"
+from os import , # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_import_python_empty_import_name,
+    r#"
+import_python("a.b.c.cinc", "")
     "#,
 );
 
@@ -1407,7 +1722,7 @@ testcase!(
     test_typing_alias,
     r#"
 from typing import Dict, assert_type
-y: Dict[str, int] = {"test": "test"} # E: `dict[str, str]` is not assignable to `dict[str, int]`
+y: Dict[str, int] = {"test": "test"} # E: `Literal['test']` is not assignable to dict value type `int`
 assert_type(y, dict[str, int])
 "#,
 );
@@ -1820,6 +2135,14 @@ testcase!(
 );
 
 testcase!(
+    test_crash_on_incomplete_named_walrus_attribute_annotation,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/3344
+(a:=).:b  # E: Cannot annotate non-self attribute `a:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Could not find name `b`
+"#,
+);
+
+testcase!(
     test_crash_on_incomplete_walrus,
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/2093
@@ -1832,6 +2155,22 @@ testcase!(
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/1991
 1 += (c := 1)  # E: Parse error: Invalid augmented assignment target
+"#,
+);
+
+testcase!(
+    test_crash_on_decorator_assign,
+    r#"
+from typing import TypeVar
+@T=TypeVar()  # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
+"#,
+);
+
+testcase!(
+    test_crash_on_multi_target_named_tuple,
+    r#"
+from typing import NamedTuple
+a = b = NamedTuple("b", [("x", int)])
 "#,
 );
 
@@ -1980,6 +2319,7 @@ testcase!(
     r#"
 def f(x: int = "test"): # E: Default `Literal['test']` is not assignable to parameter `x` with type `int`
     pass
+f()  # Make sure we don't get a cascading bad-argument-type error
 "#,
 );
 
@@ -2174,7 +2514,7 @@ def __getattr__(name: str) -> Any: ...
 testcase!(
     test_ellipsis_default_source,
     r#"
-def f(x: bool = ...):  # E: Default `Ellipsis` is not assignable to parameter `x` with type `bool`
+def f(x: bool = ...):  # E: Default `EllipsisType` is not assignable to parameter `x` with type `bool`
     pass
     "#,
 );
@@ -2368,6 +2708,33 @@ def f(x):
     y &= x
     assert_type(y, Any)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2221
+testcase!(
+    test_shutil_copyfileobj_with_urlopen,
+    r#"
+import shutil
+import urllib.request as request
+with request.urlopen("https://example.com") as remote, open("out.html", 'wb') as local:
+    shutil.copyfileobj(remote, local)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2866
+testcase!(
+    test_reduce_gcd_return_type,
+    r#"
+from functools import reduce
+from math import gcd
+
+def detect_indentation(values: list[int]) -> int:
+    try:
+        indentation = reduce(gcd, [v for v in values if not v % 2]) or 1
+    except TypeError:
+        indentation = 1
+    return indentation
+"#,
 );
 
 // Regression test for https://github.com/facebook/pyrefly/issues/3048

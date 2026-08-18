@@ -1,0 +1,111 @@
+---
+title: Mypy ignore_missing_imports in Pyrefly
+slug: /migrate/mypy/ignore-missing-imports
+description:
+    Understand mypy ignore_missing_imports, its Pyrefly equivalent, and when to
+    use ignore-missing-imports instead of replacing all imports with Any.
+keywords:
+    - mypy ignore_missing_imports
+    - ignore missing imports mypy
+    - pyrefly missing import
+    - mypy import error
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Mypy's `ignore_missing_imports` suppresses errors when an imported module cannot
+be resolved. In a per-module override the pattern matches the **imported
+module**, not the file that contains the import. Pyrefly's equivalent works the
+same way.
+
+## Mypy configuration
+
+```toml
+[tool.mypy]
+
+[[tool.mypy.overrides]]
+module = ["optional_vendor.*"]
+ignore_missing_imports = true
+```
+
+## Pyrefly equivalent
+
+```toml
+ignore-missing-imports = ["optional_vendor.*"]
+```
+
+`pyrefly init` converts both per-module and global mypy import suppression into
+this list. A global `ignore_missing_imports = true` becomes the module glob
+`"*"`.
+
+## Do not confuse the two Pyrefly settings
+
+| Setting                              | Behavior                                                                                                           |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `ignore-missing-imports`             | Substitutes `Any` only when the matched module cannot be found. If it is found, its real type information is used. |
+| `replace-imports-with-any`           | Always substitutes `Any` for the matched module, even when source or stubs are available.                          |
+| `[errors] missing-import = "ignore"` | Suppresses missing-import diagnostics everywhere, rather than for selected modules.                                |
+
+Prefer `ignore-missing-imports` for optional dependencies.
+`replace-imports-with-any` is the closer match for mypy's
+`follow_imports = "skip"`, and it is a much stronger escape hatch.
+
+:::warning
+
+`pyrefly init` currently groups `follow_imports = "skip"` with
+`ignore_missing_imports`, so a migrated `skip` rule lands in
+`ignore-missing-imports` and keeps type information for modules that do resolve.
+Inspect the generated list and move entries to `replace-imports-with-any` where
+you need mypy's unconditional `skip` behavior.
+
+:::
+
+## Diagnose before suppressing
+
+An unresolved import is often a misconfigured environment rather than a missing
+dependency. Check that:
+
+1. the dependency is installed in the interpreter Pyrefly queries;
+2. `python-interpreter-path` selects the intended environment;
+3. your source roots are listed in `search-path`;
+4. custom stubs live in `site-package-path`;
+5. the module name matches the package layout.
+
+If the module resolves from the command line but not in the IDE, or the other
+way round, the two are using different configs or different interpreters.
+
+## Example migration
+
+Mypy:
+
+```ini
+[mypy]
+mypy_path = src
+
+[mypy-vendor_sdk.*]
+ignore_missing_imports = True
+```
+
+Pyrefly:
+
+```toml
+search-path = ["src"]
+ignore-missing-imports = ["vendor_sdk.*"]
+```
+
+Pyrefly supports mypy's
+[module name pattern syntax](https://mypy.readthedocs.io/en/stable/config_file.html#config-file-format);
+see [Module Globbing](../../configuration.mdx#module-globbing) for the exact
+matching rules.
+
+## Related guides
+
+- [Migrate from mypy](index.mdx)
+- [Mypy config reference](config-reference.mdx)
+- [`reportMissingImports` for Pyright users](../pyright/missing-imports.mdx)
+- [Import resolution](../../import-resolution.mdx)

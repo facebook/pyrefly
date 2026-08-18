@@ -190,13 +190,11 @@ pub fn derive_v2_response(
         };
     }
     match reason {
-        Some(SynthesizedPresetReason::IdeOverride) => {
-            // The IdeOverride reason is set by the unconfigured resolver
-            // when the user explicitly chose a non-`Auto` value for the
-            // `python.pyrefly.typeCheckingMode` workspace setting AND no
-            // nearby `pyrefly.toml` was found, so we surface both facts.
-            // Fall back to `<unknown>` only if the workspace state and
-            // the reason somehow disagree — shouldn't happen in practice.
+        Some(SynthesizedPresetReason::UserOverride) => {
+            // In the LSP this is produced by the unconfigured resolver
+            // when the user chose a non-`Auto` `typeCheckingMode`. On the
+            // CLI it comes from `--preset`. Either way the user made a
+            // deliberate choice, so we just surface the current value.
             let value = workspace_type_checking_mode
                 .map(type_checking_mode_kebab)
                 .unwrap_or("<unknown>");
@@ -292,6 +290,7 @@ fn type_checking_mode_kebab(mode: TypeCheckingMode) -> &'static str {
         TypeCheckingMode::Legacy => "legacy",
         TypeCheckingMode::Default => "default",
         TypeCheckingMode::Strict => "strict",
+        TypeCheckingMode::All => "all",
     }
 }
 
@@ -327,10 +326,10 @@ mod tests {
         use crate::state::lsp::TypeCheckingMode;
 
         #[test]
-        fn ide_override_yields_null_label() {
+        fn user_override_yields_null_label() {
             let r = derive_v2_response(
-                Some(SynthesizedPresetReason::IdeOverride),
-                &ConfigSource::Synthetic,
+                Some(SynthesizedPresetReason::UserOverride),
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 Some(TypeCheckingMode::Strict),
@@ -352,7 +351,7 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
                     MigratedConfigSource::DedicatedFile,
                 ))),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -368,7 +367,7 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
                     MigratedConfigSource::PyprojectToml,
                 ))),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -384,7 +383,7 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(
                     MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile),
                 )),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -399,7 +398,7 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(
                     MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml),
                 )),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -416,7 +415,7 @@ mod tests {
         fn no_nearby_config_yields_basic_label() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::NoNearbyConfig),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -493,7 +492,7 @@ mod tests {
         /// know which knob to flip.
         #[test]
         fn workspace_kill_switch_yields_errors_off_label() {
-            let r = derive_v2_response(None, &ConfigSource::Synthetic, false, true, None);
+            let r = derive_v2_response(None, &ConfigSource::Synthetic(None), false, true, None);
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("python.pyrefly.disableTypeErrors"));
         }
@@ -506,7 +505,7 @@ mod tests {
         fn workspace_kill_switch_wins_over_preset_reason() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::NoNearbyConfig),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 true,
                 None,

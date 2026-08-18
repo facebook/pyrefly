@@ -21,9 +21,12 @@ use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Identifier;
 
+use crate::dimension::gradual_size;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::heap::TypeHeap;
+use crate::quantified::Quantified;
+use crate::quantified::QuantifiedKind;
 use crate::simplify::unions;
 use crate::stdlib::Stdlib;
 use crate::types::Type;
@@ -62,12 +65,24 @@ impl Restriction {
         matches!(self, Self::Bound(_) | Self::Constraints(_))
     }
 
-    pub(crate) fn as_type(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
+    fn as_type(&self, stdlib: &Stdlib, heap: &TypeHeap, kind: QuantifiedKind) -> Type {
         match self {
             Self::Bound(t) => t.clone(),
             Self::Constraints(ts) => unions(ts.clone(), heap),
-            Self::Unrestricted => stdlib.object().clone().to_type(),
+            Self::Unrestricted => match kind {
+                QuantifiedKind::TypeVar => stdlib.object().clone().to_type(),
+                QuantifiedKind::IntVar => gradual_size(),
+                QuantifiedKind::ParamSpec => Type::Ellipsis,
+                QuantifiedKind::TypeVarTuple => Type::any_tuple(),
+            },
         }
+    }
+}
+
+impl Quantified {
+    /// The upper bound of this type parameter as a type.
+    pub fn upper_bound(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
+        self.restriction.as_type(stdlib, heap, self.kind)
     }
 }
 
@@ -146,6 +161,7 @@ impl Display for Variance {
 #[derive(Debug, PartialEq, TypeEq, Eq, Ord, PartialOrd)]
 struct TypeVarInner {
     qname: QName,
+    kind: QuantifiedKind,
     restriction: Restriction,
     default: Option<Type>,
     /// The variance if known, or None for infer_variance=True
@@ -160,9 +176,28 @@ impl TypeVar {
         default: Option<Type>,
         variance: PreInferenceVariance,
     ) -> Self {
+        Self::new_with_kind(
+            name,
+            module,
+            QuantifiedKind::TypeVar,
+            restriction,
+            default,
+            variance,
+        )
+    }
+
+    pub fn new_with_kind(
+        name: Identifier,
+        module: Module,
+        kind: QuantifiedKind,
+        restriction: Restriction,
+        default: Option<Type>,
+        variance: PreInferenceVariance,
+    ) -> Self {
         Self(ArcId::new(TypeVarInner {
             // TODO: properly take parent from caller of new()
             qname: QName::new(name, NestingContext::toplevel(), module),
+            kind,
             restriction,
             default,
             variance,
@@ -175,6 +210,10 @@ impl TypeVar {
 
     pub fn restriction(&self) -> &Restriction {
         &self.0.restriction
+    }
+
+    pub fn kind(&self) -> QuantifiedKind {
+        self.0.kind
     }
 
     pub fn default(&self) -> Option<&Type> {
@@ -190,9 +229,8 @@ impl TypeVar {
     }
 
     /// The upper bound of this legacy TypeVar as a type.
-    /// TypeVar is always of TypeVar kind, so unrestricted defaults to `object`.
-    pub fn bound_type(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
-        self.restriction().as_type(stdlib, heap)
+    pub fn upper_bound(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
+        self.restriction().as_type(stdlib, heap, self.kind())
     }
 
     pub fn type_eq_inner(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {

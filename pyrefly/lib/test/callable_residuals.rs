@@ -21,6 +21,7 @@
  * behavior.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 // Make sure no residual type leaks into user output, when a residual
@@ -221,7 +222,7 @@ from typing import Callable, reveal_type
 def identity_tuple[*Ts, R](x: Callable[[*Ts], R]) -> Callable[[*Ts], R]:
     return x
 result = identity_tuple(identity_tuple)
-reveal_type(result)  # E: revealed type: [Ts, R](**tuple[(**tuple[*Ts]) -> R]) -> (**tuple[*Ts]) -> R
+reveal_type(result)  # E: revealed type: [*Ts, R](**tuple[(**tuple[*Ts]) -> R]) -> (**tuple[*Ts]) -> R
 "#,
 );
 
@@ -245,7 +246,7 @@ from typing import Callable, reveal_type
 def identity[**P, T](x: Callable[P, T]) -> Callable[P, T]:
     return x
 result = identity(identity)
-reveal_type(result)  # E: revealed type: [P, T](x: (ParamSpec(P)) -> T) -> (ParamSpec(P)) -> T
+reveal_type(result)  # E: revealed type: [**P, T](x: (ParamSpec(P)) -> T) -> (ParamSpec(P)) -> T
 "#,
 );
 
@@ -321,7 +322,7 @@ class Wrapper[**P, R]:
 def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
 assert_type(wrapper(1), int)
 "#,
 );
@@ -344,7 +345,7 @@ def wrap[**P, R](f: Callable[P, R]) -> Wrapper[P, R]:
 def f[S](x: S) -> S: ...
 wrapper = wrap(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
 assert_type(wrapper(1), int)
 "#,
 );
@@ -362,7 +363,7 @@ class Wrapper[**P, R]:
 def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
 reveal_type(wrapper)  # E: revealed type: Wrapper[[x: GenericResidual@R], GenericResidual@R]
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
 "#,
 );
 
@@ -386,7 +387,6 @@ reveal_type(c.x)  # E: revealed type: Unknown
 );
 
 testcase!(
-    bug = "Generic class constructors don't work with ParamSpec",
     test_param_spec_generic_constructor,
     r#"
 from typing import Callable, reveal_type
@@ -397,13 +397,43 @@ class C[T]:
   def __init__(self, x: T) -> None:
     self.x = x
 c2 = identity(C)
-reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
+reveal_type(c2)  # E: revealed type: [T](x: T) -> C[T]
 x: C[int] = c2(1)
 "#,
 );
 
 testcase!(
-    bug = "Constructor identity still erases ParamSpec/return generics to Ellipsis/Unknown (and/or partial types)",
+    test_overloaded_generic_new_constructor_callable,
+    TestEnv::one_with_path(
+        "constructor_stub",
+        "constructor_stub.pyi",
+        r#"
+from typing import overload
+
+class C[T = str]:
+    @overload
+    def __new__(cls) -> C[T]: ...
+    @overload
+    def __new__(cls, value: T, /) -> C[T]: ...
+"#,
+    ),
+    r#"
+from collections.abc import Callable
+from typing import assert_type
+from constructor_stub import C
+
+def call0[R](ctor: Callable[[], R]) -> R:
+    return ctor()
+
+def identity[**P, R](ctor: Callable[P, R]) -> Callable[P, R]:
+    return ctor
+
+assert_type(call0(C), C[str])
+assert_type(identity(C)(1), C[int])
+"#,
+);
+
+testcase!(
     test_callable_class_constructor_identity,
     r#"
 from typing import Callable, reveal_type
@@ -419,9 +449,36 @@ class Wrapper[**P, R]:
         return self.fn(*args, **kwargs)
 
 ctor = identity(Wrapper)
-reveal_type(ctor)  # E: revealed type: (fn: (...) -> Unknown) -> Wrapper[Ellipsis, Unknown]
+reveal_type(ctor)  # E: revealed type: [**P, R](fn: (ParamSpec(P)) -> R) -> Wrapper[P, R]
 identity2 = ctor(identity)
-reveal_type(identity2.__call__)  # E: revealed type: (Wrapper[Ellipsis, Unknown], ...) -> Unknown
+reveal_type(identity2.__call__)  # E: revealed type: [**P, R](self: Wrapper[[x: (ParamSpec(P)) -> R], (ParamSpec(P)) -> R], x: (ParamSpec(P)) -> R) -> (ParamSpec(P)) -> R
+"#,
+);
+
+testcase!(
+    test_overloaded_constructor_return_only_class_tparam,
+    r#"
+from collections import defaultdict
+
+def consume(metrics: dict[str, list[float]]) -> None: ...
+
+metrics = defaultdict(list)
+metrics["runtime"].append(1.0)
+consume(metrics)
+"#,
+);
+
+testcase!(
+    test_constructor_overload_with_specialized_self,
+    r#"
+import contextlib
+from typing import Any, Callable
+
+null_context = contextlib.nullcontext
+
+def consume(
+    factory: Callable[[], contextlib.AbstractContextManager[Any]] = null_context,
+) -> None: ...
 "#,
 );
 
@@ -438,7 +495,7 @@ def multi(x: str) -> int: ...  # E: Overload return type `int` is not assignable
 def multi(*args, **kwargs): ...
 
 result = transform(multi)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (x: int, y: str) -> bool (x: str) -> int ]
 assert_type(result(1, "ok"), bool)
 result("ok")
 "#,
@@ -458,7 +515,7 @@ def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to 
 def f(x): ...
 
 result = identity(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (x: int) -> str (x: str) -> int ]
 assert_type(result(1), str)
 result("ok")
 "#,
@@ -478,7 +535,7 @@ def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to 
 def f(x): ...
 
 result = identity(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> str (str) -> int ]
 assert_type(result(1), str)
 result("ok")
 "#,
@@ -498,7 +555,7 @@ def f(x: str, y: int) -> bytes: ...  # E: Overload return type `bytes` is not as
 def f(x, y): ...
 
 result = identity(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int, str) -> bool (str, int) -> bytes ]
 assert_type(result(1, "ok"), bool)
 result("x", "ok")  # E: No matching overload found for function `typing.overload` called with arguments: (Literal['x'], Literal['ok'])
 result(1, 1)  # E: No matching overload found for function `typing.overload` called with arguments: (Literal[1], Literal[1])
@@ -518,7 +575,7 @@ def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to 
 def f(x): ...
 
 result = higher_order(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (list[int]) -> str (list[str]) -> int ]
 assert_type(result([1]), str)
 assert_type(result(["ok"]), int)
 "#,
@@ -537,7 +594,7 @@ def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to 
 def f(x): ...
 
 result = higher_order(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> list[str] (str) -> list[int] ]
 assert_type(result(1), list[str])
 assert_type(result("ok"), list[int])
 "#,
@@ -559,7 +616,23 @@ def f(x: bytes) -> bytes: ...  # E: Overload return type `bytes` is not assignab
 def f(x): ...
 
 result = project(f, object())
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> object (str) -> object (bytes) -> object ]
+"#,
+);
+
+testcase!(
+    test_overload_pruning_commits_nested_generic_constraints,
+    r#"
+from typing import Any, Iterable, assert_type, overload
+
+@overload
+def collect() -> list[Any]: ...
+@overload
+def collect[T](xs: Iterable[T]) -> list[T]: ...
+def collect(xs: Any = ()) -> Any: ...
+
+rows: list[list[int]] = [[1], [2]]
+assert_type(list(map(collect, rows)), list[list[int]])
 "#,
 );
 
@@ -656,7 +729,7 @@ def f(x: bytes) -> str: ...  # E: Overload return type `str` is not assignable t
 def f(x): ...
 
 result = project(f, 1)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> int (str) -> int ]
 assert_type(result(1), int)
 assert_type(result("ok"), int)
 "#,
@@ -678,7 +751,7 @@ def f(x) -> str: ...
 # Both branches return str, so S=str is compatible with all branches.
 # No pruning occurs; the result should be a full overload.
 result = project(f, "ok")
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> str (bytes) -> str ]
 assert_type(result(1), str)
 assert_type(result(b"ok"), str)
 "#,
@@ -718,7 +791,7 @@ def f(x: str) -> int: ...
 def f(x) -> str | int: ...
 
 result = identity(identity)(f)
-reveal_type(result)  # E: revealed type: Overload[
+reveal_type(result)  # E: revealed type: Overload[ (int) -> str (str) -> int ]
 assert_type(result(1), str)
 assert_type(result("ok"), int)
 "#,
@@ -743,7 +816,7 @@ def f(x: str) -> int: ...
 def f(x) -> str | int: ...
 
 wrapper = Wrapper(f)
-reveal_type(wrapper.fn)  # E: revealed type: Overload[
+reveal_type(wrapper.fn)  # E: revealed type: Overload[ (int) -> str (str) -> int ]
 assert_type(wrapper(1), str)
 assert_type(wrapper("ok"), int)
 "#,
@@ -788,6 +861,73 @@ result = lift(f)
 reveal_type(result)  # E: revealed type: Callback[OverloadResidual@[int, str], OverloadResidual@[str, int]]
 assert_type(result(1), str)
 assert_type(result("ok"), int)
+"#,
+);
+
+testcase!(
+    test_await_preserves_overload_residual_in_callback_protocol,
+    r#"
+import asyncio
+from functools import partial
+from typing import Callable, Protocol, assert_type, overload
+
+class Callback[A, R](Protocol):
+    def __call__(self, x: A) -> R: ...
+
+def lift[A, R](f: Callable[[A], R]) -> Callback[A, R]: ...
+
+@overload
+def f(x: int) -> str: ...
+@overload
+def f(x: str) -> int: ...
+def f(x: int | str) -> int | str: ...
+
+async def test() -> None:
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(lift, f))
+    assert_type(result(1), str)
+    assert_type(result("ok"), int)
+"#,
+);
+
+testcase!(
+    test_await_resolves_overload_forwarded_through_paramspec,
+    r#"
+import asyncio
+import subprocess
+from typing import assert_type
+
+async def test() -> None:
+    result = await asyncio.to_thread(
+        subprocess.run,
+        ["printf", "ok"],
+        capture_output=True,
+        text=True,
+    )
+    assert_type(result, subprocess.CompletedProcess[str])
+    assert_type(result.stdout + result.stderr, str)
+"#,
+);
+
+testcase!(
+    test_await_resolves_overload_forwarded_through_typevartuple,
+    r#"
+from collections.abc import Callable, Iterator
+from typing import TypeVar, TypeVarTuple, Unpack, assert_type
+
+Args = TypeVarTuple("Args")
+R = TypeVar("R")
+
+async def run_sync(
+    func: Callable[[Unpack[Args]], R],
+    *args: Unpack[Args],
+) -> R: ...
+
+async def test(iterator: Iterator[str]) -> None:
+    value = await run_sync(next, iterator, None)
+    assert_type(value, str | None)
+    if value is not None:
+        assert_type(value, str)
 "#,
 );
 
@@ -860,4 +1000,110 @@ def foo(tmpdir):
 def bar(tmpdir):
     shutil.rmtree(tmpdir, ignore_errors=True)
 "#,
+);
+
+// Regression test for a panic when pruning against a residual Variable
+// in the case where overload analysis merged the Quantified with a partial
+// type (behavior for Recursive / Unwrap is the same).
+testcase!(
+    test_overload_residual_with_partial_quantified_var,
+    r#"
+from typing import overload, Callable, assert_type
+
+class C[T]:
+    @overload
+    def method(self, x: T) -> T: ...
+    @overload
+    def method(self, x: str) -> str: ...
+    def method(self, x): return x
+
+def apply[U](fn: Callable[[U], U], default: U) -> U: ...
+
+c = C()
+result = apply(c.method, 42)
+assert_type(result, int)
+    "#,
+);
+
+// Regression test for a panic when converting a residual Variable to a Type
+// in the case where overload analysis merged the Quantified with a partial
+// type (behavior for Recursive / Unwrap is the same).
+testcase!(
+    test_overload_residual_with_partial_contained_var,
+    r#"
+from typing import overload, Any, Callable, assert_type, reveal_type
+
+class C[T]:
+    def __init__(self, items: list[T]) -> None: ...
+    @overload
+    def method(self, x: T) -> T: ...
+    @overload
+    def method(self, x: str) -> str: ...
+    def method(self, x): return x
+
+def apply[U](fn: Callable[[U], U]) -> U: ...
+
+c = C([])
+result = apply(c.method)
+# The partial type for `c` does not get pinned, so it resolves to Unknown
+assert_type(result, str | Any)
+assert_type(c, C[Any])
+    "#,
+);
+
+testcase!(
+    test_overload_residual_in_param_default,
+    r#"
+from typing import Callable, assert_type
+class A(int): ...
+def f[T](x: int, y: Callable[[int], T] = A) -> T:
+    return y(x)
+assert_type(f(0), A)
+    "#,
+);
+
+// Regression test for a false `incompatible-overload-residual` error when
+// passing a generic overloaded function (like `operator.add`) to a
+// higher-order function (like `functools.reduce`). The overload's first
+// branch (`SupportsAdd`) is applicable, but a self-referential probe var
+// leaking into the captured residual bound used to prune every branch.
+testcase!(
+    test_overload_residual_generic_protocol_arg_not_pruned,
+    r#"
+from typing import Callable, Iterable, TypeVar, Protocol, assert_type, overload
+
+# Protocol type vars (distinct identities, mirroring _typeshed).
+_PTc = TypeVar("_PTc", contravariant=True)
+_PTco = TypeVar("_PTco", covariant=True)
+class SupportsAdd(Protocol[_PTc, _PTco]):
+    def __add__(self, x: _PTc, /) -> _PTco: ...
+class SupportsRAdd(Protocol[_PTc, _PTco]):
+    def __radd__(self, x: _PTc, /) -> _PTco: ...
+
+# add's own type vars (distinct identities, mirroring _operator).
+_Tcontra = TypeVar("_Tcontra", contravariant=True)
+_Tco = TypeVar("_Tco", covariant=True)
+@overload
+def add(a: SupportsAdd[_Tcontra, _Tco], b: _Tcontra, /) -> _Tco: ...
+@overload
+def add(a: _Tcontra, b: SupportsRAdd[_Tcontra, _Tco], /) -> _Tco: ...
+def add(a, b, /) -> object: ...
+
+_T = TypeVar("_T")
+def reduce(function: Callable[[_T, _T], _T], iterable: Iterable[_T], /) -> _T: ...
+
+lists: list[list[str]] = [["a"], ["b"]]
+y = reduce(add, lists)
+assert_type(y, list[str])
+    "#,
+);
+
+testcase!(
+    test_overload_residual_generic_protocol_rejects_mixed_union_arg,
+    r#"
+from functools import reduce
+from operator import add
+xs: list[int | str] = [1, "x"]
+reduce(add, xs)  # E: Overload type was not compatible with solved type variables: _T = int | str
+    "#,
 );
