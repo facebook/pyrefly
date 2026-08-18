@@ -12,6 +12,5 @@ pub(crate) mod conda;
     reason = "environment is both the module group and public API"
 )]
 pub mod environment;
-pub(crate) mod finder;
 pub mod interpreters;
 pub(crate) mod venv;

@@ -191,7 +191,7 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
 
         // we print the errors here instead of returning them since
         // it gives the most immediate feedback for config loading errors
-        for error in errors.drain(..).chain(config.configure()) {
+        for error in errors.drain(..).chain(config.configure_at(root)) {
             error.print();
         }
         let config = ArcId::new(config);

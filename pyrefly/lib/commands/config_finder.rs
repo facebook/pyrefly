@@ -72,7 +72,7 @@ pub trait ConfigConfigurer: Send + Sync + 'static {
     ) -> (ArcId<ConfigFile>, Vec<ConfigError>);
 }
 
-/// A basic [`ConfigConfigurer`] implementation that only calls [`ConfigFile::configure()`]
+/// A basic [`ConfigConfigurer`] implementation that only calls [`ConfigFile::configure_at()`]
 /// and returns the configured config. Any errors are ignored, and an empty [`Vec<ConfigError>`]
 /// is always returned.
 pub struct DefaultConfigConfigurer {}
@@ -87,7 +87,7 @@ impl ConfigConfigurer for DefaultConfigConfigurer {
         // The CLI never has an explicit IDE override, so always pass
         // `Auto` and let the resolver auto-detect.
         apply_unconfigured_resolver_if_applicable(&mut config, root, UnconfiguredOverride::Auto);
-        config.configure();
+        config.configure_at(root);
         (ArcId::new(config), Vec::new())
     }
 }
@@ -162,7 +162,7 @@ impl ConfigConfigurer for DefaultConfigConfigurerWithOverrides {
         mut errors: Vec<ConfigError>,
     ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
         apply_unconfigured_resolver_if_applicable(&mut config, root, self.args.preset().into());
-        let (c, mut configure_errors) = self.args.override_config(config);
+        let (c, mut configure_errors) = self.args.override_config_at(config, root);
         if self.ignore_errors {
             errors.clear();
         } else {
@@ -275,7 +275,7 @@ pub fn standard_config_finder(
                     .entry(path.clone())
                     .or_insert_with(|| {
                         let (config, errors) = configure2.configure(
-                            path.parent(),
+                            Some(&path),
                             ConfigFile::init_at_root(&path, &ProjectLayout::Flat, true),
                             vec![],
                         );
@@ -466,9 +466,9 @@ mod tests {
         );
         assert_eq!(config_file.fallback_search_path, FallbackSearchPath::Empty);
 
-        // we should get a synthetic config with a search path = project_root/..
+        // we should get a synthetic config rooted at the inferred import root
         let config_file = finder(
-            Some(root),
+            Some(&root.join("no_config")),
             ModuleName::from_str("foo.bar"),
             ModulePath::filesystem(root.join("no_config/foo/bar.py")),
         );

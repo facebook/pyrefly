@@ -32,7 +32,6 @@ thiserror = "2.0.20"
 toml = { version = "1.1.4", features = ["preserve_order"] }
 toml_edit = { version = "0.25.13", features = ["serde"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
-walkdir = "2.3"
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 
 [dev-dependencies]

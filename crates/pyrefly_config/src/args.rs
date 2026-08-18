@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context as _;
@@ -434,7 +435,15 @@ impl ConfigOverrideArgs {
         self.environment.preset
     }
 
-    pub fn override_config(&self, mut config: ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
+    pub fn override_config(&self, config: ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
+        self.override_config_at(config, None)
+    }
+
+    pub fn override_config_at(
+        &self,
+        mut config: ConfigFile,
+        project_root: Option<&Path>,
+    ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
         // Apply environment-level overrides first
         self.environment.override_environment_config(&mut config);
 
@@ -548,7 +557,7 @@ impl ConfigOverrideArgs {
             let sub_config_errors = sub_config.settings.errors.get_or_insert_default();
             apply_error_settings(sub_config_errors);
         }
-        let mut errors = config.configure();
+        let mut errors = config.configure_at(project_root);
         if self.tensor_shapes.is_some() {
             errors.push(ConfigError::warn(anyhow::anyhow!(
                 "`--tensor-shapes` is deprecated and has no effect. Tensor shape support is enabled when `shape_extensions` is resolvable."

@@ -108,6 +108,56 @@ fi
     interpreter_path
 }
 
+#[cfg(unix)]
+#[test]
+fn test_workspace_discovers_project_venv() {
+    let test_files_root = get_test_files_root();
+    let project_root = test_files_root.path().join("custom_interpreter");
+    let venv_root = project_root.join(".venv");
+    let site_packages = venv_root.join("bin/site-packages");
+    fs::create_dir_all(&site_packages).unwrap();
+    write(&venv_root.join("pyvenv.cfg"), "").unwrap();
+    write(
+        &site_packages.join("custom_module.py"),
+        fs::read_to_string(project_root.join("bin/site-packages/custom_module.py")).unwrap(),
+    )
+    .unwrap();
+    setup_dummy_interpreter(&venv_root);
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            initialization_options: Some(json!({
+                "pyrefly": {"streamDiagnostics": false},
+            })),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("custom_interpreter/src/foo.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(project_root.join("src/foo.py"), 0)
+        .expect("Failed to receive publish diagnostics");
+    interaction
+        .client
+        .definition("custom_interpreter/src/foo.py", 5, 31)
+        .expect_definition_response_from_root(
+            "custom_interpreter/.venv/bin/site-packages/custom_module.py",
+            6,
+            6,
+            6,
+            17,
+        )
+        .unwrap();
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
 // Only run this test on unix since windows has no way to mock a .exe without compiling something
 // (we call python with python.exe)
 #[cfg(unix)]

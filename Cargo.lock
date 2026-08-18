@@ -2342,7 +2342,6 @@ dependencies = [
  "toml",
  "toml_edit",
  "tracing",
- "walkdir",
  "which",
  "yansi",
 ]

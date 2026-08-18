@@ -1326,7 +1326,21 @@ impl ConfigFile {
     /// Configures values that must be updated *after* overwriting with CLI flag values,
     /// which should probably be everything except for `PathBuf` or `Globs` types.
     pub fn configure(&mut self) -> Vec<ConfigError> {
+        self.configure_at(None)
+    }
+
+    /// Configures this file using `project_root` for project-local discovery when its
+    /// [`ConfigSource`] does not identify an on-disk root.
+    ///
+    /// Config finders should pass the root associated with the file being checked because
+    /// synthesized configurations do not have an on-disk [`ConfigSource`] to supply one.
+    pub fn configure_at(&mut self, project_root: Option<&Path>) -> Vec<ConfigError> {
         let mut configure_errors = Vec::new();
+        let project_root = self
+            .source
+            .root_from_file()
+            .or(project_root)
+            .map(Path::to_path_buf);
 
         // Whether the user explicitly configured `site_package_path` (via config
         // file or CLI flag). If not, we auto-discover a `typings/` directory below.
@@ -1342,10 +1356,7 @@ impl ConfigFile {
                         "`python-interpreter-path` and `fallback-python-interpreter-name` both set, but only one can be used."
                 ));
             }
-            match self
-                .interpreters
-                .find_interpreter(self.source.root_from_file())
-            {
+            match self.interpreters.find_interpreter(project_root.as_deref()) {
                 Ok(interpreter) => {
                     let (env, error) = PythonEnvironment::get_interpreter_env(&interpreter);
                     self.python_environment.override_empty(env);
@@ -1361,16 +1372,16 @@ impl ConfigFile {
             }
         }
 
-        // A `typings/` directory under the config root is always a default
+        // A `typings/` directory under the project root is always a default
         // `site_package_path` entry (in addition to any interpreter-provided
         // site-packages, which live in `interpreter_site_package_path`), unless
         // the user explicitly set `site_package_path`. We resolve it relative to
-        // the config root here, rather than in `set_empty_to_default`, so the CLI
+        // the project root here, rather than in `set_empty_to_default`, so the CLI
         // and IDE agree regardless of the process's working directory and so it
         // applies even when an interpreter query succeeds. A `Synthetic` config
-        // has no on-disk root to anchor `typings/` to, so we skip discovery
-        // rather than fall back to a CWD-relative path.
-        if !site_package_path_set && let Some(root) = self.source.root_from_file() {
+        // relies on the project root supplied by its config finder rather than
+        // falling back to a CWD-relative path.
+        if !site_package_path_set && let Some(root) = project_root.as_deref() {
             let typings = root.join("typings");
             if typings.exists() {
                 self.python_environment
@@ -4084,6 +4095,29 @@ output-format = "omit-errors"
             ..Default::default()
         };
         config.configure();
+
+        assert!(
+            config.site_package_path().any(|p| p == &typings),
+            "expected auto-discovered typings dir {typings:?} in site_package_path, got {:?}",
+            config.site_package_path().collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_typings_autodiscovered_relative_to_synthetic_project_root() {
+        let root = TempDir::new().unwrap();
+        let typings = root.path().join("typings");
+        fs::create_dir_all(&typings).unwrap();
+
+        let mut config = ConfigFile {
+            source: ConfigSource::Synthetic(None),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure_at(Some(root.path()));
 
         assert!(
             config.site_package_path().any(|p| p == &typings),

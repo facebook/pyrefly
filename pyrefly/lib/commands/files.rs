@@ -140,7 +140,7 @@ pub fn get_project_config_for_current_dir(
             Some(&current_dir),
             UnconfiguredOverride::Auto,
         );
-        let (config, errors) = args.override_config(synthesized);
+        let (config, errors) = args.override_config_at(synthesized, Some(&current_dir));
         // Since this is a config we generated, these are likely internal errors.
         debug_log(errors);
         config
@@ -159,7 +159,7 @@ pub fn get_config_finder_for_snippet(
             let finder = default_config_finder_with_overrides(args.clone(), false, None);
             match finder.directory(&current_dir) {
                 Some(config) => (config, finder.errors()),
-                None => args.override_config(ConfigFile::default()),
+                None => args.override_config_at(ConfigFile::default(), Some(&current_dir)),
             }
         }
     };
