@@ -2699,6 +2699,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 // - probably not as a dedicated Type alternative.
                 self.is_subset_eq(&self.solver.heap.mk_class_type(ellipsis.clone()), want)
             }
+            // The value `...` is the sole inhabitant of `types.EllipsisType`, so the two
+            // representations denote the same type. Both directions must hold for them
+            // to be equivalent, which `assert_type` and narrowing rely on.
+            (_, Type::EllipsisValue)
+                if let Some(ellipsis) = self.type_order.stdlib().ellipsis_type() =>
+            {
+                self.is_subset_eq(got, &self.solver.heap.mk_class_type(ellipsis.clone()))
+            }
             (Type::None, _) => self.is_subset_eq(
                 &self
                     .solver

@@ -204,40 +204,55 @@ def foo(bar: Bar) -> Iterable[int]:
 );
 
 testcase!(
-    bug = "Negative narrowing fails",
     test_ellipsis_is,
     r#"
-from typing import reveal_type
+from typing import assert_type
 from types import EllipsisType
 
 def f(x: int | EllipsisType):
     if x is ...:
-        reveal_type(x)  # E: Ellipsis
+        assert_type(x, EllipsisType)
     else:
-        reveal_type(x)  # E: EllipsisType | int
+        assert_type(x, int)
     if x is not ...:
-        reveal_type(x)  # E: EllipsisType | int
+        assert_type(x, int)
     else:
-        reveal_type(x)  # E: Ellipsis
+        assert_type(x, EllipsisType)
     "#,
 );
 
 testcase!(
-    bug = "Negative narrowing fails",
     test_ellipsis_eq,
     r#"
-from typing import reveal_type
+from typing import assert_type
 from types import EllipsisType
 
 def f(x: int | EllipsisType):
     if x == ...:
-        reveal_type(x)  # E: Ellipsis
+        assert_type(x, EllipsisType)
     else:
-        reveal_type(x)  # E: EllipsisType | int
+        assert_type(x, int)
     if x != ...:
-        reveal_type(x)  # E: EllipsisType | int
+        assert_type(x, int)
     else:
-        reveal_type(x)  # E: Ellipsis
+        assert_type(x, EllipsisType)
+    "#,
+);
+
+// The value `...` and a `types.EllipsisType` annotation denote the same singleton, so
+// they must match, regardless of which representation introduced the type (ref: #4426).
+testcase!(
+    test_ellipsis_value_is_ellipsis_type,
+    r#"
+from typing import assert_type
+from types import EllipsisType
+
+assert_type(..., EllipsisType)
+
+def f(x: EllipsisType):
+    assert_type(x, EllipsisType)
+    y: EllipsisType = ...
+    assert_type(y, EllipsisType)
     "#,
 );
 
