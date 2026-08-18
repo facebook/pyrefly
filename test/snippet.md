@@ -196,5 +196,13 @@ $ cat <<EOF | $PYREFLY snippet -
 > def foo(x: float) -> None:
 >   return x > 1.0
 > foo(x)
-[0]
+ERROR Returned type `bool` is not assignable to declared return type `None` [bad-return]
+ --> snippet:3:10
+  |
+2 | def foo(x: float) -> None:
+  |                      ---- declared return type
+3 |   return x > 1.0
+  |          ^^^^^^^
+  |
+[1]
 ```
