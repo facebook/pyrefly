@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 
 use crate::alt::types::class_metadata::ClassMetadata;
@@ -24,7 +23,7 @@ pub fn get_class_metadata(name: &str, handle: &Handle, state: &State) -> Arc<Cla
     let solutions = state.transaction().get_solutions(handle).unwrap();
 
     let cls = get_class(name, handle, state);
-    solutions.get(&KeyClassMetadata(cls.index())).dupe()
+    solutions.get_arc(&KeyClassMetadata(cls.index()))
 }
 
 fn get_class_keywords(

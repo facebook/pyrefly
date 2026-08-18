@@ -29,7 +29,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use dupe::Dupe;
-use dupe::OptionDupedExt;
 use enum_iterator::Sequence;
 use fxhash::FxHashMap;
 use itertools::Itertools;
@@ -1862,7 +1861,7 @@ impl<'a> Transaction<'a> {
                 .state
                 .get_solutions()
                 .expect("answers evicted implies solutions exist");
-            return solutions.get_hashed_opt(key).duped();
+            return solutions.get_hashed_arc_opt(key);
         };
 
         // Fast path: check if the answer is already computed in the

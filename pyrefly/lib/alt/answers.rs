@@ -339,25 +339,56 @@ impl Solutions {
         self.cinderx_solutions.as_ref()
     }
 
-    pub fn get<K: Exported>(&self, key: &K) -> &Arc<<K as Keyed>::Answer>
+    pub fn get<K: Exported>(&self, key: &K) -> &<K as Keyed>::Answer
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         self.get_hashed(Hashed::new(key))
     }
 
-    pub fn get_hashed_opt<K: Exported>(&self, key: Hashed<&K>) -> Option<&Arc<<K as Keyed>::Answer>>
+    pub fn get_hashed_opt<K: Exported>(&self, key: Hashed<&K>) -> Option<&<K as Keyed>::Answer>
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        self.table.get().get_hashed(key)
+        self.table.get().get_hashed(key).map(Arc::as_ref)
     }
 
-    pub fn get_hashed<K: Exported>(&self, key: Hashed<&K>) -> &Arc<<K as Keyed>::Answer>
+    pub fn get_hashed<K: Exported>(&self, key: Hashed<&K>) -> &<K as Keyed>::Answer
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         self.get_hashed_opt(key).unwrap_or_else(|| {
+            panic!(
+                "Internal error: solution not found, module {}, path {}, key {:?}",
+                self.module_info.name(),
+                self.module_info.path(),
+                key.key(),
+            )
+        })
+    }
+
+    pub fn get_arc<K: Exported>(&self, key: &K) -> Arc<<K as Keyed>::Answer>
+    where
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        self.get_hashed_arc(Hashed::new(key))
+    }
+
+    pub fn get_hashed_arc_opt<K: Exported>(
+        &self,
+        key: Hashed<&K>,
+    ) -> Option<Arc<<K as Keyed>::Answer>>
+    where
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        self.table.get().get_hashed(key).map(|value| value.dupe())
+    }
+
+    pub fn get_hashed_arc<K: Exported>(&self, key: Hashed<&K>) -> Arc<<K as Keyed>::Answer>
+    where
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        self.get_hashed_arc_opt(key).unwrap_or_else(|| {
             panic!(
                 "Internal error: solution not found, module {}, path {}, key {:?}",
                 self.module_info.name(),

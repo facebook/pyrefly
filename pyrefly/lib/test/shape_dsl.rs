@@ -224,7 +224,7 @@ def shape_identity(shape: IntTuple) -> IntTuple:
         ("int_identity", TypeShapeDslDomain::Int),
         ("shape_identity", TypeShapeDslDomain::IntTuple),
     ] {
-        let ty = &**solutions.get(&KeyExport(Name::new(name)));
+        let ty = solutions.get(&KeyExport(Name::new(name)));
         assert!(
             matches!(ty, Type::Function(function)
                 if matches!(&function.metadata.kind,
@@ -265,7 +265,7 @@ def conflicting(x: Int) -> Int:
         .get_solutions(&main)
         .expect("module should solve");
     for name in ["invalid", "invalid_domain", "conflicting"] {
-        let ty = &**solutions.get(&KeyExport(Name::new(name)));
+        let ty = solutions.get(&KeyExport(Name::new(name)));
         assert!(
             matches!(ty, Type::Function(function)
                 if matches!(&function.metadata.kind, FunctionKind::Def(_))),
@@ -418,7 +418,7 @@ x: Array[[2, 3], int]
     let (state, handle) = env.to_state();
     let main = handle("main");
     let solutions = state.transaction().get_solutions(&main).unwrap();
-    match &**solutions.get(&KeyExport(Name::new("x"))) {
+    match solutions.get(&KeyExport(Name::new("x"))) {
         Type::ShapedArray(array) => {
             let shape_arg = &array.base_class.targs().as_slice()[0];
             assert!(
@@ -444,7 +444,7 @@ N = IntVar("N")
     let (state, handle) = env.to_state();
     let main = handle("main");
     let solutions = state.transaction().get_solutions(&main).unwrap();
-    match &**solutions.get(&KeyExport(Name::new("N"))) {
+    match solutions.get(&KeyExport(Name::new("N"))) {
         Type::TypeVar(tv) => assert_eq!(tv.kind(), QuantifiedKind::IntVar),
         ty => panic!("expected `N` to solve to a raw IntVar, got `{ty}`"),
     }
@@ -4661,7 +4661,7 @@ symbolic: IntTuple[2, *Elements[IntTuple], 3]
     let main = handle("main");
     let solutions = state.transaction().get_solutions(&main).unwrap();
     for name in ["concrete", "symbolic"] {
-        let ty = &**solutions.get(&KeyExport(Name::new(name)));
+        let ty = solutions.get(&KeyExport(Name::new(name)));
         let Type::IntTuple(shape) = ty else {
             panic!("expected `{name}` to solve to an `IntTuple`, got `{ty}`");
         };

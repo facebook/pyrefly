@@ -6476,7 +6476,7 @@ impl Server {
                 let stdlib = transaction.as_ref().get_stdlib(handle);
                 let mut items = Vec::new();
                 // Skip the implicit trailing `object` for cyclic MROs.
-                if let ClassMro::Resolved { ancestors, .. } = mro.as_ref() {
+                if let ClassMro::Resolved { ancestors, .. } = mro {
                     for ancestor in ancestors {
                         if let Some(item) = type_hierarchy_item_from_class_type(ancestor) {
                             items.push(item);
