@@ -82,6 +82,113 @@ test(C())
  "#,
 );
 
+// A gradual type argument in the expected type must not suppress the bounds
+// check on the corresponding class type parameter (ref: #3525).
+testcase!(
+    test_bound_checked_under_gradual_expected_type,
+    r#"
+from typing import Any
+
+class A: ...
+class B(A): ...
+
+class Container[T: B]:
+    def __init__(self, x: T) -> None: ...
+
+def bare(x: A) -> Container:  # implicitly Container[Any]
+    return Container(x)  # E: `A` is not assignable to upper bound `B` of type variable `T`
+
+def explicit_any(x: A) -> Container[Any]:
+    return Container(x)  # E: `A` is not assignable to upper bound `B` of type variable `T`
+
+def unrelated(x: str) -> Container[Any]:
+    return Container(x)  # E: `str` is not assignable to upper bound `B` of type variable `T`
+ "#,
+);
+
+// A gradual type argument still supplies the solution for its own type
+// parameter, so a well-bounded argument is accepted and `Any` is preserved.
+testcase!(
+    test_gradual_expected_type_still_solves_targ,
+    r#"
+from typing import Any, assert_type
+
+class B: ...
+
+class Container[T: B]:
+    def __init__(self, x: T) -> None: ...
+
+def f(x: B) -> None:
+    assert_type(Container(x), Container[B])
+    y: Container[Any] = Container(x)
+    assert_type(y, Container[Any])
+ "#,
+);
+
+// An `Any` argument is a real solution for the type parameter, unlike an `Any`
+// coming from the expected type, so the parameter is still solved to `Any`.
+testcase!(
+    test_gradual_argument_solves_restricted_targ,
+    r#"
+from typing import Any, assert_type
+
+def unknown() -> Any: ...
+
+class Container[T: str | None]:
+    def __init__(self, x: T = None) -> None: ...
+
+def f() -> None:
+    assert_type(Container(unknown()), Container[Any])
+    assert_type(next(Container(unknown()) for _ in range(3)), Container[Any])
+
+def g() -> Container[str]:
+    return Container(unknown())
+ "#,
+);
+
+// Constraints are checked under a gradual expected type just as bounds are, and a valid
+// argument still selects its constraint.
+testcase!(
+    test_constraints_checked_under_gradual_expected_type,
+    r#"
+from typing import Any, assert_type
+
+class Container[T: (int, str)]:
+    def __init__(self, x: T) -> None: ...
+
+def returned(x: float) -> Container[Any]:
+    return Container(x)  # E: `float` is not assignable to any of constraints `int`, `str`
+
+def assigned(x: float) -> None:
+    y: Container[Any] = Container(x)  # E: `float` is not assignable to any of constraints `int`, `str`
+
+def valid(x: int) -> Container[Any]:
+    assert_type(Container(x), Container[int])
+    return Container(x)
+ "#,
+);
+
+// A bound of `Any` or `object` accepts everything, so keeping such a parameter free buys no
+// checking and only discards the solution the expected type supplies.
+testcase!(
+    test_vacuous_bound_solved_from_gradual_expected_type,
+    r#"
+from typing import Any, assert_type
+
+class BoxAny[T: Any]:
+    def __init__(self, x: T) -> None: ...
+
+class BoxObj[T: object]:
+    def __init__(self, x: T) -> None: ...
+
+def f(x: str) -> None:
+    y: BoxAny[Any] = BoxAny(x)
+    assert_type(y, BoxAny[Any])
+    z: BoxObj[Any] = BoxObj(x)
+    assert_type(z, BoxObj[Any])
+ "#,
+);
+
 testcase!(
     test_any_bound_attribute_access,
     r#"

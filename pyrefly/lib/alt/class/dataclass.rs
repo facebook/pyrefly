@@ -1087,7 +1087,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .freshen_class_targs(class_type.targs_mut(), self.uniques);
         let matched = self.is_subset_eq(&self.heap.mk_class_type(class_type.clone()), hint);
         self.solver()
-            .generalize_class_targs(class_type.targs_mut(), &SmallSet::new());
+            .generalize_class_targs(class_type.targs_mut(), &SmallSet::new(), false);
         self.solver()
             .finish_class_targs(class_type.targs_mut(), self.uniques);
         // Finalizing the fresh vars is required; its specialization errors are dropped because this
