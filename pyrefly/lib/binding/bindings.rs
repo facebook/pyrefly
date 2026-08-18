@@ -2465,18 +2465,6 @@ impl<'a> BindingsBuilder<'a> {
                         initialized,
                     };
                 }
-                // A legacy TypeVar that is already a type parameter of an enclosing class is out of
-                // scope when referenced from a nested class. Leave it as a raw type variable so it is
-                // flagged as out of scope.
-                if self
-                    .scopes
-                    .legacy_tparam_out_of_scope_in_nested_class(&name.id)
-                {
-                    return TParamLookupResult::NotTParam {
-                        idx: original_idx,
-                        initialized,
-                    };
-                }
                 match self.lookup_legacy_tparam_from_idx(id, original_idx, has_scoped_type_params) {
                     Some(possible_tparam) => TParamLookupResult::MaybeTParam(possible_tparam),
                     None => TParamLookupResult::NotTParam {

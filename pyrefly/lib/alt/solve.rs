@@ -5306,6 +5306,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> TypeInfo {
         let name = match self.bindings().get(source) {
             Binding::TypeParameter(tp) => &tp.name,
+            Binding::PossibleLegacyTParam(legacy_tparam, _) => {
+                // Preserve the raw legacy TypeVar here. Consumers of type parameter lists detect
+                // and report out-of-scope legacy TypeVars.
+                return self
+                    .get_idx(self.bindings().get(*legacy_tparam).idx())
+                    .arc_clone();
+            }
             binding => unreachable!("out-of-scope type parameter source is {binding:?}"),
         };
         self.error(

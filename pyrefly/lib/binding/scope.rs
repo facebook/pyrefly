@@ -1777,36 +1777,6 @@ impl Scopes {
         false
     }
 
-    /// Returns true if `name` refers to a legacy type parameter of an enclosing class that is out
-    /// of scope at the current position within a nested class. A class's legacy type
-    /// parameters are visible only from the innermost enclosing class-annotation scope, so once the
-    /// walk crosses a class-annotation scope, an outer class's type parameters are out of scope.
-    pub fn legacy_tparam_out_of_scope_in_nested_class(&self, name: &Name) -> bool {
-        let mut crossed_class_annotation = false;
-        for scope in self.iter_rev() {
-            match scope.kind {
-                // A function signature can always bind a legacy TypeVar as its own type parameter,
-                // even one that parameterizes an enclosing class it can no longer see. Only a class
-                // is forbidden from re-adopting an enclosing class's type parameter.
-                ScopeKind::Annotation {
-                    class_scope: false, ..
-                } if !crossed_class_annotation => return false,
-                ScopeKind::Annotation {
-                    class_scope: true, ..
-                } => {
-                    if let Some(info) = scope.stat.0.get(name)
-                        && matches!(info.style, StaticStyle::PossibleLegacyTParam)
-                    {
-                        return crossed_class_annotation;
-                    }
-                    crossed_class_annotation = true;
-                }
-                _ => {}
-            }
-        }
-        false
-    }
-
     pub fn function_predecessor_indices(
         &self,
         name: &Name,
@@ -3225,10 +3195,18 @@ impl Scopes {
         );
         // Class type parameters are hidden by an intervening class annotation scope.
         let mut crossed_class_annotation = false;
+        let mut may_reintroduce_legacy_type_parameter = false;
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
             let is_class_annotation =
                 matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
+            if !crossed_class_annotation
+                && matches!(scope.kind, ScopeKind::Annotation { class_scope: false })
+            {
+                // A function signature may bind a legacy TypeVar as its own parameter even when
+                // an enclosing class has already bound the same declaration.
+                may_reintroduce_legacy_type_parameter = true;
+            }
             // Class body scopes are dynamic, not static, so if we don't find a name in the
             // current flow we keep looking. In every other kind of scope, anything the Python
             // compiler has identified as local shadows enclosing scopes, so we should prefer
@@ -3242,7 +3220,10 @@ impl Scopes {
             if crossed_class_annotation
                 && is_class_annotation
                 && let Some(static_info) = static_info
-                && matches!(static_info.style, StaticStyle::ScopedTypeParam)
+                && matches!(
+                    static_info.style,
+                    StaticStyle::ScopedTypeParam | StaticStyle::PossibleLegacyTParam
+                )
                 // Type parameters have special scoping rules that are more restrictive than
                 // runtime semantics. Apply these rules only to static type usages. Non-static
                 // usages fall through to normal lookup, which follows the runtime.
@@ -3251,9 +3232,13 @@ impl Scopes {
                     Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
                 )
             {
-                return Some(NameReadInfo::OutOfScopeTypeParameter {
-                    key: static_info.as_key(name.into_key()),
-                });
+                if may_reintroduce_legacy_type_parameter {
+                    return None;
+                } else {
+                    return Some(NameReadInfo::OutOfScopeTypeParameter {
+                        key: static_info.as_key(name.into_key()),
+                    });
+                }
             }
 
             let flow_info = scope.flow.get_info_hashed(name);
@@ -3303,16 +3288,6 @@ impl Scopes {
                 // enclosing scope — which correctly handles class-scope-skipping
                 // and flow barriers.
                 if matches!(scope.kind, ScopeKind::Comprehension { .. }) && flow_info.is_none() {
-                    return None;
-                }
-
-                // Once we've crossed a class-annotation scope, a legacy type parameter found in an
-                // outer class-annotation scope belongs to an enclosing class and is out of scope
-                // here; skip it so the lookup falls through to the module-level `TypeVar`.
-                if is_class_annotation
-                    && crossed_class_annotation
-                    && matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
-                {
                     return None;
                 }
 
