@@ -463,7 +463,7 @@ class Asset(TestABC):
 
 class PensionAsset(Asset):
     @classmethod
-    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `(cls: type[PensionAsset]) -> Literal['90岁累计可领(元)']`, which is not assignable to `(cls: type[PensionAsset]) -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
+    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `() -> Literal['90岁累计可领(元)']`, which is not assignable to `() -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
         return '90岁累计可领(元)'
 "#,
 );

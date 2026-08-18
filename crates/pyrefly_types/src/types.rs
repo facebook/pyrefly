@@ -454,6 +454,67 @@ impl BoundMethodType {
         }
     }
 
+    /// The signature callers see, with the receiver parameter that binding already
+    /// consumed removed. Returns `None` when no parameter can be stripped, which
+    /// happens for signatures like `(...) -> T` that have no leading positional param.
+    ///
+    /// This is a display-only view: `bind_bound_method_type` in the solver performs the
+    /// same strip, and additionally instantiates type parameters against the receiver.
+    pub fn strip_receiver(&self) -> Option<Self> {
+        match self {
+            Self::Function(func) => func.signature.strip_first_param().map(|signature| {
+                Self::Function(Function {
+                    signature,
+                    metadata: func.metadata.clone(),
+                })
+            }),
+            Self::Forall(forall) => forall.body.signature.strip_first_param().map(|signature| {
+                Self::Forall(Forall {
+                    tparams: forall.tparams.clone(),
+                    body: Function {
+                        signature,
+                        metadata: forall.body.metadata.clone(),
+                    },
+                })
+            }),
+            Self::Overload(overload) => overload
+                .signatures
+                .try_mapped_ref(|x| match x {
+                    OverloadType::Function(f) => f
+                        .signature
+                        .strip_first_param()
+                        .map(|signature| {
+                            OverloadType::Function(Function {
+                                signature,
+                                metadata: f.metadata.clone(),
+                            })
+                        })
+                        .ok_or(()),
+                    OverloadType::Forall(forall) => forall
+                        .body
+                        .signature
+                        .strip_first_param()
+                        .map(|signature| {
+                            OverloadType::Forall(Forall {
+                                tparams: forall.tparams.clone(),
+                                body: Function {
+                                    signature,
+                                    metadata: forall.body.metadata.clone(),
+                                },
+                            })
+                        })
+                        .ok_or(()),
+                })
+                .ok()
+                .map(|signatures| {
+                    Self::Overload(Overload {
+                        signatures,
+                        metadata: overload.metadata.clone(),
+                    })
+                }),
+        }
+    }
+
     pub fn subst_self_type_mut(&mut self, replacement: &Type) {
         match self {
             Self::Function(func) => func.signature.subst_self_type_mut(replacement),

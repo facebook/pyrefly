@@ -615,7 +615,7 @@ def f2(c: Callable[[C, int], None]):
 f1(C.f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(int) -> None`
 f1(C().f)
 f2(C.f)
-f2(C().f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(C, int) -> None`
+f2(C().f)  # E: Argument `(x: int) -> None` is not assignable to parameter `c` with type `(C, int) -> None`
     "#,
 );
 
@@ -1176,7 +1176,7 @@ def test(o: D):
     reveal_type(o.f) # E: [T](x: T) -> T
     assert_type(o.f(1), int)
 
-    reveal_type(o.g) # E: [U](self: C, x: U) -> U
+    reveal_type(o.g) # E: [U](x: U) -> U
     assert_type(o.g(1), int)
 "#,
 );
@@ -2332,7 +2332,7 @@ testcase!(
     r#"
 from typing import Never, assert_type, reveal_type
 def f() -> type[Never]: ...
-reveal_type(f().mro) # E: (self: type) -> list[type[Any]]
+reveal_type(f().mro) # E: () -> list[type[Any]]
 assert_type(f().wut, Never)
     "#,
 );

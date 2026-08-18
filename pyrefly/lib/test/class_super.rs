@@ -196,7 +196,7 @@ class Parent:
 
 class Child(Parent):
     def __init__(self) -> None:
-        self.meth2 = super().meth1  # E: `(self: type[Self@Child]) -> int` is not assignable to attribute `meth2` with type `(self: type[Self@Child]) -> str`
+        self.meth2 = super().meth1  # E: `() -> int` is not assignable to attribute `meth2` with type `() -> str`
 
 # At runtime, this is a call to the inherited `Parent.meth2` classmethod.
 # We don't have a good way of modeling this, so we treat this as an (illegal) class access of the
