@@ -270,6 +270,26 @@ pub struct Errors {
     loads: Vec<(Arc<Load>, Option<Arc<ModuleRanges>>, ArcId<ConfigFile>)>,
 }
 
+/// Outcome of applying a baseline file.
+#[derive(Debug)]
+pub enum BaselineApplyResult {
+    /// No baseline path was configured.
+    NotConfigured,
+    /// A path was configured but no file exists on disk. Tolerated as
+    /// `NotCompared` in ordinary `check`; `--prune`/`--error-stale-baseline`
+    /// require an existing file elsewhere.
+    NotFound,
+    /// File exists but could not be read or parsed. Hard error unless
+    /// `--update-baseline` tolerates it.
+    FailedToRead(anyhow::Error),
+    /// File was loaded and used to split `ordinary` vs `baseline`.
+    /// When `classify_stale_entries` is false, `unused=0` and `retained=[]`.
+    Applied {
+        unused_entry_count: usize,
+        retained_entries: Vec<BaselineError>,
+    },
+}
+
 impl Errors {
     pub fn new(mut loads: Vec<(Arc<Load>, Option<Arc<ModuleRanges>>, ArcId<ConfigFile>)>) -> Self {
         loads.sort_by_key(|x| (x.0.module_info.name(), x.0.module_info.path().dupe()));
@@ -311,63 +331,58 @@ impl Errors {
     }
 
     /// Apply baseline filtering to already-collected errors in place.
-    /// `relative_to` is the resolved `--relative-to` directory so that
-    /// relative paths stored in the baseline file are resolved correctly.
-    ///
-    /// When `classify_stale_entries` is true, returns the number of baseline entries
-    /// that are definitely unused together with all entries that should be retained.
-    /// Ordinary checks skip that filesystem work and return empty maintenance data.
-    /// The final return value records whether a baseline was loaded for comparison.
-    ///
-    /// A baseline path that exists but cannot be read or parsed is a hard error
-    /// rather than being silently ignored, so a corrupt baseline surfaces instead
-    /// of behaving as if no baseline were configured. Callers that regenerate the
-    /// baseline from scratch (i.e. `--update-baseline`) may choose to ignore this.
+    /// `relative_to` resolves relative paths stored in the baseline file.
     pub fn apply_baseline(
         &self,
         errors: &mut CollectedErrors,
         baseline_path: Option<&Path>,
         relative_to: &Path,
         classify_stale_entries: bool,
-    ) -> anyhow::Result<(usize, Vec<BaselineError>, bool)> {
-        let mut unused_baseline_entries = 0;
-        let mut retained_baseline_entries = Vec::new();
-        let mut baseline_loaded = false;
-        if let Some(baseline_path) = baseline_path
-            && baseline_path.exists()
-        {
-            if classify_stale_entries {
-                let mut processor = TrackedBaselineProcessor::from_file(baseline_path, relative_to)
-                    .with_context(|| {
-                        format!("failed to read baseline file `{}`", baseline_path.display())
-                    })?;
-                processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
-                let checked_paths: HashSet<_> = self
-                    .loads
-                    .iter()
-                    .filter(|(load, _, _)| load.errors.style() != ErrorStyle::Never)
-                    .map(|(load, _, _)| {
-                        normalize_baseline_path(load.module_info.path().as_path(), relative_to)
-                    })
-                    .collect();
-                let result = processor.into_pruning_result(&checked_paths);
-                unused_baseline_entries = result.unused_entry_count;
-                retained_baseline_entries = result.retained_entries;
-                baseline_loaded = true;
-            } else {
-                let processor = BaselineProcessor::from_file(baseline_path, relative_to)
-                    .with_context(|| {
-                        format!("failed to read baseline file `{}`", baseline_path.display())
-                    })?;
-                processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
-                baseline_loaded = true;
+    ) -> BaselineApplyResult {
+        let Some(baseline_path) = baseline_path else {
+            return BaselineApplyResult::NotConfigured;
+        };
+        if !baseline_path.exists() {
+            return BaselineApplyResult::NotFound;
+        }
+
+        let fail_ctx = || format!("failed to read baseline file `{}`", baseline_path.display());
+
+        if classify_stale_entries {
+            let mut processor =
+                match TrackedBaselineProcessor::from_file(baseline_path, relative_to)
+                    .with_context(fail_ctx)
+                {
+                    Ok(p) => p,
+                    Err(e) => return BaselineApplyResult::FailedToRead(e),
+                };
+            processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
+            let checked_paths: HashSet<_> = self
+                .loads
+                .iter()
+                .filter(|(load, _, _)| load.errors.style() != ErrorStyle::Never)
+                .map(|(load, _, _)| {
+                    normalize_baseline_path(load.module_info.path().as_path(), relative_to)
+                })
+                .collect();
+            let result = processor.into_pruning_result(&checked_paths);
+            BaselineApplyResult::Applied {
+                unused_entry_count: result.unused_entry_count,
+                retained_entries: result.retained_entries,
+            }
+        } else {
+            let processor = match BaselineProcessor::from_file(baseline_path, relative_to)
+                .with_context(fail_ctx)
+            {
+                Ok(p) => p,
+                Err(e) => return BaselineApplyResult::FailedToRead(e),
+            };
+            processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
+            BaselineApplyResult::Applied {
+                unused_entry_count: 0,
+                retained_entries: Vec::new(),
             }
         }
-        Ok((
-            unused_baseline_entries,
-            retained_baseline_entries,
-            baseline_loaded,
-        ))
     }
 
     /// Collect display errors for the language server, partitioned by whether or not they

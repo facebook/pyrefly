@@ -92,6 +92,7 @@ use crate::error::suppress::CommentLocation;
 use crate::error::suppress::SerializedError;
 use crate::error::suppress::UnusedIgnoreKind;
 use crate::report;
+use crate::state::errors::BaselineApplyResult;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
@@ -1530,35 +1531,42 @@ impl CheckArgs {
         // Pass pre-collected errors to avoid redundant error collection.
         let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display(&collected);
         collected.ordinary.extend(unused_ignore_errors.ordinary);
-        let (unused_baseline_entries, retained_baseline_entries, baseline_loaded) = match loads
-            .apply_baseline(
-                &mut collected,
-                self.output.baseline.as_deref(),
-                relative_to.as_path(),
-                self.output.prune_baseline || self.output.error_stale_baseline,
-            ) {
-            Ok(result) => result,
-            // `--update-baseline` regenerates the baseline from the current run, so
-            // a missing or unreadable existing baseline is not fatal. Log the
-            // discarded error so a genuinely broken environment (e.g. a permission
-            // error) leaves a trace rather than silently surfacing later as an
-            // unrelated write failure.
-            Err(e) if self.output.update_baseline => {
-                debug!(
-                    "ignoring unreadable baseline while regenerating it with `--update-baseline`: {e:#}"
-                );
-                (0, Vec::new(), false)
-            }
-            Err(e) => return Err(e),
-        };
+
+        let baseline_apply_result = loads.apply_baseline(
+            &mut collected,
+            self.output.baseline.as_deref(),
+            relative_to.as_path(),
+            self.output.prune_baseline || self.output.error_stale_baseline,
+        );
+
+        // `--update-baseline` regenerates the baseline from the current run, so
+        // a missing or unreadable existing baseline is not fatal. Log the
+        // discarded error so a genuinely broken environment (e.g. a permission
+        // error) leaves a trace rather than silently surfacing later as an
+        // unrelated write failure.
+        let (unused_baseline_entries, retained_baseline_entries, baseline_status) =
+            match baseline_apply_result {
+                BaselineApplyResult::NotConfigured => {
+                    (0usize, Vec::new(), BaselineStatus::NotConfigured)
+                }
+                BaselineApplyResult::NotFound => (0usize, Vec::new(), BaselineStatus::NotCompared),
+                BaselineApplyResult::Applied {
+                    unused_entry_count,
+                    retained_entries,
+                } => (
+                    unused_entry_count,
+                    retained_entries,
+                    BaselineStatus::Unmatched,
+                ),
+                BaselineApplyResult::FailedToRead(e) if self.output.update_baseline => {
+                    debug!(
+                        "ignoring unreadable baseline while regenerating it with `--update-baseline`: {e:#}"
+                    );
+                    (0usize, Vec::new(), BaselineStatus::NotCompared)
+                }
+                BaselineApplyResult::FailedToRead(e) => return Err(e),
+            };
         let errors = collected;
-        let baseline_status = if self.output.baseline.is_none() {
-            BaselineStatus::NotConfigured
-        } else if baseline_loaded {
-            BaselineStatus::Unmatched
-        } else {
-            BaselineStatus::NotCompared
-        };
         let (directives, ordinary_errors): (Vec<Error>, Vec<Error>) =
             if let Some(only) = &self.output.only {
                 let only = only.iter().collect::<SmallSet<_>>();
