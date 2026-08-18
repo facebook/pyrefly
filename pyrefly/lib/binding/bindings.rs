@@ -2585,7 +2585,6 @@ impl<'a> BindingsBuilder<'a> {
                     BindingLegacyTypeParam::ModuleKeyed(Box::new(LegacyTypeParamModule {
                         base: original_idx,
                         attrs: attrs.mapped_ref(|a| a.id.clone()),
-                        prior: None,
                     })),
                 )),
                 Some(_) => None,
@@ -2610,8 +2609,9 @@ impl<'a> BindingsBuilder<'a> {
                     .expect("a possible legacy type parameter should have a binding")
                 {
                     let base = possible_tparam.id.as_identifier().id.clone();
-                    module.prior = module_heads.get(&base).copied();
-                    module_heads.insert(base, possible_tparam.idx);
+                    if let Some(prior) = module_heads.insert(base, possible_tparam.idx) {
+                        module.base = prior;
+                    }
                 }
                 self.scopes
                     .add_possible_legacy_tparam(possible_tparam.id.as_identifier());

@@ -3476,12 +3476,13 @@ pub enum BindingLegacyTypeParam {
 /// the binding for the local name `pkg`, and `attrs` contains `mod` and `T`.
 #[derive(Clone, Debug)]
 pub struct LegacyTypeParamModule {
-    /// The original binding for the dotted reference's base name.
+    /// The binding for the dotted reference's base name.
+    /// Every possible legacy type param from the same module rebinds this name, so `base` points
+    /// to the preceding binding for the base name, with the first legacy type param binding
+    /// pointing to the original binding for the base name.
     pub base: Idx<Key>,
     /// The attribute path from the base name to the possible type parameter.
     pub attrs: Vec1<Name>,
-    /// The preceding binding for the same base name, if any.
-    pub prior: Option<Idx<Key>>,
 }
 
 impl DisplayWith<Bindings> for BindingLegacyTypeParam {
@@ -3493,9 +3494,6 @@ impl DisplayWith<Bindings> for BindingLegacyTypeParam {
                 write!(f, "{}", ctx.display(module.base))?;
                 for attr in module.attrs.iter() {
                     write!(f, ".{}", attr)?;
-                }
-                if let Some(prior) = module.prior {
-                    write!(f, ", prior={}", ctx.display(prior))?;
                 }
                 Ok(())
             }

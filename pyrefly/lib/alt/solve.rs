@@ -5265,8 +5265,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // binding is for the module itself, we use the mechanism for attribute
                 // ("facet") type narrowing to change the type produced when the final
                 // attr is accessed.
-                let base = binding.prior.unwrap_or(binding.base);
-                let mut module = (*self.get_idx(base)).clone();
+                let mut module = (*self.get_idx(binding.base)).clone();
                 let ty = resolve(key);
                 if matches!(ty, Type::QuantifiedValue(_)) {
                     let facets = binding
