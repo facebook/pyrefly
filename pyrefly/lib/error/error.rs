@@ -62,6 +62,26 @@ pub enum BaselineStatus {
     Matched,
 }
 
+impl BaselineStatus {
+    /// Value for the legacy JSON `baselined` field.
+    /// `None` omits the field (no baseline configured), `Some(true/false)` emits it.
+    pub fn legacy_baselined_flag(self) -> Option<bool> {
+        match self {
+            Self::NotConfigured => None,
+            Self::Matched => Some(true),
+            Self::NotCompared | Self::Unmatched => Some(false),
+        }
+    }
+
+    /// Suffix appended in text renderers, e.g. `" [baselined]"`.
+    pub fn display_suffix(self) -> &'static str {
+        match self {
+            Self::Matched => " [baselined]",
+            _ => "",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Error {
     module: Module,
@@ -156,11 +176,7 @@ impl<W: Write> ErrorRenderer<W> {
                 error.severity.label(),
                 error.msg_header,
                 error.error_kind.to_name(),
-                if error.baseline_status == BaselineStatus::Matched {
-                    " [baselined]"
-                } else {
-                    ""
-                },
+                error.baseline_status.display_suffix(),
             ),
             ErrorRenderMode::Color => {
                 write!(
@@ -189,11 +205,7 @@ impl<W: Write> ErrorRenderer<W> {
                 error.display_range,
                 header,
                 error.error_kind.to_name(),
-                if error.baseline_status == BaselineStatus::Matched {
-                    " [baselined]"
-                } else {
-                    ""
-                },
+                error.baseline_status.display_suffix(),
             ),
             ErrorRenderMode::Color => {
                 write!(

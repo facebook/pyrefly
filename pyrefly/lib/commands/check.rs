@@ -885,11 +885,7 @@ fn github_actions_command(error: &Error) -> Option<String> {
     let command = severity_to_github_command(error.severity())?;
     let range = error.display_range();
     let file = path_to_unix_string(error.path().as_path());
-    let baseline_marker = if error.baseline_status() == BaselineStatus::Matched {
-        " [baselined]"
-    } else {
-        ""
-    };
+    let baseline_marker = error.baseline_status().display_suffix();
     let params = format!(
         "file={},line={},col={},endLine={},endColumn={},title={}",
         escape_workflow_property(&file),
@@ -1567,58 +1563,46 @@ impl CheckArgs {
                 BaselineApplyResult::FailedToRead(e) => return Err(e),
             };
         let errors = collected;
-        let (directives, ordinary_errors): (Vec<Error>, Vec<Error>) =
-            if let Some(only) = &self.output.only {
-                let only = only.iter().collect::<SmallSet<_>>();
-                (
-                    errors
-                        .directives
-                        .into_iter()
-                        .filter(|e| only.contains(&e.error_kind()))
-                        .map(|e| e.with_baseline_status(baseline_status))
-                        .collect(),
-                    errors
-                        .ordinary
-                        .into_iter()
-                        .filter(|e| only.contains(&e.error_kind()))
-                        .map(|e| e.with_baseline_status(baseline_status))
-                        .collect(),
-                )
+        let only_filter = self
+            .output
+            .only
+            .as_ref()
+            .map(|only| only.iter().collect::<SmallSet<&ErrorKind>>());
+
+        let with_status = |errors: Vec<Error>, status: BaselineStatus| -> Vec<Error> {
+            if let Some(only) = &only_filter {
+                errors
+                    .into_iter()
+                    .filter(|e| only.contains(&e.error_kind()))
+                    .map(|e| e.with_baseline_status(status))
+                    .collect()
             } else {
-                (
-                    errors
-                        .directives
-                        .into_iter()
-                        .map(|e| e.with_baseline_status(baseline_status))
-                        .collect(),
-                    errors
-                        .ordinary
-                        .into_iter()
-                        .map(|e| e.with_baseline_status(baseline_status))
-                        .collect(),
-                )
-            };
+                errors
+                    .into_iter()
+                    .map(|e| e.with_baseline_status(status))
+                    .collect()
+            }
+        };
+
+        let directives = with_status(errors.directives, baseline_status);
+        let ordinary_errors = with_status(errors.ordinary, baseline_status);
 
         // Baseline matches are cloned for display. Baseline maintenance uses the
         // original severity and baseline representation.
         let baseline_error_level = self.output.baseline_error_level();
         let displayed_baseline_errors = if baseline_error_level == Severity::Ignore {
             Vec::new()
-        } else if let Some(only) = &self.output.only {
-            let only = only.iter().collect::<SmallSet<_>>();
-            errors
-                .baseline
-                .iter()
-                .filter(|e| only.contains(&e.error_kind()))
-                .map(|e| {
-                    e.with_severity(e.severity().min(baseline_error_level))
-                        .with_baseline_status(BaselineStatus::Matched)
-                })
-                .collect()
         } else {
             errors
                 .baseline
                 .iter()
+                .filter(|e| {
+                    if let Some(only) = &only_filter {
+                        only.contains(&e.error_kind())
+                    } else {
+                        true
+                    }
+                })
                 .map(|e| {
                     e.with_severity(e.severity().min(baseline_error_level))
                         .with_baseline_status(BaselineStatus::Matched)

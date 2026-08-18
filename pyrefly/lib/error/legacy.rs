@@ -13,7 +13,6 @@ use pyrefly_util::prelude::SliceExt;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 
 pub(crate) fn severity_to_str(severity: Severity) -> String {
@@ -77,11 +76,7 @@ impl LegacyError {
             description: error.msg(),
             concise_description: error.msg_header().to_owned(),
             severity: severity_to_str(error.severity()),
-            baselined: match error.baseline_status() {
-                BaselineStatus::NotConfigured => None,
-                BaselineStatus::NotCompared | BaselineStatus::Unmatched => Some(false),
-                BaselineStatus::Matched => Some(true),
-            },
+            baselined: error.baseline_status().legacy_baselined_flag(),
         }
     }
 }
@@ -157,6 +152,7 @@ mod tests {
 
     use super::*;
     use crate::config::error_kind::ErrorKind;
+    use crate::error::error::BaselineStatus;
 
     #[test]
     fn test_relativize_when_error_is_not_under_relative_to() {
