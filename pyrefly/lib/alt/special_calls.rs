@@ -60,7 +60,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 TypeFormContext::FunctionArgument,
                 errors,
             ));
-            if !self.is_equivalent(&a, &b) {
+            if !b.is_error() && !self.is_equivalent(&a, &b) {
                 self.error(
                     errors,
                     range,
@@ -365,14 +365,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         let ret = if let Some(t) = typ {
-            match self.untype_opt(self.expr_infer(t, errors), range, errors) {
-                Some(t) => t,
-                None => self.error(
-                    errors,
-                    range,
-                    ErrorKind::BadArgumentType,
-                    "First argument to `typing.cast` must be a type".to_owned(),
-                ),
+            if matches!(t, Expr::Call(_)) {
+                self.expr_untype(t, TypeFormContext::FunctionArgument, errors)
+            } else {
+                match self.untype_opt(self.expr_infer(t, errors), range, errors) {
+                    Some(t) => t,
+                    None => self.error(
+                        errors,
+                        range,
+                        ErrorKind::BadArgumentType,
+                        "First argument to `typing.cast` must be a type".to_owned(),
+                    ),
+                }
             }
         } else {
             self.error(

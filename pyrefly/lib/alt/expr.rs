@@ -1055,18 +1055,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub(crate) fn finish_prepared_expr_call_with_trace(
-        &self,
-        x: &ExprCall,
-        prepared: PreparedExprCall,
-        errors: &ErrorCollector,
-    ) -> Type {
-        let ty = self.finish_prepared_expr_call(x, prepared, None, errors);
-        self.check_for_deprecated_call(&ty, x.range(), errors);
-        self.record_type_trace(x.range(), &ty);
-        ty
-    }
-
     /// Convenience function to call `expr_infer_with_hint` and promote literals in the result
     fn expr_infer_with_hint_promote(
         &self,

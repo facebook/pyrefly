@@ -5455,17 +5455,6 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(int, Unknown) failed",
-      "description": "assert_type(int, Unknown) failed",
-      "line": 120,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 43,
-      "stop_line": 120
-    },
-    {
-      "code": -2,
       "column": 32,
       "concise_description": "`Example.b` is not a valid enum member",
       "description": "`Example.b` is not a valid enum member",
@@ -5485,17 +5474,6 @@
       "severity": "info",
       "stop_column": 34,
       "stop_line": 132
-    },
-    {
-      "code": -2,
-      "column": 20,
-      "concise_description": "assert_type(int, Unknown) failed",
-      "description": "assert_type(int, Unknown) failed",
-      "line": 133,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 57,
-      "stop_line": 133
     },
     {
       "code": -2,

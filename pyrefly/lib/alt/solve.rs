@@ -6900,18 +6900,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let result = match x {
-            Expr::Call(call) if type_form_context == TypeFormContext::ReturnAnnotation => {
-                let prepared = self.prepare_expr_call(call, errors);
-                if let Some(ty) = prepared.callee().and_then(|callee| {
-                    self.parse_type_level_dsl_call_with_callee(call, callee, errors)
-                }) {
-                    ty
-                } else {
-                    let inferred_ty =
-                        self.finish_prepared_expr_call_with_trace(call, prepared, errors);
-                    self.untype_runtime_type(inferred_ty, x.range(), type_form_context, errors)
-                }
+            Expr::Call(_)
+                if type_form_context == TypeFormContext::ReturnAnnotation
+                    && let Some(ty) = self.parse_type_level_dsl_call(x, errors) =>
+            {
+                ty
             }
+            Expr::Call(_) if type_form_context != TypeFormContext::BaseClassList => self.error(
+                errors,
+                x.range(),
+                ErrorKind::InvalidAnnotation,
+                "Function call cannot be used in annotations".to_owned(),
+            ),
             Expr::Subscript(x)
                 if let Some(ty) =
                     self.parse_jaxtyping_type_form(&x.value, &x.slice, x.range(), errors) =>

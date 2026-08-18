@@ -275,9 +275,7 @@ testcase!(
     env_3_13_with_stub(),
     "import foo",
 );
-
 testcase!(
-    bug = "Function calls are accepted in type expressions",
     test_call_expressions_in_type_forms,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
@@ -286,15 +284,19 @@ from typing import TypeVar, assert_type, cast
 class Base: ...
 def make_type() -> type[Base]: ...
 
-LegacyBound = TypeVar("LegacyBound", bound=make_type())
-LegacyConstraints = TypeVar("LegacyConstraints", make_type(), Base)
-LegacyDefault = TypeVar("LegacyDefault", default=make_type())
+base = Base()
+class DynamicBase(type(base)): ...
 
-def pep_bound[T: make_type()](x: T) -> T: ...
-def pep_default[T = make_type()](x: T) -> T: ...
+LegacyBound = TypeVar("LegacyBound", bound=make_type())  # E: Function call cannot be used in annotations
+LegacyConstraints = TypeVar("LegacyConstraints", make_type(), Base)  # E: Function call cannot be used in annotations
+LegacyDefault = TypeVar("LegacyDefault", default=make_type())  # E: Function call cannot be used in annotations
+
+def pep_bound[T: make_type()](x: T) -> T: ...  # E: Function call cannot be used in annotations
+def pep_default[T = make_type()](x: T) -> T: ...  # E: Function call cannot be used in annotations
 
 def use(value: Base) -> None:
-    assert_type(cast(make_type(), object()), Base)
-    assert_type(value, make_type())
+    cast(make_type(), object())  # E: Function call cannot be used in annotations
+    cast(list[make_type()], object())  # E: Function call cannot be used in annotations
+    assert_type(value, make_type())  # E: Function call cannot be used in annotations
 "#,
 );
