@@ -1496,7 +1496,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        let builtin_names = ["str", "int", "float", "bool", "bytes"];
+        let builtin_names = ["str", "int", "bool", "bytes"];
         if !builtin_names
             .iter()
             .any(|name| cls.has_qname("builtins", name))
