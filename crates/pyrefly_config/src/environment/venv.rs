@@ -18,10 +18,12 @@ fn is_venv_root(dir: &Path) -> bool {
 }
 
 #[cfg(windows)]
-fn interpreter_candidates(root: &Path) -> [PathBuf; 2] {
+fn interpreter_candidates(root: &Path) -> [PathBuf; 4] {
     [
         root.join("Scripts").join("python.exe"),
+        root.join("Scripts").join("python3.exe"),
         root.join("python.exe"),
+        root.join("python3.exe"),
     ]
 }
 
