@@ -27,5 +27,6 @@ pub mod special_calls;
 pub mod specials;
 pub mod subscript;
 pub mod traits;
+pub mod type_level_dsl;
 pub mod types;
 pub mod unwrap;
