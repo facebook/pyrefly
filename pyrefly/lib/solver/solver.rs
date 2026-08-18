@@ -265,19 +265,39 @@ enum Variable {
     Recursive,
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
     Unwrap(Bounds),
-    /// A variable whose answer has been determined
-    Answer(Type),
+    /// A variable whose answer has been determined.
+    Answer {
+        ty: Type,
+        /// Whether every `Type::Var` transitively reachable through `ty` has a stable answer.
+        /// A var may be published in `Answers` only when its answer is frozen.
+        /// Frozen answers do not need to be traversed again when sanitizing vars for publication.
+        frozen: bool,
+    },
     /// A variable whose answer is a residual that is only visible to selected vars.
     ResidualAnswer {
         target_vars: SmallSet<Var>,
         ty: Type,
+        /// See `Answer::frozen`.
+        frozen: bool,
     },
 }
 
 impl Variable {
+    fn answer(ty: Type) -> Self {
+        Self::Answer { ty, frozen: false }
+    }
+
+    fn residual_answer(target_vars: SmallSet<Var>, ty: Type) -> Self {
+        Self::ResidualAnswer {
+            target_vars,
+            ty,
+            frozen: false,
+        }
+    }
+
     fn finished(q: &Quantified) -> Self {
         if q.default().is_some() {
-            Variable::Answer(q.as_gradual_type())
+            Variable::answer(q.as_gradual_type())
         } else {
             Variable::PartialQuantified(q.clone())
         }
@@ -307,8 +327,10 @@ impl Display for Variable {
             }
             Variable::Recursive => write!(f, "Recursive"),
             Variable::Unwrap(_) => write!(f, "Unwrap"),
-            Variable::Answer(t) => write!(f, "{t}"),
-            Variable::ResidualAnswer { target_vars, ty } => {
+            Variable::Answer { ty, .. } => write!(f, "{ty}"),
+            Variable::ResidualAnswer {
+                target_vars, ty, ..
+            } => {
                 write!(f, "ResidualAnswer({ty}, targets={target_vars:?})")
             }
         }
@@ -647,7 +669,7 @@ impl Solver {
         let variables = self.variables.lock();
         let mut variable = variables.get_mut(var);
         match &mut *variable {
-            Variable::Recursive | Variable::Answer(..) | Variable::ResidualAnswer { .. } => {
+            Variable::Recursive | Variable::Answer { .. } | Variable::ResidualAnswer { .. } => {
                 // Nothing to do if we have an answer already, and we want to skip recursive Vars
                 // which do not represent placeholder types.
                 None
@@ -661,23 +683,23 @@ impl Solver {
                 // constraints. If we see a Quantified while pinning other placeholder types, that
                 // means we forgot to finish it.
                 let result = Some(PinError::UnfinishedQuantified(q.clone()));
-                *variable = Variable::Answer(q.as_gradual_type());
+                *variable = Variable::answer(q.as_gradual_type());
                 result
             }
             Variable::PartialQuantified(q) => {
                 if pin_partial_types {
-                    *variable = Variable::Answer(q.as_gradual_type());
+                    *variable = Variable::answer(q.as_gradual_type());
                 }
                 None
             }
             Variable::PartialContained(range) if pin_partial_types => {
                 let range = *range;
-                *variable = Variable::Answer(self.heap.mk_any_implicit());
+                *variable = Variable::answer(self.heap.mk_any_implicit());
                 Some(PinError::ImplicitPartialContained(range))
             }
             Variable::PartialContained(_) => None,
             Variable::Unwrap(bounds) => {
-                *variable = Variable::Answer(
+                *variable = Variable::answer(
                     self.solve_bounds(mem::take(bounds))
                         .unwrap_or_else(Type::any_implicit),
                 );
@@ -694,17 +716,46 @@ impl Solver {
         self.sanitize_vars(ty.collect_all_vars(), pin_partial_types)
     }
 
+    /// A `ResidualAnswer` is as final as an `Answer`, so it freezes the same way. Its
+    /// `target_vars` only select who sees the residual read of the answer; the answer does not
+    /// point at them, so they are neither traversed nor frozen here.
     pub fn sanitize_vars(&self, mut pending: Vec<Var>, pin_partial_types: bool) -> Vec<PinError> {
         let mut seen = SmallSet::new();
+        let mut to_freeze = Vec::new();
         let mut errors = Vec::new();
         while let Some(var) = pending.pop() {
             if !seen.insert(var) {
                 continue;
             }
+            if matches!(
+                &*self.variables.lock().get(var),
+                Variable::Answer { frozen: true, .. }
+                    | Variable::ResidualAnswer { frozen: true, .. }
+            ) {
+                continue;
+            }
             if let Some(error) = self.pin_placeholder_type(var, pin_partial_types) {
                 errors.push(error);
             }
-            pending.extend(self.force_var(var).collect_all_vars());
+            // Reading a residual flattens it, which erases the vars held inside residual markers,
+            // so traverse the stored answer directly to reach everything it points at.
+            let residual_vars = match &*self.variables.lock().get(var) {
+                Variable::ResidualAnswer { ty, .. } => Some(ty.collect_all_vars()),
+                _ => None,
+            };
+            pending.extend(match residual_vars {
+                Some(vars) => vars,
+                None => self.force_var(var).collect_all_vars(),
+            });
+            to_freeze.push(var);
+        }
+        let variables = self.variables.lock();
+        for var in to_freeze {
+            if let Variable::Answer { frozen, .. } | Variable::ResidualAnswer { frozen, .. } =
+                &mut *variables.get_mut(var)
+            {
+                *frozen = true;
+            }
         }
         errors
     }
@@ -951,13 +1002,15 @@ impl Solver {
             if let Some(_guard) = lock.recurse(*x, recurser) {
                 let variable = lock.get(*x);
                 match &*variable {
-                    Variable::Answer(ty) => {
+                    Variable::Answer { ty, .. } => {
                         *t = ty.clone();
                         drop(variable);
                         drop(lock);
                         self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
                     }
-                    Variable::ResidualAnswer { target_vars, ty } => {
+                    Variable::ResidualAnswer {
+                        target_vars, ty, ..
+                    } => {
                         *t = self.residual_read_for_query_var(query_var, target_vars, ty);
                         drop(variable);
                         drop(lock);
@@ -992,7 +1045,7 @@ impl Solver {
                                 .unwrap_or_else(|| self.heap.mk_any_implicit()),
                             _ => self.heap.mk_any_implicit(),
                         };
-                        *e = Variable::Answer(ty.clone());
+                        *e = Variable::answer(ty.clone());
                         *t = ty;
                         drop(e);
                         drop(lock);
@@ -1014,10 +1067,10 @@ impl Solver {
     pub fn expand_unwrap(&self, v: Var) -> Type {
         let variables = self.variables.lock();
         match &*variables.get(v) {
-            Variable::Answer(t) => t.clone(),
-            Variable::ResidualAnswer { target_vars, ty } => {
-                self.residual_read_for_query_var(Some(v), target_vars, ty)
-            }
+            Variable::Answer { ty, .. } => ty.clone(),
+            Variable::ResidualAnswer {
+                target_vars, ty, ..
+            } => self.residual_read_for_query_var(Some(v), target_vars, ty),
             Variable::Unwrap(bounds) if let Some(bound) = self.solve_bounds(bounds.clone()) => {
                 bound
             }
@@ -1055,10 +1108,10 @@ impl Solver {
         let lock = self.variables.lock();
         let mut e = lock.get_mut(v);
         match &mut *e {
-            Variable::Answer(t) => t.clone(),
-            Variable::ResidualAnswer { target_vars, ty } => {
-                self.residual_read_for_query_var(Some(v), target_vars, ty)
-            }
+            Variable::Answer { ty, .. } => ty.clone(),
+            Variable::ResidualAnswer {
+                target_vars, ty, ..
+            } => self.residual_read_for_query_var(Some(v), target_vars, ty),
             _ => {
                 let ty = match &mut *e {
                     Variable::Quantified {
@@ -1073,7 +1126,7 @@ impl Solver {
                         .unwrap_or_else(|| self.heap.mk_any_implicit()),
                     _ => self.heap.mk_any_implicit(),
                 };
-                *e = Variable::Answer(ty.clone());
+                *e = Variable::answer(ty.clone());
                 ty
             }
         }
@@ -1694,7 +1747,7 @@ impl Solver {
         has_generic_residual: bool,
     ) -> Type {
         match value {
-            Variable::Answer(ty) | Variable::ResidualAnswer { ty, .. } => ty.clone(),
+            Variable::Answer { ty, .. } | Variable::ResidualAnswer { ty, .. } => ty.clone(),
             Variable::Quantified { quantified, bounds } => {
                 if let Some(bound) = self.solve_bounds(bounds.clone()) {
                     return bound;
@@ -1804,7 +1857,8 @@ impl Solver {
                 }));
                 constraints
             }
-            Variable::Answer(branch_ty) | Variable::ResidualAnswer { ty: branch_ty, .. } => {
+            Variable::Answer { ty: branch_ty, .. }
+            | Variable::ResidualAnswer { ty: branch_ty, .. } => {
                 // If this branch already collapsed to a concrete type, treat
                 // compatibility as type equivalence against the solved type.
                 vec![
@@ -1828,7 +1882,7 @@ impl Solver {
             let variables = self.variables.lock();
             vars.into_iter()
                 .filter(|v| {
-                    matches!(&*variables.get(*v), Variable::Answer(answer)
+                    matches!(&*variables.get(*v), Variable::Answer { ty: answer, .. }
                         if answer.collect_maybe_placeholder_vars().contains(v))
                 })
                 .collect()
@@ -2082,7 +2136,7 @@ impl Solver {
         for &v in &vs.0 {
             let mut variable = lock.get_mut(v);
             match &mut *variable {
-                Variable::Answer(_) | Variable::ResidualAnswer { .. } => {
+                Variable::Answer { .. } | Variable::ResidualAnswer { .. } => {
                     // We pin the quantified var to a type when it first appears in a subset constraint,
                     // and at that point we check the instantiation with the bound.
                     if let Some(e) = self.instantiation_errors.read().get(&v) {
@@ -2101,7 +2155,7 @@ impl Solver {
                         if has_overload_captures {
                             solved_quantified_names_by_var.insert(v, q.name().clone());
                         }
-                        *variable = Variable::Answer(bound);
+                        *variable = Variable::answer(bound);
                     } else {
                         *bounds = original_bounds;
                     }
@@ -2116,7 +2170,7 @@ impl Solver {
                 let lock = self.variables.lock();
                 vs.0.iter()
                     .filter_map(|&v| match &*lock.get(v) {
-                        Variable::Answer(solved_ty) => Some((
+                        Variable::Answer { ty: solved_ty, .. } => Some((
                             v,
                             SolvedVarInfo {
                                 quantified_name: solved_quantified_names_by_var.get(&v).cloned(),
@@ -2147,7 +2201,7 @@ impl Solver {
                         }
                         _ => continue,
                     };
-                    *branch_value = Variable::Answer(answer);
+                    *branch_value = Variable::answer(answer);
                 }
             }
             pruning
@@ -2249,9 +2303,9 @@ impl Solver {
                 }
 
                 *e = if let Some(bound) = solved_bound {
-                    Variable::Answer(bound)
+                    Variable::answer(bound)
                 } else if all_pruned_witness.is_some() {
-                    Variable::Answer(Type::never())
+                    Variable::answer(Type::never())
                 } else if let Some(witness_hash) = witness_hash {
                     let overload_captures =
                         captures.overload.get(&witness_hash).unwrap_or_else(|| {
@@ -2267,18 +2321,18 @@ impl Solver {
                         overload_captures,
                         &overload_pruning_by_witness,
                     );
-                    Variable::ResidualAnswer { target_vars, ty }
+                    Variable::residual_answer(target_vars, ty)
                 } else if let Some(target_vars) =
                     self.find_unique_generic_witness(v, &captures.generic, &root_map)
                 {
-                    Variable::ResidualAnswer {
+                    Variable::residual_answer(
                         target_vars,
-                        ty: Type::callable_residual_generic(q.clone()),
-                    }
+                        Type::callable_residual_generic(q.clone()),
+                    )
                 } else if infer_with_first_use {
                     Variable::finished(q)
                 } else {
-                    Variable::Answer(q.as_gradual_type())
+                    Variable::answer(q.as_gradual_type())
                 };
             }
         }
@@ -2344,7 +2398,7 @@ impl Solver {
                         *t = param.clone().to_type(&self.heap);
                     } else if !bounds.is_empty() {
                         // If the variable has bounds, finalize its type now.
-                        *e = Variable::Answer(
+                        *e = Variable::answer(
                             self.solve_bounds(mem::take(bounds))
                                 .unwrap_or_else(|| q.as_gradual_type()),
                         );
@@ -2491,12 +2545,14 @@ impl Solver {
                 Type::Var(v) if let Some(_guard) = variables.recurse(v, recurser) => {
                     let variable = variables.get(v);
                     match &*variable {
-                        Variable::Answer(t) => {
-                            let t = t.clone();
+                        Variable::Answer { ty, .. } => {
+                            let t = ty.clone();
                             drop(variable);
                             expand(t, variables, recurser, heap, query_var, residual_read, res);
                         }
-                        Variable::ResidualAnswer { target_vars, ty } => {
+                        Variable::ResidualAnswer {
+                            target_vars, ty, ..
+                        } => {
                             let t = residual_read(query_var, target_vars, ty);
                             drop(variable);
                             expand(t, variables, recurser, heap, query_var, residual_read, res);
@@ -2516,7 +2572,7 @@ impl Solver {
         let lock = self.variables.lock();
         let variable = lock.get(var);
         match &*variable {
-            Variable::Answer(forced) => {
+            Variable::Answer { ty: forced, .. } => {
                 // An answer was already forced - use it, not the type from analysis.
                 //
                 // This can only happen in a fixpoint, and we'll catch it with a fixpoint non-convergence
@@ -2529,6 +2585,7 @@ impl Solver {
             Variable::ResidualAnswer {
                 target_vars,
                 ty: forced,
+                ..
             } => {
                 let forced = self.residual_read_for_query_var(Some(var), target_vars, forced);
                 drop(variable);
@@ -2556,7 +2613,7 @@ impl Solver {
                 // Then remove any reference to self, before unioning it back together
                 res.retain(|x| x != &Type::Var(var));
                 let ty = unions(res, &self.heap);
-                lock.update(var, Variable::Answer(ty.clone()));
+                lock.update(var, Variable::answer(ty.clone()));
                 ty
             }
         }
@@ -3593,16 +3650,20 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let variable1 = variables.get(*v1);
                 let variable2 = variables.get(*v2);
                 let solved1 = match &*variable1 {
-                    Variable::Answer(t1) => Some(t1.clone()),
-                    Variable::ResidualAnswer { target_vars, ty } => Some(
+                    Variable::Answer { ty: t1, .. } => Some(t1.clone()),
+                    Variable::ResidualAnswer {
+                        target_vars, ty, ..
+                    } => Some(
                         self.solver
                             .residual_read_for_query_var(Some(*v1), target_vars, ty),
                     ),
                     _ => None,
                 };
                 let solved2 = match &*variable2 {
-                    Variable::Answer(t2) => Some(t2.clone()),
-                    Variable::ResidualAnswer { target_vars, ty } => Some(
+                    Variable::Answer { ty: t2, .. } => Some(t2.clone()),
+                    Variable::ResidualAnswer {
+                        target_vars, ty, ..
+                    } => Some(
                         self.solver
                             .residual_read_for_query_var(Some(*v2), target_vars, ty),
                     ),
@@ -3722,7 +3783,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let variables = self.solver.variables.lock();
                 let v1_ref = variables.get(*v1);
                 match &*v1_ref {
-                    Variable::Answer(t1) => {
+                    Variable::Answer { ty: t1, .. } => {
                         let t1 = t1.clone();
                         drop(v1_ref);
                         drop(variables);
@@ -3731,6 +3792,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Variable::ResidualAnswer {
                         target_vars,
                         ty: t1,
+                        ..
                     } => {
                         let t1 =
                             self.solver
@@ -3746,7 +3808,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         // TODO(https://github.com/facebook/pyrefly/issues/105): figure out what to
                         // do with ParamSpec.
                         drop(v1_ref);
-                        variables.update(*v1, Variable::Answer(t2.clone()));
+                        variables.update(*v1, Variable::answer(t2.clone()));
                         Ok(())
                     }
                     Variable::Quantified { .. } | Variable::Unwrap(_) => {
@@ -3772,7 +3834,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             // defensive path normalized in case an internal
                             // quantified value is constructed with constraints.
                             let answer = normalize_answer_for_kind(kind, Cow::Borrowed(t2));
-                            variables.update(*v1, Variable::Answer(answer));
+                            variables.update(*v1, Variable::answer(answer));
                             drop(variables);
                             if let Type::Quantified(q_t2) = t2 {
                                 if !self.quantified_satisfies_constraints(q_t2, &constraints) {
@@ -3793,7 +3855,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                                 self.solver
                                     .variables
                                     .lock()
-                                    .update(*v1, Variable::Answer(constraint));
+                                    .update(*v1, Variable::answer(constraint));
                             } else if !t2.is_any() {
                                 self.solver.instantiation_errors.write().insert(
                                     *v1,
@@ -3806,7 +3868,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             }
                         } else {
                             let answer = normalize_answer_for_kind(kind, Cow::Borrowed(t2));
-                            variables.update(*v1, Variable::Answer(answer));
+                            variables.update(*v1, Variable::answer(answer));
                             drop(variables);
                             if self.is_subset_eq(t2, &bound).is_err() {
                                 self.solver.instantiation_errors.write().insert(
@@ -3823,14 +3885,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         // the PartialContained behavior (see comment there).
                         let variables = self.solver.variables.lock();
                         let v1_current = variables.get(*v1);
-                        if let Variable::Answer(t) | Variable::ResidualAnswer { ty: t, .. } =
-                            &*v1_current
+                        if let Variable::Answer { ty: t, .. }
+                        | Variable::ResidualAnswer { ty: t, .. } = &*v1_current
                             && t.is_none()
                         {
                             let widened =
                                 unions(vec![t.clone(), Type::any_implicit()], &self.solver.heap);
                             drop(v1_current);
-                            variables.update(*v1, Variable::Answer(widened));
+                            variables.update(*v1, Variable::answer(widened));
                         }
                         Ok(())
                     }
@@ -3845,12 +3907,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         } else {
                             t2.clone()
                         };
-                        variables.update(*v1, Variable::Answer(answer));
+                        variables.update(*v1, Variable::answer(answer));
                         Ok(())
                     }
                     Variable::Recursive => {
                         drop(v1_ref);
-                        variables.update(*v1, Variable::Answer(t2.clone()));
+                        variables.update(*v1, Variable::answer(t2.clone()));
                         Ok(())
                     }
                 }
@@ -3860,7 +3922,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let variables = self.solver.variables.lock();
                 let v2_ref = variables.get(*v2);
                 match &*v2_ref {
-                    Variable::Answer(t2) => {
+                    Variable::Answer { ty: t2, .. } => {
                         let t2 = t2.clone();
                         drop(v2_ref);
                         drop(variables);
@@ -3869,6 +3931,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Variable::ResidualAnswer {
                         target_vars,
                         ty: t2,
+                        ..
                     } => {
                         let t2 =
                             self.solver
@@ -3905,7 +3968,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             self.solver
                                 .variables
                                 .lock()
-                                .update(*v2, Variable::Answer(answer));
+                                .update(*v2, Variable::answer(answer));
                             Ok(())
                         } else {
                             self.solver.add_lower_bound(*v2, answer, &mut |got, want| {
@@ -3934,9 +3997,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                                 vec![answer.clone(), Type::any_implicit()],
                                 &self.solver.heap,
                             );
-                            variables.update(*v2, Variable::Answer(widened));
+                            variables.update(*v2, Variable::answer(widened));
                         } else {
-                            variables.update(*v2, Variable::Answer(answer));
+                            variables.update(*v2, Variable::answer(answer));
                         }
                         Ok(())
                     }
@@ -3952,7 +4015,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         } else {
                             t1_p
                         };
-                        variables.update(*v2, Variable::Answer(answer));
+                        variables.update(*v2, Variable::answer(answer));
                         Ok(())
                     }
                     Variable::Unwrap(_) => {
@@ -3965,7 +4028,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     }
                     Variable::Recursive => {
                         drop(v2_ref);
-                        variables.update(*v2, Variable::Answer(t1.clone()));
+                        variables.update(*v2, Variable::answer(t1.clone()));
                         Ok(())
                     }
                 }
@@ -4041,7 +4104,7 @@ mod tests {
         solver
             .variables
             .lock()
-            .insert_fresh(var, Variable::Answer(answer));
+            .insert_fresh(var, Variable::answer(answer));
         (solver, var)
     }
 
@@ -4086,7 +4149,7 @@ mod tests {
         solver
             .variables
             .lock()
-            .insert_fresh(outer, Variable::Answer(Type::Var(partial)));
+            .insert_fresh(outer, Variable::answer(Type::Var(partial)));
         let ty = Type::Var(outer);
 
         let errors = solver.sanitize_type_vars(&ty, true);
@@ -4097,6 +4160,55 @@ mod tests {
         ));
         assert!(solver.force_var(partial).is_any());
         assert_eq!(ty, Type::Var(outer));
+        let variables = solver.variables.lock();
+        for var in [outer, partial] {
+            assert!(matches!(
+                &*variables.get(var),
+                Variable::Answer { frozen: true, .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn sanitize_type_vars_freezes_through_residual_answers() {
+        let solver = Solver::new(false, true, false, false, false, false);
+        let uniques = UniqueFactory::new();
+        let range = TextRange::new(TextSize::new(1), TextSize::new(3));
+        let partial = solver.fresh_partial_contained(&uniques, range);
+        let residual = Var::new(&uniques);
+        // The partial var sits in the quantified's restriction, which the residual's flattened
+        // read discards. Only a direct traversal of the stored answer can reach it.
+        let ty = Type::callable_residual_generic(quantified_with_restriction(
+            QuantifiedKind::TypeVar,
+            0,
+            Restriction::Bound(Type::Var(partial)),
+        ));
+        solver
+            .variables
+            .lock()
+            .insert_fresh(residual, Variable::residual_answer(SmallSet::new(), ty));
+
+        let errors = solver.sanitize_type_vars(&Type::Var(residual), true);
+
+        assert!(
+            matches!(
+                errors.as_slice(),
+                [PinError::ImplicitPartialContained(error_range)] if *error_range == range
+            ),
+            "sanitizing must traverse into the residual answer and pin the partial var it holds"
+        );
+        let variables = solver.variables.lock();
+        assert!(
+            matches!(
+                &*variables.get(residual),
+                Variable::ResidualAnswer { frozen: true, .. }
+            ),
+            "a residual answer is a final answer, so it freezes like a plain answer"
+        );
+        assert!(matches!(
+            &*variables.get(partial),
+            Variable::Answer { frozen: true, .. }
+        ));
     }
 
     fn quantified(kind: QuantifiedKind, index: u32) -> Quantified {
