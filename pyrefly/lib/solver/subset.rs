@@ -2692,7 +2692,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Type::Concatenate(ls, l_pspec), Type::Concatenate(us, u_pspec)) => {
                 self.is_paramspec_subset_of_paramspec(ls, l_pspec, us, u_pspec)
             }
-            (Type::Ellipsis, _)
+            (Type::EllipsisValue, _)
                 if let Some(ellipsis) = self.type_order.stdlib().ellipsis_type() =>
             {
                 // Bit of a weird case - pretty sure we should be modelling these slightly differently

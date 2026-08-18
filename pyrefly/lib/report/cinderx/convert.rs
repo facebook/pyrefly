@@ -301,7 +301,9 @@ pub(crate) fn type_to_structured(
                 insert_simple_other_form("typing.Any", table)
             }
         },
-        Type::Ellipsis => insert_simple_other_form("builtins.ellipsis", table),
+        Type::EllipsisValue | Type::Ellipsis => {
+            insert_simple_other_form("builtins.ellipsis", table)
+        }
         Type::Tuple(tuple) => {
             let arg_indices: Vec<usize> = match tuple {
                 pyrefly_types::tuple::Tuple::Concrete(elts) => elts

@@ -416,9 +416,9 @@ impl TypeHeap {
         Type::Kwargs(Box::new(quantified))
     }
 
-    /// Create a `Type::Ellipsis`.
+    /// Create a `Type::EllipsisValue`.
     pub fn mk_ellipsis(&self) -> Type {
-        Type::Ellipsis
+        Type::EllipsisValue
     }
 
     /// Create a `Type::TypeAlias` from a TypeAliasData.

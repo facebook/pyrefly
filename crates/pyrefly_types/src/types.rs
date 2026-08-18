@@ -884,6 +884,9 @@ pub enum Type {
     Type(Box<Type>),
     /// TypeForm[T] — a type form object (PEP 747).
     TypeForm(Box<Type>),
+    /// The type of a `...` value
+    EllipsisValue,
+    /// A literal `...` in a type annotation (e.g., `Concatenate[int, ...]`)
     Ellipsis,
     Any(AnyStyle),
     Never(NeverStyle),
@@ -975,7 +978,7 @@ impl Visit for Type {
             Type::KwargsValue(x) => x.visit(f),
             Type::Type(x) => x.visit(f),
             Type::TypeForm(x) => x.visit(f),
-            Type::Ellipsis => {}
+            Type::EllipsisValue | Type::Ellipsis => {}
             Type::Any(x) => x.visit(f),
             Type::Never(x) => x.visit(f),
             Type::TypeAlias(x) => x.visit(f),
@@ -1038,7 +1041,7 @@ impl VisitMut for Type {
             Type::KwargsValue(x) => x.visit_mut(f),
             Type::Type(x) => x.visit_mut(f),
             Type::TypeForm(x) => x.visit_mut(f),
-            Type::Ellipsis => {}
+            Type::EllipsisValue | Type::Ellipsis => {}
             Type::Any(x) => x.visit_mut(f),
             Type::Never(x) => x.visit_mut(f),
             Type::TypeAlias(x) => x.visit_mut(f),

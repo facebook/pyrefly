@@ -1032,7 +1032,7 @@ def add_int[**P](x: A[P]) -> A[Concatenate[int, P]]: ...
 def drop_int[**P](x: A[Concatenate[int, P]]) -> A[P]: ...
 
 g: A[...] = A()
-reveal_type(add_int(g))   # E: revealed type: A[Concatenate[int, Ellipsis]]
+reveal_type(add_int(g))   # E: revealed type: A[Concatenate[int, ...]]
 reveal_type(drop_int(g))  # E: revealed type: A[@_]
 "#,
 );

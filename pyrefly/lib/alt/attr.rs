@@ -2492,7 +2492,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::BoundMethod(bound_method) => {
                 acc.push(AttributeBase1::BoundMethod(bound_method.func.clone()));
             }
-            Type::Ellipsis => {
+            Type::EllipsisValue => {
                 if let Some(cls) = self.stdlib.ellipsis_type() {
                     acc.push(AttributeBase1::ClassInstance(cls.clone()))
                 }
@@ -2590,7 +2590,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)
-            | Type::Materialization => {}
+            | Type::Materialization
+            | Type::Ellipsis => {}
         }
     }
 

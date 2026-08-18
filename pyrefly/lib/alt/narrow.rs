@@ -2473,7 +2473,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn is_literal(ty: &Type) -> bool {
         matches!(
             ty,
-            Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_)
+            Type::None | Type::EllipsisValue | Type::Literal(_) | Type::Sentinel(_)
         )
     }
 
@@ -2481,7 +2481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// This determines whether some narrowing operations are safe.
     fn is_identity_literal(ty: &Type) -> bool {
         match ty {
-            Type::None | Type::Ellipsis => true,
+            Type::None | Type::EllipsisValue => true,
             Type::Literal(f) => matches!(f.value, Lit::Bool(_) | Lit::Enum(_)),
             _ => false,
         }
@@ -2490,7 +2490,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn literal_equal(left: &Type, right: &Type) -> bool {
         match (left, right) {
             (Type::None, Type::None) => true,
-            (Type::Ellipsis, Type::Ellipsis) => true,
+            (Type::EllipsisValue, Type::EllipsisValue) => true,
             (Type::Sentinel(s1), Type::Sentinel(s2)) => s1 == s2,
             (Type::Literal(left), Type::Literal(right)) => left.value == right.value,
             _ => false,

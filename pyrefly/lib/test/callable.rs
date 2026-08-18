@@ -2126,7 +2126,7 @@ class NoArgs(Protocol):
 def f(n: NoArgs) -> None:
     ok: Gradual = n        # a gradual target accepts a stricter callable
     err1: Subst[Any] = n   # E: `NoArgs` is not assignable to `Subst[Any]`
-    err2: SubstP[...] = n  # E: `NoArgs` is not assignable to `SubstP[Ellipsis]`
+    err2: SubstP[...] = n  # E: `NoArgs` is not assignable to `SubstP[...]`
     "#,
 );
 

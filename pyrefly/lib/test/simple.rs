@@ -1166,11 +1166,11 @@ testcase!(
 from typing import Callable, ParamSpec, TypeVar, Generic
 
 # `...` leaking into non-ParamSpec positions is rejected.
-class C1[T: ...]: ...                # E: `Ellipsis` is not allowed in this context
+class C1[T: ...]: ...                # E: `...` is not allowed in this context
 x1: list[...]                        # E: `...` cannot be used for type parameter
 x2: dict[int, ...]                   # E: `...` cannot be used for type parameter
-x3: type[...]                        # E: `Ellipsis` is not allowed in this context
-TBad = TypeVar("TBad", bound=...)    # E: `Ellipsis` is not allowed in this context
+x3: type[...]                        # E: `...` is not allowed in this context
+TBad = TypeVar("TBad", bound=...)    # E: `...` is not allowed in this context
 
 # Still rejected via existing paths.
 def g() -> ...: ...                  # E: Expression cannot be used in annotations

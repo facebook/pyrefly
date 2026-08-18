@@ -597,7 +597,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if arg.is_any() {
             // Any is the universal type that is compatible with any ParamSpec.
             // Convert it to Ellipsis, which is the gradual type for ParamSpec.
-            self.heap.mk_ellipsis()
+            Type::Ellipsis
         } else {
             self.error(
                 errors,
@@ -608,7 +608,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.for_display(arg.clone())
                 ),
             );
-            self.heap.mk_ellipsis()
+            Type::Ellipsis
         }
     }
 
