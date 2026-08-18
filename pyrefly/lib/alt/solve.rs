@@ -5279,6 +5279,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Report a reference to a type parameter from an outer class.
+    ///
+    /// Kept out of line to reduce the stack frame of `binding_to_type_info`.
+    #[inline(never)]
+    fn binding_to_type_info_out_of_scope_type_parameter(
+        &self,
+        source: Idx<Key>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
+        let name = match self.bindings().get(source) {
+            Binding::TypeParameter(tp) => &tp.name,
+            binding => unreachable!("out-of-scope type parameter source is {binding:?}"),
+        };
+        self.error(
+            errors,
+            range,
+            ErrorKind::InvalidTypeVar,
+            format!("Type variable `{name}` is not in scope"),
+        );
+        TypeInfo::of_ty(self.heap.mk_any_error())
+    }
+
     /// Handle `Binding::NameAssign` in binding_to_type_info - process name assignment with dict facets.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
@@ -5341,6 +5364,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
             Binding::AssignToSubscript(x) => {
                 self.binding_to_type_info_assign_to_subscript(&x.0, &x.1, errors)
+            }
+            Binding::OutOfScopeTypeParameter(source, range) => {
+                self.binding_to_type_info_out_of_scope_type_parameter(*source, *range, errors)
             }
             Binding::PossibleLegacyTParam(legacy_tparam, has_scoped_tparams) => self
                 .binding_to_type_info_possible_legacy_tparam(
@@ -5758,6 +5784,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Binding::Narrow(..)
             | Binding::AssignToAttribute(..)
             | Binding::AssignToSubscript(..)
+            | Binding::OutOfScopeTypeParameter(..)
             | Binding::PossibleLegacyTParam(..) => {
                 // These forms require propagating attribute narrowing information, so they
                 // are handled in `binding_to_type_info`

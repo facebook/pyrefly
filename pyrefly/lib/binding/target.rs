@@ -155,7 +155,9 @@ impl<'a> BindingsBuilder<'a> {
             // implicit builtin, binding the assigned expression has already materialized it. A still
             // unmaterialized builtin here is indistinguishable from any other name that is absent
             // from local flow, so leave it un-narrowed.
-            NameReadInfo::ImplicitBuiltin { .. } | NameReadInfo::NotFound => false,
+            NameReadInfo::ImplicitBuiltin { .. }
+            | NameReadInfo::OutOfScopeTypeParameter { .. }
+            | NameReadInfo::NotFound => false,
         };
         if name_is_defined {
             self.scopes.narrow_in_current_flow(name, narrowed_idx);

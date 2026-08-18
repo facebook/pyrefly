@@ -123,6 +123,9 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             {
                 current_idx = bindings.key_to_idx(&key);
             }
+            Binding::OutOfScopeTypeParameter(k, _) => {
+                current_idx = *k;
+            }
             _ => {
                 // We have reached the end of the forwarding chain, and did not find any definitions
                 break;

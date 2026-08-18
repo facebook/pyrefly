@@ -107,6 +107,8 @@ pub enum NameReadInfo {
     /// `BindingsBuilder::materialize_implicit_builtin_name`). Callers that only care about
     /// lexically-defined names should treat this the same as `NotFound`.
     ImplicitBuiltin { module: ModuleName },
+    /// The name resolves to a type parameter outside the current class's scope.
+    OutOfScopeTypeParameter { key: Key },
     /// No such name is defined in the current scope stack, and it is not a builtin.
     NotFound,
 }
@@ -241,6 +243,8 @@ enum StaticStyle {
     MutableCapture(MutableCapture),
     /// I have a single definition, possibly annotated.
     SingleDef(Option<Idx<KeyAnnotation>>),
+    /// I am a PEP 695 type parameter.
+    ScopedTypeParam,
     /// I am an ImplicitGlobal definition.
     ImplicitGlobal,
     /// I am defined only by delete statements, with no other definitions.
@@ -303,7 +307,8 @@ impl StaticStyle {
             | Self::ImplicitGlobal
             | Self::MergeableImport
             | Self::ImplicitBuiltinImport(_)
-            | Self::PossibleLegacyTParam => None,
+            | Self::PossibleLegacyTParam
+            | Self::ScopedTypeParam => None,
         }
     }
 
@@ -371,7 +376,9 @@ impl StaticInfo {
                 Key::Import(Box::new((name.clone(), self.range)))
             }
             StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(Box::new(name.clone())),
-            StaticStyle::SingleDef(..) => Key::Definition(short_identifier()),
+            StaticStyle::SingleDef(..) | StaticStyle::ScopedTypeParam => {
+                Key::Definition(short_identifier())
+            }
             StaticStyle::PossibleLegacyTParam => Key::PossibleLegacyTParam(self.range),
         }
     }
@@ -2469,6 +2476,7 @@ impl Scopes {
                 }
                 NameReadInfo::Flow { .. }
                 | NameReadInfo::Anywhere { .. }
+                | NameReadInfo::OutOfScopeTypeParameter { .. }
                 | NameReadInfo::NotFound => None,
             }
         }
@@ -2487,6 +2495,19 @@ impl Scopes {
             Hashed::new(name.id.clone()),
             name.range,
             StaticStyle::SingleDef(ann),
+            name.range,
+        )
+    }
+
+    /// Add a PEP 695 type parameter to the current annotation scope.
+    ///
+    /// Callers must always define the name via a `Key::Definition` immediately
+    /// afterward or downstream lookups may panic.
+    pub fn add_scoped_type_parameter_to_current_static(&mut self, name: &Identifier) {
+        self.current_mut().stat.upsert(
+            Hashed::new(name.id.clone()),
+            name.range,
+            StaticStyle::ScopedTypeParam,
             name.range,
         )
     }
@@ -3202,14 +3223,38 @@ impl Scopes {
             usage,
             Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
         );
-        // A class's legacy type parameters live in its class-annotation scope and are only in
-        // scope within that class. Track whether the walk has crossed a class-annotation scope so
-        // that a nested class does not resolve an enclosing class's legacy type parameters.
+        // Class type parameters are hidden by an intervening class annotation scope.
         let mut crossed_class_annotation = false;
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
             let is_class_annotation =
                 matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
+            // Class body scopes are dynamic, not static, so if we don't find a name in the
+            // current flow we keep looking. In every other kind of scope, anything the Python
+            // compiler has identified as local shadows enclosing scopes, so we should prefer
+            // inner static lookups to outer flow lookups.
+            let static_info = if is_class {
+                None
+            } else {
+                scope.stat.0.get_hashed(name)
+            };
+
+            if crossed_class_annotation
+                && is_class_annotation
+                && let Some(static_info) = static_info
+                && matches!(static_info.style, StaticStyle::ScopedTypeParam)
+                // Type parameters have special scoping rules that are more restrictive than
+                // runtime semantics. Apply these rules only to static type usages. Non-static
+                // usages fall through to normal lookup, which follows the runtime.
+                && matches!(
+                    usage,
+                    Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
+                )
+            {
+                return Some(NameReadInfo::OutOfScopeTypeParameter {
+                    key: static_info.as_key(name.into_key()),
+                });
+            }
 
             let flow_info = scope.flow.get_info_hashed(name);
             let is_class_overload = is_class
@@ -3250,11 +3295,7 @@ impl Scopes {
                     initialized,
                 });
             }
-            // Class body scopes are dynamic, not static, so if we don't find a name in the
-            // current flow we keep looking. In every other kind of scope, anything the Python
-            // compiler has identified as local shadows enclosing scopes, so we should prefer
-            // inner static lookups to outer flow lookups.
-            if !is_class && let Some(static_info) = scope.stat.0.get_hashed(name) {
+            if let Some(static_info) = static_info {
                 // A walrus operator's target is added to the comprehension's
                 // static scope (via `add_lvalue_to_current_static`) before the
                 // walrus write adds it to flow. When reading the name before
@@ -3295,8 +3336,7 @@ impl Scopes {
                     implicit_builtin_module: static_info.implicit_builtin_module(),
                 });
             }
-            // We are moving past this class-annotation scope without resolving the name here, so any
-            // legacy type parameters in outer class-annotation scopes are now out of scope.
+            // Subsequent class annotation scopes belong to outer classes.
             if is_class_annotation {
                 crossed_class_annotation = true;
             }

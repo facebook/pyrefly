@@ -3203,6 +3203,30 @@ Definition Result:
     );
 }
 
+#[test]
+fn goto_def_nested_typevar() {
+    // Even though accessing a typevar from an outer class is illegal, goto-def should still work.
+    let code = r#"
+class Outer[T]:
+    class Inner:
+        x: T
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+4 |         x: T
+               ^
+Definition Result:
+2 | class Outer[T]:
+                ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 /// When importing a name from a non-Python module (e.g. a .thrift file),
 /// go-to-definition on the imported name should navigate to the actual
 /// symbol definition in the source file, not just the top of the file.

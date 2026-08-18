@@ -514,7 +514,6 @@ reveal_type(C.D.f)  # E: [T](self: C.D, x: T) -> T
 );
 
 testcase!(
-    bug = "Missing errors on scoped type vars",
     test_outer_class_typevar_is_out_of_scope_in_default_and_body,
     r#"
 from typing import Any, Generic, TypeVar, assert_type
@@ -531,17 +530,16 @@ assert_type(A.B().x, Any)
 assert_type(A.B().y, Any)
 
 class C[Outer]:
-    class D[Inner = Outer]:  # missing error
-        x: Outer  # missing error
+    class D[Inner = Outer]:  # E: not in scope
+        x: Outer  # E: not in scope
         y: Inner
 
-assert_type(C.D().x, Any)  # E: assert_type(Outer, Any)
-assert_type(C.D().y, Any)  # E: assert_type(Outer, Any)
+assert_type(C.D().x, Any)
+assert_type(C.D().y, Any)
     "#,
 );
 
 testcase!(
-    bug = "Missing error on scoped type vars",
     test_outer_class_typevar_is_out_of_scope_in_bases,
     r#"
 from typing import Generic, TypeVar
@@ -553,7 +551,7 @@ class A(Generic[LegacyT]):
         pass
 
 class C[T]:
-    class D(list[T]):  # missing error
+    class D(list[T]):  # E: not in scope
         pass
     "#,
 );
@@ -577,5 +575,39 @@ def g[T](x: T):
 
 assert_type(f(0), int)
 assert_type(g(0), int)
+    "#,
+);
+
+testcase!(
+    test_cannot_redeclare_outer_typevar_in_class_in_method,
+    r#"
+from typing import Generic, TypeVar, assert_type
+T = TypeVar("T")
+class A[T]:
+    def f1(self):
+        class C(list[T]): ...  # E: not in scope
+    def f2(self):
+        class C[T](list[T]): ...  # E: shadows
+class B(Generic[T]):
+    def f1(self):
+        class C(list[T]): ...  # E: not in scope
+    def f2(self):
+        class C[T](list[T]): ...  # E: shadows
+    "#,
+);
+
+testcase!(
+    test_inner_method_can_access_outer_typevar_as_value,
+    r#"
+from typing import Generic, TypeVar, assert_type
+class Outer[T]:
+    class Inner:
+        def f(self):
+            assert_type(T, TypeVar)
+LegacyT = TypeVar("LegacyT")
+class LegacyOuter(Generic[LegacyT]):
+    class Inner:
+        def f(self):
+            assert_type(LegacyT, TypeVar)
     "#,
 );

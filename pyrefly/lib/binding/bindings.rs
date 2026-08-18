@@ -148,6 +148,8 @@ pub enum NameLookupResult {
         initialized: InitializedInFlow,
         is_module_scope: bool,
     },
+    /// This name resolves to a type parameter outside the current class's scope.
+    OutOfScopeTypeParameter { idx: Idx<Key> },
     /// This name is not defined in the current scope stack.
     NotFound,
 }
@@ -156,7 +158,7 @@ impl NameLookupResult {
     fn found(self) -> Option<Idx<Key>> {
         match self {
             NameLookupResult::Found { idx, .. } => Some(idx),
-            NameLookupResult::NotFound => None,
+            NameLookupResult::OutOfScopeTypeParameter { .. } | NameLookupResult::NotFound => None,
         }
     }
 }
@@ -1628,6 +1630,11 @@ impl<'a> BindingsBuilder<'a> {
                     is_module_scope: true,
                 }
             }
+            NameReadInfo::OutOfScopeTypeParameter { key } => {
+                NameLookupResult::OutOfScopeTypeParameter {
+                    idx: self.idx_for_promise(key),
+                }
+            }
             NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
     }
@@ -2154,7 +2161,8 @@ impl<'a> BindingsBuilder<'a> {
                     QuantifiedKind::TypeVarTuple
                 }
             };
-            self.scopes.add_parameter_to_current_static(&name, None);
+            self.scopes
+                .add_scoped_type_parameter_to_current_static(&name);
             // PEP 695 type parameters use the parameter's own definition range as anchor,
             // which is unique within the module by construction (no two syntax nodes share a range).
             let identity = QuantifiedIdentity::new(
@@ -2313,6 +2321,9 @@ enum TParamLookupResult {
         idx: Idx<Key>,
         initialized: InitializedInFlow,
     },
+    OutOfScopeTypeParameter {
+        idx: Idx<Key>,
+    },
     NotFound,
 }
 
@@ -2329,6 +2340,9 @@ impl TParamLookupResult {
                 initialized: initialized.clone(),
                 is_module_scope: false,
             },
+            Self::OutOfScopeTypeParameter { idx } => {
+                NameLookupResult::OutOfScopeTypeParameter { idx: *idx }
+            }
             Self::NotFound => NameLookupResult::NotFound,
         }
     }
@@ -2470,6 +2484,9 @@ impl<'a> BindingsBuilder<'a> {
                         initialized,
                     },
                 }
+            }
+            NameLookupResult::OutOfScopeTypeParameter { idx } => {
+                TParamLookupResult::OutOfScopeTypeParameter { idx }
             }
             NameLookupResult::NotFound => TParamLookupResult::NotFound,
         }

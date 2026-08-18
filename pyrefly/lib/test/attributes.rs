@@ -1256,19 +1256,18 @@ def f():
 );
 
 testcase!(
-    bug = "TODO(stroxler): We need to define the semantics of generic class nesting and avoid leaked type variables",
     test_class_nested_inside_generic_class,
     r#"
-from typing import Any, assert_type, reveal_type
+from typing import Any, assert_type
 class Outer[T]:
     class Inner:
-        x: T | None = None
+        x: T | None = None  # E: not in scope
 assert_type(Outer[int].Inner, type[Outer.Inner])
 assert_type(Outer.Inner, type[Outer.Inner])
-reveal_type(Outer[int].Inner.x)  # E: revealed type: T | None
-reveal_type(Outer.Inner.x)  # E: revealed type: T | None
-reveal_type(Outer[int].Inner().x)  # E: revealed type: T | None
-reveal_type(Outer.Inner().x)  # E: revealed type: T | None
+assert_type(Outer[int].Inner.x, Any)
+assert_type(Outer.Inner.x, Any)
+assert_type(Outer[int].Inner().x, Any)
+assert_type(Outer.Inner().x, Any)
    "#,
 );
 

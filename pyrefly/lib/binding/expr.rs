@@ -425,6 +425,9 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 self.defer_bound_name(key, lookup_result_idx, usage, promote)
             }
+            NameLookupResult::OutOfScopeTypeParameter { idx } => {
+                self.insert_binding(key, Binding::OutOfScopeTypeParameter(idx, name.range))
+            }
             NameLookupResult::NotFound => {
                 if self.scopes.is_definitely_unreachable() {
                     return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));

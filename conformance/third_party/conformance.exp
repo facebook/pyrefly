@@ -7341,13 +7341,13 @@
     },
     {
       "code": -2,
-      "column": 21,
-      "concise_description": "Type variable bounds and constraints must be concrete",
-      "description": "Type variable bounds and constraints must be concrete",
+      "column": 31,
+      "concise_description": "Type variable `V` is not in scope",
+      "description": "Type variable `V` is not in scope",
       "line": 44,
-      "name": "invalid-annotation",
+      "name": "invalid-type-var",
       "severity": "error",
-      "stop_column": 33,
+      "stop_column": 32,
       "stop_line": 44
     },
     {
