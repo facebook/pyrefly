@@ -375,6 +375,65 @@ const config: Config = {
                     url: 'https://github.com/migeed-z/pyrefly-type-challenge',
                   },
                 });
+                // The AI landing page, plus one URL per ad placement that
+                // points at it.
+                addRoute({
+                  path: '/ai',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-1',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-2',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-social1',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-social2',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                // The preset landing page, plus one URL per ad placement that
+                // points at it.
+                addRoute({
+                  path: '/presets',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-social1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-social2',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-web-square1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-web-banner1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
               },
             };
         },
