@@ -113,8 +113,8 @@ pub struct Stdlib {
     sentinel: StdlibResult<ClassType>,
     traceback_type: StdlibResult<ClassType>,
     builtins_type: StdlibResult<ClassType>,
-    /// Introduced in Python 3.10.
-    ellipsis_type: Option<StdlibResult<ClassType>>,
+    /// At runtime, `types.EllipsisType` is new in 3.10, but typeshed defines it unconditionally.
+    ellipsis_type: StdlibResult<ClassType>,
     /// Moved from `_typeshed` to `types` in 3.10.
     none_type: StdlibResult<ClassType>,
     function_type: StdlibResult<ClassType>,
@@ -247,9 +247,7 @@ impl Stdlib {
             tuple: lookup_generic(builtins, "tuple", 1),
             enumerate: lookup_generic(builtins, "enumerate", 1),
             builtins_type: lookup_concrete(builtins, "type"),
-            ellipsis_type: version
-                .at_least(3, 10)
-                .then(|| lookup_concrete(types, "EllipsisType")),
+            ellipsis_type: lookup_concrete(types, "EllipsisType"),
             none_type: lookup_concrete(none_location, "NoneType"),
             iterable: lookup_generic(typing, "Iterable", 1),
             iterator: lookup_generic(typing, "Iterator", 1),
@@ -364,8 +362,8 @@ impl Stdlib {
         Self::primitive(&self.typed_dict_fallback)
     }
 
-    pub fn ellipsis_type(&self) -> Option<&ClassType> {
-        Some(Self::primitive(self.ellipsis_type.as_ref()?))
+    pub fn ellipsis_type(&self) -> &ClassType {
+        Self::primitive(&self.ellipsis_type)
     }
 
     pub fn none_type(&self) -> &ClassType {

@@ -2492,11 +2492,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::BoundMethod(bound_method) => {
                 acc.push(AttributeBase1::BoundMethod(bound_method.func.clone()));
             }
-            Type::EllipsisValue => {
-                if let Some(cls) = self.stdlib.ellipsis_type() {
-                    acc.push(AttributeBase1::ClassInstance(cls.clone()))
-                }
-            }
+            Type::EllipsisValue => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.ellipsis_type().clone(),
+            )),
             Type::Forall(forall) => self.as_attribute_base1(forall.body.as_type(), acc),
             Type::Var(v) => {
                 self.force_var_for_attribute_base(v, |ty| self.as_attribute_base1(ty, acc))
