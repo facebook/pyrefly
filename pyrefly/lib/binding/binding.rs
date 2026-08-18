@@ -3062,7 +3062,7 @@ impl Display for AnnotationTarget {
 }
 
 impl AnnotationTarget {
-    pub fn type_form_context(&self) -> TypeFormContext {
+    pub fn type_form_context(&self) -> TypeFormContext<'static> {
         match self {
             Self::Param(_) => TypeFormContext::ParameterAnnotation,
             Self::ArgsParam(_) => TypeFormContext::ParameterArgsAnnotation,

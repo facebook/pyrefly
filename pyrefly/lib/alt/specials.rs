@@ -51,7 +51,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         special_form: String,
         arguments: &[Expr],
         range: TextRange,
-        context: TypeFormContext,
+        context: TypeFormContext<'_>,
         errors: &ErrorCollector,
         wrap: impl FnOnce(Type) -> Type,
     ) -> Type {
@@ -86,6 +86,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn check_args_and_construct_tuple(
         &self,
         arguments: &[Expr],
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Option<(Tuple, bool)> {
         let mut prefix: Vec<Type> = Vec::new();
@@ -120,7 +121,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return None;
                 }
             }
-            let ty = self.expr_untype(value, TypeFormContext::TupleOrCallableParam, errors);
+            let ty = self.expr_untype(
+                value,
+                TypeFormContext::TupleOrCallableParam(&type_form_context),
+                errors,
+            );
             match ty {
                 Type::Unpack(ty) if matches!(&*ty, Type::Tuple(Tuple::Concrete(_))) => {
                     has_unpack = true;
@@ -262,7 +267,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => false,
                     }
                 }
-                let t = self.expr_untype(x, TypeFormContext::TypeArgument, errors);
+                let t = self.expr_untype(x, TypeFormContext::type_argument(), errors);
                 if is_valid_literal(&t) {
                     literals.push(t)
                 } else {
@@ -340,8 +345,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         special_form: SpecialForm,
         arguments: &Expr,
         range: TextRange,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
+        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         let (arguments, parens) = match arguments {
             Expr::Tuple(x) => (x.elts.as_slice(), x.parenthesized),
             _ => (slice::from_ref(arguments), false),
@@ -351,19 +358,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::Optional.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgument,
+                type_argument_context,
                 errors,
                 |arg| self.heap.mk_optional(arg),
             ),
-            SpecialForm::Union => self.heap.mk_type_of(self.unions(
-                arguments.map(|arg| self.expr_untype(arg, TypeFormContext::TypeArgument, errors)),
-            )),
-            SpecialForm::Tuple => match self.check_args_and_construct_tuple(arguments, errors) {
-                Some((tuple, _)) => self.heap.mk_type_of(self.heap.mk_tuple(tuple)),
-                None => self
-                    .heap
-                    .mk_type_of(self.heap.mk_unbounded_tuple(self.heap.mk_any_error())),
-            },
+            SpecialForm::Union => {
+                self.heap.mk_type_of(self.unions(
+                    arguments.map(|arg| self.expr_untype(arg, type_argument_context, errors)),
+                ))
+            }
+            SpecialForm::Tuple => {
+                match self.check_args_and_construct_tuple(arguments, type_form_context, errors) {
+                    Some((tuple, _)) => self.heap.mk_type_of(self.heap.mk_tuple(tuple)),
+                    None => self
+                        .heap
+                        .mk_type_of(self.heap.mk_unbounded_tuple(self.heap.mk_any_error())),
+                }
+            }
             SpecialForm::Literal => {
                 if parens {
                     self.error(
@@ -395,16 +406,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .iter()
                         .map(|x| {
                             PrefixParam::new(
-                                self.expr_untype(x, TypeFormContext::TupleOrCallableParam, errors),
+                                self.expr_untype(
+                                    x,
+                                    TypeFormContext::TupleOrCallableParam(&type_form_context),
+                                    errors,
+                                ),
                                 Required::Required,
                             )
                         })
                         .collect();
-                    let pspec = self.expr_untype(
-                        arguments.last().unwrap(),
-                        TypeFormContext::TypeArgument,
-                        errors,
-                    );
+                    let pspec =
+                        self.expr_untype(arguments.last().unwrap(), type_argument_context, errors);
                     if !pspec.is_kind_param_spec() {
                         self.error(
                             errors,
@@ -435,13 +447,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     self.expr_untype(
                         &arguments[1],
-                        TypeFormContext::TypeArgumentCallableReturn,
+                        TypeFormContext::TypeArgumentCallableReturn(&type_form_context),
                         errors,
                     )
                 };
                 match &arguments[0] {
                     Expr::List(ExprList { elts, .. }) => {
-                        match self.check_args_and_construct_tuple(elts, errors) {
+                        match self.check_args_and_construct_tuple(
+                            elts,
+                            TypeFormContext::TypeExpression,
+                            errors,
+                        ) {
                             Some((tuple, true)) => {
                                 self.heap.mk_type_of(self.heap.mk_callable_from_vec(
                                     vec![Param::Varargs(
@@ -475,7 +491,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.heap.mk_type_of(self.heap.mk_callable_ellipsis(ret))
                     }
                     name @ Expr::Name(_) => {
-                        let ty = self.expr_untype(name, TypeFormContext::TypeArgument, errors);
+                        let ty = self.expr_untype(name, type_argument_context, errors);
                         if ty.is_kind_param_spec() {
                             self.heap
                                 .mk_type_of(self.heap.mk_callable_param_spec(ty, ret))
@@ -485,7 +501,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                     x @ Expr::Subscript(_) => {
-                        let ty = self.expr_untype(x, TypeFormContext::TypeArgument, errors);
+                        let ty = self.expr_untype(x, type_argument_context, errors);
                         match ty {
                             Type::Concatenate(args, pspec) => self
                                 .heap
@@ -524,7 +540,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::TypeGuard.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgument,
+                TypeFormContext::TypePredicateArgument(&type_form_context),
                 errors,
                 |arg| self.heap.mk_type_guard(arg),
             ),
@@ -532,12 +548,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::TypeIs.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgument,
+                TypeFormContext::TypePredicateArgument(&type_form_context),
                 errors,
                 |arg| self.heap.mk_type_is(arg),
             ),
             SpecialForm::Unpack if arguments.len() == 1 => {
-                let arg = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                let arg = self.expr_untype(&arguments[0], type_argument_context, errors);
                 if matches!(arg, Type::Unpack(_)) {
                     return self.error(
                         errors,
@@ -561,7 +577,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::Type.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgumentForType,
+                TypeFormContext::TypeArgumentForType(&type_form_context),
                 errors,
                 |arg| self.heap.mk_type_of(arg),
             ),
@@ -569,12 +585,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::TypeForm.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgument,
+                type_argument_context,
                 errors,
                 |arg| self.heap.mk_typeform(arg),
             ),
             SpecialForm::Annotated if arguments.len() > 1 => {
-                let inner = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                let inner = self.expr_untype(&arguments[0], type_argument_context, errors);
                 let metadata: Vec<Type> = arguments[1..]
                     .iter()
                     .map(|e| self.expr_infer(e, &self.error_swallower()))

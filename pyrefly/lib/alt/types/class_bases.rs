@@ -126,23 +126,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .heap
                 .mk_type_of(self.heap.mk_special_form(SpecialForm::Tuple));
         }
+        let type_form_context = TypeFormContext::BaseClassList;
+        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         let mut has_strict = false;
         let arguments_untype = |slice: &Expr, has_strict: &mut bool| {
             Ast::unpack_slice(slice)
                 .iter()
                 .map(|x| match BaseClassExpr::from_expr(x) {
                     Some(base_expr) => {
-                        let (ty, arg_has_strict) = self.base_class_expr_untype(
-                            &base_expr,
-                            TypeFormContext::TypeArgument,
-                            errors,
-                        );
+                        let (ty, arg_has_strict) =
+                            self.base_class_expr_untype(&base_expr, type_argument_context, errors);
                         if arg_has_strict {
                             *has_strict = true;
                         }
                         ty
                     }
-                    None => self.expr_untype(x, TypeFormContext::TypeArgument, errors),
+                    None => self.expr_untype(x, type_argument_context, errors),
                 })
                 .collect::<Vec<_>>()
         };
@@ -158,7 +157,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             )),
             Type::Type(f) if let Type::SpecialForm(special) = *f => {
-                self.apply_special_form(special, slice, range, errors)
+                self.apply_special_form(special, slice, range, type_form_context, errors)
             }
             Type::Any(style) => style.propagate(),
             t => self.error(
@@ -224,7 +223,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn base_class_expr_untype(
         &self,
         base_expr: &BaseClassExpr,
-        type_form_context: TypeFormContext,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> (Type, bool) {
         let range = base_expr.range();

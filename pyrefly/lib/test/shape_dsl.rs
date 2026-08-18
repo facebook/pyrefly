@@ -944,6 +944,14 @@ from shape_extensions import IntTuple, broadcast
 from torch import Tensor
 from typing import overload, reveal_type
 
+class Foo[T]: ...
+class Bar[T]: ...
+class Baz[T]: ...
+def ordinary(x: object) -> object: ...
+
+def deeply_wrapped[S: IntTuple]() -> Foo[Bar[Baz[Bar[Foo[Tensor[broadcast(S, S)]]]]]]: ...
+def invalid_call() -> Tensor[ordinary(IntTuple[2])]: ...  # E: Expected a type-level DSL function
+
 def add_qualified[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[shape_extensions.broadcast(S0, S1)]: ...
 def add_imported[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[broadcast(S0, S1)]: ...
 def add_alias[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[shapes.broadcast(S0, S1)]: ...
@@ -996,14 +1004,80 @@ testcase!(
 from shape_extensions import IntTuple, broadcast
 from torch import Tensor
 
-BadAlias = Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E:
+BadAlias = Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E: Function call cannot be used in annotations
 
-bad_global: Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E:
+bad_global: Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E: Function call cannot be used in annotations
 
 class C:
-    bad_attr: Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E:
+    bad_attr: Tensor[broadcast(IntTuple[2], IntTuple[3])]  # E: Function call cannot be used in annotations
 
-def bad_parameter[S0: IntTuple](x: Tensor[broadcast(S0, S0)]) -> None: ...  # E:
+def bad_parameter[S0: IntTuple](x: Tensor[broadcast(S0, S0)]) -> None: ...  # E: Function call cannot be used in annotations
+"#,
+);
+
+testcase!(
+    test_type_level_dsl_broadcast_annotation_boundaries,
+    shaped_array_env_with_shaped_torch(),
+    r#"
+from shape_extensions import IntTuple, broadcast
+from torch import Tensor
+from typing import Annotated, Callable, TypeGuard, TypeIs, Union
+
+type Wrapper[T] = tuple[T]
+type Recursive[T] = T | list[Recursive[T]]
+type Deferred[T] = Callable[[], T]
+type RecursiveDeferred[T] = Callable[[], T | RecursiveDeferred[T]]
+type Rotate[A, B, C] = A | list[Rotate[B, C, A]]
+type Delayed[A, B, C] = tuple[A, Callable[[], Delayed[B, C, A]]]
+type Grow[T] = T | list[Grow[list[T]]]
+
+def wrapped[S: IntTuple]() -> Wrapper[Tensor[broadcast(S, S)]]: ...
+def annotated[S: IntTuple]() -> Annotated[Tensor[broadcast(S, S)], "shape"]: ...
+def pep604[S: IntTuple]() -> Tensor[broadcast(S, S)] | None: ...
+def union[S: IntTuple]() -> Union[Tensor[broadcast(S, S)], None]: ...
+def recursive[S: IntTuple]() -> Recursive[Tensor[broadcast(S, S)]]: ...
+def rotating_alias[S: IntTuple]() -> Rotate[int, str, Tensor[broadcast(S, S)]]: ...
+def growing_alias() -> Grow[int]: ...
+
+def callable_boundary[S: IntTuple]() -> Callable[[], Tensor[broadcast(S, S)]]: ...  # E: Function call cannot be used in annotations
+def alias_hidden_callable[S: IntTuple]() -> Deferred[Tensor[broadcast(S, S)]]: ...
+def alias_hidden_recursive_callable[S: IntTuple]() -> RecursiveDeferred[Tensor[broadcast(S, S)]]: ...
+def alias_hidden_delayed_callable[S: IntTuple]() -> Delayed[int, str, Tensor[broadcast(S, S)]]: ...
+def type_guard_boundary[S: IntTuple](x: object) -> TypeGuard[Tensor[broadcast(S, S)]]: ...  # E: Function call cannot be used in annotations
+def type_is_boundary[S: IntTuple](x: object) -> TypeIs[Tensor[broadcast(S, S)]]: ...  # E: Function call cannot be used in annotations
+
+def bad_arity() -> Tensor[broadcast(IntTuple[2])]: ...  # E: Expected 2 arguments for `broadcast`, got 1
+def bad_keyword() -> Tensor[broadcast(IntTuple[2], right=IntTuple[2])]: ...  # E: `broadcast` does not accept keyword arguments
+def bad_domain() -> Tensor[broadcast(int, IntTuple[2])]: ...  # E: Expected an `IntTuple` argument to `broadcast`
+def bad_dimension() -> Tensor[[broadcast(IntTuple[2], IntTuple[2])]]: ...  # E: Tensor shape dimensions must be positive integer literals
+"#,
+);
+
+testcase!(
+    test_type_level_dsl_broadcast_rejected_at_direct_type_roots,
+    shaped_array_env_with_shaped_torch(),
+    r#"
+from shape_extensions import IntTuple, broadcast
+from torch import Tensor
+from typing import Generic, TypeVar, TypedDict, assert_type, cast
+from typing_extensions import TypeForm
+
+LegacyBound = TypeVar("LegacyBound", bound=Tensor[broadcast(IntTuple[2], IntTuple[2])])  # E: Function call cannot be used in annotations
+LegacyConstraint = TypeVar("LegacyConstraint", Tensor[broadcast(IntTuple[2], IntTuple[2])], int)  # E: Function call cannot be used in annotations
+LegacyDefault = TypeVar("LegacyDefault", default=Tensor[broadcast(IntTuple[2], IntTuple[2])])  # E: Function call cannot be used in annotations
+
+def pep_bound[T: Tensor[broadcast(IntTuple[2], IntTuple[2])]]() -> None: ...  # E: Function call cannot be used in annotations
+def pep_constraint[T: (Tensor[broadcast(IntTuple[2], IntTuple[2])], int)]() -> None: ...  # E: Function call cannot be used in annotations
+def pep_default[T = Tensor[broadcast(IntTuple[2], IntTuple[2])]]() -> None: ...  # E: Function call cannot be used in annotations
+
+class BadBase(list[Tensor[broadcast(IntTuple[2], IntTuple[2])]]): ...  # E: Function call cannot be used in annotations
+class BadGeneric(Generic[broadcast(IntTuple[2], IntTuple[2])]): ...  # E: Function call cannot be used in annotations
+class BadMetaclass(metaclass=Tensor[broadcast(IntTuple[2], IntTuple[2])]): ...  # E: Function call cannot be used in annotations
+class BadExtraItems(TypedDict, extra_items=Tensor[broadcast(IntTuple[2], IntTuple[2])]): ...  # E: Function call cannot be used in annotations
+
+assert_type(None, Tensor[broadcast(IntTuple[2], IntTuple[2])])  # E: Function call cannot be used in annotations
+cast(Tensor[broadcast(IntTuple[2], IntTuple[2])], None)  # E: Function call cannot be used in annotations
+TypeForm(Tensor[broadcast(IntTuple[2], IntTuple[2])])  # E: Function call cannot be used in annotations
 "#,
 );
 
@@ -3151,6 +3225,7 @@ LegacyN = IntVar("LegacyN")
 OrdinaryT = TypeVar("OrdinaryT")
 OrdinaryDefault = TypeVar("OrdinaryDefault", default=LegacyN)  # E: `LegacyN` is an `IntVar` and cannot be used as an ordinary type
 BadSymDefault = IntVar("BadSymDefault", default=OrdinaryT)  # E: `OrdinaryT` must be an `IntVar` to be used as a shape dimension
+BadOperatorDefault = IntVar("BadOperatorDefault", default=1 | 2)  # E: Unsupported operator `|` in tensor shape dimension
 IntDefault = IntVar("IntDefault", default=int)
 
 class LegacyBox(Generic[LegacyN]): ...

@@ -181,7 +181,9 @@ use crate::types::types::TParamsSource;
 use crate::types::types::Type;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TypeFormContext {
+pub enum TypeFormContext<'a> {
+    /// A type expression parsed without an enclosing annotation context.
+    TypeExpression,
     /// Expression in a base class list
     BaseClassList,
     /// Keyword in a class definition - `class C(some_keyword=SomeValue): ...`
@@ -197,14 +199,6 @@ pub enum TypeFormContext {
     ParameterArgsAnnotation,
     ParameterKwargsAnnotation,
     ReturnAnnotation,
-    /// Type argument for a generic
-    TypeArgument,
-    /// Type argument for `builtins.type`
-    TypeArgumentForType,
-    /// Type argument for the return position of a Callable type
-    TypeArgumentCallableReturn,
-    /// Type argument for the parameters list of a Callable type or a tuple
-    TupleOrCallableParam,
     /// Constraints or upper bound for type variables
     TypeVarConstraint,
     /// Default values for each kind of type variable
@@ -217,6 +211,18 @@ pub enum TypeFormContext {
     /// Variable annotation outside of a class definition
     /// Is the variable assigned a value here?
     VarAnnotation(AnnAssignHasValue),
+    /// Type argument for a generic.
+    TypeArgument(&'a TypeFormContext<'a>),
+    /// Type argument for `builtins.type`.
+    TypeArgumentForType(&'a TypeFormContext<'a>),
+    /// Type argument for the return position of a `Callable` type.
+    TypeArgumentCallableReturn(&'a TypeFormContext<'a>),
+    /// Type argument for `TypeGuard` or `TypeIs`.
+    TypePredicateArgument(&'a TypeFormContext<'a>),
+    /// Type argument for the parameters list of a `Callable` type or a tuple.
+    TupleOrCallableParam(&'a TypeFormContext<'a>),
+    /// A member of a union type.
+    UnionMember(&'a TypeFormContext<'a>),
 }
 
 /// The position in which a value is being interpreted as a type, used by
@@ -235,14 +241,19 @@ pub(crate) enum UntypeContext {
     SymbolicInt(&'static str),
 }
 
-impl TypeFormContext {
-    pub fn quantified_kind_default(x: QuantifiedKind) -> Self {
+impl TypeFormContext<'_> {
+    pub fn quantified_kind_default(x: QuantifiedKind) -> TypeFormContext<'static> {
         match x {
             QuantifiedKind::TypeVar => TypeFormContext::TypeVarDefault,
             QuantifiedKind::IntVar => TypeFormContext::IntVarDefault,
             QuantifiedKind::ParamSpec => TypeFormContext::ParamSpecDefault,
             QuantifiedKind::TypeVarTuple => TypeFormContext::TypeVarTupleDefault,
         }
+    }
+
+    /// A type argument parsed without an enclosing annotation context.
+    pub const fn type_argument() -> TypeFormContext<'static> {
+        TypeFormContext::TypeArgument(&TypeFormContext::TypeExpression)
     }
 
     /// Is this special form valid as an un-parameterized annotation anywhere?
@@ -273,10 +284,12 @@ impl TypeFormContext {
         !matches!(
             self,
             TypeFormContext::GenericBase
-                | TypeFormContext::TupleOrCallableParam
-                | TypeFormContext::TypeArgument
-                | TypeFormContext::TypeArgumentCallableReturn
-                | TypeFormContext::TypeArgumentForType
+                | TypeFormContext::TupleOrCallableParam(_)
+                | TypeFormContext::TypeArgument(_)
+                | TypeFormContext::TypeArgumentCallableReturn(_)
+                | TypeFormContext::TypeArgumentForType(_)
+                | TypeFormContext::TypePredicateArgument(_)
+                | TypeFormContext::UnionMember(_)
         )
     }
 
@@ -663,7 +676,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn expr_qualifier(
         &self,
         x: &Expr,
-        type_form_context: TypeFormContext,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Option<Qualifier> {
         let ty = match x {
@@ -748,7 +761,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_annotated_metadata(
         &self,
         expr: &Expr,
-        type_form_context: TypeFormContext,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Vec<Expr> {
         match expr {
@@ -784,7 +797,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn expr_annotation(
         &self,
         x: &Expr,
-        type_form_context: TypeFormContext,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Annotation {
         if !self.has_valid_annotation_syntax(x, errors) {
@@ -6645,7 +6658,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         ty: Type,
         range: TextRange,
-        type_form_context: TypeFormContext,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
         if type_form_context != TypeFormContext::ParameterKwargsAnnotation
@@ -6692,8 +6705,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             type_form_context,
             TypeFormContext::ParameterArgsAnnotation
                 | TypeFormContext::ParameterKwargsAnnotation
-                | TypeFormContext::TypeArgument
-                | TypeFormContext::TupleOrCallableParam
+                | TypeFormContext::TypeArgument(_)
+                | TypeFormContext::TupleOrCallableParam(_)
                 | TypeFormContext::GenericBase
                 | TypeFormContext::TypeVarTupleDefault
         ) && matches!(ty, Type::Unpack(_))
@@ -6707,7 +6720,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if !matches!(
             type_form_context,
-            TypeFormContext::TypeArgument
+            TypeFormContext::TypeArgument(_)
                 | TypeFormContext::GenericBase
                 | TypeFormContext::ParamSpecDefault
         ) && ty.is_kind_param_spec()
@@ -6723,7 +6736,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // to avoid emitting duplicate errors.
         if !matches!(
             type_form_context,
-            TypeFormContext::TupleOrCallableParam | TypeFormContext::TypeArgument
+            TypeFormContext::TupleOrCallableParam(_) | TypeFormContext::TypeArgument(_)
         ) && ty.is_kind_type_var_tuple()
         {
             // Determine whether we're simply missing an `Unpack[...]` or the TypeVarTuple isn't allowed at all in this context.
@@ -6782,7 +6795,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "Type variable bounds and constraints must be concrete".to_owned(),
             );
         }
-        if type_form_context == TypeFormContext::TypeArgumentForType
+        if matches!(type_form_context, TypeFormContext::TypeArgumentForType(_))
             && let Some(cls) = match &ty {
                 Type::ClassType(cls) | Type::SelfType(cls) => Some(cls.class_object().clone()),
                 Type::ClassDef(cls) => Some(cls.clone()),
@@ -6896,45 +6909,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn expr_untype(
         &self,
         x: &Expr,
-        type_form_context: TypeFormContext,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
         let result = match x {
-            Expr::Call(_)
-                if type_form_context == TypeFormContext::ReturnAnnotation
-                    && let Some(ty) = self.parse_type_level_dsl_call(x, errors) =>
-            {
-                ty
-            }
-            Expr::Call(_) if type_form_context != TypeFormContext::BaseClassList => self.error(
-                errors,
-                x.range(),
-                ErrorKind::InvalidAnnotation,
-                "Function call cannot be used in annotations".to_owned(),
-            ),
-            Expr::Subscript(x)
-                if let Some(ty) =
-                    self.parse_jaxtyping_type_form(&x.value, &x.slice, x.range(), errors) =>
-            {
-                ty
-            }
-            Expr::Subscript(x) if type_form_context == TypeFormContext::ReturnAnnotation => {
-                let base = self.expr_infer(&x.value, errors);
-                // Preserve return-annotation context through ordinary wrappers so nested shaped
-                // array arguments may contain type-level DSL calls.
-                let inferred_ty = self.subscript_infer_for_type_in_return_annotation(
-                    &base,
-                    &x.slice,
-                    x.range(),
-                    errors,
-                );
-                self.untype_runtime_type_with_trace(
-                    inferred_ty,
-                    x.range(),
-                    type_form_context,
-                    errors,
-                )
-            }
             // A `IntVar`'s default (e.g. `N = 3`) is a dimension expression, not
             // an ordinary type, so route it through the dimension parser.
             _ if type_form_context == TypeFormContext::IntVarDefault => self
@@ -6944,7 +6922,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::List(x)
                 if matches!(
                     type_form_context,
-                    TypeFormContext::TypeArgument | TypeFormContext::ParamSpecDefault
+                    TypeFormContext::TypeArgument(_) | TypeFormContext::ParamSpecDefault
                 ) =>
             {
                 let elts: Vec<Param> = x
@@ -6957,7 +6935,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))
             }
-            _ => self.untype_runtime_expr(x, type_form_context, errors),
+            _ => {
+                let inferred_ty = self
+                    .expr_infer_impl(x, None, errors, Some(type_form_context))
+                    .into_ty();
+                self.untype_runtime_type(inferred_ty, x.range(), type_form_context, errors)
+            }
         };
         let result = self.validate_type_form(result, x.range(), type_form_context, errors);
         if type_form_context.can_report_explicit_any() {
@@ -6966,32 +6949,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         result
     }
 
-    fn untype_runtime_expr(
-        &self,
-        x: &Expr,
-        type_form_context: TypeFormContext,
-        errors: &ErrorCollector,
-    ) -> Type {
-        let inferred_ty = self.expr_infer(x, errors);
-        self.untype_runtime_type(inferred_ty, x.range(), type_form_context, errors)
-    }
-
-    fn untype_runtime_type_with_trace(
-        &self,
-        inferred_ty: Type,
-        range: TextRange,
-        type_form_context: TypeFormContext,
-        errors: &ErrorCollector,
-    ) -> Type {
-        self.record_type_trace(range, &inferred_ty);
-        self.untype_runtime_type(inferred_ty, range, type_form_context, errors)
-    }
-
     fn untype_runtime_type(
         &self,
         inferred_ty: Type,
         range: TextRange,
-        type_form_context: TypeFormContext,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
         // Check if this is a scoped type alias in base class context

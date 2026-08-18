@@ -297,7 +297,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !self.has_valid_annotation_syntax(&args[0], errors) {
             return Type::TypeForm(Box::new(self.heap.mk_any_error()));
         }
-        let inner = self.expr_untype(&args[0], TypeFormContext::TypeArgument, errors);
+        let inner = self.expr_untype(&args[0], TypeFormContext::type_argument(), errors);
         Type::TypeForm(Box::new(inner))
     }
 

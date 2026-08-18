@@ -202,7 +202,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn jaxtyping_shaped_array_base(&self, base_expr: &Expr) -> Option<ClassType> {
         let silent_errors = self.error_swallower();
-        match self.expr_untype(base_expr, TypeFormContext::TypeArgument, &silent_errors) {
+        match self.expr_untype(base_expr, TypeFormContext::type_argument(), &silent_errors) {
             Type::ShapedArray(shaped_array_type) if shaped_array_type.is_shapeless() => {
                 Some(shaped_array_type.base_class.clone())
             }

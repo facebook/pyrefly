@@ -35,6 +35,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::MAX_TUPLE_LENGTH;
+use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
@@ -384,10 +385,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         x: &ExprBinOp,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
+        type_form_context: Option<TypeFormContext<'_>>,
     ) -> Type {
         let lhs;
         let rhs;
-        if Ast::is_list_literal_or_comprehension(&x.left) && x.op == Operator::Mult {
+        if x.op == Operator::BitOr
+            && let Some(type_form_context) = type_form_context
+        {
+            let member_context = TypeFormContext::UnionMember(&type_form_context);
+            lhs = self
+                .expr_infer_impl(&x.left, None, errors, Some(member_context))
+                .into_ty();
+            rhs = self
+                .expr_infer_impl(&x.right, None, errors, Some(member_context))
+                .into_ty();
+        } else if Ast::is_list_literal_or_comprehension(&x.left) && x.op == Operator::Mult {
             // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
             // type hint when evaluating [X]
             rhs = self.expr_infer(&x.right, errors);

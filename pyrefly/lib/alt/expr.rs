@@ -135,15 +135,6 @@ pub(crate) enum PreparedExprCall {
     Callee(Type),
 }
 
-impl PreparedExprCall {
-    pub(crate) fn callee(&self) -> Option<&Type> {
-        match self {
-            Self::Callee(callee) => Some(callee),
-            Self::Resolved(_) => None,
-        }
-    }
-}
-
 /// Where a dimension expression appears, which controls whether a plain
 /// `TypeVar` is accepted. Shape arithmetic (e.g. `N + 1`) needs the
 /// symbolic-integer semantics of an `IntVar`, so an operand of an arithmetic
@@ -452,8 +443,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 context,
                 call_context,
             } if !want.is_any() => {
-                let got =
-                    self.expr_infer_impl(x, Some(HintRef::new(want, Some(errors))), options.errors);
+                let got = self.expr_infer_impl(
+                    x,
+                    Some(HintRef::new(want, Some(errors))),
+                    options.errors,
+                    None,
+                );
                 let check_options = match call_context {
                     Some(call_context) => {
                         TypeCheckOptions::new(errors, context).with_call_context(call_context)
@@ -466,18 +461,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     got.with_ty(want.clone())
                 }
             }
-            ExprExpectation::Check { .. } => self.expr_infer_impl(x, None, options.errors),
-            ExprExpectation::Infer(hint) => self.expr_infer_impl(x, hint, options.errors),
+            ExprExpectation::Check { .. } => self.expr_infer_impl(x, None, options.errors, None),
+            ExprExpectation::Infer(hint) => self.expr_infer_impl(x, hint, options.errors, None),
         }
     }
 
     /// The core logic for inferring a type for an expression.
     /// Returns a TypeInfo that includes narrowing information.
-    fn expr_infer_impl(
+    pub(crate) fn expr_infer_impl(
         &self,
         x: &Expr,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
+        type_form_context: Option<TypeFormContext<'_>>,
     ) -> TypeInfo {
         let res = match x {
             Expr::Name(x) => {
@@ -496,24 +492,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Expr::Attribute(x) => {
-                let base = self.expr_infer_impl(&x.value, None, errors);
+                let base = self.expr_infer_impl(&x.value, None, errors, type_form_context);
                 self.attr_access_infer(x, &base, errors)
             }
             Expr::Subscript(x) => {
                 // TODO: We don't deal properly with hint here, we should.
-                let base = self.expr_infer_impl(&x.value, None, errors);
-                self.subscript_infer(&base, &x.slice, x.range(), errors)
+                if let Some(ty) = type_form_context.and_then(|_| {
+                    self.parse_jaxtyping_type_form(&x.value, &x.slice, x.range(), errors)
+                }) {
+                    TypeInfo::of_ty(self.heap.mk_type_of(ty))
+                } else {
+                    let base = self.expr_infer_impl(&x.value, None, errors, type_form_context);
+                    self.subscript_infer(
+                        &base,
+                        &x.slice,
+                        x.range(),
+                        type_form_context.unwrap_or(TypeFormContext::TypeExpression),
+                        errors,
+                    )
+                }
             }
             Expr::Named(x) => match &*x.target {
                 Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self
                     .get(&Key::Definition(ShortIdentifier::expr_name(name)))
                     .arc_clone(),
-                _ => self.expr_infer_impl(&x.value, hint, errors),
+                _ => self.expr_infer_impl(&x.value, hint, errors, type_form_context),
             },
             // All other expressions operate at the `Type` level only, so we avoid the overhead of
             // wrapping and unwrapping `TypeInfo` by computing the result as a `Type` and only wrapping
             // at the end.
-            _ => TypeInfo::of_ty(self.expr_infer_impl_helper(x, hint, errors)),
+            _ => TypeInfo::of_ty(self.expr_infer_impl_helper(x, hint, errors, type_form_context)),
         };
         // Check for deprecation
         self.check_for_deprecated_call(res.ty(), x.range(), errors);
@@ -528,12 +536,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         x: &Expr,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
+        type_form_context: Option<TypeFormContext<'_>>,
     ) -> Type {
         match x {
             Expr::Name(..) | Expr::Attribute(..) | Expr::Named(..) | Expr::Subscript(..) => {
                 // These cases are required to preserve attribute narrowing information. But anyone calling
                 // this function only needs the Type, so we can just pull it out.
-                self.expr_infer_impl(x, hint, errors).into_ty()
+                self.expr_infer_impl(x, hint, errors, type_form_context)
+                    .into_ty()
             }
             Expr::If(x) => {
                 let condition_type = self.expr_infer(&x.test, errors);
@@ -545,11 +555,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .sys_info()
                     .evaluate_bool_with_sys_info(&x.test)
                 {
-                    Some(true) => self.expr_infer_impl(&x.body, hint, errors).into_ty(),
-                    Some(false) => self.expr_infer_impl(&x.orelse, hint, errors).into_ty(),
+                    Some(true) => self
+                        .expr_infer_impl(&x.body, hint, errors, type_form_context)
+                        .into_ty(),
+                    Some(false) => self
+                        .expr_infer_impl(&x.orelse, hint, errors, type_form_context)
+                        .into_ty(),
                     None => {
-                        let body_type = self.expr_infer_impl(&x.body, hint, errors).into_ty();
-                        let orelse_type = self.expr_infer_impl(&x.orelse, hint, errors).into_ty();
+                        let body_type = self
+                            .expr_infer_impl(&x.body, hint, errors, type_form_context)
+                            .into_ty();
+                        let orelse_type = self
+                            .expr_infer_impl(&x.orelse, hint, errors, type_form_context)
+                            .into_ty();
                         match self.as_bool(&condition_type, x.test.range(), errors) {
                             Some(true) => body_type,
                             Some(false) => orelse_type,
@@ -559,7 +577,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Expr::BoolOp(x) => self.boolop(&x.values, x.op, hint, errors),
-            Expr::BinOp(x) => self.binop_infer(x, hint, errors),
+            Expr::BinOp(x) => self.binop_infer(x, hint, errors, type_form_context),
             Expr::UnaryOp(x) => self.unop_infer(x, errors),
             Expr::Lambda(lambda) => {
                 let param_ids = if let Some(parameters) = &lambda.parameters {
@@ -694,8 +712,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 hint.and_then(|hint| hint.errors().map(|_| callable_errors)),
                             )
                         });
-                        let ret =
-                            self.expr_infer_impl_helper(&lambda.body, return_hint, callable_errors);
+                        let ret = self.expr_infer_impl_helper(
+                            &lambda.body,
+                            return_hint,
+                            callable_errors,
+                            None,
+                        );
                         let (yield_keys, yield_from_keys) =
                             self.bindings().lambda_yield_keys(lambda.range);
                         let ret = if !(yield_keys.is_empty() && yield_from_keys.is_empty()) {
@@ -846,6 +868,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             &x.elt,
                             HintRef::with_ty_opt(hint, yield_hint.as_ref()),
                             errors,
+                            None,
                         )
                         .into_ty();
                     if self.generator_expr_is_async(x) {
@@ -875,6 +898,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::YieldFrom(x) => self.get(&KeyYieldFrom(x.range)).return_ty.clone(),
             Expr::Compare(x) => self.compare_infer(x, errors),
             Expr::Call(x) => {
+                if let Some(type_form_context) = type_form_context {
+                    if type_form_context.allows_type_level_dsl_call() {
+                        let callee = self.expr_infer(&x.func, &self.error_swallower());
+                        let ty =
+                            self.parse_type_level_dsl_call(x, &callee, type_form_context, errors);
+                        return self.heap.mk_type_of(ty);
+                    }
+                    if type_form_context != TypeFormContext::BaseClassList {
+                        return self.error(
+                            errors,
+                            x.range,
+                            ErrorKind::InvalidAnnotation,
+                            "Function call cannot be used in annotations".to_owned(),
+                        );
+                    }
+                }
                 let prepared = self.prepare_expr_call(x, errors);
                 self.finish_prepared_expr_call(x, prepared, hint, errors)
             }
@@ -926,7 +965,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_class_type(self.stdlib.ellipsis_type().clone())
             }
             Expr::Starred(ExprStarred { value, .. }) => {
-                let ty = self.expr_untype(value, TypeFormContext::TypeArgument, errors);
+                let ty = self.expr_untype(value, TypeFormContext::type_argument(), errors);
                 self.heap.mk_unpack(ty)
             }
             Expr::Slice(x) => {
@@ -969,7 +1008,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         // Reuse the inferred receiver when schema specialization does not apply.
         let callee_ty = if let Expr::Attribute(func) = &*x.func {
-            let base = self.expr_infer_impl(&func.value, None, errors);
+            let base = self.expr_infer_impl(&func.value, None, errors, None);
             if let Some(ty) = self.polars_method_call(base.ty(), func, &x.arguments, errors) {
                 return PreparedExprCall::Resolved(ty);
             }
@@ -1042,6 +1081,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     x.range,
                     errors,
                     true,
+                    TypeFormContext::TypeExpression,
                 )
             } else {
                 obj_ty
@@ -1831,7 +1871,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = key_expr else {
             return None;
         };
-        let obj_ty = self.expr_infer_impl(&attr_expr.value, None, errors);
+        let obj_ty = self.expr_infer_impl(&attr_expr.value, None, errors, None);
         Some((obj_ty, key_expr, key))
     }
 
@@ -2145,11 +2185,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         base: &TypeInfo,
         slice: &Expr,
         range: TextRange,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> TypeInfo {
         if let Some(idx) = int_from_slice(slice) {
             TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
-                self.subscript_infer_for_type(base.ty(), slice, range, errors)
+                self.subscript_infer_for_type_with_key_present(
+                    base.ty(),
+                    slice,
+                    range,
+                    errors,
+                    false,
+                    type_form_context,
+                )
             })
         } else if let Expr::StringLiteral(ExprStringLiteral { value, .. }) = slice {
             self.subscript_infer_for_key_facet(
@@ -2157,6 +2205,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 FacetKind::Key(value.to_string()),
                 slice,
                 range,
+                type_form_context,
                 errors,
             )
         } else {
@@ -2164,11 +2213,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match self.expr_infer(slice, &swallower) {
                 key_ty if let Some(value) = self.literal_typed_dict_key_name(&key_ty) => {
                     let facet = FacetKind::Key(value.to_string());
-                    self.subscript_infer_for_key_facet(base, facet, slice, range, errors)
+                    self.subscript_infer_for_key_facet(
+                        base,
+                        facet,
+                        slice,
+                        range,
+                        type_form_context,
+                        errors,
+                    )
                 }
-                _ => {
-                    TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors))
-                }
+                _ => TypeInfo::of_ty(self.subscript_infer_for_type_with_key_present(
+                    base.ty(),
+                    slice,
+                    range,
+                    errors,
+                    false,
+                    type_form_context,
+                )),
             }
         }
     }
@@ -2180,6 +2241,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         facet: FacetKind,
         slice: &Expr,
         range: TextRange,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> TypeInfo {
         if base.has_value_less_presence(&facet) {
@@ -2189,10 +2251,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 errors,
                 true,
+                type_form_context,
             ))
         } else {
             TypeInfo::at_facet(base, &facet, || {
-                self.subscript_infer_for_type(base.ty(), slice, range, errors)
+                self.subscript_infer_for_type_with_key_present(
+                    base.ty(),
+                    slice,
+                    range,
+                    errors,
+                    false,
+                    type_form_context,
+                )
             })
         }
     }
@@ -2838,17 +2908,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        self.subscript_infer_for_type_with_options(base, slice, range, errors, false, false)
-    }
-
-    pub fn subscript_infer_for_type_in_return_annotation(
-        &self,
-        base: &Type,
-        slice: &Expr,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Type {
-        self.subscript_infer_for_type_with_options(base, slice, range, errors, false, true)
+        self.subscript_infer_for_type_with_key_present(
+            base,
+            slice,
+            range,
+            errors,
+            false,
+            TypeFormContext::TypeExpression,
+        )
     }
 
     fn valid_slice_index_type(&self, ty: &Type, index_dunder: &Name) -> bool {
@@ -2907,18 +2974,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
         key_present: bool, // true if the key is definitely known to be present
-    ) -> Type {
-        self.subscript_infer_for_type_with_options(base, slice, range, errors, key_present, false)
-    }
-
-    fn subscript_infer_for_type_with_options(
-        &self,
-        base: &Type,
-        slice: &Expr,
-        range: TextRange,
-        errors: &ErrorCollector,
-        key_present: bool,
-        allow_type_level_dsl: bool,
+        type_form_context: TypeFormContext<'_>,
     ) -> Type {
         let xs = Ast::unpack_slice(slice);
         let slice_ty = LazyCell::new(|| self.expr_infer(slice, errors));
@@ -2966,8 +3022,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match base {
                 Type::Forall(forall) => {
                     if matches!(forall.body, Forallable::TypeAlias(_)) {
-                        let tys =
-                            self.parse_type_args_for_tparams(xs, forall.tparams.as_vec(), errors);
+                        let tys = self.parse_type_args_for_tparams(
+                            xs,
+                            forall.tparams.as_vec(),
+                            type_form_context,
+                            errors,
+                        );
                         self.specialize_forall(*forall, tys, range, errors)
                     } else {
                         let name = forall.body.name();
@@ -2986,7 +3046,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Expr::Tuple(x) => (x.elts.as_slice(), x.parenthesized),
                             _ => (slice::from_ref(slice), false),
                     };
-                    self.apply_unary_special_form("type".to_owned(), arguments, range, TypeFormContext::TypeArgumentForType, errors, |arg| self.heap.mk_type_of(arg))
+                    self.apply_unary_special_form("type".to_owned(), arguments, range, TypeFormContext::TypeArgumentForType(&type_form_context), errors, |arg| self.heap.mk_type_of(arg))
                 }
                 // TODO: pyre_extensions.PyreReadOnly is a non-standard type system extension that marks read-only
                 // objects. We don't support it yet.
@@ -3013,8 +3073,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         cls,
                         xs,
                         range,
+                        type_form_context,
                         errors,
-                        allow_type_level_dsl,
                     ))
                 }
                 Type::ClassDef(ref cls)
@@ -3068,7 +3128,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     }
                 }
-                Type::ClassDef(cls) => self.class_subscript_infer(&cls, slice, xs, range, errors),
+                Type::ClassDef(cls) => self.class_subscript_infer(
+                    &cls,
+                    slice,
+                    xs,
+                    range,
+                    type_form_context,
+                    errors,
+                ),
                 Type::Type(f) if matches!(&*f, Type::Quantified(q) if q.is_type_var()) => {
                     // Repeated match because pattern guards cannot move out of bindings.
                     let Type::Quantified(quantified) = *f else { unreachable!("guarded by matches! above") };
@@ -3125,7 +3192,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Type::Type(f) if let Type::SpecialForm(special) = *f => {
-                    self.apply_special_form(special, slice, range, errors)
+                    self.apply_special_form(
+                        special,
+                        slice,
+                        range,
+                        type_form_context,
+                        errors,
+                    )
                 }
                 Type::Tuple(ref tuple) => self.infer_tuple_subscript(
                     tuple.clone(),
@@ -3285,6 +3358,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                         errors,
                         key_present,
+                        type_form_context,
                     );
                     // Preserve the stub's Series class when attaching an element dtype.
                     match (column_dtype, result) {
@@ -3306,6 +3380,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     errors,
                     key_present,
+                    type_form_context,
                 ),
                 Type::Quantified(ref q) if q.is_type_var() && q.restriction().is_restricted() => {
                     match q.restriction() {
@@ -3316,6 +3391,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 range,
                                 errors,
                                 key_present,
+                                type_form_context,
                             ),
                         Restriction::Constraints(constraints) => {
                             self.unions(constraints.map(|constraint| {
@@ -3325,6 +3401,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     range,
                                     errors,
                                     key_present,
+                                    type_form_context,
                                 )
                             }))
                         }
@@ -3419,6 +3496,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     errors,
                     key_present,
+                    type_form_context,
                 ),
                 t => self.error(
                     errors,
@@ -4116,6 +4194,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         slice: &Expr,
         xs: &[Expr],
         range: TextRange,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
         let metadata = self.get_metadata_for_class(cls);
@@ -4159,7 +4238,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(result) = class_getitem_result.or(metaclass_getitem_result) {
             result
         } else {
-            let targs = self.parse_class_type_args(cls, xs, errors);
+            let targs = self.parse_class_type_args(cls, xs, type_form_context, errors);
             self.heap
                 .mk_type_of(self.specialize(cls, targs, range, errors))
         }
@@ -4169,20 +4248,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         args: &[Expr],
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         let tparams = self.get_class_tparams(cls);
-        self.parse_type_args_for_tparams(args, tparams.as_vec(), errors)
+        self.parse_type_args_for_tparams(args, tparams.as_vec(), type_form_context, errors)
     }
 
     fn parse_type_args_for_tparams(
         &self,
         args: &[Expr],
         tparams_vec: &[Quantified],
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Vec<Type> {
+        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         if !self.solver().tensor_shapes {
-            return args.map(|arg| self.expr_untype(arg, TypeFormContext::TypeArgument, errors));
+            return args.map(|arg| self.expr_untype(arg, type_argument_context, errors));
         }
         let variadic_idx = tparams_vec
             .iter()
@@ -4224,7 +4306,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .unwrap_or_else(Type::any_error);
                     }
                 }
-                self.expr_untype(arg, TypeFormContext::TypeArgument, errors)
+                self.expr_untype(arg, type_argument_context, errors)
             })
             .collect()
     }
@@ -4287,7 +4369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         match Ast::unpack_slice(&subscript.slice) {
             [arg] => {
-                let carrier = self.expr_untype(arg, TypeFormContext::TypeArgument, errors);
+                let carrier = self.expr_untype(arg, TypeFormContext::type_argument(), errors);
                 match carrier {
                     Type::IntTuple(shape) => match shape.view() {
                         IntTupleView::Concrete(_) => Ok(Some(shape_to_tuple_carrier(&shape))),
@@ -4374,7 +4456,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let middle_ty = match self.parse_int_tuple_elements_projection(value, errors) {
                 Ok(Some(middle_ty)) => middle_ty,
                 Ok(None) => {
-                    let got = self.expr_untype(value, TypeFormContext::TypeArgument, errors);
+                    let got = self.expr_untype(value, TypeFormContext::type_argument(), errors);
                     self.error(
                         errors,
                         value.range(),
@@ -4410,8 +4492,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         args: &[Expr],
         range: TextRange,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
-        allow_type_level_dsl: bool,
     ) -> Type {
         let shape_param = self
             .shaped_array_shape_for_class(cls)
@@ -4444,7 +4526,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         let mut shape_arg_carrier = None;
-        let class_targs = args
+        let mut shape_arg_failed_to_parse = false;
+        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
+        let class_targs: Vec<Type> = args
             .iter()
             .enumerate()
             .map(|(i, arg)| match arg {
@@ -4455,17 +4539,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             shape_arg_carrier = Some(shape.to_shape_arg_type());
                             shape_validation_arg(&carrier)
                         }
-                        None => Type::any_error(),
+                        None => {
+                            shape_arg_failed_to_parse = true;
+                            Type::any_error()
+                        }
                     }
                 }
                 _ => {
-                    if allow_type_level_dsl
-                        && i == shape_idx
-                        && let Some(ty) = self.parse_type_level_dsl_call(arg, errors)
-                    {
-                        shape_arg_carrier = Some(ty);
-                        shape_validation_arg(&IntTuple::shapeless().to_shape_arg_type())
-                    } else if i == shape_idx
+                    if i == shape_idx
                         && let Type::ClassDef(cls) = self.expr_infer(arg, &self.error_swallower())
                         && self.is_int_tuple_class(&cls)
                     {
@@ -4473,7 +4554,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         shape_arg_carrier = Some(IntTuple::shapeless().to_shape_arg_type());
                         shape_validation_arg(&carrier)
                     } else {
-                        match self.expr_untype(arg, TypeFormContext::TypeArgument, errors) {
+                        match self.expr_untype(arg, type_argument_context, errors) {
+                            ty if i == shape_idx && ty.is_error() => {
+                                shape_arg_failed_to_parse = true;
+                                ty
+                            }
+                            ty @ Type::TypeLevelDslCall(_) if i == shape_idx => {
+                                shape_arg_carrier = Some(ty);
+                                shape_validation_arg(&IntTuple::shapeless().to_shape_arg_type())
+                            }
                             Type::IntTuple(shape) if i == shape_idx => {
                                 let carrier = if shape.is_shapeless() {
                                     self.bare_int_tuple_carrier()
@@ -4521,6 +4610,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             })
             .collect();
+        if args.len() <= tparams.len() && shape_arg_failed_to_parse {
+            return Type::any_error();
+        }
         let mut base_class =
             self.specialize_nontypeddict_to_classtype(cls, class_targs, range, errors);
         if let Some(carrier) = shape_arg_carrier

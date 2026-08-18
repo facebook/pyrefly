@@ -49,6 +49,7 @@ use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::polars_specials::polars_degrade_for_mutation;
+use crate::alt::solve::TypeFormContext;
 use crate::alt::types::instance::Instance;
 use crate::binding::binding::Key;
 use crate::binding::narrow::AtomicNarrowOp;
@@ -1874,7 +1875,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     },
                     Some((next_name, remaining_facets)) => {
-                        let base_ty = self.subscript_infer(base, &synthesized_slice, range, errors);
+                        let base_ty = self.subscript_infer(
+                            base,
+                            &synthesized_slice,
+                            range,
+                            TypeFormContext::TypeExpression,
+                            errors,
+                        );
                         self.narrowable_for_facet_chain(
                             &base_ty,
                             next_name,
@@ -1893,11 +1900,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None => match base.type_at_facet(first_facet) {
                         Some(ty) => self.force_for_narrowing(ty, range, errors),
                         None => self
-                            .subscript_infer(base, &synthesized_slice, range, errors)
+                            .subscript_infer(
+                                base,
+                                &synthesized_slice,
+                                range,
+                                TypeFormContext::TypeExpression,
+                                errors,
+                            )
                             .into_ty(),
                     },
                     Some((next_name, remaining_facets)) => {
-                        let base_ty = self.subscript_infer(base, &synthesized_slice, range, errors);
+                        let base_ty = self.subscript_infer(
+                            base,
+                            &synthesized_slice,
+                            range,
+                            TypeFormContext::TypeExpression,
+                            errors,
+                        );
                         self.narrowable_for_facet_chain(
                             &base_ty,
                             next_name,

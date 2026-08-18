@@ -11,7 +11,6 @@ use pyrefly_types::type_level_dsl::TypeLevelDslCall;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
-use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_text_size::Ranged;
 
@@ -21,40 +20,47 @@ use crate::alt::solve::TypeFormContext;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 
+impl TypeFormContext<'_> {
+    pub(crate) fn allows_type_level_dsl_call(self) -> bool {
+        match self {
+            Self::ReturnAnnotation => true,
+            Self::TypeArgument(parent) | Self::UnionMember(parent) => {
+                parent.allows_type_level_dsl_call()
+            }
+            _ => false,
+        }
+    }
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(crate) fn parse_type_level_dsl_call(
         &self,
-        x: &Expr,
-        errors: &ErrorCollector,
-    ) -> Option<Type> {
-        let Expr::Call(call) = x else {
-            return None;
-        };
-        let probe_errors = self.error_swallower();
-        let prepared = self.prepare_expr_call(call, &probe_errors);
-        let callee = prepared.callee()?;
-        self.parse_type_level_dsl_call_with_callee(call, callee, errors)
-    }
-
-    pub(crate) fn parse_type_level_dsl_call_with_callee(
-        &self,
         call: &ExprCall,
         callee: &Type,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
-    ) -> Option<Type> {
+    ) -> Type {
         if !Self::is_native_broadcast_callee(callee) {
-            return None;
+            return self.error(
+                errors,
+                call.func.range(),
+                ErrorKind::InvalidAnnotation,
+                format!(
+                    "Expected a type-level DSL function, got `{}`",
+                    self.for_display(callee.clone())
+                ),
+            );
         }
         if !call.arguments.keywords.is_empty() {
-            return Some(self.error(
+            return self.error(
                 errors,
                 call.range,
                 ErrorKind::InvalidAnnotation,
                 "`broadcast` does not accept keyword arguments".to_owned(),
-            ));
+            );
         }
         if call.arguments.args.len() != 2 {
-            return Some(self.error(
+            return self.error(
                 errors,
                 call.range,
                 ErrorKind::InvalidAnnotation,
@@ -62,19 +68,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "Expected 2 arguments for `broadcast`, got {}",
                     call.arguments.args.len()
                 ),
-            ));
+            );
         }
-        let args = call
+
+        let argument_context = TypeFormContext::TypeArgument(&type_form_context);
+        let args: Vec<_> = call
             .arguments
             .args
             .iter()
             .map(|arg| {
-                let ty = self
-                    .parse_type_level_dsl_call(arg, errors)
-                    .unwrap_or_else(|| {
-                        self.expr_untype(arg, TypeFormContext::TypeArgument, errors)
-                    });
-                if !self.is_int_tuple_dsl_argument(&ty) {
+                let ty = self.expr_untype(arg, argument_context, errors);
+                if ty.is_error() {
+                    ty
+                } else if !self.is_int_tuple_dsl_argument(&ty) {
                     self.error(
                         errors,
                         arg.range(),
@@ -83,14 +89,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             "Expected an `IntTuple` argument to `broadcast`, got `{}`",
                             self.for_display(ty.clone())
                         ),
-                    );
+                    )
+                } else {
+                    ty
                 }
-                ty
             })
             .collect();
-        Some(Type::TypeLevelDslCall(Box::new(
-            TypeLevelDslCall::broadcast(args),
-        )))
+        if args.iter().any(Type::is_error) {
+            return Type::any_error();
+        }
+        Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::broadcast(args)))
     }
 
     fn is_native_broadcast_callee(callee: &Type) -> bool {
