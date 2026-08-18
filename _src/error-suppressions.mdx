@@ -100,6 +100,7 @@ pyrefly suppress --comment-location=same-line
 Pyrefly also supports storing errors in a baseline file. Any errors matching the baseline will be ignored and only new errors will be reported.
 This is useful when introducing type checking to a project for the first time, or when rolling out changes that require many suppression comments.
 This feature is inspired by tools like [basedpyright](https://docs.basedpyright.com/latest/benefits-over-pyright/baseline/) and [Android Studio](https://developer.android.com/studio/write/lint#snapshot).
+A baseline is the recommended starting point when migrating a large codebase from [mypy](./migrate/mypy/index.mdx) or [Pyright](./migrate/pyright/index.mdx).
 
 To generate (or re-generate) the baseline file:
 
@@ -132,6 +133,25 @@ Note that `baseline` is a **project-level setting** and cannot be overridden in 
 
 Errors are matched with the baseline by looking at file, error code, and column number.
 Note that errors suppressed by the baseline file are still shown in the IDE.
+
+`--baseline-error-level=<ignore|info|warn|error>` and the project-level
+`baseline-error-level` setting control how matching errors are reported. The
+default is `ignore`, which omits them from CLI output; the other levels emit them
+at a reduced or unchanged severity:
+
+```toml
+baseline = "baseline.json"
+baseline-error-level = "warn"
+```
+
+Emitted matches follow the normal `--min-severity` filtering and exit-status rules.
+Pyrefly records baseline provenance differently depending on the output format:
+
+- `full-text` and `min-text`: matched findings include `[baselined]` after the error-kind marker.
+- `github`: matched findings include `[baselined]` in the annotation title.
+- `json`: when a baseline is configured, each result has `baselined` set to `true` for a match and `false` otherwise.
+- `sarif`: when a baseline is configured, each result has `baselineState` set to `unchanged` for a match and `new` otherwise.
+- `omit-errors`: the summary includes the number of emitted baselined diagnostics.
 
 If a baseline file is configured but cannot be read or parsed, the run fails with an error rather than proceeding as if no baseline were set. The exception is `--update-baseline`, which regenerates the file from scratch and so tolerates a missing or unparseable baseline.
 

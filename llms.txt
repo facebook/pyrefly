@@ -2,37 +2,48 @@
 
 ## Docs
 
-- [attrs Support](attrs): Pyrefly support for the attrs library.
-- [Infer](autotype): Automatically add type annotations to your code with the Pyrefly infer feature.
-- [Bazel Integration](bazel): Run Pyrefly type checking over Bazel Python targets with rules_pyrefly
-- [Configuration](configuration): Configure Pyrefly settings and options
-- [DataFrames](dataframes): Pyrefly support for Polars and pandas DataFrames, including column and dtype inference.
-- [Django Support](django): Pyrefly support for Django ORM.
-- [Pyrefly Error Kinds](error-kinds): Pyrefly error categories and suppression codes
-- [Pyrefly Error Suppressions](error-suppressions): Learn how to suppress type check errors in Pyrefly with code comments and baseline files.
-- [IDE Installation](IDE): How to add Pyrefly Language Server and Typechecking to your IDE
-- [IDE Supported Features](IDE-features): Supported features for Pyrefly's IDE extension
-- [Import Resolution](import-resolution): How imports in a given file are found by Pyrefly and their bindings are resolved, including files that are being type checked
-- [Introduction](index): Guides and references for all you need to know about Pyrefly type checker and IDE extension.
-- [Installation](installation): How to install Pyrefly
-- [Migrating from Mypy](migrating-from-mypy): How to switch your type checker configuration from Mypy to Pyrefly
-- [Migrating from Pyright](migrating-from-pyright): How to switch your type checker configuration from Pyright to Pyrefly
-- [Migration Guides](migrating-to-pyrefly): How to switch from another type checker to Pyrefly
-- [Pydantic Support](pydantic): Pyrefly support for Pydantic.
-- [Pydantic Lax Mode Type Conversions](pydantic-lax-conversions): Complete reference of how Pyrefly converts types in Pydantic lax mode.
-- [FAQ](pyrefly-faq): Frequently Asked Questions about Pyrefly, a PEP 484 compliant Type Checker for Python and IDE extension.
-- [Pytest Support](pytest): Pyrefly support for pytest fixtures and test navigation.
-- [Typing Features and PEPS](python-features-and-peps): Typing features and associated PEPs available in each Python version.
-- [Python Typing 101](python-typing-for-beginners): A gentle, example‑driven introduction to static type hints in Python.
-- [Coverage](report): Measure and enforce type coverage in your Python codebase with Pyrefly.
-- [Stub Generation](stubgen): Generate .pyi stub files from Python source files with Pyrefly stubgen.
-- [Tensor Shapes](tensor-shapes): An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
-- [Agent Skill for Tensor Shape Porting](tensor-shapes-ai-porting): How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.
-- [Contributing](tensor-shapes-contributing): How to extend tensor shape coverage by adding fixture stubs, DSL specifications, and ported models.
-- [API Reference](tensor-shapes-reference): Complete reference for Int, Tensor, and tensor shape type system APIs.
-- [Getting Started](tensor-shapes-setup): How to configure Pyrefly for tensor shape checking and set up your project.
-- [Tutorial 4: Configs and Dynamic Patterns](tensor-shapes-tutorial-advanced): Parameterized config dataclasses, dynamic construction patterns, and typed interfaces.
-- [Tutorial 3: Complex Architectures](tensor-shapes-tutorial-architectures): Type encoder-decoder skip connections and recursive chains with exponential shapes.
-- [Tutorial 1: Your First Port](tensor-shapes-tutorial-basics): Learn the basics of tensor shape annotations by typing a simple multi-layer perceptron (MLP) model.
-- [Tutorial 2: Loops and Stacking](tensor-shapes-tutorial-loops): Type shape-preserving loops and ModuleList iteration in Transformer-style architectures.
-- [Typing for Python Developers](typing-for-python-developers): Get to know Python's Type System with working examples
+- [attrs Support](/en/docs/attrs/): Pyrefly support for the attrs library.
+- [Infer](/en/docs/autotype/): Automatically add type annotations to your code with the Pyrefly infer feature.
+- [Bazel Integration](/en/docs/bazel/): Run Pyrefly type checking over Bazel Python targets with rules_pyrefly
+- [Mypy vs Pyright vs Pyrefly](/en/docs/compare/): Compare mypy, Pyright, and Pyrefly for Python type checking, IDE support, configuration, framework support, strictness, and migration cost.
+- [Configuration](/en/docs/configuration/): Configure Pyrefly settings and options
+- [DataFrames](/en/docs/dataframes/): Pyrefly support for Polars and pandas DataFrames, including column and dtype inference.
+- [Django Support](/en/docs/django/): Pyrefly support for Django ORM.
+- [Pyrefly Error Kinds](/en/docs/error-kinds/): Pyrefly error categories and suppression codes
+- [Pyrefly Error Suppressions](/en/docs/error-suppressions/): Learn how to suppress type check errors in Pyrefly with code comments and baseline files.
+- [IDE Installation](/en/docs/IDE/): How to add Pyrefly Language Server and Typechecking to your IDE
+- [IDE Supported Features](/en/docs/IDE-features/): Supported features for Pyrefly's IDE extension
+- [Import Resolution](/en/docs/import-resolution/): How imports in a given file are found by Pyrefly and their bindings are resolved, including files that are being type checked
+- [Introduction](/en/docs/): Guides and references for all you need to know about Pyrefly type checker and IDE extension.
+- [Installation](/en/docs/installation/): How to install Pyrefly
+- [Migrating to Pyrefly](/en/docs/migrating-to-pyrefly/): Start here to move a Python project to Pyrefly from mypy or Pyright, with automatic config conversion, parallel CI, and a suppression or baseline rollout.
+- [Mypy Config to Pyrefly](/en/docs/migrate/mypy/config/): A complete migration reference for translating mypy.ini and [tool.mypy] options into Pyrefly configuration.
+- [Mypy Error Codes to Pyrefly](/en/docs/migrate/mypy/error-codes/): Map mypy error codes to Pyrefly error kinds, with exact automatic migration status and one-to-many compatibility notes.
+- [Mypy ignore_missing_imports in Pyrefly](/en/docs/migrate/mypy/ignore-missing-imports/): Understand mypy ignore_missing_imports, its Pyrefly equivalent, and when to use ignore-missing-imports instead of replacing all imports with Any.
+- [Migrate from mypy](/en/docs/migrating-from-mypy/): Move a Python project from mypy to Pyrefly: install alongside, convert the config automatically, compare the two outputs, and adopt the backlog with suppressions or a baseline.
+- [Mypy Plugin Support in Pyrefly](/en/docs/migrate/mypy/plugins/): Migrate common mypy plugin workloads to Pyrefly's built-in Pydantic, Django, and attrs support, and identify custom plugins that still need manual review.
+- [Mypy Strict Mode in Pyrefly](/en/docs/migrate/mypy/strict-mode/): Translate mypy strict mode into a reviewed Pyrefly configuration without assuming that the two strict bundles are identical.
+- [Pyright Config to Pyrefly](/en/docs/migrate/pyright/config/): Translate pyrightconfig.json and [tool.pyright] settings into Pyrefly, including execution environments and diagnostic rules.
+- [Pyright Diagnostics to Pyrefly](/en/docs/migrate/pyright/diagnostics/): Map every upstream Pyright report rule to Pyrefly error kinds, including automatic migration, split rules, and missing equivalents.
+- [Migrate from Pyright](/en/docs/migrating-from-pyright/): Move a Python project from Pyright or Pylance to Pyrefly: install alongside, convert pyrightconfig.json, review diagnostic mappings, and roll out with suppressions or a baseline.
+- [Pyright reportMissingImports in Pyrefly](/en/docs/migrate/pyright/missing-imports/): Map Pyright reportMissingImports to Pyrefly missing-import and fix interpreter, search-path, stub, and optional dependency issues.
+- [Pyright Strict Mode in Pyrefly](/en/docs/migrate/pyright/strict-mode/): Translate Pyright strict type checking into Pyrefly presets and explicit error severities, including path-specific strict rules.
+- [Pyright reportUnknownMemberType in Pyrefly](/en/docs/migrate/pyright/unknown-member-type/): Map Pyright reportUnknownMemberType to Pyrefly unknown-attribute-type and distinguish unknown member types from missing attributes.
+- [Pydantic Support](/en/docs/pydantic/): Pyrefly support for Pydantic.
+- [Pydantic Lax Mode Type Conversions](/en/docs/pydantic-lax-conversions/): Complete reference of how Pyrefly converts types in Pydantic lax mode.
+- [FAQ](/en/docs/pyrefly-faq/): Frequently Asked Questions about Pyrefly, a PEP 484 compliant Type Checker for Python and IDE extension.
+- [Pytest Support](/en/docs/pytest/): Pyrefly support for pytest fixtures and test navigation.
+- [Typing Features and PEPS](/en/docs/python-features-and-peps/): Typing features and associated PEPs available in each Python version.
+- [Python Typing 101](/en/docs/python-typing-for-beginners/): A gentle, example‑driven introduction to static type hints in Python.
+- [Coverage](/en/docs/report/): Measure and enforce type coverage in your Python codebase with Pyrefly.
+- [Stub Generation](/en/docs/stubgen/): Generate .pyi stub files from Python source files with Pyrefly stubgen.
+- [Tensor Shapes](/en/docs/tensor-shapes/): An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
+- [Agent Skill for Tensor Shape Porting](/en/docs/tensor-shapes-ai-porting/): How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.
+- [Contributing](/en/docs/tensor-shapes-contributing/): How to extend tensor shape coverage by adding fixture stubs, DSL specifications, and ported models.
+- [API Reference](/en/docs/tensor-shapes-reference/): Complete reference for Int, Tensor, and tensor shape type system APIs.
+- [Getting Started](/en/docs/tensor-shapes-setup/): How to configure Pyrefly for tensor shape checking and set up your project.
+- [Tutorial 4: Configs and Dynamic Patterns](/en/docs/tensor-shapes-tutorial-advanced/): Parameterized config dataclasses, dynamic construction patterns, and typed interfaces.
+- [Tutorial 3: Complex Architectures](/en/docs/tensor-shapes-tutorial-architectures/): Type encoder-decoder skip connections and recursive chains with exponential shapes.
+- [Tutorial 1: Your First Port](/en/docs/tensor-shapes-tutorial-basics/): Learn the basics of tensor shape annotations by typing a simple multi-layer perceptron (MLP) model.
+- [Tutorial 2: Loops and Stacking](/en/docs/tensor-shapes-tutorial-loops/): Type shape-preserving loops and ModuleList iteration in Transformer-style architectures.
+- [Typing for Python Developers](/en/docs/typing-for-python-developers/): Get to know Python's Type System with working examples
