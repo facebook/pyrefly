@@ -1938,6 +1938,32 @@ y = 1 or 2
 }
 
 #[test]
+fn hover_over_not_operator_highlights_unary_expression() {
+    let code = r#"
+x = not value
+#   ^
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let handle = handle("main");
+    let position = extract_cursors_for_test(code)[0];
+    let range = match get_hover(&state.transaction(), &handle, position, false) {
+        Some(hover) => hover.range,
+        None => panic!("Expected hover result for not operator"),
+    };
+    assert_eq!(
+        range,
+        Some(Range {
+            start: Position::new(1, 4),
+            end: Position::new(1, 13),
+        })
+    );
+}
+
+#[test]
 fn hover_over_bool_operator_chain_highlights_whole_chain() {
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
     // chain highlights the entire boolean expression, not just the adjacent
