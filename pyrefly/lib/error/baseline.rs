@@ -12,7 +12,6 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use pyrefly_util::absolutize::Absolutize;
-use pyrefly_util::fs_anyhow;
 
 use crate::error::error::Error;
 use crate::error::legacy::BaselineError;
@@ -58,12 +57,12 @@ pub struct BaselineProcessor {
 }
 
 impl BaselineProcessor {
-    /// Load a baseline file. `relative_to` is the base directory that was used
-    /// when the baseline was written (i.e. the resolved `--relative-to` value),
-    /// so that relative paths in the file are resolved correctly.
-    pub fn from_file(baseline_path: &Path, relative_to: &Path) -> Result<Self> {
-        let content = fs_anyhow::read_to_string(baseline_path)?;
-        let baseline_file: BaselineErrors = serde_json::from_str(&content)?;
+    /// Parse the contents of a baseline file. `relative_to` is the base directory
+    /// that was used when the baseline was written (i.e. the resolved
+    /// `--relative-to` value), so that relative paths in the file are resolved
+    /// correctly.
+    pub fn from_json(content: &str, relative_to: &Path) -> Result<Self> {
+        let baseline_file: BaselineErrors = serde_json::from_str(content)?;
         Ok(Self::from_baseline_errors(baseline_file, relative_to))
     }
 
@@ -113,9 +112,8 @@ pub struct TrackedBaselineProcessor {
 }
 
 impl TrackedBaselineProcessor {
-    pub fn from_file(baseline_path: &Path, relative_to: &Path) -> Result<Self> {
-        let content = fs_anyhow::read_to_string(baseline_path)?;
-        let baseline_file: BaselineErrors = serde_json::from_str(&content)?;
+    pub fn from_json(content: &str, relative_to: &Path) -> Result<Self> {
+        let baseline_file: BaselineErrors = serde_json::from_str(content)?;
         Ok(Self::from_baseline_errors(baseline_file, relative_to))
     }
 

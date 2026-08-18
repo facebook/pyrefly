@@ -92,7 +92,6 @@ use crate::error::suppress::CommentLocation;
 use crate::error::suppress::SerializedError;
 use crate::error::suppress::UnusedIgnoreKind;
 use crate::report;
-use crate::state::errors::BaselineApplyResult;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
@@ -1535,33 +1534,8 @@ impl CheckArgs {
             self.output.prune_baseline || self.output.error_stale_baseline,
         );
 
-        // `--update-baseline` regenerates the baseline from the current run, so
-        // a missing or unreadable existing baseline is not fatal. Log the
-        // discarded error so a genuinely broken environment (e.g. a permission
-        // error) leaves a trace rather than silently surfacing later as an
-        // unrelated write failure.
-        let (unused_baseline_entries, retained_baseline_entries, baseline_status) =
-            match baseline_apply_result {
-                BaselineApplyResult::NotConfigured => {
-                    (0usize, Vec::new(), BaselineStatus::NotConfigured)
-                }
-                BaselineApplyResult::NotFound => (0usize, Vec::new(), BaselineStatus::NotCompared),
-                BaselineApplyResult::Applied {
-                    unused_entry_count,
-                    retained_entries,
-                } => (
-                    unused_entry_count,
-                    retained_entries,
-                    BaselineStatus::Unmatched,
-                ),
-                BaselineApplyResult::FailedToRead(e) if self.output.update_baseline => {
-                    debug!(
-                        "ignoring unreadable baseline while regenerating it with `--update-baseline`: {e:#}"
-                    );
-                    (0usize, Vec::new(), BaselineStatus::NotCompared)
-                }
-                BaselineApplyResult::FailedToRead(e) => return Err(e),
-            };
+        let (baseline_status, unused_baseline_entries, retained_baseline_entries) =
+            baseline_apply_result.resolve(self.output.update_baseline)?;
         let errors = collected;
         let only_filter = self
             .output

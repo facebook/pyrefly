@@ -6,9 +6,12 @@
  */
 
 use std::collections::HashSet;
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
+use anstream::eprintln;
 use anyhow::Context as _;
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
@@ -39,6 +42,7 @@ use crate::error::baseline::BaselineProcessor;
 use crate::error::baseline::TrackedBaselineProcessor;
 use crate::error::baseline::normalize_baseline_path;
 use crate::error::collector::CollectedErrors;
+use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 use crate::error::expectation::Expectation;
 use crate::error::legacy::BaselineError;
@@ -290,6 +294,40 @@ pub enum BaselineApplyResult {
     },
 }
 
+impl BaselineApplyResult {
+    /// Resolve into the data needed by `check`, handling the
+    /// `--update-baseline` toleration for unreadable baselines.
+    /// Returns the `BaselineStatus` to assign to ordinary errors, plus
+    /// pruning data (0/empty when not applicable).
+    /// `tolerate_read_error` should be `true` when `--update-baseline` is set.
+    pub fn resolve(
+        self,
+        tolerate_read_error: bool,
+    ) -> anyhow::Result<(BaselineStatus, usize, Vec<BaselineError>)> {
+        match self {
+            Self::NotConfigured => Ok((BaselineStatus::NotConfigured, 0, Vec::new())),
+            Self::NotFound => Ok((BaselineStatus::NotCompared, 0, Vec::new())),
+            Self::Applied {
+                unused_entry_count,
+                retained_entries,
+            } => Ok((
+                BaselineStatus::Unmatched,
+                unused_entry_count,
+                retained_entries,
+            )),
+            Self::FailedToRead(e) if tolerate_read_error => {
+                // When regenerating the baseline, a corrupt/unreadable existing
+                // file is tolerated and treated as missing.
+                eprintln!(
+                    "Ignoring unreadable baseline while regenerating it with `--update-baseline`: {e:#}"
+                );
+                Ok((BaselineStatus::NotCompared, 0, Vec::new()))
+            }
+            Self::FailedToRead(e) => Err(e),
+        }
+    }
+}
+
 impl Errors {
     pub fn new(mut loads: Vec<(Arc<Load>, Option<Arc<ModuleRanges>>, ArcId<ConfigFile>)>) -> Self {
         loads.sort_by_key(|x| (x.0.module_info.name(), x.0.module_info.path().dupe()));
@@ -332,6 +370,8 @@ impl Errors {
 
     /// Apply baseline filtering to already-collected errors in place.
     /// `relative_to` resolves relative paths stored in the baseline file.
+    /// A missing file is mapped to `NotFound` (benign), not `FailedToRead`,
+    /// so there is no TOCTOU race between `exists()` and reading the file.
     pub fn apply_baseline(
         &self,
         errors: &mut CollectedErrors,
@@ -342,20 +382,31 @@ impl Errors {
         let Some(baseline_path) = baseline_path else {
             return BaselineApplyResult::NotConfigured;
         };
-        if !baseline_path.exists() {
-            return BaselineApplyResult::NotFound;
-        }
 
         let fail_ctx = || format!("failed to read baseline file `{}`", baseline_path.display());
 
+        // Read via `std::fs` rather than `fs_anyhow` so that a missing baseline is
+        // identified by the `ErrorKind` of this exact call, rather than by searching
+        // an `anyhow` chain where an unrelated `NotFound` could be mistaken for it.
+        let content = match fs::read_to_string(baseline_path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return BaselineApplyResult::NotFound;
+            }
+            Err(e) => {
+                return BaselineApplyResult::FailedToRead(
+                    anyhow::Error::new(e).context(fail_ctx()),
+                );
+            }
+        };
+
         if classify_stale_entries {
-            let mut processor =
-                match TrackedBaselineProcessor::from_file(baseline_path, relative_to)
-                    .with_context(fail_ctx)
-                {
-                    Ok(p) => p,
-                    Err(e) => return BaselineApplyResult::FailedToRead(e),
-                };
+            let mut processor = match TrackedBaselineProcessor::from_json(&content, relative_to)
+                .with_context(fail_ctx)
+            {
+                Ok(p) => p,
+                Err(e) => return BaselineApplyResult::FailedToRead(e),
+            };
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
             let checked_paths: HashSet<_> = self
                 .loads
@@ -371,12 +422,11 @@ impl Errors {
                 retained_entries: result.retained_entries,
             }
         } else {
-            let processor = match BaselineProcessor::from_file(baseline_path, relative_to)
-                .with_context(fail_ctx)
-            {
-                Ok(p) => p,
-                Err(e) => return BaselineApplyResult::FailedToRead(e),
-            };
+            let processor =
+                match BaselineProcessor::from_json(&content, relative_to).with_context(fail_ctx) {
+                    Ok(p) => p,
+                    Err(e) => return BaselineApplyResult::FailedToRead(e),
+                };
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
             BaselineApplyResult::Applied {
                 unused_entry_count: 0,
@@ -418,7 +468,8 @@ impl Errors {
                     .root_from_file()
                     .or_else(|| baseline_path.parent())
                     .unwrap_or_else(|| Path::new(""));
-                BaselineProcessor::from_file(baseline_path, relative_to).ok()
+                let content = fs::read_to_string(baseline_path).ok()?;
+                BaselineProcessor::from_json(&content, relative_to).ok()
             });
             if processor
                 .as_ref()
