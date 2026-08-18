@@ -219,7 +219,9 @@ pub enum TypeFormContext<'a> {
     TypeArgumentCallableReturn(&'a TypeFormContext<'a>),
     /// Type argument for `TypeGuard` or `TypeIs`.
     TypePredicateArgument(&'a TypeFormContext<'a>),
-    /// Type argument for the parameters list of a `Callable` type or a tuple.
+    /// An element of a tuple type.
+    TupleElement(&'a TypeFormContext<'a>),
+    /// Type argument for the parameters list of a `Callable` type.
     TupleOrCallableParam(&'a TypeFormContext<'a>),
     /// A member of a union type.
     UnionMember(&'a TypeFormContext<'a>),
@@ -285,6 +287,7 @@ impl TypeFormContext<'_> {
             self,
             TypeFormContext::GenericBase
                 | TypeFormContext::TupleOrCallableParam(_)
+                | TypeFormContext::TupleElement(_)
                 | TypeFormContext::TypeArgument(_)
                 | TypeFormContext::TypeArgumentCallableReturn(_)
                 | TypeFormContext::TypeArgumentForType(_)
@@ -6706,6 +6709,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             TypeFormContext::ParameterArgsAnnotation
                 | TypeFormContext::ParameterKwargsAnnotation
                 | TypeFormContext::TypeArgument(_)
+                | TypeFormContext::TupleElement(_)
                 | TypeFormContext::TupleOrCallableParam(_)
                 | TypeFormContext::GenericBase
                 | TypeFormContext::TypeVarTupleDefault
@@ -6736,7 +6740,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // to avoid emitting duplicate errors.
         if !matches!(
             type_form_context,
-            TypeFormContext::TupleOrCallableParam(_) | TypeFormContext::TypeArgument(_)
+            TypeFormContext::TupleElement(_)
+                | TypeFormContext::TupleOrCallableParam(_)
+                | TypeFormContext::TypeArgument(_)
         ) && ty.is_kind_type_var_tuple()
         {
             // Determine whether we're simply missing an `Unpack[...]` or the TypeVarTuple isn't allowed at all in this context.
@@ -6916,7 +6922,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // A `IntVar`'s default (e.g. `N = 3`) is a dimension expression, not
             // an ordinary type, so route it through the dimension parser.
             _ if type_form_context == TypeFormContext::IntVarDefault => self
-                .parse_dimension_list(slice::from_ref(x), errors)
+                .parse_dimension_list(slice::from_ref(x), type_form_context, errors)
                 .and_then(|dims| dims.into_iter().next())
                 .unwrap_or_else(Type::any_error),
             Expr::List(x)

@@ -123,7 +123,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             let ty = self.expr_untype(
                 value,
-                TypeFormContext::TupleOrCallableParam(&type_form_context),
+                TypeFormContext::TupleElement(&type_form_context),
                 errors,
             );
             match ty {

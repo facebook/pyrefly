@@ -38,6 +38,7 @@ use pyrefly_types::shaped_array::index_shape_tensor;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier;
 use pyrefly_types::shaped_array::tuple_carrier_to_shape;
 use pyrefly_types::shaped_array::type_to_dim;
+use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -3084,10 +3085,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::type_of(df)
                 }
                 Type::ClassDef(ref cls) if self.is_int_tuple_class(cls) => {
-                    self.parse_int_tuple_type(xs, errors)
+                    self.parse_int_tuple_type(xs, type_form_context, errors)
                 }
                 Type::ClassDef(ref cls) if self.is_int_class(cls) => {
-                    self.parse_int_type(xs, range, errors)
+                    self.parse_int_type(xs, range, type_form_context, errors)
                 }
                 Type::ClassDef(ref cls)
                     if cls.has_toplevel_qname("shape_extensions", "ProxyMethod") =>
@@ -4098,11 +4099,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(super) fn parse_dimension_list(
         &self,
         args: &[Expr],
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Option<Vec<Type>> {
         let mut dims = Vec::new();
         for arg in args {
-            let dim = self.parse_dimension_expr(arg, errors)?;
+            let dim = if let Expr::Call(call) = arg
+                && type_form_context.allows_type_level_dsl_call()
+            {
+                let callee = self.expr_infer(&call.func, &self.error_swallower());
+                let ty = self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
+                if let Type::TypeLevelDslCall(call) = &ty
+                    && call.result_domain() != TypeShapeDslDomain::Int
+                {
+                    self.error(
+                        errors,
+                        arg.range(),
+                        ErrorKind::InvalidAnnotation,
+                        "Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result"
+                            .to_owned(),
+                    );
+                    Type::any_error()
+                } else {
+                    ty
+                }
+            } else {
+                self.parse_dimension_expr(arg, errors)?
+            };
             let simplified = canonicalize(dim);
 
             // Validate that literal dimensions are positive
@@ -4130,7 +4153,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<IntTuple> {
         match expr {
             Expr::Tuple(ExprTuple { elts, .. }) => self
-                .parse_dimension_list(elts, errors)
+                .parse_dimension_list(elts, TypeFormContext::TypeExpression, errors)
                 .map(IntTuple::from_types),
             _ => {
                 self.error(
@@ -4290,7 +4313,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(param) = param_for_arg(idx) {
                     if !matches!(arg, Expr::Starred(_)) && param.kind() == QuantifiedKind::IntVar {
                         return self
-                            .parse_dimension_expr(arg, errors)
+                            .parse_dimension_list(
+                                slice::from_ref(arg),
+                                type_argument_context,
+                                errors,
+                            )
+                            .and_then(|dims| dims.into_iter().next())
                             .unwrap_or_else(Type::any_error);
                     }
                     if param.kind() == QuantifiedKind::TypeVar
@@ -4301,7 +4329,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     {
                         return self
-                            .parse_int_tuple_shape_args(elts, errors)
+                            .parse_int_tuple_shape_args(elts, type_argument_context, errors)
                             .map(|shape| shape.to_shape_arg_type())
                             .unwrap_or_else(Type::any_error);
                     }
@@ -4430,6 +4458,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn parse_int_tuple_shape_args(
         &self,
         args: &[Expr],
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Option<IntTuple> {
         let star = args
@@ -4451,8 +4480,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return None;
             }
 
-            let prefix = self.parse_dimension_list(&args[..star_idx], errors)?;
-            let suffix = self.parse_dimension_list(&args[star_idx + 1..], errors)?;
+            let prefix = self.parse_dimension_list(&args[..star_idx], type_form_context, errors)?;
+            let suffix =
+                self.parse_dimension_list(&args[star_idx + 1..], type_form_context, errors)?;
             let middle_ty = match self.parse_int_tuple_elements_projection(value, errors) {
                 Ok(Some(middle_ty)) => middle_ty,
                 Ok(None) => {
@@ -4477,7 +4507,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Some(IntTuple::unpacked_from_types(prefix, middle_ty, suffix));
         }
 
-        self.parse_dimension_list(args, errors)
+        self.parse_dimension_list(args, type_form_context, errors)
             .map(IntTuple::from_types)
     }
 
@@ -4533,7 +4563,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .enumerate()
             .map(|(i, arg)| match arg {
                 Expr::List(ExprList { elts, .. }) if i == shape_idx => {
-                    match self.parse_int_tuple_shape_args(elts, errors) {
+                    match self.parse_int_tuple_shape_args(elts, type_argument_context, errors) {
                         Some(shape) => {
                             let carrier = shape_to_tuple_carrier(&shape);
                             shape_arg_carrier = Some(shape.to_shape_arg_type());
@@ -4559,9 +4589,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 shape_arg_failed_to_parse = true;
                                 ty
                             }
-                            ty @ Type::TypeLevelDslCall(_) if i == shape_idx => {
-                                shape_arg_carrier = Some(ty);
-                                shape_validation_arg(&IntTuple::shapeless().to_shape_arg_type())
+                            Type::TypeLevelDslCall(call) if i == shape_idx => {
+                                if call.result_domain() == TypeShapeDslDomain::IntTuple {
+                                    let ty = Type::TypeLevelDslCall(call);
+                                    shape_arg_carrier = Some(ty);
+                                    shape_validation_arg(
+                                        &IntTuple::shapeless().to_shape_arg_type(),
+                                    )
+                                } else {
+                                    shape_arg_failed_to_parse = true;
+                                    self.error(
+                                        errors,
+                                        arg.range(),
+                                        ErrorKind::InvalidAnnotation,
+                                        "Expected a type-level shape DSL call with an `IntTuple` result in a shaped-array shape argument, got an `Int` result"
+                                            .to_owned(),
+                                    );
+                                    Type::any_error()
+                                }
                             }
                             Type::IntTuple(shape) if i == shape_idx => {
                                 let carrier = if shape.is_shapeless() {
@@ -4630,8 +4675,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .to_type()
     }
 
-    fn parse_int_tuple_type(&self, args: &[Expr], errors: &ErrorCollector) -> Type {
-        let Some(shape) = self.parse_int_tuple_shape_args(args, errors) else {
+    fn parse_int_tuple_type(
+        &self,
+        args: &[Expr],
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let argument_context = TypeFormContext::TypeArgument(&type_form_context);
+        let Some(shape) = self.parse_int_tuple_shape_args(args, argument_context, errors) else {
             return self.heap.mk_type_of(Type::any_error());
         };
         self.heap.mk_type_of(self.heap.mk_int_tuple(shape))
@@ -4642,6 +4693,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         spelling: &str,
         args: &[Expr],
         range: TextRange,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
         if args.len() != 1 {
@@ -4658,7 +4710,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Type::any_error();
         }
 
-        let Some(dims) = self.parse_dimension_list(args, errors) else {
+        let argument_context = TypeFormContext::TypeArgument(&type_form_context);
+        let Some(dims) = self.parse_dimension_list(args, argument_context, errors) else {
             return Type::any_error();
         };
         let dim = dims.into_iter().next().expect(
@@ -4676,8 +4729,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Parse Int[3], Int[N], Int[N+1] into `Type::Int(...)`.
-    fn parse_int_type(&self, args: &[Expr], range: TextRange, errors: &ErrorCollector) -> Type {
-        self.parse_single_int_type("Int", args, range, errors)
+    fn parse_int_type(
+        &self,
+        args: &[Expr],
+        range: TextRange,
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        self.parse_single_int_type("Int", args, range, type_form_context, errors)
     }
 
     /// Return the reason why we think `ty` is suspicious to use as a branching condition

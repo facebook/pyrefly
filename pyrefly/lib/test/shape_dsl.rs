@@ -197,6 +197,25 @@ class Tensor[Shape: IntTuple]:
     env
 }
 
+fn type_shape_dsl_import_env() -> TestEnv {
+    let mut env = shape_dsl_tensor_env();
+    env.add(
+        "identities",
+        r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def int_identity(x: Int) -> Int:
+    return x
+
+@type_shape_dsl_function
+def shape_identity(x: IntTuple) -> IntTuple:
+    return x
+"#,
+    );
+    env
+}
+
 #[test]
 fn test_type_shape_dsl_function_declarations() {
     let mut env = shaped_array_env();
@@ -998,6 +1017,190 @@ def test(x: Tensor[[2, 3]], y: Tensor[[1, 3]], z: Tensor[[2, 1]], bad: Tensor[[4
 );
 
 testcase!(
+    test_type_shape_dsl_identity_calls,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, IntVar, broadcast, type_shape_dsl_function
+from torch import Tensor
+from typing import Annotated, Any, Literal, overload, reveal_type
+
+@type_shape_dsl_function
+def int_identity(x: Int) -> Int:
+    return x
+
+@type_shape_dsl_function
+def shape_identity(x: IntTuple) -> IntTuple:
+    return x
+
+def keep_dim[N: IntVar](x: Tensor[[N]]) -> Tensor[[int_identity(N)]]: ...
+def gradual_dim(x: Tensor[[int]]) -> Tensor[[int_identity(int)]]: ...
+def any_dim(x: Tensor[[int]]) -> Tensor[[int_identity(Any)]]: ...
+def keep_shape[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S)]: ...
+def gradual_shape(x: Tensor[IntTuple]) -> Tensor[shape_identity(IntTuple)]: ...
+def any_shape(x: Tensor[IntTuple]) -> Tensor[shape_identity(Any)]: ...
+def compose[S0: IntTuple, S1: IntTuple](
+    x: Tensor[S0],
+    y: Tensor[S1],
+) -> Tensor[shape_identity(broadcast(shape_identity(S0), S1))]: ...
+def wrapped[S: IntTuple](x: Tensor[S]) -> tuple[Tensor[shape_identity(S)]]: ...
+type Wrapped[T] = tuple[T]
+def wrapped_alias[S: IntTuple](x: Tensor[S]) -> Wrapped[Tensor[shape_identity(S)]]: ...
+def annotated[S: IntTuple](x: Tensor[S]) -> Annotated[Tensor[shape_identity(S)], "shape"]: ...
+
+class DimBox[N: IntVar]: ...
+def wrapped_dim[N: IntVar](x: Tensor[[N]]) -> DimBox[int_identity(N)]: ...
+class ShapeBox[S: IntTuple]: ...
+def wrapped_compact_shape[N: IntVar](x: Tensor[[N]]) -> ShapeBox[[int_identity(N)]]: ...
+def wrapped_shape_call[N: IntVar](x: Tensor[[N]]) -> Tensor[shape_identity(IntTuple[int_identity(N)])]: ...
+def wrapped_int_call[N: IntVar](x: Tensor[[N]]) -> Tensor[[int_identity(Int[int_identity(N)])]]: ...
+def wrapped_broadcast_call[N: IntVar](x: Tensor[[N]]) -> Tensor[broadcast(IntTuple[int_identity(N)], IntTuple[1])]: ...
+class ParamSpecBox[**P]: ...
+def wrapped_paramspec_list() -> ParamSpecBox[[int, str]]: ...
+
+@overload
+def overloaded[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S)]: ...
+@overload
+def overloaded(x: int) -> int: ...
+def overloaded(x: Any) -> Any: ...
+
+def runtime_identity[T](x: T) -> T:
+    return x
+
+def test(
+    dim: Tensor[[3]],
+    unknown_dim: Tensor[[int]],
+    x: Tensor[[2, 3]],
+    y: Tensor[[1, 3]],
+    unknown_shape: Tensor[IntTuple],
+    text: str,
+) -> None:
+    exact_dim: Tensor[[3]] = keep_dim(dim)
+    exact_shape: Tensor[[2, 3]] = keep_shape(x)
+    reveal_type(keep_dim(dim))  # E: revealed type: Tensor[[3]]
+    reveal_type(gradual_dim(unknown_dim))  # E: revealed type: Tensor[[int]]
+    reveal_type(any_dim(unknown_dim))  # E: revealed type: Tensor[[int]]
+    reveal_type(keep_shape(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(gradual_shape(unknown_shape))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(any_shape(unknown_shape))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(compose(x, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(wrapped(x))  # E: revealed type: tuple[Tensor[[2, 3]]]
+    reveal_type(wrapped_alias(x))  # E: revealed type: tuple[Tensor[[2, 3]]]
+    reveal_type(annotated(x))  # E: revealed type: Tensor[[2, 3]]
+    exact_dim_box: DimBox[3] = wrapped_dim(dim)
+    exact_shape_box: ShapeBox[[3]] = wrapped_compact_shape(dim)
+    reveal_type(wrapped_shape_call(dim))  # E: revealed type: Tensor[[3]]
+    reveal_type(wrapped_int_call(dim))  # E: revealed type: Tensor[[3]]
+    reveal_type(wrapped_broadcast_call(dim))  # E: revealed type: Tensor[[3]]
+    reveal_type(overloaded(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(runtime_identity(text))  # E: revealed type: str
+
+def symbolic[N: IntVar](dim: Tensor[[N]]) -> None:
+    reveal_type(keep_dim(dim))  # E: revealed type: Tensor[[N]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_identity_import_resolution,
+    type_shape_dsl_import_env(),
+    r#"
+import identities
+import identities as identities_alias
+from identities import shape_identity
+from identities import shape_identity as renamed_identity
+from shape_extensions import IntTuple
+from torch import Tensor
+from typing import reveal_type
+
+def qualified[S: IntTuple](x: Tensor[S]) -> Tensor[identities.shape_identity(S)]: ...
+def module_alias[S: IntTuple](x: Tensor[S]) -> Tensor[identities_alias.shape_identity(S)]: ...
+def imported[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S)]: ...
+def import_alias[S: IntTuple](x: Tensor[S]) -> Tensor[renamed_identity(S)]: ...
+value_alias = shape_identity
+def value_aliased[S: IntTuple](x: Tensor[S]) -> Tensor[value_alias(S)]: ...
+
+def test(x: Tensor[[2, 3]]) -> None:
+    reveal_type(qualified(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(module_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(imported(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(import_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(value_aliased(x))  # E: revealed type: Tensor[[2, 3]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_identity_call_errors_and_boundaries,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import Callable, Concatenate, TypeGuard, TypeIs, Union, reveal_type
+
+@type_shape_dsl_function
+def int_identity(x: Int) -> Int:
+    return x
+
+@type_shape_dsl_function
+def shape_identity(x: IntTuple) -> IntTuple:
+    return x
+
+def missing[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity()]: ...  # E: Expected 1 argument for `shape_identity`, got 0
+def extra[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S, S)]: ...  # E: Expected 1 argument for `shape_identity`, got 2
+def keyword[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(x=S)]: ...  # E: `shape_identity` does not accept keyword arguments
+def wrong_shape_domain(x: Tensor[[2]]) -> Tensor[shape_identity(Int[2])]: ...  # E: Expected an `IntTuple` argument to `shape_identity`, got `Int[2]`
+def wrong_int_domain(x: Tensor[[2]]) -> Tensor[[int_identity(IntTuple[2])]]: ...  # E: Expected an `Int` argument to `int_identity`, got `IntTuple[2]`
+def wrong_dimension_result(x: Tensor[[2]]) -> Tensor[[shape_identity(IntTuple[2])]]: ...  # E: Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result
+def wrong_shape_result(x: Tensor[[2]]) -> Tensor[int_identity(Int[2])]: ...  # E: Expected a type-level shape DSL call with an `IntTuple` result in a shaped-array shape argument, got an `Int` result
+def nested_wrong_domain(x: Tensor[[2]]) -> Tensor[shape_identity(int_identity(IntTuple[2]))]: ...  # E: Expected an `Int` argument to `int_identity`, got `IntTuple[2]`
+def malformed_int(x: Tensor[[2]]) -> Tensor[[int_identity("x")]]: ...  # E: String literals are not valid tensor dimensions
+def recovered_dimension[N: IntVar]() -> Tensor[[int_identity(Int[N + MissingDim])]]: ...  # E: Could not find name `MissingDim`
+def recovered_ordinary() -> Tensor[[int_identity(list[MissingType])]]: ...  # E: Could not find name `MissingType`  # E: Expected an `Int` argument to `int_identity`, got `list[Unknown]`
+def nonpositive_int(x: Tensor[[2]]) -> Tensor[[int_identity(-1)]]: ...  # E: Tensor shape dimension must be positive, got -1
+def malformed_shape(x: Tensor[[2]]) -> Tensor[shape_identity(IntTuple["x"])]: ...  # E: String literals are not valid tensor dimensions
+def unbound_shape(x: Tensor[[2]]) -> Tensor[shape_identity(MissingShape)]: ...  # E: Could not find name `MissingShape`
+
+BadAlias = Tensor[shape_identity(IntTuple[2])]  # E: Function call cannot be used in annotations
+bad_global: Tensor[shape_identity(IntTuple[2])]  # E: Function call cannot be used in annotations
+def bad_parameter(x: Tensor[shape_identity(IntTuple[2])]) -> None: ...  # E: Function call cannot be used in annotations
+def bad_composed_parameter[N: IntVar](x: Tensor[shape_identity(IntTuple[int_identity(N)])]) -> None: ...  # E: Function call cannot be used in annotations
+def tuple_return[S: IntTuple](x: Tensor[S]) -> tuple[Tensor[shape_identity(S)], int]: ...
+def bad_tuple_paramspec[**P]() -> tuple[P]: ...  # E: `P` is not allowed in this context
+def bad_tuple_concatenate[**P]() -> tuple[Concatenate[int, P]]: ...  # E: `Concatenate[int, P]` is not allowed in this context
+def nested_callable[S: IntTuple]() -> tuple[Callable[[], Tensor[shape_identity(S)]]]: ...  # E: Function call cannot be used in annotations
+type Deferred[T] = Callable[[], T]
+def nested_callable_alias[S: IntTuple]() -> Deferred[Tensor[shape_identity(S)]]: ...
+type Mixed[T, U] = tuple[T, Callable[[], U]]
+def mixed_alias[S: IntTuple]() -> Mixed[Tensor[shape_identity(S)], int]: ...
+type NestedDeferred[T] = tuple[int, Deferred[T]]
+def nested_alias[S: IntTuple]() -> NestedDeferred[Tensor[shape_identity(S)]]: ...
+type Guard[T] = TypeGuard[T]
+def guard_alias[S: IntTuple](x: object) -> Guard[Tensor[shape_identity(S)]]: ...
+type Narrowed[T] = TypeIs[T]
+def type_is_alias[S: IntTuple](x: object) -> Narrowed[Tensor[shape_identity(S)]]: ...
+type Recursive[T] = T | list[Recursive[T]]
+def recursive_alias[S: IntTuple]() -> Recursive[Tensor[shape_identity(S)]]: ...
+type RecursiveTransform[T] = T | list[RecursiveTransform[list[T]]]
+def recursive_transform_alias[S: IntTuple]() -> RecursiveTransform[Tensor[shape_identity(S)]]: ...
+type RecursiveDeferred[T] = T | Callable[[], RecursiveDeferred[T]]
+def recursive_deferred_alias[S: IntTuple]() -> RecursiveDeferred[Tensor[shape_identity(S)]]: ...
+type RecursiveDeferredTransform[T] = T | Callable[[], RecursiveDeferredTransform[list[T]]]
+def recursive_deferred_transform_alias[S: IntTuple]() -> RecursiveDeferredTransform[Tensor[shape_identity(S)]]: ...
+
+def pep604_union[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S)] | None: ...
+def typing_union[S: IntTuple](x: Tensor[S]) -> Union[Tensor[shape_identity(S)], None]: ...
+def bad_union_parameter[S: IntTuple](x: Tensor[shape_identity(S)] | None) -> None: ...  # E: Function call cannot be used in annotations
+def bad_nested_union_callable[S: IntTuple]() -> Callable[[], Tensor[shape_identity(S)] | None]: ...  # E: Function call cannot be used in annotations
+type BadUnionAlias[S: IntTuple] = Tensor[shape_identity(S)] | None  # E: Function call cannot be used in annotations
+
+def test_union(x: Tensor[[2, 3]]) -> None:
+    reveal_type(pep604_union(x))  # E: revealed type: Tensor[[2, 3]] | None
+    reveal_type(typing_union(x))  # E: revealed type: Tensor[[2, 3]] | None
+
+def runtime(x: Int[2]) -> Int:
+    return int_identity(x)
+"#,
+);
+
+testcase!(
     test_type_level_dsl_broadcast_rejected_outside_return_annotation,
     shaped_array_env_with_shaped_torch(),
     r#"
@@ -1049,7 +1252,7 @@ def type_is_boundary[S: IntTuple](x: object) -> TypeIs[Tensor[broadcast(S, S)]]:
 def bad_arity() -> Tensor[broadcast(IntTuple[2])]: ...  # E: Expected 2 arguments for `broadcast`, got 1
 def bad_keyword() -> Tensor[broadcast(IntTuple[2], right=IntTuple[2])]: ...  # E: `broadcast` does not accept keyword arguments
 def bad_domain() -> Tensor[broadcast(int, IntTuple[2])]: ...  # E: Expected an `IntTuple` argument to `broadcast`
-def bad_dimension() -> Tensor[[broadcast(IntTuple[2], IntTuple[2])]]: ...  # E: Tensor shape dimensions must be positive integer literals
+def bad_dimension() -> Tensor[[broadcast(IntTuple[2], IntTuple[2])]]: ...  # E: Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result
 "#,
 );
 

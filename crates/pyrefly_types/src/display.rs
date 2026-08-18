@@ -903,7 +903,7 @@ impl<'a> TypeDisplayContext<'a> {
                 }
             },
             Type::TypeLevelDslCall(call) => {
-                output.write_str(call.function.name)?;
+                output.write_str(call.function_name())?;
                 output.write_str("(")?;
                 for (i, arg) in call.args.iter().enumerate() {
                     if i > 0 {

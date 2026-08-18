@@ -22,7 +22,9 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
+use crate::dimension::Int;
 use crate::dimension::ShapeError;
+use crate::dimension::gradual_size;
 use crate::equality::TypeEq as TypeEqTrait;
 use crate::equality::TypeEqCtx;
 use crate::shaped_array::IntTuple;
@@ -191,6 +193,10 @@ impl ValidatedTypeShapeDslFunction {
         &self.parameter_name
     }
 
+    pub fn name(&self) -> &Name {
+        &self.definition.name.id
+    }
+
     pub fn parameter_annotation_range(&self) -> TextRange {
         self.definition.parameters.args[0]
             .parameter
@@ -222,21 +228,24 @@ impl ValidatedTypeShapeDslFunction {
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut)]
 pub struct TypeLevelDslCall {
-    pub function: TypeLevelDslFunction,
-    pub args: Vec<Type>,
-    pub result_schema: TypeLevelDslResultSchema,
+    pub(crate) function: TypeLevelDslFunction,
+    pub(crate) args: Vec<Type>,
 }
 
 /// The identity of a type-level DSL operation.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
-pub struct TypeLevelDslFunction {
-    pub name: &'static str,
+pub enum TypeLevelDslFunction {
+    Broadcast,
+    UserDefined {
+        function: Arc<ValidatedTypeShapeDslFunction>,
+        domain: TypeShapeDslDomain,
+    },
 }
 
-/// The type domain produced when a DSL call must fall back to a gradual result.
-#[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
-pub enum TypeLevelDslResultSchema {
-    IntTuple,
+#[derive(Debug, Clone)]
+enum DslValue {
+    Int(Int),
+    IntTuple(IntTuple),
 }
 
 impl Visit<Type> for TypeLevelDslFunction {
@@ -249,37 +258,52 @@ impl VisitMut<Type> for TypeLevelDslFunction {
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
 }
 
-impl Visit<Type> for TypeLevelDslResultSchema {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-impl VisitMut<Type> for TypeLevelDslResultSchema {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-
 impl TypeLevelDslCall {
     /// Constructs a native two-argument broadcast call.
     pub fn broadcast(args: Vec<Type>) -> Self {
         Self {
-            function: TypeLevelDslFunction { name: "broadcast" },
+            function: TypeLevelDslFunction::Broadcast,
             args,
-            result_schema: TypeLevelDslResultSchema::IntTuple,
+        }
+    }
+
+    pub fn user_defined(
+        function: Arc<ValidatedTypeShapeDslFunction>,
+        domain: TypeShapeDslDomain,
+        arg: Type,
+    ) -> Self {
+        Self {
+            function: TypeLevelDslFunction::UserDefined { function, domain },
+            args: vec![arg],
+        }
+    }
+
+    pub fn function_name(&self) -> &str {
+        match &self.function {
+            TypeLevelDslFunction::Broadcast => "broadcast",
+            TypeLevelDslFunction::UserDefined { function, .. } => function.name().as_str(),
+        }
+    }
+
+    pub fn result_domain(&self) -> TypeShapeDslDomain {
+        match &self.function {
+            TypeLevelDslFunction::Broadcast => TypeShapeDslDomain::IntTuple,
+            TypeLevelDslFunction::UserDefined { domain, .. } => *domain,
         }
     }
 
     /// Returns the gradual result for a call whose precise value cannot be determined.
     pub fn fallback(&self) -> Type {
-        match &self.result_schema {
-            TypeLevelDslResultSchema::IntTuple => IntTuple::shapeless().to_shape_arg_type(),
+        match self.result_domain() {
+            TypeShapeDslDomain::Int => gradual_size(),
+            TypeShapeDslDomain::IntTuple => IntTuple::shapeless().to_shape_arg_type(),
         }
     }
 
-    /// Evaluates the native call, reporting incompatible concrete shapes.
+    /// Evaluates the call, reporting incompatible concrete shapes.
     pub fn evaluate(&self) -> Result<Type, ShapeError> {
-        match self.function.name {
-            "broadcast" => {
+        match &self.function {
+            TypeLevelDslFunction::Broadcast => {
                 let [left, right] = self.args.as_slice() else {
                     unreachable!("native broadcast DSL calls are constructed with two arguments");
                 };
@@ -295,7 +319,37 @@ impl TypeLevelDslCall {
                 };
                 broadcast_shapes(&left, &right).map(|shape| shape.to_shape_arg_type())
             }
-            name => unreachable!("unknown type-level DSL function `{name}`"),
+            TypeLevelDslFunction::UserDefined { function, domain } => {
+                let [arg] = self.args.as_slice() else {
+                    unreachable!("validated identity DSL calls are constructed with one argument");
+                };
+                Ok(DslValue::from_type(arg, *domain)
+                    .map(|value| function.evaluate(value).into_type())
+                    .unwrap_or_else(|| self.fallback()))
+            }
+        }
+    }
+}
+
+impl ValidatedTypeShapeDslFunction {
+    fn evaluate(&self, value: DslValue) -> DslValue {
+        // Validation currently admits only the identity program.
+        value
+    }
+}
+
+impl DslValue {
+    fn from_type(ty: &Type, domain: TypeShapeDslDomain) -> Option<Self> {
+        match domain {
+            TypeShapeDslDomain::Int => Int::from_type(ty).map(Self::Int),
+            TypeShapeDslDomain::IntTuple => IntTuple::from_shape_arg_type(ty).map(Self::IntTuple),
+        }
+    }
+
+    fn into_type(self) -> Type {
+        match self {
+            Self::Int(value) => Type::Int(value),
+            Self::IntTuple(value) => value.to_shape_arg_type(),
         }
     }
 }

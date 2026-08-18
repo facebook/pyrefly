@@ -20,6 +20,7 @@ use std::fmt::Display;
 use crate::equality::TypeEq;
 use crate::literal::Lit;
 use crate::quantified::QuantifiedKind;
+use crate::type_level_dsl::TypeShapeDslDomain;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
@@ -145,6 +146,9 @@ impl Int {
                 Some(Int::Symbolic(Box::new(ty.clone())))
             }
             Type::Var(_) => Some(Int::Symbolic(Box::new(ty.clone()))),
+            Type::TypeLevelDslCall(call) if call.result_domain() == TypeShapeDslDomain::Int => {
+                Some(Int::Symbolic(Box::new(ty.clone())))
+            }
             _ => None,
         }
     }

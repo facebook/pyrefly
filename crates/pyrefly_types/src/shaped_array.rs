@@ -26,6 +26,7 @@ use crate::lit_int::LitInt;
 use crate::literal::Lit;
 use crate::quantified::QuantifiedKind;
 use crate::tuple::Tuple;
+use crate::type_level_dsl::TypeShapeDslDomain;
 use crate::types::Type;
 
 // ============================================================================
@@ -806,6 +807,7 @@ fn is_valid_internal_dim(dim: &Type) -> bool {
         Type::Quantified(q) => q.kind == QuantifiedKind::IntVar,
         Type::TypeVar(tv) => tv.kind() == QuantifiedKind::IntVar,
         Type::Var(_) | Type::Any(_) => true,
+        Type::TypeLevelDslCall(call) => call.result_domain() == TypeShapeDslDomain::Int,
         _ => false,
     }
 }
