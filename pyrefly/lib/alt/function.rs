@@ -2334,7 +2334,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &impl_ret.promote_implicit_literals(self.stdlib),
                 *range,
                 errors,
-                &|| TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn),
+                &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn(
+                        self.for_display(original_overload_func.signature.ret.clone()),
+                    ))
+                },
             );
             match &overload_func.signature.params {
                 Params::List(params) => {

@@ -255,11 +255,14 @@ impl TypeCheckKind {
                 ctx.display(got),
                 ctx.display(want),
             ),
-            Self::OverloadReturn => format!(
-                "Overload return type `{}` is not assignable to implementation return type `{}`",
-                ctx.display(got),
-                ctx.display(want),
-            ),
+            Self::OverloadReturn(overload_return) => {
+                ctx.add(overload_return);
+                format!(
+                    "Overload return type `{}` is not assignable to implementation return type `{}`",
+                    ctx.display(overload_return),
+                    ctx.display(want),
+                )
+            }
             Self::OverloadInput(overload_sig, impl_sig) => {
                 format!(
                     "Implementation signature `{impl_sig}` does not accept all arguments that overload signature `{overload_sig}` accepts"
