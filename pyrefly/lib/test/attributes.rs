@@ -937,6 +937,22 @@ def test(foo: Foo, attr_name: str) -> None:
 );
 
 testcase!(
+    test_builtin_getattr_non_special_call_shapes,
+    r#"
+from typing import Any, assert_type
+
+class Foo:
+    x: int
+
+def test(foo: Foo) -> None:
+    assert_type(getattr(*(foo, "x")), Any)
+    assert_type(getattr(*[foo], "x"), Any)
+    assert_type(getattr(foo, "x", *(None,)), Any | None)
+    getattr(foo, "x", None, None)  # E:
+    "#,
+);
+
+testcase!(
     test_object_setattr,
     r#"
 from typing import assert_type
