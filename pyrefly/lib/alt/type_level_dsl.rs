@@ -8,6 +8,7 @@
 use std::slice;
 use std::sync::Arc;
 
+use pyrefly_types::callable::Param;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_level_dsl::TypeLevelDslCall;
@@ -18,6 +19,7 @@ use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
 use ruff_python_ast::ExprCall;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -38,6 +40,82 @@ impl TypeFormContext<'_> {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Validates resolved DSL annotations, emitting diagnostics and metadata only on success.
+    pub(super) fn validate_type_shape_dsl_declaration(
+        &self,
+        dsl: &Arc<ValidatedTypeShapeDslFunction>,
+        params: &[Param],
+        return_type: &Type,
+        function_kind: &FunctionKind,
+        function_range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<FunctionKind> {
+        let parameter_domain = if dsl.has_parameter_annotation() {
+            params
+                .first()
+                .and_then(|param| type_shape_dsl_domain(param.as_type()))
+        } else {
+            None
+        };
+        let return_domain = if dsl.has_return_annotation() {
+            type_shape_dsl_domain(return_type)
+        } else {
+            None
+        };
+        match (parameter_domain, return_domain) {
+            (Some(parameter), Some(result)) if parameter == result => {
+                if let FunctionKind::Def(func_id) = function_kind {
+                    Some(FunctionKind::TypeShapeDsl(
+                        func_id.clone(),
+                        parameter,
+                        dsl.clone(),
+                    ))
+                } else {
+                    self.error(
+                        errors,
+                        function_range,
+                        ErrorKind::InvalidArgument,
+                        "`@type_shape_dsl_function` must be applied to an ordinary function definition"
+                            .to_owned(),
+                    );
+                    None
+                }
+            }
+            (None, _) => {
+                self.error(
+                    errors,
+                    dsl.parameter_annotation_range(),
+                    ErrorKind::InvalidArgument,
+                    format!(
+                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int` or `IntTuple`",
+                        dsl.parameter_name()
+                    ),
+                );
+                None
+            }
+            (_, None) => {
+                self.error(
+                    errors,
+                    dsl.return_annotation_range(),
+                    ErrorKind::InvalidArgument,
+                    "`@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`"
+                        .to_owned(),
+                );
+                None
+            }
+            (Some(_), Some(_)) => {
+                self.error(
+                    errors,
+                    dsl.return_annotation_range(),
+                    ErrorKind::InvalidArgument,
+                    "`@type_shape_dsl_function` parameter and return annotations must use the same domain"
+                        .to_owned(),
+                );
+                None
+            }
+        }
+    }
+
     pub(crate) fn parse_type_level_dsl_call(
         &self,
         call: &ExprCall,
@@ -238,5 +316,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             TypeShapeDslDomain::IntTuple => self.is_int_tuple_dsl_argument(ty),
         }
+    }
+}
+
+fn type_shape_dsl_domain(ty: &Type) -> Option<TypeShapeDslDomain> {
+    match ty {
+        Type::Int(_) => Some(TypeShapeDslDomain::Int),
+        Type::IntTuple(_) => Some(TypeShapeDslDomain::IntTuple),
+        _ => None,
     }
 }
