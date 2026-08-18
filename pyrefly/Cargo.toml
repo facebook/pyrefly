@@ -78,7 +78,7 @@ tokio = { version = "1.53.1", features = ["macros", "rt"] }
 toml = { version = "1.1.4", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tsp_types = { path = "../crates/tsp_types" }
-uuid = { version = "1.24.0", features = ["js", "rng-getrandom", "v4"] }
+uuid = { version = "1.24.1", features = ["js", "rng-getrandom", "v4"] }
 vec1 = { version = "1.12.1", features = ["serde"] }
 web-time = "1.1.0"
 xxhash-rust = { version = "0.8.18", features = ["xxh64"] }
