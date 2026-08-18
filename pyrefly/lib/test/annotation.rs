@@ -275,3 +275,26 @@ testcase!(
     env_3_13_with_stub(),
     "import foo",
 );
+
+testcase!(
+    bug = "Function calls are accepted in type expressions",
+    test_call_expressions_in_type_forms,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from typing import TypeVar, assert_type, cast
+
+class Base: ...
+def make_type() -> type[Base]: ...
+
+LegacyBound = TypeVar("LegacyBound", bound=make_type())
+LegacyConstraints = TypeVar("LegacyConstraints", make_type(), Base)
+LegacyDefault = TypeVar("LegacyDefault", default=make_type())
+
+def pep_bound[T: make_type()](x: T) -> T: ...
+def pep_default[T = make_type()](x: T) -> T: ...
+
+def use(value: Base) -> None:
+    assert_type(cast(make_type(), object()), Base)
+    assert_type(value, make_type())
+"#,
+);
