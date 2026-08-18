@@ -46,6 +46,11 @@ jobs:
     - run: cargo clippy --release
     - run: cargo build --release
     - run: cargo test --release
+    - name: Check conformance output is up to date
+      # The generated output is platform-independent, so one OS is enough. It must not
+      # be Windows: the check keys results by splitting paths on "/".
+      if: ${{ matrix.os == 'ubuntu-latest' }}
+      run: python conformance/conformance_output.py conformance/third_party --mode check --executable target/release/pyrefly
     - name: Run torch stub tests
       run: python tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --release
     - name: Run Scrut tests
