@@ -6415,41 +6415,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(self.validate_untyped_type_var_context(ty, range, errors, context))
             }
             Type::Type(t) => {
-                if let Type::ClassType(cls) = t.as_ref()
-                    && self.is_int_tuple_class(cls.class_object())
-                {
-                    return Some(self.heap.mk_int_tuple(IntTuple::shapeless()));
+                match t.as_ref() {
+                    Type::ClassType(cls) => {
+                        if self.is_int_tuple_class(cls.class_object()) {
+                            Some(self.heap.mk_int_tuple(IntTuple::shapeless()))
+                        } else if cls.has_qname("shape_extensions", "Int") {
+                            Some(gradual_size())
+                        } else if self.shaped_array_shape_for_class_type(cls).is_some() {
+                            // Canonicalize bare shaped-array types to Type::ShapedArray(shapeless)
+                            // for consistency. Subscripted arrays are already converted to
+                            // Type::ShapedArray during annotation parsing, so only the bare case reaches here.
+                            Some(ShapedArrayType::shapeless(cls.clone()).to_type())
+                        } else if cls.has_qname("types", "NoneType") {
+                            // Normalize type[NoneType] as None
+                            Some(self.heap.mk_none())
+                        } else {
+                            Some(self.validate_untyped_type_var_context(*t, range, errors, context))
+                        }
+                    }
+                    Type::SpecialForm(SpecialForm::TypeForm) => {
+                        // Bare TypeForm (no subscript) is equivalent to TypeForm[Any]
+                        Some(Type::TypeForm(Box::new(Type::Any(AnyStyle::Implicit))))
+                    }
+                    Type::SpecialForm(SpecialForm::SelfType) => {
+                        // `typing.Self` substitutes to the concrete `SelfType` of
+                        // the enclosing class, recovered from the bind-time
+                        // `class_scopes` side table on `Bindings`.
+                        Some(self.untype_self(range, errors))
+                    }
+                    _ => Some(self.validate_untyped_type_var_context(*t, range, errors, context)),
                 }
-                if let Type::ClassType(cls) = t.as_ref()
-                    && cls.has_qname("shape_extensions", "Int")
-                {
-                    return Some(gradual_size());
-                }
-                // Canonicalize bare shaped-array types to Type::ShapedArray(shapeless)
-                // for consistency. Subscripted arrays are already converted to
-                // Type::ShapedArray during annotation parsing, so only the bare case reaches here.
-                if let Type::ClassType(cls) = t.as_ref()
-                    && self.shaped_array_shape_for_class_type(cls).is_some()
-                {
-                    return Some(ShapedArrayType::shapeless(cls.clone()).to_type());
-                }
-                // Normalize type[NoneType] as None
-                if let Type::ClassType(cls) = t.as_ref()
-                    && cls.has_qname("types", "NoneType")
-                {
-                    return Some(self.heap.mk_none());
-                }
-                // Bare TypeForm (no subscript) is equivalent to TypeForm[Any]
-                if let Type::SpecialForm(SpecialForm::TypeForm) = t.as_ref() {
-                    return Some(Type::TypeForm(Box::new(Type::Any(AnyStyle::Implicit))));
-                }
-                // `typing.Self` substitutes to the concrete `SelfType` of
-                // the enclosing class, recovered from the bind-time
-                // `class_scopes` side table on `Bindings`.
-                if let Type::SpecialForm(SpecialForm::SelfType) = t.as_ref() {
-                    return Some(self.untype_self(range, errors));
-                }
-                Some(self.validate_untyped_type_var_context(*t, range, errors, context))
             }
             Type::Sentinel(sentinel) => Some(self.heap.mk_sentinel(sentinel)),
             Type::None => Some(self.heap.mk_none()), // Both a value and a type
