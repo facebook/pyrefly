@@ -71,6 +71,21 @@ class E(B):
 );
 
 testcase!(
+    bug = "Callable ClassVar override is treated as an instance variable",
+    test_override_class_var_callable_with_lambda,
+    r#"
+from collections.abc import Callable
+from typing import ClassVar
+
+class Parent:
+    x: ClassVar[Callable]
+
+class Child(Parent):
+    x: ClassVar[Callable] = lambda x: None  # E: `Child.x` is not a ClassVar, but `Parent.x` is
+"#,
+);
+
+testcase!(
     test_override_classvar_with_nested_class,
     r#"
 from typing import ClassVar
