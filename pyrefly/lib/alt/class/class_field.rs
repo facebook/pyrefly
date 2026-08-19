@@ -927,7 +927,7 @@ impl ClassField {
         }
     }
 
-    pub fn as_typed_dict_field_info(self, required_by_default: bool) -> Option<TypedDictField> {
+    pub fn as_typed_dict_field_info(&self, required_by_default: bool) -> Option<TypedDictField> {
         match &self.0 {
             ClassFieldInner::ClassAttribute {
                 annotation:
@@ -3662,17 +3662,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn as_enum_member(&self, field: ClassField, enum_cls: &Class) -> Option<Lit> {
-        match field.0 {
+    pub fn as_enum_member(&self, field: &ClassField, enum_cls: &Class) -> Option<Lit> {
+        match &field.0 {
             ClassFieldInner::ClassAttribute {
-                ty: Type::Literal(mut lit),
+                ty: Type::Literal(lit),
                 ..
             } if matches!(&lit.value, Lit::Enum(lit_enum) if lit_enum.class.class_object() == enum_cls) =>
             {
                 let replacement = self.instantiate(enum_cls);
-                lit.value
-                    .visit_mut(&mut |ty| ty.subst_self_type_mut(&replacement));
-                Some(lit.value)
+                let mut value = lit.value.clone();
+                value.visit_mut(&mut |ty| ty.subst_self_type_mut(&replacement));
+                Some(value)
             }
             _ => None,
         }
@@ -3693,7 +3693,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         metadata
             .typed_dict_metadata()
             .and_then(|typed_dict| typed_dict.fields.get(field_name))
-            .and_then(|is_total| field.clone().as_typed_dict_field_info(*is_total))
+            .and_then(|is_total| field.as_typed_dict_field_info(*is_total))
     }
 
     fn validate_typed_dict_field_override(

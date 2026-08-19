@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use dupe::Dupe;
 use num_traits::ToPrimitive;
 use pyrefly_config::error_kind::ErrorKind;
@@ -2172,8 +2170,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && self.has_superclass(cls.class_object(), self.stdlib.enum_flag().class_object())
     }
 
-    pub(crate) fn with_type_for_exhaustiveness_check(&self, info: Arc<TypeInfo>) -> TypeInfo {
-        info.arc_clone().map_ty(|mut ty| {
+    pub(crate) fn with_type_for_exhaustiveness_check(&self, info: &TypeInfo) -> TypeInfo {
+        info.clone().map_ty(|mut ty| {
             self.expand_mut(&mut ty);
             match ty {
                 Type::SelfType(cls) => Type::ClassType(cls),
@@ -2245,7 +2243,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
-        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
+        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
         // We only check match exhaustiveness if the subject is an enum or a union of enum literals
         if !self.should_check_exhaustiveness(subject_info.ty()) {
             return;
@@ -2309,7 +2307,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !Self::is_match_case_reachability_op(op) {
             return;
         }
-        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
+        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
         let subject_ty = subject_info.ty().clone();
         if subject_ty.is_any()
             || matches!(&subject_ty, Type::ClassType(cls) if cls.is_builtin("object"))

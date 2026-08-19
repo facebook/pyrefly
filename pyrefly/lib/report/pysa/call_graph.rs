@@ -78,7 +78,7 @@ use crate::report::pysa::captured_variable::CapturedVariableRef;
 use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
-use crate::report::pysa::class::get_super_class_member;
+use crate::report::pysa::class::get_super_class_member_defining_class;
 use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
@@ -1675,13 +1675,12 @@ impl<'a> CallGraphVisitor<'a> {
         }
 
         // Fall back to super class member lookup.
-        if let Some(with_defining_class) = get_super_class_member(
+        if let Some(parent_class) = get_super_class_member_defining_class(
             class,
             field_name,
             /* start_lookup_cls */ None,
             self.module_context,
         ) {
-            let parent_class = with_defining_class.defining_class;
             let object = self.module_answers_context.stdlib.object().class_object();
             if exclude_object_methods && parent_class == *object {
                 return Result::Err(UnresolvedReason::ClassFieldOnlyExistInObject);

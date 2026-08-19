@@ -2621,7 +2621,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let annotation = self.get_idx(*annotation).annotation.get_type().clone();
                 let implicit_return = self.get_idx(*implicit_return);
                 self.check_implicit_return_against_annotation(
-                    implicit_return,
+                    &implicit_return,
                     &annotation,
                     *is_async,
                     *is_generator,
@@ -3574,7 +3574,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let ignore_errors = self.error_swallower();
         for (subject_idx, op, narrow_range) in narrow_entries {
-            let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
+            let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
             let facet_chain = Self::extract_facet_from_op(op)
                 .and_then(|facets| self.resolve_facet_chain(facets.chain.clone()));
             let narrowed = self.narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors);
@@ -5735,7 +5735,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn check_implicit_return_against_annotation(
         &self,
-        implicit_return: Arc<TypeInfo>,
+        implicit_return: &TypeInfo,
         annotation: &Type,
         is_async: bool,
         is_generator: bool,

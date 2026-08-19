@@ -250,8 +250,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<TypedDictField> {
         let member = self.get_non_synthesized_class_member(typed_dict.class_object(), name)?;
         let instantiated_ty = self.instantiate_typed_dict_field_type(typed_dict, name, &member)?;
-        let mut typed_dict_field =
-            Arc::unwrap_or_clone(member).as_typed_dict_field_info(is_total)?;
+        let mut typed_dict_field = member.as_typed_dict_field_info(is_total)?;
         typed_dict_field.ty = instantiated_ty;
         Some(typed_dict_field)
     }
@@ -314,7 +313,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         fields.iter().filter_map(|(name, is_total)| {
             self.get_non_synthesized_class_member(cls, name)
                 .and_then(|member| {
-                    Arc::unwrap_or_clone(member)
+                    member
                         .as_typed_dict_field_info(*is_total)
                         .map(|field| (name, field))
                 })
