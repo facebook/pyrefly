@@ -308,6 +308,7 @@ use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::lsp::non_wasm::queue::QueuedEvent;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
@@ -440,7 +441,7 @@ pub trait TspInterface: Send + Sync + 'static {
         telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
-        event: LspEvent,
+        event: QueuedEvent,
     ) -> anyhow::Result<ProcessEvent>;
 
     fn telemetry_state(&self) -> TelemetryServerState;
@@ -1549,12 +1550,13 @@ pub fn lsp_loop(
                     lsp_start_time,
                 )
                 .finish_and_record(telemetry, None);
-                while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
+                while let Ok(event) = server.lsp_queue.recv() {
+                    let subsequent_mutation = server.lsp_queue.has_subsequent_mutation(&event);
                     let task_id = next_task_id;
                     next_task_id += 1;
                     let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(
                         TelemetryEventKind::LspEvent(event.describe()),
-                        enqueue_time,
+                        event.enqueued_at(),
                         server.telemetry_state(),
                         QueueName::LspQueue,
                         task_id,
@@ -1836,8 +1838,9 @@ impl Server {
         telemetry_event: &mut TelemetryEvent,
         // After this event there is another mutation
         subsequent_mutation: bool,
-        event: LspEvent,
+        event: QueuedEvent,
     ) -> anyhow::Result<ProcessEvent> {
+        let (queue_id, event, enqueued_at) = event.into_parts();
         match event {
             LspEvent::Exit => {
                 return Ok(ProcessEvent::Exit);
@@ -2099,9 +2102,14 @@ impl Server {
                 if x.method == InlayHintRequest::METHOD
                     && let Some(remaining) = self.inlay_hint_debounce_remaining(&x)
                 {
-                    if let Some(superseded) =
-                        self.lsp_queue.send_delayed(x, Instant::now() + remaining)
-                    {
+                    if let Some(superseded) = self.lsp_queue.send_delayed(
+                        QueuedEvent::from_parts(queue_id, LspEvent::LspRequest(x), enqueued_at),
+                        Instant::now() + remaining,
+                    ) {
+                        let (_, superseded, _) = superseded.into_parts();
+                        let LspEvent::LspRequest(superseded) = superseded else {
+                            unreachable!("only LSP requests enter the delayed queue")
+                        };
                         canceled_requests.remove(&superseded.id);
                         self.send_response(Response::new_err(
                             superseded.id,
@@ -6726,7 +6734,7 @@ impl TspInterface for Server {
         telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
-        event: LspEvent,
+        event: QueuedEvent,
     ) -> anyhow::Result<ProcessEvent> {
         self.process_event(
             ide_transaction_manager,
