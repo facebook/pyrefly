@@ -173,3 +173,66 @@ Rename locations:
         report.trim(),
     );
 }
+
+#[test]
+fn test_rename_legacy_type_parameters_updates_constructor_names() {
+    let code = r#"
+from typing import Callable, ParamSpec, TypeVar, TypeVarTuple
+
+T = TypeVar("T")
+P = ParamSpec(name="P")
+Ts = TypeVarTuple("Ts")
+unrelated = "T"
+
+def f(value: T) -> T:
+#            ^
+    return value
+
+def g(func: Callable[P, None]) -> None:
+#                    ^
+    pass
+
+def h(value: tuple[*Ts]) -> None:
+#                   ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+9 | def f(value: T) -> T:
+                 ^
+Rename locations:
+4 | T = TypeVar("T")
+    ^
+4 | T = TypeVar("T")
+                 ^
+9 | def f(value: T) -> T:
+                 ^
+9 | def f(value: T) -> T:
+                       ^
+
+13 | def g(func: Callable[P, None]) -> None:
+                          ^
+Rename locations:
+5 | P = ParamSpec(name="P")
+    ^
+5 | P = ParamSpec(name="P")
+                        ^
+13 | def g(func: Callable[P, None]) -> None:
+                          ^
+
+17 | def h(value: tuple[*Ts]) -> None:
+                         ^
+Rename locations:
+6 | Ts = TypeVarTuple("Ts")
+    ^^
+6 | Ts = TypeVarTuple("Ts")
+                       ^^
+17 | def h(value: tuple[*Ts]) -> None:
+                         ^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
