@@ -71,13 +71,10 @@ impl ImportTracker {
                 }
                 Stmt::ImportFrom(stmt_import_from) => {
                     let module = if stmt_import_from.level == 0 {
-                        ModuleName::from_str(
-                            stmt_import_from
-                                .module
-                                .as_ref()
-                                .expect("absolute import-from must name a module")
-                                .as_str(),
-                        )
+                        let Some(module) = &stmt_import_from.module else {
+                            continue;
+                        };
+                        ModuleName::from_str(module.as_str())
                     } else {
                         let suffix = stmt_import_from
                             .module
@@ -337,6 +334,14 @@ mod tests {
         ];
 
         assert_eq!(candidates(source, &parts), Vec::new());
+    }
+
+    #[test]
+    fn ignores_incomplete_absolute_import() {
+        assert_eq!(
+            candidates("from ", &[reference("foo", "Foo")]),
+            vec![("foo".to_owned(), "Foo".to_owned())]
+        );
     }
 
     #[test]
