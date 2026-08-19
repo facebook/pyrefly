@@ -634,3 +634,23 @@ def f(x: T):
     c2: C[str] = C[int]()  # E: `f.C[int]` is not assignable to `f.C[str]`
     "#,
 );
+
+fn legacy_generic_env() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+class One(Generic[T]): ...
+    "#,
+    )
+}
+
+testcase!(
+    test_use_imported_typevar,
+    legacy_generic_env(),
+    r#"
+import foo
+class Bar(foo.One[foo.T]): ...
+    "#,
+);
