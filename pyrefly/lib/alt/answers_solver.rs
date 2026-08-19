@@ -16,9 +16,11 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use append_only_vec::AppendOnlyVec;
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use fxhash::FxHashMap;
@@ -216,65 +218,108 @@ impl CalcId {
     }
 }
 
-type AnswerMap = BTreeMap<CalcId, Arc<dyn Any + Send + Sync>>;
+/// Stable, append-only storage for one SCC answer generation. The separate
+/// index permits lookup by `CalcId` without moving answers, so references into
+/// `answers` can remain valid for the generation's lifetime.
+struct AnswerGeneration {
+    answers: AppendOnlyVec<Arc<dyn Any + Send + Sync>>,
+    indices: RefCell<BTreeMap<CalcId, usize>>,
+}
+
+impl AnswerGeneration {
+    fn new() -> Self {
+        Self {
+            answers: AppendOnlyVec::new(),
+            indices: RefCell::new(BTreeMap::new()),
+        }
+    }
+
+    fn insert(
+        &self,
+        calc_id: &CalcId,
+        answer: Arc<dyn Any + Send + Sync>,
+    ) -> &Arc<dyn Any + Send + Sync> {
+        // Replacements append rather than overwrite because references to an
+        // earlier placeholder may still be live. The index always identifies
+        // the newest answer; superseded values remain until this generation is
+        // dropped.
+        let index = self.answers.push(answer);
+        self.indices.borrow_mut().insert(calc_id.dupe(), index);
+        &self.answers[index]
+    }
+
+    fn get(&self, calc_id: &CalcId) -> Option<&Arc<dyn Any + Send + Sync>> {
+        let index = self.indices.borrow().get(calc_id).copied()?;
+        Some(&self.answers[index])
+    }
+}
+
+impl Debug for AnswerGeneration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AnswerGeneration")
+            .field("len", &self.indices.borrow().len())
+            .finish()
+    }
+}
 
 /// Answer storage for an SCC iteration.
 ///
 /// A valid iteration has one current generation and at most one previous
-/// generation. Dynamic membership expansion changes the state to `Merged`,
-/// which retains answers needed while active calculations unwind. The driver
-/// then discards those generations and restarts from a cold `Single` state.
+/// generation. Dynamic membership expansion changes the state to
+/// `NeedsDemotion`, which retains answers needed while active calculations
+/// unwind. The driver then discards those generations and restarts from a cold
+/// `Single` state.
 #[derive(Debug)]
 enum SccAnswers {
     /// The normal state for one fixpoint iteration.
     Single {
         /// Answers calculated during the current iteration.
-        current: AnswerMap,
+        current: Rc<AnswerGeneration>,
         /// Answers from the prior iteration, used to warm-start back-edges.
         /// This is `None` during the first, cold iteration.
-        previous: Option<AnswerMap>,
+        previous: Option<Rc<AnswerGeneration>>,
     },
     /// Transient state after SCC membership expands. Active calculations may
     /// still refer to any constituent generation, so all of them remain alive
     /// until the call stack unwinds to the driver. The driver then discards
     /// them and cold-starts the merged SCC.
-    Merged {
-        current: Vec1<AnswerMap>,
-        previous: Vec<AnswerMap>,
+    NeedsDemotion {
+        current: Vec1<Rc<AnswerGeneration>>,
+        previous: Vec<Rc<AnswerGeneration>>,
     },
 }
 
 impl SccAnswers {
     fn new() -> Self {
         Self::Single {
-            current: BTreeMap::new(),
+            current: Rc::new(AnswerGeneration::new()),
             previous: None,
         }
     }
 
-    #[allow(clippy::mutable_key_type)]
-    fn insert_current(&mut self, calc_id: &CalcId, answer: Arc<dyn Any + Send + Sync>) {
-        match self {
-            Self::Single { current, .. } => {
-                current.insert(calc_id.dupe(), answer);
-            }
-            Self::Merged { current, .. } => {
-                let index = (0..current.len())
-                    .find(|index| current[*index].contains_key(calc_id))
-                    // A merged SCC will be discarded and cold-started after
-                    // the current call stack unwinds. A new answer only needs
-                    // to remain available during that unwind, so its specific
-                    // constituent generation does not affect the final result.
-                    .unwrap_or(0);
-                current[index].insert(calc_id.dupe(), answer);
-            }
-        }
+    fn insert_current(
+        &self,
+        calc_id: &CalcId,
+        answer: Arc<dyn Any + Send + Sync>,
+    ) -> &Arc<dyn Any + Send + Sync> {
+        let current = match self {
+            Self::Single { current, .. } => current,
+            Self::NeedsDemotion { current, .. } => current
+                .iter()
+                .find(|generation| generation.get(calc_id).is_some())
+                // A demoted SCC will be discarded and cold-started after the
+                // current call stack unwinds. A new answer only needs to
+                // remain available during that unwind, so its specific
+                // constituent generation does not affect the final result.
+                .unwrap_or_else(|| current.first()),
+        };
+        current.insert(calc_id, answer)
     }
 
     fn get_current(&self, calc_id: &CalcId) -> Option<&Arc<dyn Any + Send + Sync>> {
         match self {
             Self::Single { current, .. } => current.get(calc_id),
-            Self::Merged { current, .. } => current
+            Self::NeedsDemotion { current, .. } => current
                 .iter()
                 .find_map(|generation| generation.get(calc_id)),
         }
@@ -283,19 +328,21 @@ impl SccAnswers {
     fn get_previous(&self, calc_id: &CalcId) -> Option<&Arc<dyn Any + Send + Sync>> {
         match self {
             Self::Single { previous, .. } => previous.as_ref()?.get(calc_id),
-            Self::Merged { previous, .. } => previous
+            Self::NeedsDemotion { previous, .. } => previous
                 .iter()
                 .find_map(|generation| generation.get(calc_id)),
         }
     }
 
     fn merge(self, other: Self) -> Self {
-        fn generations(answers: SccAnswers) -> (Vec1<AnswerMap>, Vec<AnswerMap>) {
+        fn generations(
+            answers: SccAnswers,
+        ) -> (Vec1<Rc<AnswerGeneration>>, Vec<Rc<AnswerGeneration>>) {
             match answers {
                 SccAnswers::Single { current, previous } => {
                     (Vec1::new(current), previous.into_iter().collect())
                 }
-                SccAnswers::Merged { current, previous } => (current, previous),
+                SccAnswers::NeedsDemotion { current, previous } => (current, previous),
             }
         }
 
@@ -307,43 +354,37 @@ impl SccAnswers {
         let (other_current, other_previous) = generations(other);
         current.extend(other_current);
         previous.extend(other_previous);
-        Self::Merged { current, previous }
+        Self::NeedsDemotion { current, previous }
     }
 
-    fn mark_merged(&mut self) {
-        if matches!(self, Self::Merged { .. }) {
-            return;
+    /// Mark that this iteration found an edge to a calculation already active
+    /// on the stack. The expanded SCC must restart with a cold iteration after
+    /// those active calculations unwind.
+    fn mark_needs_demotion(&mut self) {
+        match self {
+            Self::Single { current, previous } => {
+                *self = Self::NeedsDemotion {
+                    current: Vec1::new(Rc::clone(current)),
+                    previous: previous.iter().cloned().collect(),
+                };
+            }
+            Self::NeedsDemotion { .. } => {}
         }
-        let Self::Single { current, previous } = std::mem::replace(self, Self::new()) else {
-            unreachable!("merged answer state returned after the early check")
-        };
-        *self = Self::Merged {
-            current: Vec1::new(current),
-            previous: previous.into_iter().collect(),
-        };
     }
 
-    fn is_merged(&self) -> bool {
-        matches!(self, Self::Merged { .. })
+    fn needs_demotion(&self) -> bool {
+        matches!(self, Self::NeedsDemotion { .. })
     }
 
     fn advance(&mut self) {
         match self {
             Self::Single { current, previous } => {
-                *previous = Some(std::mem::take(current));
+                *previous = Some(std::mem::replace(current, Rc::new(AnswerGeneration::new())));
             }
-            Self::Merged { .. } => {
+            Self::NeedsDemotion { .. } => {
                 panic!("cannot advance an SCC iteration after membership expansion")
             }
         }
-    }
-
-    #[allow(clippy::mutable_key_type)]
-    fn into_current(self) -> BTreeMap<CalcId, Arc<dyn Any + Send + Sync>> {
-        let Self::Single { current, .. } = self else {
-            panic!("cannot commit SCC answers that require a cold restart")
-        };
-        current
     }
 }
 
@@ -434,8 +475,8 @@ impl CalcStack {
             };
             if is_non_top {
                 // Merge all SCCs from scc_idx to the top of the stack.
-                // This produces a single SCC whose merged answer state causes
-                // the iterative driver to restart after active calls unwind.
+                // This produces a single SCC whose answer state requires the
+                // iterative driver to restart after active calls unwind.
                 {
                     let calc_stack_vec = self.into_vec();
                     let mut scc_stack = self.scc_stack.borrow_mut();
@@ -1223,8 +1264,9 @@ enum BindingAction {
 pub struct SccIterationState {
     /// Current iteration number (starts at 1).
     pub iteration: u32,
-    /// Current and previous answer generations. `Merged` means SCC membership
-    /// expanded and the iteration must restart cold after active calls unwind.
+    /// Current and previous answer generations. `NeedsDemotion` means SCC
+    /// membership expanded and the iteration must restart cold after active
+    /// calls unwind.
     answers: SccAnswers,
     /// Whether any answer changed compared to the previous generation during
     /// this iteration. When `false` after iteration >= 2, the SCC has converged.
@@ -1452,8 +1494,8 @@ impl Scc {
     ///
     /// Node states are merged via `node_state` (keeping the more advanced
     /// state). Answer generations from both SCCs remain available while active
-    /// calculations unwind; their `Merged` representation makes the required
-    /// cold restart explicit.
+    /// calculations unwind; their `NeedsDemotion` representation makes the
+    /// required cold restart explicit.
     #[allow(clippy::mutable_key_type)]
     fn merge(mut self, other: Scc) -> Self {
         // Union node_state maps (keep the more advanced state)
@@ -1476,8 +1518,8 @@ impl Scc {
         }
         // Retain both SCCs' generations while active calculations unwind.
         // This avoids copying answers that may eventually be stored without
-        // per-answer Arcs. The Merged state itself records that this iteration
-        // is doomed and must cold-restart afterward.
+        // per-answer Arcs. The NeedsDemotion state itself records that this
+        // iteration is doomed and must cold-restart afterward.
         // Take max iteration from either SCC: if one has progressed further,
         // we should not regress to iteration 1.
         let iteration = self.iterative.iteration.max(other.iterative.iteration);
@@ -1527,8 +1569,62 @@ impl Scc {
             });
         }
         if added_new {
-            self.iterative.answers.mark_merged();
+            self.iterative.answers.mark_needs_demotion();
         }
+    }
+
+    /// Pair every final answer with its node's deferred side effects.
+    #[allow(clippy::mutable_key_type)] // CalcId's ordering does not depend on mutable parts.
+    fn into_final_answers(
+        self,
+    ) -> impl ExactSizeIterator<
+        Item = (
+            CalcId,
+            Arc<dyn Any + Send + Sync>,
+            Option<Arc<ErrorCollector>>,
+            Option<TraceSideEffects>,
+        ),
+    > {
+        let Scc {
+            node_state,
+            iterative,
+            ..
+        } = self;
+        let SccAnswers::Single { current, .. } = iterative.answers else {
+            panic!("cannot commit SCC answers that require a cold restart")
+        };
+        let current = Rc::try_unwrap(current)
+            .unwrap_or_else(|_| panic!("completed SCC generation still has active readers"));
+        let AnswerGeneration { answers, indices } = current;
+        let mut answers: Vec<_> = answers.into_vec().into_iter().map(Some).collect();
+        let indices = indices.into_inner();
+        assert_eq!(
+            node_state.len(),
+            indices.len(),
+            "SCC node state and answer generation must have identical members"
+        );
+        node_state.into_iter().zip(indices).map(
+            move |((calc_id, node_state), (answer_calc_id, answer_index))| {
+                assert_eq!(
+                    answer_calc_id, calc_id,
+                    "SCC node and answer generation must have identical members"
+                );
+                let answer = answers[answer_index]
+                    .take()
+                    .expect("answer generation index must identify one answer");
+                match node_state {
+                    SccNodeState::Done { errors, traces } => (calc_id, answer, errors, traces),
+                    SccNodeState::Fresh
+                    | SccNodeState::InProgress
+                    | SccNodeState::HasPlaceholder(_) => {
+                        panic!(
+                            "SCC node {} is {:?} when collecting final answers",
+                            calc_id, node_state,
+                        );
+                    }
+                }
+            },
+        )
     }
 
     /// Reset the SCC for a cold start at iteration 1.
@@ -2679,27 +2775,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// reached).
     #[allow(clippy::mutable_key_type)]
     fn commit_final_answers(&self, scc: Scc) -> bool {
-        let mut answers = scc.iterative.answers.into_current();
-        // Collect Done members from node_state. BTreeMap iteration is already sorted by CalcId.
-        let members = scc
-            .node_state
-            .into_iter()
-            .map(|(calc_id, node_state)| match node_state {
-                SccNodeState::Done { errors, traces } => {
-                    let answer = answers
-                        .remove(&calc_id)
-                        .expect("Done SCC node must have a current answer");
-                    (calc_id, answer, errors, traces)
-                }
-                SccNodeState::Fresh
-                | SccNodeState::InProgress
-                | SccNodeState::HasPlaceholder(_) => {
-                    panic!(
-                        "commit_final_answers: node {} is {:?} at commit time",
-                        calc_id, node_state,
-                    );
-                }
-            });
+        let members = scc.into_final_answers();
 
         let member_count = members.len();
         let mut guard = SccReservationGuard {
@@ -2812,8 +2888,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Iterative fixpoint driver for a completed SCC.
     ///
     /// Implements two conceptual loops:
-    /// - Demotion: if SCC membership expands during an iteration, the `Merged`
-    ///   answer state causes a cold restart with the expanded membership.
+    /// - Demotion: if SCC membership expands during an iteration, the
+    ///   `NeedsDemotion` answer state causes a cold restart with the expanded
+    ///   membership.
     /// - Fixpoint: otherwise, continue warm iterations until answers converge
     ///   or `MAX_ITERATIONS` is exceeded.
     ///
@@ -2854,13 +2931,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             scc = completed;
 
-            // A merged state retains answers only for recursive unwind. Once
-            // back at the driver, discard them and restart with the expanded
-            // membership.
-            let merged = scc.iterative.answers.is_merged();
+            // A state that needs demotion retains answers only for recursive
+            // unwind. Once back at the driver, discard them and restart with
+            // the expanded membership.
+            let needs_demotion = scc.iterative.answers.needs_demotion();
             let has_changed = scc.iterative.has_changed;
 
-            if merged {
+            if needs_demotion {
                 demotions += 1;
                 check_demotion_limit(demotions, &scc.detected_at);
                 scc.reset_for_cold_start();
@@ -3698,7 +3775,7 @@ mod scc_tests {
         detected_at: CalcId,
         bottom_pos_inclusive: usize,
     ) -> Scc {
-        let mut answers = SccAnswers::new();
+        let answers = SccAnswers::new();
         for (calc_id, state) in &node_state {
             if matches!(state, SccNodeState::Done { .. }) {
                 answers.insert_current(calc_id, Arc::new(()));
@@ -3773,17 +3850,21 @@ mod scc_tests {
     fn test_scc_merge_retains_current_and_previous_answers() {
         let a = CalcId::for_test("m", 0);
         let b = CalcId::for_test("m", 1);
-        let answer = |value| Arc::new(value) as Arc<dyn Any + Send + Sync>;
+        let generation = |calc_id: &CalcId, value| {
+            let generation = Rc::new(AnswerGeneration::new());
+            generation.insert(calc_id, Arc::new(value));
+            generation
+        };
         let first = SccAnswers::Single {
-            current: BTreeMap::from([(a.dupe(), answer(1))]),
-            previous: Some(BTreeMap::from([(a.dupe(), answer(2))])),
+            current: generation(&a, 1),
+            previous: Some(generation(&a, 2)),
         };
         let second = SccAnswers::Single {
-            current: BTreeMap::from([(b.dupe(), answer(3))]),
-            previous: Some(BTreeMap::from([(b.dupe(), answer(4))])),
+            current: generation(&b, 3),
+            previous: Some(generation(&b, 4)),
         };
 
-        let mut merged = first.merge(second);
+        let merged = first.merge(second);
 
         assert_eq!(
             merged
@@ -3813,7 +3894,7 @@ mod scc_tests {
                 .downcast_ref(),
             Some(&4),
         );
-        merged.insert_current(&b, answer(5));
+        merged.insert_current(&b, Arc::new(5));
         assert_eq!(
             merged
                 .get_current(&b)
@@ -4220,10 +4301,10 @@ mod scc_tests {
 
         let merged = &scc_stack[0];
 
-        // The merged answer state records that the SCC must cold-restart after
+        // The answer state records that the merged SCC must cold-restart after
         // active calculations unwind.
         assert!(
-            merged.iterative.answers.is_merged(),
+            merged.iterative.answers.needs_demotion(),
             "merged SCC should require a cold restart after a membership back-edge"
         );
 
