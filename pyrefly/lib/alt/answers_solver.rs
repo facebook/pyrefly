@@ -410,6 +410,35 @@ pub struct CalcStack {
     next_scc_owner: Cell<u64>,
 }
 
+/// One active entry on `CalcStack`. Dropping the guard pops the entry and
+/// discards any completed SCC during unwinding; normal completion returns the
+/// completed SCC for publication.
+#[must_use = "call finish() to commit the completed SCC"]
+struct CalcStackGuard<'stack> {
+    stack: &'stack CalcStack,
+    finished: bool,
+    action: BindingAction,
+}
+
+impl CalcStackGuard<'_> {
+    fn action(&self) -> &BindingAction {
+        &self.action
+    }
+
+    fn finish(mut self) -> Option<Scc> {
+        self.finished = true;
+        self.stack.pop_and_take_completed_scc()
+    }
+}
+
+impl Drop for CalcStackGuard<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            drop(self.stack.pop_and_take_completed_scc());
+        }
+    }
+}
+
 impl CalcStack {
     fn new() -> Self {
         Self {
@@ -424,7 +453,8 @@ impl CalcStack {
     /// Pop the current frame and take the completed SCC (if any).
     ///
     /// These two operations are always paired: every `pop` must be followed by
-    /// taking and committing the completed SCC.
+    /// taking the completed SCC, either to commit it on normal completion or
+    /// discard it during unwinding.
     ///
     /// We pop before taking (not after) for lifecycle correctness: committed
     /// answers should correspond to fully unwound computations, so the stack
@@ -440,18 +470,24 @@ impl CalcStack {
         self.pending_completed_scc.borrow_mut().take()
     }
 
-    /// Push a CalcId onto the stack and determine the binding action.
-    ///
-    /// This is purely thread-local: it manages the CalcStack and SCC state
-    /// without touching shared result slots. Cycle detection uses the
-    /// thread-local stack exclusively.
-    fn push(&self, current: CalcId) -> BindingAction {
+    /// Push a calculation and return its binding action with a guard that pops
+    /// it during unwinding.
+    fn push(&self, current: &CalcId) -> CalcStackGuard<'_> {
         let position = {
             let mut stack = self.stack.borrow_mut();
             let pos = stack.len();
             stack.push(current.dupe());
             pos
         };
+
+        // Construct the guard immediately after pushing so any later panic
+        // pops the frame. `action` is set to the result before returning.
+        let mut guard = CalcStackGuard {
+            stack: self,
+            finished: false,
+            action: BindingAction::Calculate,
+        };
+
         self.position_of
             .borrow_mut()
             .entry(current.dupe())
@@ -468,7 +504,7 @@ impl CalcStack {
         // Borrow safety: `find_scc_containing` returns an owned
         // `Option<usize>`, so the shared borrow on `scc_stack` is released
         // before the exclusive borrow needed for merging.
-        if let Some(scc_idx) = self.find_scc_containing(&current) {
+        if let Some(scc_idx) = self.find_scc_containing(current) {
             let is_non_top = {
                 let scc_stack = self.scc_stack.borrow();
                 scc_idx < scc_stack.len() - 1
@@ -502,12 +538,14 @@ impl CalcStack {
                 // After merge, existing iteration states are preserved (Done/
                 // InProgress stay as-is) and new members are Fresh. The target
                 // will typically be Fresh or InProgress. Handle all cases.
-                return self.binding_action_for_top_scc_member(&current);
+                guard.action = self.binding_action_for_top_scc_member(current);
+                return guard;
             }
             // The target is in the top SCC's iteration state (not a cross-SCC
             // back-edge). If we've exited the SCC segment, merge from the top
             // SCC anchor so intervening nodes/SCC fragments are absorbed.
-            return self.binding_action_for_top_scc_member(&current);
+            guard.action = self.binding_action_for_top_scc_member(current);
+            return guard;
         }
 
         // Top-SCC membership check: if the target is already a member of the
@@ -518,9 +556,10 @@ impl CalcStack {
         // Borrow safety: `get_iteration_node_state` returns an owned
         // `SccNodeStateKind`, so the shared borrow on `scc_stack` is
         // released before any exclusive borrow for mutation.
-        if self.get_iteration_node_state(&current).is_some() {
+        if self.get_iteration_node_state(current).is_some() {
             // Top-SCC member handling is shared across all re-entry paths.
-            return self.binding_action_for_top_scc_member(&current);
+            guard.action = self.binding_action_for_top_scc_member(current);
+            return guard;
         }
 
         // At this point, the node is not a known member of any SCC. But it
@@ -534,12 +573,13 @@ impl CalcStack {
         //
         // Check whether this push itself completes a cycle (i.e., this CalcId
         // already appears lower on the stack). If so, create a new SCC.
-        if let Some(current_cycle) = self.current_cycle() {
+        guard.action = if let Some(current_cycle) = self.current_cycle() {
             self.on_scc_detected(current_cycle);
             BindingAction::NeedsColdPlaceholder
         } else {
             BindingAction::Calculate
-        }
+        };
+        guard
     }
 
     /// Pop a binding frame from the raw binding-level CalcId stack.
@@ -2261,24 +2301,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return result;
         }
 
-        let mut result = match self.stack().push(current.dupe()) {
+        let frame = self.stack().push(&current);
+        let mut result = match frame.action() {
             BindingAction::Calculate => self.calculate_and_record_answer(current, idx, slot),
-            BindingAction::SccLocalAnswer(type_erased) => {
-                // Downcast the type-erased answer back to Arc<K::Answer>.
-                // The answer was stored as Arc::new(answer.dupe()) where answer: Arc<K::Answer>,
-                // so the concrete type inside Arc<dyn Any> is Arc<K::Answer>.
-                // downcast() returns Arc<Arc<K::Answer>>; unwrap_or_clone extracts the inner Arc.
-                Arc::unwrap_or_clone(
-                    type_erased
-                        .downcast::<Arc<K::Answer>>()
-                        .expect("SccLocalAnswer downcast failed: type mismatch"),
-                )
-            }
+            BindingAction::SccLocalAnswer(type_erased) => type_erased
+                .downcast_ref::<Arc<K::Answer>>()
+                .expect("SccLocalAnswer downcast failed: type mismatch")
+                .dupe(),
             BindingAction::NeedsColdPlaceholder => {
                 self.attempt_to_unwind_cycle_from_here(&current, idx, slot)
             }
         };
-        if let Some(scc) = self.stack().pop_and_take_completed_scc() {
+        if let Some(scc) = frame.finish() {
             self.iterative_resolve_scc(scc);
         }
         // After SCC iteration, the shared result slot may hold a newer answer
@@ -3753,6 +3787,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
 #[cfg(test)]
 mod scc_tests {
+    use std::panic::AssertUnwindSafe;
+    use std::panic::catch_unwind;
+
     use vec1::vec1;
 
     use super::*;
@@ -3810,6 +3847,38 @@ mod scc_tests {
         ids.iter()
             .map(|id| (id.dupe(), SccNodeState::Fresh))
             .collect()
+    }
+
+    #[test]
+    fn test_finish_does_not_pop_twice_if_taking_completed_scc_panics() {
+        let outer = CalcId::for_test("m", 0);
+        let inner = CalcId::for_test("m", 1);
+        let calc_stack = make_calc_stack(&[outer.dupe()]);
+        let guard = calc_stack.push(&inner);
+        let pending_borrow = calc_stack.pending_completed_scc.borrow();
+
+        assert!(catch_unwind(AssertUnwindSafe(|| guard.finish())).is_err());
+        drop(pending_borrow);
+
+        assert_eq!(calc_stack.stack.borrow().as_slice(), &[outer]);
+    }
+
+    #[test]
+    fn test_unwind_discards_pending_completed_scc() {
+        let current = CalcId::for_test("m", 0);
+        let completed = CalcId::for_test("m", 1);
+        let calc_stack = CalcStack::new();
+        let guard = calc_stack.push(&current);
+        *calc_stack.pending_completed_scc.borrow_mut() = Some(make_test_scc(
+            fresh_nodes(&[completed.dupe()]),
+            completed,
+            0,
+        ));
+
+        drop(guard);
+
+        assert!(calc_stack.stack.borrow().is_empty());
+        assert!(calc_stack.pending_completed_scc.borrow().is_none());
     }
 
     #[test]
@@ -4202,13 +4271,30 @@ mod scc_tests {
 
         // 3. Push the same calculation.
         // This should NOT panic.
-        let action = stack.push(calc_id);
+        let frame = stack.push(&calc_id);
 
         // 4. Expect Calculate action (to recover).
-        match action {
+        match frame.action() {
             BindingAction::Calculate => {}
             _ => panic!("Expected Calculate action to recover from stale state"),
         }
+        frame.finish();
+    }
+
+    #[test]
+    fn test_stack_guard_pops_during_unwind() {
+        let id = CalcId::for_test("m", 0);
+        let stack = CalcStack::new();
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _frame = stack.push(&id);
+            assert_eq!(stack.len(), 1);
+            panic!("test unwind");
+        }));
+
+        assert!(result.is_err());
+        assert!(stack.is_empty());
+        assert!(stack.position_of.borrow().is_empty());
     }
 
     #[test]
@@ -4289,7 +4375,12 @@ mod scc_tests {
 
         // Push A: A is a member of SCC0 (the non-top iterating SCC).
         // This should trigger a membership back-edge merge.
-        let action = calc_stack.push(a.dupe());
+        let frame = calc_stack.push(&a);
+        assert!(
+            matches!(frame.action(), BindingAction::Calculate),
+            "push should return Calculate for a Fresh member after merge"
+        );
+        frame.finish();
 
         // After merge, there should be exactly one SCC.
         let scc_stack = calc_stack.borrow_scc_stack();
@@ -4332,12 +4423,6 @@ mod scc_tests {
             merged.node_state.contains_key(&e),
             "E should be in merged SCC"
         );
-
-        // The push should return Calculate because A was Fresh when requested.
-        assert!(
-            matches!(action, BindingAction::Calculate),
-            "push should return Calculate for a Fresh member after merge"
-        );
     }
 
     #[test]
@@ -4350,12 +4435,12 @@ mod scc_tests {
         scc.iterative.iteration = 1;
         calc_stack.scc_stack.borrow_mut().push(scc);
 
-        let action = calc_stack.push(member);
-
+        let frame = calc_stack.push(&member);
         assert!(
-            matches!(action, BindingAction::Calculate),
+            matches!(frame.action(), BindingAction::Calculate),
             "the absorbed caller should leave the requested member Fresh"
         );
+        frame.finish();
         assert!(
             calc_stack.borrow_scc_stack()[0]
                 .node_state
