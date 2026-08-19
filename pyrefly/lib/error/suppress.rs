@@ -5,17 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::LazyLock;
 
 use anyhow::anyhow;
 use clap::ValueEnum;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::module::GENERATED_TOKEN;
 use pyrefly_python::module::Module;
@@ -34,24 +33,11 @@ use starlark_map::small_set::SmallSet;
 use tracing::info;
 
 use crate::error::error::Error;
+use crate::error::error::ErrorQuickFix;
 use crate::state::errors::find_containing_range;
 use crate::state::errors::sorted_backslash_continuation_ranges;
 use crate::state::errors::sorted_bracketed_continuation_ranges;
 use crate::state::errors::sorted_multi_line_string_ranges;
-
-/// Regexes to match ignore comments with optional error codes and trailing text.
-/// Each consumes all non-`#` characters after its ignore pattern, so removing one
-/// suppression preserves any other pragma later on the same line.
-static PYREFLY_IGNORE_COMMENT_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"#\s*pyrefly:\s*ignore\s*(\[[^\]]*\])?[^#]*").unwrap());
-static TYPE_IGNORE_COMMENT_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"#\s*type:\s*ignore\s*(\[[^\]]*\])?[^#]*").unwrap());
-static PYRE_IGNORE_COMMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"#\s*pyre-(?:fixme|ignore)\s*(\[[^\]]*\])?[^#]*|#\s*pyre:\s*ignore\s*(\[[^\]]*\])?[^#]*",
-    )
-    .unwrap()
-});
 
 /// Where to place suppression comments relative to the error line.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
@@ -89,7 +75,7 @@ impl UnusedIgnoreKind {
 
 /// A serializable representation of an error for JSON input/output.
 /// This struct holds the fields needed to add or remove a suppression comment.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SerializedError {
     /// The file path where the error occurs.
     pub path: PathBuf,
@@ -97,8 +83,24 @@ pub struct SerializedError {
     pub line: usize,
     /// The kebab-case name of the error kind (e.g., "bad-assignment").
     pub name: String,
-    /// The error message. Used for UnusedIgnore errors to determine what to remove.
-    pub message: String,
+    /// An exact machine-applicable edit when this diagnostic reports an unused suppression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suppression_edit: Option<SerializedSuppressionEdit>,
+}
+
+/// A line-relative source edit for an unused suppression comment.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SerializedSuppressionEdit {
+    /// The suppression syntax being edited.
+    pub tool: Tool,
+    /// Byte offset within the diagnostic line where the edit starts.
+    pub start: usize,
+    /// Byte offset within the diagnostic line where the edit ends.
+    pub end: usize,
+    /// Source text expected in the range, used to reject stale edits.
+    pub expected: String,
+    /// Replacement text for the range. Empty text removes the entire suppression.
+    pub replacement: String,
 }
 
 impl SerializedError {
@@ -106,15 +108,23 @@ impl SerializedError {
     /// Returns None if the error is not from a filesystem path.
     pub fn from_error(error: &Error) -> Option<Self> {
         if let ModulePathDetails::FileSystem(path) = error.path().details() {
+            let line = error.display_range().start.line_within_file();
+            let line_start = error.lined_buffer().line_start(line);
+            let suppression_edit = error.quick_fixes().iter().find_map(|fix| match fix {
+                ErrorQuickFix::RemoveUnusedSuppression(edit) => Some(SerializedSuppressionEdit {
+                    tool: edit.tool,
+                    start: (edit.range.start() - line_start).to_usize(),
+                    end: (edit.range.end() - line_start).to_usize(),
+                    expected: edit.expected.clone(),
+                    replacement: edit.replacement.clone(),
+                }),
+                ErrorQuickFix::ReplaceWithEnumMember { .. } => None,
+            });
             Some(Self {
                 path: (**path).clone(),
-                line: error
-                    .display_range()
-                    .start
-                    .line_within_file()
-                    .to_zero_indexed() as usize,
+                line: line.to_zero_indexed() as usize,
                 name: error.error_kind().to_name().to_owned(),
-                message: error.msg().to_owned(),
+                suppression_edit,
             })
         } else {
             None
@@ -382,7 +392,7 @@ fn add_suppressions(
                     path: e.path.clone(),
                     line: new_line.to_zero_indexed() as usize,
                     name: e.name.clone(),
-                    message: e.message.clone(),
+                    suppression_edit: e.suppression_edit.clone(),
                 }
             })
             .collect();
@@ -532,64 +542,13 @@ pub fn suppress_errors(errors: Vec<SerializedError>, comment_location: CommentLo
     }
 }
 
-/// Given a line with a pyrefly ignore comment and sets of used/unused error codes,
-/// returns the updated line. If all codes are unused, removes the entire comment.
-/// If some codes are used, keeps only the used codes in the comment.
-/// Uses string-aware parsing to only modify the comment portion of the line.
-fn update_ignore_comment_with_used_codes(
-    line: &str,
-    used_codes: &SmallSet<String>,
-    unused_codes: &SmallSet<String>,
-) -> Option<String> {
-    // If there are no unused codes, keep the line as-is
-    if unused_codes.is_empty() {
-        return None;
-    }
-
-    let comment_start = find_comment_start_in_line(line)?;
-    let code_part = &line[..comment_start];
-    let comment_part = &line[comment_start..];
-
-    // If there are no used codes, remove the entire comment
-    if used_codes.is_empty() {
-        if PYREFLY_IGNORE_COMMENT_REGEX.is_match(comment_part) {
-            let new_comment = PYREFLY_IGNORE_COMMENT_REGEX.replace(comment_part, "");
-            let result = format!("{}{}", code_part, new_comment);
-            return Some(result.trim_end().to_owned());
-        }
-        return None;
-    }
-
-    // Drop only the unused codes; preserve the user's original whitespace and comma style.
-    let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[([^\]]*)\]").unwrap();
-    let codes = regex.captures(comment_part)?.get(1).unwrap();
-    let separator = if codes.as_str().contains(", ") {
-        ", "
-    } else {
-        ","
-    };
-    let kept = codes
-        .as_str()
-        .split(',')
-        .map(str::trim)
-        .filter(|c| !c.is_empty() && used_codes.contains(*c))
-        .collect::<Vec<_>>()
-        .join(separator);
-    Some(format!(
-        "{code_part}{}{kept}{}",
-        &comment_part[..codes.start()],
-        &comment_part[codes.end()..],
-    ))
-}
-
 /// Removes unused ignore comments from source files.
-/// Takes a list of UnusedIgnore errors (from collect_unused_ignore_errors) and uses
-/// the error location and message to determine what to remove:
-/// - "Unused `# pyrefly: ignore` comment" -> remove entire comment
-/// - "Unused `# type: ignore` comment" -> remove entire comment when opted in
-/// - "Unused `# pyrefly: ignore` comment for code(s): X, Y" -> remove entire comment
-/// - "Unused error code(s) in `# pyrefly: ignore`: X, Y" -> remove only those codes
-pub fn remove_unused_ignores(unused_ignore_errors: Vec<Error>, kind: UnusedIgnoreKind) -> usize {
+/// Takes UnusedIgnore errors from `collect_unused_ignore_errors` and applies their
+/// structured suppression edits.
+pub fn remove_unused_ignores(
+    unused_ignore_errors: Vec<Error>,
+    kind: UnusedIgnoreKind,
+) -> anyhow::Result<usize> {
     let serialized: Vec<SerializedError> = unused_ignore_errors
         .iter()
         .filter_map(SerializedError::from_error)
@@ -603,23 +562,31 @@ pub fn remove_unused_ignores(unused_ignore_errors: Vec<Error>, kind: UnusedIgnor
 pub fn remove_unused_ignores_from_serialized(
     unused_ignore_errors: Vec<SerializedError>,
     kind: UnusedIgnoreKind,
-) -> usize {
+) -> anyhow::Result<usize> {
     if unused_ignore_errors.is_empty() {
-        return 0;
+        return Ok(0);
     }
 
     // Group errors by file path
-    let mut errors_by_path: SmallMap<PathBuf, Vec<&SerializedError>> = SmallMap::new();
+    let mut errors_by_path: SmallMap<PathBuf, Vec<(&SerializedError, &SerializedSuppressionEdit)>> =
+        SmallMap::new();
     for error in &unused_ignore_errors {
         if !((kind.includes_pyrefly_or_pyre() && error.is_unused_ignore())
             || (kind.includes_type() && error.is_unused_type_ignore()))
         {
             continue;
         }
+        let edit = error.suppression_edit.as_ref().ok_or_else(|| {
+            anyhow!(
+                "Unused suppression diagnostic for {}:{} has no structured suppression edit",
+                error.path.display(),
+                error.line + 1,
+            )
+        })?;
         errors_by_path
             .entry(error.path.clone())
             .or_default()
-            .push(error);
+            .push((error, edit));
     }
 
     let mut removed_ignores: SmallMap<PathBuf, usize> = SmallMap::new();
@@ -627,9 +594,9 @@ pub fn remove_unused_ignores_from_serialized(
     for (path, path_errors) in &errors_by_path {
         // Build a map from line number to its errors. Multiple unused suppressions
         // may appear on the same line and must each be handled independently.
-        let mut line_errors: SmallMap<usize, Vec<&SerializedError>> = SmallMap::new();
-        for error in path_errors {
-            line_errors.entry(error.line).or_default().push(*error);
+        let mut line_edits: SmallMap<usize, Vec<&SerializedSuppressionEdit>> = SmallMap::new();
+        for (error, edit) in path_errors {
+            line_edits.entry(error.line).or_default().push(*edit);
         }
 
         if let Ok((file, _ast)) = read_and_validate_file(path) {
@@ -639,73 +606,49 @@ pub fn remove_unused_ignores_from_serialized(
             let mut unused_count = 0;
 
             for (idx, line) in lines.iter().enumerate() {
-                if let Some(errors) = line_errors.get(&idx) {
-                    let mut updated_line = Cow::Borrowed(*line);
+                if let Some(edits) = line_edits.get(&idx) {
+                    let mut updated_line = (*line).to_owned();
+                    let mut edits = edits.clone();
+                    edits.sort_by_key(|edit| std::cmp::Reverse(edit.start));
+                    edits.dedup_by(|a, b| {
+                        a.start == b.start
+                            && a.end == b.end
+                            && a.expected == b.expected
+                            && a.replacement == b.replacement
+                            && a.tool == b.tool
+                    });
 
-                    for error in errors {
-                        let msg = &error.message;
-
-                        if msg.starts_with("Unused error code(s)") {
-                            // Partially unused - extract codes from message and remove only those.
-                            // Message format: "Unused error code(s) in `# pyrefly: ignore`: code1, code2"
-                            if let Some(codes_part) = msg.split(": ").last() {
-                                let unused_codes: SmallSet<String> = codes_part
-                                    .split(", ")
-                                    .map(|s| s.trim().to_owned())
-                                    .collect();
-
-                                if let Some(existing_codes) = parse_ignore_comment(&updated_line) {
-                                    let used_codes: SmallSet<String> = existing_codes
-                                        .into_iter()
-                                        .filter(|c| !unused_codes.contains(c))
-                                        .collect();
-
-                                    if let Some(updated) = update_ignore_comment_with_used_codes(
-                                        &updated_line,
-                                        &used_codes,
-                                        &unused_codes,
-                                    ) {
-                                        updated_line = Cow::Owned(updated);
-                                        unused_count += 1;
-                                    }
-                                }
-                            }
-                            continue;
+                    for edit in edits {
+                        if edit.start > edit.end
+                            || edit.end > updated_line.len()
+                            || !updated_line.is_char_boundary(edit.start)
+                            || !updated_line.is_char_boundary(edit.end)
+                        {
+                            return Err(anyhow!(
+                                "Invalid suppression edit range {}..{} for {}:{}",
+                                edit.start,
+                                edit.end,
+                                path.display(),
+                                idx + 1,
+                            ));
                         }
-
-                        let ignore_regex = if error.is_unused_type_ignore() {
-                            &*TYPE_IGNORE_COMMENT_REGEX
-                        } else if msg.starts_with("Unused `# pyrefly: ignore` comment") {
-                            &*PYREFLY_IGNORE_COMMENT_REGEX
-                        } else if msg.starts_with("Unused pyre-fixme comment") {
-                            &*PYRE_IGNORE_COMMENT_REGEX
-                        } else {
-                            continue;
-                        };
-
-                        // Use string-aware comment detection instead of raw regex.
-                        let Some(comment_start) = find_comment_start_in_line(&updated_line) else {
-                            continue;
-                        };
-                        let comment_part = &updated_line[comment_start..];
-                        if let Cow::Owned(new_comment) = ignore_regex.replace(comment_part, "") {
-                            let code_part = &updated_line[..comment_start];
-                            updated_line = Cow::Owned(
-                                format!("{}{}", code_part, new_comment)
-                                    .trim_end()
-                                    .to_owned(),
-                            );
-                            unused_count += 1;
+                        if updated_line.get(edit.start..edit.end) != Some(&edit.expected) {
+                            return Err(anyhow!(
+                                "Suppression edit no longer matches {}:{}",
+                                path.display(),
+                                idx + 1,
+                            ));
                         }
+                        updated_line.replace_range(edit.start..edit.end, &edit.replacement);
+                        unused_count += 1;
                     }
 
-                    if let Cow::Owned(updated_line) = updated_line {
-                        if !updated_line.trim().is_empty() {
-                            buf.push_str(&updated_line);
-                            buf.push_str(line_ending);
-                        }
-                        continue;
+                    updated_line.truncate(updated_line.trim_end().len());
+                    if !updated_line.trim().is_empty() {
+                        buf.push_str(&updated_line);
+                        buf.push_str(line_ending);
                     }
+                    continue;
                 }
                 buf.push_str(line);
                 buf.push_str(line_ending);
@@ -724,7 +667,7 @@ pub fn remove_unused_ignores_from_serialized(
         removals,
         removed_ignores.len(),
     );
-    removals
+    Ok(removals)
 }
 
 #[cfg(test)]
@@ -787,7 +730,8 @@ mod tests {
         let (errors, tdir) = get_errors(before);
         let collected = errors.collect_errors();
         let unused_errors = errors.collect_unused_ignore_errors(&collected);
-        let removals = suppress::remove_unused_ignores(unused_errors, UnusedIgnoreKind::Pyrefly);
+        let removals =
+            suppress::remove_unused_ignores(unused_errors, UnusedIgnoreKind::Pyrefly).unwrap();
         let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
         assert_eq!(after, got_file);
         assert_eq!(removals, expected_removals);
@@ -804,7 +748,8 @@ mod tests {
         let (errors, tdir) = get_errors(before);
         let collected = errors.collect_errors();
         let unused_errors = errors.collect_unused_ignore_errors(&collected);
-        let removals = suppress::remove_unused_ignores(unused_errors, UnusedIgnoreKind::Pyrefly);
+        let removals =
+            suppress::remove_unused_ignores(unused_errors, UnusedIgnoreKind::Pyrefly).unwrap();
         let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
         assert_eq!(after, got_file);
         assert_eq!(removals, expected_removals);
@@ -959,13 +904,13 @@ def foo() -> None:
                 path: path.clone(),
                 line: 2, // x = 1 (0-indexed)
                 name: "new-error".to_owned(),
-                message: String::new(),
+                suppression_edit: None,
             },
             SerializedError {
                 path: path.clone(),
                 line: 4, // y = 2 (0-indexed)
                 name: "new-error".to_owned(),
-                message: String::new(),
+                suppression_edit: None,
             },
         ];
 
@@ -1201,7 +1146,8 @@ def f() -> int:
         let collected = errors.collect_errors();
         let unused_errors = errors.collect_unused_ignore_errors(&collected);
 
-        let removals = suppress::remove_unused_ignores(unused_errors, UnusedIgnoreKind::All);
+        let removals =
+            suppress::remove_unused_ignores(unused_errors, UnusedIgnoreKind::All).unwrap();
 
         let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
         assert_eq!(want, got_file);
@@ -1503,6 +1449,31 @@ def f() -> int:
     }
 
     // Helper function to test remove_unused_ignores_from_serialized
+    fn serialized_unused_suppression(
+        source: &str,
+        path: PathBuf,
+        line: usize,
+        name: &str,
+        tool: Tool,
+        start: usize,
+        end: usize,
+        replacement: &str,
+    ) -> SerializedError {
+        let source_line = source.lines().nth(line).unwrap();
+        SerializedError {
+            path,
+            line,
+            name: name.to_owned(),
+            suppression_edit: Some(SerializedSuppressionEdit {
+                tool,
+                start,
+                end,
+                expected: source_line[start..end].to_owned(),
+                replacement: replacement.to_owned(),
+            }),
+        }
+    }
+
     fn assert_remove_ignores_from_serialized(
         file_content: &str,
         serialized_errors: Vec<SerializedError>,
@@ -1534,11 +1505,67 @@ def f() -> int:
             error.path = path.clone();
         }
 
-        let removals = suppress::remove_unused_ignores_from_serialized(serialized_errors, kind);
+        let removals =
+            suppress::remove_unused_ignores_from_serialized(serialized_errors, kind).unwrap();
 
         let got_file = fs_anyhow::read_to_string(&path).unwrap();
         assert_eq!(expected_content, got_file);
         assert_eq!(removals, expected_removals);
+    }
+
+    #[test]
+    fn test_unused_ignore_serializes_structured_edit() {
+        let input = "# pyrefly: ignore [bad-assignment, bad-return]\nx: str = 1\n";
+        let (errors, _tdir) = get_errors(input);
+        let collected = errors.collect_errors();
+        let unused_errors = errors.collect_unused_ignore_errors(&collected);
+        let serialized = SerializedError::from_error(&unused_errors[0]).unwrap();
+
+        let edit = serialized.suppression_edit.unwrap();
+        assert_eq!(edit.tool, Tool::Pyrefly);
+        assert_eq!(edit.start, 0);
+        assert_eq!(edit.end, input.lines().next().unwrap().len());
+        assert_eq!(
+            edit.expected,
+            "# pyrefly: ignore [bad-assignment, bad-return]"
+        );
+        assert_eq!(edit.replacement, "# pyrefly: ignore [bad-assignment]");
+    }
+
+    #[test]
+    fn test_serialized_error_accepts_obsolete_message_field() {
+        let error: SerializedError = serde_json::from_str(
+            r#"{"path":"test.py","line":0,"name":"bad-assignment","message":"ignored"}"#,
+        )
+        .unwrap();
+        assert_eq!(error.path, PathBuf::from("test.py"));
+        assert_eq!(error.line, 0);
+        assert_eq!(error.name, "bad-assignment");
+        assert!(error.suppression_edit.is_none());
+
+        let serialized = serde_json::to_value(error).unwrap();
+        assert!(serialized.get("message").is_none());
+    }
+
+    #[test]
+    fn test_unused_ignore_without_structured_edit_is_rejected() {
+        let tdir = tempfile::tempdir().unwrap();
+        let path = get_path(&tdir);
+        let input = "x = 1  # pyrefly: ignore\n";
+        fs_anyhow::write(&path, input).unwrap();
+        let error = SerializedError {
+            path: path.clone(),
+            line: 0,
+            name: "unused-ignore".to_owned(),
+            suppression_edit: None,
+        };
+
+        let error =
+            suppress::remove_unused_ignores_from_serialized(vec![error], UnusedIgnoreKind::Pyrefly)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("has no structured suppression edit"));
+        assert_eq!(fs_anyhow::read_to_string(&path).unwrap(), input);
     }
 
     #[test]
@@ -1547,12 +1574,16 @@ def f() -> int:
         // from the same line when type-ignore removal was not requested.
         let input = "x = 1  # pyrefly: ignore  # type: ignore\n";
         let want = "x = 1  # type: ignore\n";
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 0,
-            name: "unused-ignore".to_owned(),
-            message: "Unused `# pyrefly: ignore` comment".to_owned(),
-        }];
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            0,
+            "unused-ignore",
+            Tool::Pyrefly,
+            7,
+            26,
+            "",
+        )];
         assert_remove_ignores_from_serialized_with_kind(
             input,
             errors,
@@ -1568,12 +1599,16 @@ def f() -> int:
         // from the same line when type-ignore removal was requested.
         let input = "x = 1  # type: ignore  # pyrefly: ignore\n";
         let want = "x = 1  # pyrefly: ignore\n";
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 0,
-            name: "unused-type-ignore".to_owned(),
-            message: "Unused `# type: ignore` comment".to_owned(),
-        }];
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            0,
+            "unused-type-ignore",
+            Tool::Type,
+            7,
+            23,
+            "",
+        )];
         assert_remove_ignores_from_serialized_with_kind(
             input,
             errors,
@@ -1591,18 +1626,26 @@ def f() -> int:
             (UnusedIgnoreKind::Type, "x = 1  # pyrefly: ignore\n"),
         ] {
             let errors = vec![
-                SerializedError {
-                    path: PathBuf::from("test.py"),
-                    line: 0,
-                    name: "unused-ignore".to_owned(),
-                    message: "Unused `# pyrefly: ignore` comment".to_owned(),
-                },
-                SerializedError {
-                    path: PathBuf::from("test.py"),
-                    line: 0,
-                    name: "unused-type-ignore".to_owned(),
-                    message: "Unused `# type: ignore` comment".to_owned(),
-                },
+                serialized_unused_suppression(
+                    input,
+                    PathBuf::from("test.py"),
+                    0,
+                    "unused-ignore",
+                    Tool::Pyrefly,
+                    7,
+                    26,
+                    "",
+                ),
+                serialized_unused_suppression(
+                    input,
+                    PathBuf::from("test.py"),
+                    0,
+                    "unused-type-ignore",
+                    Tool::Type,
+                    26,
+                    40,
+                    "",
+                ),
             ];
             assert_remove_ignores_from_serialized_with_kind(input, errors, want, 1, kind);
         }
@@ -1611,23 +1654,31 @@ def f() -> int:
     #[test]
     fn test_remove_multiple_unused_suppressions_from_same_line() {
         let want = "x = 1\n";
-        for input in [
-            "x = 1  # pyrefly: ignore  # type: ignore\n",
-            "x = 1  # type: ignore  # pyrefly: ignore\n",
+        for (input, pyrefly_start, pyrefly_end, type_start, type_end) in [
+            ("x = 1  # pyrefly: ignore  # type: ignore\n", 7, 26, 26, 40),
+            ("x = 1  # type: ignore  # pyrefly: ignore\n", 23, 40, 7, 23),
         ] {
             let errors = vec![
-                SerializedError {
-                    path: PathBuf::from("test.py"),
-                    line: 0,
-                    name: "unused-ignore".to_owned(),
-                    message: "Unused `# pyrefly: ignore` comment".to_owned(),
-                },
-                SerializedError {
-                    path: PathBuf::from("test.py"),
-                    line: 0,
-                    name: "unused-type-ignore".to_owned(),
-                    message: "Unused `# type: ignore` comment".to_owned(),
-                },
+                serialized_unused_suppression(
+                    input,
+                    PathBuf::from("test.py"),
+                    0,
+                    "unused-ignore",
+                    Tool::Pyrefly,
+                    pyrefly_start,
+                    pyrefly_end,
+                    "",
+                ),
+                serialized_unused_suppression(
+                    input,
+                    PathBuf::from("test.py"),
+                    0,
+                    "unused-type-ignore",
+                    Tool::Type,
+                    type_start,
+                    type_end,
+                    "",
+                ),
             ];
             assert_remove_ignores_from_serialized_with_kind(
                 input,
@@ -1647,12 +1698,16 @@ def f() -> int:
         let want = r#"def g() -> str:
     return "hello"
 "#;
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 1,
-            name: "unused-ignore".to_owned(),
-            message: "Unused `# pyrefly: ignore` comment".to_owned(),
-        }];
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            1,
+            "unused-ignore",
+            Tool::Pyrefly,
+            19,
+            36,
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -1666,12 +1721,16 @@ a: int = ""
 # pyrefly: ignore[bad-assignment]
 a: int = ""
 "#;
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 1,
-            name: "unused-ignore".to_owned(),
-            message: "Unused error code(s) in `# pyrefly: ignore`: bad-override".to_owned(),
-        }];
+        let errors = vec![serialized_unused_suppression(
+            before,
+            PathBuf::from("test.py"),
+            1,
+            "unused-ignore",
+            Tool::Pyrefly,
+            0,
+            "# pyrefly: ignore[bad-assignment,bad-override]".len(),
+            "# pyrefly: ignore[bad-assignment]",
+        )];
         assert_remove_ignores_from_serialized(before, errors, after, 1);
     }
 
@@ -1687,12 +1746,16 @@ def foo() -> str:
     # pyrefly: ignore [bad-return, unsupported-operation]
     return 1 + []
 "#;
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 2,
-            name: "unused-ignore".to_owned(),
-            message: "Unused error code(s) in `# pyrefly: ignore`: bad-assignment".to_owned(),
-        }];
+        let errors = vec![serialized_unused_suppression(
+            before,
+            PathBuf::from("test.py"),
+            2,
+            "unused-ignore",
+            Tool::Pyrefly,
+            4,
+            "    # pyrefly: ignore [bad-return, unsupported-operation, bad-assignment]".len(),
+            "# pyrefly: ignore [bad-return, unsupported-operation]",
+        )];
         assert_remove_ignores_from_serialized(before, errors, after, 1);
     }
 
@@ -1706,12 +1769,17 @@ def g() -> str:
 def g() -> str:
     return "hello"
 "#;
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 2,
-            name: "unused-ignore".to_owned(),
-            message: "Unused `# pyrefly: ignore` comment for code(s): bad-return".to_owned(),
-        }];
+        let source_line = input.lines().nth(2).unwrap();
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            2,
+            "unused-ignore",
+            Tool::Pyrefly,
+            source_line.find('#').unwrap(),
+            source_line.len(),
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -1728,22 +1796,31 @@ def g() -> str:
         fs_anyhow::write(&path2, content2).unwrap();
 
         let errors = vec![
-            SerializedError {
-                path: path1.clone(),
-                line: 0,
-                name: "unused-ignore".to_owned(),
-                message: "Unused `# pyrefly: ignore` comment".to_owned(),
-            },
-            SerializedError {
-                path: path2.clone(),
-                line: 0,
-                name: "unused-ignore".to_owned(),
-                message: "Unused `# pyrefly: ignore` comment".to_owned(),
-            },
+            serialized_unused_suppression(
+                content1,
+                path1.clone(),
+                0,
+                "unused-ignore",
+                Tool::Pyrefly,
+                7,
+                content1.trim_end().len(),
+                "",
+            ),
+            serialized_unused_suppression(
+                content2,
+                path2.clone(),
+                0,
+                "unused-ignore",
+                Tool::Pyrefly,
+                7,
+                content2.trim_end().len(),
+                "",
+            ),
         ];
 
         let removals =
-            suppress::remove_unused_ignores_from_serialized(errors, UnusedIgnoreKind::Pyrefly);
+            suppress::remove_unused_ignores_from_serialized(errors, UnusedIgnoreKind::Pyrefly)
+                .unwrap();
 
         assert_eq!(fs_anyhow::read_to_string(&path1).unwrap(), "x = 1\n");
         assert_eq!(fs_anyhow::read_to_string(&path2).unwrap(), "y = 2\n");
@@ -1754,7 +1831,8 @@ def g() -> str:
     fn test_remove_unused_ignores_from_serialized_empty_list() {
         let errors: Vec<SerializedError> = vec![];
         let removals =
-            suppress::remove_unused_ignores_from_serialized(errors, UnusedIgnoreKind::Pyrefly);
+            suppress::remove_unused_ignores_from_serialized(errors, UnusedIgnoreKind::Pyrefly)
+                .unwrap();
         assert_eq!(removals, 0);
     }
 
@@ -1762,12 +1840,17 @@ def g() -> str:
     fn test_remove_unused_ignores_from_serialized_preserves_crlf() {
         let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore [bad-return]\r\n";
         let want = "def g() -> str:\r\n    return \"hello\"\r\n";
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 1,
-            name: "unused-ignore".to_owned(),
-            message: "Unused `# pyrefly: ignore` comment".to_owned(),
-        }];
+        let source_line = input.lines().nth(1).unwrap();
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            1,
+            "unused-ignore",
+            Tool::Pyrefly,
+            source_line.find('#').unwrap(),
+            source_line.len(),
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -1794,12 +1877,17 @@ y = 1 + 1
 "##;
         let want = r##"x = "# pyrefly: ignore [bad-override]"
 "##;
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 0,
-            name: "unused-ignore".to_owned(),
-            message: "Unused `# pyrefly: ignore` comment".to_owned(),
-        }];
+        let source_line = input.lines().next().unwrap();
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            0,
+            "unused-ignore",
+            Tool::Pyrefly,
+            source_line.rfind('#').unwrap(),
+            source_line.len(),
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -2171,12 +2259,16 @@ build_query(
     fn test_remove_unused_pyre_fixme_inline() {
         let input = "x = 1  # pyre-fixme\n";
         let want = "x = 1\n";
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 0,
-            name: "unused-ignore".to_owned(),
-            message: "Unused pyre-fixme comment".to_owned(),
-        }];
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            0,
+            "unused-ignore",
+            Tool::Pyre,
+            7,
+            input.trim_end().len(),
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -2184,12 +2276,16 @@ build_query(
     fn test_remove_unused_pyre_ignore_inline() {
         let input = "x = 1  # pyre-ignore\n";
         let want = "x = 1\n";
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 0,
-            name: "unused-ignore".to_owned(),
-            message: "Unused pyre-fixme comment".to_owned(),
-        }];
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            0,
+            "unused-ignore",
+            Tool::Pyre,
+            7,
+            input.trim_end().len(),
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -2197,12 +2293,17 @@ build_query(
     fn test_remove_unused_pyre_fixme_above() {
         let input = "# pyre-fixme[7]\nx = 1\n";
         let want = "x = 1\n";
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 0,
-            name: "unused-ignore".to_owned(),
-            message: "Unused pyre-fixme comment".to_owned(),
-        }];
+        let source_line = input.lines().next().unwrap();
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            0,
+            "unused-ignore",
+            Tool::Pyre,
+            0,
+            source_line.len(),
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -2210,12 +2311,16 @@ build_query(
     fn test_remove_unused_pyre_fixme_with_description() {
         let input = "x = 1  # pyre-fixme[7]: Expected `int` but got `str`\n";
         let want = "x = 1\n";
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 0,
-            name: "unused-ignore".to_owned(),
-            message: "Unused pyre-fixme comment".to_owned(),
-        }];
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            0,
+            "unused-ignore",
+            Tool::Pyre,
+            7,
+            input.trim_end().len(),
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -2223,12 +2328,16 @@ build_query(
     fn test_remove_unused_pyre_colon_ignore() {
         let input = "x = 1  # pyre: ignore\n";
         let want = "x = 1\n";
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 0,
-            name: "unused-ignore".to_owned(),
-            message: "Unused pyre-fixme comment".to_owned(),
-        }];
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            0,
+            "unused-ignore",
+            Tool::Pyre,
+            7,
+            input.trim_end().len(),
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -2236,12 +2345,17 @@ build_query(
     fn test_remove_unused_pyre_fixme_preserves_other_comments() {
         let input = "x = 1  # pyre-fixme # important note\n";
         let want = "x = 1  # important note\n";
-        let errors = vec![SerializedError {
-            path: PathBuf::from("test.py"),
-            line: 0,
-            name: "unused-ignore".to_owned(),
-            message: "Unused pyre-fixme comment".to_owned(),
-        }];
+        let source_line = input.trim_end();
+        let errors = vec![serialized_unused_suppression(
+            input,
+            PathBuf::from("test.py"),
+            0,
+            "unused-ignore",
+            Tool::Pyre,
+            7,
+            source_line.rfind('#').unwrap(),
+            "",
+        )];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
     }
 
@@ -2252,14 +2366,20 @@ build_query(
         let input = "x = \"# pyre-fixme\"\ny = 1  # pyre-fixme\n";
         let want = "x = \"# pyre-fixme\"\ny = 1\n";
         fs_anyhow::write(&path, input).unwrap();
-        let errors = vec![SerializedError {
-            path: path.clone(),
-            line: 1,
-            name: "unused-ignore".to_owned(),
-            message: "Unused pyre-fixme comment".to_owned(),
-        }];
+        let source_line = input.lines().nth(1).unwrap();
+        let errors = vec![serialized_unused_suppression(
+            input,
+            path.clone(),
+            1,
+            "unused-ignore",
+            Tool::Pyre,
+            source_line.rfind('#').unwrap(),
+            source_line.len(),
+            "",
+        )];
         let removals =
-            suppress::remove_unused_ignores_from_serialized(errors, UnusedIgnoreKind::Pyrefly);
+            suppress::remove_unused_ignores_from_serialized(errors, UnusedIgnoreKind::Pyrefly)
+                .unwrap();
         let got = fs_anyhow::read_to_string(&path).unwrap();
         assert_eq!(want, got);
         assert_eq!(removals, 1);

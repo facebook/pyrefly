@@ -3201,7 +3201,10 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<(String, Vec<(Module, TextRange, String)>)>> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
-        let errors = self.get_errors(vec![handle]).collect_errors().ordinary;
+        let error_collection = self.get_errors(vec![handle]);
+        let collected = error_collection.collect_errors();
+        let unused = error_collection.collect_unused_ignore_errors_for_display(&collected);
+        let errors = collected.ordinary.into_iter().chain(unused.ordinary);
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
@@ -3235,6 +3238,20 @@ impl<'a> Transaction<'a> {
                 }
             }
             match error.error_kind() {
+                ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore => {
+                    if let Some(action) =
+                        quick_fixes::unused_ignore::remove_unused_ignore_code_action(
+                            &module_info,
+                            &error,
+                        )
+                        && (error_range.contains_range(range) || action.2.contains_range(range))
+                    {
+                        let key = (action.0.clone(), action.2, action.3.clone());
+                        if other_action_keys.insert(key) {
+                            other_actions.push(action);
+                        }
+                    }
+                }
                 ErrorKind::UnknownName | ErrorKind::UnimportedDirective
                     if error_range.contains_range(range) =>
                 {

@@ -1958,7 +1958,7 @@ fn test_unused_ignore_diagnostic() {
                     "message": "Unused `# pyrefly: ignore` comment",
                     "range": {
                         "start": {"line": 5, "character": 0},
-                        "end": {"line": 5, "character": 1}
+                        "end": {"line": 5, "character": 17}
                     },
                     "severity": 1,
                     "source": "Pyrefly"
@@ -2029,7 +2029,7 @@ fn test_unused_type_ignore_diagnostic() {
                     "message": "Unused `# type: ignore` comment",
                     "range": {
                         "start": {"line": 5, "character": 0},
-                        "end": {"line": 5, "character": 1}
+                        "end": {"line": 5, "character": 14}
                     },
                     "severity": 1,
                     "source": "Pyrefly"

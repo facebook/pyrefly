@@ -32,8 +32,6 @@ use ruff_python_ast::ModModule;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::walk_expr;
 use ruff_text_size::Ranged;
-use ruff_text_size::TextRange;
-use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -641,12 +639,6 @@ impl Errors {
                         .and_then(|m| m.get(applies_to_line))
                         .cloned()
                         .unwrap_or_default();
-                    let comment_start = module.lined_buffer().line_start(supp.comment_line())
-                        + TextSize::try_from(supp.comment_offset())
-                            .expect("Python source offsets fit in TextSize");
-                    let comment_range =
-                        TextRange::new(comment_start, comment_start + TextSize::new(1));
-
                     // For Tool::Pyre, error code filtering is not enforced
                     // (any Pyre suppression suppresses all errors on the line),
                     // so we only report it as unused when no errors at all were
@@ -655,13 +647,17 @@ impl Errors {
                         if !used_codes.is_empty() {
                             continue; // Pyre suppression is used
                         }
-                        unused_errors.push(Error::new(
-                            module.dupe(),
-                            comment_range,
-                            "Unused pyre-fixme comment".to_owned(),
-                            Vec::new(),
-                            ErrorKind::UnusedIgnore,
-                        ));
+                        let edit = supp.removal_edit(module.lined_buffer(), None);
+                        unused_errors.push(
+                            Error::new(
+                                module.dupe(),
+                                edit.range,
+                                "Unused pyre-fixme comment".to_owned(),
+                                Vec::new(),
+                                ErrorKind::UnusedIgnore,
+                            )
+                            .with_quick_fix(edit.into()),
+                        );
                         continue;
                     }
 
@@ -670,13 +666,17 @@ impl Errors {
                         if !used_codes.is_empty() {
                             continue; // type: ignore is used
                         }
-                        unused_errors.push(Error::new(
-                            module.dupe(),
-                            comment_range,
-                            "Unused `# type: ignore` comment".to_owned(),
-                            Vec::new(),
-                            ErrorKind::UnusedTypeIgnore,
-                        ));
+                        let edit = supp.removal_edit(module.lined_buffer(), None);
+                        unused_errors.push(
+                            Error::new(
+                                module.dupe(),
+                                edit.range,
+                                "Unused `# type: ignore` comment".to_owned(),
+                                Vec::new(),
+                                ErrorKind::UnusedTypeIgnore,
+                            )
+                            .with_quick_fix(edit.into()),
+                        );
                         continue;
                     }
 
@@ -705,7 +705,6 @@ impl Errors {
                         unused
                     };
 
-                    // Create an error for the unused suppression
                     let msg = if declared_codes.is_empty() {
                         "Unused `# pyrefly: ignore` comment".to_owned()
                     } else if unused_codes.len() == declared_codes.len() {
@@ -720,13 +719,22 @@ impl Errors {
                         )
                     };
 
-                    unused_errors.push(Error::new(
-                        module.dupe(),
-                        comment_range,
-                        msg,
-                        Vec::new(),
-                        ErrorKind::UnusedIgnore,
-                    ));
+                    let partially_unused =
+                        !declared_codes.is_empty() && unused_codes.len() != declared_codes.len();
+                    let edit = supp.removal_edit(
+                        module.lined_buffer(),
+                        partially_unused.then_some(&unused_codes),
+                    );
+                    unused_errors.push(
+                        Error::new(
+                            module.dupe(),
+                            edit.range,
+                            msg,
+                            Vec::new(),
+                            ErrorKind::UnusedIgnore,
+                        )
+                        .with_quick_fix(edit.into()),
+                    );
                 }
             }
         }
@@ -963,6 +971,32 @@ def g() -> str:
     }
 
     #[test]
+    fn test_unused_ignore_ranges_cover_suppression_comments() {
+        let contents = "\
+# type: ignore
+x = 1
+y: int = \"bad\"  # pyrefly: ignore [bad-assignment, unknown-name]
+z = 2  # pyrefly: ignore
+";
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        let mut ranges = unused
+            .iter()
+            .map(|error| error.module().code_at(error.range()))
+            .collect::<Vec<_>>();
+        ranges.sort_unstable();
+        assert_eq!(
+            ranges,
+            vec![
+                "# pyrefly: ignore",
+                "# pyrefly: ignore [bad-assignment, unknown-name]",
+                "# type: ignore",
+            ]
+        );
+    }
+
+    #[test]
     fn test_unused_type_ignore_no_error() {
         let contents = r#"
 def f() -> int:
@@ -1008,7 +1042,10 @@ def f() -> int:
         let collected = errors.collect_errors();
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
-        assert_eq!(unused[0].lined_buffer().code_at(unused[0].range()), "#");
+        assert_eq!(
+            unused[0].lined_buffer().code_at(unused[0].range()),
+            "# type: ignore"
+        );
 
         let mut renderer = ErrorRenderer::plain(Vec::new());
         renderer.write(&unused[0], Path::new(""), true).unwrap();
