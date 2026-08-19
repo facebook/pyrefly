@@ -41,11 +41,16 @@ fn find_interpreter(root: &Path) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn find_in_root(root: &Path) -> Option<PathBuf> {
+/// Find the interpreter in a known virtual environment root.
+pub fn find_active(root: &Path) -> Option<PathBuf> {
     if is_venv_root(root) {
-        return find_interpreter(root);
+        find_interpreter(root)
+    } else {
+        None
     }
+}
 
+fn find_in_root(root: &Path) -> Option<PathBuf> {
     CANDIDATE_DIRS
         .iter()
         .map(|candidate| root.join(candidate))
@@ -62,8 +67,8 @@ fn search_roots(project_path: &Path) -> impl Iterator<Item = &Path> {
 /// Find a virtual environment interpreter starting from `project_path`.
 ///
 /// Search order:
-/// 1. If `project_path` or a known subdir (`.venv`, `venv`, `env`) contains `pyvenv.cfg`,
-///    look for an interpreter there.
+/// 1. Look for `pyvenv.cfg` in a known subdirectory (`.venv`, `venv`, `env`) of
+///    `project_path`, then look for an interpreter there.
 /// 2. Repeat step 1 in each ancestor directory.
 pub fn find(project_path: &Path) -> Option<PathBuf> {
     search_roots(project_path).find_map(find_in_root)
@@ -307,9 +312,23 @@ mod tests {
     }
 
     #[test]
-    fn test_find_ancestor_is_venv_directory() {
-        // Exercises the find_in_root early-return branch where the ancestor
-        // directory itself contains pyvenv.cfg (i.e., the ancestor IS a venv).
+    fn test_find_active_venv_root() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let interp_name = interp_name("");
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file(CONFIG_FILE),
+                TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+            ],
+        );
+
+        assert_eq!(find_active(root), Some(interp_path(root, "")));
+    }
+
+    #[test]
+    fn test_find_does_not_treat_ancestor_as_venv() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         let interp_name = interp_name("");
@@ -319,14 +338,11 @@ mod tests {
             vec![
                 TestPath::file(CONFIG_FILE),
                 TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
-                TestPath::dir(
-                    "project",
-                    vec![TestPath::dir("src", vec![TestPath::file("main.py")])],
-                ),
+                TestPath::dir("project", vec![TestPath::file("main.py")]),
             ],
         );
 
-        assert_eq!(find(&project_root), Some(interp_path(root, "")),);
+        assert_eq!(find(&project_root), None);
     }
 
     #[test]
