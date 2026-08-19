@@ -2063,6 +2063,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         // Check for a partial answer shortcut before pushing to the CalcStack.
         // This is used by ForwardToFirstUse during inline first-use pinning to
@@ -2506,6 +2507,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         let answer = Arc::unwrap_or_clone(
             answer
@@ -2537,6 +2539,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         if let Some(errors) = errors {
             let errors = Arc::try_unwrap(errors)
@@ -2575,6 +2578,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
         // which proves ownership of this pending reservation.
@@ -2688,6 +2692,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         let _ = self.get_idx(idx);
     }
@@ -2700,6 +2705,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         let _ = self.get_idx(idx);
     }
@@ -3095,6 +3101,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         self.get_hashed(Hashed::new(k))
     }
@@ -3103,6 +3110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         self.get_idx(self.bindings().key_to_idx_hashed(k))
     }
@@ -3111,6 +3119,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         Some(self.get_idx(self.bindings().key_to_idx_hashed_opt(k)?))
     }

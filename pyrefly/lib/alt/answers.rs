@@ -200,6 +200,7 @@ pub struct TraceSideEffects {
 pub struct Answers {
     solver: Solver,
     table: AnswerTable,
+    solutions: Arc<SolutionsData>,
     index: Option<Arc<Mutex<Index>>>,
     trace: Option<Mutex<Traces>>,
 }
@@ -379,6 +380,26 @@ impl<T> AnswerSlot<T> {
         }
     }
 
+    #[inline]
+    fn get_published(&self) -> &T {
+        let ptr = self.ptr.load(Ordering::Acquire);
+        assert!(!ptr.is_null(), "solution result is unpublished");
+        assert!(!Self::is_pending(ptr), "solution result is pending");
+        // SAFETY: The checks above prove that `ptr` is a published pointer
+        // retained by this slot.
+        unsafe { &*ptr }
+    }
+
+    #[inline]
+    fn get_published_arc(&self) -> Arc<T> {
+        let ptr = self.ptr.load(Ordering::Acquire);
+        assert!(!ptr.is_null(), "solution result is unpublished");
+        assert!(!Self::is_pending(ptr), "solution result is pending");
+        // SAFETY: The checks above prove that `ptr` is published and retains
+        // the strong reference owned by this slot.
+        unsafe { Self::clone_arc(ptr) }
+    }
+
     /// Publish an ordinary, non-SCC result or return the competing winner.
     pub(crate) fn record(&self, value: Arc<T>) -> (Arc<T>, bool) {
         let mut candidate = Self::into_raw(value);
@@ -473,6 +494,28 @@ impl<T> AnswerSlot<T> {
     }
 }
 
+/// A published view of an `AnswerSlot` owned by a complete `Solutions`.
+/// `SolutionsData::new` creates slots only for exported bindings. Before
+/// constructing `Solutions`, `Answers::solve` calls the infallible
+/// `AnswersSolver::get_idx` for every exported binding. That call does not
+/// return until the final result, including an SCC result, has been published.
+/// Therefore every slot reachable through this view contains a non-null,
+/// untagged pointer.
+#[repr(transparent)]
+struct SolutionSlot<'a, T>(&'a AnswerSlot<T>);
+
+impl<'a, T> SolutionSlot<'a, T> {
+    #[inline]
+    fn get(&self) -> &'a T {
+        self.0.get_published()
+    }
+
+    #[inline]
+    fn get_arc(&self) -> Arc<T> {
+        self.0.get_published_arc()
+    }
+}
+
 impl<T> Drop for AnswerSlot<T> {
     fn drop(&mut self) {
         let ptr = *self.ptr.get_mut();
@@ -509,6 +552,7 @@ impl<K: Keyed> Default for AnswerEntry<K> {
 
 impl<K: Keyed> AnswerEntry<K> {
     fn answer_slot(&self, idx: Idx<K>) -> Option<&AnswerSlot<K::Answer>> {
+        assert!(!K::EXPORTED, "exported answers live in SolutionsData");
         self.0.get(idx.idx())
     }
 }
@@ -529,6 +573,7 @@ impl DisplayWith<Bindings> for Answers {
         where
             AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+            SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
         {
             for idx in bindings.keys::<K>() {
                 let key = bindings.idx_to_key(idx);
@@ -552,18 +597,62 @@ impl DisplayWith<Bindings> for Answers {
     }
 }
 
-pub type SolutionsEntry<K> = SmallMap<K, Arc<<K as Keyed>::Answer>>;
+pub type SolutionsEntry<K> = SmallMap<K, AnswerSlot<<K as Keyed>::Answer>>;
 
 table!(
     // Only the exported keys are stored in the solutions table.
-    #[derive(Default, Debug, Clone, PartialEq, Eq)]
+    #[derive(Default, Debug)]
     pub struct SolutionsTable(pub SolutionsEntry)
 );
+
+#[derive(Debug)]
+pub(crate) struct SolutionsData {
+    table: SolutionsTable,
+}
+
+impl SolutionsData {
+    fn new(bindings: &Bindings) -> Self {
+        fn presize<K: Keyed>(items: &mut SolutionsEntry<K>, bindings: &Bindings)
+        where
+            BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        {
+            if K::EXPORTED {
+                let keys = bindings.keys::<K>();
+                let len = keys.len();
+                items.reserve(len);
+                // `Bindings::keys` enumerates the binding storage and creates
+                // each `Idx` from that same position. The table is never
+                // structurally mutated after this loop, so each `SmallMap`
+                // position remains identical to its binding `Idx`.
+                for idx in keys {
+                    items.insert(bindings.idx_to_key(idx).clone(), AnswerSlot::default());
+                }
+                assert_eq!(items.len(), len, "exported solution keys must be unique");
+            }
+        }
+
+        let mut table = SolutionsTable::default();
+        table_mut_for_each!(&mut table, |items| presize(items, bindings));
+        Self { table }
+    }
+
+    fn slot_idx<K: Keyed>(&self, idx: Idx<K>) -> Option<&AnswerSlot<K::Answer>>
+    where
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        // `new` inserts exported keys in binding index order, and the table is
+        // never structurally mutated, so each `SmallMap` position matches its `Idx`.
+        self.table
+            .get::<K>()
+            .get_index(idx.idx())
+            .map(|(_, slot)| slot)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Solutions {
     module_info: ModuleInfo,
-    table: SolutionsTable,
+    data: Arc<SolutionsData>,
     metadata: Arc<BindingsMetadata>,
     /// Multi-line ranges and ignore-all directives.
     module_ranges: Arc<ModuleRanges>,
@@ -577,20 +666,23 @@ pub struct Solutions {
 impl Display for Solutions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn go<K: Keyed>(
-            entry: &SolutionsEntry<K>,
+            _entry: &SolutionsEntry<K>,
+            solutions: &Solutions,
             f: &mut fmt::Formatter<'_>,
             ctx: &ModuleInfo,
         ) -> fmt::Result
         where
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+            SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
         {
-            for (key, answer) in entry {
+            for (key, slot) in solutions.solution_slots::<K>() {
+                let answer = slot.get();
                 writeln!(f, "{} = {}", ctx.display(key), answer)?;
             }
             Ok(())
         }
 
-        table_try_for_each!(&self.table, |x| go(x, f, &self.module_info));
+        table_try_for_each!(&self.data.table, |x| go(x, self, f, &self.module_info));
         Ok(())
     }
 }
@@ -639,6 +731,26 @@ impl Display for SolutionsDifference<'_> {
 }
 
 impl Solutions {
+    #[inline]
+    fn solution_slot_hashed<K: Keyed>(&self, key: Hashed<&K>) -> Option<SolutionSlot<'_, K::Answer>>
+    where
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        Some(SolutionSlot(self.data.table.get::<K>().get_hashed(key)?))
+    }
+
+    #[inline]
+    fn solution_slots<K: Keyed>(&self) -> impl Iterator<Item = (&K, SolutionSlot<'_, K::Answer>)>
+    where
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        self.data
+            .table
+            .get::<K>()
+            .iter()
+            .map(|(key, slot)| (key, SolutionSlot(slot)))
+    }
+
     pub fn metadata(&self) -> &Arc<BindingsMetadata> {
         &self.metadata
     }
@@ -668,7 +780,7 @@ impl Solutions {
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        self.table.get().get_hashed(key).map(Arc::as_ref)
+        Some(self.solution_slot_hashed(key)?.get())
     }
 
     pub fn get_hashed<K: Exported>(&self, key: Hashed<&K>) -> &<K as Keyed>::Answer
@@ -699,7 +811,7 @@ impl Solutions {
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        self.table.get().get_hashed(key).map(|value| value.dupe())
+        Some(self.solution_slot_hashed(key)?.get_arc())
     }
 
     pub fn get_hashed_arc<K: Exported>(&self, key: Hashed<&K>) -> Arc<<K as Keyed>::Answer>
@@ -718,7 +830,7 @@ impl Solutions {
 
     /// Helper to create a difference for a key only in rhs.
     #[inline]
-    fn make_only_in_rhs<'a, K: Keyed>(k: &'a K, v: &'a Arc<K::Answer>) -> SolutionsDifference<'a> {
+    fn make_only_in_rhs<'a, K: Keyed>(k: &'a K, v: &'a K::Answer) -> SolutionsDifference<'a> {
         SolutionsDifference {
             key: (k, k),
             lhs: None,
@@ -728,7 +840,7 @@ impl Solutions {
 
     /// Helper to create a difference for a key only in lhs.
     #[inline]
-    fn make_only_in_lhs<'a, K: Keyed>(k: &'a K, v: &'a Arc<K::Answer>) -> SolutionsDifference<'a> {
+    fn make_only_in_lhs<'a, K: Keyed>(k: &'a K, v: &'a K::Answer) -> SolutionsDifference<'a> {
         SolutionsDifference {
             key: (k, k),
             lhs: Some((v, v)),
@@ -740,8 +852,8 @@ impl Solutions {
     #[inline]
     fn make_value_differs<'a, K: Keyed>(
         k: &'a K,
-        v1: &'a Arc<K::Answer>,
-        v2: &'a Arc<K::Answer>,
+        v1: &'a K::Answer,
+        v2: &'a K::Answer,
     ) -> SolutionsDifference<'a> {
         SolutionsDifference {
             key: (k, k),
@@ -751,9 +863,6 @@ impl Solutions {
     }
 
     /// Find the first key that differs between two solutions, with the two values.
-    ///
-    /// Don't love that we always allocate String's for the result, but it's rare that
-    /// there is a difference, and if there is, we'll do quite a lot of computation anyway.
     pub fn first_difference<'a>(&'a self, other: &'a Self) -> Option<SolutionsDifference<'a>> {
         fn f<'a, K: Keyed>(
             x: &'a SolutionsEntry<K>,
@@ -768,24 +877,28 @@ impl Solutions {
                 return None;
             }
 
-            let y_table = y.table.get::<K>();
+            let y_table = y.data.table.get::<K>();
             if y_table.len() > x.len() {
-                for (k, v) in y_table {
+                for (k, slot) in y_table {
                     if !x.contains_key(k) {
+                        let v = slot.get_published();
                         return Some(Solutions::make_only_in_rhs(k, v));
                     }
                 }
                 unreachable!();
             }
-            for (k, v) in x {
+            for (k, slot) in x {
+                let v = slot.get_published();
                 match y_table.get(k) {
-                    Some(v2) if !v.type_eq(v2, ctx) => {
-                        return Some(Solutions::make_value_differs(k, v, v2));
+                    Some(slot2) => {
+                        let v2 = slot2.get_published();
+                        if !v.type_eq(v2, ctx) {
+                            return Some(Solutions::make_value_differs(k, v, v2));
+                        }
                     }
                     None => {
                         return Some(Solutions::make_only_in_lhs(k, v));
                     }
-                    _ => {}
                 }
             }
             None
@@ -795,7 +908,7 @@ impl Solutions {
         // Important we have a single TypeEqCtx, so that we don't have
         // types used in different ways.
         let mut ctx = TypeEqCtx::default();
-        table_for_each!(self.table, |x| {
+        table_for_each!(self.data.table, |x| {
             if difference.is_none() {
                 difference = f(x, other, &mut ctx);
             }
@@ -821,7 +934,7 @@ impl Solutions {
                 return;
             }
 
-            let y_table = y.table.get::<K>();
+            let y_table = y.data.table.get::<K>();
 
             // Check for items only in y (added keys) — existence change.
             for (k, _v) in y_table {
@@ -833,9 +946,14 @@ impl Solutions {
             }
 
             // Check for differences in x
-            for (k, v) in x {
+            for (k, slot) in x {
+                let v = slot.get_published();
                 match y_table.get(k) {
-                    Some(v2) if !v.type_eq(v2, ctx) => {
+                    Some(slot2) => {
+                        let v2 = slot2.get_published();
+                        if v.type_eq(v2, ctx) {
+                            continue;
+                        }
                         // Value changed — type/metadata change, key still exists.
                         if let Some(anykey) = k.try_to_anykey() {
                             changed.add_key(anykey);
@@ -847,7 +965,6 @@ impl Solutions {
                             changed.add_key_existence(anykey);
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -857,7 +974,7 @@ impl Solutions {
         let mut ctx = TypeEqCtx::default();
 
         // Check all tables
-        table_for_each!(self.table, |x| {
+        table_for_each!(self.data.table, |x| {
             check_table(x, other, &mut ctx, changed);
         });
     }
@@ -890,7 +1007,8 @@ impl Solutions {
                 return;
             }
 
-            for (k, new_val) in new_solutions {
+            for (k, slot) in new_solutions {
+                let new_val = slot.get_published();
                 let Some(anykey) = k.try_to_anykey() else {
                     continue;
                 };
@@ -899,7 +1017,7 @@ impl Solutions {
                     Some(idx) => {
                         // Key existed in old answers — compare values.
                         match old_answers.get_idx::<K>(idx) {
-                            Some(old_val) if !old_val.type_eq(new_val, ctx) => {
+                            Some(old_val) if !old_val.as_ref().type_eq(new_val, ctx) => {
                                 changed.add_key(anykey);
                             }
                             // None means the old answer was never computed, so
@@ -918,7 +1036,7 @@ impl Solutions {
 
         let mut ctx = TypeEqCtx::default();
 
-        table_for_each!(self.table, |x| {
+        table_for_each!(self.data.table, |x| {
             check_table_vs_answers(x, old_bindings, old_answers, &mut ctx, changed);
         });
     }
@@ -1005,12 +1123,15 @@ impl Answers {
         where
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         {
-            items
-                .0
-                .resize_with(bindings.keys::<K>().len(), AnswerSlot::default);
+            if !K::EXPORTED {
+                items
+                    .0
+                    .resize_with(bindings.keys::<K>().len(), AnswerSlot::default);
+            }
         }
         let mut table = AnswerTable::default();
         table_mut_for_each!(&mut table, |items| presize(items, bindings));
+        let solutions = Arc::new(SolutionsData::new(bindings));
         let index = if enable_index {
             Some(Arc::new(Mutex::new(Index::default())))
         } else {
@@ -1025,6 +1146,7 @@ impl Answers {
         Self {
             solver,
             table,
+            solutions,
             index,
             trace,
         }
@@ -1037,8 +1159,13 @@ impl Answers {
     pub(crate) fn answer_slot<K: Keyed>(&self, idx: Idx<K>) -> Option<&AnswerSlot<K::Answer>>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        self.table.get::<K>().answer_slot(idx)
+        if K::EXPORTED {
+            self.solutions.slot_idx(idx)
+        } else {
+            self.table.get::<K>().answer_slot(idx)
+        }
     }
 
     pub fn heap(&self) -> &TypeHeap {
@@ -1058,19 +1185,15 @@ impl Answers {
         pysa_context: Option<&crate::report::pysa::context::ModuleAnswersContext>,
         enable_cinderx_solutions: bool,
     ) -> Solutions {
-        let mut res = SolutionsTable::default();
-
         fn pre_solve<Ans: LookupAnswer, K: Solve<Ans>>(
-            items: &mut SolutionsEntry<K>,
+            _items: &SolutionsEntry<K>,
             answers: &AnswersSolver<Ans>,
             compute_everything: bool,
         ) where
             AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+            SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
         {
-            if K::EXPORTED {
-                items.reserve(answers.bindings().keys::<K>().len());
-            }
             if !K::EXPORTED
                 && !compute_everything
                 && answers.base_errors().style() == ErrorStyle::Never
@@ -1079,11 +1202,7 @@ impl Answers {
                 return;
             }
             for idx in answers.bindings().keys::<K>() {
-                let v = answers.get_idx(idx);
-                if K::EXPORTED {
-                    let k = answers.bindings().idx_to_key(idx);
-                    items.insert(k.clone(), v.dupe());
-                }
+                answers.get_idx(idx);
             }
         }
         let recurser = &VarRecurser::new();
@@ -1100,11 +1219,13 @@ impl Answers {
             thread_state,
             self.heap(),
         );
-        table_mut_for_each!(&mut res, |items| pre_solve(
+        table_for_each!(&self.solutions.table, |items| pre_solve(
             items,
             &answers_solver,
             compute_everything
         ));
+        // `pre_solve` has published every exported slot. From this point on,
+        // the preallocated solutions table represents a complete result set.
         if let Some(index) = &self.index {
             let mut index = index.lock();
             // Index bindings with external definitions.
@@ -1155,7 +1276,7 @@ impl Answers {
 
         Solutions {
             module_info: bindings.module().dupe(),
-            table: res,
+            data: self.solutions.dupe(),
             metadata: bindings.metadata().dupe(),
             module_ranges: bindings.module_ranges().dupe(),
             index: self.index.dupe(),
@@ -1178,6 +1299,7 @@ impl Answers {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         // Fast path: check if the answer has already been published in its result slot.
         // This avoids constructing a VarRecurser and AnswersSolver when the value is cached.
@@ -1206,6 +1328,7 @@ impl Answers {
     pub fn get_idx<K: Keyed>(&self, k: Idx<K>) -> Option<Arc<K::Answer>>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         self.answer_slot(k)?.get_arc()
     }
@@ -1275,6 +1398,7 @@ impl Answers {
     fn reserve_typed<K: Keyed>(&self, idx: Idx<K>, answer: Arc<dyn Any + Send + Sync>) -> bool
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         let typed_answer: Arc<K::Answer> = Arc::unwrap_or_clone(
             answer
@@ -1290,6 +1414,7 @@ impl Answers {
     unsafe fn publish_reserved_typed<K: Keyed>(&self, idx: Idx<K>) -> bool
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         let Some(slot) = self.answer_slot(idx) else {
             return false;
@@ -1303,6 +1428,7 @@ impl Answers {
     unsafe fn rollback_reserved_if_pending_typed<K: Keyed>(&self, idx: Idx<K>) -> bool
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         let Some(slot) = self.answer_slot(idx) else {
             return false;
@@ -1444,6 +1570,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         self.current().answer_slot(idx).unwrap_or_else(|| {
             // Do not fix a panic by removing this error.
