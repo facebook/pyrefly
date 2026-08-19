@@ -154,14 +154,14 @@ impl<'a> BindingsBuilder<'a> {
         let name = Hashed::new(&identifier.id);
         let usage = Usage::NonPinningValue(None);
         let name_is_defined = match self.look_up_name_for_read(name, &usage) {
-            NameReadInfo::Flow { .. } | NameReadInfo::Anywhere { .. } => true,
+            NameReadInfo::Flow { .. }
+            | NameReadInfo::Anywhere { .. }
+            | NameReadInfo::OuterClassTypeParameter { .. } => true,
             // This helper only runs after attribute/subscript assignment targets. If the base is an
             // implicit builtin, binding the assigned expression has already materialized it. A still
             // unmaterialized builtin here is indistinguishable from any other name that is absent
             // from local flow, so leave it un-narrowed.
-            NameReadInfo::ImplicitBuiltin { .. }
-            | NameReadInfo::OutOfScopeTypeParameter { .. }
-            | NameReadInfo::NotFound => false,
+            NameReadInfo::ImplicitBuiltin { .. } | NameReadInfo::NotFound => false,
         };
         if name_is_defined {
             self.scopes.narrow_in_current_flow(name, narrowed_idx);

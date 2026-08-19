@@ -1206,7 +1206,7 @@ impl NarrowOps {
             // implicit builtins, and missing names do not.
             NameReadInfo::Anywhere { .. }
             | NameReadInfo::ImplicitBuiltin { .. }
-            | NameReadInfo::OutOfScopeTypeParameter { .. }
+            | NameReadInfo::OuterClassTypeParameter { .. }
             | NameReadInfo::NotFound => None,
         }
     }

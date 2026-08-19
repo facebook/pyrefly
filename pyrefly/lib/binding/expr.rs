@@ -382,7 +382,14 @@ impl<'a> BindingsBuilder<'a> {
                 idx: lookup_result_idx,
                 initialized: is_initialized,
                 is_module_scope,
+                is_outer_class_type_parameter,
             } => {
+                if is_outer_class_type_parameter {
+                    return self.insert_binding(
+                        key,
+                        Binding::OuterClassTypeParameter(lookup_result_idx, name.range),
+                    );
+                }
                 // Uninitialized local errors are only reported when we are neither in a stub
                 // nor a static type context.
                 if !usage.is_static() && !self.module_info.path().is_interface() {
@@ -429,9 +436,6 @@ impl<'a> BindingsBuilder<'a> {
                     self.promote_ranges.insert(name.range);
                 }
                 self.defer_bound_name(key, lookup_result_idx, usage, promote)
-            }
-            NameLookupResult::OutOfScopeTypeParameter { idx } => {
-                self.insert_binding(key, Binding::OutOfScopeTypeParameter(idx, name.range))
             }
             NameLookupResult::NotFound => {
                 if self.scopes.is_definitely_unreachable() {

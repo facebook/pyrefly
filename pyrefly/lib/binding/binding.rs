@@ -2396,8 +2396,13 @@ pub enum Binding {
     Global(ImplicitGlobal),
     /// A type parameter.
     TypeParameter(Box<TypeParameter>),
-    /// A reference to a type parameter from outside the class scope that owns it.
-    OutOfScopeTypeParameter(Idx<Key>, TextRange),
+    /// A reference in an inner scope to a type parameter from an outer class scope. A class
+    /// scope is "outer" if there is another intervening class scope in between. Example:
+    ///   class A[T]:
+    ///     class B[U]:
+    ///       x: T  # <- this is an OuterClassTypeParameter
+    ///       y: U  # <- this is not
+    OuterClassTypeParameter(Idx<Key>, TextRange),
     /// The type of a function.
     Function {
         /// A reference to the KeyDecoratedFunction that points to the def.
@@ -2647,8 +2652,8 @@ impl DisplayWith<Bindings> for Binding {
             Self::TypeParameter(tp) => {
                 write!(f, "TypeParameter({}, {}, ..)", tp.identity, tp.kind)
             }
-            Self::OutOfScopeTypeParameter(k, _) => {
-                write!(f, "OutOfScopeTypeParameter({})", ctx.display(*k))
+            Self::OuterClassTypeParameter(k, _) => {
+                write!(f, "OuterClassTypeParameter({})", ctx.display(*k))
             }
             Self::PossibleLegacyTParam(legacy_tparam, ..) => {
                 write!(f, "PossibleLegacyTParam({})", ctx.display(*legacy_tparam))
@@ -2850,7 +2855,7 @@ impl Binding {
             | Binding::ParamSpec(_)
             | Binding::TypeVarTuple(_)
             | Binding::TypeParameter(_)
-            | Binding::OutOfScopeTypeParameter(..)
+            | Binding::OuterClassTypeParameter(..)
             | Binding::PossibleLegacyTParam(..) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
             Binding::Function { in_class, .. } => {

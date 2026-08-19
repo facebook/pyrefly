@@ -148,9 +148,9 @@ pub enum NameLookupResult {
         idx: Idx<Key>,
         initialized: InitializedInFlow,
         is_module_scope: bool,
+        /// Does this name resolve to a type parameter outside the current class's scope?
+        is_outer_class_type_parameter: bool,
     },
-    /// This name resolves to a type parameter outside the current class's scope.
-    OutOfScopeTypeParameter { idx: Idx<Key> },
     /// This name is not defined in the current scope stack.
     NotFound,
 }
@@ -159,7 +159,7 @@ impl NameLookupResult {
     fn found(self) -> Option<Idx<Key>> {
         match self {
             NameLookupResult::Found { idx, .. } => Some(idx),
-            NameLookupResult::OutOfScopeTypeParameter { .. } | NameLookupResult::NotFound => None,
+            NameLookupResult::NotFound => None,
         }
     }
 }
@@ -1599,6 +1599,7 @@ impl<'a> BindingsBuilder<'a> {
                     idx,
                     initialized,
                     is_module_scope: false,
+                    is_outer_class_type_parameter: false,
                 }
             }
             NameReadInfo::Anywhere {
@@ -1626,6 +1627,7 @@ impl<'a> BindingsBuilder<'a> {
                     idx,
                     initialized,
                     is_module_scope,
+                    is_outer_class_type_parameter: false,
                 }
             }
             NameReadInfo::ImplicitBuiltin { module } => {
@@ -1634,13 +1636,15 @@ impl<'a> BindingsBuilder<'a> {
                     idx,
                     initialized: InitializedInFlow::Yes,
                     is_module_scope: true,
+                    is_outer_class_type_parameter: false,
                 }
             }
-            NameReadInfo::OutOfScopeTypeParameter { key } => {
-                NameLookupResult::OutOfScopeTypeParameter {
-                    idx: self.idx_for_promise(key),
-                }
-            }
+            NameReadInfo::OuterClassTypeParameter { key } => NameLookupResult::Found {
+                idx: self.idx_for_promise(key),
+                initialized: InitializedInFlow::Yes,
+                is_module_scope: false,
+                is_outer_class_type_parameter: true,
+            },
             NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
     }
@@ -2323,9 +2327,7 @@ enum TParamLookupResult {
     NotTParam {
         idx: Idx<Key>,
         initialized: InitializedInFlow,
-    },
-    OutOfScopeTypeParameter {
-        idx: Idx<Key>,
+        is_outer_class_type_parameter: bool,
     },
     NotFound,
 }
@@ -2337,15 +2339,18 @@ impl TParamLookupResult {
                 idx: possible_tparam.idx,
                 initialized: possible_tparam.initialized.clone(),
                 is_module_scope: false,
+                is_outer_class_type_parameter: false,
             },
-            Self::NotTParam { idx, initialized } => NameLookupResult::Found {
+            Self::NotTParam {
+                idx,
+                initialized,
+                is_outer_class_type_parameter,
+            } => NameLookupResult::Found {
                 idx: *idx,
                 initialized: initialized.clone(),
                 is_module_scope: false,
+                is_outer_class_type_parameter: *is_outer_class_type_parameter,
             },
-            Self::OutOfScopeTypeParameter { idx } => {
-                NameLookupResult::OutOfScopeTypeParameter { idx: *idx }
-            }
             Self::NotFound => NameLookupResult::NotFound,
         }
     }
@@ -2454,6 +2459,7 @@ impl<'a> BindingsBuilder<'a> {
             NameLookupResult::Found {
                 idx: original_idx,
                 initialized,
+                is_outer_class_type_parameter,
                 ..
             } => {
                 self.mark_does_not_pin_if_first_use(original_idx);
@@ -2466,6 +2472,7 @@ impl<'a> BindingsBuilder<'a> {
                     return TParamLookupResult::NotTParam {
                         idx: original_idx,
                         initialized,
+                        is_outer_class_type_parameter,
                     };
                 }
                 let shadows_enclosing_annotation_scope = self
@@ -2481,11 +2488,9 @@ impl<'a> BindingsBuilder<'a> {
                     None => TParamLookupResult::NotTParam {
                         idx: original_idx,
                         initialized,
+                        is_outer_class_type_parameter,
                     },
                 }
-            }
-            NameLookupResult::OutOfScopeTypeParameter { idx } => {
-                TParamLookupResult::OutOfScopeTypeParameter { idx }
             }
             NameLookupResult::NotFound => TParamLookupResult::NotFound,
         }

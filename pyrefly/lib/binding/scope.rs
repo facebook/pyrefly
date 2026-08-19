@@ -108,7 +108,7 @@ pub enum NameReadInfo {
     /// lexically-defined names should treat this the same as `NotFound`.
     ImplicitBuiltin { module: ModuleName },
     /// The name resolves to a type parameter outside the current class's scope.
-    OutOfScopeTypeParameter { key: Key },
+    OuterClassTypeParameter { key: Key },
     /// No such name is defined in the current scope stack, and it is not a builtin.
     NotFound,
 }
@@ -2482,7 +2482,7 @@ impl Scopes {
                 }
                 NameReadInfo::Flow { .. }
                 | NameReadInfo::Anywhere { .. }
-                | NameReadInfo::OutOfScopeTypeParameter { .. }
+                | NameReadInfo::OuterClassTypeParameter { .. }
                 | NameReadInfo::NotFound => None,
             }
         }
@@ -3261,7 +3261,7 @@ impl Scopes {
                             return None;
                         }
                         StaticStyle::PossibleLegacyTParam | StaticStyle::ScopedTypeParam => {
-                            return Some(NameReadInfo::OutOfScopeTypeParameter {
+                            return Some(NameReadInfo::OuterClassTypeParameter {
                                 key: static_info.as_key(name.into_key()),
                             });
                         }

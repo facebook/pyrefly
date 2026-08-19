@@ -5361,7 +5361,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///
     /// Kept out of line to reduce the stack frame of `binding_to_type_info`.
     #[inline(never)]
-    fn binding_to_type_info_out_of_scope_type_parameter(
+    fn binding_to_type_info_outer_class_type_parameter(
         &self,
         source: Idx<Key>,
         range: TextRange,
@@ -5451,8 +5451,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_info_assign_to_subscript(&x.0, &x.1, errors)
             }
             Binding::Delete(x) => self.binding_to_type_info_delete(x, errors),
-            Binding::OutOfScopeTypeParameter(source, range) => {
-                self.binding_to_type_info_out_of_scope_type_parameter(*source, *range, errors)
+            Binding::OuterClassTypeParameter(source, range) => {
+                self.binding_to_type_info_outer_class_type_parameter(*source, *range, errors)
             }
             Binding::PossibleLegacyTParam(
                 legacy_tparam,
@@ -5875,7 +5875,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Binding::AssignToAttribute(..)
             | Binding::AssignToSubscript(..)
             | Binding::Delete(..)
-            | Binding::OutOfScopeTypeParameter(..)
+            | Binding::OuterClassTypeParameter(..)
             | Binding::PossibleLegacyTParam(..) => {
                 // These forms require propagating attribute narrowing information, so they
                 // are handled in `binding_to_type_info`
