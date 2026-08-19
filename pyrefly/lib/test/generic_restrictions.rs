@@ -83,6 +83,51 @@ test(C())
 );
 
 testcase!(
+    test_any_bound_attribute_access,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+class Concrete: ...
+
+def pep695_bound[T: Any](arg: T) -> T:
+    assert_type(arg.method(), Any)
+    return arg
+
+LegacyT = TypeVar("LegacyT", bound=Any)
+def legacy_bound(arg: LegacyT) -> LegacyT:
+    assert_type(arg.method(), Any)
+    return arg
+
+assert_type(pep695_bound(Concrete()), Concrete)
+assert_type(legacy_bound(Concrete()), Concrete)
+
+class Base:
+    def method(self) -> int: ...
+    @classmethod
+    def class_method(cls) -> int: ...
+class Inherited(Base): ...
+
+def union_bound[T: Any | Inherited](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    arg.missing()  # E: Object of class `Inherited` has no attribute `missing`
+    return arg
+
+def constrained[T: (Any, Inherited)](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    return arg
+
+def class_bound[T: Any](arg: type[T]) -> type[T]:
+    assert_type(arg.__name__, str)
+    assert_type(arg.class_method(), Any)
+    return arg
+
+def class_constrained[T: (Any, Inherited)](arg: type[T]) -> type[T]:
+    arg.class_method()
+    return arg
+ "#,
+);
+
+testcase!(
     test_base_class_bound,
     r#"
 class A: pass
@@ -341,7 +386,7 @@ from typing import Self, TypeVar
 
 class B():
     def f(self) -> Self:
-        return self 
+        return self
 class C(B):
     pass
 class D(B):
@@ -1021,6 +1066,16 @@ class A:
 );
 
 testcase!(
+    test_nondefault_followed_by_default,
+    r#"
+from typing import assert_type
+class C[R, T = int, S = T]: ...
+def f(x: C[str]) -> None:
+    assert_type(x, C[str, int, int])
+    "#,
+);
+
+testcase!(
     test_nested_call_preserves_bound,
     r#"
 # Tests for preserving type variable bounds when unifying quantified variables.
@@ -1163,67 +1218,6 @@ from typing import reveal_type
 
 def f[T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]: ...
 reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]
-"#,
-);
-
-testcase!(
-    bug =
-        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
-    test_typevar_scoping_restrictions,
-    r#"
-from typing import TypeVar, Generic, TypeAlias
-from collections.abc import Iterable
-
-T = TypeVar("T")
-S = TypeVar("S")
-
-# Unbound TypeVar S used in generic function body
-def fun_3(x: T) -> list[T]:
-    y: list[T] = []  # OK
-    z: list[S] = []  # E: Type variable `S` is not in scope
-    return y
-
-# Unbound TypeVar S in class body (not in method)
-class Bar(Generic[T]):
-    an_attr: list[S] = []  # E: Type variable `S` is not in scope
-
-# Nested class using outer class's TypeVar
-class Outer(Generic[T]):
-    class Bad(Iterable[T]):  # should error: T from outer not in scope
-        ...
-    class AlsoBad:
-        x: list[T]  # should error: T from outer not in scope
-
-    alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
-
-# Unbound TypeVars at global scope
-global_var1: T  # E: Type variable `T` is not in scope
-global_var2: list[T] = []  # E: Type variable `T` is not in scope
-list[T]()  # should error
-"#,
-);
-
-testcase!(
-    bug = "Follow-on errors on TypeVar usages inside nested class that shadows outer TypeVars",
-    test_nested_class_independent_typevar_adoption,
-    r#"
-from typing import Generic, Type, TypeVar
-
-_Deserialized = TypeVar("_Deserialized")
-_Serialized = TypeVar("_Serialized")
-
-class CustomCoercer(Generic[_Deserialized, _Serialized]):
-    # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
-    class CoercerMapping(
-        dict[
-            Type[_Deserialized],  # should error: _Deserialized already bound by CustomCoercer
-            Type["CustomCoercer[_Deserialized, _Serialized]"],  # should error: both TypeVars
-        ]
-    ):
-        def __getitem__(
-            self,
-            key: type[_Deserialized],
-        ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
 "#,
 );
 

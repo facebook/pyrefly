@@ -2,21 +2,21 @@
 
 [package]
 name = "pyrefly_build"
-version = "1.2.0-dev.1"
+version = "1.3.0-dev.2"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
 license = "MIT"
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow = "1.0.104"
 dupe = "0.9.1"
 itertools = "0.15.0"
 pyrefly_python = { path = "../pyrefly_python" }
 pyrefly_util = { path = "../pyrefly_util" }
-regex = "1.12.4"
-serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 starlark_map = "0.14.2"
 static_interner = { version = "0.1.3", features = ["dupe"] }
 tempfile = "3.27.0"
@@ -27,7 +27,7 @@ vec1 = { version = "1.12.1", features = ["serde"] }
 pretty_assertions = { version = "1.4.1", features = ["alloc"], default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-which = "4.2.4"
+which = "8.0.5"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fbcode_build)"]}

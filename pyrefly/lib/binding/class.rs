@@ -7,17 +7,16 @@
 
 use std::mem;
 use std::sync::Arc;
-use std::sync::LazyLock;
 
 use dupe::Dupe as _;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
-use regex::Regex;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
@@ -53,7 +52,6 @@ use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingExpect;
-use crate::binding::binding::BindingShapedArrayMetadata;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingVariance;
 use crate::binding::binding::ClassBinding;
@@ -75,6 +73,7 @@ use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
+use crate::binding::binding::ShapedArrayMetadata;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -257,7 +256,7 @@ impl<'a> BindingsBuilder<'a> {
         let decorators =
             self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list), class_object.usage());
 
-        self.scopes.push(Scope::annotation(x.range));
+        self.scopes.push(Scope::annotation(x.range, true));
 
         let scoped_type_param_names = x
             .type_params
@@ -285,7 +284,7 @@ impl<'a> BindingsBuilder<'a> {
             metadata => metadata,
         };
 
-        let mut legacy = Some(LegacyTParamCollector::new(x.type_params.is_some()));
+        let mut legacy = LegacyTParamCollector::new(x.type_params.is_some());
         let bases = x.bases().map(|base| {
             let mut base = base.clone();
             // If this base was pre-synthesized as a namedtuple, return the synthesized base
@@ -313,7 +312,6 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {}
             }
             // If it's really obvious this can't be a legacy type var then don't even record it.
-            let mut none = None;
             let legacy = match &base {
                 Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                     // Syntactically, this may be a legacy type var.
@@ -326,12 +324,12 @@ impl<'a> BindingsBuilder<'a> {
                         // This definitely isn't a legacy type var: it's a reference to a scoped
                         // type var. Note that even if there exists a legacy type var with the same
                         // name, the scoped type var shadows it.
-                        &mut none
+                        None
                     } else {
-                        &mut legacy
+                        Some(&mut legacy)
                     }
                 }
-                _ => &mut none,
+                _ => None,
             };
             self.ensure_type_with_usage(
                 &mut base,
@@ -388,7 +386,7 @@ impl<'a> BindingsBuilder<'a> {
             args.keywords.iter_mut().for_each(|keyword| {
                 if let Some(name) = &keyword.arg {
                     self.ensure_expr(&mut keyword.value, class_object.usage());
-                    keywords.push((name.id.clone(), keyword.value.clone()));
+                    keywords.push((name.clone(), keyword.value.clone()));
                 } else {
                     self.error(
                         keyword.range(),
@@ -425,8 +423,7 @@ impl<'a> BindingsBuilder<'a> {
             BindingClassSynthesizedFields(class_indices.class_idx),
         );
 
-        let legacy_tparam_collector = legacy.unwrap();
-        self.add_name_definitions(&legacy_tparam_collector);
+        self.add_name_definitions(&legacy);
 
         self.scopes.push(Scope::class_body(
             x.range,
@@ -452,12 +449,14 @@ impl<'a> BindingsBuilder<'a> {
 
         let django_field_info = self.extract_django_fields_from_class_body(&field_definitions);
         let mut fields = SmallMap::with_capacity(field_definitions.len());
+        let mut django_relation_fields = Vec::new();
         for (name, (definition, range)) in field_definitions.into_iter_hashed() {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = &definition
                 && let ExprOrBinding::Expr(e) = value.as_ref()
             {
                 self.extract_pydantic_config_dict(e, &name, &mut pydantic_config_dict);
             }
+            let is_django_relation_candidate = django_field_info.relation_fields.contains(&name);
             let (is_initialized_on_class, is_annotated, is_defined_in_class_body) =
                 match &definition {
                     ClassFieldDefinition::DefinedInMethod { annotation, .. } => {
@@ -493,8 +492,12 @@ impl<'a> BindingsBuilder<'a> {
                 range,
                 definition,
             };
-            self.insert_binding(key_field, binding);
+            let field_idx = self.insert_binding(key_field, binding);
+            if is_django_relation_candidate {
+                django_relation_fields.push(field_idx);
+            }
         }
+        self.record_django_relation_class(class_indices.class_idx, django_relation_fields);
 
         self.bind_current_as(
             &x.name,
@@ -511,7 +514,7 @@ impl<'a> BindingsBuilder<'a> {
 
         // Insert a `KeyTParams` / `BindingTParams` pair, but only if there is at least
         // one generic base class - otherwise, it is not possible that legacy tparams are used.
-        let legacy_tparams = legacy_tparam_collector.lookup_keys();
+        let legacy_tparams = legacy.lookup_keys();
         let tparams_require_binding = !legacy_tparams.is_empty();
         if tparams_require_binding {
             let scoped_type_params = mem::take(&mut x.type_params);
@@ -541,6 +544,7 @@ impl<'a> BindingsBuilder<'a> {
                 def_index: class_indices.def_index,
                 def: ClassDefData::new(x),
                 parent: parent.dupe(),
+                is_protocol: has_protocol_base,
                 tparams_require_binding,
                 docstring_range,
             }),
@@ -596,7 +600,7 @@ impl<'a> BindingsBuilder<'a> {
     fn extract_shaped_array_metadata(
         &mut self,
         decorators: &[Decorator],
-    ) -> Option<Box<BindingShapedArrayMetadata>> {
+    ) -> Option<Box<ShapedArrayMetadata>> {
         let mut metadata = None;
         let mut seen_shaped_array = false;
         for decorator in decorators {
@@ -689,7 +693,7 @@ impl<'a> BindingsBuilder<'a> {
                 continue;
             };
             if !invalid {
-                metadata = Some(Box::new(BindingShapedArrayMetadata {
+                metadata = Some(Box::new(ShapedArrayMetadata {
                     shape_name: Name::new(shape.value.to_str()),
                     range: shape_keyword.value.range(),
                 }));
@@ -747,6 +751,7 @@ impl<'a> BindingsBuilder<'a> {
         use ruff_python_ast::Stmt;
 
         let mut field_docstrings = SmallMap::new();
+        let mut first_function_ranges = SmallMap::new();
         let mut i = 0;
 
         while i < body.len() {
@@ -755,8 +760,14 @@ impl<'a> BindingsBuilder<'a> {
             let is_field = matches!(stmt, Stmt::AnnAssign(_) | Stmt::Assign(_));
 
             if let Stmt::FunctionDef(func_def) = stmt {
+                let first_range = *first_function_ranges
+                    .entry(func_def.name.id.clone())
+                    .or_insert(func_def.name.range);
                 if let Some(docstring_range) = Docstring::range_from_stmts(&func_def.body) {
                     field_docstrings.insert(func_def.name.range, docstring_range);
+                    // Class field metadata points at the first declaration in an overload chain,
+                    // while its documentation belongs to the implementation.
+                    field_docstrings.insert(first_range, docstring_range);
                 }
             } else if let Stmt::ClassDef(class_def) = stmt {
                 if let Some(docstring_range) = Docstring::range_from_stmts(&class_def.body) {
@@ -1143,7 +1154,7 @@ impl<'a> BindingsBuilder<'a> {
         class_indices: ClassIndices,
         parent: &NestingContext,
         base: Option<Expr>,
-        keywords: Box<[(Name, Expr)]>,
+        keywords: Box<[(Identifier, Expr)]>,
         // name, position, annotation, value
         member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         illegal_identifier_handling: IllegalIdentifierHandling,
@@ -1513,7 +1524,7 @@ impl<'a> BindingsBuilder<'a> {
                 .map(|((name, range, annotation), default)| {
                     let bound_default = default.map(ExprOrBinding::Expr);
                     if let Some(mut ann) = annotation {
-                        self.ensure_type(&mut ann, &mut None);
+                        self.ensure_type(&mut ann, None);
                         (name, range, Some(ann), bound_default)
                     } else {
                         (name, range, None, bound_default)
@@ -1551,7 +1562,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(func, class_object.usage());
         self.ensure_expr(new_type_name, class_object.usage());
         self.check_functional_definition_name(&name.id, new_type_name, ErrorKind::InvalidArgument);
-        self.ensure_type(base, &mut None);
+        self.ensure_type(base, None);
         self.synthesize_class_def(
             class_name,
             class_object,
@@ -1591,8 +1602,12 @@ impl<'a> BindingsBuilder<'a> {
                 (Some(name), _) if name == "extra_items" => Some(name),
                 _ => None,
             };
-            if let Some(kw_name) = recognized_kw {
-                base_class_keywords.push((kw_name.clone(), kw.value.clone()));
+            if recognized_kw.is_some() {
+                let kw_name = kw
+                    .arg
+                    .clone()
+                    .expect("recognized TypedDict keyword must have a name");
+                base_class_keywords.push((kw_name, kw.value.clone()));
             } else {
                 let msg = if let Some(name) = &kw.arg {
                     format!("Unrecognized keyword argument `{name}`")
@@ -1615,7 +1630,7 @@ impl<'a> BindingsBuilder<'a> {
                         if let Some(key) = &mut item.key {
                             self.ensure_expr(key, class_object.usage());
                         }
-                        self.ensure_type(&mut item.value, &mut None);
+                        self.ensure_type(&mut item.value, None);
                         match (&item.key, &item.value) {
                             (Some(Expr::StringLiteral(k)), v) => {
                                 Some((k.value.to_string(), k.range(), Some(v.clone()), None))
@@ -1688,51 +1703,4 @@ impl<'a> BindingsBuilder<'a> {
             );
         }
     }
-}
-
-fn is_keyword(name: &str) -> bool {
-    matches!(
-        name,
-        "False"
-            | "None"
-            | "True"
-            | "and"
-            | "as"
-            | "assert"
-            | "async"
-            | "await"
-            | "break"
-            | "class"
-            | "continue"
-            | "def"
-            | "del"
-            | "elif"
-            | "else"
-            | "except"
-            | "finally"
-            | "for"
-            | "from"
-            | "global"
-            | "if"
-            | "import"
-            | "in"
-            | "is"
-            | "lambda"
-            | "nonlocal"
-            | "not"
-            | "or"
-            | "pass"
-            | "raise"
-            | "return"
-            | "try"
-            | "while"
-            | "with"
-            | "yield",
-    )
-}
-
-fn is_valid_identifier(name: &str) -> bool {
-    static IDENTIFIER_REGEX: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new("^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap());
-    !is_keyword(name) && IDENTIFIER_REGEX.is_match(name)
 }

@@ -42,20 +42,6 @@ def test(cls: type[T]) -> None:
 "#,
 );
 
-testcase!(
-    test_tyvar_mix,
-    r#"
-from typing import TypeVar, assert_type
-U = TypeVar("U")
-def foo[T](
-      x: U  # E: Type parameter U is not included in the type parameter list
-    ) -> U:
-    return x
-
-assert_type(foo(1), int)
-"#,
-);
-
 // This test exercises an edge case where naively using type analysis on base classes
 // can cause problems in the interaction of tparams validation and recursion.
 testcase!(
@@ -137,7 +123,7 @@ append(v, "test")
 testcase!(
     test_call_hint_does_not_override_arg,
     r#"
-from typing import Any, reveal_type
+from typing import Any, assert_type
 
 class Map[K, V]:
     def set(self, key: K, value: V) -> None: ...
@@ -145,11 +131,11 @@ class Map[K, V]:
 
 d_any: Map[str, Any] = Map()
 
-reveal_type(d_any.get("key", None))  # E: revealed type: Any | None
-result: str = reveal_type(d_any.get("key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+assert_type(d_any.get("key", None), Any | None)
+result: str = assert_type(d_any.get("key", None), Any | None)  # E: `Any | None` is not assignable to `str`
 
 def get[V, T](x: Map[str, V], key: Any, default: T, /) -> V | T: ...
-result2: str = reveal_type(get(d_any, "key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+result2: str = assert_type(get(d_any, "key", None), Any | None)  # E: `Any | None` is not assignable to `str`
 "#,
 );
 
@@ -274,11 +260,11 @@ _Ts = TypeVarTuple("_Ts")
 
 class partial(Generic[_P1, _P2, _T, _R_co, *_Ts]):
     @overload
-    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ... # E: Overload return type `partial[Ellipsis, Ellipsis, Any, object, *tuple[()]]` is not assignable to implementation return type `Self@partial`
+    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ... # E: Overload return type `partial[_P1, _P1, Any, _R_co, *tuple[()]]` is not assignable to implementation return type `Self@partial`
     @overload
-    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ... # E: Overload return type `partial[Concatenate[*tuple[Unknown, ...], _P2], Ellipsis, Any, object, *tuple[Unknown, ...]]` is not assignable to implementation return type `Self@partial`
+    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ... # E: Overload return type `partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]` is not assignable to implementation return type `Self@partial`
     @overload
-    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ... # E: Overload return type `partial[Ellipsis, Ellipsis, object, object, *tuple[Unknown, ...]]` is not assignable to implementation return type `Self@partial`
+    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ... # E: Overload return type `partial[_P1, ..., _T, _R_co, *_Ts]` is not assignable to implementation return type `Self@partial`
     def __new__(cls, __func, *args, **kwargs):
         return super().__new__(cls)
     def __call__(self, *args: _P2.args, **kwargs: _P2.kwargs) -> _R_co: ...
@@ -480,20 +466,6 @@ testcase!(
     r#"
 class A[T]:  # E: Cannot use type parameter lists on Python 3.8 (syntax was added in Python 3.12)
     x: T
-    "#,
-);
-
-testcase!(
-    test_shadowing_scoped_type_vars,
-    r#"
-from typing import TypeVar, Generic
-class C0[T]:
-    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
-        return x
-T = TypeVar("T")
-class C1(Generic[T]):
-    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
-        return x
     "#,
 );
 
@@ -706,6 +678,33 @@ assert_type(bad(Sub), Sub)
 );
 
 testcase!(
+    test_typevar_union_with_type_of_specialized_generic_alias,
+    r#"
+from typing import Generic, Protocol, TypeVar, assert_type, overload
+
+class NBit: ...
+class Bit32(NBit): ...
+class GenericBase: ...
+class SignedInteger[TBit: NBit](GenericBase): ...
+class DType[T: GenericBase]: ...
+class HasDType[T: DType](Protocol):
+    @property
+    def dtype(self) -> T: ...
+
+type DTypeLike[T: GenericBase] = type[T] | DType[T] | HasDType[DType[T]]
+
+@overload
+def array[T: GenericBase](x: object, dtype: DTypeLike[T]) -> list[T]: ...
+@overload
+def array(x: object, dtype: object = ...) -> list[object]: ...
+def array(x: object, dtype: object = None) -> object: ...
+
+Int32 = SignedInteger[Bit32]
+assert_type(array([1], Int32), list[SignedInteger[Bit32]])
+"#,
+);
+
+testcase!(
     test_generic_alias_fields,
     r#"
 from typing import assert_type
@@ -811,6 +810,15 @@ class A[T]:
 
 assert_type(A(0).f(""), A[int | str])
 "#,
+);
+
+testcase!(
+    test_mapping_of_typevar,
+    r#"
+from typing import assert_type, Mapping
+def f[T](x: T, y: Mapping[str, T]) -> T: ...
+assert_type(f(0, {"x": "y"}), int | str)
+    "#,
 );
 
 testcase!(

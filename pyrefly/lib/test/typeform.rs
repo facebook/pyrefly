@@ -198,3 +198,15 @@ x = Annotated[int, "meta"]
 dict.__dict__["fromkeys"]
     "#,
 );
+
+testcase!(
+    test_type_alias_form,
+    r#"
+from typing import Literal
+from typing_extensions import TypeForm
+type Mode = Literal["A", "B"]
+X: TypeForm = Mode
+Y: TypeForm[Literal["A", "B"]] = Mode
+Z: TypeForm[Literal["C"]] = Mode # E:
+    "#,
+);

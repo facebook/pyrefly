@@ -463,7 +463,7 @@ class Asset(TestABC):
 
 class PensionAsset(Asset):
     @classmethod
-    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `(cls: type[PensionAsset]) -> Literal['90岁累计可领(元)']`, which is not assignable to `(cls: type[PensionAsset]) -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
+    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `() -> Literal['90岁累计可领(元)']`, which is not assignable to `() -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
         return '90岁累计可领(元)'
 "#,
 );
@@ -529,6 +529,195 @@ xs: Final[list[int]] = []
 f: Final[TextIO] = open("file.txt")
 with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is marked final
     ...
+"#,
+);
+
+testcase!(
+    test_all_caps_as_final_reassign,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO = 1
+FOO = 2  # E: Cannot assign to variable `FOO` because it is marked final
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2  # E: Cannot assign to variable `LOCAL` because it is marked final
+
+Bar = 1
+Bar = 2
+"#,
+);
+
+testcase!(
+    test_all_caps_as_final_disabled_by_default,
+    r#"
+FOO = 1
+FOO = 2
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2
+"#,
+);
+
+fn env_all_caps_imported_final() -> TestEnv {
+    let mut t = TestEnv::new().enable_treat_all_caps_as_final();
+    t.add(
+        "foo",
+        r#"
+from typing import Final
+MAX_SIZE: Final = 42
+"#,
+    );
+    t
+}
+
+// Reassigning an ALL_CAPS name that is also imported as final would trigger both
+// the imported-final check and the ALL_CAPS check; only the former should report.
+testcase!(
+    test_all_caps_imported_final_single_error,
+    env_all_caps_imported_final(),
+    r#"
+from foo import MAX_SIZE
+MAX_SIZE = 10  # E: Cannot assign to `MAX_SIZE` because it is imported as final
+"#,
+);
+
+fn env_all_caps_imports() -> TestEnv {
+    let mut t = TestEnv::new().enable_treat_all_caps_as_final();
+    t.add(
+        "foo",
+        r#"
+from typing import Final
+MAX_SIZE: Final = 42
+DEFAULT_NAME = "abc"
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_all_caps_as_final_class_scope,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+class C:
+    ATTR = 1
+    ATTR = 2  # E: Cannot assign to variable `ATTR` because it is marked final
+"#,
+);
+
+// Assigning the same constant once per mutually-exclusive branch is not a
+// reassignment, so no error should fire.
+testcase!(
+    test_all_caps_as_final_branches,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+def f(cond: bool) -> None:
+    if cond:
+        MODE = 1
+    else:
+        MODE = 2
+    print(MODE)
+"#,
+);
+
+// A duplicate PEP 695 type parameter is not a value assignment, so it must
+// report only the duplicate-type-parameter error, not "marked final".
+testcase!(
+    test_all_caps_dup_type_param,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+class C[T, T]: ...  # E: duplicate type parameter
+"#,
+);
+
+// Overload chains rebind the function name but are function definitions, not
+// assignments, so an ALL_CAPS overloaded method must not be flagged.
+testcase!(
+    test_all_caps_overload_method,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+from typing import overload
+class C:
+    @overload
+    def METHOD(self, x: int) -> int: ...
+    @overload
+    def METHOD(self, x: str) -> str: ...
+    def METHOD(self, x): return x
+"#,
+);
+
+// Single-letter uppercase names are still constants: a genuine value
+// reassignment of one is flagged (only type parameters/defs are exempt).
+testcase!(
+    test_all_caps_single_letter_reassign,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+T = 1
+T = 2  # E: Cannot assign to variable `T` because it is marked final
+"#,
+);
+
+// Reassigning an ALL_CAPS type alias reports only the more specific
+// redefinition error, not an additional "marked final" error.
+testcase!(
+    test_all_caps_type_alias_single_error,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+from typing import TypeAlias
+FOO: TypeAlias = int
+FOO = str  # E: Cannot redefine existing type alias `FOO`
+
+type BAR = int
+BAR = str  # E: Cannot redefine existing type alias `BAR`
+"#,
+);
+
+testcase!(
+    test_all_caps_type_checking_branching,
+    env_all_caps_imports(),
+    r#"
+from typing import TYPE_CHECKING
+from foo import DEFAULT_NAME
+if TYPE_CHECKING:
+    from foo import MAX_SIZE
+    from foo import DEFAULT_NAME  # E: Cannot assign to variable `DEFAULT_NAME` because it is marked final
+else:
+    from foo import MAX_SIZE
+"#,
+);
+
+testcase!(
+    test_all_caps_classvar_behavior,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO: bool = True
+class A:
+    FOO: bool = False
+
+    def bar(self, b: bool) -> None:
+        FOO = b
+
+    def baz(self, b: bool) -> None:
+        global FOO
+        FOO = b  # E: Cannot assign to variable `FOO` because it is marked final due to `treat-all-caps-as-final`
+A.FOO = FOO
+"#,
+);
+
+testcase!(
+    test_all_caps_function_behavior,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO = True
+
+def bar(b: bool):
+    FOO = b
+
+def baz(b: bool):
+    global FOO
+    FOO = b  # E: Cannot assign to variable `FOO` because it is marked final due to `treat-all-caps-as-final`
+
 "#,
 );
 
@@ -732,7 +921,7 @@ testcase!(
     r#"
 from typing import assert_type
 x1: dict[str, int] = {"foo": 1, **{"bar": 2}}
-x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `dict[str, int | str]` is not assignable to `dict[str, int]`
+x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `Literal['bar']` is not assignable to dict value type `int`
 assert_type({"foo": 1, **{"bar": "bar"}}, dict[str, int | str])
 {"foo": 1, **1}  # E: Expected a mapping, got Literal[1]
 "#,
@@ -977,11 +1166,11 @@ testcase!(
 from typing import Callable, ParamSpec, TypeVar, Generic
 
 # `...` leaking into non-ParamSpec positions is rejected.
-class C1[T: ...]: ...                # E: `Ellipsis` is not allowed in this context
+class C1[T: ...]: ...                # E: `...` is not allowed in this context
 x1: list[...]                        # E: `...` cannot be used for type parameter
 x2: dict[int, ...]                   # E: `...` cannot be used for type parameter
-x3: type[...]                        # E: `Ellipsis` is not allowed in this context
-TBad = TypeVar("TBad", bound=...)    # E: `Ellipsis` is not allowed in this context
+x3: type[...]                        # E: `...` is not allowed in this context
+TBad = TypeVar("TBad", bound=...)    # E: `...` is not allowed in this context
 
 # Still rejected via existing paths.
 def g() -> ...: ...                  # E: Expression cannot be used in annotations
@@ -1533,7 +1722,7 @@ testcase!(
     test_typing_alias,
     r#"
 from typing import Dict, assert_type
-y: Dict[str, int] = {"test": "test"} # E: `dict[str, str]` is not assignable to `dict[str, int]`
+y: Dict[str, int] = {"test": "test"} # E: `Literal['test']` is not assignable to dict value type `int`
 assert_type(y, dict[str, int])
 "#,
 );
@@ -2325,7 +2514,7 @@ def __getattr__(name: str) -> Any: ...
 testcase!(
     test_ellipsis_default_source,
     r#"
-def f(x: bool = ...):  # E: Default `Ellipsis` is not assignable to parameter `x` with type `bool`
+def f(x: bool = ...):  # E: Default `EllipsisType` is not assignable to parameter `x` with type `bool`
     pass
     "#,
 );

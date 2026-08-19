@@ -46,6 +46,7 @@ skip-lsp-config-indexing = false
 
 # Baseline
 baseline = "baseline.json"
+baseline-error-level = "warn"
 
 # Error configuration
 [tool.pyrefly.errors]
@@ -53,6 +54,11 @@ bad-assignment = false
 bad-return = true
 missing-import = "warn"
 invalid-argument = "error"
+
+# Coverage command include/exclude overrides
+[tool.pyrefly.coverage]
+includes = ["src/**"]
+excludes = ["src/vendored/**"]
 
 # SubConfig example 1: Test files
 [[tool.pyrefly.sub-config]]

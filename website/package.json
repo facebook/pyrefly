@@ -36,6 +36,7 @@
     "clsx": "^1.2.1",
     "docusaurus-plugin-internaldocs-fb": "^1.19.1",
     "esbuild": "0.28.1",
+    "fflate": "^0.8.2",
     "file-loader": "^6.2.0",
     "http-proxy-middleware": "3.0.7",
     "image-size": "1.2.1",

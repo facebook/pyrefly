@@ -21,6 +21,7 @@ use starlark_map::Hashed;
 
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AssignToAttribute;
+use crate::binding::binding::AttrsSpecifier;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTypeAlias;
@@ -90,9 +91,12 @@ impl<'a> BindingsBuilder<'a> {
         let unpack_idx =
             self.insert_binding_current(unpacked, make_binding(assigned.as_deref(), None));
 
-        // An unpacking has zero or one splats (starred expressions).
+        // An unpacking has zero or one splats (starred expressions). Without a splat the
+        // source length is pinned exactly; with one it is only a lower bound.
         let mut splat = false;
         let len = elts.len();
+        let has_star = elts.iter().any(|e| matches!(e, Expr::Starred(_)));
+        let num_targets = if has_star { len - 1 } else { len };
         for (i, e) in elts.iter_mut().enumerate() {
             match e {
                 Expr::Starred(e) => {
@@ -111,12 +115,14 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_target_no_expr(&mut e.value, &make_nested_binding);
                 }
                 _ => {
-                    let unpacked_position = if splat {
+                    let unpacked_position = if !has_star {
+                        UnpackedPosition::ExactIndex(i, num_targets)
+                    } else if splat {
                         // If we've encountered a splat, we no longer know how many values have been consumed
                         // from the front, but we know how many are left at the back.
-                        UnpackedPosition::ReverseIndex(len - i)
+                        UnpackedPosition::ReverseIndex(len - i, num_targets)
                     } else {
-                        UnpackedPosition::Index(i)
+                        UnpackedPosition::Index(i, num_targets)
                     };
                     let make_nested_binding = |ann| {
                         Binding::UnpackedValue(ann, unpack_idx, range, unpacked_position, None)
@@ -125,10 +131,10 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
         }
-        let expect = if splat {
-            SizeExpectation::Ge(elts.len() - 1)
+        let expect = if has_star {
+            SizeExpectation::Ge(num_targets)
         } else {
-            SizeExpectation::Eq(elts.len())
+            SizeExpectation::Eq(num_targets)
         };
         self.insert_binding(
             KeyExpect::UnpackedLength(range),
@@ -137,18 +143,25 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     /// Narrow a name to `Idx` if the name is defined in the current scope stack. Used
-    /// to handle attribute and subscript assignment narrows, which we want to allow whenever
+    /// to handle attribute and subscript mutation narrows, which we want to allow whenever
     /// the name was defined, but we don't want them to cause us to treat nonexistent names
     /// as defined downstream.
-    fn narrow_if_name_is_defined(&mut self, identifier: Identifier, narrowed_idx: Idx<Key>) {
+    pub(crate) fn narrow_if_name_is_defined(
+        &mut self,
+        identifier: Identifier,
+        narrowed_idx: Idx<Key>,
+    ) {
         let name = Hashed::new(&identifier.id);
-        let name_is_defined = match self.look_up_name_for_read(name, &Usage::Narrowing(None)) {
+        let usage = Usage::NonPinningValue(None);
+        let name_is_defined = match self.look_up_name_for_read(name, &usage) {
             NameReadInfo::Flow { .. } | NameReadInfo::Anywhere { .. } => true,
             // This helper only runs after attribute/subscript assignment targets. If the base is an
             // implicit builtin, binding the assigned expression has already materialized it. A still
             // unmaterialized builtin here is indistinguishable from any other name that is absent
             // from local flow, so leave it un-narrowed.
-            NameReadInfo::ImplicitBuiltin { .. } | NameReadInfo::NotFound => false,
+            NameReadInfo::ImplicitBuiltin { .. }
+            | NameReadInfo::OutOfScopeTypeParameter { .. }
+            | NameReadInfo::NotFound => false,
         };
         if name_is_defined {
             self.scopes.narrow_in_current_flow(name, narrowed_idx);
@@ -351,7 +364,9 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
                 // Make sure the RHS is properly bound, so that we can report errors there.
-                let mut user = self.declare_current_idx(Key::Anon(illegal_target.range()));
+                // `ensure_expr` may itself create a `Key::Anon` for this range (for example,
+                // functional NamedTuple syntax recovered as an invalid `for` target).
+                let mut user = self.declare_current_idx(Key::InvalidTarget(illegal_target.range()));
                 if ensure_assigned && let Some(assigned) = &mut assigned {
                     self.ensure_expr(assigned, user.usage());
                 }
@@ -599,7 +614,7 @@ impl<'a> BindingsBuilder<'a> {
                     && let Expr::StringLiteral(lit) = &kw.value
                     && lit.as_single_part_string().is_some()
                 {
-                    self.ensure_type(&mut kw.value, &mut None);
+                    self.ensure_type(&mut kw.value, None);
                 }
             }
         }
@@ -675,15 +690,17 @@ impl<'a> BindingsBuilder<'a> {
         let mut tparams = None;
         if ensure_assigned {
             if is_definitely_type_alias {
-                let mut legacy = Some(LegacyTParamCollector::new(false));
-                self.ensure_type_with_usage(&mut value, &mut legacy, &mut Usage::TypeAliasRhs);
-                if let Some(collector) = legacy {
-                    tparams = Some(collector.lookup_keys().into_boxed_slice());
-                }
+                let mut legacy = LegacyTParamCollector::new(false);
+                self.ensure_type_with_usage(
+                    &mut value,
+                    Some(&mut legacy),
+                    &mut Usage::TypeAliasRhs,
+                );
+                tparams = Some(legacy.lookup_keys().into_boxed_slice());
             } else if has_typeform_annotation && value.is_string_literal_expr() {
                 self.ensure_type_with_usage(
                     &mut value,
-                    &mut None,
+                    None,
                     &mut Usage::StaticTypeInformation {
                         is_annotation: false,
                     },
@@ -730,14 +747,16 @@ impl<'a> BindingsBuilder<'a> {
         // Compute def_idx before building the binding, since the NameAssign needs
         // its own idx for partial type inference support.
         let def_idx = current.into_idx();
-        // Only an in-class-body `field()`/`attr.ib()` is an attrs field specifier whose value is a
-        // `_CountingAttr` (typed `Any` so `@<field>.default`/`.validator` resolve). Gating on the
-        // class body keeps this off the hot path for ordinary assignments. The kind distinguishes
-        // legacy `attr.ib` (positional `default`) from kw-only `field`.
-        let attrs_field_specifier = if self.scopes.in_class_body()
-            && let Expr::Call(call) = value.as_ref()
+        // Only an in-class-body `field()`/`attr.ib()` is an attrs field specifier; gating on the
+        // class body keeps this off the hot path for ordinary assignments.
+        let attrs_field_specifier = if let Expr::Call(call) = value.as_ref()
+            && let Some(class_def_index) = self.scopes.current_class_def_index()
+            && let Some(kind) = self.attrs_field_specifier_kind(&call.func)
         {
-            self.attrs_field_specifier_kind(&call.func)
+            Some(AttrsSpecifier {
+                kind,
+                class_def_index,
+            })
         } else {
             None
         };
@@ -765,6 +784,7 @@ impl<'a> BindingsBuilder<'a> {
                 expr: value,
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
+                is_class_body_assignment: self.scopes.in_class_body(),
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
                 receiver_idx,
