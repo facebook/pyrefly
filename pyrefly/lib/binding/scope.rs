@@ -2452,6 +2452,12 @@ impl Scopes {
         }
     }
 
+    fn add_to_current_static(&mut self, name: &Identifier, style: StaticStyle) {
+        self.current_mut()
+            .stat
+            .upsert(Hashed::new(name.id.clone()), name.range, style, name.range)
+    }
+
     /// Add a parameter to the current static.
     ///
     /// Callers must always define the name via a `Key::Definition` immediately
@@ -2461,12 +2467,7 @@ impl Scopes {
         name: &Identifier,
         ann: Option<Idx<KeyAnnotation>>,
     ) {
-        self.current_mut().stat.upsert(
-            Hashed::new(name.id.clone()),
-            name.range,
-            StaticStyle::SingleDef(ann),
-            name.range,
-        )
+        self.add_to_current_static(name, StaticStyle::SingleDef(ann))
     }
 
     /// Add a PEP 695 type parameter to the current annotation scope.
@@ -2474,12 +2475,36 @@ impl Scopes {
     /// Callers must always define the name via a `Key::Definition` immediately
     /// afterward or downstream lookups may panic.
     pub fn add_scoped_type_parameter_to_current_static(&mut self, name: &Identifier) {
-        self.current_mut().stat.upsert(
-            Hashed::new(name.id.clone()),
-            name.range,
-            StaticStyle::ScopedTypeParam,
-            name.range,
-        )
+        self.add_to_current_static(name, StaticStyle::ScopedTypeParam)
+    }
+
+    /// Add an intercepted possible legacy TParam - this is a name that's part
+    /// of the scope, but only for static type lookups, and might potentially
+    /// intercept the raw runtime value of a pre-PEP-695 legacy type variable
+    /// to turn it into a quantified type parameter.
+    pub fn add_possible_legacy_tparam_to_current_static(&mut self, name: &Identifier) {
+        self.add_to_current_static(name, StaticStyle::PossibleLegacyTParam)
+    }
+
+    /// Add a name to the current static scope.
+    ///
+    /// Callers must always define the name via a `Key::Definition` immediately
+    /// afterward or downstream lookups may panic.
+    pub fn add_name_to_current_static(&mut self, name: &Identifier) {
+        self.add_to_current_static(name, StaticStyle::SingleDef(None))
+    }
+
+    /// Add an adhoc name - if it does not already exist - to the current static
+    /// scope. If the name already exists, nothing happens.
+    ///
+    /// Callers must always define the name via a `Key::Definition` immediately
+    /// afterward or downstream lookups may panic.
+    ///
+    /// Used to bind names in comprehension and lambda scopes, where we
+    /// don't have `Definitions` to work from so we discover the names during
+    /// the main AST traversal in bindings.
+    pub fn add_lvalue_to_current_static(&mut self, x: &Expr) {
+        self.current_mut().stat.expr_lvalue(x);
     }
 
     pub fn register_parameter(&mut self, name: &Identifier, allow_unused: bool) {
@@ -2623,45 +2648,6 @@ impl Scopes {
                 break;
             }
         }
-    }
-
-    /// Add an intercepted possible legacy TParam - this is a name that's part
-    /// of the scope, but only for static type lookups, and might potentially
-    /// intercept the raw runtime value of a pre-PEP-695 legacy type variable
-    /// to turn it into a quantified type parameter.
-    pub fn add_possible_legacy_tparam(&mut self, name: &Identifier) {
-        self.current_mut().stat.upsert(
-            Hashed::new(name.id.clone()),
-            name.range,
-            StaticStyle::PossibleLegacyTParam,
-            name.range,
-        )
-    }
-
-    /// Add a name to the current static scope.
-    ///
-    /// Callers must always define the name via a `Key::Definition` immediately
-    /// afterward or downstream lookups may panic.
-    pub fn add_name_to_current_static(&mut self, name: &Identifier) {
-        self.current_mut().stat.upsert(
-            Hashed::new(name.id.clone()),
-            name.range,
-            StaticStyle::SingleDef(None),
-            name.range,
-        );
-    }
-
-    /// Add an adhoc name - if it does not already exist - to the current static
-    /// scope. If the name already exists, nothing happens.
-    ///
-    /// Callers must always define the name via a `Key::Definition` immediately
-    /// afterward or downstream lookups may panic.
-    ///
-    /// Used to bind names in comprehension and lambda scopes, where we
-    /// don't have `Definitions` to work from so we discover the names during
-    /// the main AST traversal in bindings.
-    pub fn add_lvalue_to_current_static(&mut self, x: &Expr) {
-        self.current_mut().stat.expr_lvalue(x);
     }
 
     /// Add a loop exit point to the current innermost loop with the current flow.

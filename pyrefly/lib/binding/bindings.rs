@@ -2604,8 +2604,9 @@ impl<'a> BindingsBuilder<'a> {
                         module.base = prior;
                     }
                 }
-                self.scopes
-                    .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
+                self.scopes.add_possible_legacy_tparam_to_current_static(
+                    possible_tparam.id.as_identifier(),
+                );
             }
         }
     }
