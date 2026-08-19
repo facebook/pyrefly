@@ -1281,6 +1281,7 @@ struct ScopeView<'a> {
     lookup_depth: usize,
     scope: &'a Scope,
     flow_barrier: FlowBarrier,
+    static_barrier: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -3089,6 +3090,7 @@ impl Scopes {
         mut visitor: impl FnMut(ScopeView<'a>) -> Option<T>,
     ) -> Option<T> {
         let mut flow_barrier = FlowBarrier::AllowFlowChecked;
+        let mut static_barrier = false;
         // Annotation scopes and type alias scopes (PEP 695) can see their enclosing class scope.
         let is_current_scope_annotation_like = matches!(
             self.current().kind,
@@ -3113,11 +3115,14 @@ impl Scopes {
                 lookup_depth,
                 scope,
                 flow_barrier,
+                static_barrier,
             }) {
                 return Some(result);
             }
 
             flow_barrier = max(flow_barrier, scope.flow_barrier);
+            // Static type information is hidden by an intervening class annotation scope.
+            static_barrier |= matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
         }
         None
     }
@@ -3130,6 +3135,7 @@ impl Scopes {
                  lookup_depth,
                  scope,
                  flow_barrier,
+                 static_barrier: _,
              }| {
                 let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
@@ -3192,19 +3198,16 @@ impl Scopes {
         lookup: &dyn LookupExport,
         current_module: ModuleName,
     ) -> NameReadInfo {
-        // Class type parameters are hidden by an intervening class annotation scope.
-        let mut crossed_class_annotation = false;
         let mut may_reintroduce_legacy_type_parameter = false;
         self.visit_scopes(
             |ScopeView {
                  lookup_depth: _,
                  scope,
                  flow_barrier,
+                 static_barrier,
              }| {
                 let is_class = matches!(scope.kind, ScopeKind::Class(_));
-                let is_class_annotation =
-                    matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
-                if !crossed_class_annotation
+                if !static_barrier
                     && matches!(scope.kind, ScopeKind::Annotation { class_scope: false })
                 {
                     // A function signature may bind a legacy TypeVar as its own parameter even when
@@ -3221,8 +3224,8 @@ impl Scopes {
                     scope.stat.0.get_hashed(name)
                 };
 
-                if crossed_class_annotation
-                && is_class_annotation
+                if static_barrier
+                && matches!(scope.kind, ScopeKind::Annotation { class_scope: true })
                 && let Some(static_info) = static_info
                 && matches!(
                     static_info.style,
@@ -3312,10 +3315,6 @@ impl Scopes {
                         is_module_scope: matches!(scope.kind, ScopeKind::Module),
                         implicit_builtin_module: static_info.implicit_builtin_module(),
                     });
-                }
-                // Subsequent class annotation scopes belong to outer classes.
-                if is_class_annotation {
-                    crossed_class_annotation = true;
                 }
                 None
             },
