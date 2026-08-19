@@ -6,16 +6,23 @@
  */
 
 use std::any::Any;
+use std::cell::UnsafeCell;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
+use std::hint::spin_loop;
+use std::mem::MaybeUninit;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
+use std::sync::atomic::fence;
+use std::thread::yield_now;
+use std::time::Duration;
+use std::time::Instant;
 
 use dupe::Dupe;
-use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::index::Idx;
-use pyrefly_graph::index_map::IndexMap;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWith;
@@ -30,6 +37,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::CalcId;
+use crate::alt::answers_solver::ReservedSlot;
 use crate::alt::answers_solver::ThreadState;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
@@ -73,8 +81,8 @@ use crate::types::types::Forallable;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
-/// The index stores all the references where the definition is external to the current module.
-/// This is useful for fast references computation.
+/// The index stores reference edges that cannot be recovered by scanning the current module's AST.
+/// This includes references to external definitions and implicit constructor-protocol references.
 #[derive(Debug, Default)]
 pub struct Index {
     /// A map from (import specifier (ModuleName), imported symbol (Name)) to all references to it
@@ -86,9 +94,25 @@ pub struct Index {
     /// A map from (attribute definition module) to a list of pairs of
     /// (range of attribute definition in the definition, range of reference in the current module).
     pub externally_defined_attribute_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
+    /// A map from (constructor definition module) to a list of pairs of
+    /// (range of the constructor definition, range of the call site in the current module).
+    /// The call-site range spells the class name, not the definition's own name, so these are
+    /// gated behind `ReferenceOptions::include_constructor_call_sites`.
+    pub constructor_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
     /// A map from (child method range) to a list of parent method definitions (ModulePath, parent method range).
     /// This is used to find reimplementations when doing find-references on parent methods.
     pub parent_methods_map: SmallMap<TextRange, Vec<(ModulePath, TextRange)>>,
+}
+
+/// How the source text at a reference range relates to the attribute it resolves to.
+#[derive(Debug, Clone, Copy)]
+pub enum AttributeReferenceKind {
+    /// The reference spells the attribute's own name, as in `x.attr`.
+    Textual,
+    /// The reference is a call site that reaches the attribute implicitly through the
+    /// constructor protocol, as in `Foo()` reaching `Foo.__init__`. Only class construction
+    /// is recorded this way; calling an instance through its `__call__` is not.
+    ConstructorCall,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +156,8 @@ pub struct Traces {
     overloaded_callees: SmallMap<TextRange, OverloadedCallee>,
     /// A map of text ranges that correspond to 'b' portion in expressions a.b where b is a property access -> getter type
     invoked_properties: SmallMap<TextRange, Arc<Type>>,
+    /// A map from expression range to expected type at that position (for type checking)
+    expected_types: SmallMap<TextRange, Arc<Type>>,
 }
 
 impl Traces {
@@ -146,6 +172,9 @@ impl Traces {
         for (k, v) in side_effects.invoked_properties {
             self.invoked_properties.insert(k, v);
         }
+        for (k, v) in side_effects.expected_types {
+            self.expected_types.insert(k, v);
+        }
     }
 }
 
@@ -156,6 +185,7 @@ pub struct TraceSideEffects {
     pub types: SmallMap<TextRange, Arc<Type>>,
     pub overloaded_callees: SmallMap<TextRange, OverloadedCallee>,
     pub invoked_properties: SmallMap<TextRange, Arc<Type>>,
+    pub expected_types: SmallMap<TextRange, Arc<Type>>,
 }
 
 /// Invariants:
@@ -173,7 +203,306 @@ pub struct Answers {
     trace: Option<Mutex<Traces>>,
 }
 
-pub type AnswerEntry<K> = IndexMap<K, Calculation<Arc<<K as Keyed>::Answer>>>;
+const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_PUBLISH_BACKOFF_STEP: u32 = 6;
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnswerStatus {
+    /// No writer owns the slot and `result` is uninitialized. A writer may
+    /// claim the slot by changing this state to `Pending`.
+    Unpublished,
+    /// One writer exclusively owns `result`. An ordinary writer may still be
+    /// initializing it, while an SCC writer may be withholding an initialized
+    /// result until the entire SCC is ready. Readers must wait; an SCC rollback
+    /// returns the slot to `Unpublished`.
+    Pending,
+    /// `result` is initialized, immutable, and visible to readers. The release
+    /// transition to this state synchronizes readers before they clone the Arc.
+    Published,
+}
+
+impl AnswerStatus {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            value if value == Self::Unpublished as u8 => Self::Unpublished,
+            value if value == Self::Pending as u8 => Self::Pending,
+            value if value == Self::Published as u8 => Self::Published,
+            _ => unreachable!("invalid answer status {value}"),
+        }
+    }
+}
+
+/// A first-write-wins result slot. `Pending` reserves the separate result
+/// storage while an ordinary result or complete SCC batch is being published.
+pub struct AnswerSlot<T> {
+    status: AtomicU8,
+    result: UnsafeCell<MaybeUninit<Arc<T>>>,
+}
+
+impl<T> Default for AnswerSlot<T> {
+    fn default() -> Self {
+        Self {
+            status: AtomicU8::new(AnswerStatus::Unpublished as u8),
+            result: UnsafeCell::new(MaybeUninit::uninit()),
+        }
+    }
+}
+
+// SAFETY: A writer must reserve the slot before initializing `result`, then
+// publish it with a release store. The result is immutable while published.
+unsafe impl<T: Send + Sync> Sync for AnswerSlot<T> {}
+
+impl<T> AnswerSlot<T> {
+    #[inline]
+    fn load(&self, ordering: Ordering) -> AnswerStatus {
+        AnswerStatus::from_u8(self.status.load(ordering))
+    }
+
+    /// Borrow the initialized result stored in this slot.
+    ///
+    /// # Safety
+    ///
+    /// `result` must be initialized and remain immutable for this call.
+    unsafe fn result(&self) -> &Arc<T> {
+        // SAFETY: The function contract guarantees that the result is initialized.
+        unsafe { (*self.result.get()).assume_init_ref() }
+    }
+
+    /// Initialize storage after this thread changes the status from unpublished
+    /// to pending.
+    ///
+    /// # Safety
+    ///
+    /// The slot must be pending and its result storage uninitialized.
+    unsafe fn initialize(&self, value: Arc<T>) {
+        // SAFETY: The function contract guarantees exclusive access to
+        // uninitialized result storage.
+        unsafe { (*self.result.get()).write(value) };
+    }
+
+    /// Wait for a pending writer to publish its result. Returns `false` only if
+    /// panic unwinding rolls back an SCC reservation before publication.
+    #[cold]
+    #[inline(never)]
+    fn wait_for_publish(&self) -> bool {
+        let deadline = Instant::now() + PUBLISH_TIMEOUT;
+        let mut backoff_step = 0;
+        loop {
+            match self.load(Ordering::Relaxed) {
+                AnswerStatus::Pending => {}
+                AnswerStatus::Published => {
+                    // The relaxed load observed the release publication, so
+                    // this fence acquires initialization of the result.
+                    fence(Ordering::Acquire);
+                    return true;
+                }
+                AnswerStatus::Unpublished => {
+                    // A pending slot can return to Unpublished only when panic
+                    // unwinding rolls back an SCC reservation.
+                    return false;
+                }
+            }
+
+            if backoff_step <= MAX_PUBLISH_BACKOFF_STEP {
+                let spins = 1 << backoff_step;
+                for _ in 0..spins {
+                    spin_loop();
+                }
+                backoff_step += 1;
+            } else {
+                if Instant::now() >= deadline {
+                    // Pending does not include answer calculation. Ordinary publication
+                    // takes a few cache-resident atomic operations (roughly 10-100 ns on
+                    // current server CPUs); even SCC batches should finish in microseconds.
+                    // Reaching 30 seconds therefore indicates a stuck publisher, so panic
+                    // intentionally rather than waiting forever.
+                    panic!("answer publication remained pending for {PUBLISH_TIMEOUT:?}");
+                }
+                yield_now();
+                backoff_step = 0;
+            }
+        }
+    }
+
+    /// Return the published value, waiting only when a writer already owns the slot.
+    #[inline]
+    pub(crate) fn get(&self) -> Option<&T> {
+        match self.load(Ordering::Acquire) {
+            AnswerStatus::Unpublished => None,
+            AnswerStatus::Pending => self
+                .wait_for_publish()
+                // SAFETY: A true result proves that publication initialized the result.
+                .then(|| unsafe { self.result() }.as_ref()),
+            AnswerStatus::Published => {
+                // SAFETY: Published status proves that the result is initialized.
+                Some(unsafe { self.result() }.as_ref())
+            }
+        }
+    }
+
+    /// Clone the `Arc` owned by a published slot.
+    #[inline]
+    pub(crate) fn get_arc(&self) -> Option<Arc<T>> {
+        self.get()?;
+        // SAFETY: `get` returned a reference only after publication initialized
+        // the result, which remains immutable.
+        Some(unsafe { self.result() }.dupe())
+    }
+
+    /// Publish an ordinary, non-SCC result or return the competing winner.
+    pub(crate) fn record(&self, value: Arc<T>) -> (Arc<T>, bool) {
+        loop {
+            match self.status.compare_exchange(
+                AnswerStatus::Unpublished as u8,
+                AnswerStatus::Pending as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    // SAFETY: The successful CAS reserved uninitialized storage.
+                    unsafe { self.initialize(value) };
+                    self.status
+                        .store(AnswerStatus::Published as u8, Ordering::Release);
+                    // SAFETY: This thread initialized the now-published result.
+                    return (unsafe { self.result() }.dupe(), true);
+                }
+                Err(actual) => {
+                    let actual = AnswerStatus::from_u8(actual);
+                    match actual {
+                        AnswerStatus::Unpublished => {
+                            unreachable!("failed CAS cannot observe the expected state")
+                        }
+                        AnswerStatus::Pending => {
+                            if !self.wait_for_publish() {
+                                continue;
+                            }
+                            // SAFETY: A true result proves that publication
+                            // initialized the result.
+                            return (unsafe { self.result() }.dupe(), false);
+                        }
+                        AnswerStatus::Published => {
+                            // SAFETY: Published status proves that the result is initialized.
+                            return (unsafe { self.result() }.dupe(), false);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Reserve this result slot, waiting for a concurrent publisher.
+    pub(crate) fn reserve(&self, value: Arc<T>) -> bool {
+        loop {
+            match self.status.compare_exchange(
+                AnswerStatus::Unpublished as u8,
+                AnswerStatus::Pending as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    // SAFETY: The successful CAS reserved uninitialized storage.
+                    unsafe { self.initialize(value) };
+                    return true;
+                }
+                Err(actual) => {
+                    let actual = AnswerStatus::from_u8(actual);
+                    match actual {
+                        AnswerStatus::Unpublished => {
+                            unreachable!("failed CAS cannot observe the expected state")
+                        }
+                        AnswerStatus::Pending => {
+                            if !self.wait_for_publish() {
+                                continue;
+                            }
+                            return false;
+                        }
+                        AnswerStatus::Published => return false,
+                    }
+                }
+            }
+        }
+    }
+
+    /// Make a reserved result visible. Calling this again after publication is
+    /// harmless so an unwind guard can complete an interrupted commit.
+    ///
+    /// # Safety
+    ///
+    /// The caller must own this slot's pending reservation. Only the owner may
+    /// access the result while the slot is pending; other threads wait for
+    /// publication. Ownership therefore proves that initialization has finished
+    /// and no other thread can publish or roll back the result concurrently.
+    pub(crate) unsafe fn publish_reserved(&self) {
+        match self.load(Ordering::Acquire) {
+            AnswerStatus::Pending => self
+                .status
+                .store(AnswerStatus::Published as u8, Ordering::Release),
+            AnswerStatus::Published => {}
+            AnswerStatus::Unpublished => panic!("reserved SCC result disappeared"),
+        }
+    }
+
+    /// Cancel this owner's reservation if it is still pending.
+    ///
+    /// # Safety
+    ///
+    /// If the slot is pending, the caller must own its reservation. Only the
+    /// owner may access the pending result; other threads wait for publication.
+    /// Ownership therefore permits moving the initialized result out without
+    /// racing another access to its storage.
+    pub(crate) unsafe fn rollback_reserved_if_pending(&self) -> bool {
+        match self.load(Ordering::Acquire) {
+            AnswerStatus::Pending => {
+                // SAFETY: Only the SCC owner changes a pending slot, so it owns
+                // the initialized result. Move it out before making the slot reusable.
+                let value = unsafe { (*self.result.get()).assume_init_read() };
+                self.status
+                    .store(AnswerStatus::Unpublished as u8, Ordering::Release);
+                drop(value);
+                true
+            }
+            AnswerStatus::Unpublished | AnswerStatus::Published => false,
+        }
+    }
+}
+
+impl<T> Drop for AnswerSlot<T> {
+    fn drop(&mut self) {
+        match AnswerStatus::from_u8(*self.status.get_mut()) {
+            AnswerStatus::Unpublished => {}
+            AnswerStatus::Pending | AnswerStatus::Published => {
+                // SAFETY: Both states have initialized result storage, and
+                // exclusive access proves that no reader can use it.
+                unsafe { self.result.get_mut().assume_init_drop() };
+            }
+        }
+    }
+}
+
+impl<T> Debug for AnswerSlot<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("AnswerSlot")
+            .field(&self.load(Ordering::Relaxed))
+            .finish()
+    }
+}
+
+/// Result slots indexed identically to `Bindings`.
+#[derive(Debug)]
+pub struct AnswerEntry<K: Keyed>(Vec<AnswerSlot<K::Answer>>);
+
+impl<K: Keyed> Default for AnswerEntry<K> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<K: Keyed> AnswerEntry<K> {
+    fn answer_slot(&self, idx: Idx<K>) -> Option<&AnswerSlot<K::Answer>> {
+        self.0.get(idx.idx())
+    }
+}
 
 table!(
     #[derive(Debug, Default)]
@@ -183,14 +512,16 @@ table!(
 impl DisplayWith<Bindings> for Answers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, bindings: &Bindings) -> fmt::Result {
         fn go<K: Keyed>(
+            answers: &Answers,
             bindings: &Bindings,
-            entry: &AnswerEntry<K>,
+            _entry: &AnswerEntry<K>,
             f: &mut fmt::Formatter<'_>,
         ) -> fmt::Result
         where
+            AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         {
-            for (idx, answer) in entry.iter() {
+            for idx in bindings.keys::<K>() {
                 let key = bindings.idx_to_key(idx);
                 let value = bindings.get(idx);
                 writeln!(
@@ -198,7 +529,7 @@ impl DisplayWith<Bindings> for Answers {
                     "{} = {} = {}",
                     bindings.module().display(key),
                     value.display_with(bindings),
-                    match answer.get() {
+                    match answers.get_idx(idx) {
                         Some(v) => v.to_string(),
                         None => "(unsolved)".to_owned(),
                     },
@@ -207,7 +538,7 @@ impl DisplayWith<Bindings> for Answers {
             Ok(())
         }
 
-        table_try_for_each!(self.table, |x| go(bindings, x, f));
+        table_try_for_each!(self.table, |x| go(self, bindings, x, f));
         Ok(())
     }
 }
@@ -317,25 +648,56 @@ impl Solutions {
         self.cinderx_solutions.as_ref()
     }
 
-    pub fn get<K: Exported>(&self, key: &K) -> &Arc<<K as Keyed>::Answer>
+    pub fn get<K: Exported>(&self, key: &K) -> &<K as Keyed>::Answer
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         self.get_hashed(Hashed::new(key))
     }
 
-    pub fn get_hashed_opt<K: Exported>(&self, key: Hashed<&K>) -> Option<&Arc<<K as Keyed>::Answer>>
+    pub fn get_hashed_opt<K: Exported>(&self, key: Hashed<&K>) -> Option<&<K as Keyed>::Answer>
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        self.table.get().get_hashed(key)
+        self.table.get().get_hashed(key).map(Arc::as_ref)
     }
 
-    pub fn get_hashed<K: Exported>(&self, key: Hashed<&K>) -> &Arc<<K as Keyed>::Answer>
+    pub fn get_hashed<K: Exported>(&self, key: Hashed<&K>) -> &<K as Keyed>::Answer
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         self.get_hashed_opt(key).unwrap_or_else(|| {
+            panic!(
+                "Internal error: solution not found, module {}, path {}, key {:?}",
+                self.module_info.name(),
+                self.module_info.path(),
+                key.key(),
+            )
+        })
+    }
+
+    pub fn get_arc<K: Exported>(&self, key: &K) -> Arc<<K as Keyed>::Answer>
+    where
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        self.get_hashed_arc(Hashed::new(key))
+    }
+
+    pub fn get_hashed_arc_opt<K: Exported>(
+        &self,
+        key: Hashed<&K>,
+    ) -> Option<Arc<<K as Keyed>::Answer>>
+    where
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        self.table.get().get_hashed(key).map(|value| value.dupe())
+    }
+
+    pub fn get_hashed_arc<K: Exported>(&self, key: Hashed<&K>) -> Arc<<K as Keyed>::Answer>
+    where
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        self.get_hashed_arc_opt(key).unwrap_or_else(|| {
             panic!(
                 "Internal error: solution not found, module {}, path {}, key {:?}",
                 self.module_info.name(),
@@ -574,22 +936,6 @@ pub trait LookupAnswer: Sized {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>;
 
-    /// Commit a preliminary answer to a specific module's Calculation cell.
-    /// Used for cross-module batch commit when an SCC spans module boundaries.
-    ///
-    /// Returns true if the commit was performed, false if the implementation
-    /// does not support cross-module commits.
-    ///
-    /// Default implementation returns false (not supported).
-    fn commit_to_module(
-        &self,
-        _calc_id: CalcId,
-        _answer: Arc<dyn Any + Send + Sync>,
-        _errors: Option<Arc<ErrorCollector>>,
-    ) -> bool {
-        false
-    }
-
     /// Drive a cross-module iteration member by calling `get_idx` in the
     /// target module's context.
     ///
@@ -606,34 +952,25 @@ pub trait LookupAnswer: Sized {
         false
     }
 
-    /// Acquire a write lock on a cross-module Calculation cell for SCC
-    /// batch commit. Returns true if the lock was acquired.
+    /// Reserve a cross-module result slot for SCC batch publication.
+    ///
+    /// Returns the target Answers when reserved so the slot remains reachable
+    /// until publication or rollback. The default implementation returns
+    /// `None` (not supported).
+    fn reserve_in_module(
+        &self,
+        _calc_id: &CalcId,
+        _answer: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<Answers>> {
+        None
+    }
+
+    /// Publish a cross-module result slot previously reserved by this SCC.
     ///
     /// Default implementation returns false (not supported).
-    fn write_lock_in_module(&self, _calc_id: &CalcId) -> bool {
+    fn publish_reserved_in_module(&self, _reserved: &mut ReservedSlot<'_, '_, Self>) -> bool {
         false
     }
-
-    /// Write a value to a write-locked cross-module Calculation cell and
-    /// release the lock. Also extends errors and publishes traces if the
-    /// write wins.
-    ///
-    /// Default implementation is a no-op.
-    fn write_unlock_in_module(
-        &self,
-        _calc_id: CalcId,
-        _answer: Arc<dyn Any + Send + Sync>,
-        _errors: Option<Arc<ErrorCollector>>,
-        _traces: Option<TraceSideEffects>,
-    ) -> bool {
-        false
-    }
-
-    /// Release a write lock on a cross-module Calculation cell without
-    /// writing a value. Used for panic cleanup.
-    ///
-    /// Default implementation is a no-op.
-    fn write_unlock_empty_in_module(&self, _calc_id: &CalcId) {}
 
     /// Look up the class fields for a class, which may be defined in another
     /// module. The fields are populated during the binding phase and can be
@@ -659,11 +996,9 @@ impl Answers {
         where
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         {
-            let ks = bindings.keys::<K>();
-            items.reserve(ks.len());
-            for k in ks {
-                items.insert_once(k, Calculation::new());
-            }
+            items
+                .0
+                .resize_with(bindings.keys::<K>().len(), AnswerSlot::default);
         }
         let mut table = AnswerTable::default();
         table_mut_for_each!(&mut table, |items| presize(items, bindings));
@@ -690,15 +1025,15 @@ impl Answers {
         &self.table
     }
 
-    pub fn heap(&self) -> &TypeHeap {
-        &self.solver.heap
+    pub(crate) fn answer_slot<K: Keyed>(&self, idx: Idx<K>) -> Option<&AnswerSlot<K::Answer>>
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+    {
+        self.table.get::<K>().answer_slot(idx)
     }
 
-    #[expect(dead_code)]
-    fn len(&self) -> usize {
-        let mut res = 0;
-        table_for_each!(&self.table, |x: &AnswerEntry<_>| res += x.len());
-        res
+    pub fn heap(&self) -> &TypeHeap {
+        &self.solver.heap
     }
 
     pub fn solve<Ans: LookupAnswer>(
@@ -835,7 +1170,7 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        // Fast path: check if the answer has already been computed in the Calculation cell.
+        // Fast path: check if the answer has already been published in its result slot.
         // This avoids constructing a VarRecurser and AnswersSolver when the value is cached.
         if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
             && let Some(v) = self.get_idx(idx)
@@ -863,14 +1198,7 @@ impl Answers {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
     {
-        self.table.get::<K>().get(k)?.get()
-    }
-
-    /// Commit a type-erased answer to this module's Calculation cell.
-    /// Target-side entry point for cross-module batch commit.
-    /// Returns true if the write won the first-write-wins race.
-    pub fn commit_preliminary(&self, any_idx: &AnyIdx, answer: Arc<dyn Any + Send + Sync>) -> bool {
-        dispatch_anyidx!(any_idx, self, commit_typed, answer)
+        self.answer_slot(k)?.get_arc()
     }
 
     /// Drive a cross-module iteration member by constructing a temporary
@@ -906,86 +1234,73 @@ impl Answers {
         dispatch_anyidx!(any_idx, solver, solve_idx_erased_typed);
     }
 
-    /// Typed commit for a specific key type. Downcasts the answer and writes
-    /// to the Calculation cell. Returns true if this write won the first-write-wins
-    /// race (i.e., the answer was actually stored).
-    fn commit_typed<K: Keyed>(&self, idx: Idx<K>, answer: Arc<dyn Any + Send + Sync>) -> bool
-    where
-        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
-    {
-        let typed_answer: Arc<K::Answer> = Arc::unwrap_or_clone(
-            answer
-                .downcast::<Arc<K::Answer>>()
-                .expect("Answers::commit_typed: type mismatch in cross-module batch commit"),
-        );
-        // Get the calculation cell from the answer table
-        if let Some(calculation) = self.table.get::<K>().get(idx) {
-            // No recursive placeholder can exist in the Calculation cell because
-            // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
-            let (_answer, did_write) = calculation.record_value(typed_answer);
-            did_write
-        } else {
-            false
-        }
-    }
-
-    /// Acquire a write lock on a cell for SCC batch commit.
-    /// Returns true if the lock was acquired, false if the cell is already
-    /// `Calculated` (no lock needed since writes would be no-ops).
-    pub fn write_lock_preliminary(&self, any_idx: &AnyIdx) -> bool {
-        dispatch_anyidx!(any_idx, self, write_lock_typed)
-    }
-
-    /// Write a value to a write-locked cell and release the lock.
-    /// Returns true if this write stored the value (first-write-wins).
-    pub fn write_unlock_preliminary(
+    /// Reserve a result slot for SCC batch publication.
+    pub fn reserve_preliminary(
         &self,
         any_idx: &AnyIdx,
         answer: Arc<dyn Any + Send + Sync>,
     ) -> bool {
-        dispatch_anyidx!(any_idx, self, write_unlock_typed, answer)
+        dispatch_anyidx!(any_idx, self, reserve_typed, answer)
     }
 
-    /// Release a write lock without writing a value (panic cleanup).
-    pub fn write_unlock_empty_preliminary(&self, any_idx: &AnyIdx) {
-        dispatch_anyidx!(any_idx, self, write_unlock_empty_typed)
+    /// Publish a slot previously reserved by an SCC batch.
+    pub fn publish_reserved_preliminary<Ans: LookupAnswer>(
+        &self,
+        reserved: &mut ReservedSlot<'_, '_, Ans>,
+    ) -> bool {
+        let CalcId(_, any_idx) = reserved.calc_id().dupe();
+        // SAFETY: `reserved` proves that this SCC owns the pending slot.
+        unsafe { dispatch_anyidx!(&any_idx, self, publish_reserved_typed) }
     }
 
-    fn write_lock_typed<K: Keyed>(&self, idx: Idx<K>) -> bool
-    where
-        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
-    {
-        if let Some(calculation) = self.table.get::<K>().get(idx) {
-            calculation.write_lock()
-        } else {
-            false
-        }
+    /// Roll back a slot reserved by an SCC batch if it is still pending.
+    pub fn rollback_reserved_if_pending_preliminary<Ans: LookupAnswer>(
+        &self,
+        reserved: &mut ReservedSlot<'_, '_, Ans>,
+    ) -> bool {
+        let CalcId(_, any_idx) = reserved.calc_id().dupe();
+        // SAFETY: `reserved` proves that this SCC owns the pending slot.
+        unsafe { dispatch_anyidx!(&any_idx, self, rollback_reserved_if_pending_typed) }
     }
 
-    fn write_unlock_typed<K: Keyed>(&self, idx: Idx<K>, answer: Arc<dyn Any + Send + Sync>) -> bool
+    fn reserve_typed<K: Keyed>(&self, idx: Idx<K>, answer: Arc<dyn Any + Send + Sync>) -> bool
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
     {
         let typed_answer: Arc<K::Answer> = Arc::unwrap_or_clone(
             answer
                 .downcast::<Arc<K::Answer>>()
-                .expect("Answers::write_unlock_typed: type mismatch"),
+                .expect("Answers::reserve_typed: type mismatch"),
         );
-        if let Some(calculation) = self.table.get::<K>().get(idx) {
-            let (_answer, did_write) = calculation.write_unlock(typed_answer);
-            did_write
-        } else {
-            false
-        }
+        let Some(slot) = self.answer_slot(idx) else {
+            return false;
+        };
+        slot.reserve(typed_answer)
     }
 
-    fn write_unlock_empty_typed<K: Keyed>(&self, idx: Idx<K>)
+    unsafe fn publish_reserved_typed<K: Keyed>(&self, idx: Idx<K>) -> bool
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
     {
-        if let Some(calculation) = self.table.get::<K>().get(idx) {
-            calculation.write_unlock_empty();
-        }
+        let Some(slot) = self.answer_slot(idx) else {
+            return false;
+        };
+        // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
+        // which proves ownership of this pending reservation.
+        unsafe { slot.publish_reserved() };
+        true
+    }
+
+    unsafe fn rollback_reserved_if_pending_typed<K: Keyed>(&self, idx: Idx<K>) -> bool
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+    {
+        let Some(slot) = self.answer_slot(idx) else {
+            return false;
+        };
+        // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
+        // which proves ownership of this pending reservation.
+        unsafe { slot.rollback_reserved_if_pending() }
     }
 
     fn force_for_export_boundary(&self, t: Type) -> Type {
@@ -1022,11 +1337,24 @@ impl Answers {
         Some(self.force_for_export_boundary(lock.types.get(&range)?.as_ref().clone()))
     }
 
+    pub fn get_expected_type_trace(&self, range: TextRange) -> Option<Type> {
+        let lock = self.trace.as_ref()?.lock();
+        Some(self.force_for_export_boundary(lock.expected_types.get(&range)?.as_ref().clone()))
+    }
+
     pub fn get_type_trace_for_display(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
         Some(
             self.solver
                 .for_display(lock.types.get(&range)?.as_ref().clone()),
+        )
+    }
+
+    pub fn get_expected_type_trace_for_display(&self, range: TextRange) -> Option<Type> {
+        let lock = self.trace.as_ref()?.lock();
+        Some(
+            self.solver
+                .for_display(lock.expected_types.get(&range)?.as_ref().clone()),
         )
     }
 
@@ -1103,12 +1431,12 @@ impl Answers {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    pub fn get_calculation<K: Solve<Ans>>(&self, idx: Idx<K>) -> &Calculation<Arc<K::Answer>>
+    pub(crate) fn get_answer_slot<K: Solve<Ans>>(&self, idx: Idx<K>) -> &AnswerSlot<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.current().table.get::<K>().get(idx).unwrap_or_else(|| {
+        self.current().answer_slot(idx).unwrap_or_else(|| {
             // Do not fix a panic by removing this error.
             // We should always be sure before calling `get`.
             panic!(
@@ -1124,9 +1452,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self.current().solver
     }
 
-    pub fn record_resolved_trace(&self, loc: TextRange, ty: Type) {
+    pub fn record_resolved_trace(&self, loc: TextRange, ty: &Type) {
         if self.current().trace.is_some()
-            && let Some(callable) = ty.to_callable()
+            && let Some(callable) = ty.clone().to_callable()
         {
             self.trace_state().record_resolved_trace(
                 loc,
@@ -1158,11 +1486,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn record_external_attribute_definition_index(
+    pub fn record_attribute_definition_index(
         &self,
         base: &Type,
         attribute_name: &Name,
         attribute_reference_range: TextRange,
+        reference_kind: AttributeReferenceKind,
     ) {
         if let Some(index) = &self.current().index {
             for AttrInfo {
@@ -1178,16 +1507,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         cls,
                         range,
                         docstring_range: _,
-                    } => {
-                        if cls.module_path() != self.bindings().module().path() {
-                            index
-                                .lock()
-                                .externally_defined_attribute_references
-                                .entry(cls.module_path().dupe())
-                                .or_default()
-                                .push((range, attribute_reference_range))
+                    } => match reference_kind {
+                        AttributeReferenceKind::ConstructorCall => index
+                            .lock()
+                            .constructor_references
+                            .entry(cls.module_path().dupe())
+                            .or_default()
+                            .push((range, attribute_reference_range)),
+                        AttributeReferenceKind::Textual => {
+                            // Textual references to an attribute defined in this module are
+                            // recovered by scanning the AST for `<expr>.<name>`, so only
+                            // out-of-module definitions need an index entry.
+                            if cls.module_path() != self.bindings().module().path() {
+                                index
+                                    .lock()
+                                    .externally_defined_attribute_references
+                                    .entry(cls.module_path().dupe())
+                                    .or_default()
+                                    .push((range, attribute_reference_range))
+                            }
                         }
-                    }
+                    },
                     AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                         index
                             .lock()
@@ -1225,5 +1565,101 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.trace_state()
                 .record_type_trace(loc, Arc::new(ty.clone()));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Barrier;
+    use std::thread;
+
+    use super::*;
+
+    #[test]
+    fn answer_slot_publishes_one_arc() {
+        let slot = AnswerSlot::default();
+
+        let (answer, did_write) = slot.record(Arc::new(1));
+        assert!(did_write);
+        assert_eq!(*answer, 1);
+
+        let (answer, did_write) = slot.record(Arc::new(2));
+        assert!(!did_write);
+        assert_eq!(*answer, 1);
+        assert_eq!(
+            *slot
+                .get()
+                .expect("the winning answer should remain published"),
+            1
+        );
+    }
+
+    #[test]
+    fn answer_slot_concurrent_publish_has_one_winner() {
+        const WRITERS: usize = 8;
+
+        let slot = Arc::new(AnswerSlot::default());
+        let barrier = Arc::new(Barrier::new(WRITERS));
+        let writers = (0..WRITERS)
+            .map(|value| {
+                let slot = slot.dupe();
+                let barrier = barrier.dupe();
+                thread::spawn(move || {
+                    barrier.wait();
+                    let (answer, did_write) = slot.record(Arc::new(value));
+                    (*answer, did_write)
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = writers
+            .into_iter()
+            .map(|writer| writer.join().expect("writer thread should not panic"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            results.iter().filter(|(_, did_write)| *did_write).count(),
+            1
+        );
+        let winner = results
+            .iter()
+            .find_map(|(answer, did_write)| did_write.then_some(*answer))
+            .expect("one writer must win");
+        assert!(results.iter().all(|(answer, _)| *answer == winner));
+    }
+
+    #[test]
+    fn answer_slot_owns_one_arc_reference() {
+        let value = Arc::new(1);
+        let weak = Arc::downgrade(&value);
+        let slot = AnswerSlot::default();
+        let (answer, did_write) = slot.record(value);
+        assert!(did_write);
+        assert_eq!(
+            Arc::strong_count(&answer),
+            2,
+            "slot and returned answer own references"
+        );
+
+        drop(slot);
+        assert_eq!(
+            Arc::strong_count(&answer),
+            1,
+            "dropping the slot releases its reference"
+        );
+        drop(answer);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn answer_slot_can_be_reused_after_reservation_rollback() {
+        let slot = AnswerSlot::default();
+        assert!(slot.reserve(Arc::new(1)));
+        // SAFETY: This test successfully reserved the slot above.
+        unsafe { slot.rollback_reserved_if_pending() };
+        assert!(slot.get().is_none());
+
+        let (answer, did_write) = slot.record(Arc::new(2));
+        assert!(did_write);
+        assert_eq!(*answer, 2);
     }
 }

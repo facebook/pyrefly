@@ -11,8 +11,11 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::simplify::intersect;
+use pyrefly_types::simplify::unions;
 use pyrefly_types::stdlib::Stdlib;
-use pyrefly_types::tensor::TensorType;
+use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::TArgs;
@@ -30,8 +33,8 @@ pub enum InstanceKind {
     Protocol(Type),
     Metaclass(ClassBase),
     LiteralString,
-    /// Tensor instance: Self is substituted with the full tensor type (including shape).
-    Tensor(TensorType),
+    /// Shaped-array instance: Self is substituted with the full shaped-array type.
+    ShapedArray(ShapedArrayType),
 }
 
 /// Wrapper to hold a specialized instance of a class , unifying ClassType and TypedDict.
@@ -99,11 +102,11 @@ impl<'a> Instance<'a> {
         }
     }
 
-    pub fn of_tensor(tensor: &'a TensorType) -> Self {
+    pub fn of_shaped_array(shaped_array: &'a ShapedArrayType) -> Self {
         Self {
-            kind: InstanceKind::Tensor(tensor.clone()),
-            class: tensor.base_class.class_object(),
-            targs: tensor.base_class.targs(),
+            kind: InstanceKind::ShapedArray(shaped_array.clone()),
+            class: shaped_array.base_class.class_object(),
+            targs: shaped_array.base_class.targs(),
         }
     }
 
@@ -121,14 +124,28 @@ impl<'a> Instance<'a> {
             InstanceKind::TypedDict => {
                 heap.mk_typed_dict(TypedDict::new(self.class.dupe(), self.targs.clone()))
             }
-            InstanceKind::TypeVar(q) => q.clone().to_type(heap),
+            InstanceKind::TypeVar(q) => {
+                let quantified_ty = q.clone().to_type(heap);
+                let ub = match q.restriction() {
+                    Restriction::Unrestricted => return quantified_ty,
+                    Restriction::Bound(b) => b.clone(),
+                    Restriction::Constraints(cs) => unions(cs.clone(), heap),
+                };
+                let instance_ty =
+                    heap.mk_class_type(ClassType::new(self.class.dupe(), self.targs.clone()));
+                if instance_ty == ub {
+                    quantified_ty
+                } else {
+                    intersect(vec![quantified_ty, instance_ty.clone()], instance_ty, heap)
+                }
+            }
             InstanceKind::SelfType => {
                 heap.mk_self_type(ClassType::new(self.class.dupe(), self.targs.clone()))
             }
             InstanceKind::Protocol(self_type) => self_type.clone(),
             InstanceKind::Metaclass(cls) => cls.clone().to_type(heap),
             InstanceKind::LiteralString => heap.mk_literal_string(LitStyle::Implicit),
-            InstanceKind::Tensor(tensor) => tensor.clone().to_type(),
+            InstanceKind::ShapedArray(shaped_array) => shaped_array.clone().to_type(),
         }
     }
 
@@ -165,7 +182,7 @@ impl<'a> Instance<'a> {
             | InstanceKind::Metaclass(..)
             | InstanceKind::TypeVar(..)
             | InstanceKind::LiteralString
-            | InstanceKind::Tensor(..) => Some(DescriptorBase::Instance(ClassType::new(
+            | InstanceKind::ShapedArray(..) => Some(DescriptorBase::Instance(ClassType::new(
                 self.class.dupe(),
                 self.targs.clone(),
             ))),
