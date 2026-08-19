@@ -51,17 +51,26 @@ impl ConfigOptionMigrater for IgnoreMissingImports {
         {
             replace_with_any.push("*".to_owned());
         }
+        // A global setting contributes a "*" that covers every module, which makes
+        // the narrower per-module patterns redundant. Note that this assumes that
+        // per-module settings contain only positive patterns (i.e., ones that add
+        // modules). We currently do not support negative patterns.
+        let ignore_missing_is_global = !ignore_missing.is_empty();
+        let replace_with_any_is_global = !replace_with_any.is_empty();
 
         util::visit_ini_sections(
             mypy_cfg,
             |section_name| section_name.starts_with("mypy-"),
             |section_name, ini| {
-                if util::get_bool_or_default(ini, section_name, "ignore_missing_imports") {
+                if !ignore_missing_is_global
+                    && util::get_bool_or_default(ini, section_name, "ignore_missing_imports")
+                {
                     ignore_missing.push(section_name.to_owned());
                 }
-                if ini
-                    .get(section_name, "follow_imports")
-                    .is_some_and(|value| value == "skip")
+                if !replace_with_any_is_global
+                    && ini
+                        .get(section_name, "follow_imports")
+                        .is_some_and(|value| value == "skip")
                 {
                     replace_with_any.push(section_name.to_owned());
                 }
@@ -308,39 +317,38 @@ mod tests {
 
         let mut pyrefly_cfg = ConfigFile::default();
 
-        let ignore_imports = IgnoreMissingImports;
-        let _ = ignore_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        IgnoreMissingImports
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("global and module settings should migrate");
 
-        // Should contain both the specific module and the global wildcard
-        let expected = [
-            ModuleWildcard::new("some.module").unwrap(),
-            ModuleWildcard::new("*").unwrap(),
-        ];
         assert_eq!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .len(),
-            2
+            pyrefly_cfg.root.ignore_missing_imports,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
         );
-        assert!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .contains(&expected[0])
+        assert_eq!(pyrefly_cfg.root.replace_imports_with_any, None);
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_global_follow_imports_and_specific() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "follow_imports", Some("skip".to_owned()));
+        mypy_cfg.set(
+            "mypy-some.module",
+            "follow_imports",
+            Some("skip".to_owned()),
         );
-        assert!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .contains(&expected[1])
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        IgnoreMissingImports
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("global and module settings should migrate");
+
+        assert_eq!(
+            pyrefly_cfg.root.replace_imports_with_any,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
         );
+        assert_eq!(pyrefly_cfg.root.ignore_missing_imports, None);
     }
 
     #[test]
