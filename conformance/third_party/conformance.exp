@@ -7263,8 +7263,8 @@
     {
       "code": -2,
       "column": 22,
-      "concise_description": "Type parameter K is not included in the type parameter list",
-      "description": "Type parameter K is not included in the type parameter list",
+      "concise_description": "Type parameter `K` is not included in the type parameter list",
+      "description": "Type parameter `K` is not included in the type parameter list",
       "line": 14,
       "name": "invalid-type-var",
       "severity": "error",
@@ -7274,8 +7274,8 @@
     {
       "code": -2,
       "column": 35,
-      "concise_description": "Type parameter K is not included in the type parameter list",
-      "description": "Type parameter K is not included in the type parameter list",
+      "concise_description": "Type parameter `K` is not included in the type parameter list",
+      "description": "Type parameter `K` is not included in the type parameter list",
       "line": 26,
       "name": "invalid-type-var",
       "severity": "error",

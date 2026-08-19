@@ -14,7 +14,7 @@ testcase!(
 from typing import TypeVar, assert_type
 U = TypeVar("U")
 def foo[T](
-      x: U  # E: Type parameter U is not included in the type parameter list
+      x: U  # E: Type parameter `U` is not included in the type parameter list
     ) -> U:
     return x
 
@@ -310,8 +310,8 @@ import foo
 
 def f[X](
     a: X,
-    b: foo.T,  # E: Type parameter T is not included in the type parameter list
-    c: foo.S,  # E: Type parameter S is not included in the type parameter list
+    b: foo.T,  # E: Type parameter `T` is not included in the type parameter list
+    c: foo.S,  # E: Type parameter `S` is not included in the type parameter list
 ) -> None: ...
     "#,
 );

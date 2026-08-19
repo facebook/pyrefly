@@ -5314,7 +5314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         tparam_key.range(),
                         ErrorKind::InvalidTypeVar,
                         format!(
-                            "Type parameter {} is not included in the type parameter list",
+                            "Type parameter `{}` is not included in the type parameter list",
                             self.module().display(&tparam_key.0)
                         ),
                     );
