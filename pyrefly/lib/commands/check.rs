@@ -12,7 +12,9 @@ use std::fmt;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::BufWriter;
+use std::io::Read;
 use std::io::Write;
+use std::io::stdin;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -224,7 +226,7 @@ pub struct CheckArgs {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct SnippetCheckArgs {
-    /// Python code to type check
+    /// Python code to type check. Pass '-' to read from STDIN.
     code: String,
 
     /// Explicitly set the Pyrefly configuration to use when type checking.
@@ -259,8 +261,22 @@ impl SnippetCheckArgs {
                 remove_unused_ignores: None,
             },
         };
+
+        let code = if self.code.trim() == "-" {
+            let mut code = String::new();
+            match stdin().read_to_string(&mut code) {
+                Ok(_) => code,
+                Err(error) => {
+                    error!("Failed to read input from stdin: {error:?}");
+                    return Ok((CommandExitStatus::UserError, None));
+                }
+            }
+        } else {
+            self.code
+        };
+
         let (status, check_result) =
-            check_args.run_once_with_snippet(self.code, version, config_finder, thread_count)?;
+            check_args.run_once_with_snippet(code, version, config_finder, thread_count)?;
         Ok((status, Some(check_result)))
     }
 }

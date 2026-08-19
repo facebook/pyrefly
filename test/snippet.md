@@ -198,3 +198,22 @@ $ $PYREFLY --help | grep "snippet"
   snippet      Check a Python code snippet
 [0]
 ```
+
+## Snippets can read from stdin
+
+```scrut
+$ cat <<EOF | $PYREFLY snippet -
+> x: int = 1
+> def foo(x: float) -> None:
+>   return x > 1.0
+> foo(x)
+ERROR Returned type `bool` is not assignable to declared return type `None` [bad-return]
+ --> snippet:3:10
+  |
+2 | def foo(x: float) -> None:
+  |                      ---- declared return type
+3 |   return x > 1.0
+  |          ^^^^^^^
+  |
+[1]
+```
