@@ -733,7 +733,7 @@ impl CalcStack {
     /// and the iterative bypass. The mapping is:
     /// - Fresh → mark InProgress, Calculate
     /// - InProgressWithPreviousAnswer → mark recursion break, return previous answer
-    /// - InProgressWithPlaceholder → return CycleBroken with the placeholder Var
+    /// - InProgressWithPlaceholder → return the SCC-local placeholder answer
     /// - InProgressCold → NeedsColdPlaceholder (caller allocates)
     /// - Done → return the SCC-local answer
     fn binding_action_for_node_state(
@@ -754,15 +754,15 @@ impl CalcStack {
                 BindingAction::SccLocalAnswer(answer)
             }
             SccNodeStateKind::InProgressWithPlaceholder => {
-                let var = self
-                    .get_iteration_placeholder(current)
-                    .expect("InProgressWithPlaceholder but no placeholder found");
-                BindingAction::CycleBroken(var)
+                let answer = self
+                    .get_iteration_answer(current)
+                    .expect("InProgressWithPlaceholder but no placeholder answer found");
+                BindingAction::SccLocalAnswer(answer)
             }
             SccNodeStateKind::InProgressCold => BindingAction::NeedsColdPlaceholder,
             SccNodeStateKind::Done => {
                 let answer = self
-                    .get_iteration_done_answer(current)
+                    .get_iteration_answer(current)
                     .expect("Done iteration node state but no answer found");
                 BindingAction::SccLocalAnswer(answer)
             }
@@ -799,10 +799,15 @@ impl CalcStack {
     /// overwritten back to `HasPlaceholder`. If the top SCC does not contain
     /// the target (e.g. during `handle_depth_overflow` where the node may not
     /// be in any SCC), the call is a no-op.
-    fn set_iteration_placeholder(&self, target: &CalcId, var: Var) {
+    fn set_iteration_placeholder(
+        &self,
+        target: &CalcId,
+        var: Var,
+        answer: Arc<dyn Any + Send + Sync>,
+    ) {
         let mut scc_stack = self.scc_stack.borrow_mut();
         if let Some(top_scc) = scc_stack.last_mut() {
-            top_scc.on_placeholder_recorded(target, var);
+            top_scc.on_placeholder_recorded(target, var, answer);
             // Debug-only check: verify the node isn't in any other SCC.
             debug_assert!(
                 scc_stack
@@ -916,23 +921,20 @@ impl CalcStack {
         top_scc.iterative.previous_answers.get(target).cloned()
     }
 
-    /// Retrieve the type-erased answer for a Done node in the top SCC.
-    /// Returns `Some(answer)` if the node is Done, `None` otherwise
-    /// (node not in SCC or not Done).
-    fn get_iteration_done_answer(&self, target: &CalcId) -> Option<Arc<dyn Any + Send + Sync>> {
+    /// Retrieve the current type-erased answer for a node in the top SCC.
+    fn get_iteration_answer(&self, target: &CalcId) -> Option<Arc<dyn Any + Send + Sync>> {
         let scc_stack = self.scc_stack.borrow();
         let top_scc = scc_stack.last()?;
-        if matches!(top_scc.node_state.get(target)?, SccNodeState::Done { .. }) {
+        let state = top_scc.node_state.get(target)?;
+        let answer = top_scc.iterative.answers.get(target);
+        if matches!(state, SccNodeState::Done { .. }) {
             Some(
-                top_scc
-                    .iterative
-                    .answers
-                    .get(target)
+                answer
                     .expect("Done SCC node must have a current answer")
                     .dupe(),
             )
         } else {
-            None
+            answer.cloned()
         }
     }
 
@@ -1090,11 +1092,7 @@ enum BindingAction {
     /// Calculate the binding and record the answer.
     /// Action: call `calculate_and_record_answer`
     Calculate,
-    /// A recursive placeholder exists (in SCC-local `SccNodeState::HasPlaceholder`)
-    /// and we should return it.
-    /// Action: return `Arc::new(K::promote_recursive(heap, r))`
-    CycleBroken(Var),
-    /// An answer is available from SccNodeState::Done in the top SCC.
+    /// An answer is available in the top SCC.
     /// Type-erased; will be downcast to `Arc<K::Answer>` in `get_idx`.
     /// Action: downcast and return
     SccLocalAnswer(Arc<dyn Any + Send + Sync>),
@@ -1117,7 +1115,7 @@ enum BindingAction {
 pub struct SccIterationState {
     /// Current iteration number (starts at 1).
     pub iteration: u32,
-    /// Answers calculated during the current iteration.
+    /// Placeholder or completed answers from the current iteration.
     pub answers: BTreeMap<CalcId, Arc<dyn Any + Send + Sync>>,
     /// Answers from the prior iteration, used for warm-start on back-edges.
     /// Empty on iteration 1 (cold start).
@@ -1336,12 +1334,18 @@ impl Scc {
     }
 
     /// Track that a placeholder has been recorded for a cycle-breaking node.
-    fn on_placeholder_recorded(&mut self, current: &CalcId, var: Var) {
+    fn on_placeholder_recorded(
+        &mut self,
+        current: &CalcId,
+        var: Var,
+        answer: Arc<dyn Any + Send + Sync>,
+    ) {
         if let Some(state) = self.node_state.get_mut(current) {
             // Only upgrade: do not overwrite Done back to HasPlaceholder.
             // This is defense-in-depth; placeholder recording should not
             // regress a completed node.
             if state.advancement_rank() < SccNodeState::HasPlaceholder(var).advancement_rank() {
+                self.iterative.answers.insert(current.dupe(), answer);
                 *state = SccNodeState::HasPlaceholder(var);
             }
         }
@@ -1376,9 +1380,10 @@ impl Scc {
         if other.owner.id() < self.owner.id() {
             self.owner = other.owner;
         }
-        // Merge iteration state. Node states are already merged via `node_state`
-        // above. Current and previous answers from the older/lower SCC take
-        // priority on overlap, matching the node-state merge above.
+        // Active SCCs have disjoint members. Answer overlap is only possible
+        // when a newly detected phase-0 fragment encloses an existing SCC. The
+        // existing SCC is merged first and its answers take priority over the
+        // new fragment, which does not have answers yet.
         // Set merge_happened so the drive loop defers demotion until
         // after the current iteration completes, bounding per-iteration work
         // to O(N) regardless of how many merges occur.
@@ -2088,7 +2093,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut result = match self.stack().push(current.dupe()) {
             BindingAction::Calculate => self.calculate_and_record_answer(current, idx, slot),
-            BindingAction::CycleBroken(r) => Arc::new(K::promote_recursive(self.heap, r)),
             BindingAction::SccLocalAnswer(type_erased) => {
                 // Downcast the type-erased answer back to Arc<K::Answer>.
                 // The answer was stored as Arc::new(answer.dupe()) where answer: Arc<K::Answer>,
@@ -2100,9 +2104,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .expect("SccLocalAnswer downcast failed: type mismatch"),
                 )
             }
-            BindingAction::NeedsColdPlaceholder => self
-                .attempt_to_unwind_cycle_from_here(&current, idx, slot)
-                .unwrap_or_else(|r| Arc::new(K::promote_recursive(self.heap, r))),
+            BindingAction::NeedsColdPlaceholder => {
+                self.attempt_to_unwind_cycle_from_here(&current, idx, slot)
+            }
         };
         if let Some(scc) = self.stack().pop_and_take_completed_scc() {
             self.iterative_resolve_scc(scc);
@@ -2902,33 +2906,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Attempt to record a cycle placeholder result to unwind a cycle from here.
     ///
-    /// Returns a `Result` where `Err(var)` is the normal case (placeholder created,
-    /// cycle should be unwound), and `Ok(value)` means another thread has already
-    /// committed a final answer so we can skip the cycle-breaking entirely.
-    ///
-    /// Note: The placeholder is recorded in SCC-local state (SccNodeState::HasPlaceholder),
-    /// not in the shared result slot. Each thread that hits the same cycle creates its
-    /// own placeholder. The final answer IS written thread-locally via SccNodeState::Done
-    /// and only published to the result slot when the SCC completes.
+    /// The placeholder is recorded in SCC-local state, not in the shared result
+    /// slot. Each thread that hits the same cycle creates its own placeholder.
+    /// The final answer is also written thread-locally and is only published to
+    /// the result slot when the SCC completes.
     fn attempt_to_unwind_cycle_from_here<K: Solve<Ans>>(
         &self,
         current: &CalcId,
         idx: Idx<K>,
         slot: &AnswerSlot<K::Answer>,
-    ) -> Result<Arc<K::Answer>, Var>
+    ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         // Check if another thread already committed a final answer.
         if let Some(v) = slot.get_arc() {
-            return Ok(v);
+            return v;
         }
         // Create a recursive placeholder and store it only in SCC-local state.
         let binding = self.bindings().get(idx);
         let rec = K::create_recursive(self, binding);
-        self.stack().set_iteration_placeholder(current, rec);
-        Err(rec)
+        let answer = Arc::new(K::promote_recursive(self.heap, rec));
+        let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
+        self.stack()
+            .set_iteration_placeholder(current, rec, answer_erased);
+        answer
     }
 
     /// Handle depth overflow based on the configured handler.
@@ -2978,7 +2981,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .emit();
         // Return recursive placeholder (same pattern as cycle handling)
         self.attempt_to_unwind_cycle_from_here(current, idx, slot)
-            .unwrap_or_else(|r| Arc::new(K::promote_recursive(self.heap, r)))
     }
 
     /// PanicWithDebugInfo handler: dump debug info to stderr and panic.
