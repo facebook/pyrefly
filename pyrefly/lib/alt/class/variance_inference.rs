@@ -20,9 +20,7 @@ use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::shaped_array::IntTupleView;
 use ruff_python_ast::name::Name;
-use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
@@ -30,7 +28,6 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::class_field::ClassFieldVariance;
 use crate::alt::types::class_bases::ClassBases;
-use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::types::callable::Callable;
 use crate::types::callable::Params;
 use crate::types::class::Class;
@@ -790,16 +787,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         violations
     }
 
-    /// The `def`-name range of `metadata`'s function, via `KeyUndecoratedFunctionRange`.
+    /// The `def`-name range of `metadata`'s function.
     /// Current-module only: variance checks a class's own fields, so `def_index` is always
     /// local — we don't resolve cross-module `FuncDefId`s.
     fn func_def_range(&self, metadata: &FuncMetadata) -> Option<TextRange> {
         let func_id = metadata.kind.as_func_def_id()?;
-        let def_index = func_id.def_index;
-        let idx = self
-            .bindings()
-            .key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))?;
-        Some(self.get_idx(idx).0.range())
+        self.bindings().function_def_range(func_id.def_index)
     }
 
     /// Check a method's signatures for variance violations (shallow: direct

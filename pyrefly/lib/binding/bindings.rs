@@ -79,6 +79,7 @@ use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
@@ -423,6 +424,15 @@ impl Bindings {
             BindingClass::ClassDef(c) => Some(c.def_index),
             BindingClass::FunctionalClassDef(d, ..) => Some(*d),
         }
+    }
+
+    /// The range of the name in the `def` statement a `FuncDefIndex` refers to.
+    /// Returns `None` if the index does not name a function in this module, which
+    /// happens for a stale cross-module index after an incremental rebuild.
+    pub fn function_def_range(&self, def_index: FuncDefIndex) -> Option<TextRange> {
+        let key = KeyUndecoratedFunctionRange(def_index);
+        let idx = self.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        Some(KeyUndecoratedFunctionRange::range_with(idx, self))
     }
 
     pub fn unused_parameters(&self) -> &[UnusedParameter] {

@@ -31,6 +31,8 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::function::FuncMetadata;
+use pyrefly_types::function::FunctionKind;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -3031,6 +3033,83 @@ impl<'a> Transaction<'a> {
             .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range)))
     }
 
+    /// Where a function-valued type was defined.
+    ///
+    /// An ordinary function carries a `FuncDefId` whose `def_index` pins the exact `def`,
+    /// which keeps methods and nested functions distinct. The well-known functions that
+    /// `FunctionKind` special-cases (`isinstance`, `cast`, `numba.jit`, and so on)
+    /// discard their `FuncDefId`, so they are instead resolved by looking up the name
+    /// they are declared under in the module that declares them.
+    ///
+    /// Returns `None` only for a synthesized function, which has no definition to point
+    /// at, so that the caller can fall back to walking the type. Returns `Err` for a
+    /// function that does have a definition we failed to reach: reporting nothing is
+    /// better than reporting the parameter types, which are never the type of the
+    /// expression.
+    fn function_def_location(
+        &self,
+        handle: &Handle,
+        metadata: &FuncMetadata,
+    ) -> Option<Result<TextRangeWithModule, EmptyResponseReason>> {
+        let not_found = || EmptyResponseReason::DefinitionNotFound {
+            name: metadata.kind.function_name().as_str().to_owned(),
+            context: DefinitionContext::Definition,
+        };
+
+        if let Some(func_id) = metadata.kind.as_func_def_id() {
+            let def_handle = Handle::new(
+                func_id.qname.module_name(),
+                func_id.qname.module_path().dupe(),
+                handle.sys_info().dupe(),
+            );
+            // The binding table already holds the `def` name, so this stays a
+            // read-only lookup with nothing to solve.
+            let Some(bindings) = self.get_bindings(&def_handle) else {
+                return Some(Err(EmptyResponseReason::BindingsNotFound));
+            };
+            return Some(
+                bindings
+                    .function_def_range(func_id.def_index)
+                    .map(|range| TextRangeWithModule::new(func_id.qname.module().dupe(), range))
+                    .ok_or_else(not_found),
+            );
+        }
+
+        match &metadata.kind {
+            // A synthesized function, such as a dataclass `__init__`, has no source to
+            // point at, so the caller falls back to walking the type.
+            FunctionKind::Synthesized(_) => None,
+            // A callback protocol borrows the signature of a class's `__call__`, so the
+            // class is what defines it.
+            FunctionKind::CallbackProtocol(cls) => {
+                let qname = cls.qname();
+                Some(Ok(TextRangeWithModule::new(
+                    qname.module().clone(),
+                    qname.range(),
+                )))
+            }
+            // Every remaining kind is a well-known function declared under a module-level
+            // name. `functools.singledispatch`'s `register` is the exception: it is
+            // reached through the dispatcher rather than through `functools`, so the
+            // lookup correctly finds nothing.
+            kind => Some(
+                self.resolve_named_import(
+                    handle,
+                    kind.module_name(),
+                    kind.function_name().into_owned(),
+                    FindPreference::default(),
+                )
+                .and_then(|(def_handle, _, export)| {
+                    Some(TextRangeWithModule::new(
+                        self.get_module_info(&def_handle)?,
+                        export.location,
+                    ))
+                })
+                .ok_or_else(not_found),
+            ),
+        }
+    }
+
     pub fn goto_type_definition(
         &self,
         handle: &Handle,
@@ -3039,6 +3118,17 @@ impl<'a> Transaction<'a> {
         let type_ = self.get_type_at(handle, position);
 
         if let Some(t) = type_ {
+            // A function-valued expression's type definition is that function's own
+            // `def`. Falling through to `collect_symbol_def_paths` would walk the
+            // signature and report the classes of the parameter types, which are never
+            // the type of this expression. A non-function type visits to `None`, as
+            // does a function with no `def`, and both fall through as before.
+            if let Some(def) =
+                t.visit_toplevel_func_metadata(&|m| self.function_def_location(handle, m))
+            {
+                return Ok(vec![def?]);
+            }
+
             let symbol_def_paths = collect_symbol_def_paths(&t);
 
             if !symbol_def_paths.is_empty() {

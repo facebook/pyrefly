@@ -258,7 +258,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -271,7 +270,6 @@ use vec1::Vec1;
 use crate::ModuleInfo;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::KeyClassMro;
-use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
@@ -6628,16 +6626,14 @@ impl Server {
         // config-default `SysInfo` would miss the module in a multi-`SysInfo`
         // transaction and silently collapse the range to zero.
         let resolve_func_range = |func_id: &pyrefly_types::function::FuncDefId| {
-            let def_index = func_id.def_index;
             let handle = Handle::new(
                 func_id.qname.module_name(),
                 func_id.qname.module_path().dupe(),
                 source_handle.sys_info().dupe(),
             );
-            let bindings = transaction.get_bindings(&handle)?;
-            let key = KeyUndecoratedFunctionRange(def_index);
-            let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
-            Some(bindings.get(idx).0.range())
+            transaction
+                .get_bindings(&handle)?
+                .function_def_range(func_id.def_index)
         };
         // An importable module's backing filesystem path.
         let resolve_module_path = |module: &pyrefly_types::module::ModuleType| {
