@@ -2581,8 +2581,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         unsafe { self.get_answer_slot(idx).rollback_reserved_if_pending() }
     }
 
-    /// Commit final answers from an iteratively-solved SCC using ordered
-    /// result-slot reservations.
+    /// Commit final answers from an iteratively-solved SCC
+    /// using tagged result-slot reservations.
     ///
     /// The intended invariant is that workers computing the same recursive
     /// component converge on the same SCC. Since every worker reserves members

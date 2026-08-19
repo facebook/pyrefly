@@ -6,15 +6,16 @@
  */
 
 use std::any::Any;
-use std::cell::UnsafeCell;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::hint::spin_loop;
-use std::mem::MaybeUninit;
+use std::marker::PhantomData;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
+use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::fence;
 use std::thread::yield_now;
@@ -205,103 +206,87 @@ pub struct Answers {
 
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PUBLISH_BACKOFF_STEP: u32 = 6;
+const PENDING_TAG: usize = 1;
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnswerStatus {
-    /// No writer owns the slot and `result` is uninitialized. A writer may
-    /// claim the slot by changing this state to `Pending`.
-    Unpublished,
-    /// One writer exclusively owns `result`. An ordinary writer may still be
-    /// initializing it, while an SCC writer may be withholding an initialized
-    /// result until the entire SCC is ready. Readers must wait; an SCC rollback
-    /// returns the slot to `Unpublished`.
-    Pending,
-    /// `result` is initialized, immutable, and visible to readers. The release
-    /// transition to this state synchronizes readers before they clone the Arc.
-    Published,
-}
-
-impl AnswerStatus {
-    fn from_u8(value: u8) -> Self {
-        match value {
-            value if value == Self::Unpublished as u8 => Self::Unpublished,
-            value if value == Self::Pending as u8 => Self::Pending,
-            value if value == Self::Published as u8 => Self::Published,
-            _ => unreachable!("invalid answer status {value}"),
-        }
-    }
-}
-
-/// A first-write-wins result slot. `Pending` reserves the separate result
-/// storage while an ordinary result or complete SCC batch is being published.
+/// A first-write-wins result slot that owns one raw `Arc` strong reference.
+/// Null is unpublished, a non-null pointer with `PENDING_TAG` set is pending,
+/// and a non-null pointer with `PENDING_TAG` unset is published. A pending
+/// pointer retains the reserved result address.
 pub struct AnswerSlot<T> {
-    status: AtomicU8,
-    result: UnsafeCell<MaybeUninit<Arc<T>>>,
+    ptr: AtomicPtr<T>,
+    _owner: PhantomData<Arc<T>>,
 }
 
 impl<T> Default for AnswerSlot<T> {
     fn default() -> Self {
         Self {
-            status: AtomicU8::new(AnswerStatus::Unpublished as u8),
-            result: UnsafeCell::new(MaybeUninit::uninit()),
+            ptr: AtomicPtr::new(ptr::null_mut()),
+            _owner: PhantomData,
         }
     }
 }
 
-// SAFETY: A writer must reserve the slot before initializing `result`, then
-// publish it with a release store. The result is immutable while published.
-unsafe impl<T: Send + Sync> Sync for AnswerSlot<T> {}
-
 impl<T> AnswerSlot<T> {
     #[inline]
-    fn load(&self, ordering: Ordering) -> AnswerStatus {
-        AnswerStatus::from_u8(self.status.load(ordering))
+    fn is_pending(ptr: *mut T) -> bool {
+        ptr.addr() & PENDING_TAG != 0
     }
 
-    /// Borrow the initialized result stored in this slot.
+    #[inline]
+    fn pending(ptr: *mut T) -> *mut T {
+        ptr.map_addr(|addr| addr | PENDING_TAG)
+    }
+
+    #[inline]
+    fn published(ptr: *mut T) -> *mut T {
+        ptr.map_addr(|addr| addr & !PENDING_TAG)
+    }
+
+    fn into_raw(value: Arc<T>) -> *mut T {
+        let ptr = Arc::into_raw(value).cast_mut();
+        if ptr.addr() & PENDING_TAG != 0 {
+            // SAFETY: `ptr` came directly from `Arc::into_raw` above and has not
+            // been stored or used to create another owning Arc.
+            unsafe { drop(Arc::from_raw(ptr)) };
+            panic!("Arc result pointer must be at least 2-byte aligned");
+        }
+        ptr
+    }
+
+    /// Clone the `Arc` strong reference owned by a published slot.
     ///
     /// # Safety
     ///
-    /// `result` must be initialized and remain immutable for this call.
-    unsafe fn result(&self) -> &Arc<T> {
-        // SAFETY: The function contract guarantees that the result is initialized.
-        unsafe { (*self.result.get()).assume_init_ref() }
+    /// `ptr` must be the untagged pointer from `Arc::into_raw`, and the slot's
+    /// owning strong reference must remain live for the duration of this call.
+    unsafe fn clone_arc(ptr: *mut T) -> Arc<T> {
+        // SAFETY: The function contract guarantees that `ptr` came from
+        // `Arc::into_raw` and that the slot still owns a live strong reference.
+        unsafe { Arc::increment_strong_count(ptr) };
+        // SAFETY: The increment above created the strong reference returned here.
+        unsafe { Arc::from_raw(ptr) }
     }
 
-    /// Initialize storage after this thread changes the status from unpublished
-    /// to pending.
-    ///
-    /// # Safety
-    ///
-    /// The slot must be pending and its result storage uninitialized.
-    unsafe fn initialize(&self, value: Arc<T>) {
-        // SAFETY: The function contract guarantees exclusive access to
-        // uninitialized result storage.
-        unsafe { (*self.result.get()).write(value) };
-    }
-
-    /// Wait for a pending writer to publish its result. Returns `false` only if
+    /// Wait for a pending writer to publish its result. Returns `None` only if
     /// panic unwinding rolls back an SCC reservation before publication.
     #[cold]
     #[inline(never)]
-    fn wait_for_publish(&self) -> bool {
+    fn wait_for_publish(&self) -> Option<*mut T> {
         let deadline = Instant::now() + PUBLISH_TIMEOUT;
         let mut backoff_step = 0;
         loop {
-            match self.load(Ordering::Relaxed) {
-                AnswerStatus::Pending => {}
-                AnswerStatus::Published => {
-                    // The relaxed load observed the release publication, so
-                    // this fence acquires initialization of the result.
-                    fence(Ordering::Acquire);
-                    return true;
-                }
-                AnswerStatus::Unpublished => {
-                    // A pending slot can return to Unpublished only when panic
-                    // unwinding rolls back an SCC reservation.
-                    return false;
-                }
+            let ptr = self.ptr.load(Ordering::Relaxed);
+            if ptr.is_null() {
+                // A pending slot can return to Unpublished only when panic
+                // unwinding rolls back an SCC reservation.
+                return None;
+            } else if Self::is_pending(ptr) {
+                // Keep waiting for the reservation to be published or rolled back.
+            } else {
+                // The relaxed load observed the release publication, so
+                // this fence acquires initialization of the result.
+                fence(Ordering::Acquire);
+                return Some(ptr);
             }
 
             if backoff_step <= MAX_PUBLISH_BACKOFF_STEP {
@@ -325,65 +310,99 @@ impl<T> AnswerSlot<T> {
         }
     }
 
+    /// Handle a failed CAS while retaining the candidate for unwind safety.
+    #[cold]
+    fn handle_failed_cas(&self, candidate: Arc<T>, actual: *mut T) -> ControlFlow<*mut T, Arc<T>> {
+        if Self::is_pending(actual) {
+            match self.wait_for_publish() {
+                Some(actual) => ControlFlow::Break(actual),
+                None => ControlFlow::Continue(candidate),
+            }
+        } else {
+            ControlFlow::Break(actual)
+        }
+    }
+
+    /// Called only after `get` observes that this slot is pending.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the borrowed result API has no callers yet")
+    )]
+    #[cold]
+    #[inline(never)]
+    fn get_pending(&self) -> Option<&T> {
+        let ptr = self.wait_for_publish()?;
+        // SAFETY: `wait_for_publish` proved that the published pointer is
+        // non-null, and it remains owned by this slot.
+        Some(unsafe { &*ptr })
+    }
+
+    /// Called only after `get_arc` observes that this slot is pending.
+    #[cold]
+    #[inline(never)]
+    fn get_pending_arc(&self) -> Option<Arc<T>> {
+        let ptr = self.wait_for_publish()?;
+        // SAFETY: `wait_for_publish` proved that `ptr` is published and retains
+        // the strong reference owned by this slot.
+        Some(unsafe { Self::clone_arc(ptr) })
+    }
+
     /// Return the published value, waiting only when a writer already owns the slot.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the borrowed result API has no callers yet")
+    )]
     #[inline]
     pub(crate) fn get(&self) -> Option<&T> {
-        match self.load(Ordering::Acquire) {
-            AnswerStatus::Unpublished => None,
-            AnswerStatus::Pending => self
-                .wait_for_publish()
-                // SAFETY: A true result proves that publication initialized the result.
-                .then(|| unsafe { self.result() }.as_ref()),
-            AnswerStatus::Published => {
-                // SAFETY: Published status proves that the result is initialized.
-                Some(unsafe { self.result() }.as_ref())
-            }
+        let ptr = self.ptr.load(Ordering::Acquire);
+        if Self::is_pending(ptr) {
+            self.get_pending()
+        } else {
+            // SAFETY: A non-null pointer is published and remains owned by this
+            // slot for the lifetime of the returned reference.
+            unsafe { ptr.as_ref() }
         }
     }
 
     /// Clone the `Arc` owned by a published slot.
     #[inline]
     pub(crate) fn get_arc(&self) -> Option<Arc<T>> {
-        self.get()?;
-        // SAFETY: `get` returned a reference only after publication initialized
-        // the result, which remains immutable.
-        Some(unsafe { self.result() }.dupe())
+        let ptr = self.ptr.load(Ordering::Acquire);
+        if Self::is_pending(ptr) {
+            self.get_pending_arc()
+        } else if ptr.is_null() {
+            None
+        } else {
+            // SAFETY: An untagged non-null pointer is published and retains the
+            // strong reference owned by this slot.
+            Some(unsafe { Self::clone_arc(ptr) })
+        }
     }
 
     /// Publish an ordinary, non-SCC result or return the competing winner.
     pub(crate) fn record(&self, value: Arc<T>) -> (Arc<T>, bool) {
+        let mut candidate = Self::into_raw(value);
         loop {
-            match self.status.compare_exchange(
-                AnswerStatus::Unpublished as u8,
-                AnswerStatus::Pending as u8,
+            match self.ptr.compare_exchange(
+                ptr::null_mut(),
+                candidate,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    // SAFETY: The successful CAS reserved uninitialized storage.
-                    unsafe { self.initialize(value) };
-                    self.status
-                        .store(AnswerStatus::Published as u8, Ordering::Release);
-                    // SAFETY: This thread initialized the now-published result.
-                    return (unsafe { self.result() }.dupe(), true);
+                    // SAFETY: This slot now owns `candidate`'s strong reference.
+                    return (unsafe { Self::clone_arc(candidate) }, true);
                 }
                 Err(actual) => {
-                    let actual = AnswerStatus::from_u8(actual);
-                    match actual {
-                        AnswerStatus::Unpublished => {
-                            unreachable!("failed CAS cannot observe the expected state")
+                    // SAFETY: The failed CAS left the candidate strong reference with us.
+                    let value = unsafe { Arc::from_raw(candidate) };
+                    match self.handle_failed_cas(value, actual) {
+                        ControlFlow::Break(actual) => {
+                            // SAFETY: `actual` is a published pointer owned by this slot.
+                            return (unsafe { Self::clone_arc(actual) }, false);
                         }
-                        AnswerStatus::Pending => {
-                            if !self.wait_for_publish() {
-                                continue;
-                            }
-                            // SAFETY: A true result proves that publication
-                            // initialized the result.
-                            return (unsafe { self.result() }.dupe(), false);
-                        }
-                        AnswerStatus::Published => {
-                            // SAFETY: Published status proves that the result is initialized.
-                            return (unsafe { self.result() }.dupe(), false);
+                        ControlFlow::Continue(value) => {
+                            candidate = Self::into_raw(value);
                         }
                     }
                 }
@@ -393,31 +412,23 @@ impl<T> AnswerSlot<T> {
 
     /// Reserve this result slot, waiting for a concurrent publisher.
     pub(crate) fn reserve(&self, value: Arc<T>) -> bool {
+        let mut candidate = Self::into_raw(value);
         loop {
-            match self.status.compare_exchange(
-                AnswerStatus::Unpublished as u8,
-                AnswerStatus::Pending as u8,
+            match self.ptr.compare_exchange(
+                ptr::null_mut(),
+                Self::pending(candidate),
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => {
-                    // SAFETY: The successful CAS reserved uninitialized storage.
-                    unsafe { self.initialize(value) };
-                    return true;
-                }
+                Ok(_) => return true,
                 Err(actual) => {
-                    let actual = AnswerStatus::from_u8(actual);
-                    match actual {
-                        AnswerStatus::Unpublished => {
-                            unreachable!("failed CAS cannot observe the expected state")
+                    // SAFETY: The failed CAS left the candidate strong reference with us.
+                    let value = unsafe { Arc::from_raw(candidate) };
+                    match self.handle_failed_cas(value, actual) {
+                        ControlFlow::Break(_) => return false,
+                        ControlFlow::Continue(value) => {
+                            candidate = Self::into_raw(value);
                         }
-                        AnswerStatus::Pending => {
-                            if !self.wait_for_publish() {
-                                continue;
-                            }
-                            return false;
-                        }
-                        AnswerStatus::Published => return false,
                     }
                 }
             }
@@ -434,13 +445,12 @@ impl<T> AnswerSlot<T> {
     /// publication. Ownership therefore proves that initialization has finished
     /// and no other thread can publish or roll back the result concurrently.
     pub(crate) unsafe fn publish_reserved(&self) {
-        match self.load(Ordering::Acquire) {
-            AnswerStatus::Pending => self
-                .status
-                .store(AnswerStatus::Published as u8, Ordering::Release),
-            AnswerStatus::Published => {}
-            AnswerStatus::Unpublished => panic!("reserved SCC result disappeared"),
+        let pending = self.ptr.load(Ordering::Acquire);
+        if !Self::is_pending(pending) {
+            assert!(!pending.is_null(), "reserved SCC result disappeared");
+            return;
         }
+        self.ptr.store(Self::published(pending), Ordering::Release);
     }
 
     /// Cancel this owner's reservation if it is still pending.
@@ -452,39 +462,38 @@ impl<T> AnswerSlot<T> {
     /// Ownership therefore permits moving the initialized result out without
     /// racing another access to its storage.
     pub(crate) unsafe fn rollback_reserved_if_pending(&self) -> bool {
-        match self.load(Ordering::Acquire) {
-            AnswerStatus::Pending => {
-                // SAFETY: Only the SCC owner changes a pending slot, so it owns
-                // the initialized result. Move it out before making the slot reusable.
-                let value = unsafe { (*self.result.get()).assume_init_read() };
-                self.status
-                    .store(AnswerStatus::Unpublished as u8, Ordering::Release);
-                drop(value);
-                true
-            }
-            AnswerStatus::Unpublished | AnswerStatus::Published => false,
+        let pending = self.ptr.load(Ordering::Acquire);
+        if !Self::is_pending(pending) {
+            return false;
         }
+        self.ptr.store(ptr::null_mut(), Ordering::Release);
+        // SAFETY: Removing the pending pointer returned its strong reference to us.
+        unsafe { drop(Arc::from_raw(Self::published(pending))) };
+        true
     }
 }
 
 impl<T> Drop for AnswerSlot<T> {
     fn drop(&mut self) {
-        match AnswerStatus::from_u8(*self.status.get_mut()) {
-            AnswerStatus::Unpublished => {}
-            AnswerStatus::Pending | AnswerStatus::Published => {
-                // SAFETY: Both states have initialized result storage, and
-                // exclusive access proves that no reader can use it.
-                unsafe { self.result.get_mut().assume_init_drop() };
-            }
+        let ptr = *self.ptr.get_mut();
+        if !ptr.is_null() {
+            // SAFETY: Exclusive access proves the slot still owns exactly one strong reference.
+            unsafe { drop(Arc::from_raw(Self::published(ptr))) };
         }
     }
 }
 
 impl<T> Debug for AnswerSlot<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("AnswerSlot")
-            .field(&self.load(Ordering::Relaxed))
-            .finish()
+        let ptr = self.ptr.load(Ordering::Relaxed);
+        let state = if ptr.is_null() {
+            "unpublished"
+        } else if Self::is_pending(ptr) {
+            "pending"
+        } else {
+            "published"
+        };
+        f.debug_tuple("AnswerSlot").field(&state).finish()
     }
 }
 
