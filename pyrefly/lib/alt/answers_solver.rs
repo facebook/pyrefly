@@ -102,7 +102,7 @@ use crate::types::types::Type;
 use crate::types::types::Var;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-enum JaxtypingQuantifiedKey {
+pub(crate) enum JaxtypingQuantifiedKey {
     Dim(Name, QuantifiedKind),
     ShapeCarrier(Name, QuantifiedKind),
 }
@@ -1680,7 +1680,7 @@ pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     /// Module-scoped: the same dimension key always maps to the same Quantified,
     /// which is correct because each function independently wraps its signature
     /// in a Forall (just like legacy TypeVars defined at module scope).
-    jaxtyping_dims: RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
+    jaxtyping_dims: &'a RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
 }
 
 /// Proof that this SCC owns the pending result slot for this calculation.
@@ -1749,7 +1749,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    pub fn new(
+    pub(crate) fn new(
         answers: &'a Ans,
         current: &'a Answers,
         base_errors: &'a ErrorCollector,
@@ -1760,6 +1760,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         stdlib: &'a Stdlib,
         thread_state: &'a ThreadState,
         heap: &'a TypeHeap,
+        jaxtyping_dims: &'a RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
     ) -> AnswersSolver<'a, Ans> {
         AnswersSolver {
             stdlib,
@@ -1772,7 +1773,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             current,
             thread_state,
             heap,
-            jaxtyping_dims: RefCell::new(FxHashMap::default()),
+            jaxtyping_dims,
         }
     }
 
