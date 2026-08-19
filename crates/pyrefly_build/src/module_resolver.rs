@@ -1317,7 +1317,9 @@ mod tests {
                 TestPath::file("nested_module.pyc"),
                 TestPath::file("another_nested_module.py"),
                 TestPath::file("cython_module.pyx"),
-                TestPath::file("windows_dll.pyd"),
+                TestPath::file("windows_pyd.pyd"),
+                TestPath::file("compiled.so"),
+                TestPath::file("windows_compiled.dll"),
             ],
         );
         let result = find_one_part(
@@ -1349,7 +1351,7 @@ mod tests {
             FindResult::CompiledModule(root.join("cython_module.pyx"))
         );
         let result = find_one_part(
-            "windows_dll",
+            "windows_pyd",
             [root.to_path_buf()].iter(),
             None,
             &mut None,
@@ -1360,7 +1362,7 @@ mod tests {
         .0;
         assert_eq!(
             result,
-            FindResult::CompiledModule(root.join("windows_dll.pyd"))
+            FindResult::CompiledModule(root.join("windows_pyd.pyd"))
         );
         let result = find_one_part(
             "another_nested_module",
@@ -1375,6 +1377,31 @@ mod tests {
         assert_eq!(
             result,
             FindResult::SingleFilePyModule(root.join("another_nested_module.py"))
+        );
+        let result = find_one_part(
+            "compiled",
+            [root.to_path_buf()].iter(),
+            None,
+            &mut None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(result, FindResult::CompiledModule(root.join("compiled.so")));
+        let result = find_one_part(
+            "windows_compiled",
+            [root.to_path_buf()].iter(),
+            None,
+            &mut None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            result,
+            FindResult::CompiledModule(root.join("windows_compiled.dll"))
         );
     }
 

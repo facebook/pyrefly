@@ -3378,6 +3378,8 @@ mod tests {
             root.join("nonexistent-stubs.pyc"),
             root.join("nonexistent-stubs.pyx"),
             root.join("nonexistent-stubs.pyd"),
+            root.join("nonexistent-stubs.so"),
+            root.join("nonexistent-stubs.dll"),
             root.join("nonexistent-stubs"),
             // Regular package check
             root.join("nonexistent/__init__.pyi"),
@@ -3387,6 +3389,8 @@ mod tests {
             root.join("nonexistent.pyc"),
             root.join("nonexistent.pyx"),
             root.join("nonexistent.pyd"),
+            root.join("nonexistent.so"),
+            root.join("nonexistent.dll"),
             root.join("nonexistent"),
         ];
 
@@ -3433,6 +3437,8 @@ mod tests {
             root.join("mypackage-stubs.pyc"),
             root.join("mypackage-stubs.pyx"),
             root.join("mypackage-stubs.pyd"),
+            root.join("mypackage-stubs.so"),
+            root.join("mypackage-stubs.dll"),
             root.join("mypackage-stubs"),
         ];
         assert_eq!(
@@ -3478,6 +3484,8 @@ mod tests {
             root.join("mypackage-stubs.pyc"),
             root.join("mypackage-stubs.pyx"),
             root.join("mypackage-stubs.pyd"),
+            root.join("mypackage-stubs.so"),
+            root.join("mypackage-stubs.dll"),
             root.join("mypackage-stubs"),
             // Regular package - __init__.pyi checked before __init__.py
             root.join("mypackage/__init__.pyi"),
@@ -3519,6 +3527,8 @@ mod tests {
             root.join("mymodule-stubs.pyc"),
             root.join("mymodule-stubs.pyx"),
             root.join("mymodule-stubs.pyd"),
+            root.join("mymodule-stubs.so"),
+            root.join("mymodule-stubs.dll"),
             root.join("mymodule-stubs"),
             // Regular module - init files checked before .pyi
             root.join("mymodule/__init__.pyi"),
@@ -3561,6 +3571,8 @@ mod tests {
             root.join("mymodule-stubs.pyc"),
             root.join("mymodule-stubs.pyx"),
             root.join("mymodule-stubs.pyd"),
+            root.join("mymodule-stubs.so"),
+            root.join("mymodule-stubs.dll"),
             root.join("mymodule-stubs"),
             // Regular module - paths checked before .py
             root.join("mymodule/__init__.pyi"),
@@ -3609,6 +3621,8 @@ mod tests {
             root.join("mymodule-stubs.pyc"),
             root.join("mymodule-stubs.pyx"),
             root.join("mymodule-stubs.pyd"),
+            root.join("mymodule-stubs.so"),
+            root.join("mymodule-stubs.dll"),
             root.join("mymodule-stubs"),
             // Regular module - paths checked before .pyc
             root.join("mymodule/__init__.pyi"),
@@ -3666,6 +3680,8 @@ mod tests {
             root.join("parent-stubs.pyc"),
             root.join("parent-stubs.pyx"),
             root.join("parent-stubs.pyd"),
+            root.join("parent-stubs.so"),
+            root.join("parent-stubs.dll"),
             root.join("parent-stubs"),
             // parent check - __init__.pyi before __init__.py
             root.join("parent/__init__.pyi"),
@@ -3727,6 +3743,8 @@ mod tests {
             root.join("root1/mymodule-stubs.pyc"),
             root.join("root1/mymodule-stubs.pyx"),
             root.join("root1/mymodule-stubs.pyd"),
+            root.join("root1/mymodule-stubs.so"),
+            root.join("root1/mymodule-stubs.dll"),
             root.join("root1/mymodule-stubs"),
             // -stubs check in root2 (all paths)
             root.join("root2/mymodule-stubs/__init__.pyi"),
@@ -3736,6 +3754,8 @@ mod tests {
             root.join("root2/mymodule-stubs.pyc"),
             root.join("root2/mymodule-stubs.pyx"),
             root.join("root2/mymodule-stubs.pyd"),
+            root.join("root2/mymodule-stubs.so"),
+            root.join("root2/mymodule-stubs.dll"),
             root.join("root2/mymodule-stubs"),
             // Regular check in root1 (all paths since not found)
             root.join("root1/mymodule/__init__.pyi"),
@@ -3745,6 +3765,8 @@ mod tests {
             root.join("root1/mymodule.pyc"),
             root.join("root1/mymodule.pyx"),
             root.join("root1/mymodule.pyd"),
+            root.join("root1/mymodule.so"),
+            root.join("root1/mymodule.dll"),
             root.join("root1/mymodule"),
             // Regular check in root2 (paths before .py found)
             root.join("root2/mymodule/__init__.pyi"),
@@ -3813,6 +3835,8 @@ mod tests {
             root.join("a-stubs.pyc"),
             root.join("a-stubs.pyx"),
             root.join("a-stubs.pyd"),
+            root.join("a-stubs.so"),
+            root.join("a-stubs.dll"),
             root.join("a-stubs"),
             // a: __init__.pyi before __init__.py
             root.join("a/__init__.pyi"),
