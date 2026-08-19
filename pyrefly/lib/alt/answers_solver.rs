@@ -864,14 +864,10 @@ impl CalcStack {
             };
             let needs_completion_check =
                 matches!(top_scc.owner, SccOwner::Phase0(_) | SccOwner::Caller(_));
-            top_scc.node_state.insert(
-                target.dupe(),
-                SccNodeState::Done {
-                    answer,
-                    errors,
-                    traces,
-                },
-            );
+            top_scc.iterative.answers.insert(target.dupe(), answer);
+            top_scc
+                .node_state
+                .insert(target.dupe(), SccNodeState::Done { errors, traces });
             needs_completion_check
         };
         // Without a driver, SCC members are completing through the normal
@@ -920,15 +916,23 @@ impl CalcStack {
         top_scc.iterative.previous_answers.get(target).cloned()
     }
 
-    /// Retrieve the type-erased answer from SccNodeState::Done in the top SCC.
+    /// Retrieve the type-erased answer for a Done node in the top SCC.
     /// Returns `Some(answer)` if the node is Done, `None` otherwise
     /// (node not in SCC or not Done).
     fn get_iteration_done_answer(&self, target: &CalcId) -> Option<Arc<dyn Any + Send + Sync>> {
         let scc_stack = self.scc_stack.borrow();
         let top_scc = scc_stack.last()?;
-        match top_scc.node_state.get(target)? {
-            SccNodeState::Done { answer, .. } => Some(answer.dupe()),
-            _ => None,
+        if matches!(top_scc.node_state.get(target)?, SccNodeState::Done { .. }) {
+            Some(
+                top_scc
+                    .iterative
+                    .answers
+                    .get(target)
+                    .expect("Done SCC node must have a current answer")
+                    .dupe(),
+            )
+        } else {
+            None
         }
     }
 
@@ -1048,13 +1052,12 @@ pub enum SccNodeState {
     /// but we haven't computed the real answer yet.
     /// The Var is the placeholder variable recorded for this node.
     HasPlaceholder(Var),
-    /// Node's calculation has completed. Stores the type-erased answer and
-    /// error collector for thread-local SCC isolation.
+    /// Node's calculation has completed. Its answer is stored in the SCC's
+    /// current iteration answers.
     ///
-    /// For SCC participants, the answer is stored here until the entire SCC
+    /// Current iteration storage retains the answer until the entire SCC
     /// completes, at which point answers are published to their result slots.
     Done {
-        answer: Arc<dyn Any + Send + Sync>,
         /// Errors collected during solving. None during Phase 0 (cold start).
         errors: Option<Arc<ErrorCollector>>,
         /// Trace side effects collected during solving. None during Phase 0.
@@ -1114,6 +1117,8 @@ enum BindingAction {
 pub struct SccIterationState {
     /// Current iteration number (starts at 1).
     pub iteration: u32,
+    /// Answers calculated during the current iteration.
+    pub answers: BTreeMap<CalcId, Arc<dyn Any + Send + Sync>>,
     /// Answers from the prior iteration, used for warm-start on back-edges.
     /// Empty on iteration 1 (cold start).
     pub previous_answers: BTreeMap<CalcId, Arc<dyn Any + Send + Sync>>,
@@ -1281,6 +1286,7 @@ impl Scc {
             owner,
             iterative: SccIterationState {
                 iteration: 0,
+                answers: BTreeMap::new(),
                 previous_answers: BTreeMap::new(),
                 demoted: false,
                 has_changed: false,
@@ -1291,19 +1297,18 @@ impl Scc {
     }
 
     /// Track that a calculation has finished, marking it as Done.
-    /// Stores the type-erased answer and error collector in SccNodeState.
-    /// For SCC participants, this is the primary storage until batch commit.
+    /// Stores the type-erased answer in the current iteration and side effects
+    /// in `SccNodeState` until batch commit.
     ///
     /// This method implements first-answer-wins semantics: once a node is marked
     /// as Done, subsequent calculations (from duplicate stack frames within an SCC)
     /// do not overwrite the state. This ensures that the first computed answer is
     /// the one that persists, consistent with Calculation::record_value semantics.
     ///
-    /// Returns the canonical answer: the one that is (or was already) stored in
-    /// SccNodeState::Done. If the node was already Done, returns the pre-existing
-    /// answer without overwriting. If the node was not yet Done, stores the
-    /// provided answer and returns a clone of it. If the node is not tracked
-    /// by this SCC at all, returns the provided answer unchanged.
+    /// Returns the canonical answer. If the node was already Done, returns the
+    /// pre-existing answer without overwriting. If the node was not yet Done,
+    /// stores the provided answer and returns it. If the node is not tracked by
+    /// this SCC at all, returns the provided answer unchanged.
     fn on_calculation_finished(
         &mut self,
         current: &CalcId,
@@ -1312,19 +1317,16 @@ impl Scc {
         traces: Option<TraceSideEffects>,
     ) -> Arc<dyn Any + Send + Sync> {
         if let Some(state) = self.node_state.get_mut(current) {
-            if let SccNodeState::Done {
-                answer: existing_answer,
-                ..
-            } = state
-            {
+            if matches!(state, SccNodeState::Done { .. }) {
                 // Already Done: return the canonical (first-written) answer.
-                existing_answer.dupe()
+                self.iterative
+                    .answers
+                    .get(current)
+                    .expect("Done SCC node must have a current answer")
+                    .dupe()
             } else {
-                *state = SccNodeState::Done {
-                    answer: answer.dupe(),
-                    errors,
-                    traces,
-                };
+                self.iterative.answers.insert(current.dupe(), answer.dupe());
+                *state = SccNodeState::Done { errors, traces };
                 answer
             }
         } else {
@@ -1375,14 +1377,16 @@ impl Scc {
             self.owner = other.owner;
         }
         // Merge iteration state. Node states are already merged via `node_state`
-        // above; the iteration state only carries metadata (iteration number,
-        // previous answers, flags).
+        // above. Current and previous answers from the older/lower SCC take
+        // priority on overlap, matching the node-state merge above.
         // Set merge_happened so the drive loop defers demotion until
         // after the current iteration completes, bounding per-iteration work
         // to O(N) regardless of how many merges occur.
         // Take max iteration from either SCC: if one has progressed further,
         // we should not regress to iteration 1.
         let iteration = self.iterative.iteration.max(other.iterative.iteration);
+        let mut answers = other.iterative.answers;
+        answers.extend(self.iterative.answers);
         // Union previous_answers from both SCCs. Start with other's answers,
         // then extend with self's (self is the older/lower SCC so its answers
         // take priority on overlap).
@@ -1390,6 +1394,7 @@ impl Scc {
         previous_answers.extend(self.iterative.previous_answers);
         self.iterative = SccIterationState {
             iteration,
+            answers,
             previous_answers,
             demoted: false,
             has_changed: false,
@@ -1439,22 +1444,6 @@ impl Scc {
         }
     }
 
-    /// Extract done answers from `node_state`.
-    ///
-    /// Iterates over `node_state`, collecting answers from `Done` variants
-    /// into a `BTreeMap`. Used to build `previous_answers` for the next
-    /// iteration.
-    #[allow(clippy::mutable_key_type)]
-    fn extract_done_answers(&self) -> BTreeMap<CalcId, Arc<dyn Any + Send + Sync>> {
-        let mut answers = BTreeMap::new();
-        for (calc_id, state) in &self.node_state {
-            if let SccNodeState::Done { answer, .. } = state {
-                answers.insert(calc_id.dupe(), answer.dupe());
-            }
-        }
-        answers
-    }
-
     /// Reset the SCC for a cold start at iteration 1.
     ///
     /// Used for Phase 0 → iteration 1 and for demotion restarts. Clears all
@@ -1466,6 +1455,7 @@ impl Scc {
         }
         self.iterative = SccIterationState {
             iteration: 1,
+            answers: BTreeMap::new(),
             previous_answers: BTreeMap::new(),
             demoted: false,
             has_changed: false,
@@ -1486,18 +1476,18 @@ impl Scc {
 
     /// Advance to the next warm iteration during fixpoint progression.
     ///
-    /// Moves current Done answers into `previous_answers` (via
-    /// `extract_done_answers`), resets all member states to Fresh, increments
-    /// the iteration counter, and clears flags.
+    /// Moves current answers into `previous_answers`, resets all member states
+    /// to Fresh, increments the iteration counter, and clears flags.
     #[allow(clippy::mutable_key_type)]
     fn advance_to_next_warm_iteration(&mut self) {
-        let previous_answers = self.extract_done_answers();
         let current_iteration = self.iterative.iteration;
+        let previous_answers = std::mem::take(&mut self.iterative.answers);
         for state in self.node_state.values_mut() {
             *state = SccNodeState::Fresh;
         }
         self.iterative = SccIterationState {
             iteration: current_iteration + 1,
+            answers: BTreeMap::new(),
             previous_answers,
             demoted: false,
             has_changed: false,
@@ -2609,17 +2599,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///
     /// Called after the fixpoint iteration converges (or max iterations are
     /// reached).
+    #[allow(clippy::mutable_key_type)]
     fn commit_final_answers(&self, scc: Scc) -> bool {
+        let mut answers = scc.iterative.answers;
         // Collect Done members from node_state. BTreeMap iteration is already sorted by CalcId.
         let members = scc
             .node_state
             .into_iter()
             .map(|(calc_id, node_state)| match node_state {
-                SccNodeState::Done {
-                    answer,
-                    errors,
-                    traces,
-                } => (calc_id, answer, errors, traces),
+                SccNodeState::Done { errors, traces } => {
+                    let answer = answers
+                        .remove(&calc_id)
+                        .expect("Done SCC node must have a current answer");
+                    (calc_id, answer, errors, traces)
+                }
                 SccNodeState::Fresh
                 | SccNodeState::InProgress
                 | SccNodeState::HasPlaceholder(_) => {
@@ -2831,12 +2824,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             scc.node_state
                 .iter()
                 .filter_map(|(calc_id, node_state)| match node_state {
-                    SccNodeState::Done { answer, .. }
+                    SccNodeState::Done { .. }
                         if scc.iterative.recursion_breaks.contains(calc_id) =>
                     {
                         Some((
                             calc_id.dupe(),
-                            answer.dupe(),
+                            scc.iterative
+                                .answers
+                                .get(calc_id)
+                                .expect("Done SCC node must have a current answer")
+                                .dupe(),
                             scc.iterative.previous_answers.get(calc_id).cloned(),
                         ))
                     }
@@ -3613,7 +3610,6 @@ mod scc_tests {
     /// Create a dummy `SccNodeState::Done` for testing.
     fn done_for_test() -> SccNodeState {
         SccNodeState::Done {
-            answer: Arc::new(()) as Arc<dyn Any + Send + Sync>,
             errors: None,
             traces: None,
         }
@@ -3629,6 +3625,11 @@ mod scc_tests {
         detected_at: CalcId,
         bottom_pos_inclusive: usize,
     ) -> Scc {
+        let answers = node_state
+            .iter()
+            .filter(|(_, state)| matches!(state, SccNodeState::Done { .. }))
+            .map(|(calc_id, _)| (calc_id.dupe(), Arc::new(()) as Arc<dyn Any + Send + Sync>))
+            .collect();
         Scc {
             node_state,
             detected_at,
@@ -3636,6 +3637,7 @@ mod scc_tests {
             owner: SccOwner::Phase0(0),
             iterative: SccIterationState {
                 iteration: 0,
+                answers,
                 previous_answers: BTreeMap::new(),
                 demoted: false,
                 has_changed: false,
@@ -3693,6 +3695,26 @@ mod scc_tests {
 
         assert!(calc_stack.take_top_scc_for_driver(SccDriver(0)).is_some());
         assert!(calc_stack.sccs_is_empty());
+    }
+
+    #[test]
+    fn test_scc_current_answers_are_first_write_wins() {
+        let id = CalcId::for_test("m", 0);
+        let mut scc = make_test_scc(fresh_nodes(&[id.dupe()]), id.dupe(), 0);
+
+        let first = scc.on_calculation_finished(&id, Arc::new(1usize), None, None);
+        let second = scc.on_calculation_finished(&id, Arc::new(2usize), None, None);
+
+        assert_eq!(first.downcast_ref::<usize>(), Some(&1));
+        assert_eq!(second.downcast_ref::<usize>(), Some(&1));
+        assert_eq!(
+            scc.iterative
+                .answers
+                .get(&id)
+                .expect("Done SCC node must retain its current answer")
+                .downcast_ref::<usize>(),
+            Some(&1),
+        );
     }
 
     #[test]
@@ -4021,6 +4043,7 @@ mod scc_tests {
                 owner: SccOwner::Driver(0),
                 iterative: SccIterationState {
                     iteration: 2,
+                    answers: BTreeMap::new(),
                     previous_answers: BTreeMap::new(),
                     demoted: false,
                     has_changed: false,
@@ -4042,6 +4065,7 @@ mod scc_tests {
                 owner: SccOwner::Driver(1),
                 iterative: SccIterationState {
                     iteration: 1,
+                    answers: BTreeMap::new(),
                     previous_answers: BTreeMap::new(),
                     demoted: false,
                     has_changed: false,
