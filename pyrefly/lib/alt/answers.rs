@@ -326,10 +326,6 @@ impl<T> AnswerSlot<T> {
     }
 
     /// Called only after `get` observes that this slot is pending.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the borrowed result API has no callers yet")
-    )]
     #[cold]
     #[inline(never)]
     fn get_pending(&self) -> Option<&T> {
@@ -350,10 +346,6 @@ impl<T> AnswerSlot<T> {
     }
 
     /// Return the published value, waiting only when a writer already owns the slot.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the borrowed result API has no callers yet")
-    )]
     #[inline]
     pub(crate) fn get(&self) -> Option<&T> {
         let ptr = self.ptr.load(Ordering::Acquire);
@@ -1336,6 +1328,15 @@ impl Answers {
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         self.answer_slot(k)?.get_arc()
+    }
+
+    /// Borrow a published answer retained by this `Answers` instance.
+    pub(crate) fn get_idx_ref<K: Keyed>(&self, k: Idx<K>) -> Option<&K::Answer>
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        self.answer_slot(k)?.get()
     }
 
     /// Drive a cross-module iteration member by constructing a temporary

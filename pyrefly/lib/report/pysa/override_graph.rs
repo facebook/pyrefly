@@ -64,18 +64,15 @@ pub fn create_reversed_override_graph_for_module(
         let overridden_base_method = function
             .defining_cls()
             .and_then(|class| find_overridden_base_method(&name, class, context));
-        match overridden_base_method {
-            Some(overridden_base_method) => {
-                let current_function = function.as_function_ref(&context.answers_context);
-                assert!(
-                    graph
-                        .0
-                        .insert(current_function, overridden_base_method)
-                        .is_none(),
-                    "Found function definitions with the same location"
-                );
-            }
-            _ => (),
+        if let Some(overridden_base_method) = overridden_base_method {
+            let current_function = function.as_function_ref(&context.answers_context);
+            assert!(
+                graph
+                    .0
+                    .insert(current_function, overridden_base_method)
+                    .is_none(),
+                "Found function definitions with the same location"
+            );
         }
     }
 

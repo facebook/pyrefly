@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use pyrefly_build::handle::Handle;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -43,7 +44,6 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 
 use crate::alt::answers::Answers;
-use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
@@ -132,12 +132,9 @@ pub fn extract_module_stub(
     let ast = transaction.get_ast(handle)?;
     let module_info = transaction.get_module_info(handle)?;
 
-    let function_map: HashMap<TextRange, DecoratedFunction> = bindings
+    let function_map: HashMap<TextRange, Idx<KeyDecoratedFunction>> = bindings
         .keys::<KeyDecoratedFunction>()
-        .map(|idx| {
-            let dec = DecoratedFunction::from_bindings_answers(idx, &bindings, &answers);
-            (dec.id_range(), dec)
-        })
+        .map(|idx| (bindings.idx_to_key(idx).range(), idx))
         .collect();
 
     let dunder_all = resolve_dunder_all(&ast.body, &module_info);
@@ -169,7 +166,7 @@ struct ExtractionContext<'a> {
     config: &'a ExtractConfig,
     uses_incomplete: bool,
     typing_imports: BTreeSet<&'static str>,
-    function_map: &'a HashMap<TextRange, DecoratedFunction>,
+    function_map: &'a HashMap<TextRange, Idx<KeyDecoratedFunction>>,
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
     dunder_all: &'a Option<HashSet<Name>>,
@@ -273,7 +270,7 @@ fn extract_function(
         return None;
     }
 
-    let decorated = ctx.function_map.get(&func_def.name.range());
+    let decorated = ctx.function_map.get(&func_def.name.range()).copied();
 
     let decorators: Vec<String> = func_def
         .decorator_list
@@ -316,16 +313,22 @@ fn extract_function(
 /// Enrich parameters with inferred types where source annotations are missing.
 fn extract_params(
     func_def: &StmtFunctionDef,
-    decorated: Option<&DecoratedFunction>,
+    decorated: Option<Idx<KeyDecoratedFunction>>,
     ctx: &mut ExtractionContext,
 ) -> Vec<StubParam> {
     let ast_params = &func_def.parameters;
     let mut result = Vec::new();
 
-    let resolved_map: HashMap<&str, &Param> = decorated
+    let undecorated = decorated.map(|idx| {
+        let idx = ctx.bindings.get(idx).undecorated_idx;
+        ctx.answers
+            .get_idx(idx)
+            .expect("decorated function must have an undecorated answer")
+    });
+    let resolved_map: HashMap<&str, &Param> = undecorated
+        .as_ref()
         .map(|d| {
-            d.undecorated
-                .params
+            d.params
                 .iter()
                 .filter_map(|p| p.name().map(|n| (n.as_str(), p)))
                 .collect()
@@ -592,7 +595,7 @@ fn format_default(expr: &Expr, module_info: &Module) -> String {
 /// Prefer source annotation, fall back to inferred return type.
 fn extract_return_type(
     func_def: &StmtFunctionDef,
-    decorated: Option<&DecoratedFunction>,
+    decorated: Option<Idx<KeyDecoratedFunction>>,
     ctx: &mut ExtractionContext,
 ) -> Option<String> {
     if let Some(returns) = &func_def.returns {

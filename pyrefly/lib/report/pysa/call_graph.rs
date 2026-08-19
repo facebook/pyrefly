@@ -63,7 +63,6 @@ use vec1::Vec1;
 
 use crate::alt::call::CallTarget;
 use crate::alt::call::CallTargetLookup;
-use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
@@ -83,6 +82,7 @@ use crate::report::pysa::class::get_super_class_member;
 use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::DecoratedFunction;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionRef;
@@ -4075,24 +4075,23 @@ impl<'a> CallGraphVisitor<'a> {
             .bindings
             .key_to_idx_hashed_opt(Hashed::new(&key))
             .and_then(|idx| {
-                let decorated_function = DecoratedFunction::from_bindings_answers(
+                let function = DecoratedFunction {
                     idx,
-                    &self.module_answers_context.bindings,
-                    &self.module_answers_context.answers,
-                );
-                if should_export_decorated_function(
-                    &decorated_function,
-                    &self.module_answers_context,
-                ) {
-                    let return_type = decorated_function
-                        .ty
+                    undecorated: self.module_answers_context.undecorated_function(idx),
+                };
+                if should_export_decorated_function(&function, &self.module_answers_context) {
+                    let return_type = self
+                        .module_answers_context
+                        .answers
+                        .get_idx_ref(idx)
+                        .unwrap()
                         .callable_return_type(self.module_answers_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {
                             ScalarTypeProperties::from_type(&type_, self.module_context)
                         });
                     let target = self.call_target_from_function_target(
                         Target::Function(FunctionRef::from_decorated_function(
-                            &decorated_function,
+                            &function,
                             &self.module_answers_context,
                         )),
                         return_type,

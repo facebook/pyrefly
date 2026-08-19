@@ -58,7 +58,6 @@ use crate::alt::call::CallStyle;
 use crate::alt::call::CallTarget;
 use crate::alt::callable::CallArg;
 use crate::alt::singledispatch::DispatcherDef;
-use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::SpecialDecorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
@@ -68,6 +67,7 @@ use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::config::error_kind::ErrorKind;
@@ -274,30 +274,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn solve_function_binding(
         &self,
-        def: DecoratedFunction,
+        idx: Idx<KeyDecoratedFunction>,
         predecessor: &mut Option<Idx<Key>>,
         errors: &ErrorCollector,
     ) -> Type {
-        let mut ty = if def.metadata().flags.is_overload {
+        let function_binding = self.bindings().get(idx);
+        let undecorated = self.get_idx(function_binding.undecorated_idx);
+        let def_ty = self.get_idx(idx);
+        let mut ty = if undecorated.metadata.flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
-            let successor = self.get_function_successor(&def);
-            if successor.is_none() {
+            if function_binding.successor.is_none() {
                 // This is the last definition in the chain. We should produce an overload type.
-                let mut acc =
-                    Vec1::new((def.id_range(), (*def.ty).clone(), def.metadata().clone()));
+                let mut acc = Vec1::new((
+                    undecorated.id_range(),
+                    (*def_ty).clone(),
+                    undecorated.metadata.clone(),
+                ));
                 let mut impl_before_overload_range = None;
-                while let Some(def) = self.step_pred(predecessor) {
-                    if def.is_overload() {
-                        acc.push((def.id_range(), (*def.ty).clone(), def.metadata().clone()));
+                while let Some(predecessor_idx) = self.step_pred(predecessor) {
+                    let predecessor_binding = self.bindings().get(predecessor_idx);
+                    let predecessor_undecorated = self.get_idx(predecessor_binding.undecorated_idx);
+                    if predecessor_undecorated.metadata.flags.is_overload {
+                        let predecessor_ty = self.get_idx(predecessor_idx);
+                        acc.push((
+                            predecessor_undecorated.id_range(),
+                            (*predecessor_ty).clone(),
+                            predecessor_undecorated.metadata.clone(),
+                        ));
                     } else {
-                        impl_before_overload_range = Some(def.id_range());
+                        impl_before_overload_range = Some(predecessor_undecorated.id_range());
                         break;
                     }
                 }
                 let first_range = acc.last().0;
                 let last_range = acc.first().0;
                 if self.module().path().style() == ModuleStyle::Executable
-                    && !def.metadata().flags.facts().allows_missing_implementation()
+                    && !undecorated
+                        .metadata
+                        .flags
+                        .facts()
+                        .allows_missing_implementation()
                 {
                     // The last definition in the chain is decorated with `@overload`, and we're in
                     // a context in which an overloaded function must end with an implementation.
@@ -313,7 +329,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .to_owned(),
                         );
                     } else if !matches!(
-                        def.metadata().flags.body_kind,
+                        undecorated.metadata.flags.body_kind,
                         BodyKind::Ellipsis | BodyKind::Trivial
                     ) {
                         // This definition has a non-trivial body, so the mistake was likely
@@ -356,17 +372,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                 }
             } else {
-                (*def.ty).clone()
+                (*def_ty).clone()
             }
         } else {
             let mut acc = Vec::new();
-            while let Some(def) = self.step_pred(predecessor)
-                && def.is_overload()
-            {
-                acc.push((def.id_range(), (*def.ty).clone(), def.metadata().clone()));
+            while let Some(predecessor_idx) = self.step_pred(predecessor) {
+                let predecessor_binding = self.bindings().get(predecessor_idx);
+                let predecessor_undecorated = self.get_idx(predecessor_binding.undecorated_idx);
+                if !predecessor_undecorated.metadata.flags.is_overload {
+                    break;
+                }
+                let predecessor_ty = self.get_idx(predecessor_idx);
+                acc.push((
+                    predecessor_undecorated.id_range(),
+                    (*predecessor_ty).clone(),
+                    predecessor_undecorated.metadata.clone(),
+                ));
             }
             acc.reverse();
-            self.check_decorator_consistency_with_implementation(&acc, &def, errors);
+            self.check_decorator_consistency_with_implementation(&acc, &undecorated, errors);
             if let Ok(defs) = Vec1::try_from_vec(acc) {
                 if defs.len() == 1 {
                     self.error(
@@ -377,26 +401,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     defs.split_off_first().0.1
                 } else {
-                    let metadata = self
-                        .merge_overload_metadata_with_implementation(&defs, def.metadata().clone());
+                    let metadata = self.merge_overload_metadata_with_implementation(
+                        &defs,
+                        undecorated.metadata.clone(),
+                    );
                     let sigs = self.extract_signatures(
                         metadata.kind.function_name().as_ref(),
                         defs,
                         errors,
                     );
-                    self.check_signature_consistency(&sigs, &def, errors);
+                    self.check_signature_consistency(&sigs, &def_ty, &undecorated, errors);
                     Type::Overload(Overload {
                         signatures: sigs.mapped(|(_, sig)| sig),
                         metadata: Box::new(metadata),
                     })
                 }
             } else {
-                (*def.ty).clone()
+                (*def_ty).clone()
             }
         };
 
-        if let Some(metadata) = def
-            .metadata()
+        if let Some(metadata) = undecorated
+            .metadata
             .flags
             .property_metadata
             .as_ref()
@@ -414,10 +440,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         if matches!(
-            def.metadata().flags.body_kind,
+            undecorated.metadata.flags.body_kind,
             BodyKind::Ellipsis | BodyKind::Trivial
         ) && self.module().path().style() != ModuleStyle::Interface
-            && def.metadata().flags.is_in_protocol_class
+            && undecorated.metadata.flags.is_in_protocol_class
         {
             ty.transform_toplevel_func_metadata(|meta| {
                 meta.flags.is_abstract_method = true;
@@ -1972,7 +1998,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     // Given the index to a function binding, return the previous function binding, if any.
-    fn step_pred(&self, pred: &mut Option<Idx<Key>>) -> Option<DecoratedFunction> {
+    fn step_pred(&self, pred: &mut Option<Idx<Key>>) -> Option<Idx<KeyDecoratedFunction>> {
         let pred_idx = (*pred)?;
         let mut b = self.bindings().get(pred_idx);
         while let Binding::Forward(k) | Binding::PromoteForward(k) | Binding::ForwardToFirstUse(k) =
@@ -1987,7 +2013,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } = b
         {
             *pred = *pred_idx;
-            Some(self.get_decorated_function(*decorated_idx))
+            Some(*decorated_idx)
         } else {
             None
         }
@@ -2120,20 +2146,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn check_signature_consistency(
         &self,
         overloads: &Vec1<(TextRange, OverloadType)>,
-        def: &DecoratedFunction,
+        ty: &Type,
+        def: &UndecoratedFunction,
         errors: &ErrorCollector,
     ) {
         // A `@functools.singledispatch` implementation's overloads describe the registered dispatch
         // variants, not the fallback's own signature, so implementation-consistency does not apply.
-        if Self::is_singledispatch_dispatcher(&def.ty) {
+        if Self::is_singledispatch_dispatcher(ty) {
             return;
         }
-        let impl_tparams = match &*def.ty {
+        let impl_tparams = match ty {
             Type::Forall(forall) => Some(&forall.tparams),
             _ => None,
         };
         let impl_sig = {
-            let sigs = def.ty.callable_signatures();
+            let sigs = ty.callable_signatures();
             if sigs.len() != 1 {
                 // If this is somehow not a callable (len == 0), there's nothing to check.
                 // An overload's implementation can't be overloaded (len > 1).
@@ -2141,17 +2168,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             sigs[0]
         };
-        let all_tparams = |tparams: Option<&Arc<TParams>>| match (tparams, def.defining_cls()) {
-            (None, None) => None,
-            (Some(_), None) => tparams.cloned(),
-            (None, Some(cls)) => Some(self.get_class_tparams(cls)),
-            (Some(tparams), Some(cls)) => {
-                let mut all_tparams = (**tparams).clone();
-                all_tparams.extend(&self.get_class_tparams(cls));
-                Some(Arc::new(all_tparams))
-            }
-        };
-        let has_self_param = def.defining_cls().is_some() && !def.metadata().flags.is_staticmethod;
+        let all_tparams =
+            |tparams: Option<&Arc<TParams>>| match (tparams, def.defining_cls.as_ref()) {
+                (None, None) => None,
+                (Some(_), None) => tparams.cloned(),
+                (None, Some(cls)) => Some(self.get_class_tparams(cls)),
+                (Some(tparams), Some(cls)) => {
+                    let mut all_tparams = (**tparams).clone();
+                    all_tparams.extend(&self.get_class_tparams(cls));
+                    Some(Arc::new(all_tparams))
+                }
+            };
+        let has_self_param = def.defining_cls.is_some() && !def.metadata.flags.is_staticmethod;
         let sig_for_input_check = |sig: &Callable| {
             let mut sig = sig.clone();
             // Set the return type to `Any` so that we check just the input signature.
@@ -2196,7 +2224,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let (vs, impl_func) = {
                 let func = Function {
                     signature: impl_sig.clone(),
-                    metadata: def.metadata().clone(),
+                    metadata: def.metadata.clone(),
                 };
                 if let Some(tparams) = all_tparams(impl_tparams) {
                     self.instantiate_fresh_function(&tparams, func)
@@ -2337,13 +2365,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn check_decorator_consistency_with_implementation(
         &self,
         overloads: &[(TextRange, Type, FuncMetadata)],
-        def: &DecoratedFunction,
+        def: &UndecoratedFunction,
         errors: &ErrorCollector,
     ) {
-        let is_static_method = def.metadata().flags.is_staticmethod
+        let is_static_method = def.metadata.flags.is_staticmethod
             || overloads.iter().any(|x| x.2.flags.is_staticmethod);
-        let is_class_method = def.metadata().flags.is_classmethod
-            || overloads.iter().any(|x| x.2.flags.is_classmethod);
+        let is_class_method =
+            def.metadata.flags.is_classmethod || overloads.iter().any(|x| x.2.flags.is_classmethod);
         for (overload_range, _, overload_metadata) in overloads.iter() {
             if overload_metadata.flags.has_final_decoration {
                 self.error(
@@ -2378,7 +2406,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
             }
         }
-        if def.metadata().flags.is_staticmethod != is_static_method {
+        if def.metadata.flags.is_staticmethod != is_static_method {
             self.error(
                     errors,
                     def.id_range(),
@@ -2386,7 +2414,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "If `@staticmethod` is present on any overload or the implementation, it should be on every overload and the implementation.".to_owned(),
                 );
         }
-        if def.metadata().flags.is_classmethod != is_class_method {
+        if def.metadata.flags.is_classmethod != is_class_method {
             self.error(
                     errors,
                     def.id_range(),
