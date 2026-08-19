@@ -1570,10 +1570,6 @@ impl<'a> BindingsBuilder<'a> {
     /// First-use detection happens later in `process_deferred_bound_names`
     /// when all phi nodes are populated.
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
-        let may_prove_initialized = !matches!(
-            usage,
-            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
-        );
         let name_read_info = self.look_up_name_for_read(name, usage);
         match name_read_info {
             NameReadInfo::Flow { idx, initialized } => {
@@ -1581,7 +1577,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.mark_parameter_used(name.key());
                 self.scopes.mark_import_used(name.key());
                 self.scopes.mark_variable_used(name.key());
-                if may_prove_initialized
+                if !usage.is_static()
                     && matches!(
                         initialized,
                         InitializedInFlow::No
@@ -1619,7 +1615,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.insert_implicit_builtin_binding(idx, module, name.key());
                 }
                 // NameReadInfo::Anywhere can only be InitializedInFlow::Yes or InitializedInFlow::No
-                if may_prove_initialized && matches!(initialized, InitializedInFlow::No) {
+                if !usage.is_static() && matches!(initialized, InitializedInFlow::No) {
                     // When we use a variable, we mark it as initialized
                     // If the variable was uninitialized before, this will
                     // prevent us from emitting errors for every subsequent usage
@@ -1737,10 +1733,7 @@ impl<'a> BindingsBuilder<'a> {
 
         if let Some((def_idx, first_use)) = partial_type_info {
             // Determine side effects based on usage and first_use state.
-            if matches!(
-                deferred.usage,
-                Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
-            ) {
+            if deferred.usage.is_static() {
                 self.mark_does_not_pin_if_first_use(def_idx);
             } else if deferred.usage.may_pin_partial_type() {
                 // Normal reads: if this is the first use, mark it.

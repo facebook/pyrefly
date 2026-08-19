@@ -3189,10 +3189,6 @@ impl Scopes {
         lookup: &dyn LookupExport,
         current_module: ModuleName,
     ) -> NameReadInfo {
-        let skip_class_overload_function_definitions = matches!(
-            usage,
-            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
-        );
         // Class type parameters are hidden by an intervening class annotation scope.
         let mut crossed_class_annotation = false;
         let mut may_reintroduce_legacy_type_parameter = false;
@@ -3227,10 +3223,7 @@ impl Scopes {
                 // Type parameters have special scoping rules that are more restrictive than
                 // runtime semantics. Apply these rules only to static type usages. Non-static
                 // usages fall through to normal lookup, which follows the runtime.
-                && matches!(
-                    usage,
-                    Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
-                )
+                && usage.is_static()
             {
                 if may_reintroduce_legacy_type_parameter {
                     return None;
@@ -3256,7 +3249,7 @@ impl Scopes {
                 });
             if let Some(flow_info) = flow_info
                 && flow_barrier < FlowBarrier::BlockFlow
-                && !(skip_class_overload_function_definitions && is_class_overload)
+                && !(usage.is_static() && is_class_overload)
             {
                 let initialized = if flow_barrier == FlowBarrier::AllowFlowUnchecked {
                     // Just assume the name is initialized without checking.

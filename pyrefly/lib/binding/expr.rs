@@ -141,6 +141,14 @@ impl Usage {
     pub fn may_pin_partial_type(&self) -> bool {
         matches!(self, Usage::CurrentIdx(_))
     }
+
+    /// Whether this usage is in a static type.
+    pub fn is_static(&self) -> bool {
+        matches!(
+            self,
+            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
+        )
+    }
 }
 
 enum TestAssertion {
@@ -362,16 +370,13 @@ impl<'a> BindingsBuilder<'a> {
             // in an IDE setting if we don't ensure this is the case.
             return self.insert_binding_overwrite(key, Binding::Any(AnyStyle::Error));
         }
-        let used_in_static_type = matches!(
-            usage,
-            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
-        );
-        let lookup_result =
-            if used_in_static_type && let Some((tparams_collector, tparam_id)) = tparams_lookup {
-                self.intercept_lookup(tparams_collector, tparam_id)
-            } else {
-                self.lookup_name(Hashed::new(&name.id), usage)
-            };
+        let lookup_result = if usage.is_static()
+            && let Some((tparams_collector, tparam_id)) = tparams_lookup
+        {
+            self.intercept_lookup(tparams_collector, tparam_id)
+        } else {
+            self.lookup_name(Hashed::new(&name.id), usage)
+        };
         match lookup_result {
             NameLookupResult::Found {
                 idx: lookup_result_idx,
@@ -380,7 +385,7 @@ impl<'a> BindingsBuilder<'a> {
             } => {
                 // Uninitialized local errors are only reported when we are neither in a stub
                 // nor a static type context.
-                if !used_in_static_type && !self.module_info.path().is_interface() {
+                if !usage.is_static() && !self.module_info.path().is_interface() {
                     if let Some(termination_keys) = is_initialized
                         .deferred_termination_keys()
                         .map(|s| s.to_vec())
