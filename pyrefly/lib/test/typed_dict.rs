@@ -2896,3 +2896,64 @@ def test(x: T) -> object:
     return x.get("name")
     "#,
 );
+
+testcase!(
+    test_recursive_typed_dict_fields_resolve_repeatedly,
+    r#"
+from typing import TypedDict, assert_type
+
+class Node(TypedDict):
+    value: int
+    child: "Node | None"
+
+def f() -> None:
+    n1: Node = {"value": 1, "child": None}
+    n2: Node = {"value": 2, "child": None}
+    assert_type(n1["value"], int)
+    assert_type(n2["child"], Node | None)
+"#,
+);
+
+testcase!(
+    test_typed_dict_field_shadowed_by_property_is_cacheable,
+    r#"
+from typing import TypedDict, assert_type
+
+class Base(TypedDict):
+    x: int
+    y: str
+
+class Mixin:
+    @property
+    def x(self) -> int: ...
+
+class Derived(Mixin, Base):  # E: `Mixin` is not a typed dictionary
+    pass
+
+def f() -> None:
+    d1: Derived = {"x": 1, "y": "a"}  # E: Key `x` is not defined in TypedDict `Derived`
+    d2: Derived = {"x": 2, "y": "b"}  # E: Key `x` is not defined in TypedDict `Derived`
+    assert_type(d1["y"], str)
+    assert_type(d2["y"], str)
+"#,
+);
+
+// `InitVar` is stripped as well as rejected, so `x` is still a field. Left in place it would
+// vanish from the field map, and the map would stay uncacheable for the `Solver`'s lifetime.
+testcase!(
+    test_typed_dict_init_var_member_rejected,
+    r#"
+from typing import TypedDict, assert_type
+from dataclasses import InitVar
+
+class TD(TypedDict):
+    x: InitVar[int]  # E: `InitVar` may not be used for TypedDict members
+    y: str
+
+def f(a: TD, b: TD) -> None:
+    assert_type(a["x"], int)
+    assert_type(a["y"], str)
+    assert_type(b["x"], int)
+    assert_type(b["y"], str)
+"#,
+);

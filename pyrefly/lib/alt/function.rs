@@ -1394,12 +1394,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let Type::Unpack(unpack) = &ty
                 && let Type::TypedDict(typed_dict) = &**unpack
             {
-                for (name, _) in self.typed_dict_fields(typed_dict) {
+                for name in self.typed_dict_fields(typed_dict).keys() {
                     if params.iter().any(|param| {
                         matches!(
                             param,
                             Param::Pos(param_name, ..) | Param::KwOnly(param_name, ..)
-                                if param_name == &name
+                                if param_name == name
                         )
                     }) {
                         self.error(
