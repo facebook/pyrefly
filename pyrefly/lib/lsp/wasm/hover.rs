@@ -44,6 +44,7 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -935,7 +936,7 @@ pub fn get_hover_with_verbosity(
     let type_ = resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
 
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
-    // chain highlights the whole expression.
+    // chain highlights the whole expression. `not` highlights its unary expression.
     let range = ast
         .as_deref()
         .zip(module_info.as_ref())
@@ -946,6 +947,9 @@ pub fn get_hover_with_verbosity(
                 .and_then(|node| match node {
                     AnyNodeRef::ExprBoolOp(bool_op) => {
                         Some(module_info.to_lsp_range(bool_op.range()))
+                    }
+                    AnyNodeRef::ExprUnaryOp(unary_op) if unary_op.op == UnaryOp::Not => {
+                        Some(module_info.to_lsp_range(unary_op.range()))
                     }
                     _ => None,
                 })
