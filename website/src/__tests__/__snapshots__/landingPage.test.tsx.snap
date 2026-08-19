@@ -10,23 +10,6 @@ exports[`Home page renders external site correctly 1`] = `
       Pyrefly is a fast type checker and language server for Python with powerful IDE features
     </div>
     <div>
-      <div>
-        <div>
-          <span>
-            🎉 Pyrefly v1.0 is now available!
-          </span>
-          <div>
-            <button>
-              Read the blog
-            </button>
-          </div>
-        </div>
-        <button
-          aria-label="Dismiss banner"
-        >
-          ✕
-        </button>
-      </div>
       <section
         id="header-section"
       >
@@ -83,14 +66,20 @@ exports[`Home page renders external site correctly 1`] = `
                     </button>
                   </pre>
                 </div>
-                <a
-                  href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
-                  target="_blank"
-                >
-                   
-                  Get VSCode Extension
-                   
-                </a>
+                <div>
+                  <a
+                    href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
+                    target="_blank"
+                  >
+                    Get VSCode Extension
+                  </a>
+                  <a
+                    href="https://open-vsx.org/extension/meta/pyrefly"
+                    target="_blank"
+                  >
+                    Get OpenVSX Extension
+                  </a>
+                </div>
               </section>
             </div>
             <section>
@@ -128,7 +117,9 @@ exports[`Home page renders external site correctly 1`] = `
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0s;"
+                    tabindex="0"
                   >
                     <h3>
                       Scale with Confidence
@@ -150,13 +141,18 @@ exports[`Home page renders external site correctly 1`] = `
                         </sup>
                       </span>
                     </p>
+                    <span>
+                      →
+                    </span>
                   </div>
                 </div>
                 <div
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0.05s;"
+                    tabindex="0"
                   >
                     <h3>
                       Developer Delight
@@ -164,26 +160,48 @@ exports[`Home page renders external site correctly 1`] = `
                     <p>
                       Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor.
                     </p>
+                    <span>
+                      →
+                    </span>
                   </div>
                 </div>
                 <div
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0.1s;"
+                    tabindex="0"
+                  >
+                    <h3>
+                      Verify AI-written Python
+                    </h3>
+                    <p>
+                      Catch type bugs in code your AI agent writes
+                    </p>
+                    <span>
+                      read the blog →
+                    </span>
+                  </div>
+                </div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0.15000000000000002s;"
                   >
                     <h3>
                       Support at your Fingertips
                     </h3>
                     <p>
-                      Have questions or feedback to share? Connect with us on 
-                      <a
-                        href="https://discord.gg/Cf7mFQtW7W"
-                        target="_blank"
-                      >
-                        Discord
-                      </a>
+                      Have questions or feedback to share? Connect with us!
                     </p>
+                    <a
+                      href="https://discord.gg/Cf7mFQtW7W"
+                      target="_blank"
+                    >
+                      Join our Discord →
+                    </a>
                   </div>
                 </div>
               </div>
@@ -427,23 +445,6 @@ exports[`Home page renders internal site correctly 1`] = `
       Pyrefly is a fast type checker and language server for Python with powerful IDE features
     </div>
     <div>
-      <div>
-        <div>
-          <span>
-            🎉 Pyrefly v1.0 is now available!
-          </span>
-          <div>
-            <button>
-              Read the blog
-            </button>
-          </div>
-        </div>
-        <button
-          aria-label="Dismiss banner"
-        >
-          ✕
-        </button>
-      </div>
       <section
         id="header-section"
       >
@@ -500,14 +501,20 @@ exports[`Home page renders internal site correctly 1`] = `
                     </button>
                   </pre>
                 </div>
-                <a
-                  href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
-                  target="_blank"
-                >
-                   
-                  Get VSCode Extension
-                   
-                </a>
+                <div>
+                  <a
+                    href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
+                    target="_blank"
+                  >
+                    Get VSCode Extension
+                  </a>
+                  <a
+                    href="https://open-vsx.org/extension/meta/pyrefly"
+                    target="_blank"
+                  >
+                    Get OpenVSX Extension
+                  </a>
+                </div>
               </section>
             </div>
             <section>
@@ -545,7 +552,9 @@ exports[`Home page renders internal site correctly 1`] = `
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0s;"
+                    tabindex="0"
                   >
                     <h3>
                       Scale with Confidence
@@ -567,13 +576,18 @@ exports[`Home page renders internal site correctly 1`] = `
                         </sup>
                       </span>
                     </p>
+                    <span>
+                      →
+                    </span>
                   </div>
                 </div>
                 <div
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0.05s;"
+                    tabindex="0"
                   >
                     <h3>
                       Developer Delight
@@ -581,26 +595,48 @@ exports[`Home page renders internal site correctly 1`] = `
                     <p>
                       Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor.
                     </p>
+                    <span>
+                      →
+                    </span>
                   </div>
                 </div>
                 <div
                   style="opacity: 0;"
                 >
                   <div
+                    role="link"
                     style="transition-delay: 0.1s;"
+                    tabindex="0"
+                  >
+                    <h3>
+                      Verify AI-written Python
+                    </h3>
+                    <p>
+                      Catch type bugs in code your AI agent writes
+                    </p>
+                    <span>
+                      read the blog →
+                    </span>
+                  </div>
+                </div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0.15000000000000002s;"
                   >
                     <h3>
                       Support at your Fingertips
                     </h3>
                     <p>
-                      Have questions or feedback to share? Connect with us on 
-                      <a
-                        href="https://discord.gg/Cf7mFQtW7W"
-                        target="_blank"
-                      >
-                        Discord
-                      </a>
+                      Have questions or feedback to share? Connect with us!
                     </p>
+                    <a
+                      href="https://discord.gg/Cf7mFQtW7W"
+                      target="_blank"
+                    >
+                      Join our Discord →
+                    </a>
                   </div>
                 </div>
               </div>

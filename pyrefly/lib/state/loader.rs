@@ -213,7 +213,7 @@ pub struct LoaderFindCache {
 }
 
 impl LoaderFindCache {
-    pub fn new(config: ArcId<ConfigFile>, dir_cache_enabled: bool) -> Self {
+    pub fn new(config: ArcId<ConfigFile>) -> Self {
         // When no config feature uses origin, all import resolutions produce
         // the same result regardless of which file is importing. We can then
         // cache by ModuleName alone, reducing millions of cache entries
@@ -229,7 +229,7 @@ impl LoaderFindCache {
             is_origin_independent,
             cache: Default::default(),
             executable_cache: Default::default(),
-            dir_cache: DirEntryCache::new(dir_cache_enabled),
+            dir_cache: DirEntryCache::new(),
         }
     }
 
@@ -314,6 +314,31 @@ impl LoaderFindCache {
         result
     }
 
+    pub fn find_import_for_tensor_shapes(
+        &self,
+        origin: Option<&ModulePath>,
+        timing: Option<&TransactionTimingCounters>,
+    ) -> FindingOrError<ModulePath> {
+        let module = ModuleName::from_str("shape_extensions");
+        if self.can_cache_missing_shape_extensions_independent_of_origin(module) {
+            self.find_import(module, None, timing)
+        } else {
+            self.find_import(module, origin, timing)
+        }
+    }
+
+    fn can_cache_missing_shape_extensions_independent_of_origin(&self, module: ModuleName) -> bool {
+        self.config
+            .source_db
+            .as_ref()
+            .is_some_and(|source_db| !source_db.may_contain_module(module))
+            && self.config.sub_configs.is_empty()
+            && !matches!(
+                self.config.fallback_search_path,
+                FallbackSearchPath::DirectoryRelative(_)
+            )
+    }
+
     #[allow(unused)] // will be used soon
     pub fn find_import_with_phantom_paths(
         &self,
@@ -331,5 +356,62 @@ impl LoaderFindCache {
             })
             .0;
         (cached.0.dupe(), cached.1.dupe())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use pyrefly_build::source_db::map_db::MapDatabase;
+
+    use super::*;
+
+    #[test]
+    fn test_tensor_shapes_missing_marker_uses_origin_independent_cache_entry() {
+        let mut config = ConfigFile::default();
+        config.python_environment.set_empty_to_default();
+        let sys_info = config.get_sys_info();
+        let mut sourcedb = MapDatabase::new(sys_info);
+        sourcedb.insert(
+            ModuleName::from_str("a"),
+            ModulePath::memory(PathBuf::from("a.py")),
+        );
+        sourcedb.insert(
+            ModuleName::from_str("b"),
+            ModulePath::memory(PathBuf::from("b.py")),
+        );
+        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+        config.configure();
+
+        let loader = LoaderFindCache::new(ArcId::new(config));
+        let origin_a = ModulePath::memory(PathBuf::from("a.py"));
+        let origin_b = ModulePath::memory(PathBuf::from("b.py"));
+
+        assert!(
+            loader
+                .find_import_for_tensor_shapes(Some(&origin_a), None)
+                .finding()
+                .is_none()
+        );
+        assert!(
+            loader
+                .find_import_for_tensor_shapes(Some(&origin_b), None)
+                .finding()
+                .is_none()
+        );
+
+        let shape_extensions = ModuleName::from_str("shape_extensions");
+        let keys = loader
+            .cache
+            .keys()
+            .filter(|(module, _)| *module == shape_extensions)
+            .map(|(_, origin)| origin.dupe())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            vec![None],
+            "missing shape_extensions should be cached once under the origin-independent key"
+        );
     }
 }

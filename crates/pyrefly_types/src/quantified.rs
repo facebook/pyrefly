@@ -23,6 +23,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
 use crate::class::ClassType;
+use crate::dimension::gradual_size;
 use crate::heap::TypeHeap;
 use crate::stdlib::Stdlib;
 use crate::type_var::PreInferenceVariance;
@@ -38,10 +39,21 @@ pub enum QuantifiedOrigin {
     ScopedLegacy,
     /// PEP 695 type parameter — has its own definition range, no ambiguity.
     Pep695,
-    /// Synthetic Self quantified synthesized for `__new__` on a class.
-    SyntheticSelf,
-    /// Synthetic binder created during callable/tuple instantiation (TypeVarTuple residual).
-    SyntheticCallableResidual,
+    /// Synthetic quantified created by pyrefly rather than written in source.
+    Synthetic {
+        /// Is this a Self quantified synthesized for `__new__` on a class?
+        is_self: bool,
+    },
+    /// Synthetic binder for the parameter of an `IntTuples` mapper.
+    MapIntTuplesParameter,
+    /// De Bruijn sentinel used only while comparing `MapIntTuples` lambdas.
+    NormalizedMapIntTuplesParameter,
+}
+
+impl QuantifiedOrigin {
+    pub fn synthetic() -> Self {
+        Self::Synthetic { is_self: false }
+    }
 }
 
 /// A source range plus an index that disambiguates multiple quantifieds sharing the same range.
@@ -206,6 +218,7 @@ impl PartialOrd for Quantified {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum QuantifiedKind {
     TypeVar,
+    IntVar,
     ParamSpec,
     TypeVarTuple,
 }
@@ -214,6 +227,7 @@ impl QuantifiedKind {
     fn empty_value(self) -> Type {
         match self {
             QuantifiedKind::TypeVar => Type::any_implicit(),
+            QuantifiedKind::IntVar => gradual_size(),
             QuantifiedKind::ParamSpec => Type::Ellipsis,
             QuantifiedKind::TypeVarTuple => Type::any_tuple(),
         }
@@ -221,7 +235,7 @@ impl QuantifiedKind {
 
     fn class_type(self, stdlib: &Stdlib) -> &ClassType {
         match self {
-            QuantifiedKind::TypeVar => stdlib.type_var(),
+            QuantifiedKind::TypeVar | QuantifiedKind::IntVar => stdlib.type_var(),
             QuantifiedKind::ParamSpec => stdlib.param_spec(),
             QuantifiedKind::TypeVarTuple => stdlib.type_var_tuple(),
         }
@@ -291,9 +305,10 @@ impl Quantified {
 
     /// Creates a Quantified from a TypeVar, extracting all relevant fields.
     pub fn from_type_var(tv: &TypeVar, identity: QuantifiedIdentity) -> Self {
-        Self::type_var(
-            tv.qname().id().clone(),
+        Self::new(
             identity,
+            tv.qname().id().clone(),
+            tv.kind(),
             tv.default().cloned(),
             tv.restriction().clone(),
             tv.variance(),
@@ -350,16 +365,24 @@ impl Quantified {
         &self.restriction
     }
 
-    /// Display this type parameter with its bounds/constraints and default,
-    /// in the format used for type parameter lists (e.g. `T: int = str`).
-    pub fn display_with_bounds(&self) -> impl Display + '_ {
+    /// Display this type parameter name with the `*`/`**` kind prefix
+    /// (e.g. `*Ts` for TypeVarTuple, `**P` for ParamSpec).
+    pub fn display_name_with_prefix(&self) -> impl Display + '_ {
         Fmt(move |f| {
             if self.is_param_spec() {
                 write!(f, "**")?;
             } else if self.is_type_var_tuple() {
                 write!(f, "*")?;
             }
-            write!(f, "{}", self.name)?;
+            write!(f, "{}", self.name)
+        })
+    }
+
+    /// Display this type parameter with its bounds/constraints and default,
+    /// in the format used for type parameter lists (e.g. `T: int = str`).
+    pub fn display_with_bounds(&self) -> impl Display + '_ {
+        Fmt(move |f| {
+            write!(f, "{}", self.display_name_with_prefix())?;
             match self.restriction() {
                 Restriction::Bound(t) => write!(f, ": {}", t)?,
                 Restriction::Constraints(ts) => {
@@ -372,6 +395,7 @@ impl Quantified {
                     }
                     write!(f, ")")?;
                 }
+                Restriction::Flag(domain) => write!(f, ": Flag[{domain}]")?,
                 Restriction::Unrestricted => {}
             }
             if let Some(default) = self.default() {
@@ -386,7 +410,7 @@ impl Quantified {
     }
 
     pub fn is_type_var(&self) -> bool {
-        matches!(self.kind, QuantifiedKind::TypeVar)
+        matches!(self.kind, QuantifiedKind::TypeVar | QuantifiedKind::IntVar)
     }
 
     pub fn is_param_spec(&self) -> bool {
@@ -399,6 +423,11 @@ impl Quantified {
 
     pub fn identity(&self) -> &QuantifiedIdentity {
         &self.identity
+    }
+
+    pub(crate) fn normalized_map_int_tuples_parameter_depth(&self) -> Option<u32> {
+        (self.identity.origin == QuantifiedOrigin::NormalizedMapIntTuplesParameter)
+            .then_some(self.identity.anchor.index)
     }
 
     pub fn as_gradual_type_helper(kind: QuantifiedKind, default: Option<&Type>) -> Type {

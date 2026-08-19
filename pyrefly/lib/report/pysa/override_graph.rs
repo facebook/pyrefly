@@ -34,17 +34,18 @@ fn find_overridden_base_method(
 ) -> Option<FunctionRef> {
     assert_eq!(class.module(), &context.answers_context.module_info);
 
-    let super_class_member = context
+    let defining_class = context
         .resolver
         .with_solver("override_super_class_member", |solver| {
-            solver.get_super_class_member(class, None, field_name)
+            solver
+                .get_super_class_member(class, None, field_name)
+                .map(|member| member.defining_class)
         })
         .flatten()?;
 
     // Look up the FunctionRef from the defining class's module index
     // instead of creating a cross-module ModuleContext.
-    let defining_class = &super_class_member.defining_class;
-    let class_id = ClassId::from_class(defining_class);
+    let class_id = ClassId::from_class(&defining_class);
     context
         .resolver
         .resolve_pysa_solutions(defining_class.module())
@@ -64,18 +65,15 @@ pub fn create_reversed_override_graph_for_module(
         let overridden_base_method = function
             .defining_cls()
             .and_then(|class| find_overridden_base_method(&name, class, context));
-        match overridden_base_method {
-            Some(overridden_base_method) => {
-                let current_function = function.as_function_ref(&context.answers_context);
-                assert!(
-                    graph
-                        .0
-                        .insert(current_function, overridden_base_method)
-                        .is_none(),
-                    "Found function definitions with the same location"
-                );
-            }
-            _ => (),
+        if let Some(overridden_base_method) = overridden_base_method {
+            let current_function = function.as_function_ref(&context.answers_context);
+            assert!(
+                graph
+                    .0
+                    .insert(current_function, overridden_base_method)
+                    .is_none(),
+                "Found function definitions with the same location"
+            );
         }
     }
 
