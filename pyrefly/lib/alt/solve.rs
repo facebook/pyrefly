@@ -5302,6 +5302,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         key: Idx<KeyLegacyTypeParam>,
         has_scoped_tparams: bool,
+        shadows_enclosing_annotation_scope: bool,
         errors: &ErrorCollector,
     ) -> TypeInfo {
         let resolve = |key: Idx<KeyLegacyTypeParam>| match &*self.get_idx(key) {
@@ -5315,6 +5316,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorKind::InvalidTypeVar,
                         format!(
                             "Type parameter `{}` is not included in the type parameter list",
+                            self.module().display(&tparam_key.0)
+                        ),
+                    );
+                }
+                if shadows_enclosing_annotation_scope {
+                    let tparam_key = self.bindings().idx_to_key(key);
+                    self.error(
+                        errors,
+                        tparam_key.range(),
+                        ErrorKind::InvalidTypeVar,
+                        format!(
+                            "Type parameter `{}` shadows a type parameter of the same name from an enclosing scope",
                             self.module().display(&tparam_key.0)
                         ),
                     );
@@ -5356,7 +5369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> TypeInfo {
         let name = match self.bindings().get(source) {
             Binding::TypeParameter(tp) => &tp.name,
-            Binding::PossibleLegacyTParam(legacy_tparam, _) => {
+            Binding::PossibleLegacyTParam(legacy_tparam, ..) => {
                 // Preserve the raw legacy TypeVar here. Consumers of type parameter lists detect
                 // and report out-of-scope legacy TypeVars.
                 return self
@@ -5441,12 +5454,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::OutOfScopeTypeParameter(source, range) => {
                 self.binding_to_type_info_out_of_scope_type_parameter(*source, *range, errors)
             }
-            Binding::PossibleLegacyTParam(legacy_tparam, has_scoped_tparams) => self
-                .binding_to_type_info_possible_legacy_tparam(
-                    *legacy_tparam,
-                    *has_scoped_tparams,
-                    errors,
-                ),
+            Binding::PossibleLegacyTParam(
+                legacy_tparam,
+                has_scoped_tparams,
+                shadows_enclosing_annotation_scope,
+            ) => self.binding_to_type_info_possible_legacy_tparam(
+                *legacy_tparam,
+                *has_scoped_tparams,
+                *shadows_enclosing_annotation_scope,
+                errors,
+            ),
             _ => {
                 // All other Bindings model `Type` level operations where we do not
                 // propagate any attribute narrows.

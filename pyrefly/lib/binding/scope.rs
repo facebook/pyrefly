@@ -1786,6 +1786,33 @@ impl Scopes {
         false
     }
 
+    /// Check if a name, assumed to be a legacy type parameter, is defined as a type parameter in
+    /// any enclosing Annotation scope.
+    pub fn legacy_tparam_shadows_enclosing_annotation_scope(&self, name: &Name) -> bool {
+        match self.current().kind {
+            // A reference to a legacy tparam in a class annotation scope always re-scopes it, so
+            // any definition from an enclosing annotation scope is shadowed.
+            ScopeKind::Annotation { class_scope: true } => {
+                self.name_shadows_enclosing_annotation_scope(name)
+            }
+            ScopeKind::Annotation { class_scope: false } => {
+                // A function annotation scope can refer to an outer legacy tparam without
+                // re-scoping it unless an intervening class annotation scope blocks it.
+                self.visit_scopes(|view| {
+                    if matches!(view.scope.kind, ScopeKind::Annotation { .. })
+                        && view.static_barrier
+                    {
+                        view.scope.stat.0.get(name)
+                    } else {
+                        None
+                    }
+                })
+                .is_some()
+            }
+            _ => false,
+        }
+    }
+
     pub fn function_predecessor_indices(
         &self,
         name: &Name,

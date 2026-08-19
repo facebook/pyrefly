@@ -110,7 +110,7 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             Binding::Phi(_, branches) if !branches.is_empty() => {
                 current_idx = branches[0].value_key
             }
-            Binding::PossibleLegacyTParam(legacy_tparam, _) => {
+            Binding::PossibleLegacyTParam(legacy_tparam, ..) => {
                 current_idx = bindings.get(*legacy_tparam).idx();
             }
             Binding::AssignToSubscript(x)
@@ -149,7 +149,7 @@ fn create_intermediate_definition_from(
             Binding::Forward(k) | Binding::PromoteForward(k) | Binding::ForwardToFirstUse(k) => {
                 current_binding = bindings.get(*k)
             }
-            Binding::PossibleLegacyTParam(legacy_tparam, _) => {
+            Binding::PossibleLegacyTParam(legacy_tparam, ..) => {
                 current_binding = bindings.get(bindings.get(*legacy_tparam).idx());
             }
             Binding::Import(x) => {

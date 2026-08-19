@@ -328,7 +328,6 @@ def f(x: E[str]):
 );
 
 testcase!(
-    bug = "Missing error",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -349,7 +348,7 @@ class Bar(Generic[T]):
 
 # Nested class using outer class's TypeVar
 class Outer(Generic[T]):
-    class Bad(Iterable[T]):  # missing error
+    class Bad(Iterable[T]):  # E: shadows
         ...
     class AlsoBad:
         x: list[T]  # E: Type variable `T` is not in scope
@@ -364,7 +363,6 @@ list[T]()  # E: Type variable `T` is not in scope
 );
 
 testcase!(
-    bug = "Missing errors",
     test_nested_class_independent_typevar_adoption,
     r#"
 from typing import Generic, Type, TypeVar
@@ -375,21 +373,20 @@ _Serialized = TypeVar("_Serialized")
 class CustomCoercer(Generic[_Deserialized, _Serialized]):
     # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
     class CoercerMapping(
-        dict[  # missing errors
-            Type[_Deserialized],
-            Type["CustomCoercer[_Deserialized, _Serialized]"],
+        dict[
+            Type[_Deserialized],  # E: shadows
+            Type["CustomCoercer[_Deserialized, _Serialized]"],  # E: shadows
         ]
     ):
-        # A method signature may bind the TypeVars as its own type parameters.
+        # The method binds new type parameters, but may not reuse the enclosing names.
         def __getitem__(
             self,
-            key: type[_Deserialized],
-        ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
+            key: type[_Deserialized],  # E: shadows
+        ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...  # E: shadows
 "#,
 );
 
 testcase!(
-    bug = "Missing error",
     test_nested_class_outer_legacy_tparam_out_of_scope,
     r#"
 from typing import Generic, TypeVar
@@ -405,14 +402,14 @@ class Outer(Generic[T]):
 
     # A nested class does not inherit the enclosing class's type parameters, so `T` is out of
     # scope in its base list and its body.
-    class Bad(Iterable[T]):  # missing error
+    class Bad(Iterable[T]):  # E: shadows
         ...
 
     class AlsoBad:
         x: list[T]  # E: Type variable `T` is not in scope
 
-        # A method signature may still bind `T` as its own type parameter.
-        def method(self, y: T) -> None:
+        # The method binds its own `T`, which illegally shadows the enclosing parameter.
+        def method(self, y: T) -> None:  # E: shadows
             ...
 
     # A nested class may still introduce its own, independent type parameter.
@@ -469,7 +466,6 @@ class C(Generic[T]):
 );
 
 testcase!(
-    bug = "Wrong/missing errors on legacy type vars",
     test_class_typevar_shadowing_enclosing_type_var,
     r#"
 from typing import Generic, TypeVar
@@ -477,10 +473,10 @@ from typing import Generic, TypeVar
 T = TypeVar("T")
 
 class A(Generic[T]):
-    class B(Generic[T]): ...  # missing error
+    class B(Generic[T]): ...  # E: shadows
 
 def f(x: T) -> T:
-    class C(Generic[T]): ...  # wrong error  # E: Redundant type parameter declaration
+    class C(Generic[T]): ...  # E: shadows
     return x
 
 class D[T]:
@@ -493,7 +489,6 @@ def g[T](x: T) -> T:
 );
 
 testcase!(
-    bug = "Missing error on legacy type vars",
     test_function_typevar_shadowing_enclosing_typevar,
     r#"
 from typing import Generic, TypeVar, reveal_type
@@ -504,7 +499,7 @@ class A(Generic[T]):
     class B:
         # This `T` is not allowed to refer to `A.T` from the outer class scope, so it must be
         # function-scoped.
-        def f(self, x: T) -> T: ...  # missing error
+        def f(self, x: T) -> T: ...  # E: shadows
 
 class C[T]:
     class D:
@@ -543,7 +538,6 @@ assert_type(C.D().y, Any)
 );
 
 testcase!(
-    bug = "Missing error",
     test_outer_class_typevar_is_out_of_scope_in_bases,
     r#"
 from typing import Generic, TypeVar
@@ -551,7 +545,7 @@ from typing import Generic, TypeVar
 LegacyT = TypeVar("LegacyT")
 
 class A(Generic[LegacyT]):
-    class B(list[LegacyT]):  # missing error
+    class B(list[LegacyT]):  # E: shadows
         pass
 
 class C[T]:
@@ -583,7 +577,6 @@ assert_type(g(0), int)
 );
 
 testcase!(
-    bug = "Missing error",
     test_cannot_redeclare_outer_typevar_in_class_in_method,
     r#"
 from typing import Generic, TypeVar, assert_type
@@ -595,7 +588,7 @@ class A[T]:
         class C[T](list[T]): ...  # E: shadows
 class B(Generic[T]):
     def f1(self):
-        class C(list[T]): ...
+        class C(list[T]): ...  # E: shadows
     def f2(self):
         class C[T](list[T]): ...  # E: shadows
     "#,
@@ -614,5 +607,30 @@ class LegacyOuter(Generic[LegacyT]):
     class Inner:
         def f(self):
             assert_type(LegacyT, TypeVar)
+    "#,
+);
+
+testcase!(
+    test_shadowing_detected_with_intervening_decl,
+    r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+class A(Generic[T]):
+    T: int  # This `T` should not prevent us from detecting that `B.T` shadows `A.T`
+    class B(Generic[T]): ...  # E: shadows
+    "#,
+);
+
+testcase!(
+    test_illegally_shadowing_class_is_still_generic,
+    r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+def f(x: T):
+    class C(Generic[T]): ...  # E: shadows
+    # Even though C.T illegally shadows f.T, we still gracefully recover and
+    # treat C as a generic class.
+    c1: C[int] = C[int]()
+    c2: C[str] = C[int]()  # E: `f.C[int]` is not assignable to `f.C[str]`
     "#,
 );

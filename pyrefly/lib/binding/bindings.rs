@@ -1850,7 +1850,7 @@ impl<'a> BindingsBuilder<'a> {
             // intercept_lookup which wraps them in PossibleLegacyTParam.
             // By finalize time we can follow through to the original
             // binding to check whether it's actually a type alias.
-            Binding::PossibleLegacyTParam(legacy_tparam, _)
+            Binding::PossibleLegacyTParam(legacy_tparam, ..)
                 if let Some(legacy_binding) = self.idx_to_binding(*legacy_tparam) =>
             {
                 self.follow_to_type_alias(legacy_binding.idx())
@@ -2468,7 +2468,15 @@ impl<'a> BindingsBuilder<'a> {
                         initialized,
                     };
                 }
-                match self.lookup_legacy_tparam_from_idx(id, original_idx, has_scoped_type_params) {
+                let shadows_enclosing_annotation_scope = self
+                    .scopes
+                    .legacy_tparam_shadows_enclosing_annotation_scope(&name.id);
+                match self.lookup_legacy_tparam_from_idx(
+                    id,
+                    original_idx,
+                    has_scoped_type_params,
+                    shadows_enclosing_annotation_scope,
+                ) {
                     Some(possible_tparam) => TParamLookupResult::MaybeTParam(possible_tparam),
                     None => TParamLookupResult::NotTParam {
                         idx: original_idx,
@@ -2518,8 +2526,18 @@ impl<'a> BindingsBuilder<'a> {
         id: LegacyTParamId,
         original_idx: Idx<Key>,
         has_scoped_type_params: bool,
+        shadows_enclosing_annotation_scope: bool,
     ) -> Option<PossibleTParam> {
-        let (original_idx, original_binding) = self.get_original_binding(original_idx)?;
+        let (mut original_idx, mut original_binding) = self.get_original_binding(original_idx)?;
+        if shadows_enclosing_annotation_scope {
+            // If we know that the current scope shadows (i.e., re-defines) a legacy tparam from an
+            // enclosing scope, then we need to create a fresh legacy tparam rather than reusing
+            // the one from the enclosing scope.
+            while let Some(Binding::PossibleLegacyTParam(tparam_idx, ..)) = original_binding {
+                (original_idx, original_binding) =
+                    self.get_original_binding(self.idx_to_binding(*tparam_idx)?.idx())?;
+            }
+        }
         // If we found a potential legacy type variable, first insert the key / binding pair
         // for the raw lookup, then insert another key / binding pair for the
         // `CheckLegacyTypeParam`, and return the `Idx<Key>`.
@@ -2527,7 +2545,11 @@ impl<'a> BindingsBuilder<'a> {
             .map(|(k, v)| self.insert_binding(k, v))?;
         let idx = self.insert_binding(
             id.as_possible_legacy_tparam_key(),
-            Binding::PossibleLegacyTParam(tparam_idx, has_scoped_type_params),
+            Binding::PossibleLegacyTParam(
+                tparam_idx,
+                has_scoped_type_params,
+                shadows_enclosing_annotation_scope,
+            ),
         );
         Some(PossibleTParam {
             id,

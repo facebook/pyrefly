@@ -6943,14 +6943,25 @@
     },
     {
       "code": -2,
-      "column": 11,
-      "concise_description": "Redundant type parameter declaration",
-      "description": "Redundant type parameter declaration",
+      "column": 29,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
       "line": 76,
       "name": "invalid-type-var",
       "severity": "error",
-      "stop_column": 20,
+      "stop_column": 30,
       "stop_line": 76
+    },
+    {
+      "code": -2,
+      "column": 24,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 86,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 25,
+      "stop_line": 86
     },
     {
       "code": -2,
@@ -6962,6 +6973,17 @@
       "severity": "error",
       "stop_column": 19,
       "stop_line": 89
+    },
+    {
+      "code": -2,
+      "column": 36,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 91,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 37,
+      "stop_line": 91
     },
     {
       "code": -2,

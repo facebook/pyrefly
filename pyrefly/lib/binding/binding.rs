@@ -2444,10 +2444,12 @@ pub enum Binding {
     /// diagnostic.
     Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>, Option<TextRange>)>),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
-    /// The flag records that this function / class has scoped type parameters, in which case
-    /// the use of legacy type parameters is invalid; the error is reported at the range of
-    /// whichever key it applies to.
-    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, bool),
+    /// - The first `bool` flag records that this function / class has scoped type parameters, in
+    ///   which case the use of legacy type parameters is invalid; the error is reported at the
+    ///   range of whichever key it applies to.
+    /// - The second `bool` flag records whether the type parameter shadows a same-named type
+    ///   parameter from an enclosing scope, which is an error.
+    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, bool, bool),
     /// An assignment to a name.
     NameAssign(Box<NameAssign>),
     /// A type alias (legacy, scoped, or `TypeAliasType` call).
@@ -2648,7 +2650,7 @@ impl DisplayWith<Bindings> for Binding {
             Self::OutOfScopeTypeParameter(k, _) => {
                 write!(f, "OutOfScopeTypeParameter({})", ctx.display(*k))
             }
-            Self::PossibleLegacyTParam(legacy_tparam, _) => {
+            Self::PossibleLegacyTParam(legacy_tparam, ..) => {
                 write!(f, "PossibleLegacyTParam({})", ctx.display(*legacy_tparam))
             }
             Self::AnnotatedType(k1, k2) => {
@@ -2849,7 +2851,7 @@ impl Binding {
             | Binding::TypeVarTuple(_)
             | Binding::TypeParameter(_)
             | Binding::OutOfScopeTypeParameter(..)
-            | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
+            | Binding::PossibleLegacyTParam(..) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
             Binding::Function { in_class, .. } => {
                 if *in_class {
