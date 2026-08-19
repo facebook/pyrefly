@@ -1724,8 +1724,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Optimization: no-hint and single-hint cases can return immediately.
             None => return inner(None, errors),
             Some(hint) if hint.types().len() == 1 => return inner(hint.types().first(), errors),
-            // Optimization: discard overly wide hints.
-            Some(hint) if hint.types().len() > MAX_CALL_HINT_WIDTH => return inner(None, errors),
+            // Optimization: discard overly wide hints. Scalar members (literals, `None`) are
+            // cheap to try individually and don't decompose further, so they don't count
+            // against the cap — mirrors `infer_with_decomposed_hint`'s `decomposable_width`.
+            Some(hint)
+                if hint.types().iter().filter(|t| !t.is_scalar()).count() > MAX_CALL_HINT_WIDTH =>
+            {
+                return inner(None, errors);
+            }
             Some(hint) => hint,
         };
         let mut hints = hint.types().map(Some);

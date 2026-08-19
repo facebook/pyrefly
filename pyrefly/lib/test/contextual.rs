@@ -858,6 +858,36 @@ f(x=["a", "bad"])  # E: `list[str]` is not assignable to parameter `x`
     "#,
 );
 
+// Regression: a generic call's return TypeVar solved against a wide Literal hint (more
+// than MAX_CALL_HINT_WIDTH members) used to discard the hint entirely, falling back to
+// the argument's own widened type (e.g. `str` instead of the Literal) and reporting a
+// false bad-assignment/bad-argument-type/bad-return in every context that offers a hint.
+// Literal members are scalar and cheap to try individually, so — like
+// `test_list_hint_with_wide_literal_alias_union` above — they should not count against
+// the cap.
+testcase!(
+    test_call_hint_with_wide_literal_union,
+    r#"
+from typing import Literal, TypeVar
+
+T = TypeVar("T")
+
+def identity(x: T) -> T:
+    return x
+
+L5 = Literal["a", "b", "c", "d", "e"]
+v: L5 = identity("a")
+
+def takes_l5(x: L5) -> None: ...
+takes_l5(identity("a"))
+
+def returns_l5() -> L5:
+    return identity("a")
+
+bad: L5 = identity("z")  # E: `str` is not assignable to `Literal['a', 'b', 'c', 'd', 'e']`
+    "#,
+);
+
 // Regression: when a TypeVar's only constraints are upper bounds, multiple
 // such bounds where one is a subtype of the other must collapse to the
 // *narrowest* one. Previously `get_new_bound`'s absorb logic kept the wider

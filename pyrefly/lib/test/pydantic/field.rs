@@ -23,6 +23,28 @@ class Model(BaseModel):
 "#,
 );
 
+// See https://github.com/facebook/pyrefly/issues/4569. Not pydantic-specific — `Field`
+// just happens to be a TypeVar-returning generic function, the shape that triggers the
+// underlying bug (see test_call_hint_with_wide_literal_union in test::contextual for the
+// general-purpose reproduction and fix).
+pydantic_testcase!(
+    test_field_default_with_wide_literal_type,
+    r#"
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+T4 = Literal["a", "b", "c", "d"]
+T5 = Literal["a", "b", "c", "d", "e"]
+
+class Works(BaseModel):
+    value: T4 = Field("a")
+
+class AlsoWorks(BaseModel):
+    value: T5 = Field("a")
+"#,
+);
+
 pydantic_testcase!(
     test_field_right_type,
     r#"
