@@ -337,6 +337,7 @@ enum ClassFieldInner {
         ty: Type,
         is_abstract: bool,
         is_function_without_return_annotation: bool,
+        is_classvar: bool,
     },
     /// A method whose instance attribute type is resolved from another method on the receiver.
     ProxyMethod { target: Name, ty: Type },
@@ -510,7 +511,7 @@ impl ClassField {
 
     fn new_synthesized_inner(ty: Type, is_classvar: bool) -> Self {
         // Detect if this is a property and construct the appropriate variant.
-        // Properties and methods are never ClassVars.
+        // Properties are never ClassVars.
         if ty.is_property_getter() || ty.is_property_setter_with_getter().is_some() {
             ClassField(
                 ClassFieldInner::Property {
@@ -526,6 +527,7 @@ impl ClassField {
                     ty,
                     is_abstract: false,
                     is_function_without_return_annotation: false,
+                    is_classvar,
                 },
                 IsInherited::Maybe,
             )
@@ -609,6 +611,7 @@ impl ClassField {
                 ty,
                 is_abstract,
                 is_function_without_return_annotation,
+                is_classvar,
             } => {
                 let mut ty = ty.clone();
                 f(&mut ty);
@@ -618,6 +621,7 @@ impl ClassField {
                         is_abstract: *is_abstract,
                         is_function_without_return_annotation:
                             *is_function_without_return_annotation,
+                        is_classvar: *is_classvar,
                     },
                     self.1.clone(),
                 )
@@ -845,9 +849,9 @@ impl ClassField {
             ClassFieldInner::InstanceAttribute { .. }
             | ClassFieldInner::NestedClass { .. }
             | ClassFieldInner::ClassAttribute { .. } => false,
+            ClassFieldInner::Method { is_classvar, .. } => !is_classvar,
             ClassFieldInner::Property { .. }
             | ClassFieldInner::Descriptor { .. }
-            | ClassFieldInner::Method { .. }
             | ClassFieldInner::ProxyMethod { .. } => true,
         }
     }
@@ -998,7 +1002,7 @@ impl ClassField {
             ClassFieldInner::Descriptor { annotation, .. } => {
                 annotation.as_ref().is_some_and(|ann| ann.is_class_var())
             }
-            ClassFieldInner::Method { .. } => false,
+            ClassFieldInner::Method { is_classvar, .. } => *is_classvar,
             ClassFieldInner::ProxyMethod { .. } => false,
             ClassFieldInner::NestedClass { .. } => false,
             ClassFieldInner::ClassAttribute { is_classvar, .. } => *is_classvar,
@@ -2251,11 +2255,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if is_method(&ty, &initialization, name, annotation.as_ref()) {
             // Use helper functions to compute flags for unions
             let is_abstract_flag = has_any_abstract(&ty);
+            let is_classvar = annotation.as_ref().is_some_and(|ann| ann.is_class_var());
             ClassField(
                 ClassFieldInner::Method {
                     ty,
                     is_abstract: is_abstract_flag,
                     is_function_without_return_annotation,
+                    is_classvar,
                 },
                 is_inherited,
             )
@@ -3424,7 +3430,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     unreachable!("A descriptor attribute should always have a valid base")
                 }
             }
-            ClassFieldInner::Method { mut ty, .. } => {
+            ClassFieldInner::Method {
+                mut ty,
+                is_classvar,
+                ..
+            } => {
                 // bind_instance matches on the type, so resolve it if we can
                 ty = self.normalize_attr_ty(ty);
                 // If the field is a dunder or ClassVar[Callable] & the assigned value is a callable, we replace it with a named function
@@ -3445,12 +3455,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(quantified) = self_quantified {
                     ty = self.wrap_with_quantified(ty, quantified);
                 }
-                ClassAttribute::read_write(
-                    make_bound_method(self.heap, instance, ty).unwrap_or_else(|ty| {
-                        make_bound_classmethod(self.heap, &instance.to_class_base(), ty)
-                            .into_inner()
-                    }),
-                )
+                let ty = make_bound_method(self.heap, instance, ty).unwrap_or_else(|ty| {
+                    make_bound_classmethod(self.heap, &instance.to_class_base(), ty).into_inner()
+                });
+                if is_classvar {
+                    ClassAttribute::read_only(ty, ReadOnlyReason::ClassVar)
+                } else {
+                    ClassAttribute::read_write(ty)
+                }
             }
             ClassFieldInner::ProxyMethod { target, .. } => {
                 match self.get_class_member(instance.class, &target) {
@@ -3920,7 +3932,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
 
-        let mut got_attribute = None;
+        let mut got_instance_attribute = None;
+        let mut got_class_attribute = None;
         let mut parent_attr_found = false;
         let mut parent_attr_requires_override = false;
         let mut parent_attr_is_from_object = false;
@@ -4055,13 +4068,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 continue;
             }
+            // Compare callable ClassVars before method binding removes their first parameter.
+            let compare_as_class_attributes = class_field.is_class_var()
+                && want_class_field.is_class_var()
+                && (matches!(&class_field.0, ClassFieldInner::Method { .. })
+                    || matches!(&want_class_field.0, ClassFieldInner::Method { .. }));
             let want_attribute = {
-                let mut attr = self.as_instance_attribute(
-                    field_name,
-                    &want_class_field,
-                    // Substitute `Self` with derived class to support contravariant occurrences of `Self`
-                    &Instance::of_protocol(parent, self.instantiate(cls)),
-                );
+                // Substitute `Self` with the derived class to support contravariant occurrences.
+                let parent_instance = Instance::of_protocol(parent, self.instantiate(cls));
+                let mut attr = if compare_as_class_attributes {
+                    self.as_class_attribute(
+                        field_name,
+                        &want_class_field,
+                        &parent_instance.to_class_base(),
+                    )
+                } else {
+                    self.as_instance_attribute(field_name, &want_class_field, &parent_instance)
+                };
                 // Relax the parent return type for the override-consistency check when the parent
                 // function's body is a `raise NotImplementedError(...)` placeholder *and* the
                 // parent's return type was inferred (not user-annotated). In that case the
@@ -4125,19 +4148,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // skip the override check.
                 continue;
             };
-            if got_attribute.is_none() {
-                // Optimisation: Only compute the `got_attr` once, and only if we actually need it.
-                got_attribute = Some(self.as_instance_attribute(
-                    field_name,
-                    class_field,
-                    &Instance::of_class(&self.as_class_type_unchecked(cls)),
-                ));
-            }
-            let attr_check = self.is_class_attribute_subset(
-                got_attribute.as_ref().unwrap(),
-                &want_attribute,
-                &mut |got, want| self.is_subset_eq_with_reason(got, want),
-            );
+            // Only compute each view once, and only if we actually need it.
+            let got_attribute = if compare_as_class_attributes {
+                got_class_attribute.get_or_insert_with(|| {
+                    self.as_class_attribute(
+                        field_name,
+                        class_field,
+                        &ClassBase::ClassType(self.as_class_type_unchecked(cls)),
+                    )
+                })
+            } else {
+                got_instance_attribute.get_or_insert_with(|| {
+                    self.as_instance_attribute(
+                        field_name,
+                        class_field,
+                        &Instance::of_class(&self.as_class_type_unchecked(cls)),
+                    )
+                })
+            };
+            let attr_check =
+                self.is_class_attribute_subset(got_attribute, &want_attribute, &mut |got, want| {
+                    self.is_subset_eq_with_reason(got, want)
+                });
             let error = match attr_check {
                 Err(ref e)
                     if let (Some((child, parent)), Some(got), Some(want)) = (

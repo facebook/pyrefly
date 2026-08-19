@@ -71,8 +71,7 @@ class E(B):
 );
 
 testcase!(
-    bug = "Callable ClassVar override is treated as an instance variable",
-    test_override_class_var_callable_with_lambda,
+    test_override_class_var_callable,
     r#"
 from collections.abc import Callable
 from typing import ClassVar
@@ -81,7 +80,28 @@ class Parent:
     x: ClassVar[Callable]
 
 class Child(Parent):
-    x: ClassVar[Callable] = lambda x: None  # E: `Child.x` is not a ClassVar, but `Parent.x` is
+    x: ClassVar[Callable] = lambda x: None
+
+def get_value() -> Callable[[object], int]: ...
+
+class ParameterizedParent:
+    x: ClassVar[Callable[[object], int]]
+
+class ParameterizedChild(ParameterizedParent):
+    x: ClassVar[Callable[[object], int]] = get_value()
+
+class InstanceVariableChild(ParameterizedParent):
+    x: Callable[[object], int] = get_value()  # E: Instance variable `InstanceVariableChild.x` overrides ClassVar
+
+def inferred_value(x: object) -> int: ...
+
+class InferredClassVarChild(ParameterizedParent):
+    x = inferred_value
+
+def get_incompatible_value() -> Callable[[str], int]: ...
+
+class IncompatibleChild(ParameterizedParent):
+    x: ClassVar[Callable[[str], int]] = get_incompatible_value()  # E: is not consistent with
 "#,
 );
 
