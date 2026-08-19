@@ -182,7 +182,7 @@ print(json.dumps({'python_platform': platform, 'python_version': version, 'site_
         })?;
         if !python_info.status.success() {
             let stderr = String::from_utf8(python_info.stderr)
-                .unwrap_or("<Failed to parse STDOUT from UTF-8 string>".to_owned());
+                .unwrap_or("<Failed to parse STDERR from UTF-8 string>".to_owned());
             return Err(anyhow::anyhow!(
                 "Unable to query {} for environment info:\nSTDOUT: {}\nSTDERR: {}",
                 command_description,
