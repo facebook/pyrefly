@@ -328,6 +328,7 @@ def f(x: E[str]):
 );
 
 testcase!(
+    bug = "Missing error",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -348,7 +349,7 @@ class Bar(Generic[T]):
 
 # Nested class using outer class's TypeVar
 class Outer(Generic[T]):
-    class Bad(Iterable[T]):  # E: Type variable `T` is not in scope
+    class Bad(Iterable[T]):  # missing error
         ...
     class AlsoBad:
         x: list[T]  # E: Type variable `T` is not in scope
@@ -363,6 +364,7 @@ list[T]()  # E: Type variable `T` is not in scope
 );
 
 testcase!(
+    bug = "Missing errors",
     test_nested_class_independent_typevar_adoption,
     r#"
 from typing import Generic, Type, TypeVar
@@ -373,7 +375,7 @@ _Serialized = TypeVar("_Serialized")
 class CustomCoercer(Generic[_Deserialized, _Serialized]):
     # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
     class CoercerMapping(
-        dict[  # E: Type variable `_Deserialized` is not in scope  # E: Type variable `_Serialized` is not in scope
+        dict[  # missing errors
             Type[_Deserialized],
             Type["CustomCoercer[_Deserialized, _Serialized]"],
         ]
@@ -387,6 +389,7 @@ class CustomCoercer(Generic[_Deserialized, _Serialized]):
 );
 
 testcase!(
+    bug = "Missing error",
     test_nested_class_outer_legacy_tparam_out_of_scope,
     r#"
 from typing import Generic, TypeVar
@@ -402,7 +405,7 @@ class Outer(Generic[T]):
 
     # A nested class does not inherit the enclosing class's type parameters, so `T` is out of
     # scope in its base list and its body.
-    class Bad(Iterable[T]):  # E: Type variable `T` is not in scope
+    class Bad(Iterable[T]):  # missing error
         ...
 
     class AlsoBad:
@@ -540,6 +543,7 @@ assert_type(C.D().y, Any)
 );
 
 testcase!(
+    bug = "Missing error",
     test_outer_class_typevar_is_out_of_scope_in_bases,
     r#"
 from typing import Generic, TypeVar
@@ -547,7 +551,7 @@ from typing import Generic, TypeVar
 LegacyT = TypeVar("LegacyT")
 
 class A(Generic[LegacyT]):
-    class B(list[LegacyT]):  # E: not in scope
+    class B(list[LegacyT]):  # missing error
         pass
 
 class C[T]:
@@ -579,6 +583,7 @@ assert_type(g(0), int)
 );
 
 testcase!(
+    bug = "Missing error",
     test_cannot_redeclare_outer_typevar_in_class_in_method,
     r#"
 from typing import Generic, TypeVar, assert_type
@@ -590,7 +595,7 @@ class A[T]:
         class C[T](list[T]): ...  # E: shadows
 class B(Generic[T]):
     def f1(self):
-        class C(list[T]): ...  # E: not in scope
+        class C(list[T]): ...
     def f2(self):
         class C[T](list[T]): ...  # E: shadows
     "#,

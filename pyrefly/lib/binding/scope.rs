@@ -3198,7 +3198,6 @@ impl Scopes {
         lookup: &dyn LookupExport,
         current_module: ModuleName,
     ) -> NameReadInfo {
-        let mut may_reintroduce_legacy_type_parameter = false;
         self.visit_scopes(
             |ScopeView {
                  lookup_depth: _,
@@ -3207,13 +3206,6 @@ impl Scopes {
                  static_barrier,
              }| {
                 let is_class = matches!(scope.kind, ScopeKind::Class(_));
-                if !static_barrier
-                    && matches!(scope.kind, ScopeKind::Annotation { class_scope: false })
-                {
-                    // A function signature may bind a legacy TypeVar as its own parameter even when
-                    // an enclosing class has already bound the same declaration.
-                    may_reintroduce_legacy_type_parameter = true;
-                }
                 // Class body scopes are dynamic, not static, so if we don't find a name in the
                 // current flow we keep looking. In every other kind of scope, anything the Python
                 // compiler has identified as local shadows enclosing scopes, so we should prefer
@@ -3227,21 +3219,26 @@ impl Scopes {
                 if static_barrier
                 && matches!(scope.kind, ScopeKind::Annotation { class_scope: true })
                 && let Some(static_info) = static_info
-                && matches!(
-                    static_info.style,
-                    StaticStyle::ScopedTypeParam | StaticStyle::PossibleLegacyTParam
-                )
                 // Type parameters have special scoping rules that are more restrictive than
                 // runtime semantics. Apply these rules only to static type usages. Non-static
                 // usages fall through to normal lookup, which follows the runtime.
                 && usage.is_static()
                 {
-                    if may_reintroduce_legacy_type_parameter {
-                        return None;
-                    } else {
-                        return Some(NameReadInfo::OutOfScopeTypeParameter {
-                            key: static_info.as_key(name.into_key()),
-                        });
+                    match static_info.style {
+                        StaticStyle::PossibleLegacyTParam
+                            if matches!(self.current().kind, ScopeKind::Annotation { .. }) =>
+                        {
+                            // This is a declaration of a new legacy tparam with the same name,
+                            // rather than a reference to the outer one. We return `None` so that
+                            // lookup continues to the raw type variable definition.
+                            return None;
+                        }
+                        StaticStyle::PossibleLegacyTParam | StaticStyle::ScopedTypeParam => {
+                            return Some(NameReadInfo::OutOfScopeTypeParameter {
+                                key: static_info.as_key(name.into_key()),
+                            });
+                        }
+                        _ => {}
                     }
                 }
 

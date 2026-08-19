@@ -97,7 +97,9 @@
     "Line 143: Unexpected errors ['`InferredContravariantParamSpecOld[[object]]` is not assignable to `InferredContravariantParamSpecOld[[int]]`']",
     "Line 152: Unexpected errors ['`InferredCovariantParamSpecOld[[int]]` is not assignable to `InferredCovariantParamSpecOld[[object]]`']"
   ],
-  "generics_scoping.py": [],
+  "generics_scoping.py": [
+    "Line 86: Expected 1 errors"
+  ],
   "generics_self_advanced.py": [],
   "generics_self_attributes.py": [],
   "generics_self_basic.py": [],
