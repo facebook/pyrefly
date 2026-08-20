@@ -54,7 +54,6 @@ use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::read_only::ReadOnlyReason;
-use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;

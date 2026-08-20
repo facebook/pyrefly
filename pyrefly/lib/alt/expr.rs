@@ -169,6 +169,14 @@ enum RegexGroupKey {
     Str(String),
 }
 
+enum RegexCall {
+    Compile,
+    Match,
+    ValidatePattern,
+    PatternMatch,
+    MatchGroup,
+}
+
 impl Ranged for TypeOrExpr<'_> {
     fn range(&self) -> TextRange {
         match self {
@@ -1102,8 +1110,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .into_ty()
             }
         } else {
-            let ret = self.expr_call_infer(x, callee_ty.clone(), hint, errors);
-            self.regex_call_result(x, &callee_ty, ret, errors)
+            let regex_call = self.regex_callee(&callee_ty);
+            let ret = self.expr_call_infer(x, callee_ty, hint, errors);
+            match regex_call {
+                Some(regex_call) => self.regex_call_result(x, regex_call, ret, errors),
+                None => ret,
+            }
         }
     }
 
@@ -1995,63 +2007,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn regex_call_result(
         &self,
         call: &ExprCall,
-        callee_ty: &Type,
+        regex_call: RegexCall,
         ret: Type,
         errors: &ErrorCollector,
     ) -> Type {
-        let Some((module, class_name, function_name)) = self.regex_callee(callee_ty) else {
-            return ret;
-        };
-        if module != "re" {
-            return ret;
-        }
-        if class_name.as_deref() == Some("Match") {
-            return match function_name.as_str() {
-                "group" => {
-                    self.regex_validate_match_group_call(call, errors);
-                    ret
-                }
-                _ => ret,
-            };
-        }
-        match (class_name.as_deref(), function_name.as_str()) {
-            (None, "compile" | "template") => {
+        match regex_call {
+            RegexCall::Compile => {
                 match self.regex_groups_from_pattern_argument(&call.arguments, errors) {
                     Some(groups) => self.annotate_regex(ret, &groups),
                     None => ret,
                 }
             }
-            (None, "match" | "fullmatch" | "search") => {
+            RegexCall::Match => {
                 match self.regex_groups_from_pattern_argument(&call.arguments, errors) {
                     Some(groups) => self.annotate_regex_matches(ret, &groups),
                     None => ret,
                 }
             }
-            (None, "findall" | "finditer" | "split") => {
+            RegexCall::ValidatePattern => {
                 self.regex_groups_from_pattern_argument(&call.arguments, errors);
                 ret
             }
-            (Some("Pattern"), "match" | "fullmatch" | "search") => {
+            RegexCall::PatternMatch => {
                 let groups = self.regex_groups_from_pattern_method_receiver(call, errors);
                 match groups {
                     Some(groups) => self.annotate_regex_matches(ret, &groups),
                     None => ret,
                 }
             }
-            _ => ret,
+            RegexCall::MatchGroup => {
+                self.regex_validate_match_group_call(call, errors);
+                ret
+            }
         }
     }
 
-    fn regex_callee(&self, callee_ty: &Type) -> Option<(String, Option<String>, String)> {
+    fn regex_callee(&self, callee_ty: &Type) -> Option<RegexCall> {
         callee_ty.visit_toplevel_func_metadata(&|metadata| {
-            Some((
-                metadata.kind.module_name().as_str().to_owned(),
-                metadata
-                    .kind
-                    .class()
-                    .map(|class| class.name().as_str().to_owned()),
-                metadata.kind.function_name().as_ref().as_str().to_owned(),
-            ))
+            if metadata.kind.module_name().as_str() != "re" {
+                return None;
+            }
+            let class = metadata.kind.class();
+            let class = class.as_ref().map(|class| class.name().as_str());
+            let function = metadata.kind.function_name();
+            match (class, function.as_ref().as_str()) {
+                (None, "compile" | "template") => Some(RegexCall::Compile),
+                (None, "match" | "fullmatch" | "search") => Some(RegexCall::Match),
+                (None, "findall" | "finditer" | "split") => Some(RegexCall::ValidatePattern),
+                (Some("Pattern"), "match" | "fullmatch" | "search") => {
+                    Some(RegexCall::PatternMatch)
+                }
+                (Some("Match"), "group") => Some(RegexCall::MatchGroup),
+                _ => None,
+            }
         })
     }
 
@@ -2200,19 +2208,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("No such group: {index}"),
                 );
             }
-            Some(RegexGroupKey::Str(name)) => {
-                match groups.iter().find(|group| group.name == Some(name.clone())) {
-                    Some(_) => {}
-                    None => {
-                        self.error(
-                            errors,
-                            arg.range(),
-                            ErrorKind::Regex,
-                            format!("No such group: '{name}'"),
-                        );
-                    }
-                }
+            Some(RegexGroupKey::Str(name))
+                if !groups
+                    .iter()
+                    .any(|group| group.name.as_deref() == Some(name.as_str())) =>
+            {
+                self.error(
+                    errors,
+                    arg.range(),
+                    ErrorKind::Regex,
+                    format!("No such group: '{name}'"),
+                );
             }
+            Some(RegexGroupKey::Str(_)) => {}
             None => {}
         }
     }
@@ -3422,13 +3430,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             match base {
                 Type::Annotated(inner, metadata) => {
-                    let ret = self.subscript_infer_for_type_with_options(
+                    let ret = self.subscript_infer_for_type_with_key_present(
                         &inner,
                         slice,
                         range,
                         errors,
                         key_present,
-                        allow_type_level_dsl,
+                        type_form_context,
                     );
                     if self.is_regex_match_type(&inner)
                         && let Some(groups) = self.regex_groups_from_metadata(&metadata)
