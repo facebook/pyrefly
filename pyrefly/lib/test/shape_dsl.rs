@@ -277,9 +277,9 @@ def select_shape(dim: Int, shape: IntTuple) -> IntTuple:
         assert!(
             matches!(ty, Type::Function(function)
                 if matches!(&function.metadata.kind,
-                    FunctionKind::TypeShapeDsl(_, signature, _)
-                        if signature.parameter_domains() == expected_parameters
-                            && signature.result_domain() == expected_result)),
+                    FunctionKind::TypeShapeDsl(_, function)
+                        if function.parameter_domains() == expected_parameters
+                            && function.result_domain() == expected_result)),
             "expected `{name}` to retain type-level DSL metadata, got `{ty}`"
         );
         assert_eq!(attribute_symbol_kind_from_type(ty), SymbolKind::Function);

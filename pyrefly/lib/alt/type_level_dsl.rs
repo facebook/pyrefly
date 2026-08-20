@@ -11,9 +11,9 @@ use std::sync::Arc;
 use pyrefly_types::callable::Param;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::type_level_dsl::ResolvedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::TypeLevelDslCall;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
-use pyrefly_types::type_level_dsl::TypeShapeDslSignature;
 use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::CalleeKind;
@@ -109,8 +109,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else if let FunctionKind::Def(func_id) = function_kind {
                 return Some(FunctionKind::TypeShapeDsl(
                     func_id.clone(),
-                    Arc::new(TypeShapeDslSignature::new(parameter_domains, result)),
-                    dsl.clone(),
+                    Arc::new(
+                        ResolvedTypeShapeDslFunction::try_new(dsl.clone(), parameter_domains)
+                            .expect(
+                                "resolved DSL parameters were checked against the validated AST",
+                            ),
+                    ),
                 ));
             } else {
                 self.error(
@@ -133,14 +137,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         match callee.callee_kind() {
-            Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(_, signature, function))) => self
-                .parse_user_defined_type_level_dsl_call(
-                    call,
-                    function,
-                    signature,
-                    type_form_context,
-                    errors,
-                ),
+            Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(_, function))) => self
+                .parse_user_defined_type_level_dsl_call(call, function, type_form_context, errors),
             Some(CalleeKind::Function(FunctionKind::Def(id)))
                 if id.has_toplevel_qname("shape_extensions", "broadcast") =>
             {
@@ -161,8 +159,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn parse_user_defined_type_level_dsl_call(
         &self,
         call: &ExprCall,
-        function: Arc<ValidatedTypeShapeDslFunction>,
-        signature: Arc<TypeShapeDslSignature>,
+        function: Arc<ResolvedTypeShapeDslFunction>,
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
@@ -201,7 +198,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("`{name}` does not accept starred arguments"),
             );
         }
-        let parameter_domains = signature.parameter_domains();
+        let parameter_domains = function.parameter_domains();
         if call.arguments.args.len() != parameter_domains.len() {
             return self.error(
                 errors,
@@ -245,9 +242,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             args.push(arg);
         }
-        Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::user_defined(
-            function, signature, args,
-        )))
+        Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::user_defined(function, args)))
     }
 
     fn parse_type_shape_dsl_argument(

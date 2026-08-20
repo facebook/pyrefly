@@ -34,8 +34,7 @@ use crate::equality::TypeEq;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::meta_shape_dsl::ShapeTransform;
-use crate::type_level_dsl::TypeShapeDslSignature;
-use crate::type_level_dsl::ValidatedTypeShapeDslFunction;
+use crate::type_level_dsl::ResolvedTypeShapeDslFunction;
 use crate::types::Type;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -459,12 +458,8 @@ pub enum FunctionKind {
         Arc<ShapeDslFunction>,
         IdentityIgnored<Arc<Vec<Arc<ShapeDslFunction>>>>,
     ),
-    /// A validated user-defined type-level shape DSL function.
-    TypeShapeDsl(
-        Arc<FuncDefId>,
-        Arc<TypeShapeDslSignature>,
-        Arc<ValidatedTypeShapeDslFunction>,
-    ),
+    /// A resolved user-defined type-level shape DSL function.
+    TypeShapeDsl(Arc<FuncDefId>, Arc<ResolvedTypeShapeDslFunction>),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,
     /// The `shape_extensions.defines_assert_shape` decorator function itself.
@@ -569,7 +564,7 @@ impl FunctionKind {
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Synthesized(id) => id.module.name(),
             Self::Def(func_id) => func_id.qname.module_name(),
-            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.qname.module_name(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _) => id.qname.module_name(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
             Self::DefinesAssertShape => ModuleName::from_str("shape_extensions"),
         }
@@ -609,7 +604,7 @@ impl FunctionKind {
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Synthesized(id) => Cow::Borrowed(&id.name),
             Self::Def(func_id) => Cow::Borrowed(func_id.qname.id()),
-            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => Cow::Borrowed(id.qname.id()),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _) => Cow::Borrowed(id.qname.id()),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
             Self::DefinesAssertShape => Cow::Owned(Name::new_static("defines_assert_shape")),
         }
@@ -649,7 +644,7 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
-            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.cls.clone(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _) => id.cls.clone(),
             Self::UsesShapeDsl => None,
             Self::DefinesAssertShape => None,
         }

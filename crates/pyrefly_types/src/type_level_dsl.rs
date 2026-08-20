@@ -38,31 +38,11 @@ pub enum TypeShapeDslDomain {
     IntTuple,
 }
 
+/// A syntax-validated DSL definition paired with its resolved parameter domains.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
-pub struct TypeShapeDslSignature {
-    /// Ordered to match both the retained AST parameters and deferred call arguments.
+pub struct ResolvedTypeShapeDslFunction {
+    definition: Arc<ValidatedTypeShapeDslFunction>,
     parameter_domains: Vec<TypeShapeDslDomain>,
-    result_domain: TypeShapeDslDomain,
-}
-
-impl TypeShapeDslSignature {
-    pub fn new(
-        parameter_domains: Vec<TypeShapeDslDomain>,
-        result_domain: TypeShapeDslDomain,
-    ) -> Self {
-        Self {
-            parameter_domains,
-            result_domain,
-        }
-    }
-
-    pub fn parameter_domains(&self) -> &[TypeShapeDslDomain] {
-        &self.parameter_domains
-    }
-
-    pub fn result_domain(&self) -> TypeShapeDslDomain {
-        self.result_domain
-    }
 }
 
 impl Visit<Type> for TypeShapeDslDomain {
@@ -75,22 +55,22 @@ impl VisitMut<Type> for TypeShapeDslDomain {
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
 }
 
-impl Visit<Type> for TypeShapeDslSignature {
+impl Visit<Type> for ResolvedTypeShapeDslFunction {
     const RECURSE_CONTAINS: bool = false;
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
-impl VisitMut<Type> for TypeShapeDslSignature {
+impl VisitMut<Type> for ResolvedTypeShapeDslFunction {
     const RECURSE_CONTAINS: bool = false;
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
 }
 
-impl Visit<Type> for Arc<TypeShapeDslSignature> {
+impl Visit<Type> for Arc<ResolvedTypeShapeDslFunction> {
     const RECURSE_CONTAINS: bool = false;
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
-impl VisitMut<Type> for Arc<TypeShapeDslSignature> {
+impl VisitMut<Type> for Arc<ResolvedTypeShapeDslFunction> {
     const RECURSE_CONTAINS: bool = false;
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
 }
@@ -300,6 +280,40 @@ impl ValidatedTypeShapeDslFunction {
     }
 }
 
+impl ResolvedTypeShapeDslFunction {
+    pub fn try_new(
+        definition: Arc<ValidatedTypeShapeDslFunction>,
+        parameter_domains: Vec<TypeShapeDslDomain>,
+    ) -> Option<Self> {
+        (definition.parameter_count() == parameter_domains.len()).then_some(Self {
+            definition,
+            parameter_domains,
+        })
+    }
+
+    pub fn name(&self) -> &Name {
+        self.definition.name()
+    }
+
+    pub fn parameter_name(&self, index: usize) -> &Name {
+        self.definition.parameter_name(index)
+    }
+
+    pub fn parameter_domains(&self) -> &[TypeShapeDslDomain] {
+        &self.parameter_domains
+    }
+
+    pub fn result_domain(&self) -> TypeShapeDslDomain {
+        self.parameter_domains[self.definition.returned_parameter_index()]
+    }
+
+    fn evaluate(&self, args: &[Type]) -> Option<DslValue> {
+        // Declaration validation currently admits only identity bodies.
+        let return_index = self.definition.returned_parameter_index();
+        DslValue::from_type(&args[return_index], self.parameter_domains[return_index])
+    }
+}
+
 /// A deferred type-level DSL invocation held until a function-call return boundary.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut)]
@@ -312,10 +326,7 @@ pub struct TypeLevelDslCall {
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub enum TypeLevelDslFunction {
     Broadcast,
-    UserDefined {
-        function: Arc<ValidatedTypeShapeDslFunction>,
-        signature: Arc<TypeShapeDslSignature>,
-    },
+    UserDefined(Arc<ResolvedTypeShapeDslFunction>),
 }
 
 #[derive(Debug, Clone)]
@@ -343,21 +354,14 @@ impl TypeLevelDslCall {
         }
     }
 
-    pub fn user_defined(
-        function: Arc<ValidatedTypeShapeDslFunction>,
-        signature: Arc<TypeShapeDslSignature>,
-        args: Vec<Type>,
-    ) -> Self {
+    pub fn user_defined(function: Arc<ResolvedTypeShapeDslFunction>, args: Vec<Type>) -> Self {
         assert_eq!(
             args.len(),
-            signature.parameter_domains().len(),
-            "type-level DSL arguments must align with the validated signature"
+            function.parameter_domains().len(),
+            "type-level DSL arguments must align with the resolved function"
         );
         Self {
-            function: TypeLevelDslFunction::UserDefined {
-                function,
-                signature,
-            },
+            function: TypeLevelDslFunction::UserDefined(function),
             args,
         }
     }
@@ -365,14 +369,14 @@ impl TypeLevelDslCall {
     pub fn function_name(&self) -> &str {
         match &self.function {
             TypeLevelDslFunction::Broadcast => "broadcast",
-            TypeLevelDslFunction::UserDefined { function, .. } => function.name().as_str(),
+            TypeLevelDslFunction::UserDefined(function) => function.name().as_str(),
         }
     }
 
     pub fn result_domain(&self) -> TypeShapeDslDomain {
         match &self.function {
             TypeLevelDslFunction::Broadcast => TypeShapeDslDomain::IntTuple,
-            TypeLevelDslFunction::UserDefined { signature, .. } => signature.result_domain(),
+            TypeLevelDslFunction::UserDefined(function) => function.result_domain(),
         }
     }
 
@@ -403,41 +407,11 @@ impl TypeLevelDslCall {
                 };
                 broadcast_shapes(&left, &right).map(|shape| shape.to_shape_arg_type())
             }
-            TypeLevelDslFunction::UserDefined {
-                function,
-                signature,
-            } => Ok(function
-                .evaluate(&self.args, signature)
+            TypeLevelDslFunction::UserDefined(function) => Ok(function
+                .evaluate(&self.args)
                 .map(|value| value.into_type())
                 .unwrap_or_else(|| self.fallback())),
         }
-    }
-}
-
-impl ValidatedTypeShapeDslFunction {
-    fn evaluate(&self, args: &[Type], signature: &TypeShapeDslSignature) -> Option<DslValue> {
-        // The validator currently admits only identity bodies; richer bodies need compiled evaluation.
-        let parameters = &self.definition.parameters.args;
-        assert_eq!(
-            parameters.len(),
-            signature.parameter_domains().len(),
-            "validated type-level DSL AST must align with its signature"
-        );
-        assert_eq!(
-            args.len(),
-            parameters.len(),
-            "type-level DSL values must align with validated parameters"
-        );
-        let return_index = self.returned_parameter_index();
-        assert_eq!(
-            signature.parameter_domains()[return_index],
-            signature.result_domain(),
-            "validated identity DSL return domain must match its result domain"
-        );
-        DslValue::from_type(
-            &args[return_index],
-            signature.parameter_domains()[return_index],
-        )
     }
 }
 
