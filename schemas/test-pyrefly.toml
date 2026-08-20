@@ -19,6 +19,7 @@ python-platform = "linux"
 python-version = "3.12.0"
 skip-interpreter-query = false
 python-interpreter-path = "venv/bin/python3"
+python-interpreter-find-cmd = ["poetry", "env", "info", "-e"]
 conda-environment = "myenv"
 fallback-python-interpreter-name = "python3"
 typeshed-path = "/path/to/typeshed"
