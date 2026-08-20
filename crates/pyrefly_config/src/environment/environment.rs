@@ -15,6 +15,7 @@ use std::sync::LazyLock;
 use anyhow::Context;
 use anyhow::anyhow;
 use itertools::Itertools;
+use pyrefly_derive::ConfigKeys;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::lock::Mutex;
@@ -40,6 +41,7 @@ static INTERPRETER_ENV_REGISTRY: LazyLock<
 /// should we always look at a venv/conda environment instead?)
 #[skip_serializing_none]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
+#[derive(ConfigKeys)]
 #[serde(rename_all = "kebab-case")]
 pub struct PythonEnvironment {
     /// The platform any `sys.platform` check should evaluate against.

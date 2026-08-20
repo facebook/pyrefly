@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use clap::ValueEnum;
 use enum_iterator::Sequence;
 use enum_iterator::all;
+use pyrefly_derive::ConfigKeys;
 use pyrefly_python::ignore::Tool;
 use serde::Deserialize;
 use serde::Serialize;
@@ -214,6 +215,7 @@ impl Preset {
 
 #[skip_serializing_none]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
+#[derive(ConfigKeys)]
 #[serde(rename_all = "kebab-case")]
 pub struct ConfigBase {
     /// Errors to silence (or not) when printing errors.
@@ -319,6 +321,7 @@ pub struct ConfigBase {
 
     /// Any unknown config items
     #[serde(flatten)]
+    #[config_keys(skip)]
     pub(crate) extras: ExtraConfigs,
 }
 

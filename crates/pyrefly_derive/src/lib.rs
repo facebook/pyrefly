@@ -13,8 +13,15 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 
+mod config_keys;
 mod type_eq;
 mod visit;
+
+/// Generate a `ConfigKeys` impl listing a config struct's serialized keys.
+#[proc_macro_derive(ConfigKeys, attributes(config_keys))]
+pub fn derive_config_keys(input: TokenStream) -> TokenStream {
+    config_keys::derive_config_keys(input)
+}
 
 /// Generate `TypeEq` traits.
 #[proc_macro_derive(TypeEq)]

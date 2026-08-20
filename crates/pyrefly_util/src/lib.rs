@@ -29,6 +29,7 @@ pub mod absolutize;
 pub mod arc_id;
 pub mod args;
 pub mod assert_size;
+pub mod config_keys;
 pub mod demand_tree;
 pub mod display;
 pub mod events;

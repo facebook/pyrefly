@@ -10,6 +10,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use pyrefly_derive::ConfigKeys;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_with::skip_serializing_none;
@@ -24,6 +25,7 @@ use crate::util::ConfigOrigin;
 
 #[skip_serializing_none]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
+#[derive(ConfigKeys)]
 #[serde(rename_all = "kebab-case")]
 pub struct Interpreters {
     #[serde(

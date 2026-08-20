@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::Display;
+use std::iter::once;
 use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
@@ -27,6 +28,7 @@ use pyrefly_build::BuildSystem;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::Target;
+use pyrefly_derive::ConfigKeys;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ignore::Tool;
@@ -38,6 +40,7 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::config_keys::ConfigKeys as _;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
@@ -46,6 +49,7 @@ use pyrefly_util::globs::HiddenDirFilter;
 use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::suggest::best_suggestion_str;
 use pyrefly_util::telemetry::SubTaskTelemetry;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
@@ -96,6 +100,7 @@ impl SubConfig {
 /// Config overrides for the `pyrefly coverage` commands.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(ConfigKeys)]
 #[serde(rename_all = "kebab-case")]
 pub struct CoverageConfig {
     /// Takes precedence over `project_includes` when set.
@@ -106,6 +111,7 @@ pub struct CoverageConfig {
 
     /// Any unknown config items
     #[serde(default, flatten)]
+    #[config_keys(skip)]
     pub(crate) extras: ExtraConfigs,
 }
 
@@ -523,6 +529,7 @@ impl ImportLookupPathPart<'_> {
 
 #[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize, Clone, Derivative)]
+#[derive(ConfigKeys)]
 #[serde(rename_all = "kebab-case")]
 #[derivative(PartialEq, Eq)]
 pub struct ConfigFile {
@@ -827,6 +834,13 @@ impl ConfigFile {
         FilteredGlobs::new(includes, project_excludes, root, hidden_dir_filter)
     }
 }
+
+// The candidate key sets and the deprecated-alias sets that rank the "did you
+// mean" SUGGESTION are both derived from the config structs via
+// `#[derive(ConfigKeys)]`, so they can't drift from the fields (see
+// `ConfigBase::config_keys()` and `ConfigBase::config_key_aliases()`).
+// Unknown-key DETECTION is independent of both -- it is serde-derived (the
+// flatten `extras` catch-all) and cannot drift.
 
 impl ConfigFile {
     pub const PYREFLY_FILE_NAME: &str = "pyrefly.toml";
@@ -1730,33 +1744,85 @@ impl ConfigFile {
                 )));
             }
 
-            if !config.root.extras.0.is_empty() {
-                let extra_keys = config.root.extras.0.keys().join(", ");
-                errors.push(ConfigError::warn(anyhow!(
-                    "Extra keys found in config: {extra_keys}"
-                )));
-            }
-            if !config.coverage.extras.0.is_empty() {
-                let extra_keys = config.coverage.extras.0.keys().join(", ");
-                errors.push(ConfigError::warn(anyhow!(
-                    "Extra keys found in coverage config: {extra_keys}"
-                )));
-            }
-            for sub_config in &config.sub_configs {
-                if !sub_config.settings.extras.0.is_empty() {
-                    let extra_keys = sub_config.settings.extras.0.keys().join(", ");
-                    errors.push(ConfigError::warn(anyhow!(
-                        "Extra keys found in sub config matching {}: {extra_keys}",
-                        sub_config.matches
-                    )));
-                }
-            }
+            errors.extend(
+                config
+                    .unknown_key_warnings()
+                    .into_iter()
+                    .map(ConfigError::warn),
+            );
             (config, errors)
         }
         let config_path = config_path.absolutize();
         let (config, errors) = f(&config_path);
         let errors = errors.into_map(|err| err.context(format!("{}", config_path.display())));
         (config, errors)
+    }
+
+    /// Warn about unrecognized config keys, suggesting the closest known key when
+    /// one is similar enough. Unknown keys are gathered into `extras` by serde's
+    /// `flatten` catch-all, so this never fires for keys Pyrefly understands
+    /// (including the snake_case migration aliases). Top-level, `[coverage]`, and
+    /// `[[sub-config]]` keys are each checked against the options valid in their own scope.
+    fn unknown_key_warnings(&self) -> Vec<anyhow::Error> {
+        fn message(
+            key: &str,
+            candidates: &[&str],
+            aliases: &[(&str, &str)],
+            location: &str,
+        ) -> anyhow::Error {
+            let suggestion = best_suggestion_str(
+                key,
+                candidates
+                    .iter()
+                    .copied()
+                    .chain(aliases.iter().map(|(alias, _)| *alias))
+                    .enumerate()
+                    .map(|(priority, candidate)| (candidate, priority)),
+            )
+            .map(|suggestion| {
+                aliases
+                    .iter()
+                    .find_map(|(alias, canonical)| (*alias == suggestion).then_some(*canonical))
+                    .unwrap_or(suggestion)
+            })
+            .map(|suggestion| format!(". Did you mean `{suggestion}`?"))
+            .unwrap_or_default();
+            anyhow!("Unknown config key `{key}`{location}{suggestion}")
+        }
+
+        // `ConfigFile` flattens `Interpreters`, `PythonEnvironment`, and (as
+        // `root`) `ConfigBase`, so its derived keys are the full top-level set.
+        let top_level = ConfigFile::config_keys();
+        let coverage = CoverageConfig::config_keys();
+        let sub_config: Vec<&str> = once("matches").chain(ConfigBase::config_keys()).collect();
+        let top_level_aliases = ConfigFile::config_key_aliases();
+        let sub_config_aliases = ConfigBase::config_key_aliases();
+
+        let mut warnings: Vec<anyhow::Error> = self
+            .root
+            .extras
+            .0
+            .keys()
+            .map(|key| message(key, &top_level, &top_level_aliases, ""))
+            .collect();
+        warnings.extend(
+            self.coverage
+                .extras
+                .0
+                .keys()
+                .map(|key| message(key, &coverage, &[], " in coverage config")),
+        );
+        for sub in &self.sub_configs {
+            let location = format!(" in sub config matching {}", sub.matches);
+            warnings.extend(
+                sub.settings
+                    .extras
+                    .0
+                    .keys()
+                    .map(|key| message(key, &sub_config, &sub_config_aliases, &location)),
+            );
+        }
+        warnings
     }
 
     pub fn parse_config(config_str: &str) -> anyhow::Result<ConfigFile> {
@@ -1922,9 +1988,11 @@ pub fn validate_path(path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::fs;
 
     use pretty_assertions::assert_eq;
+    use pyrefly_util::config_keys::ConfigKeys;
     use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
     use tempfile::TempDir;
@@ -1933,6 +2001,7 @@ mod tests {
 
     use super::*;
     use crate::base::ExtraConfigs;
+    use crate::base::RecursionOverflowHandler;
     use crate::base::UntypedDefBehavior;
     use crate::error_kind::ErrorKind;
     use crate::error_kind::Severity;
@@ -4219,6 +4288,291 @@ output-format = "omit-errors"
             errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
             Severity::Ignore,
             "without pytorch-efficiency-lints flag, lints should default to Ignore"
+        );
+    }
+
+    #[test]
+    fn test_unknown_config_key_suggests_closest() {
+        // `check-unannotated-def` is a typo of the real `check-unannotated-defs`.
+        let config = ConfigFile::parse_config("check-unannotated-def = true\n").unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(
+            warnings[0].contains("`check-unannotated-def`"),
+            "should name the unknown key: {}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("`check-unannotated-defs`"),
+            "should suggest the closest known key: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn test_unknown_config_alias_typo_suggests_canonical_key() {
+        let config = ConfigFile::parse_config("replace_imports_with_an = [\"foo\"]\n").unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(
+            warnings,
+            [concat!(
+                "Unknown config key `replace_imports_with_an`. Did you mean ",
+                "`replace-imports-with-any`?"
+            )]
+        );
+    }
+
+    #[test]
+    fn test_unknown_config_key_without_close_match_has_no_suggestion() {
+        let config = ConfigFile::parse_config("made-up-key-xyz = 1\n").unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(warnings[0].contains("`made-up-key-xyz`"), "{}", warnings[0]);
+        assert!(
+            !warnings[0].contains("Did you mean"),
+            "no key is close enough to suggest: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn test_unknown_coverage_key_suggests_closest() {
+        // `incldes` is an intentional misspelling exercising the "did you mean `includes`?" path.
+        let config = ConfigFile::parse_config("[coverage]\nincldes = [\"src/**\"]\n").unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(
+            warnings,
+            ["Unknown config key `incldes` in coverage config. Did you mean `includes`?"]
+        );
+    }
+
+    #[test]
+    fn test_unknown_sub_config_key_suggests_closest() {
+        let config_str = r#"
+[[sub-config]]
+matches = "foo/**"
+check-unannotated-def = true
+"#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(
+            warnings[0].contains("`check-unannotated-def`"),
+            "{}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("`check-unannotated-defs`"),
+            "{}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("sub config matching"),
+            "should mention the sub-config: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn test_known_config_keys_are_not_flagged() {
+        // Canonical kebab-case keys and a snake_case migration alias
+        // (`replace_imports_with_any`) are all recognized, so none is reported.
+        let config_str = r#"
+search-path = ["src"]
+project-includes = ["src"]
+python-version = "3.11"
+replace_imports_with_any = ["foo"]
+"#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn test_known_config_aliases_are_consistent() {
+        // Every serde `alias` must (a) point at a canonical key present in its scope's derived
+        // keys, so the "did you mean" suggestion resolves, and (b) still be honored by serde,
+        // so the alias maps back to its field instead of landing in `extras`. The sync test
+        // (`test_known_config_keys_cover_serialized_fields`) deliberately does not cover aliases.
+        fn alias_toml_value(alias: &str) -> &'static str {
+            match alias {
+                "replace_imports_with_any"
+                | "project_includes"
+                | "project_excludes"
+                | "search_path"
+                | "site_package_path" => "[\"foo\"]",
+                "ignore_errors_in_generated_code" => "true",
+                "untyped_def_behavior" => "\"check-and-infer-return-type\"",
+                "python_interpreter" | "python-interpreter" => "\"python3\"",
+                "python_platform" => "\"linux\"",
+                "python_version" => "\"3.11\"",
+                "sub_config" => "[]",
+                other => panic!("add a valid TOML value for new alias `{other}`"),
+            }
+        }
+
+        for (aliases, canonical_keys) in [
+            (ConfigBase::config_key_aliases(), ConfigBase::config_keys()),
+            (ConfigFile::config_key_aliases(), ConfigFile::config_keys()),
+        ] {
+            for (alias, canonical) in &aliases {
+                // (a) The suggested canonical key must be a real key in the same scope.
+                assert!(
+                    canonical_keys.contains(canonical),
+                    "alias `{alias}` suggests `{canonical}`, absent from its scope's derived keys"
+                );
+                // (b) serde must still accept the alias, so no unknown-key warning fires.
+                let toml = format!("{alias} = {}\n", alias_toml_value(alias));
+                let config = ConfigFile::parse_config(&toml)
+                    .unwrap_or_else(|e| panic!("alias `{alias}` should parse: {e}"));
+                let warnings: Vec<String> = config
+                    .unknown_key_warnings()
+                    .iter()
+                    .map(|w| w.to_string())
+                    .collect();
+                assert!(
+                    warnings.is_empty(),
+                    "alias `{alias}` should be recognized by serde, got: {warnings:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_known_config_keys_cover_serialized_fields() {
+        fn serialized_keys(value: &impl Serialize) -> HashSet<String> {
+            serde_json::to_value(value)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .keys()
+                .filter(|key| key.as_str() != "extras")
+                .cloned()
+                .collect()
+        }
+
+        fn derived_keys(keys: Vec<&'static str>) -> HashSet<String> {
+            keys.into_iter().map(|key| key.to_owned()).collect()
+        }
+
+        // These exhaustive fixtures make adding a field to any config scope a compile error until
+        // the fixture is updated; the assertions below then prove `#[derive(ConfigKeys)]` produces
+        // exactly serde's serialized key set for each scope. Serde `alias`es never serialize, so the
+        // derive omits them (as does serde); `skip_serializing` fields (e.g. `interpreter_stdlib_path`)
+        // are set to non-defaults here to prove both sides drop them.
+        let base = ConfigBase {
+            errors: Some(Default::default()),
+            permissive_ignores: Some(false),
+            enabled_ignores: Some(Default::default()),
+            replace_imports_with_any: Some(vec![ModuleWildcard::new("replace").unwrap()]),
+            ignore_missing_imports: Some(vec![ModuleWildcard::new("ignore").unwrap()]),
+            untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
+            check_unannotated_defs: Some(true),
+            infer_return_types: Some(InferReturnTypes::Checked),
+            disable_type_errors_in_ide: Some(false),
+            ignore_errors_in_generated_code: Some(false),
+            infer_with_first_use: Some(true),
+            pytorch_efficiency_lints: Some(false),
+            recursion_depth_limit: Some(1),
+            recursion_overflow_handler: Some(RecursionOverflowHandler::BreakWithPlaceholder),
+            strict_callable_subtyping: Some(false),
+            strict_partial_subtyping: Some(false),
+            spec_compliant_overloads: Some(false),
+            legacy_overload_expansion: Some(false),
+            treat_all_caps_as_final: Some(false),
+            extras: Default::default(),
+        };
+        assert_eq!(
+            serialized_keys(&base),
+            derived_keys(ConfigBase::config_keys())
+        );
+
+        let top_level = ConfigFile {
+            source: ConfigSource::Synthetic(None),
+            project_includes: Globs::new(vec!["src/**".to_owned()]).unwrap(),
+            project_excludes: Globs::new(vec!["generated/**".to_owned()]).unwrap(),
+            disable_project_excludes_heuristics: true,
+            search_path_from_args: vec![PathBuf::from("cli")],
+            search_path_from_file: vec![PathBuf::from("src")],
+            import_root: Some(PathBuf::from("root")),
+            fallback_search_path: FallbackSearchPath::default(),
+            disable_search_path_heuristics: true,
+            enable_fallback_search_path: true,
+            typeshed_path: Some(PathBuf::from("typeshed")),
+            baseline: Some(PathBuf::from("baseline.json")),
+            baseline_error_level: Some(Severity::Warn),
+            output_format: Some(OutputFormat::Json),
+            interpreters: Interpreters {
+                python_interpreter_path: Some(ConfigOrigin::config(PathBuf::from("python"))),
+                fallback_python_interpreter_name: Some(ConfigOrigin::config("python3".to_owned())),
+                conda_environment: Some(ConfigOrigin::config("env".to_owned())),
+                skip_interpreter_query: true,
+            },
+            python_environment: PythonEnvironment {
+                python_platform: Some(PythonPlatform::linux()),
+                python_version: Some(PythonVersion::new(3, 13, 0)),
+                site_package_path: Some(vec![PathBuf::from("site-packages")]),
+                interpreter_site_package_path: vec![PathBuf::from("interpreter-site-packages")],
+                interpreter_stdlib_path: vec![PathBuf::from("stdlib")],
+            },
+            preset: Some(Preset::Default),
+            // Fully populated so the flattened `ConfigBase` keys serialize, letting this fixture
+            // exercise the whole top-level key set that `ConfigFile::config_keys()` derives.
+            root: base,
+            sub_configs: vec![SubConfig {
+                matches: Glob::new("src/**".to_owned()).unwrap(),
+                settings: ConfigBase::default(),
+            }],
+            coverage: CoverageConfig {
+                includes: Some(Globs::new(vec!["covered/**".to_owned()]).unwrap()),
+                excludes: Some(Globs::new(vec!["covered/generated/**".to_owned()]).unwrap()),
+                extras: Default::default(),
+            },
+            use_ignore_files: false,
+            build_system: Some(toml::from_str("type = \"custom\"\ncommand = [\"true\"]").unwrap()),
+            source_db: None,
+            min_severity: Some(Severity::Warn),
+            skip_lsp_config_indexing: true,
+            extra_file_extensions: vec!["cinc".to_owned()],
+            synthesized_preset_reason: Some(SynthesizedPresetReason::NoNearbyConfig),
+        };
+        assert_eq!(
+            serialized_keys(&top_level),
+            derived_keys(ConfigFile::config_keys())
+        );
+
+        let coverage = CoverageConfig {
+            includes: Some(Globs::new(vec!["a".to_owned()]).unwrap()),
+            excludes: Some(Globs::new(vec!["b".to_owned()]).unwrap()),
+            extras: Default::default(),
+        };
+        assert_eq!(
+            serialized_keys(&coverage),
+            derived_keys(CoverageConfig::config_keys())
         );
     }
 }
