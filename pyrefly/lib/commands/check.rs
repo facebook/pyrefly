@@ -1034,16 +1034,16 @@ impl Handles {
         (result, reloaded_configs, Vec::new())
     }
 
-    fn update<'a>(
-        &mut self,
-        created_files: impl Iterator<Item = &'a PathBuf>,
-        removed_files: impl Iterator<Item = &'a PathBuf>,
-    ) {
-        for file in created_files {
-            self.path_data
-                .insert(ModulePath::filesystem(file.to_path_buf()));
+    /// Removals need no `covers` check because a path the include set does not cover is
+    /// never a member of `path_data`.
+    fn apply_events(&mut self, events: &CategorizedEvents, includes: &dyn Includes) {
+        for file in &events.created {
+            if includes.covers(file) {
+                self.path_data
+                    .insert(ModulePath::filesystem(file.to_path_buf()));
+            }
         }
-        for file in removed_files {
+        for file in &events.removed {
             self.path_data
                 .remove(&ModulePath::filesystem(file.to_path_buf()));
         }
@@ -1377,12 +1377,7 @@ impl CheckArgs {
             );
             let new_transaction_mut = transaction.as_mut();
             new_transaction_mut.invalidate_events(&events);
-            // File addition and removal may affect the list of files/handles to check. Update
-            // the handles accordingly.
-            handles.update(
-                events.created.iter().filter(|p| files_to_check.covers(p)),
-                events.removed.iter().filter(|p| files_to_check.covers(p)),
-            );
+            handles.apply_events(&events, files_to_check.as_ref());
         }
     }
 
