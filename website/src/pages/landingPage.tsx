@@ -14,7 +14,6 @@ import WhyPyrefly from '../components/landing-page/whyPyrefly';
 import PyreflyVideo from '../components/landing-page/PyreflyVideo';
 import LandingPageSection from '../components/landing-page/landingPageSection';
 import LandingPageHeader from '../components/landing-page/landingPageHeader';
-import IDECarousel from '../components/landing-page/IDECarousel';
 import Banner from '../components/Banner';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import { log, LoggingEvent } from '../utils/LoggingUtils';
@@ -49,10 +48,6 @@ export default function LandingPage(): React.ReactElement {
             <LandingPageSection
                 id="why-pyrefly-section"
                 child={<WhyPyrefly />}
-            />
-            <LandingPageSection
-                id="ide-carousel-section"
-                child={<IDECarousel />}
             />
             <LandingPageSection
                 id="performance-comparison-section"
