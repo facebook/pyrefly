@@ -338,7 +338,7 @@ impl<'a> BindingsBuilder<'a> {
         // The constraints (i.e., any positional arguments after the first)
         // and some keyword arguments are types.
         for arg in iargs {
-            if self.as_direct_shape_intvar(arg) {
+            if self.as_special_export(arg) == Some(SpecialExport::IntVar) {
                 self.error(
                     arg.range(),
                     ErrorKind::InvalidTypeVar,
@@ -353,7 +353,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(id) = &kw.arg
                 && (id.id == "bound" || id.id == "default")
             {
-                if self.as_direct_shape_intvar(&kw.value) {
+                if self.as_special_export(&kw.value) == Some(SpecialExport::IntVar) {
                     let role = if id.id == "bound" { "bound" } else { "default" };
                     self.error(
                         kw.value.range(),

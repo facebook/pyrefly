@@ -1307,39 +1307,6 @@ impl<'a> BindingsBuilder<'a> {
         self.as_special_export_inner(e, &mut visited_names, &mut visited_keys)
     }
 
-    pub fn as_direct_shape_intvar(&self, e: &Expr) -> bool {
-        let shape_extensions = ModuleName::from_str("shape_extensions");
-        match e {
-            Expr::Name(name) => {
-                if name.id == "IntVar" && self.module_info.name() == shape_extensions {
-                    return true;
-                }
-                matches!(
-                    self.scopes.binding_idx_for_name(&name.id),
-                    Some((
-                        _,
-                        FlowStyle::Import(module, upstream_name)
-                    )) if module == shape_extensions && upstream_name == "IntVar"
-                )
-            }
-            Expr::Attribute(ExprAttribute {
-                value, attr: name, ..
-            }) if name == "IntVar" => {
-                let Expr::Name(base_name) = &**value else {
-                    return false;
-                };
-                matches!(
-                    self.scopes.binding_idx_for_name(&base_name.id),
-                    Some((
-                        _,
-                        FlowStyle::MergeableImport(module) | FlowStyle::ImportAs(module)
-                    )) if module == shape_extensions
-                )
-            }
-            _ => false,
-        }
-    }
-
     pub fn class_object_is_generic(&self, idx: Idx<Key>) -> bool {
         let Some(Binding::ClassDef(class_idx, _)) = self.idx_to_binding(idx) else {
             return false;
@@ -2122,7 +2089,8 @@ impl<'a> BindingsBuilder<'a> {
                             let mut invalid_intvar_constraint = false;
                             let mut constraint_exprs = Vec::new();
                             for constraint in &mut tuple.elts {
-                                if self.as_direct_shape_intvar(constraint) {
+                                if self.as_special_export(constraint) == Some(SpecialExport::IntVar)
+                                {
                                     self.error(
                                         constraint.range(),
                                         ErrorKind::InvalidTypeVar,
@@ -2139,7 +2107,8 @@ impl<'a> BindingsBuilder<'a> {
                             if !invalid_intvar_constraint {
                                 constraints = Some((constraint_exprs, bound_expr.range()))
                             }
-                        } else if self.as_direct_shape_intvar(bound_expr) {
+                        } else if self.as_special_export(bound_expr) == Some(SpecialExport::IntVar)
+                        {
                             self.ensure_expr(bound_expr, &mut usage);
                             kind = QuantifiedKind::IntVar;
                         } else {

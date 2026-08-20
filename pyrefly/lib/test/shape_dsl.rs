@@ -128,6 +128,17 @@ fn shaped_array_env_with_plain_torch_and_jaxtyping() -> TestEnv {
     env
 }
 
+fn reexporting_shape_extensions_env() -> TestEnv {
+    let mut env = shaped_array_env_with_shaped_torch();
+    env.add(
+        "reexport",
+        r#"
+from shape_extensions import *
+"#,
+    );
+    env
+}
+
 fn shaped_array_env_with_shaped_torch_and_jaxtyping() -> TestEnv {
     let mut env = shaped_array_env_with_shaped_torch();
     add_jaxtyping(&mut env);
@@ -4124,6 +4135,60 @@ def alias_specialization[N: IntVar, ShapeT: IntTuple](
     reveal_type(x)  # E: revealed type: Tensor[[N]]
     reveal_type(packed)  # E: revealed type: Tensor[[*Elements[ShapeT], N]]
     reveal_type(ordinary)  # E: revealed type: tuple[int, Int[N]]
+"#,
+);
+
+testcase!(
+    test_intvar_type_parameter_bound_through_reexport,
+    reexporting_shape_extensions_env(),
+    r#"
+from reexport import Int, IntVar
+from torch import Tensor
+from typing import assert_type
+
+def bound[N: IntVar](n: Int[N], x: Tensor[[N]]) -> None:
+    assert_type(n, Int[N])
+    assert_type(x, Tensor[[N]])
+"#,
+);
+
+testcase!(
+    test_intvar_type_parameter_bound_through_reexport_alias,
+    reexporting_shape_extensions_env(),
+    r#"
+from reexport import Int
+from reexport import IntVar as SV
+from torch import Tensor
+from typing import assert_type
+
+def bound[N: SV](n: Int[N], x: Tensor[[N]]) -> None:
+    assert_type(x, Tensor[[N]])
+"#,
+);
+
+testcase!(
+    test_intvar_type_parameter_bound_through_assignment_alias,
+    shaped_array_env_with_shaped_torch(),
+    r#"
+from shape_extensions import Int, IntVar
+from torch import Tensor
+from typing import assert_type
+
+MyIntVar = IntVar
+
+def bound[N: MyIntVar](n: Int[N], x: Tensor[[N]]) -> None:
+    assert_type(x, Tensor[[N]])
+"#,
+);
+
+testcase!(
+    test_reexported_intvar_still_rejected_as_typevar_bound,
+    reexporting_shape_extensions_env(),
+    r#"
+from reexport import IntVar
+from typing import TypeVar
+
+Bad = TypeVar("Bad", bound=IntVar)  # E: `IntVar` cannot be used as a TypeVar bound
 "#,
 );
 
