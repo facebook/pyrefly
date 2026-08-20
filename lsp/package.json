@@ -147,6 +147,17 @@
                     "description": "The path to the binary (or the binary available in your $PATH) used as the language server. This is useful to guarantee version parity between your IDE and CLI, but means extension updates won't update which Pyrefly version you'll be using.",
                     "scope": "machine-overridable"
                 },
+                "pyrefly.pyreflyExecutable": {
+                    "type": "string",
+                    "default": "from-environment",
+                    "enum": [
+                        "bundled",
+                        "from-environment",
+                        "lsp-path"
+                    ],
+                    "description": "The Pyrefly executable that should run in VSCode. `from-environment` uses the Pyrefly version that can be found in your environment, attempting to match a local version. `bundled` uses the Pyrefly executable bundled with the extension, whose version is tied to the extension version. `lsp-path` uses the executable at the path specified with the `pyrefly.lspPath` setting.",
+                    "scope": "window"
+                },
                 "pyrefly.lspArguments": {
                     "type": "array",
                     "items": {
