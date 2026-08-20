@@ -246,6 +246,8 @@ pub enum ProjectLayout {
     /// The parent directory of the project root is the import root
     /// (this is how pandas is set up for some reason)
     Parent,
+    /// idk, some gh stack test layout or something
+    Special,
 }
 
 impl ProjectLayout {
@@ -280,6 +282,7 @@ impl ProjectLayout {
             Self::Flat => project_root.to_path_buf(),
             Self::Src => project_root.join("src"),
             Self::Parent => project_root.parent().unwrap_or(project_root).to_path_buf(),
+            Self::Special => PathBuf::new(),
         }
     }
 }
