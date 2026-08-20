@@ -20,6 +20,8 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
+use ruff_python_ast::StmtIf;
+use ruff_python_ast::StmtReturn;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -137,137 +139,168 @@ fn parameter_index(parameters: &Parameters, expr: &Expr) -> Option<usize> {
         .position(|parameter| parameter.parameter.name.id == name.id)
 }
 
-fn validate_type_shape_dsl_block(
-    block: &[Stmt],
-    parameters: &Parameters,
-    resolve_intrinsic: &impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
-    returns: &mut Vec<TypeShapeDslReturn>,
-    conditions: &mut Vec<TypeShapeDslEquality>,
-) -> Result<bool, TypeShapeDslDefinitionError> {
-    let mut always_returns = false;
-    for statement in block {
-        if always_returns {
-            return Err(TypeShapeDslDefinitionError {
-                range: statement.range(),
-                message: "statement is unreachable",
-            });
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DslStatementFlow {
+    Continue,
+    Return,
+}
+
+struct DslValidator<'a, F> {
+    parameters: &'a Parameters,
+    resolve_intrinsic: &'a F,
+    returns: Vec<TypeShapeDslReturn>,
+    conditions: Vec<TypeShapeDslEquality>,
+}
+
+impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
+    fn new(parameters: &'a Parameters, resolve_intrinsic: &'a F) -> Self {
+        Self {
+            parameters,
+            resolve_intrinsic,
+            returns: Vec::new(),
+            conditions: Vec::new(),
         }
+    }
+
+    fn validate_block(
+        &mut self,
+        block: &[Stmt],
+    ) -> Result<DslStatementFlow, TypeShapeDslDefinitionError> {
+        let mut flow = DslStatementFlow::Continue;
+        for statement in block {
+            if flow == DslStatementFlow::Return {
+                return Err(TypeShapeDslDefinitionError {
+                    range: statement.range(),
+                    message: "statement is unreachable",
+                });
+            }
+            flow = self.validate_statement(statement)?;
+        }
+        Ok(flow)
+    }
+
+    fn validate_statement(
+        &mut self,
+        statement: &Stmt,
+    ) -> Result<DslStatementFlow, TypeShapeDslDefinitionError> {
         match statement {
             Stmt::Return(return_stmt) => {
-                let kind = match return_stmt.value.as_deref() {
-                    Some(returned @ Expr::Attribute(_))
-                        if matches!(
-                            resolve_intrinsic(returned),
-                            Some(TypeShapeDslIntrinsic::Gradual(_))
-                        ) =>
-                    {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: returned.range(),
-                            message: "gradual return must be called",
-                        });
-                    }
-                    Some(returned @ Expr::Name(returned_name)) => {
-                        if matches!(
-                            resolve_intrinsic(returned),
-                            Some(TypeShapeDslIntrinsic::Gradual(_))
-                        ) {
-                            return Err(TypeShapeDslDefinitionError {
-                                range: returned_name.range,
-                                message: "gradual return must be called",
-                            });
-                        }
-                        let Some(index) = parameter_index(parameters, returned) else {
-                            return Err(TypeShapeDslDefinitionError {
-                                range: returned_name.range,
-                                message: "returned name must match a parameter name",
-                            });
-                        };
-                        TypeShapeDslReturnKind::Parameter(index)
-                    }
-                    Some(Expr::Call(call))
-                        if let Some(TypeShapeDslIntrinsic::Gradual(domain)) =
-                            resolve_intrinsic(&call.func) =>
-                    {
-                        if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
-                            return Err(TypeShapeDslDefinitionError {
-                                range: call.arguments.range,
-                                message: "gradual return does not accept arguments",
-                            });
-                        }
-                        TypeShapeDslReturnKind::Gradual(domain)
-                    }
-                    _ => {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: return_stmt.range,
-                            message: "return value must be a bare parameter name or a gradual return",
-                        });
-                    }
-                };
-                returns.push(TypeShapeDslReturn {
-                    statement_range: return_stmt.range,
-                    value_range: return_stmt
-                        .value
-                        .as_deref()
-                        .expect("validated return must have a value")
-                        .range(),
-                    kind,
-                });
-                always_returns = true;
+                self.validate_return(return_stmt)?;
+                Ok(DslStatementFlow::Return)
             }
             Stmt::If(if_stmt) => {
-                if !if_stmt.elif_else_clauses.is_empty() {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: if_stmt.range,
-                        message: "does not support `else` or `elif`",
-                    });
-                }
-                let Expr::Compare(compare) = &*if_stmt.test else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: if_stmt.test.range(),
-                        message: "condition must be exactly `<Int parameter> == <Int parameter>`",
-                    });
-                };
-                if compare.ops.len() != 1
-                    || compare.ops[0] != CmpOp::Eq
-                    || compare.comparators.len() != 1
-                {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: compare.range,
-                        message: "condition must be exactly `<Int parameter> == <Int parameter>`",
-                    });
-                }
-                let (Some(left), Some(right)) = (
-                    parameter_index(parameters, &compare.left),
-                    parameter_index(parameters, &compare.comparators[0]),
-                ) else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: compare.range,
-                        message: "condition operands must name parameters",
-                    });
-                };
-                conditions.push(TypeShapeDslEquality {
-                    range: compare.range,
-                    left,
-                    right,
+                self.validate_if(if_stmt)?;
+                Ok(DslStatementFlow::Continue)
+            }
+            _ => Err(TypeShapeDslDefinitionError {
+                range: statement.range(),
+                message: "body supports only `if` and `return`",
+            }),
+        }
+    }
+
+    fn validate_return(
+        &mut self,
+        return_stmt: &StmtReturn,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        let kind = match return_stmt.value.as_deref() {
+            Some(returned @ Expr::Attribute(_))
+                if matches!(
+                    (self.resolve_intrinsic)(returned),
+                    Some(TypeShapeDslIntrinsic::Gradual(_))
+                ) =>
+            {
+                return Err(TypeShapeDslDefinitionError {
+                    range: returned.range(),
+                    message: "gradual return must be called",
                 });
-                // Without an `else`, this statement may fall through even if its body returns.
-                validate_type_shape_dsl_block(
-                    &if_stmt.body,
-                    parameters,
-                    resolve_intrinsic,
-                    returns,
-                    conditions,
-                )?;
+            }
+            Some(returned @ Expr::Name(returned_name)) => {
+                if matches!(
+                    (self.resolve_intrinsic)(returned),
+                    Some(TypeShapeDslIntrinsic::Gradual(_))
+                ) {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: returned_name.range,
+                        message: "gradual return must be called",
+                    });
+                }
+                let Some(index) = parameter_index(self.parameters, returned) else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: returned_name.range,
+                        message: "returned name must match a parameter name",
+                    });
+                };
+                TypeShapeDslReturnKind::Parameter(index)
+            }
+            Some(Expr::Call(call))
+                if let Some(TypeShapeDslIntrinsic::Gradual(domain)) =
+                    (self.resolve_intrinsic)(&call.func) =>
+            {
+                if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: call.arguments.range,
+                        message: "gradual return does not accept arguments",
+                    });
+                }
+                TypeShapeDslReturnKind::Gradual(domain)
             }
             _ => {
                 return Err(TypeShapeDslDefinitionError {
-                    range: statement.range(),
-                    message: "body supports only `if` and `return`",
+                    range: return_stmt.range,
+                    message: "return value must be a bare parameter name or a gradual return",
                 });
             }
-        }
+        };
+        self.returns.push(TypeShapeDslReturn {
+            statement_range: return_stmt.range,
+            value_range: return_stmt
+                .value
+                .as_deref()
+                .expect("validated return must have a value")
+                .range(),
+            kind,
+        });
+        Ok(())
     }
-    Ok(always_returns)
+
+    fn validate_if(&mut self, if_stmt: &StmtIf) -> Result<(), TypeShapeDslDefinitionError> {
+        if !if_stmt.elif_else_clauses.is_empty() {
+            return Err(TypeShapeDslDefinitionError {
+                range: if_stmt.range,
+                message: "does not support `else` or `elif`",
+            });
+        }
+        let Expr::Compare(compare) = &*if_stmt.test else {
+            return Err(TypeShapeDslDefinitionError {
+                range: if_stmt.test.range(),
+                message: "condition must be exactly `<Int parameter> == <Int parameter>`",
+            });
+        };
+        if compare.ops.len() != 1 || compare.ops[0] != CmpOp::Eq || compare.comparators.len() != 1 {
+            return Err(TypeShapeDslDefinitionError {
+                range: compare.range,
+                message: "condition must be exactly `<Int parameter> == <Int parameter>`",
+            });
+        }
+        let (Some(left), Some(right)) = (
+            parameter_index(self.parameters, &compare.left),
+            parameter_index(self.parameters, &compare.comparators[0]),
+        ) else {
+            return Err(TypeShapeDslDefinitionError {
+                range: compare.range,
+                message: "condition operands must name parameters",
+            });
+        };
+        self.conditions.push(TypeShapeDslEquality {
+            range: compare.range,
+            left,
+            right,
+        });
+        // Without an `else`, this statement may fall through even if its body returns.
+        self.validate_block(&if_stmt.body)?;
+        Ok(())
+    }
 }
 
 impl ParsedTypeShapeDslFunction {
@@ -336,15 +369,8 @@ impl ParsedTypeShapeDslFunction {
         &self,
         resolve_intrinsic: impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
     ) -> Result<ValidatedTypeShapeDslFunction, TypeShapeDslDefinitionError> {
-        let mut returns = Vec::new();
-        let mut conditions = Vec::new();
-        if !validate_type_shape_dsl_block(
-            &self.definition.body,
-            &self.definition.parameters,
-            &resolve_intrinsic,
-            &mut returns,
-            &mut conditions,
-        )? {
+        let mut validator = DslValidator::new(&self.definition.parameters, &resolve_intrinsic);
+        if validator.validate_block(&self.definition.body)? != DslStatementFlow::Return {
             return Err(TypeShapeDslDefinitionError {
                 range: self.definition.name.range(),
                 message: "every control-flow path must return",
@@ -352,8 +378,8 @@ impl ParsedTypeShapeDslFunction {
         }
         Ok(ValidatedTypeShapeDslFunction {
             parsed: self.clone(),
-            returns,
-            conditions,
+            returns: validator.returns,
+            conditions: validator.conditions,
         })
     }
 
