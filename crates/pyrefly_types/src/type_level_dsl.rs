@@ -16,11 +16,13 @@ use pyrefly_derive::VisitMut;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
+use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 
 use crate::dimension::Int;
 use crate::dimension::ShapeError;
@@ -110,6 +112,89 @@ pub enum TypeShapeDslReturnKind {
     Gradual(TypeShapeDslDomain),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TypeShapeDslReturn {
+    statement_range: TextRange,
+    kind: TypeShapeDslReturnKind,
+}
+
+fn parameter_index(parameters: &Parameters, expr: &Expr) -> Option<usize> {
+    let Expr::Name(name) = expr else {
+        return None;
+    };
+    parameters
+        .args
+        .iter()
+        .position(|parameter| parameter.parameter.name.id == name.id)
+}
+
+fn validate_type_shape_dsl_block(
+    block: &[Stmt],
+    block_range: TextRange,
+    parameters: &Parameters,
+    resolve_intrinsic: &impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
+) -> Result<TypeShapeDslReturn, TypeShapeDslDefinitionError> {
+    let [Stmt::Return(return_stmt)] = block else {
+        return Err(TypeShapeDslDefinitionError {
+            range: block_range,
+            message: "body must contain exactly `return <parameter>` or a gradual return",
+        });
+    };
+    let kind = match return_stmt.value.as_deref() {
+        Some(returned @ Expr::Attribute(_))
+            if matches!(
+                resolve_intrinsic(returned),
+                Some(TypeShapeDslIntrinsic::Gradual(_))
+            ) =>
+        {
+            return Err(TypeShapeDslDefinitionError {
+                range: returned.range(),
+                message: "gradual return must be called",
+            });
+        }
+        Some(returned @ Expr::Name(returned_name)) => {
+            if let Some(index) = parameter_index(parameters, returned) {
+                TypeShapeDslReturnKind::Parameter(index)
+            } else if matches!(
+                resolve_intrinsic(returned),
+                Some(TypeShapeDslIntrinsic::Gradual(_))
+            ) {
+                return Err(TypeShapeDslDefinitionError {
+                    range: returned_name.range,
+                    message: "gradual return must be called",
+                });
+            } else {
+                return Err(TypeShapeDslDefinitionError {
+                    range: returned_name.range,
+                    message: "returned name must match a parameter name",
+                });
+            }
+        }
+        Some(Expr::Call(call))
+            if let Some(TypeShapeDslIntrinsic::Gradual(domain)) = resolve_intrinsic(&call.func) =>
+        {
+            if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
+                return Err(TypeShapeDslDefinitionError {
+                    range: call.arguments.range,
+                    message: "gradual return does not accept arguments",
+                });
+            } else {
+                TypeShapeDslReturnKind::Gradual(domain)
+            }
+        }
+        _ => {
+            return Err(TypeShapeDslDefinitionError {
+                range: return_stmt.range,
+                message: "return value must be a bare parameter name or a gradual return",
+            });
+        }
+    };
+    Ok(TypeShapeDslReturn {
+        statement_range: return_stmt.range,
+        kind,
+    })
+}
+
 impl ParsedTypeShapeDslFunction {
     pub fn try_new(
         definition: StmtFunctionDef,
@@ -176,70 +261,15 @@ impl ParsedTypeShapeDslFunction {
         &self,
         resolve_intrinsic: impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
     ) -> Result<ValidatedTypeShapeDslFunction, TypeShapeDslDefinitionError> {
-        let [Stmt::Return(return_stmt)] = self.definition.body.as_slice() else {
-            return Err(TypeShapeDslDefinitionError {
-                range: self.definition.name.range(),
-                message: "body must contain exactly `return <parameter>` or a gradual return",
-            });
-        };
-        let return_kind = match return_stmt.value.as_deref() {
-            Some(returned @ Expr::Attribute(_))
-                if matches!(
-                    resolve_intrinsic(returned),
-                    Some(TypeShapeDslIntrinsic::Gradual(_))
-                ) =>
-            {
-                return Err(TypeShapeDslDefinitionError {
-                    range: returned.range(),
-                    message: "gradual return must be called",
-                });
-            }
-            Some(returned @ Expr::Name(returned_name)) => {
-                if let Some(index) = self
-                    .definition
-                    .parameters
-                    .args
-                    .iter()
-                    .position(|parameter| parameter.parameter.name.id == returned_name.id)
-                {
-                    TypeShapeDslReturnKind::Parameter(index)
-                } else if matches!(
-                    resolve_intrinsic(returned),
-                    Some(TypeShapeDslIntrinsic::Gradual(_))
-                ) {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: returned_name.range,
-                        message: "gradual return must be called",
-                    });
-                } else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: returned_name.range,
-                        message: "returned name must match a parameter name",
-                    });
-                }
-            }
-            Some(Expr::Call(call))
-                if let Some(TypeShapeDslIntrinsic::Gradual(domain)) =
-                    resolve_intrinsic(&call.func) =>
-            {
-                if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: call.arguments.range,
-                        message: "gradual return does not accept arguments",
-                    });
-                }
-                TypeShapeDslReturnKind::Gradual(domain)
-            }
-            _ => {
-                return Err(TypeShapeDslDefinitionError {
-                    range: return_stmt.range,
-                    message: "return value must be a bare parameter name or a gradual return",
-                });
-            }
-        };
+        let return_ = validate_type_shape_dsl_block(
+            &self.definition.body,
+            self.definition.name.range(),
+            &self.definition.parameters,
+            &resolve_intrinsic,
+        )?;
         Ok(ValidatedTypeShapeDslFunction {
             parsed: self.clone(),
-            return_kind,
+            returns: vec![return_],
         })
     }
 
@@ -349,13 +379,38 @@ impl TypeEqTrait for ParsedTypeShapeDslFunction {
 /// An owned function AST whose restricted declaration syntax and body have been validated.
 /// Future evaluation may interpret the definition relying on these invariants.
 ///
-/// Identity is derived from the parsed program's pointer identity plus `return_kind`. The latter
+/// Identity is derived from the parsed program's pointer identity plus its return metadata. The latter
 /// is required because resolving an intrinsic depends on imports outside this AST, so an unedited
 /// declaration whose gradual constructor now resolves to a different domain compares unequal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ValidatedTypeShapeDslFunction {
     parsed: ParsedTypeShapeDslFunction,
-    return_kind: TypeShapeDslReturnKind,
+    returns: Vec<TypeShapeDslReturn>,
+}
+
+impl PartialOrd for ValidatedTypeShapeDslFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ValidatedTypeShapeDslFunction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        fn offsets(range: TextRange) -> (TextSize, TextSize) {
+            (range.start(), range.end())
+        }
+        self.parsed.cmp(&other.parsed).then_with(|| {
+            self.returns
+                .iter()
+                .map(|x| (offsets(x.statement_range), x.kind))
+                .cmp(
+                    other
+                        .returns
+                        .iter()
+                        .map(|x| (offsets(x.statement_range), x.kind)),
+                )
+        })
+    }
 }
 
 impl Visit<Type> for ValidatedTypeShapeDslFunction {
@@ -397,8 +452,14 @@ impl ValidatedTypeShapeDslFunction {
         self.parsed.parameter_name(index)
     }
 
-    pub fn return_kind(&self) -> TypeShapeDslReturnKind {
-        self.return_kind
+    pub fn returns(&self) -> impl Iterator<Item = TypeShapeDslReturn> + '_ {
+        self.returns.iter().copied()
+    }
+}
+
+impl TypeShapeDslReturn {
+    pub fn kind(self) -> TypeShapeDslReturnKind {
+        self.kind
     }
 }
 
@@ -407,10 +468,27 @@ impl ResolvedTypeShapeDslFunction {
         definition: Arc<ValidatedTypeShapeDslFunction>,
         parameter_domains: Vec<TypeShapeDslDomain>,
     ) -> Option<Self> {
-        (definition.parameter_count() == parameter_domains.len()).then_some(Self {
+        if definition.parameter_count() != parameter_domains.len() {
+            return None;
+        }
+        let resolved = Self {
             definition,
             parameter_domains,
-        })
+        };
+        let result_domain = resolved
+            .definition
+            .returns()
+            .next()
+            .map(|x| resolved.return_domain(x.kind()))
+            .expect("validated type-level DSL function must return");
+        assert!(
+            resolved
+                .definition
+                .returns()
+                .all(|x| resolved.return_domain(x.kind()) == result_domain),
+            "resolved type-level DSL returns must have one domain"
+        );
+        Some(resolved)
     }
 
     pub fn name(&self) -> &Name {
@@ -426,19 +504,18 @@ impl ResolvedTypeShapeDslFunction {
     }
 
     pub fn result_domain(&self) -> TypeShapeDslDomain {
-        match self.definition.return_kind() {
-            TypeShapeDslReturnKind::Parameter(index) => self.parameter_domains[index],
-            TypeShapeDslReturnKind::Gradual(domain) => domain,
-        }
+        let return_ = self
+            .definition
+            .returns()
+            .next()
+            .expect("validated type-level DSL function must return");
+        self.return_domain(return_.kind())
     }
 
-    fn evaluate(&self, args: &[Type]) -> DslEvaluation {
-        match self.definition.return_kind() {
-            TypeShapeDslReturnKind::Parameter(index) => {
-                DslValue::from_type(&args[index], self.parameter_domains[index])
-                    .map_or(DslEvaluation::AutomaticFallback, DslEvaluation::Value)
-            }
-            TypeShapeDslReturnKind::Gradual(_) => DslEvaluation::ExplicitGradual,
+    fn return_domain(&self, kind: TypeShapeDslReturnKind) -> TypeShapeDslDomain {
+        match kind {
+            TypeShapeDslReturnKind::Parameter(index) => self.parameter_domains[index],
+            TypeShapeDslReturnKind::Gradual(domain) => domain,
         }
     }
 }
@@ -468,6 +545,11 @@ enum DslEvaluation {
     Value(DslValue),
     ExplicitGradual,
     AutomaticFallback,
+}
+
+enum DslControlFlow {
+    Continue,
+    Return(DslEvaluation),
 }
 
 impl Visit<Type> for TypeLevelDslFunction {
@@ -550,6 +632,48 @@ impl TypeLevelDslCall {
                     }
                 })
             }
+        }
+    }
+}
+
+impl ResolvedTypeShapeDslFunction {
+    fn evaluate(&self, args: &[Type]) -> DslEvaluation {
+        assert_eq!(
+            args.len(),
+            self.parameter_domains.len(),
+            "type-level DSL values must align with resolved parameters"
+        );
+        match self.evaluate_block(&self.definition.parsed.definition.body, args) {
+            DslControlFlow::Return(result) => result,
+            DslControlFlow::Continue => {
+                unreachable!("validated type-level DSL function cannot fall through")
+            }
+        }
+    }
+
+    fn evaluate_block(&self, block: &[Stmt], args: &[Type]) -> DslControlFlow {
+        let Some(statement) = block.first() else {
+            return DslControlFlow::Continue;
+        };
+        match statement {
+            Stmt::Return(return_stmt) => {
+                let kind = self
+                    .definition
+                    .returns
+                    .iter()
+                    .find_map(|return_| {
+                        (return_.statement_range == return_stmt.range).then_some(return_.kind)
+                    })
+                    .expect("validated return statement must have validation metadata");
+                DslControlFlow::Return(match kind {
+                    TypeShapeDslReturnKind::Parameter(index) => {
+                        DslValue::from_type(&args[index], self.parameter_domains[index])
+                            .map_or(DslEvaluation::AutomaticFallback, DslEvaluation::Value)
+                    }
+                    TypeShapeDslReturnKind::Gradual(_) => DslEvaluation::ExplicitGradual,
+                })
+            }
+            _ => unreachable!("validated type-level DSL block contains only return"),
         }
     }
 }

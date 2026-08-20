@@ -110,7 +110,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         if valid_parameters && let Some(result) = return_domain {
-            let valid_return = match validated.return_kind() {
+            let return_ = validated
+                .returns()
+                .next()
+                .expect("validated type-level DSL function must return");
+            let valid_return = match return_.kind() {
                 TypeShapeDslReturnKind::Parameter(index) if parameter_domains[index] != result => {
                     self.error(
                         errors,
