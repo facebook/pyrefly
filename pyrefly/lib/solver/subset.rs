@@ -2170,6 +2170,22 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     )),
                 )
             }
+            (Type::TypedDict(TypedDict::TypedDict(_)), Type::ClassType(want))
+                if !self.type_order.is_protocol(want.class_object())
+                    && !self.type_order.has_superclass(
+                        self.type_order.stdlib().mapping_object(),
+                        want.class_object(),
+                    )
+                    && !self.type_order.has_superclass(
+                        self.type_order.stdlib().dict_object(),
+                        want.class_object(),
+                    ) =>
+            {
+                // A declared TypedDict's nominal carrier is either Mapping or dict. Reject
+                // classes unrelated to both before calculating its value type, which may
+                // require solving recursive fields of the TypedDict currently being defined.
+                Err(SubsetError::Other)
+            }
             (Type::TypedDict(td @ TypedDict::TypedDict(_)), _) => {
                 let stdlib = self.type_order.stdlib();
                 if let Some(value_type) = self
