@@ -2519,3 +2519,209 @@ if TYPE_CHECKING:
     def f(a: str): ...
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4167: a comprehension argument is
+// contextually typed per candidate overload, so its literal element narrows and the call matches.
+testcase!(
+    test_overload_literal_narrowing_through_comprehension,
+    r#"
+from collections.abc import Sequence
+from typing import Literal, overload, reveal_type
+
+Order = Literal["ascending", "descending"]
+
+@overload
+def sort_indices(sort_keys: Sequence[tuple[str, Order]]) -> str: ...
+@overload
+def sort_indices(sort_keys: str) -> int: ...
+def sort_indices(sort_keys: Sequence[tuple[str, Order]] | str) -> str | int:
+    return 0
+
+def f(names: list[str]) -> None:
+    reveal_type(sort_indices([(name, "ascending") for name in names]))  # E: revealed type: str
+"#,
+);
+
+// Set/dict comprehensions and generator expressions share the same un-flattened arm, so a
+// literal element is likewise narrowed against the candidate overload's parameter.
+// https://github.com/facebook/pyrefly/issues/4167
+testcase!(
+    test_overload_literal_narrowing_through_set_dict_generator,
+    r#"
+from collections.abc import Iterable
+from typing import Literal, overload, reveal_type
+
+Order = Literal["ascending", "descending"]
+
+@overload
+def take_set(x: set[Order]) -> str: ...
+@overload
+def take_set(x: int) -> int: ...
+def take_set(x: set[Order] | int) -> str | int: return 0
+
+@overload
+def take_dict(x: dict[str, Order]) -> str: ...
+@overload
+def take_dict(x: int) -> int: ...
+def take_dict(x: dict[str, Order] | int) -> str | int: return 0
+
+@overload
+def take_iter(x: Iterable[Order]) -> str: ...
+@overload
+def take_iter(x: int) -> int: ...
+def take_iter(x: Iterable[Order] | int) -> str | int: return 0
+
+def f(keys: list[str]) -> None:
+    reveal_type(take_set({"ascending" for _ in keys}))  # E: revealed type: str
+    reveal_type(take_dict({k: "ascending" for k in keys}))  # E: revealed type: str
+    reveal_type(take_iter("ascending" for _ in keys))  # E: revealed type: str
+"#,
+);
+
+// Every overload here accepts the argument, so the assertions pin down *which* one wins: only a
+// hint that reaches the element selects the narrower one. Without contextual typing these still
+// resolve, just to the wider overload, so the test fails loudly rather than merely erroring.
+// https://github.com/facebook/pyrefly/issues/4167
+testcase!(
+    test_overload_comprehension_hint_selects_narrower_overload,
+    r#"
+from collections.abc import Iterable
+from typing import Literal, assert_type, overload
+
+Order = Literal["ascending", "descending"]
+
+@overload
+def g(x: list[Order]) -> int: ...
+@overload
+def g(x: list[str]) -> str: ...
+def g(x: list[Order] | list[str]) -> int | str: return 0
+
+@overload
+def gen(x: Iterable[list[Order]]) -> int: ...
+@overload
+def gen(x: Iterable[list[str]]) -> str: ...
+def gen(x: Iterable[list[Order]] | Iterable[list[str]]) -> int | str: return 0
+
+def f(keys: list[str]) -> None:
+    assert_type(g(["ascending" for _ in keys]), int)
+    assert_type(g([k for k in keys]), str)
+    assert_type(gen(["ascending"] for _ in keys), int)
+    assert_type(gen([k] for k in keys), str)
+"#,
+);
+
+// A generic overload may provide only a provisional contextual type. Do not let that type widen
+// a comprehension whose element type is already known. Regression test for a Zulip primer failure.
+testcase!(
+    test_overload_generic_hint_does_not_widen_comprehension,
+    r#"
+from collections.abc import Collection
+from typing import assert_type
+
+def validated_emails(emails: Collection[str]) -> list[str]:
+    result = list(filter(bool, {email.strip() for email in emails}))
+    assert_type(result, list[str])
+    return result
+"#,
+);
+
+// A comprehension whose element type depends on the generic hint (here a bare lambda whose
+// parameter is typed by the hint) is inferred without context only when a context-free pass would
+// already be fully resolved; otherwise the hint is applied, narrowing it like the list literal.
+// https://github.com/facebook/pyrefly/issues/4167
+testcase!(
+    test_overload_generic_hint_narrows_comprehension_lambda,
+    r#"
+from collections.abc import Callable, Iterable
+from typing import assert_type
+
+def g[T](it: Iterable[Callable[[int], T]]) -> T: ...
+
+def call() -> None:
+    assert_type(g([lambda a: a]), int)
+    assert_type(g([lambda a: a for _ in range(1)]), int)
+"#,
+);
+
+// An ordinary generic function is not an overload, so its comprehension argument must be typed
+// contextually against the parameter, exactly like a list literal. Deferral (and the widening guard
+// it enables) applies only to calls evaluated more than once (overload / union-callee resolution).
+// https://github.com/facebook/pyrefly/pull/4224
+testcase!(
+    test_generic_comprehension_typed_contextually,
+    r#"
+from typing import TypedDict
+class TD(TypedDict):
+    x: int
+def take[T](xs: list[T]) -> list[T]: ...
+def f(ks: list[int]) -> None:
+    a: list[TD] = take([{"x": k} for k in ks])
+    b: list[TD] = take([{"x": 1}])
+"#,
+);
+
+// Keyword comprehension arguments to an overload are checked on a separate path from positional
+// ones, so the widening guard must apply there too: a deferred set comprehension keeps its known
+// element type against a provisional generic hint whether passed positionally or by keyword.
+testcase!(
+    test_overload_generic_hint_does_not_widen_comprehension_keyword,
+    r#"
+from collections.abc import Callable, Iterable, Iterator
+from typing import Any, assert_type, overload
+@overload
+def myfilter[T](function: None, iterable: Iterable[T | None]) -> Iterator[T]: ...
+@overload
+def myfilter[T](function: Callable[[T], Any], iterable: Iterable[T]) -> Iterator[T]: ...
+def myfilter(function, iterable) -> Iterator[Any]: ...
+def f(emails: list[str]) -> None:
+    assert_type(list(myfilter(bool, {e.strip() for e in emails})), list[str])
+    assert_type(list(myfilter(bool, iterable={e.strip() for e in emails})), list[str])
+"#,
+);
+
+// A generator in starred position into an overload is flattened (inferred once) rather than
+// deferred: deferral there buys no contextual narrowing and would re-infer it per candidate.
+testcase!(
+    test_overload_starred_generator,
+    r#"
+from typing import assert_type, overload
+@overload
+def f(x: int, y: int) -> int: ...
+@overload
+def f(x: str, y: str) -> str: ...
+def f(x: int | str, y: int | str) -> int | str: return x
+def g(xs: list[int]) -> None:
+    assert_type(f(*(x for x in xs)), int)
+"#,
+);
+
+// When an earlier argument pins the generic, the deferred comprehension's elements genuinely depend
+// on that binding (the lambda parameter is typed by it), so context-free inference is incomplete and
+// the pinned hint narrows the comprehension. `var_is_quantified` alone would wrongly discard it.
+testcase!(
+    test_overload_generic_hint_pinned_by_earlier_arg,
+    r#"
+from collections.abc import Callable, Iterable
+from typing import Any, assert_type, overload
+@overload
+def g[T](b: T, a: Iterable[Callable[[int], T]]) -> T: ...
+@overload
+def g(b: None, a: None) -> None: ...
+def g(b: Any, a: Any) -> Any: ...
+def call() -> None:
+    assert_type(g(0, [lambda x: x for _ in range(1)]), int)
+"#,
+);
+
+// A comprehension deferred during overload resolution still reports errors inside its body when the
+// widening guard keeps its (fully resolved) element type. Guards against dropping those diagnostics.
+testcase!(
+    test_overload_deferred_comprehension_reports_body_errors,
+    r#"
+from collections.abc import Collection
+def need_int(a: int) -> str:
+    return ""
+def validated(emails: Collection[str]) -> list[str]:
+    return list(filter(bool, {need_int() for _ in emails}))  # E: Missing argument `a`
+"#,
+);

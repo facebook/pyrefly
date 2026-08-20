@@ -648,7 +648,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(|(name, value)| CallKeyword {
                 range: name.range(),
                 arg: Some(name),
-                value: TypeOrExpr::Expr(value),
+                value: TypeOrExpr::Expr(value, false),
             })
             .collect::<Vec<_>>();
         self.call_infer(

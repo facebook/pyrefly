@@ -878,7 +878,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         let ty;
         let got = match got {
-            ExprOrBinding::Expr(value) => TypeOrExpr::Expr(value),
+            ExprOrBinding::Expr(value) => TypeOrExpr::Expr(value, false),
             ExprOrBinding::Binding(got) => {
                 ty = self.solve_binding(got, range, errors);
                 TypeOrExpr::Type(ty.ty(), range)
@@ -1138,7 +1138,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         narrowed_types: &mut Vec<Type>,
     ) {
         let ty = match &got {
-            TypeOrExpr::Expr(got) => self.expr_check(
+            TypeOrExpr::Expr(got, _) => self.expr_check(
                 got,
                 Some((&attr_ty, &|| {
                     TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))

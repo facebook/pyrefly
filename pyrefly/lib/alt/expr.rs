@@ -128,7 +128,12 @@ use crate::types::types::Type;
 pub enum TypeOrExpr<'a> {
     /// Bundles a `Type` with a `TextRange`, allowing us to give good errors.
     Type(&'a Type, TextRange),
-    Expr(&'a Expr),
+    /// An expression whose type is inferred lazily. The `bool` records whether
+    /// `CallWithTypes::type_or_expr` deliberately deferred it so that a call
+    /// evaluated more than once (overload / union-callee resolution) can type it
+    /// contextually per candidate. Argument checking gates the deferral-specific
+    /// widening guard on this flag so ordinary calls always type it contextually.
+    Expr(&'a Expr, bool),
 }
 
 pub(crate) enum PreparedExprCall {
@@ -164,7 +169,7 @@ impl Ranged for TypeOrExpr<'_> {
     fn range(&self) -> TextRange {
         match self {
             TypeOrExpr::Type(_, range) => *range,
-            TypeOrExpr::Expr(expr) => expr.range(),
+            TypeOrExpr::Expr(expr, _) => expr.range(),
         }
     }
 }
@@ -179,7 +184,7 @@ impl<'a> TypeOrExpr<'a> {
     ) -> Type {
         match self {
             TypeOrExpr::Type(ty, _) => ty.clone(),
-            TypeOrExpr::Expr(x) => solver.expr_infer(x, errors),
+            TypeOrExpr::Expr(x, _) => solver.expr_infer(x, errors),
         }
     }
 
