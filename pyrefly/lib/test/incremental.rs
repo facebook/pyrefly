@@ -540,6 +540,80 @@ fn test_stale_typed_dict() {
 }
 
 #[test]
+fn test_type_shape_dsl_body_edit_invalidates_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "definitions".to_owned(),
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "definitions",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def select(first: Int, second: Int) -> Int:
+    return first
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from definitions import select
+from shape_extensions import Int, IntTuple
+
+class Tensor[Shape: IntTuple]: ...
+def result() -> Tensor[[select(Int[2], Int[3])]]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import Tensor, result
+
+expected: Tensor[[2]] = result()
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "definitions",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def select(first: Int, second: Int) -> Int:
+    return second
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "definitions", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one consumer mismatch, got {errors:?}"
+    );
+    assert_eq!(errors[0].module().name(), ModuleName::from_str("consumer"),);
+    assert!(
+        errors[0]
+            .msg()
+            .contains("not assignable to `Tensor[IntTuple[2]]`"),
+        "expected a consumer assignment mismatch, got {errors:?}",
+    );
+}
+
+#[test]
 fn test_incremental_cycle_class() {
     let mut i = Incremental::new();
     i.set("foo", "from bar import Cls");

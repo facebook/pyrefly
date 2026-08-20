@@ -13,10 +13,13 @@ use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_level_dsl::TypeLevelDslCall;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
+use pyrefly_types::type_level_dsl::TypeShapeDslSignature;
 use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
+use pyrefly_util::display::pluralize;
+use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -50,70 +53,76 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         function_range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<FunctionKind> {
-        let parameter_domain = if dsl.has_parameter_annotation() {
-            params
-                .first()
-                .and_then(|param| type_shape_dsl_domain(param.as_type()))
-        } else {
-            None
-        };
+        assert_eq!(
+            params.len(),
+            dsl.parameter_count(),
+            "validated type-level DSL AST must align with resolved parameters"
+        );
+        let mut parameter_domains = Vec::with_capacity(params.len());
+        let mut valid_parameters = true;
+        for (index, parameter) in params.iter().enumerate() {
+            let domain = dsl
+                .has_parameter_annotation(index)
+                .then(|| type_shape_dsl_domain(parameter.as_type()))
+                .flatten();
+            if let Some(domain) = domain {
+                parameter_domains.push(domain);
+            } else {
+                valid_parameters = false;
+                self.error(
+                    errors,
+                    dsl.parameter_annotation_range(index),
+                    ErrorKind::InvalidArgument,
+                    format!(
+                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int` or `IntTuple`",
+                        dsl.parameter_name(index)
+                    ),
+                );
+            }
+        }
         let return_domain = if dsl.has_return_annotation() {
             type_shape_dsl_domain(return_type)
         } else {
             None
         };
-        match (parameter_domain, return_domain) {
-            (Some(parameter), Some(result)) if parameter == result => {
-                if let FunctionKind::Def(func_id) = function_kind {
-                    Some(FunctionKind::TypeShapeDsl(
-                        func_id.clone(),
-                        parameter,
-                        dsl.clone(),
-                    ))
-                } else {
-                    self.error(
-                        errors,
-                        function_range,
-                        ErrorKind::InvalidArgument,
-                        "`@type_shape_dsl_function` must be applied to an ordinary function definition"
-                            .to_owned(),
-                    );
-                    None
-                }
-            }
-            (None, _) => {
+        if return_domain.is_none() {
+            self.error(
+                errors,
+                dsl.return_annotation_range(),
+                ErrorKind::InvalidArgument,
+                "`@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`"
+                    .to_owned(),
+            );
+        }
+        if valid_parameters && let Some(result) = return_domain {
+            let returned_parameter = dsl.returned_parameter_index();
+            if parameter_domains[returned_parameter] != result {
                 self.error(
                     errors,
-                    dsl.parameter_annotation_range(),
+                    dsl.return_annotation_range(),
                     ErrorKind::InvalidArgument,
                     format!(
-                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int` or `IntTuple`",
-                        dsl.parameter_name()
+                        "`@type_shape_dsl_function` return annotation must match returned parameter `{}`",
+                        dsl.parameter_name(returned_parameter)
                     ),
                 );
-                None
-            }
-            (_, None) => {
+            } else if let FunctionKind::Def(func_id) = function_kind {
+                return Some(FunctionKind::TypeShapeDsl(
+                    func_id.clone(),
+                    Arc::new(TypeShapeDslSignature::new(parameter_domains, result)),
+                    dsl.clone(),
+                ));
+            } else {
                 self.error(
                     errors,
-                    dsl.return_annotation_range(),
+                    function_range,
                     ErrorKind::InvalidArgument,
-                    "`@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`"
+                    "`@type_shape_dsl_function` must be applied to an ordinary function definition"
                         .to_owned(),
                 );
-                None
-            }
-            (Some(_), Some(_)) => {
-                self.error(
-                    errors,
-                    dsl.return_annotation_range(),
-                    ErrorKind::InvalidArgument,
-                    "`@type_shape_dsl_function` parameter and return annotations must use the same domain"
-                        .to_owned(),
-                );
-                None
             }
         }
+        None
     }
 
     pub(crate) fn parse_type_level_dsl_call(
@@ -124,11 +133,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         match callee.callee_kind() {
-            Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(_, domain, function))) => self
+            Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(_, signature, function))) => self
                 .parse_user_defined_type_level_dsl_call(
                     call,
                     function,
-                    domain,
+                    signature,
                     type_form_context,
                     errors,
                 ),
@@ -153,11 +162,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         call: &ExprCall,
         function: Arc<ValidatedTypeShapeDslFunction>,
-        domain: TypeShapeDslDomain,
+        signature: Arc<TypeShapeDslSignature>,
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
         let name = function.name().as_str();
+        if let Some(keyword) = call
+            .arguments
+            .keywords
+            .iter()
+            .find(|keyword| keyword.arg.is_none())
+        {
+            return self.error(
+                errors,
+                keyword.range(),
+                ErrorKind::InvalidAnnotation,
+                format!("`{name}` does not accept starred keyword arguments"),
+            );
+        }
         if !call.arguments.keywords.is_empty() {
             return self.error(
                 errors,
@@ -166,27 +188,82 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("`{name}` does not accept keyword arguments"),
             );
         }
-        if call.arguments.args.len() != 1 {
+        if let Some(arg) = call
+            .arguments
+            .args
+            .iter()
+            .find(|arg| matches!(arg, Expr::Starred(_)))
+        {
+            return self.error(
+                errors,
+                arg.range(),
+                ErrorKind::InvalidAnnotation,
+                format!("`{name}` does not accept starred arguments"),
+            );
+        }
+        let parameter_domains = signature.parameter_domains();
+        if call.arguments.args.len() != parameter_domains.len() {
             return self.error(
                 errors,
                 call.range,
                 ErrorKind::InvalidAnnotation,
                 format!(
-                    "Expected 1 argument for `{name}`, got {}",
+                    "Expected {} {} for `{name}`, got {}",
+                    parameter_domains.len(),
+                    pluralize(parameter_domains.len(), "argument"),
                     call.arguments.args.len()
                 ),
             );
         }
 
-        let arg_expr = &call.arguments.args[0];
         let argument_context = TypeFormContext::TypeArgument(&type_form_context);
-        let arg = match domain {
+        let mut args = Vec::with_capacity(call.arguments.args.len());
+        for (index, (arg_expr, domain)) in call
+            .arguments
+            .args
+            .iter()
+            .zip(parameter_domains)
+            .enumerate()
+        {
+            let arg =
+                self.parse_type_shape_dsl_argument(arg_expr, *domain, argument_context, errors);
+            if arg.is_error() {
+                return arg;
+            }
+            if !self.is_type_shape_dsl_argument(&arg, *domain) {
+                return self.error(
+                    errors,
+                    arg_expr.range(),
+                    ErrorKind::InvalidAnnotation,
+                    format!(
+                        "Expected an `{domain:?}` argument for parameter `{}` (position {}) of `{name}`, got `{}`",
+                        function.parameter_name(index),
+                        index + 1,
+                        self.for_display(arg.clone())
+                    ),
+                );
+            }
+            args.push(arg);
+        }
+        Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::user_defined(
+            function, signature, args,
+        )))
+    }
+
+    fn parse_type_shape_dsl_argument(
+        &self,
+        arg: &Expr,
+        domain: TypeShapeDslDomain,
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match domain {
             TypeShapeDslDomain::Int => {
                 let dimension_errors = self.error_collector();
                 let parsed_dimension = self
                     .parse_dimension_list(
-                        slice::from_ref(arg_expr),
-                        argument_context,
+                        slice::from_ref(arg),
+                        type_form_context,
                         &dimension_errors,
                     )
                     .and_then(|dims| dims.into_iter().next())
@@ -196,7 +273,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ty
                 } else {
                     let ordinary_errors = self.error_collector();
-                    let ty = self.expr_untype(arg_expr, argument_context, &ordinary_errors);
+                    let ty = self.expr_untype(arg, type_form_context, &ordinary_errors);
                     if ty.is_error() {
                         errors.extend(dimension_errors);
                         Type::any_error()
@@ -206,25 +283,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
-            TypeShapeDslDomain::IntTuple => self.expr_untype(arg_expr, argument_context, errors),
-        };
-        if arg.is_error() {
-            return arg;
+            TypeShapeDslDomain::IntTuple => self.expr_untype(arg, type_form_context, errors),
         }
-        if !self.is_type_shape_dsl_argument(&arg, domain) {
-            return self.error(
-                errors,
-                arg_expr.range(),
-                ErrorKind::InvalidAnnotation,
-                format!(
-                    "Expected an `{domain:?}` argument to `{name}`, got `{}`",
-                    self.for_display(arg.clone())
-                ),
-            );
-        }
-        Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::user_defined(
-            function, domain, arg,
-        )))
     }
 
     fn parse_broadcast_type_level_dsl_call(

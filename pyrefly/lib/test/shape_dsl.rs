@@ -211,6 +211,10 @@ def int_identity(x: Int) -> Int:
 @type_shape_dsl_function
 def shape_identity(x: IntTuple) -> IntTuple:
     return x
+
+@type_shape_dsl_function
+def select_shape(dim: Int, shape: IntTuple) -> IntTuple:
+    return shape
 "#,
     );
     env
@@ -231,6 +235,14 @@ def int_identity(x: Int) -> Int:
 @type_shape_dsl_function
 def shape_identity(shape: IntTuple) -> IntTuple:
     return shape
+
+@type_shape_dsl_function
+def select_int(shape: IntTuple, dim: Int) -> Int:
+    return dim
+
+@type_shape_dsl_function
+def select_shape(dim: Int, shape: IntTuple) -> IntTuple:
+    return shape
 "#,
     );
     let (state, handle) = env.to_state();
@@ -239,15 +251,35 @@ def shape_identity(shape: IntTuple) -> IntTuple:
         .transaction()
         .get_solutions(&main)
         .expect("module should solve");
-    for (name, expected_domain) in [
-        ("int_identity", TypeShapeDslDomain::Int),
-        ("shape_identity", TypeShapeDslDomain::IntTuple),
+    for (name, expected_parameters, expected_result) in [
+        (
+            "int_identity",
+            vec![TypeShapeDslDomain::Int],
+            TypeShapeDslDomain::Int,
+        ),
+        (
+            "shape_identity",
+            vec![TypeShapeDslDomain::IntTuple],
+            TypeShapeDslDomain::IntTuple,
+        ),
+        (
+            "select_int",
+            vec![TypeShapeDslDomain::IntTuple, TypeShapeDslDomain::Int],
+            TypeShapeDslDomain::Int,
+        ),
+        (
+            "select_shape",
+            vec![TypeShapeDslDomain::Int, TypeShapeDslDomain::IntTuple],
+            TypeShapeDslDomain::IntTuple,
+        ),
     ] {
         let ty = solutions.get(&KeyExport(Name::new(name)));
         assert!(
             matches!(ty, Type::Function(function)
                 if matches!(&function.metadata.kind,
-                    FunctionKind::TypeShapeDsl(_, domain, _) if *domain == expected_domain)),
+                    FunctionKind::TypeShapeDsl(_, signature, _)
+                        if signature.parameter_domains() == expected_parameters
+                            && signature.result_domain() == expected_result)),
             "expected `{name}` to retain type-level DSL metadata, got `{ty}`"
         );
         assert_eq!(attribute_symbol_kind_from_type(ty), SymbolKind::Function);
@@ -271,6 +303,10 @@ def invalid(x: Int) -> Int:
 def invalid_domain(x: str) -> str:
     return x
 
+@type_shape_dsl_function
+def duplicate(x: Int, x: Int) -> Int:
+    return x
+
 @shape_dsl_function
 @type_shape_dsl_function
 def conflicting(x: Int) -> Int:
@@ -283,7 +319,7 @@ def conflicting(x: Int) -> Int:
         .transaction()
         .get_solutions(&main)
         .expect("module should solve");
-    for name in ["invalid", "invalid_domain", "conflicting"] {
+    for name in ["invalid", "invalid_domain", "duplicate", "conflicting"] {
         let ty = solutions.get(&KeyExport(Name::new(name)));
         assert!(
             matches!(ty, Type::Function(function)
@@ -309,11 +345,31 @@ def generic[T](x: Int) -> Int:  # E: @type_shape_dsl_function does not support t
     return x
 
 @type_shape_dsl_function
-def two_parameters(x: Int, y: Int) -> Int:  # E: @type_shape_dsl_function requires exactly one ordinary positional parameter
-    return x
+def zero_parameters() -> Int:  # E: @type_shape_dsl_function supports only ordinary positional parameters and requires at least one
+    return x  # E: Could not find name `x`
 
 @type_shape_dsl_function
 def default(x: Int = 1) -> Int:  # E: @type_shape_dsl_function does not support parameter defaults
+    return x
+
+@type_shape_dsl_function
+def positional_only(x: Int, /, y: Int) -> Int:  # E: @type_shape_dsl_function supports only ordinary positional parameters and requires at least one
+    return y
+
+@type_shape_dsl_function
+def keyword_only(x: Int, *, y: Int) -> Int:  # E: @type_shape_dsl_function supports only ordinary positional parameters and requires at least one
+    return x
+
+@type_shape_dsl_function
+def variadic(x: Int, *args: Int) -> Int:  # E: @type_shape_dsl_function supports only ordinary positional parameters and requires at least one
+    return x
+
+@type_shape_dsl_function
+def keyword_variadic(x: Int, **kwargs: Int) -> Int:  # E: @type_shape_dsl_function supports only ordinary positional parameters and requires at least one
+    return x
+
+@type_shape_dsl_function
+def duplicate(x: Int, x: Int) -> Int:  # E: @type_shape_dsl_function parameter names must be unique  # E: Duplicate parameter "x"
     return x
 
 @type_shape_dsl_function
@@ -322,7 +378,7 @@ def expression(x: Int) -> Int:
 
 @type_shape_dsl_function
 def wrong_name(x: Int) -> Int:
-    return other  # E: @type_shape_dsl_function returned name must match the parameter name  # E: Could not find name `other`
+    return other  # E: @type_shape_dsl_function returned name must match a parameter name  # E: Could not find name `other`
 
 def outer() -> None:
     @type_shape_dsl_function
@@ -351,12 +407,24 @@ def missing_return(x: Int):  # E: `@type_shape_dsl_function` return must be anno
     return x
 
 @type_shape_dsl_function
-def wrong_type(x: str) -> str:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`
+def wrong_type(x: str) -> str:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`  # E: `@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`
     return x
 
 @type_shape_dsl_function
-def cross_domain(x: Int) -> IntTuple:  # E: `@type_shape_dsl_function` parameter and return annotations must use the same domain
+def cross_domain(x: Int) -> IntTuple:  # E: `@type_shape_dsl_function` return annotation must match returned parameter `x`
     return x  # E: Returned type `Int[int]` is not assignable to declared return type `IntTuple`
+
+@type_shape_dsl_function
+def missing_second(x: Int, y) -> Int:  # E: `@type_shape_dsl_function` parameter `y` must be annotated as `Int` or `IntTuple`
+    return x
+
+@type_shape_dsl_function
+def invalid_first(x: str, y: Int) -> Int:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`
+    return y
+
+@type_shape_dsl_function
+def mixed_unused_domain(shape: IntTuple, dim: Int) -> Int:
+    return dim
 "#,
 );
 
@@ -1107,7 +1175,9 @@ import identities
 import identities as identities_alias
 from identities import shape_identity
 from identities import shape_identity as renamed_identity
-from shape_extensions import IntTuple
+from identities import select_shape
+from identities import select_shape as renamed_select_shape
+from shape_extensions import Int, IntTuple
 from torch import Tensor
 from typing import reveal_type
 
@@ -1117,6 +1187,12 @@ def imported[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S)]: ...
 def import_alias[S: IntTuple](x: Tensor[S]) -> Tensor[renamed_identity(S)]: ...
 value_alias = shape_identity
 def value_aliased[S: IntTuple](x: Tensor[S]) -> Tensor[value_alias(S)]: ...
+select_alias = select_shape
+def multi_qualified[S: IntTuple](x: Tensor[S]) -> Tensor[identities.select_shape(Int[1], S)]: ...
+def multi_module_alias[S: IntTuple](x: Tensor[S]) -> Tensor[identities_alias.select_shape(Int[1], S)]: ...
+def multi_imported[S: IntTuple](x: Tensor[S]) -> Tensor[select_shape(Int[1], S)]: ...
+def multi_import_alias[S: IntTuple](x: Tensor[S]) -> Tensor[renamed_select_shape(Int[1], S)]: ...
+def multi_value_alias[S: IntTuple](x: Tensor[S]) -> Tensor[select_alias(Int[1], S)]: ...
 
 def test(x: Tensor[[2, 3]]) -> None:
     reveal_type(qualified(x))  # E: revealed type: Tensor[[2, 3]]
@@ -1124,6 +1200,104 @@ def test(x: Tensor[[2, 3]]) -> None:
     reveal_type(imported(x))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(import_alias(x))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(value_aliased(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_qualified(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_module_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_imported(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_import_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_value_alias(x))  # E: revealed type: Tensor[[2, 3]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_multi_parameter_calls,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, IntVar, broadcast, type_shape_dsl_function
+from torch import Tensor
+from typing import overload, reveal_type
+
+@type_shape_dsl_function
+def select_int(shape: IntTuple, dim: Int) -> Int:
+    return dim
+
+@type_shape_dsl_function
+def select_shape(dim: Int, shape: IntTuple) -> IntTuple:
+    return shape
+
+@type_shape_dsl_function
+def select_dim(dim: Int, shape: IntTuple) -> Int:
+    return dim
+
+@type_shape_dsl_function
+def first(a: Int, b: Int, c: Int) -> Int:
+    return a
+
+@type_shape_dsl_function
+def second(a: Int, b: Int, c: Int) -> Int:
+    return b
+
+@type_shape_dsl_function
+def third(a: Int, b: Int, c: Int) -> Int:
+    return c
+
+def concrete_first() -> Tensor[[first(Int[2], Int[3], Int[4])]]: ...
+def concrete_second() -> Tensor[[second(Int[2], Int[3], Int[4])]]: ...
+def concrete_third() -> Tensor[[third(Int[2], Int[3], Int[4])]]: ...
+def concrete_shape() -> Tensor[select_shape(Int[9], IntTuple[2, 3])]: ...
+def concrete_dim() -> Tensor[[select_dim(Int[9], IntTuple[2, 3])]]: ...
+def unused_gradual() -> Tensor[[select_int(IntTuple, Int[7])]]: ...
+def selected_gradual() -> Tensor[[select_int(IntTuple[2], int)]]: ...
+
+def symbolic[N: IntVar, S: IntTuple](x: Tensor[[N]], shape: Tensor[S]) -> Tensor[[select_int(S, N)]]: ...
+def nested[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[
+    select_shape(select_int(S0, Int[1]), select_shape(Int[2], broadcast(S0, S1)))
+]: ...
+
+@overload
+def overloaded[N: IntVar, S: IntTuple](x: Tensor[[N]], shape: Tensor[S]) -> Tensor[[select_int(S, N)]]: ...
+@overload
+def overloaded(x: int, shape: int) -> int: ...
+def overloaded(x: object, shape: object) -> object: ...
+
+def test(dim: Tensor[[5]], shape: Tensor[[2, 3]], other: Tensor[[1, 3]]) -> None:
+    reveal_type(concrete_first())  # E: revealed type: Tensor[[2]]
+    reveal_type(concrete_second())  # E: revealed type: Tensor[[3]]
+    reveal_type(concrete_third())  # E: revealed type: Tensor[[4]]
+    reveal_type(concrete_shape())  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(concrete_dim())  # E: revealed type: Tensor[[9]]
+    reveal_type(unused_gradual())  # E: revealed type: Tensor[[7]]
+    reveal_type(selected_gradual())  # E: revealed type: Tensor[[int]]
+    reveal_type(symbolic(dim, shape))  # E: revealed type: Tensor[[5]]
+    reveal_type(nested(shape, other))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(overloaded(dim, shape))  # E: revealed type: Tensor[[5]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_multi_parameter_call_errors,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, broadcast, type_shape_dsl_function
+from torch import Tensor
+from typing import reveal_type
+
+@type_shape_dsl_function
+def select_int(shape: IntTuple, dim: Int) -> Int:
+    return dim
+
+def missing() -> Tensor[[select_int(IntTuple[2])]]: ...  # E: Expected 2 arguments for `select_int`, got 1
+def excess() -> Tensor[[select_int(IntTuple[2], Int[3], Int[4])]]: ...  # E: Expected 2 arguments for `select_int`, got 3
+def keyword() -> Tensor[[select_int(IntTuple[2], dim=Int[3])]]: ...  # E: `select_int` does not accept keyword arguments
+def keyword_starred() -> Tensor[[select_int(**dict[str, object])]]: ...  # E: `select_int` does not accept starred keyword arguments
+def positional_starred() -> Tensor[[select_int(*tuple[IntTuple[2], Int[3]])]]: ...  # E: `select_int` does not accept starred arguments
+def wrong_first() -> Tensor[[select_int(Int[2], Int[3])]]: ...  # E: Expected an `IntTuple` argument for parameter `shape` (position 1) of `select_int`, got `Int[2]`
+def wrong_second() -> Tensor[[select_int(IntTuple[2], IntTuple[3])]]: ...  # E: Expected an `Int` argument for parameter `dim` (position 2) of `select_int`, got `IntTuple[3]`
+def stop_first() -> Tensor[[select_int(Int[2], IntTuple[3])]]: ...  # E: Expected an `IntTuple` argument for parameter `shape` (position 1) of `select_int`, got `Int[2]`
+def invalid_unused_nested() -> Tensor[[select_int(broadcast(IntTuple[2], IntTuple[3]), Int[1])]]: ...
+
+def test() -> None:
+    result = invalid_unused_nested()  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[3] at position 0
+    reveal_type(result)  # E: revealed type: Tensor[[int]]
 "#,
 );
 
@@ -1146,14 +1320,14 @@ def shape_identity(x: IntTuple) -> IntTuple:
 def missing[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity()]: ...  # E: Expected 1 argument for `shape_identity`, got 0
 def extra[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S, S)]: ...  # E: Expected 1 argument for `shape_identity`, got 2
 def keyword[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(x=S)]: ...  # E: `shape_identity` does not accept keyword arguments
-def wrong_shape_domain(x: Tensor[[2]]) -> Tensor[shape_identity(Int[2])]: ...  # E: Expected an `IntTuple` argument to `shape_identity`, got `Int[2]`
-def wrong_int_domain(x: Tensor[[2]]) -> Tensor[[int_identity(IntTuple[2])]]: ...  # E: Expected an `Int` argument to `int_identity`, got `IntTuple[2]`
+def wrong_shape_domain(x: Tensor[[2]]) -> Tensor[shape_identity(Int[2])]: ...  # E: Expected an `IntTuple` argument for parameter `x` (position 1) of `shape_identity`, got `Int[2]`
+def wrong_int_domain(x: Tensor[[2]]) -> Tensor[[int_identity(IntTuple[2])]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `int_identity`, got `IntTuple[2]`
 def wrong_dimension_result(x: Tensor[[2]]) -> Tensor[[shape_identity(IntTuple[2])]]: ...  # E: Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result
 def wrong_shape_result(x: Tensor[[2]]) -> Tensor[int_identity(Int[2])]: ...  # E: Expected a type-level shape DSL call with an `IntTuple` result in a shaped-array shape argument, got an `Int` result
-def nested_wrong_domain(x: Tensor[[2]]) -> Tensor[shape_identity(int_identity(IntTuple[2]))]: ...  # E: Expected an `Int` argument to `int_identity`, got `IntTuple[2]`
+def nested_wrong_domain(x: Tensor[[2]]) -> Tensor[shape_identity(int_identity(IntTuple[2]))]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `int_identity`, got `IntTuple[2]`
 def malformed_int(x: Tensor[[2]]) -> Tensor[[int_identity("x")]]: ...  # E: String literals are not valid tensor dimensions
 def recovered_dimension[N: IntVar]() -> Tensor[[int_identity(Int[N + MissingDim])]]: ...  # E: Could not find name `MissingDim`
-def recovered_ordinary() -> Tensor[[int_identity(list[MissingType])]]: ...  # E: Could not find name `MissingType`  # E: Expected an `Int` argument to `int_identity`, got `list[Unknown]`
+def recovered_ordinary() -> Tensor[[int_identity(list[MissingType])]]: ...  # E: Could not find name `MissingType`  # E: Expected an `Int` argument for parameter `x` (position 1) of `int_identity`, got `list[Unknown]`
 def nonpositive_int(x: Tensor[[2]]) -> Tensor[[int_identity(-1)]]: ...  # E: Tensor shape dimension must be positive, got -1
 def malformed_shape(x: Tensor[[2]]) -> Tensor[shape_identity(IntTuple["x"])]: ...  # E: String literals are not valid tensor dimensions
 def unbound_shape(x: Tensor[[2]]) -> Tensor[shape_identity(MissingShape)]: ...  # E: Could not find name `MissingShape`

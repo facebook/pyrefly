@@ -34,7 +34,7 @@ use crate::equality::TypeEq;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::meta_shape_dsl::ShapeTransform;
-use crate::type_level_dsl::TypeShapeDslDomain;
+use crate::type_level_dsl::TypeShapeDslSignature;
 use crate::type_level_dsl::ValidatedTypeShapeDslFunction;
 use crate::types::Type;
 
@@ -462,7 +462,7 @@ pub enum FunctionKind {
     /// A validated user-defined type-level shape DSL function.
     TypeShapeDsl(
         Arc<FuncDefId>,
-        TypeShapeDslDomain,
+        Arc<TypeShapeDslSignature>,
         Arc<ValidatedTypeShapeDslFunction>,
     ),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
