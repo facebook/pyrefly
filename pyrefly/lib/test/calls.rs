@@ -569,6 +569,20 @@ obj()  # E: Expected a callable, got `Uncallable`
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4590
+testcase!(
+    test_call_instance_with_self_recursive_dunder_call,
+    r#"
+from typing import Self
+
+class C:
+    __call__: Self | None
+
+x = C()
+x()  # E: `__call__` on `C` resolves back to the same type, creating infinite recursion at runtime
+"#,
+);
+
 // Verify **kwargs unpacking correctly suppresses missing-argument errors.
 testcase!(
     test_kwargs_unpacking_provides_required_args,

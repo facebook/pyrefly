@@ -543,9 +543,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 match maybe_dunder_call {
                     Some(ty) => {
-                        let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
-                            || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
-                        if is_self_recursive {
+                        if is_recursive_dunder_call_target(&ty, &cls) {
                             CallTargetLookup::CircularCall(Type::ClassType(cls))
                         } else {
                             self.as_call_target_impl(ty, quantified)
@@ -594,9 +592,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SelfType(cls) => {
                 // Ignoring `quantified` is okay here because Self is not a valid typevar bound.
                 match self.self_as_dunder_call(&cls) {
-                    Some(ty) => self
-                        .as_call_target_impl(ty, None)
-                        .with_error_type(|_| Type::SelfType(cls)),
+                    Some(ty) => {
+                        if is_recursive_dunder_call_target(&ty, &cls) {
+                            CallTargetLookup::CircularCall(Type::SelfType(cls))
+                        } else {
+                            self.as_call_target_impl(ty, None)
+                                .with_error_type(|_| Type::SelfType(cls))
+                        }
+                    }
                     None => CallTargetLookup::Error(Type::SelfType(cls), vec![]),
                 }
             }
@@ -2780,6 +2783,27 @@ fn is_special_name(x: &Expr, name: &str) -> bool {
         // It's convenient to be able to call functions like reveal_type in the course of
         // debugging without scrolling to the top of the file to add an import.
         Expr::Name(x) => x.id.as_str() == name,
+        _ => false,
+    }
+}
+
+/// Helper to detect if a resolved `__call__` type circularly refers back to the same class or `Self`.
+/// Inspects direct matches as well as union and intersection members.
+fn is_recursive_dunder_call_target(ty: &Type, cls: &ClassType) -> bool {
+    match ty {
+        Type::ClassType(inner) => inner.class_object() == cls.class_object(),
+        Type::SelfType(inner) => inner.class_object() == cls.class_object(),
+        Type::Union(union) => union
+            .members
+            .iter()
+            .any(|member| is_recursive_dunder_call_target(member, cls)),
+        Type::Intersect(intersect) => {
+            let (types, fallback) = &**intersect;
+            types
+                .iter()
+                .any(|member| is_recursive_dunder_call_target(member, cls))
+                || is_recursive_dunder_call_target(fallback, cls)
+        }
         _ => false,
     }
 }
