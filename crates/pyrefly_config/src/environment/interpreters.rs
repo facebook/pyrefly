@@ -12,32 +12,32 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::skip_serializing_none;
 #[cfg(not(target_arch = "wasm32"))]
 use which::which;
 
 use crate::environment::active_environment::ActiveEnvironment;
 use crate::environment::conda;
+use crate::environment::environment::PythonEnvironment;
 use crate::environment::venv;
 use crate::util::ConfigOrigin;
 
+#[skip_serializing_none]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Interpreters {
     #[serde(
-                default,
-                skip_serializing_if = "ConfigOrigin::should_skip_serializing_option",
-                // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
-                // alias while we migrate existing fields from snake case to kebab case.
-                alias = "python_interpreter",
-                alias = "python-interpreter",
-            )]
+        skip_serializing_if = "ConfigOrigin::should_skip_serializing_option",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "python_interpreter",
+        alias = "python-interpreter",
+    )]
     pub(crate) python_interpreter_path: Option<ConfigOrigin<PathBuf>>,
 
     /// Should we turn a generic command into a `python_interpreter` path?
-    #[serde(default)]
     pub(crate) fallback_python_interpreter_name: Option<ConfigOrigin<String>>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) conda_environment: Option<ConfigOrigin<String>>,
 
     /// Should we do any querying of an interpreter?
@@ -188,24 +188,20 @@ impl Interpreters {
         Ok(self.python_interpreter_path.clone())
     }
 
-    /// Get the first interpreter available on the path by using `which`
-    /// and querying for [`Self::DEFAULT_INTERPRETERS`] in order.
+    /// Get the first executable interpreter available on the path.
+    ///
+    /// Query the interpreter environment as the validation step. The result is cached, so the
+    /// caller's environment lookup does not spawn the same interpreter a second time.
     pub(crate) fn get_default_interpreter() -> Option<&'static Path> {
         static SYSTEM_INTERP: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
             // disable query with `which` on wasm
             #[cfg(not(target_arch = "wasm32"))]
             for binary_name in Interpreters::DEFAULT_INTERPRETERS {
-                use std::process::Command;
-
-                let Ok(binary_path) = which(binary_name) else {
-                    continue;
-                };
-                let mut check = Command::new(&binary_path);
-                check.arg("--version");
-                if let Ok(output) = check.output()
-                    && output.status.success()
-                {
-                    return Some(binary_path);
+                if let Ok(binary_path) = which(binary_name) {
+                    let (_, error) = PythonEnvironment::get_interpreter_env(&binary_path);
+                    if error.is_none() {
+                        return Some(binary_path);
+                    }
                 }
             }
             None
@@ -222,16 +218,23 @@ mod test {
 
     use super::*;
 
+    fn test_venv_interpreter_name() -> &'static str {
+        if cfg!(windows) {
+            "python.exe"
+        } else {
+            "python3"
+        }
+    }
+
     fn setup_test_dir() -> TempDir {
         let tempdir = tempdir().unwrap();
         let root = tempdir.path();
-        let interpreter_suffix = if cfg!(windows) { ".exe" } else { "" };
         TestPath::setup_test_directory(
             root,
             vec![TestPath::dir(
                 "venv",
                 vec![
-                    TestPath::file(&format!("python3{interpreter_suffix}")),
+                    TestPath::file(test_venv_interpreter_name()),
                     TestPath::file("pyvenv.cfg"),
                 ],
             )],
@@ -345,7 +348,6 @@ mod test {
         let tempdir = setup_test_dir();
 
         let interpreters = Interpreters::default();
-        let interpreter_suffix = if cfg!(windows) { ".exe" } else { "" };
 
         unsafe {
             // clear this variable if it exists, since we can't test that in unit tests.
@@ -358,7 +360,8 @@ mod test {
             ConfigOrigin::auto(
                 tempdir
                     .path()
-                    .join(format!("venv/python3{interpreter_suffix}"))
+                    .join("venv")
+                    .join(test_venv_interpreter_name())
             )
         );
     }

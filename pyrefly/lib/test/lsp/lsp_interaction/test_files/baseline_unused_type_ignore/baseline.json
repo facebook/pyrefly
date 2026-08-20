@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "column": 8,
+      "path": "bad.py",
+      "name": "unused-type-ignore",
+      "concise_description": "test"
+    }
+  ]
+}

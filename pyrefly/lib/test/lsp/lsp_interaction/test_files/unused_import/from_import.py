@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 
-from typing import Dict, List
+from typing import Dict, List  # noqa: F401
 
 
 def process(items: List[str]):

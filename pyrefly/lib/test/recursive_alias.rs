@@ -86,8 +86,7 @@ def f(x: X) -> Y:
 );
 
 testcase!(
-    bug =
-        "Iterative fixpoint reports non-convergent-recursion for recursive class attribute aliases",
+    bug = "fixpoint reports non-convergent-recursion for recursive class attribute aliases",
     test_class_attr,
     r#"
 class C:
@@ -96,6 +95,36 @@ class C:
     type X = int | list[C.X]  # E: Fixpoint iteration did not converge. Inferred type `TypeAlias[X, type[int | list[X]]]`. Adding annotations may help.
 x1: C.X = [[1]]
 x2: C.X = [["oops"]]  # E: `list[list[str]]` is not assignable to `int | list[X]`
+    "#,
+);
+
+// This intentionally contrived decorator/annotation cycle exercises fixpoint
+// convergence; it is not intended as a recommended typing pattern.
+testcase!(
+    test_decorated_method_recursive_return_annotation,
+    r#"
+from __future__ import annotations
+from typing import Callable, assert_type
+
+class Wrapper[T]:
+    class Result: pass
+
+    def __init__(self, f: Callable[..., T]) -> None:
+        self.f = f
+
+    def __call__(self, *args: object) -> T:
+        return self.f(*args)
+
+def wrap[T](f: Callable[..., T]) -> Wrapper[T]:
+    return Wrapper(f)
+
+class C:
+    @wrap
+    def f(self) -> C.f.Result:
+        return Wrapper.Result()
+
+assert_type(C.f, Wrapper[Wrapper.Result])
+assert_type(C.f.Result, type[Wrapper.Result])
     "#,
 );
 
@@ -196,7 +225,7 @@ type X[K, V] = dict[K, V] | list[X[str, V]]
 
 x1: X = {0: 1}
 x2: X[int, int] = {0: 1}
-x3: X[str, int] = {0: 1}  # E: `dict[int, int]` is not assignable to `dict[str, int] | list[X[str, int]]`
+x3: X[str, int] = {0: 1}  # E: `Literal[0]` is not assignable to dict key type `str`
 
 x4: X = [{'ok': 1}]
 x5: X[int, int] = [{'ok': 1}]
@@ -233,7 +262,7 @@ testcase!(
     test_error_implicit_any,
     TestEnv::new().enable_implicit_any_error(),
     r#"
-type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X`
+type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X[T]`
 def f(x: X[str]) -> X[int]:
     return [x]
     "#,
@@ -272,13 +301,39 @@ not x
 );
 
 testcase!(
+    test_cyclic_alias_through_type_parameter_bound,
+    r#"
+# Regression test for #2851: resolving `Y`'s scoped type parameter bound closes
+# a cycle through `X`. Using the alias used to make the solver recurse forever.
+type X = Y  # E: cyclic self-reference in `X`
+type Y[T: X] = X  # E: cyclic self-reference in `Y`
+
+x: X = 1
+not x
+    "#,
+);
+
+testcase!(
     test_cyclic_no_base_case,
     r#"
-# These have no base case — every value would be infinitely nested.
+# These have no base case — they are either uninhabited or inhabited only by nestings of empty containers.
 type A = list[A]  # E: cyclic self-reference in `A`
-type B = dict[str, B]  # E: cyclic self-reference in `B`
+type B = dict[B, B]  # E: cyclic self-reference in `B`
 type C = tuple[int, C]  # E: cyclic self-reference in `C`
 type D = tuple[D, ...]  # E: cyclic self-reference in `D`
+type E = list[list[E]]  # E: cyclic self-reference in `E`
+type F = tuple[list[F]]  # E: cyclic self-reference in `F`
+type G = list[G] | tuple[G, ...]  # E: cyclic self-reference in `G`
+    "#,
+);
+
+testcase!(
+    test_container_with_non_self_ref_not_cyclic,
+    r#"
+type A = int | list[A]
+type B = list[int | B]
+type C = tuple[int, list[C]]
+type D = list[tuple[int, D]]
     "#,
 );
 
@@ -367,5 +422,68 @@ Outer: TypeAlias = dict[str, Inner[int]]
 
 def f(x: Outer) -> None:
     reveal_type(x)  # E: dict[str, int | list[int]]
+    "#,
+);
+
+testcase!(
+    test_nested_literal_against_recursive_alias_branch,
+    r#"
+from collections.abc import Mapping
+from typing import TypeAlias
+
+class A: ...
+class B(A): ...
+
+IncEx: TypeAlias = Mapping[int, int] | Mapping[str, "IncEx | list[A]"]
+
+ok: IncEx = {"a": {"__all__": [B()]}}
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4324: a
+// self-referential alias reached *through* another alias used to leave a live
+// reference into the cycle, so attribute lookup recursed until the stack
+// overflowed. Contrast with `type T2 = T2` alone, which was already detected.
+testcase!(
+    test_cyclic_indirect_self_reference,
+    r#"
+type T1 = T2  # E: cyclic self-reference in `T1`
+type T2 = T2  # E: cyclic self-reference in `T2`
+
+x: T1 = 1
+x.__str__
+    "#,
+);
+
+// Indirection depth is irrelevant: the cycle is reachable from `T1` without
+// `T1` participating in it.
+testcase!(
+    test_cyclic_indirect_self_reference_multi_hop,
+    r#"
+type T1 = T2  # E: cyclic self-reference in `T1`
+type T2 = T3  # E: cyclic self-reference in `T2`
+type T3 = T3  # E: cyclic self-reference in `T3`
+
+x: T1 = 1
+x.foo
+    "#,
+);
+
+// Guard for the fix above: recording the names of recursive references must not
+// flag an alias that merely *points at* a well-founded recursive alias, nor one
+// whose cycle runs through a user-defined generic that can be inhabited.
+testcase!(
+    test_alias_referencing_valid_recursive_alias_is_not_cyclic,
+    r#"
+type Inner = int | list[Inner]
+type Outer = Inner
+
+class C[T]:
+    x: T | None = None
+type A = C[A]
+type B = A
+
+v: Outer = 1
+w: B = C()
     "#,
 );

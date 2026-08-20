@@ -4,7 +4,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-strict
 
 """
 GitHub Utilities
@@ -406,6 +405,7 @@ class ContributorAnalyzer:
                         "type": contributor_type,
                         "commit_count": 0,
                     }
+                # pyrefly: ignore [unsupported-operation]
                 contributors[contributor_id]["commit_count"] += 1
 
         return contributors
