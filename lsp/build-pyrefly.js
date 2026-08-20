@@ -51,3 +51,8 @@ fs.copyFileSync(
   path.join(JSON.parse(metadata.stdout).target_directory, profile, name),
   path.join(binDir, name),
 );
+
+fs.copyFileSync(
+  path.join(__dirname, "resources/find_pyrefly.py"),
+  path.join(binDir, "find_pyrefly.py"),
+);

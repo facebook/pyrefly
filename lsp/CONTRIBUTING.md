@@ -34,6 +34,8 @@ contributing. This file shows how to develop the extension locally.
 2. Add the `pyrefly.lspPath` configuration key to point at it after extension
    startup.
 
+- If you didn't run `build-pyrefly.js`, also copy `lsp/resources/find_pyrefly.py` to
+  `lsp/bin/find_pyrefly.py`.
 - Run `npm install vsce`
 - Run `npm exec vsce package`
 - In VS Code, go to Extensions, click on the "..." button in the Extensions bar,
