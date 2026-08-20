@@ -930,6 +930,7 @@ impl ConfigFile {
         if self.disable_search_path_heuristics {
             None.iter()
         } else {
+            eprintln!("using heuristic search path");
             self.import_root.iter()
         }
     }
