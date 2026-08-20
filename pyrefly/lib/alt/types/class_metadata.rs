@@ -113,6 +113,7 @@ pub struct ClassMetadata {
     django_model_metadata: Option<DjangoModelMetadata>,
     is_marshmallow_schema: bool,
     is_factory_boy_factory: bool,
+    is_django_rest_framework_model_serializer: bool,
     /// Whether this class is a metaclass (i.e., a subclass of `type`).
     is_metaclass: bool,
     explicit_slots: ExplicitSlots,
@@ -209,6 +210,7 @@ impl ClassMetadata {
         django_model_metadata: Option<DjangoModelMetadata>,
         is_marshmallow_schema: bool,
         is_factory_boy_factory: bool,
+        is_django_rest_framework_model_serializer: bool,
         is_metaclass: bool,
         explicit_slots: ExplicitSlots,
         capture_init: Option<Vec<Name>>,
@@ -238,6 +240,7 @@ impl ClassMetadata {
             django_model_metadata,
             is_marshmallow_schema,
             is_factory_boy_factory,
+            is_django_rest_framework_model_serializer,
             is_metaclass,
             explicit_slots,
             capture_init,
@@ -270,6 +273,7 @@ impl ClassMetadata {
             django_model_metadata: None,
             is_marshmallow_schema: false,
             is_factory_boy_factory: false,
+            is_django_rest_framework_model_serializer: false,
             is_metaclass: false,
             explicit_slots: ExplicitSlots::Absent,
             capture_init: None,
@@ -312,6 +316,10 @@ impl ClassMetadata {
 
     pub fn is_factory_boy_factory(&self) -> bool {
         self.is_factory_boy_factory
+    }
+
+    pub fn is_django_rest_framework_model_serializer(&self) -> bool {
+        self.is_django_rest_framework_model_serializer
     }
 
     /// Whether this class is a metaclass (i.e., a subclass of `type`).

@@ -309,6 +309,10 @@ impl ModuleName {
         Self::from_str("marshmallow.schema")
     }
 
+    pub fn rest_framework_serializers() -> Self {
+        Self::from_str("rest_framework.serializers")
+    }
+
     pub fn pydantic_types() -> Self {
         Self::from_str("pydantic.types")
     }
