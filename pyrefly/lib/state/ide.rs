@@ -103,10 +103,10 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             Binding::Forward(k)
             | Binding::PromoteForward(k)
             | Binding::ForwardToFirstUse(k)
-            | Binding::Narrow(k, _, _)
-            | Binding::LoopPhi(k, ..) => {
+            | Binding::Narrow(k, _, _) => {
                 current_idx = *k;
             }
+            Binding::LoopPhi(phi) => current_idx = phi.0,
             Binding::Phi(_, branches) if !branches.is_empty() => {
                 current_idx = branches[0].value_key
             }
@@ -244,8 +244,10 @@ fn create_intermediate_definition_from(
             Binding::NameAssign(na) if let Some(receiver_idx) = na.receiver_idx => {
                 current_binding = bindings.get(receiver_idx);
             }
-            Binding::MultiTargetAssign(_, _, _, Some(receiver))
-            | Binding::UnpackedValue(_, _, _, _, Some(receiver)) => {
+            Binding::MultiTargetAssign(_, _, _, Some(receiver)) => {
+                current_binding = bindings.get(receiver.idx);
+            }
+            Binding::UnpackedValue(value) if let Some(receiver) = &value.receiver => {
                 current_binding = bindings.get(receiver.idx);
             }
             _ => {

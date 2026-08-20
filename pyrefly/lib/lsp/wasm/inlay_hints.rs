@@ -388,10 +388,15 @@ impl<'a> Transaction<'a> {
                         // applies to receiver-bearing unpacked rebinds.
                         Binding::NameAssign(x) if !x.is_pinned() => (Some(&*x.expr), false),
                         Binding::Expr(None, e) => (Some(&**e), false),
-                        Binding::UnpackedValue(None, unpack_idx, _, pos, None) => {
+                        Binding::UnpackedValue(value)
+                            if value.annotation.is_none() && value.receiver.is_none() =>
+                        {
                             // Try to get the element expression from the unpacked source
-                            let element_expr =
-                                Self::get_unpacked_element_expr(&bindings, *unpack_idx, *pos);
+                            let element_expr = Self::get_unpacked_element_expr(
+                                &bindings,
+                                value.source,
+                                value.position,
+                            );
                             (element_expr, true)
                         }
                         _ => (None, false),

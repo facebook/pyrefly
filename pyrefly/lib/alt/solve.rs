@@ -5427,7 +5427,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Phi(join_style, branches) => {
                 self.binding_to_type_info_phi(join_style, branches)
             }
-            Binding::LoopPhi(default, ks) => self.binding_to_type_info_loop_phi(*default, ks),
+            Binding::LoopPhi(phi) => self.binding_to_type_info_loop_phi(phi.0, &phi.1),
             Binding::NameAssign(x) => {
                 // Receiver-constrained class assignments behave like
                 // annotated names: the implicit class receiver pins the
@@ -5932,9 +5932,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None,
                 )
             }
-            Binding::PatternMatchClassPositional(_, idx, key, range) => {
-                self.binding_to_type_pattern_match_class_positional(*idx, *key, *range, errors)
-            }
+            Binding::PatternMatchClassPositional(pattern) => self
+                .binding_to_type_pattern_match_class_positional(
+                    pattern.1, pattern.2, pattern.3, errors,
+                ),
             Binding::PatternMatchClassKeyword(x) => {
                 // TODO: check that value matches class
                 // TODO: check against duplicate keys (optional)
@@ -6019,15 +6020,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::ContextValue(ann, e, range, kind) => {
                 self.binding_to_type_context_value(*ann, *e, *range, *kind, errors)
             }
-            Binding::UnpackedValue(ann, to_unpack, range, pos, receiver) => self
-                .binding_to_type_unpacked_value(
-                    *ann,
-                    *to_unpack,
-                    *range,
-                    pos,
-                    receiver.as_deref(),
-                    errors,
-                ),
+            Binding::UnpackedValue(value) => self.binding_to_type_unpacked_value(
+                value.annotation,
+                value.source,
+                value.range,
+                &value.position,
+                value.receiver.as_deref(),
+                errors,
+            ),
             &Binding::Function {
                 decorated_idx,
                 mut pred_idx,

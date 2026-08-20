@@ -38,6 +38,7 @@ use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::UnpackedPosition;
+use crate::binding::binding::UnpackedValue;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
@@ -104,13 +105,13 @@ impl<'a> BindingsBuilder<'a> {
                     // Counts how many elements are after the splat.
                     let j = len - i - 1;
                     let make_nested_binding = |ann| {
-                        Binding::UnpackedValue(
-                            ann,
-                            unpack_idx,
+                        Binding::UnpackedValue(Box::new(UnpackedValue {
+                            annotation: ann,
+                            source: unpack_idx,
                             range,
-                            UnpackedPosition::Slice(i, j),
-                            None,
-                        )
+                            position: UnpackedPosition::Slice(i, j),
+                            receiver: None,
+                        }))
                     };
                     self.bind_target_no_expr(&mut e.value, &make_nested_binding);
                 }
@@ -125,7 +126,13 @@ impl<'a> BindingsBuilder<'a> {
                         UnpackedPosition::Index(i, num_targets)
                     };
                     let make_nested_binding = |ann| {
-                        Binding::UnpackedValue(ann, unpack_idx, range, unpacked_position, None)
+                        Binding::UnpackedValue(Box::new(UnpackedValue {
+                            annotation: ann,
+                            source: unpack_idx,
+                            range,
+                            position: unpacked_position,
+                            receiver: None,
+                        }))
                     };
                     self.bind_target_no_expr(e, &make_nested_binding);
                 }
@@ -588,12 +595,12 @@ impl<'a> BindingsBuilder<'a> {
                 });
                 Binding::MultiTargetAssign(a, rhs, range, Some(receiver))
             }
-            (Some(idx), Binding::UnpackedValue(a, src, range, pos, _)) => {
-                let receiver = Box::new(MultiTargetReceiver {
+            (Some(idx), Binding::UnpackedValue(mut value)) => {
+                value.receiver = Some(Box::new(MultiTargetReceiver {
                     name: name.id.clone(),
                     idx,
-                });
-                Binding::UnpackedValue(a, src, range, pos, Some(receiver))
+                }));
+                Binding::UnpackedValue(value)
             }
             (_, binding) => binding,
         };

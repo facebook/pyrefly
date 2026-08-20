@@ -3646,7 +3646,10 @@ impl<'a> BindingsBuilder<'a> {
             self.insert_binding_idx(phi_idx, Binding::Forward(idx));
             idx
         } else if let Some(loop_prior) = loop_prior {
-            self.insert_binding_idx(phi_idx, Binding::LoopPhi(loop_prior, branch_idxs));
+            self.insert_binding_idx(
+                phi_idx,
+                Binding::LoopPhi(Box::new((loop_prior, branch_idxs))),
+            );
             phi_idx
         } else {
             self.insert_binding_idx(

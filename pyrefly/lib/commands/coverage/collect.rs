@@ -467,9 +467,9 @@ fn parse_variables(
             Binding::Phi(_, branches) => branches
                 .iter()
                 .any(|b| involves_import(bindings, b.value_key, seen)),
-            Binding::LoopPhi(prior, members) => {
-                involves_import(bindings, *prior, seen)
-                    || members.iter().any(|i| involves_import(bindings, *i, seen))
+            Binding::LoopPhi(phi) => {
+                involves_import(bindings, phi.0, seen)
+                    || phi.1.iter().any(|i| involves_import(bindings, *i, seen))
             }
             _ => false,
         }

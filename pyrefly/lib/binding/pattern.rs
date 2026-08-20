@@ -31,6 +31,7 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
+use crate::binding::binding::UnpackedValue;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
@@ -480,13 +481,13 @@ impl<'a> BindingsBuilder<'a> {
                                 // go-to-def resolves to the capture without a `PatternCapture` wrapper.
                                 self.bind_definition(
                                     name,
-                                    Binding::UnpackedValue(
-                                        None,
-                                        subject_idx,
-                                        p.range,
+                                    Binding::UnpackedValue(Box::new(UnpackedValue {
+                                        annotation: None,
+                                        source: subject_idx,
+                                        range: p.range,
                                         position,
-                                        None,
-                                    ),
+                                        receiver: None,
+                                    })),
                                     FlowStyle::Other,
                                 );
                             }
@@ -505,13 +506,13 @@ impl<'a> BindingsBuilder<'a> {
                             };
                             let key_for_subpattern = self.insert_binding(
                                 Key::Anon(x.range()),
-                                Binding::UnpackedValue(
-                                    None,
-                                    subject_idx,
-                                    x.range(),
+                                Binding::UnpackedValue(Box::new(UnpackedValue {
+                                    annotation: None,
+                                    source: subject_idx,
+                                    range: x.range(),
                                     position,
-                                    None,
-                                ),
+                                    receiver: None,
+                                })),
                             );
                             let subject_for_subpattern = match &match_subject {
                                 // For tuple subjects, map pattern index to the
@@ -731,12 +732,12 @@ impl<'a> BindingsBuilder<'a> {
                 for (idx, pattern) in x.arguments.patterns.into_iter().enumerate() {
                     let attr_key = self.insert_binding(
                         Key::Anon(pattern.range()),
-                        Binding::PatternMatchClassPositional(
+                        Binding::PatternMatchClassPositional(Box::new((
                             x.cls.clone(),
                             idx,
                             subject_idx,
                             pattern.range(),
-                        ),
+                        ))),
                     );
                     // Narrow the matched attribute (`__match_args__[idx]`) as a facet
                     // of the subject, so sub-pattern narrowing flows to the parent.

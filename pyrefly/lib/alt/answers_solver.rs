@@ -2540,10 +2540,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // generic over K, but we know K = Key here; Rust's type system
             // requires the concrete type to resolve the binding table lookup.
             let key_binding = self.bindings().get::<Key>(key_idx);
-            if let Binding::LoopPhi(prior_idx, _) = key_binding {
+            if let Binding::LoopPhi(phi) = key_binding {
                 // Resolve the prior/default index (value from above the loop).
                 // Uses get_idx::<Key> explicitly since prior_idx is Idx<Key>.
-                let prior_answer: Arc<TypeInfo> = self.get_idx::<Key>(*prior_idx);
+                let prior_answer: Arc<TypeInfo> = self.get_idx::<Key>(phi.0);
 
                 // Deep-force to resolve all type variables, matching the
                 // invariant that all iterative answers are deep-forced.

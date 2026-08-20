@@ -121,7 +121,7 @@ assert_words!(KeyDecorator, 1);
 assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
-assert_words!(Binding, 6);
+assert_words!(Binding, 4);
 assert_words!(BindingExpect, 14);
 assert_words!(BindingTypeAlias, 6);
 assert_words!(BindingAnnotation, 13);
@@ -2221,6 +2221,16 @@ pub struct MultiTargetReceiver {
     pub idx: Idx<Key>,
 }
 
+/// Data for a value at a specific position in an unpacked iterable expression.
+#[derive(Clone, Debug)]
+pub struct UnpackedValue {
+    pub annotation: Option<Idx<KeyAnnotation>>,
+    pub source: Idx<Key>,
+    pub range: TextRange,
+    pub position: UnpackedPosition,
+    pub receiver: Option<Box<MultiTargetReceiver>>,
+}
+
 /// Data for a type alias binding.
 #[derive(Clone, Debug)]
 pub struct TypeAliasBinding {
@@ -2374,13 +2384,7 @@ pub enum Binding {
     /// The optional `MultiTargetReceiver` carries the canonical class identity
     /// when this is a receiver-constrained class rebind (`Real, _ = (Dummy, 0)`),
     /// so the solver can apply the same checks as a single-target rebind.
-    UnpackedValue(
-        Option<Idx<KeyAnnotation>>,
-        Idx<Key>,
-        TextRange,
-        UnpackedPosition,
-        Option<Box<MultiTargetReceiver>>,
-    ),
+    UnpackedValue(Box<UnpackedValue>),
     /// A type where we have an annotation, but also a type we computed.
     /// If the annotation has a type inside it (e.g. `int` then use the annotation).
     /// If the annotation doesn't (e.g. it's `Final`), then use the binding.
@@ -2434,7 +2438,7 @@ pub enum Binding {
     /// A phi node for a name that was defined above a loop. This can involve recursion
     /// due to reassingment in the loop, so we provide a prior idx of the type from above
     /// the loop, which can be used if the resulting Var is forced.
-    LoopPhi(Idx<Key>, SmallSet<Idx<Key>>),
+    LoopPhi(Box<(Idx<Key>, SmallSet<Idx<Key>>)>),
     /// A narrowed type.
     Narrow(Idx<Key>, Box<NarrowOp>, NarrowUseLocation),
     /// An import of a module.
@@ -2470,7 +2474,7 @@ pub enum Binding {
     PatternMatchMapping(Box<Expr>, Idx<Key>),
     /// An entry in a MatchClass. The Key looks up the value being matched, the Expr is the class name.
     /// Positional patterns index into __match_args__, and keyword patterns match an attribute name.
-    PatternMatchClassPositional(Box<Expr>, usize, Idx<Key>, TextRange),
+    PatternMatchClassPositional(Box<(Box<Expr>, usize, Idx<Key>, TextRange)>),
     PatternMatchClassKeyword(Box<(Box<Expr>, Identifier, Idx<Key>)>),
     /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
     ExceptionHandler(Box<Expr>, bool),
@@ -2592,8 +2596,8 @@ impl DisplayWith<Bindings> for Binding {
             Self::ContextValue(a, x, _, kind) => {
                 write!(f, "ContextValue({}, {}, {kind:?})", ann(a), ctx.display(*x))
             }
-            Self::UnpackedValue(a, x, range, pos, receiver) => {
-                let pos = match pos {
+            Self::UnpackedValue(value) => {
+                let pos = match &value.position {
                     UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => {
                         i.to_string()
                     }
@@ -2609,12 +2613,12 @@ impl DisplayWith<Bindings> for Binding {
                 write!(
                     f,
                     "UnpackedValue({}, {}, {}, {}",
-                    ann(a),
-                    ctx.display(*x),
-                    m.display(range),
+                    ann(&value.annotation),
+                    ctx.display(value.source),
+                    m.display(&value.range),
                     pos
                 )?;
-                if let Some(receiver) = receiver {
+                if let Some(receiver) = &value.receiver {
                     write!(
                         f,
                         ", receiver={}@{}",
@@ -2687,7 +2691,8 @@ impl DisplayWith<Bindings> for Binding {
                         .map(|branch| ctx.display(branch.value_key))),
                 )
             }
-            Self::LoopPhi(k, xs) => {
+            Self::LoopPhi(phi) => {
+                let (k, xs) = phi.as_ref();
                 write!(
                     f,
                     "LoopPhi({}, {})",
@@ -2726,7 +2731,8 @@ impl DisplayWith<Bindings> for Binding {
                     ctx.display(*binding_key),
                 )
             }
-            Self::PatternMatchClassPositional(class, idx, key, range) => {
+            Self::PatternMatchClassPositional(pattern) => {
+                let (class, idx, key, range) = pattern.as_ref();
                 write!(
                     f,
                     "PatternMatchClassPositional({}, {idx}, {}, {})",
@@ -2905,9 +2911,9 @@ impl Binding {
             }
             // Receiver-constrained multi-target / unpacked rebinds are
             // class-shaped — match the `NameAssign` path above.
-            Binding::MultiTargetAssign(_, _, _, Some(_))
-            | Binding::UnpackedValue(_, _, _, _, Some(_)) => Some(SymbolKind::Class),
-            Binding::UnpackedValue(_, _, _, _, None) => Some(SymbolKind::Variable),
+            Binding::MultiTargetAssign(_, _, _, Some(_)) => Some(SymbolKind::Class),
+            Binding::UnpackedValue(value) if value.receiver.is_some() => Some(SymbolKind::Class),
+            Binding::UnpackedValue(_) => Some(SymbolKind::Variable),
             Binding::AugAssign(_, _) => Some(SymbolKind::Variable),
             Binding::Expr(_, _)
             | Binding::StmtExpr(_, _)
@@ -2922,10 +2928,10 @@ impl Binding {
             | Binding::PromoteForward(_)
             | Binding::ForwardToFirstUse(_)
             | Binding::Phi(_, _)
-            | Binding::LoopPhi(_, _)
+            | Binding::LoopPhi(_)
             | Binding::Narrow(_, _, _)
             | Binding::PatternMatchMapping(_, _)
-            | Binding::PatternMatchClassPositional(_, _, _, _)
+            | Binding::PatternMatchClassPositional(_)
             | Binding::PatternMatchClassKeyword(_)
             | Binding::SuperInstance(_)
             | Binding::AssignToAttribute(_)
