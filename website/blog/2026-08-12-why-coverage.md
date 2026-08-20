@@ -15,13 +15,13 @@ Let's learn about what it is, why you might want to care about it, and what it c
 
 **TL;DR**:
 
-- Type coverage measures what percentage of your project's symbols are type-annotated.
-- Optionally, you can choose to only include publicly-exported symbols.
+- Type coverage measures what percentage of your project's typables are type-annotated.
+- Optionally, you can choose to only include publicly-exported typables.
 - You can use it similarly to how you would use test coverage.
 
 ## What's type coverage?
 
-Similarly to how test coverage measures how much of a library's source code is hit by its tests, type coverage measures what percentage of a library's symbols have type annotations. Examples of symbols which get counted include function arguments and return types, class variables, and constants. Local variables in function bodies are excluded, as users would never interact with them anyway.
+Similarly to how test coverage measures how much of a library's source code is hit by its tests, type coverage measures what percentage of a library's typeables have type annotations. By typeable, we mean something which can be meaningfully annotated with a type, such as function arguments and return types, class variables, and constants. Local variables in function bodies, on the other hand, are excluded, as users would never interact with them anyway.
 
 If this sounds familiar to you, it may be because we've previously written about the topic in [typing pandas](https://pyrefly.org/blog/pandas-type-completeness/) and [typing numpy](https://pyrefly.org/blog/numpy-type-completeness/). In those posts, we were using Pyright's _verify-types_ feature. Now, however, Pyrefly ships its own type coverage tool (_pyrefly coverage_), which we're now recommending you use instead.
 
@@ -43,9 +43,12 @@ Note how there are two issues with the stub file:
 - The `c` parameter in `two` is misnamed (it should be `b`). It's also unannotated.
 - The `three` function is missing entirely.
 
-How could we have been alerted about this? Just running a type-checker isn't enough, `pyrefly check` would return zero errors in this code alone. Just running `ruff check` with `ANN` enabled isn't enough either, as that would only tell us that the `c` argument is unannotated (it wouldn't tell us anything about the `three` function missing from the stub). Fortunately, there is indeed a tool which can tell us that `three` is missing from the stubs: _pyrefly coverage_. In this case, it tells us:
+Note that if a stub file is present, then that's all the type-checker looks at. Type [typing spec](https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering) enforces this: "If a stub file is found for a module, the type checker should not read the corresponding “real” module". So, if stub files are present, they could be both accurate and complete.
+
+Here, however, the stub is incomplete. How could we have been alerted about this? Just running a type-checker isn't enough, `pyrefly check` would return zero errors in this code alone. Just running `ruff check` with `ANN` enabled isn't enough either, as that would only tell us that the `c` argument is unannotated (it wouldn't tell us anything about the `three` function missing from the stub). Fortunately, there is indeed a tool which can tell us that `three` is missing from the stubs: _pyrefly coverage_. In this case, running `pyrefly coverage check` tells us:
 
 ```console
+$ pyrefly coverage check
  WARN `foo.three` is untyped [coverage-missing]
  --> src/foo/__init__.py:7:1
   |
@@ -70,16 +73,17 @@ The Python linter [ruff](https://docs.astral.sh/ruff) has a suite of typing-rela
 
 First, class variables. If you have a class which does any non-trivial logic in its `__init__` method, then those class variables might not get inferred uniformly across type-checkers (if at all!). `pyrefly coverage` enforces that you explicitly specify types for your class variables. [This PR which typed the `GroupBy` attributes](https://github.com/pola-rs/polars/pull/27903/changes) is a good example of this, where `offset`, `period`, and `closed` all go through non-trivial transformations in the `__init__` method.
 
-Second, you might not currently have type annotations everywhere. By giving you a report, a coverage score, and the option to only include public symbols (`--public-only`), `pyrefly coverage` allows you to focus your efforts on the highest-yield parts of your codebase and tell you how far along with your effort you are. We used this to [prioritise typing efforts in NumPy](https://pyrefly.org/blog/numpy-type-completeness/).
+Second, you might not currently have type annotations everywhere. By giving you a report, a coverage score, and the option to only include public typables (`--public-only`), `pyrefly coverage` allows you to focus your efforts on the highest-yield parts of your codebase and tell you how far along with your effort you are. We used this to [prioritise typing efforts in NumPy](https://pyrefly.org/blog/numpy-type-completeness/).
 
 Finally, stub files. `pyrefly coverage` checks that you don't forget to include annotations for anything in your Python files, if you have stub files. [stubtest](https://mypy.readthedocs.io/en/stable/stubtest.html) can also do this, but that also checks for runtime behaviour and so is a more intensive check, whereas `pyrefly coverage` is fast enough that you could easily include it in a pre-commit configuration file without it impacting developer productivity.
 
 ## Who's using it?
 
-Pyrefly coverage is a new-ish feature, yet it's already being used by a few projects:
+Pyrefly coverage is a new-ish feature, yet it's already being used by a few major projects:
 
-- [SciPy](https://github.com/scipy/scipy).
+- [scipy-stubs](https://github.com/scipy/scipy-stubs).
 - [NumPy](https://github.com/numpy/numpy).
+- [Polars](https://github.com/pola-rs/polars).
 - [Narwhals](https://github.com/narwhals-dev/narwhals).
 - [sh](https://github.com/amoffat/sh).
 
