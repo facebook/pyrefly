@@ -14,6 +14,7 @@ use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::ResolvedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::TypeLevelDslCall;
+use pyrefly_types::type_level_dsl::TypeShapeDslConditionKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
 use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
@@ -111,16 +112,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if valid_parameters && let Some(result) = return_domain {
             let mut valid_body = true;
-            for equality in validated.conditions() {
-                let (left, right) = equality.parameters();
-                if parameter_domains[left] != TypeShapeDslDomain::Int
-                    || parameter_domains[right] != TypeShapeDslDomain::Int
-                {
+            for condition in validated.conditions() {
+                let valid = match condition.kind() {
+                    TypeShapeDslConditionKind::Equal(left, right)
+                    | TypeShapeDslConditionKind::LessThan(left, right) => {
+                        parameter_domains[left] == TypeShapeDslDomain::Int
+                            && parameter_domains[right] == TypeShapeDslDomain::Int
+                    }
+                    TypeShapeDslConditionKind::IsConcreteInt(parameter) => {
+                        parameter_domains[parameter] == TypeShapeDslDomain::Int
+                    }
+                };
+                if !valid {
                     self.error(
                         errors,
-                        equality.range(),
+                        condition.range(),
                         ErrorKind::InvalidArgument,
-                        "`@type_shape_dsl_function` equality operands must be annotated as `Int`"
+                        "`@type_shape_dsl_function` condition operands must be annotated as `Int`"
                             .to_owned(),
                     );
                     valid_body = false;
@@ -188,10 +196,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Some(CalleeKind::Function(FunctionKind::Def(id))) = callee.callee_kind() else {
             return None;
         };
+        if id.qname.module_name().as_str() != "shape_extensions.dsl" {
+            return None;
+        }
+        if id.cls.is_none() && id.qname.id().as_str() == "is_concrete_int" {
+            return Some(TypeShapeDslIntrinsic::IsConcreteInt);
+        }
         let class = id.cls.as_ref()?;
-        if id.qname.module_name().as_str() != "shape_extensions.dsl"
-            || id.qname.id().as_str() != "gradual"
-        {
+        if id.qname.id().as_str() != "gradual" {
             return None;
         }
         if class.has_toplevel_qname("shape_extensions.dsl", "Int") {

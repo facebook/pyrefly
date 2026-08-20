@@ -208,6 +208,19 @@ from shape_extensions.dsl import Int as ReexportedInt
     env
 }
 
+fn type_shape_dsl_predicate_env() -> TestEnv {
+    let mut env = shape_dsl_tensor_env();
+    env.add(
+        "predicate_reexport",
+        "from shape_extensions.dsl import is_concrete_int as predicate\n",
+    );
+    env.add(
+        "predicate_lookalike",
+        "def is_concrete_int(value: object) -> bool: ...\n",
+    );
+    env
+}
+
 fn type_shape_dsl_import_env() -> TestEnv {
     let mut env = shape_dsl_tensor_env();
     env.add(
@@ -1508,13 +1521,13 @@ from shape_extensions.dsl import IntTuple as DslIntTuple
 
 @type_shape_dsl_function
 def chained(a: Int, b: Int, c: Int) -> Int:
-    if a == b == c:  # E: @type_shape_dsl_function condition must be exactly `<Int parameter> == <Int parameter>`
+    if a == b == c:  # E: @type_shape_dsl_function comparison must be exactly
         return a
     return b
 
 @type_shape_dsl_function
 def other_comparison(a: Int, b: Int) -> Int:
-    if a < b:  # E: @type_shape_dsl_function condition must be exactly `<Int parameter> == <Int parameter>`
+    if a <= b:  # E: @type_shape_dsl_function comparison must be exactly
         return a
     return b
 
@@ -1548,7 +1561,7 @@ def fallthrough(a: Int, b: Int) -> Int:  # E: @type_shape_dsl_function every con
 
 @type_shape_dsl_function
 def tuple_condition(a: IntTuple, b: IntTuple) -> IntTuple:
-    if a == b:  # E: equality operands must be annotated as `Int`
+    if a == b:  # E: condition operands must be annotated as `Int`
         return a
     return b
 
@@ -1563,6 +1576,238 @@ def mismatched_gradual_paths(a: Int, b: Int) -> Int:
     if a == b:
         return DslIntTuple.gradual()  # E: declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`
     return DslIntTuple.gradual()  # E: declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_is_concrete_int_resolution,
+    type_shape_dsl_predicate_env(),
+    r#"
+import shape_extensions.dsl as dsl
+import shape_extensions.dsl
+from predicate_reexport import predicate as reexported_predicate
+from shape_extensions import Int, IntVar, type_shape_dsl_function
+from shape_extensions.dsl import is_concrete_int
+from shape_extensions.dsl import is_concrete_int as imported_alias
+from torch import Tensor
+from typing import Any, reveal_type
+
+value_alias = is_concrete_int
+
+@type_shape_dsl_function
+def direct(x: Int, yes: Int, no: Int) -> Int:
+    if is_concrete_int(x):
+        return yes
+    return no
+
+@type_shape_dsl_function
+def qualified(x: Int, yes: Int, no: Int) -> Int:
+    if dsl.is_concrete_int(x):
+        return yes
+    return no
+
+@type_shape_dsl_function
+def fully_qualified(x: Int, yes: Int, no: Int) -> Int:
+    if shape_extensions.dsl.is_concrete_int(x):
+        return yes
+    return no
+
+@type_shape_dsl_function
+def imported(x: Int, yes: Int, no: Int) -> Int:
+    if imported_alias(x):
+        return yes
+    return no
+
+@type_shape_dsl_function
+def value_aliased(x: Int, yes: Int, no: Int) -> Int:
+    if value_alias(x):
+        return yes
+    return no
+
+@type_shape_dsl_function
+def reexported(x: Int, yes: Int, no: Int) -> Int:
+    if reexported_predicate(x):
+        return yes
+    return no
+
+def literal() -> Tensor[[direct(Int[2], Int[7], Int[8])]]: ...
+def computed_literal() -> Tensor[[qualified(Int[1 + 1], Int[7], Int[8])]]: ...
+def gradual() -> Tensor[[fully_qualified(Int, Int[7], Int[8])]]: ...
+def symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[imported(N, Int[7], Int[8])]]: ...
+def solved_literal[N: IntVar](x: Tensor[[N]]) -> Tensor[[direct(N, Int[7], Int[8])]]: ...
+def aliased_literal() -> Tensor[[value_aliased(Int[2], Int[7], Int[8])]]: ...
+def reexported_literal() -> Tensor[[reexported(Int[2], Int[7], Int[8])]]: ...
+# `Any` is admitted without error but is not readable as an `Int`, so the guard is unknown and
+# must fall back gradually instead of taking the precise `Int[8]` false branch.
+def any_argument() -> Tensor[[direct(Any, Int[7], Int[8])]]: ...
+
+def test(x: Tensor[[2]]) -> None:
+    reveal_type(literal())  # E: revealed type: Tensor[[7]]
+    reveal_type(computed_literal())  # E: revealed type: Tensor[[7]]
+    reveal_type(gradual())  # E: revealed type: Tensor[[8]]
+    reveal_type(solved_literal(x))  # E: revealed type: Tensor[[7]]
+    reveal_type(aliased_literal())  # E: revealed type: Tensor[[7]]
+    reveal_type(reexported_literal())  # E: revealed type: Tensor[[7]]
+    reveal_type(any_argument())  # E: revealed type: Tensor[[int]]
+
+def test_symbolic[N: IntVar](x: Tensor[[N]]) -> None:
+    reveal_type(symbolic(x))  # E: revealed type: Tensor[[8]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_is_concrete_int_and_lt,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntVar, type_shape_dsl_function
+from shape_extensions.dsl import Int as DslInt, is_concrete_int
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def guarded_lt(a: Int, b: Int, yes: Int, no: Int) -> Int:
+    if is_concrete_int(a) and a < b:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def unguarded_lt(a: Int, b: Int, yes: Int, no: Int) -> Int:
+    if a < b:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def reflexive_lt(a: Int, yes: Int, no: Int) -> Int:
+    if a < a:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def int_min(a: Int, b: Int) -> Int:
+    if a == b:
+        return a
+    if is_concrete_int(a) and is_concrete_int(b):
+        if a < b:
+            return a
+        return b
+    return DslInt.gradual()
+
+def guarded_true() -> Tensor[[guarded_lt(Int[2], Int[3], Int[7], Int[8])]]: ...
+def guarded_false() -> Tensor[[guarded_lt(Int[3], Int[2], Int[7], Int[8])]]: ...
+def guarded_gradual() -> Tensor[[guarded_lt(Int, Int[3], Int[7], Int[8])]]: ...
+def reflexive_gradual() -> Tensor[[reflexive_lt(Int, Int[7], Int[8])]]: ...
+def min_concrete() -> Tensor[[int_min(Int[2], Int[3])]]: ...
+def min_gradual() -> Tensor[[int_min(Int, Int[2])]]: ...
+def guarded_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> Tensor[[guarded_lt(N, M, Int[7], Int[8])]]: ...
+def unguarded_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> Tensor[[unguarded_lt(N, M, Int[7], Int[8])]]: ...
+def same_symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[unguarded_lt(N, N, Int[7], Int[8])]]: ...
+def reflexive_symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[reflexive_lt(N, Int[7], Int[8])]]: ...
+
+def test() -> None:
+    reveal_type(guarded_true())  # E: revealed type: Tensor[[7]]
+    reveal_type(guarded_false())  # E: revealed type: Tensor[[8]]
+    reveal_type(guarded_gradual())  # E: revealed type: Tensor[[8]]
+    assert_type(reflexive_gradual(), Tensor[[8]])
+    reveal_type(min_concrete())  # E: revealed type: Tensor[[2]]
+    reveal_type(min_gradual())  # E: revealed type: Tensor[[int]]
+
+def test_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> None:
+    reveal_type(guarded_symbolic(x, y))  # E: revealed type: Tensor[[8]]
+    reveal_type(unguarded_symbolic(x, y))  # E: revealed type: Tensor[[int]]
+    assert_type(same_symbolic(x), Tensor[[8]])
+    assert_type(reflexive_symbolic(x), Tensor[[8]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_is_concrete_int,
+    type_shape_dsl_predicate_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from predicate_lookalike import is_concrete_int as lookalike
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+class Spoof:
+    @staticmethod
+    def is_concrete_int(value: object) -> bool: ...
+
+@type_shape_dsl_function
+def missing(x: Int) -> Int:
+    if dsl.is_concrete_int():  # E: @type_shape_dsl_function `is_concrete_int` condition requires exactly one positional argument  # E: Missing argument `value`
+        return x
+    return x
+
+@type_shape_dsl_function
+def excess(x: Int) -> Int:
+    if dsl.is_concrete_int(x, x):  # E: @type_shape_dsl_function `is_concrete_int` condition requires exactly one positional argument  # E: Expected 1 positional argument
+        return x
+    return x
+
+@type_shape_dsl_function
+def keyword(x: Int) -> Int:
+    if dsl.is_concrete_int(value=x):  # E: @type_shape_dsl_function `is_concrete_int` condition requires exactly one positional argument
+        return x
+    return x
+
+@type_shape_dsl_function
+def starred(x: Int) -> Int:
+    if dsl.is_concrete_int(*(x,)):  # E: @type_shape_dsl_function `is_concrete_int` condition requires exactly one positional argument
+        return x
+    return x
+
+@type_shape_dsl_function
+def keyword_starred(x: Int) -> Int:
+    if dsl.is_concrete_int(**{"value": x}):  # E: @type_shape_dsl_function `is_concrete_int` condition requires exactly one positional argument
+        return x
+    return x
+
+@type_shape_dsl_function
+def wrong_domain(x: IntTuple) -> IntTuple:
+    if dsl.is_concrete_int(x):  # E: condition operands must be annotated as `Int`
+        return x
+    return x
+
+@type_shape_dsl_function
+def builtin_isinstance(x: Int) -> Int:
+    if isinstance(x, int):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
+        return x
+    return x
+
+@type_shape_dsl_function
+def imported_lookalike(x: Int) -> Int:
+    if lookalike(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
+        return x
+    return x
+
+@type_shape_dsl_function
+def spoof(x: Int) -> Int:
+    if Spoof.is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
+        return x
+    return x
+
+@type_shape_dsl_function
+def shadowed(is_concrete_int: Int, x: Int) -> Int:
+    if is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`  # E: Expected a callable
+        return x
+    return x
+
+@type_shape_dsl_function
+def boolean_or(x: Int, y: Int) -> Int:
+    if dsl.is_concrete_int(x) or dsl.is_concrete_int(y):  # E: @type_shape_dsl_function condition supports only boolean `and`
+        return x
+    return y
+
+@type_shape_dsl_function
+def other_order(x: Int, y: Int) -> Int:
+    if x <= y:  # E: @type_shape_dsl_function comparison must be exactly
+        return x
+    return y
+
+@type_shape_dsl_function
+def tuple_lt(x: IntTuple, y: IntTuple) -> IntTuple:
+    if x < y:  # E: condition operands must be annotated as `Int`
+        return x
+    return y
 "#,
 );
 

@@ -73,6 +73,9 @@ class IntTuple:
     def gradual() -> typing.Any: ...
 
 
+def is_concrete_int(value: typing.Any) -> bool: ...
+
+
 def prod(xs: list[int]) -> int:
     """Compute the product of a list of dimension sizes."""
     ...

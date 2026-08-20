@@ -15,6 +15,7 @@ use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
+use ruff_python_ast::BoolOp;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Parameters;
@@ -105,6 +106,7 @@ pub struct ParsedTypeShapeDslFunction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeShapeDslIntrinsic {
     Gradual(TypeShapeDslDomain),
+    IsConcreteInt,
 }
 
 /// What a validated DSL body returns. Resolving this depends on more than the AST, so it
@@ -122,11 +124,17 @@ pub struct TypeShapeDslReturn {
     kind: TypeShapeDslReturnKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TypeShapeDslConditionKind {
+    Equal(usize, usize),
+    IsConcreteInt(usize),
+    LessThan(usize, usize),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeShapeDslEquality {
+pub struct TypeShapeDslCondition {
     range: TextRange,
-    left: usize,
-    right: usize,
+    kind: TypeShapeDslConditionKind,
 }
 
 fn parameter_index(parameters: &Parameters, expr: &Expr) -> Option<usize> {
@@ -149,7 +157,7 @@ struct DslValidator<'a, F> {
     parameters: &'a Parameters,
     resolve_intrinsic: &'a F,
     returns: Vec<TypeShapeDslReturn>,
-    conditions: Vec<TypeShapeDslEquality>,
+    conditions: Vec<TypeShapeDslCondition>,
 }
 
 impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
@@ -271,35 +279,91 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 message: "does not support `else` or `elif`",
             });
         }
-        let Expr::Compare(compare) = &*if_stmt.test else {
-            return Err(TypeShapeDslDefinitionError {
-                range: if_stmt.test.range(),
-                message: "condition must be exactly `<Int parameter> == <Int parameter>`",
-            });
-        };
-        if compare.ops.len() != 1 || compare.ops[0] != CmpOp::Eq || compare.comparators.len() != 1 {
-            return Err(TypeShapeDslDefinitionError {
-                range: compare.range,
-                message: "condition must be exactly `<Int parameter> == <Int parameter>`",
-            });
-        }
-        let (Some(left), Some(right)) = (
-            parameter_index(self.parameters, &compare.left),
-            parameter_index(self.parameters, &compare.comparators[0]),
-        ) else {
-            return Err(TypeShapeDslDefinitionError {
-                range: compare.range,
-                message: "condition operands must name parameters",
-            });
-        };
-        self.conditions.push(TypeShapeDslEquality {
-            range: compare.range,
-            left,
-            right,
-        });
+        self.validate_condition(&if_stmt.test)?;
         // Without an `else`, this statement may fall through even if its body returns.
         self.validate_block(&if_stmt.body)?;
         Ok(())
+    }
+
+    fn validate_condition(&mut self, condition: &Expr) -> Result<(), TypeShapeDslDefinitionError> {
+        if let Expr::BoolOp(bool_op) = condition {
+            if bool_op.op != BoolOp::And {
+                return Err(TypeShapeDslDefinitionError {
+                    range: bool_op.range,
+                    message: "condition supports only boolean `and`",
+                });
+            }
+            for value in &bool_op.values {
+                self.validate_condition(value)?;
+            }
+            return Ok(());
+        }
+
+        let kind = self.validate_atomic_condition(condition)?;
+        self.conditions.push(TypeShapeDslCondition {
+            range: condition.range(),
+            kind,
+        });
+        Ok(())
+    }
+
+    fn validate_atomic_condition(
+        &self,
+        condition: &Expr,
+    ) -> Result<TypeShapeDslConditionKind, TypeShapeDslDefinitionError> {
+        match condition {
+            Expr::Compare(compare) => {
+                if compare.ops.len() != 1
+                    || !matches!(compare.ops[0], CmpOp::Eq | CmpOp::Lt)
+                    || compare.comparators.len() != 1
+                {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: compare.range,
+                        message: "comparison must be exactly `<Int parameter> == <Int parameter>` or `<Int parameter> < <Int parameter>`",
+                    });
+                }
+                let (Some(left), Some(right)) = (
+                    parameter_index(self.parameters, &compare.left),
+                    parameter_index(self.parameters, &compare.comparators[0]),
+                ) else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: compare.range,
+                        message: "condition operands must name parameters",
+                    });
+                };
+                Ok(match compare.ops[0] {
+                    CmpOp::Eq => TypeShapeDslConditionKind::Equal(left, right),
+                    CmpOp::Lt => TypeShapeDslConditionKind::LessThan(left, right),
+                    _ => unreachable!("validated comparison operator is equality or less-than"),
+                })
+            }
+            Expr::Call(call)
+                if (self.resolve_intrinsic)(&call.func)
+                    == Some(TypeShapeDslIntrinsic::IsConcreteInt) =>
+            {
+                if call.arguments.args.len() != 1
+                    || !call.arguments.keywords.is_empty()
+                    || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
+                {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: call.arguments.range,
+                        message: "`is_concrete_int` condition requires exactly one positional argument",
+                    });
+                }
+                let Some(parameter) = parameter_index(self.parameters, &call.arguments.args[0])
+                else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: call.arguments.args[0].range(),
+                        message: "`is_concrete_int` argument must name a parameter",
+                    });
+                };
+                Ok(TypeShapeDslConditionKind::IsConcreteInt(parameter))
+            }
+            _ => Err(TypeShapeDslDefinitionError {
+                range: condition.range(),
+                message: "condition supports only `is_concrete_int`, `and`, `==`, and `<`",
+            }),
+        }
     }
 }
 
@@ -497,7 +561,7 @@ pub struct ValidatedTypeShapeDslFunction {
     parsed: ParsedTypeShapeDslFunction,
     // These source-keyed facts are validation invariants for the retained AST, not a body IR.
     returns: Vec<TypeShapeDslReturn>,
-    conditions: Vec<TypeShapeDslEquality>,
+    conditions: Vec<TypeShapeDslCondition>,
 }
 
 // `TextRange` has no total order, so the resolved metadata is ordered by its offsets. Like the
@@ -530,13 +594,8 @@ impl Ord for ValidatedTypeShapeDslFunction {
             .then_with(|| {
                 self.conditions
                     .iter()
-                    .map(|x| (offsets(x.range), x.left, x.right))
-                    .cmp(
-                        other
-                            .conditions
-                            .iter()
-                            .map(|x| (offsets(x.range), x.left, x.right)),
-                    )
+                    .map(|x| (offsets(x.range), x.kind))
+                    .cmp(other.conditions.iter().map(|x| (offsets(x.range), x.kind)))
             })
     }
 }
@@ -584,7 +643,7 @@ impl ValidatedTypeShapeDslFunction {
         self.returns.iter().copied()
     }
 
-    pub fn conditions(&self) -> impl Iterator<Item = TypeShapeDslEquality> + '_ {
+    pub fn conditions(&self) -> impl Iterator<Item = TypeShapeDslCondition> + '_ {
         self.conditions.iter().copied()
     }
 }
@@ -599,13 +658,13 @@ impl TypeShapeDslReturn {
     }
 }
 
-impl TypeShapeDslEquality {
+impl TypeShapeDslCondition {
     pub fn range(self) -> TextRange {
         self.range
     }
 
-    pub fn parameters(self) -> (usize, usize) {
-        (self.left, self.right)
+    pub fn kind(self) -> TypeShapeDslConditionKind {
+        self.kind
     }
 }
 
@@ -823,42 +882,80 @@ impl ResolvedTypeShapeDslFunction {
                         TypeShapeDslReturnKind::Gradual(_) => DslEvaluation::ExplicitGradual,
                     });
                 }
-                Stmt::If(if_stmt) => {
-                    let (left, right) = self
-                        .definition
-                        .conditions
-                        .iter()
-                        .find_map(|equality| {
-                            (equality.range == if_stmt.test.range())
-                                .then_some((equality.left, equality.right))
-                        })
-                        .expect("validated if condition must have validation metadata");
-                    // Reflexive equality is true even when the parameter itself is gradual.
-                    let condition = if left == right {
-                        DslCondition::True
-                    } else {
-                        match (Int::from_type(&args[left]), Int::from_type(&args[right])) {
-                            (Some(Int::Int), _) | (_, Some(Int::Int)) => DslCondition::Unknown,
-                            (Some(left), Some(right)) if left == right => DslCondition::True,
-                            (Some(Int::Literal(_)), Some(Int::Literal(_))) => DslCondition::False,
-                            _ => DslCondition::Unknown,
-                        }
-                    };
-                    match condition {
-                        DslCondition::True => match self.evaluate_block(&if_stmt.body, args) {
-                            DslControlFlow::Continue => {}
-                            result @ DslControlFlow::Return(_) => return result,
-                        },
-                        DslCondition::False => {}
-                        DslCondition::Unknown => {
-                            return DslControlFlow::Return(DslEvaluation::AutomaticFallback);
-                        }
+                Stmt::If(if_stmt) => match self.evaluate_condition(&if_stmt.test, args) {
+                    DslCondition::True => match self.evaluate_block(&if_stmt.body, args) {
+                        DslControlFlow::Continue => {}
+                        result @ DslControlFlow::Return(_) => return result,
+                    },
+                    DslCondition::False => {}
+                    DslCondition::Unknown => {
+                        return DslControlFlow::Return(DslEvaluation::AutomaticFallback);
                     }
-                }
+                },
                 _ => unreachable!("validated type-level DSL block contains only if and return"),
             }
         }
         DslControlFlow::Continue
+    }
+
+    fn evaluate_condition(&self, condition: &Expr, args: &[Type]) -> DslCondition {
+        if let Expr::BoolOp(bool_op) = condition {
+            let mut result = DslCondition::True;
+            for value in &bool_op.values {
+                match self.evaluate_condition(value, args) {
+                    DslCondition::False => return DslCondition::False,
+                    DslCondition::Unknown => result = DslCondition::Unknown,
+                    DslCondition::True => {}
+                }
+            }
+            return result;
+        }
+
+        let kind = self
+            .definition
+            .conditions
+            .iter()
+            .find_map(|condition_metadata| {
+                (condition_metadata.range == condition.range()).then_some(condition_metadata.kind)
+            })
+            .expect("validated atomic condition must have validation metadata");
+        match kind {
+            TypeShapeDslConditionKind::IsConcreteInt(parameter) => {
+                match Int::from_type(&args[parameter]) {
+                    Some(Int::Literal(_)) => DslCondition::True,
+                    Some(_) => DslCondition::False,
+                    None => DslCondition::Unknown,
+                }
+            }
+            TypeShapeDslConditionKind::LessThan(left, right) => {
+                if left == right {
+                    DslCondition::False
+                } else {
+                    match (Int::from_type(&args[left]), Int::from_type(&args[right])) {
+                        (Some(Int::Int), _) | (_, Some(Int::Int)) => DslCondition::Unknown,
+                        (Some(left), Some(right)) if left == right => DslCondition::False,
+                        (Some(Int::Literal(left)), Some(Int::Literal(right))) if left < right => {
+                            DslCondition::True
+                        }
+                        (Some(Int::Literal(_)), Some(Int::Literal(_))) => DslCondition::False,
+                        _ => DslCondition::Unknown,
+                    }
+                }
+            }
+            TypeShapeDslConditionKind::Equal(left, right) => {
+                // Reflexive equality is true even when the parameter itself is gradual.
+                if left == right {
+                    DslCondition::True
+                } else {
+                    match (Int::from_type(&args[left]), Int::from_type(&args[right])) {
+                        (Some(Int::Int), _) | (_, Some(Int::Int)) => DslCondition::Unknown,
+                        (Some(left), Some(right)) if left == right => DslCondition::True,
+                        (Some(Int::Literal(_)), Some(Int::Literal(_))) => DslCondition::False,
+                        _ => DslCondition::Unknown,
+                    }
+                }
+            }
+        }
     }
 }
 impl DslValue {
