@@ -1656,6 +1656,35 @@ def f(t: tuple[int, str] | tuple[str, int]) -> int:  # E: one or more paths are 
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4066
+testcase!(
+    test_match_tuple_subject_exhaustive_rows,
+    r#"
+from typing import assert_never
+class RQ: pass
+class QQ: pass
+class RA: pass
+class QA: pass
+def f(q: RQ | QQ, a: RA | QA) -> None:
+    match q, a:
+        case RQ(), RA(): return
+        case RQ(), _: return
+        case QQ(), QA(): return
+        case QQ(), _: return
+        case unreachable:
+            assert_never(unreachable)
+
+def guarded(q: RQ | QQ, a: RA | QA, flag: bool) -> None:
+    match q, a:
+        case RQ(), RA(): return
+        case RQ(), _ if flag: return
+        case QQ(), QA(): return
+        case QQ(), _: return
+        case reachable:
+            assert_never(reachable)  # E: not assignable to parameter `arg` with type `Never`
+"#,
+);
+
 testcase!(
     test_match_sequence_nested_element_not_exhaustive,
     r#"
