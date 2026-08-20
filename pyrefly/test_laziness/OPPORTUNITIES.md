@@ -38,8 +38,10 @@ forced their export sets during binding.
    function regardless of usage.
 4. **Class metadata for annotation-only usage** — `is_typed_dict()` check
    on every class-as-annotation.
-5. **Eagerly resolved builtins** — 150 KeyExport + cascading demands per
-   module. Fixed cost but adds up.
+5. **Eagerly resolved builtins** — resolved. This used to cost ~150
+   `KeyExport` + cascading demands per module; remaining builtin
+   demands should come from referenced builtin names and small lookup
+   overhead.
 6. **Multiple inheritance check resolves unique fields** — low volume but
    real waste for wide hierarchies.
 
@@ -50,23 +52,26 @@ remaining `Step::Load` modules are submodules touched by
 `solve_import`'s submodule-fallback or `attr.rs`'s module-attribute
 cascade — both are inherently solve-time.
 
-## Eagerly resolved builtins
+## Lazily materialized builtins
 
-Every module resolves ~150 `KeyExport` entries from `builtins`
-(int, str, bool, list, dict, OverflowError, ValueError, ...) even
-if the code never references them. This is because `inject_builtins`
-creates `Binding::Import` for every name returned by
-`get_wildcard(builtins)`, and the solver resolves all bindings.
+This opportunity has been addressed. Previously every module resolved
+~150 `KeyExport` entries from `builtins` (int, str, bool, list, dict,
+OverflowError, ValueError, ...) even if the code never referenced them.
+That happened because `inject_builtins` created `Binding::Import` for
+every name returned by `get_wildcard(builtins)`, and the solver
+resolved all bindings.
 
-**Visible in:** Every test — `(N builtin demands hidden)` line.
+**Visible in:** The `(N builtin demands hidden)` line remains in the
+snapshots, but `N` should now reflect builtin names that were actually
+referenced plus small lookup overhead, not the full builtin wildcard
+surface.
 
-**Ideal behavior:** Only resolve builtin names that are actually
-referenced in the module's code. Unreferenced builtins should not
-trigger cross-module key solving.
+**Current behavior:** Builtin names are materialized lazily when name
+resolution needs them. Unreferenced builtins should not trigger
+cross-module key solving.
 
-**Root cause:** `inject_builtins` in `bindings.rs` imports all
-builtin names via wildcard. The solver resolves every binding
-including unused ones.
+**Regression signal:** A broad increase in hidden builtin demands can
+mean a code path has started materializing more builtins than it uses.
 
 ## Full function signature resolved on import
 
@@ -167,7 +172,8 @@ exports during binding.
   same names don't pay this cost.
 - `get_wildcard` for `from X import *` — unavoidable; binder needs
   the set of names to create binding table entries.
-- `module_exists` for builtins — unavoidable; fixed per-module cost.
+- builtin module availability checks — small fixed overhead; this is no
+  longer the old full-builtin wildcard import fanout.
 
 **Where calls already fire only at solve time** (so they don't force
 exports or load during binding):

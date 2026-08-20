@@ -1,0 +1,38 @@
+# Deliberately not wired into `.github/workflows/build_shape_stubs.yml`, and so
+# not published: the `pyrefly-jax-stubs` name on PyPI is already taken by
+# someone else, and that has to be resolved before this package can be
+# released. The metadata lives here so the package is ready when it is, and so
+# it stays in step with the NumPy and Torch stubs in the meantime.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyrefly-jax-stubs"
+description = "JAX type stubs with array-shape tracking, maintained by Pyrefly"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+version = "0.0.0"
+keywords = ["typechecker", "typechecking", "stubs", "jax"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Typing :: Stubs Only",
+]
+dependencies = [
+  "pyrefly-shape-extensions==0.0.0",
+]
+
+[project.urls]
+homepage = "https://pyrefly.org"
+documentation = "https://pyrefly.org/en/docs/"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["jax-stubs"]
+
+[tool.hatch.build.targets.sdist]
+include = ["jax-stubs/", "README.md", "LICENSE"]

@@ -134,6 +134,30 @@ assert_type(test((1, 2, 3)), tuple[int, int, int])
 );
 
 testcase!(
+    test_type_var_tuple_constructor_inference_from_generic,
+    r#"
+from collections.abc import Callable
+
+class Codec[*Ts]:
+    def map[T](
+        self,
+        f: Callable[[*Ts], T],
+        inv_f: Callable[[T], tuple[*Ts]],
+    ) -> Map[T, *Ts]:
+        return Map(self, f, inv_f)
+
+class Map[T, *Ts](Codec[T]):
+    def __init__(
+        self,
+        parser: Codec[*Ts],
+        f: Callable[[*Ts], T],
+        inv_f: Callable[[T], tuple[*Ts]],
+    ) -> None:
+        ...
+"#,
+);
+
+testcase!(
     test_type_var_tuple_subtype,
     r#"
 from typing import assert_type
@@ -211,6 +235,83 @@ assert_type(test(lambda: 1), tuple[()])
 
 fun: Callable[[int], int] = lambda x: x + 1
 assert_type(test(fun, 1), tuple[int])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_callable_optional_parameter,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]: ...
+def callback(x: int, y: str = "") -> None: ...
+
+assert_type(test(callback, 1), tuple[int])
+assert_type(test(callback, 1, ""), tuple[int, str])
+test(callback, 1, 1)  # E: Unpacked argument `tuple[Literal[1], Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, str]`
+test(callback, 1, "", "")  # E: Unpacked argument `tuple[Literal[1], Literal[''], Literal['']]` is not assignable to parameter `*args` with type `tuple[int, str]`
+"#,
+);
+
+// Optional callback arities constrain matching without becoming the inferred value of `Ts`.
+testcase!(
+    test_type_var_tuple_callable_optional_parameter_does_not_escape,
+    r#"
+from typing import Callable, assert_type
+
+def apply[*Ts](callback: Callable[[*Ts], None]) -> tuple[*Ts]: ...
+def callback(x: int, y: str = "") -> None: ...
+
+r = apply(callback)
+assert_type(r, tuple[int, str])
+assert_type(r[0], int)
+r[2]  # E: Index 2 out of range for tuple with 2 elements
+
+a, b = r
+assert_type(a, int)
+assert_type(b, str)
+"#,
+);
+
+// Optional positional parameters compose with each supported variadic callback form.
+testcase!(
+    test_type_var_tuple_callable_optional_parameter_with_varargs,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]: ...
+
+def cb1(x: int, y: str = "", *rest: bytes) -> None: ...
+assert_type(test(cb1, 1), tuple[int])
+assert_type(test(cb1, 1, ""), tuple[int, str])
+assert_type(test(cb1, 1, "", b""), tuple[int, str, bytes])
+
+def cb2(x: int, y: str = "", *rest: *tuple[bytes, ...]) -> None: ...
+assert_type(test(cb2, 1), tuple[int])
+assert_type(test(cb2, 1, ""), tuple[int, str])
+assert_type(test(cb2, 1, "", b""), tuple[int, str, bytes])
+
+def cb3[*Us](x: int, y: str = "", *rest: *Us) -> None: ...
+assert_type(test(cb3, 1), tuple[int])
+assert_type(test(cb3, 1, ""), tuple[int, str])
+assert_type(test(cb3, 1, "", b""), tuple[int, str, bytes])
+
+def cb4(x: int, y: str = "", *rest: *tuple[bytes, complex]) -> None: ...
+test(cb4, 1)  # E: Unpacked argument `tuple[Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, str, bytes, complex]`
+"#,
+);
+
+// Many optional parameters must not change which callback invocations are legal.
+testcase!(
+    test_type_var_tuple_callable_many_optional_parameters,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]: ...
+def callback(a: int, b: str = "", c: str = "", d: str = "", e: str = "") -> None: ...
+
+assert_type(test(callback, 1), tuple[int])
+assert_type(test(callback, 1, "", "", "", ""), tuple[int, str, str, str, str])
 "#,
 );
 
@@ -438,6 +539,23 @@ def test3() -> None:
 
 infer3 = positional(test3)
 assert_type(infer3, Callable[[], None])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_splat_unpacked_with_hint,
+    r#"
+from typing import TypeVarTuple, Unpack, assert_type
+
+Ts = TypeVarTuple("Ts")
+
+def test(rest: tuple[int, Unpack[Ts], str]) -> None:
+    # Splatting `rest` yields a `Tuple::Unpacked` (prefix `int`, variadic middle, suffix `str`).
+    # With a tuple hint on the LHS, inference must advance past every remaining per-element hint
+    # slot so the trailing annotation element lines up with the splatted suffix instead of the
+    # variadic middle.
+    x: tuple[bool, int, Unpack[Ts], str] = (True, *rest)
+    assert_type(x, tuple[bool, int, *Ts, str])
 "#,
 );
 

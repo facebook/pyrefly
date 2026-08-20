@@ -61,6 +61,7 @@ if sys.platform != "win32":
     def setlogmask(maskpri: int, /) -> int:
         """Set the priority mask to maskpri and return the previous mask value."""
         ...
+
     @overload
     def syslog(priority: int, message: str) -> None:
         """

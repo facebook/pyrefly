@@ -52,11 +52,8 @@ if sys.platform != "win32":
         F_OFD_GETLK: Final[int]
         F_OFD_SETLK: Final[int]
         F_OFD_SETLKW: Final[int]
-
-        if sys.version_info >= (3, 10):
-            F_GETPIPE_SZ: Final[int]
-            F_SETPIPE_SZ: Final[int]
-
+        F_GETPIPE_SZ: Final[int]
+        F_SETPIPE_SZ: Final[int]
         DN_ACCESS: Final[int]
         DN_ATTRIB: Final[int]
         DN_CREATE: Final[int]
@@ -175,6 +172,7 @@ if sys.platform != "win32":
         corresponding to the return value of the fcntl call in the C code.
         """
         ...
+
     # If arg is an int, return int
     @overload
     def ioctl(fd: FileDescriptorLike, request: int, arg: int = 0, mutate_flag: bool = True, /) -> int:
@@ -313,6 +311,7 @@ if sys.platform != "win32":
         code.
         """
         ...
+
     def flock(fd: FileDescriptorLike, operation: int, /) -> None:
         """
         Perform the lock operation `operation` on file descriptor `fd`.

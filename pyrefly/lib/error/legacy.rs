@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use pyrefly_config::error_kind::Severity;
+use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::prelude::SliceExt;
 use serde::Deserialize;
 use serde::Serialize;
@@ -47,6 +48,9 @@ pub struct LegacyError {
     /// This field is not part of Pyre1 error format. But it's useful for Pyrefly clients
     #[serde(default = "default_severity")]
     severity: String,
+    /// Whether the error matched a configured baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    baselined: Option<bool>,
     /// Optional notebook cell number for errors in notebook files
     #[serde(skip_serializing_if = "Option::is_none")]
     cell: Option<usize>,
@@ -63,16 +67,16 @@ impl LegacyError {
             stop_column: error_range.end.column().get() as usize,
             cell: error_range.start.cell().map(|cell| cell.get() as usize),
             path: error_path
-                .strip_prefix(relative_to)
-                .unwrap_or(error_path)
+                .relativize_from(relative_to)
                 .to_string_lossy()
-                .into_owned(),
+                .replace('\\', "/"), // Normalize Windows backslashes so baseline files are consistent across platforms
             // -2 is chosen because it's an unused error code in Pyre1
             code: -2, // TODO: replace this dummy value
             name: error.error_kind().to_name().to_owned(),
             description: error.msg(),
             concise_description: error.msg_header().to_owned(),
             severity: severity_to_str(error.severity()),
+            baselined: error.baseline_status().legacy_baselined_flag(),
         }
     }
 }
@@ -87,5 +91,117 @@ impl LegacyErrors {
         Self {
             errors: errors.map(|e| LegacyError::from_error(relative_to, e)),
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct BaselineError {
+    pub column: usize,
+    pub path: String,
+    /// The kebab-case name of the error kind.
+    pub name: String,
+    concise_description: String,
+    #[serde(default = "default_severity")]
+    severity: String,
+    /// Optional notebook cell number for errors in notebook files
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cell: Option<usize>,
+}
+
+impl BaselineError {
+    fn from_error(relative_to: &Path, error: &Error) -> Self {
+        let error_range = error.display_range();
+        let error_path = error.path().as_path();
+        Self {
+            column: error_range.start.column().get() as usize,
+            cell: error_range.start.cell().map(|cell| cell.get() as usize),
+            path: error_path
+                .relativize_from(relative_to)
+                .to_string_lossy()
+                .replace('\\', "/"), // Normalize Windows backslashes so baseline files are consistent across platforms
+            name: error.error_kind().to_name().to_owned(),
+            concise_description: error.msg_header().to_owned(),
+            severity: severity_to_str(error.severity()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct BaselineErrors {
+    pub errors: Vec<BaselineError>,
+}
+
+impl BaselineErrors {
+    pub fn from_errors(relative_to: &Path, errors: &[Error]) -> Self {
+        Self {
+            errors: errors.map(|e| BaselineError::from_error(relative_to, e)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+
+    use super::*;
+    use crate::config::error_kind::ErrorKind;
+    use crate::error::error::BaselineStatus;
+
+    #[test]
+    fn test_relativize_when_error_is_not_under_relative_to() {
+        let module = Module::new(
+            ModuleName::from_str("foo"),
+            ModulePath::filesystem(PathBuf::from("/repo/libs/foo.py")),
+            Arc::new("x = 1\n".to_owned()),
+        );
+        let error = Error::new(
+            module,
+            TextRange::new(TextSize::new(0), TextSize::new(1)),
+            "err".to_owned(),
+            Vec::new(),
+            ErrorKind::BadAssignment,
+        );
+        let legacy = LegacyError::from_error(Path::new("/repo/src"), &error);
+        assert_eq!(legacy.path, "../libs/foo.py");
+    }
+
+    #[test]
+    fn test_baseline_provenance_is_optional() {
+        let module = Module::new(
+            ModuleName::from_str("foo"),
+            ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
+            Arc::new("x = 1\n".to_owned()),
+        );
+        let error = Error::new(
+            module,
+            TextRange::new(TextSize::new(0), TextSize::new(1)),
+            "err".to_owned(),
+            Vec::new(),
+            ErrorKind::BadAssignment,
+        );
+
+        let without_baseline =
+            serde_json::to_value(LegacyError::from_error(Path::new("/repo"), &error)).unwrap();
+        assert!(without_baseline.get("baselined").is_none());
+
+        let matched = error.clone().with_baseline_status(BaselineStatus::Matched);
+        assert_eq!(
+            serde_json::to_value(LegacyError::from_error(Path::new("/repo"), &matched)).unwrap()["baselined"],
+            true
+        );
+
+        let not_compared = error.with_baseline_status(BaselineStatus::NotCompared);
+        assert_eq!(
+            serde_json::to_value(LegacyError::from_error(Path::new("/repo"), &not_compared))
+                .unwrap()["baselined"],
+            false
+        );
     }
 }

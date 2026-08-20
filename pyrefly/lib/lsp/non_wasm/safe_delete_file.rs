@@ -100,6 +100,9 @@ pub(crate) fn safe_delete_file_code_actions(
             delete_file_code_action(format!("Delete file `{file_name}` anyway"), uri),
         ]);
     }
+    if transaction.is_depended_on_by_anything(&handle) {
+        return None;
+    }
 
     Some(vec![delete_file_code_action(
         format!("Safe delete file `{file_name}`"),
@@ -142,6 +145,7 @@ fn find_usages_code_action(
                 "uri": uri,
                 "locations": locations,
             })]),
+            tooltip: None,
         }),
         ..Default::default()
     })

@@ -36,6 +36,7 @@ use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
+use crate::lsp::non_wasm::queue::QueuedEvent;
 use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::InitializeInfo;
 use crate::lsp::non_wasm::server::MessageReader;
@@ -44,7 +45,6 @@ use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
-use crate::tsp::type_conversion::convert_type_with_resolvers;
 use crate::tsp::validation::internal_error;
 use crate::tsp::validation::invalid_params_error;
 use crate::tsp::validation::snapshot_outdated_error;
@@ -166,22 +166,6 @@ impl<T: TspInterface> TspConnection<T> {
     /// Convenience accessor for the inner LSP server.
     pub(crate) fn inner(&self) -> &T {
         &self.server.inner
-    }
-
-    /// Convert a pyrefly `Type` to a TSP protocol `Type`, resolving function
-    /// declaration ranges via the binding table.
-    pub(crate) fn convert_type(
-        &self,
-        ty: &pyrefly_types::types::Type,
-        source_uri: Option<&str>,
-    ) -> tsp_types::Type {
-        let resolver = |func_id: &pyrefly_types::callable::FuncId| {
-            self.inner().resolve_func_def_range(func_id)
-        };
-        let module_path_resolver = |module: &pyrefly_types::module::ModuleType| {
-            source_uri.and_then(|uri| self.inner().resolve_module_uri(uri, module))
-        };
-        convert_type_with_resolvers(ty, Some(&resolver), Some(&module_path_resolver))
     }
 
     fn send_response(&self, response: Response) {
@@ -320,10 +304,10 @@ impl<T: TspInterface> TspMainConnection<T> {
         telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
-        event: LspEvent,
+        event: QueuedEvent,
     ) -> anyhow::Result<ProcessEvent> {
         // Remember if this event should increment the snapshot after processing
-        let should_increment_snapshot = match &event {
+        let should_increment_snapshot = match event.event() {
             LspEvent::RecheckFinished => true,
             // Increment on DidChange since it affects type checker state via synchronous validation
             LspEvent::DidChangeTextDocument(_) => true,
@@ -335,7 +319,7 @@ impl<T: TspInterface> TspMainConnection<T> {
         };
 
         // For TSP requests, handle them specially
-        if let LspEvent::LspRequest(ref request) = event {
+        if let LspEvent::LspRequest(request) = event.event() {
             match parse_tsp_request(request) {
                 Some(TSPRequests::ConnectionRequest { params, .. }) => {
                     self.handle_connection_request(request.id.clone(), params);
@@ -639,12 +623,13 @@ pub fn tsp_loop(
         let mut canceled_requests = HashSet::new();
         let mut next_task_id = 0_usize;
 
-        while let Ok((subsequent_mutation, event, enqueued_at)) = server.inner.lsp_queue().recv() {
+        while let Ok(event) = server.inner.lsp_queue().recv() {
+            let subsequent_mutation = server.inner.lsp_queue().has_subsequent_mutation(&event);
             let task_id = next_task_id;
             next_task_id += 1;
             let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(
                 TelemetryEventKind::LspEvent(event.describe()),
-                enqueued_at,
+                event.enqueued_at(),
                 server.inner.telemetry_state(),
                 QueueName::LspQueue,
                 task_id,

@@ -12,11 +12,11 @@ use lsp_types::ResourceOp;
 use lsp_types::Url;
 use lsp_types::request::CodeActionRequest;
 use serde_json::Value;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn init_with_delete_support(root_path: &std::path::Path) -> (LspInteraction, Url) {
     let scope_uri = Url::from_file_path(root_path).unwrap();
@@ -319,6 +319,42 @@ fn test_safe_delete_file_rejects_relative_import() {
                 }
             }
             saw_find && saw_delete && !saw_safe
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// A Configerator `.cinc` file reaches its Thrift stub through an
+/// `import_thrift(...)` call rather than an `import` statement. The dependency
+/// is real -- deleting the stub breaks the config -- and the dependency graph
+/// records it, so safe delete must not offer to remove it.
+#[test]
+fn test_safe_delete_file_rejects_special_import() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("safe_delete_special_import");
+    let (interaction, _scope_uri) = init_with_delete_support(&root_path);
+
+    interaction.client.did_open("config.cinc");
+
+    let uri = Url::from_file_path(root_path.join("service/types.thrift.pyi")).unwrap();
+    interaction
+        .client
+        .send_request::<CodeActionRequest>(json!({
+            "textDocument": { "uri": uri },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 0, "character": 0 }
+            },
+            "context": { "diagnostics": [] }
+        }))
+        .expect_response_with(|response: Option<Vec<CodeActionOrCommand>>| {
+            response.unwrap_or_default().iter().all(|action| {
+                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                    return true;
+                };
+                !code_action.title.starts_with("Safe delete file")
+            })
         })
         .unwrap();
 

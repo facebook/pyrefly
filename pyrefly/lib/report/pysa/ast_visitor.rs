@@ -6,6 +6,7 @@
  */
 
 use dupe::Dupe;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::Class;
@@ -20,11 +21,11 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 
-use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::DecoratedFunction;
 use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::should_export_decorated_function;
@@ -38,7 +39,7 @@ pub enum Scope {
         #[allow(dead_code)]
         location: TextRange,
         #[allow(dead_code)]
-        decorated_function: DecoratedFunction,
+        decorated_function: Idx<KeyDecoratedFunction>,
     },
     ExportedClass {
         class_id: ClassId,
@@ -310,22 +311,18 @@ fn visit_statement<V: AstScopedVisitor>(
                 .bindings
                 .key_to_idx_hashed_opt(Hashed::new(&key))
             {
-                let decorated_function = DecoratedFunction::from_bindings_answers(
+                let function = DecoratedFunction {
                     idx,
-                    &module_context.answers_context.bindings,
-                    &module_context.answers_context.answers,
-                );
-                if should_export_decorated_function(
-                    &decorated_function,
-                    &module_context.answers_context,
-                ) {
+                    undecorated: module_context.answers_context.undecorated_function(idx),
+                };
+                if should_export_decorated_function(&function, &module_context.answers_context) {
                     Scope::ExportedFunction {
                         function_id: FunctionId::Function {
-                            func_def_index: decorated_function.undecorated.def_index,
+                            func_def_index: function.undecorated.def_index,
                         },
                         location: function_def.identifier().range(),
                         function_name: function_def.name.id().clone(),
-                        decorated_function,
+                        decorated_function: idx,
                     }
                 } else {
                     Scope::NonExportedFunction {

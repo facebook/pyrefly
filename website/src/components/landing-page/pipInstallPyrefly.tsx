@@ -119,13 +119,15 @@ const styles = stylex.create({
         transform: 'rotateX(0deg) translateY(0)',
     },
     pre: {
-        maxWidth: '430px',
+        maxWidth: '640px',
         width: '100%',
         borderRadius: '4px',
         color: 'var(--color-text)',
-        padding: '4px 10px',
+        padding: '4px 36px 4px 10px',
         marginTop: '10px',
         position: 'relative',
+        whiteSpace: 'pre-wrap',
+        overflowWrap: 'anywhere',
     },
     copy: {
         position: 'absolute',

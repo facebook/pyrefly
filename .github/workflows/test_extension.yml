@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    branches: [ main ]
     paths:
       - '**/*'
       - '!.*'
@@ -41,7 +42,7 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: alpine
             arch: arm64
-          - os: macos-14
+          - os: macos-15-intel
             platform: darwin
             arch: x64
           - os: macos-14

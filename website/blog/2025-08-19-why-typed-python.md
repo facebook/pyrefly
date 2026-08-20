@@ -153,6 +153,8 @@ Choose and install a type checker that fits your needs. Typecheckers leverage th
 
 At Meta, we recommend [Pyrefly](https://pyrefly.org/), our new open-source type checker built in Rust. Pyrefly is designed to scale from small projects to massive codebases incredibly fast, while providing excellent developer experience. Read the [Pyrefly documentation](https://pyrefly.org/en/docs/) to understand configuration options and best practices, then start adding simple type hints to new functions before gradually working your way up to more complex scenarios.
 
+Weighing up the options? [Compare mypy, Pyright, and Pyrefly](https://pyrefly.org/en/docs/compare/) walks through how the three differ. If you already run a type checker, you can move across without rewriting your configuration by hand: see [migrating from mypy](https://pyrefly.org/en/docs/migrating-from-mypy/) or [migrating from Pyright](https://pyrefly.org/en/docs/migrating-from-pyright/).
+
 You should also consider working with a typechecker that [supports IDE integration](https://pyrefly.org/en/docs/IDE/) to get real-time feedback as you write code. Pyrefly provides extensions for editors like VS Code, PyCharm, and Vim which will highlight errors and provide autocomplete suggestions based on your type annotations.
 
 Adding your typechecker to your CI processes is also valuable for maintaining code quality at scale. You can [configure your CI/CD pipeline to run type checking](https://pyrefly.org/en/docs/installation/#add-pyrefly-to-ci) on every pull request, treating type errors as build failures.

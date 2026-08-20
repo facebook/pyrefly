@@ -27,7 +27,7 @@ Pyrefly's current development status is [stable](https://github.com/facebook/pyr
 - **Fast.** Pyrefly checks over 1.85 million lines of code per second, type checking projects like PyTorch 15x faster than Mypy and Pyright. In the IDE, rechecks typically complete in under 10 milliseconds after saving a file.
 - **Production-proven at scale.** Pyrefly is the default type checker for Instagram's 20-million-line Python codebase at Meta, and has been adopted by large open source projects including PyTorch and JAX.
 - **Full-featured language server.** Code navigation, autocomplete, hover information, inlay hints, semantic highlighting, and more, with consistent results across the CLI and your editor of choice.
-- **Understands real-world Python.** Built-in support for frameworks like [Pydantic](https://pyrefly.org/en/docs/pydantic/) and [Django](https://pyrefly.org/en/docs/django/), with model validation, field types, and autocomplete that work out of the box.
+- **Understands real-world Python.** Built-in support for frameworks and tools like [Pydantic](https://pyrefly.org/en/docs/pydantic/), [Django](https://pyrefly.org/en/docs/django/), and [pytest](https://pyrefly.org/en/docs/pytest/), with model validation, field types, fixture navigation, and autocomplete that work out of the box.
 - **Adoption-ready.** Migrate from Mypy or Pyright with `pyrefly init`, silence existing errors with `pyrefly suppress`, and generate type annotations with `pyrefly infer`. Start with one file and expand at your own pace.
 
 ### Getting Started

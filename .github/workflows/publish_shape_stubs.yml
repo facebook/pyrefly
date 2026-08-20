@@ -1,0 +1,40 @@
+name: Publish shape stubs to PyPI
+
+on:
+  push:
+    paths:
+      - version.bzl
+    branches: [ main, 'release/**' ]
+  workflow_dispatch:
+
+jobs:
+  check_publish:
+    uses: ./.github/workflows/check_publish.yml
+
+  build-shape-stubs:
+    name: Build shape stubs
+    needs: check_publish
+    if: needs.check_publish.outputs.should_publish == 'true'
+    uses: ./.github/workflows/build_shape_stubs.yml
+
+  pypi-publish-shape-stubs:
+    name: Upload shape stubs to PyPI
+    runs-on: ubuntu-latest
+    needs: build-shape-stubs
+    environment:
+      name: pypi-shape-extensions
+      url: https://pypi.org/p/pyrefly-shape-extensions
+    permissions:
+      id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
+    steps:
+      - name: Download shape stubs dist
+        uses: actions/download-artifact@v7
+        with:
+          name: shape-stubs-dist
+          path: shape-stubs-dist
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish shape stubs to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1.13
+        with:
+          packages-dir: shape-stubs-dist
+          skip-existing: false

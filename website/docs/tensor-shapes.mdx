@@ -44,8 +44,8 @@ import TabItem from '@theme/TabItem';
 </Tabs>
 
 With tensor shapes enabled, Pyrefly infers and displays the shape of every
-intermediate tensor — `Tensor[B, T, NEmbedding]` for embeddings,
-`Tensor[T]` for position indices — without any manual annotations on local
+intermediate tensor — `Tensor[[B, T, NEmbedding]]` for embeddings,
+`Tensor[[T]]` for position indices — without any manual annotations on local
 variables.
 
 ```sandbox
@@ -58,7 +58,7 @@ description: See tensor shape tracking, variadic batch dimensions, and shape mis
 Pyrefly's tensor shape support is built on two extensions that work together:
 
 1. **Symbolic integer arithmetic** in the core type system — lets you write
-   `Tensor[B, C, H, W]` and have arithmetic like `D // NHead` work at the
+   `Tensor[[B, C, H, W]]` and have arithmetic like `D // NHead` work at the
    type level.
 2. **Shape transform specifications** for PyTorch operators — a library of
    shape rules that tells Pyrefly how each operator transforms shapes.
@@ -69,40 +69,43 @@ a few annotations at class and function boundaries.
 
 ### Symbolic integer arithmetic
 
-You can write tensor types with integer dimensions — `Tensor[3, 4]` is a
+You can write tensor types with integer dimensions — `Tensor[[3, 4]]` is a
 2D tensor with shape `(3, 4)`. This works for modules too: `nn.Linear[3, 4]`
-takes `Tensor[..., 3]` as input and returns `Tensor[..., 4]`.
+accepts a tensor with any number of leading dimensions followed by a `3`,
+and returns one with the same leading dimensions followed by a `4` — see
+[Variadic dimensions with `Elements`](./tensor-shapes-reference.mdx#variadic-dimensions-with-elements)
+in the Reference page for the syntax that expresses this.
 
-**`Dim[X]`** bridges runtime integer values to the type level. When
-`x: Tensor[3, 4]`, then `x.shape` has type `tuple[Dim[3], Dim[4]]` — you
+**`Int[X]`** bridges runtime integer values to the type level. When
+`x: Tensor[[3, 4]]`, then `x.shape` has type `tuple[Int[3], Int[4]]` — you
 can extract dimensions from tensors and use them to construct new ones.
-Arithmetic works too: if `a: Dim[3]` and `b: Dim[4]`, then
-`a * b: Dim[12]`.
+Arithmetic works too: if `a: Int[3]` and `b: Int[4]`, then
+`a * b: Int[12]`.
 
 **Generic type parameters** let you write shape-polymorphic modules:
 
 ```python
-class Linear[N, M]:
-    def __init__(self, n: Dim[N], m: Dim[M]):
+class Linear[N: IntVar, M: IntVar]:
+    def __init__(self, n: Int[N], m: Int[M]):
         ...
 
-    def forward[*Xs](self, inp: Tensor[*Xs, N]) -> Tensor[*Xs, M]:
+    def forward[Xs: IntTuple](self, inp: Tensor[[*Elements[Xs], N]]) -> Tensor[[*Elements[Xs], M]]:
         ...
 
 linear: Linear[3, 4] = Linear(3, 4)
-inp: Tensor[2, 5, 3] = ...
-x: Tensor[2, 5, 4] = linear(inp)
+inp: Tensor[[2, 5, 3]] = ...
+x: Tensor[[2, 5, 4]] = linear(inp)
 ```
 
-`Dim` encodes symbolic shapes at the type level throughout PyTorch, covering modules as well as tensors.
+`Int` encodes symbolic shapes at the type level throughout PyTorch, covering modules as well as tensors.
 
 **Arithmetic on type variables** lets you write custom shape transforms:
 
 ```python
-def custom_rand_tensor[A, B](a: Dim[A], b: Dim[B]) -> Tensor[(A + B) // 2]:
+def custom_rand_tensor[A: IntVar, B: IntVar](a: Int[A], b: Int[B]) -> Tensor[[(A + B) // 2]]:
     return torch.randn((a + b) // 2)
 
-x: Tensor[3] = custom_rand_tensor(2, 4)
+x: Tensor[[3]] = custom_rand_tensor(2, 4)
 ```
 
 While these examples use type annotations for exposition, the types of local
@@ -115,7 +118,7 @@ Some PyTorch operators have simple shape signatures that can be expressed as
 standard type stubs. For example, `torch.mm`:
 
 ```python
-def mm[M, K, N](x: Tensor[M, K], y: Tensor[K, N]) -> Tensor[M, N]:
+def mm[M: IntVar, K: IntVar, N: IntVar](x: Tensor[[M, K]], y: Tensor[[K, N]]) -> Tensor[[M, N]]:
     ...
 ```
 
@@ -166,7 +169,7 @@ express tensor shapes in type annotations that other libraries like `typeguard`
 and `beartype` can check at runtime. The syntax is designed to be universal for
 array-like containers (supporting JAX, NumPy, and PyTorch), but is somewhat
 verbose — for example, `Shaped[Tensor, "M 2 M//2"]` instead of
-`Tensor[M, 2, M // 2]`.
+`Tensor[[M, 2, M // 2]]`.
 
 Pyrefly supports jaxtyping annotations as an alternative front-end to our native
 syntax; these annotations are translated internally to use generics and display
