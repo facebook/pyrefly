@@ -1099,7 +1099,7 @@ impl ConfigFile {
     }
 
     pub fn treat_all_caps_as_final(&self, _: &Path) -> bool {
-        false
+        true
     }
 
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
