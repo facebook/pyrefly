@@ -842,7 +842,7 @@ impl ConfigFile {
     ];
     /// Files that don't contain pyrefly-specific config information but indicate that we're at the
     /// root of a Python project, which should be added to the search path.
-    pub const ADDITIONAL_ROOT_FILE_NAMES: &[&str] = &["mypy.ini", "pyrightconfig.json"];
+    pub const ADDITIONAL_ROOT_FILE_NAMES: &[&str] = &["mypy.ini", "pyrightconfig.json", "test.rs"];
 
     /// Writes the configuration to a file in the specified directory.
     pub fn write_to_toml_in_directory(&self, directory: &Path) -> Result<()> {
