@@ -71,6 +71,41 @@ class E(B):
 );
 
 testcase!(
+    test_override_class_var_callable,
+    r#"
+from collections.abc import Callable
+from typing import ClassVar
+
+class Parent:
+    x: ClassVar[Callable]
+
+class Child(Parent):
+    x: ClassVar[Callable] = lambda x: None
+
+def get_value() -> Callable[[object], int]: ...
+
+class ParameterizedParent:
+    x: ClassVar[Callable[[object], int]]
+
+class ParameterizedChild(ParameterizedParent):
+    x: ClassVar[Callable[[object], int]] = get_value()
+
+class InstanceVariableChild(ParameterizedParent):
+    x: Callable[[object], int] = get_value()  # E: Instance variable `InstanceVariableChild.x` overrides ClassVar
+
+def inferred_value(x: object) -> int: ...
+
+class InferredClassVarChild(ParameterizedParent):
+    x = inferred_value
+
+def get_incompatible_value() -> Callable[[str], int]: ...
+
+class IncompatibleChild(ParameterizedParent):
+    x: ClassVar[Callable[[str], int]] = get_incompatible_value()  # E: is not consistent with
+"#,
+);
+
+testcase!(
     test_override_classvar_with_nested_class,
     r#"
 from typing import ClassVar
