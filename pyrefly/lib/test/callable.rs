@@ -1868,9 +1868,7 @@ constrained_first(0, lambda x: None)
 "#,
 );
 
-// Lambda arguments are inferred before later arguments can constrain the generic parameter.
 testcase!(
-    bug = "Lambda context ignores later generic constraints",
     test_implicit_any_lambda_late_generic_context,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
@@ -1878,7 +1876,7 @@ from typing import Callable
 
 def constrained_later[T](f: Callable[[T], None], x: T) -> None: ...
 
-constrained_later(lambda x: None, 0)  # E: Type of lambda parameter `x` is unknown
+constrained_later(lambda x: None, 0)
 "#,
 );
 
@@ -2043,11 +2041,10 @@ f = lambda x=1: x
 );
 
 testcase!(
-    bug = "Pyrefly does not contextually type lambda parameters in generic callback arguments (e.g. `sorted(key=...)`), so they become implicit `Any` and are flagged, even though the type is derivable (Pyright infers `int` here)",
     test_implicit_any_lambda_in_generic_call,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
-xs = sorted([3, 1, 2], key=lambda x: x)  # E: Type of lambda parameter `x` is unknown
+xs = sorted([3, 1, 2], key=lambda x: x)
 "#,
 );
 
