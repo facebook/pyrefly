@@ -1097,12 +1097,8 @@ impl ConfigFile {
                  self.root.legacy_overload_expansion.unwrap())
     }
 
-    pub fn treat_all_caps_as_final(&self, path: &Path) -> bool {
-        self.get_from_sub_configs(ConfigBase::get_treat_all_caps_as_final, path)
-            .unwrap_or_else(||
-                 // we can use unwrap here, because the value in the root config must
-                 // be set in `ConfigFile::configure()`.
-                 self.root.treat_all_caps_as_final.unwrap())
+    pub fn treat_all_caps_as_final(&self, _: &Path) -> bool {
+        false
     }
 
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
