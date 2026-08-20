@@ -704,7 +704,7 @@ impl Default for ConfigFile {
             interpreters: Interpreters {
                 python_interpreter_path: None,
                 fallback_python_interpreter_name: None,
-                python_interpreter_find_cmd: None,
+                python_interpreter_find_command: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -1358,8 +1358,8 @@ impl ConfigFile {
         ) {
             interpreter_selections.push("python-interpreter-path");
         }
-        if self.interpreters.python_interpreter_find_cmd.is_some() {
-            interpreter_selections.push("python-interpreter-find-cmd");
+        if self.interpreters.python_interpreter_find_command.is_some() {
+            interpreter_selections.push("python-interpreter-find-command");
         }
         if self.interpreters.fallback_python_interpreter_name.is_some() {
             interpreter_selections.push("fallback-python-interpreter-name");
@@ -2034,7 +2034,7 @@ mod tests {
                         "venv/my/python"
                     ))),
                     fallback_python_interpreter_name: None,
-                    python_interpreter_find_cmd: None,
+                    python_interpreter_find_command: None,
                     conda_environment: None,
                     skip_interpreter_query: false,
                 },
@@ -2409,7 +2409,7 @@ mod tests {
                     interpreter.clone(),
                 ))),
                 fallback_python_interpreter_name: None,
-                python_interpreter_find_cmd: None,
+                python_interpreter_find_command: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -2471,7 +2471,7 @@ mod tests {
             interpreters: Interpreters {
                 python_interpreter_path: Some(ConfigOrigin::config(test_path.join(interpreter))),
                 fallback_python_interpreter_name: None,
-                python_interpreter_find_cmd: None,
+                python_interpreter_find_command: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -2625,27 +2625,31 @@ output-format = "omit-errors"
     }
 
     #[test]
-    fn test_python_interpreter_find_cmd_config_parsing() {
+    fn test_python_interpreter_find_command_config_parsing() {
         let config = ConfigFile::parse_config(
-            r#"python-interpreter-find-cmd = ["poetry", "env", "info", "-e"]"#,
+            r#"python-interpreter-find-command = ["poetry", "env", "info", "-e"]"#,
         )
         .unwrap();
         let expected = ["poetry", "env", "info", "-e"].map(str::to_owned);
         assert_eq!(
-            config.interpreters.python_interpreter_find_cmd.as_deref(),
+            config
+                .interpreters
+                .python_interpreter_find_command
+                .as_deref(),
             Some(expected.as_slice())
         );
         let serialized = toml::to_string(&config).unwrap();
         assert_eq!(ConfigFile::parse_config(&serialized).unwrap(), config);
 
-        let error = ConfigFile::parse_config(r#"python-interpreter-find-cmd = []"#).unwrap_err();
+        let error =
+            ConfigFile::parse_config(r#"python-interpreter-find-command = []"#).unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("`python-interpreter-find-cmd` must contain a program")
+                .contains("`python-interpreter-find-command` must contain a program")
         );
 
-        assert!(ConfigFile::parse_config(r#"python-interpreter-find-cmd = [""]"#).is_err());
+        assert!(ConfigFile::parse_config(r#"python-interpreter-find-command = [""]"#).is_err());
     }
 
     #[test]
@@ -2663,7 +2667,7 @@ output-format = "omit-errors"
             "project-excludes",
             "python-interpreter-path",
             "fallback-python-interpreter-name",
-            "python-interpreter-find-cmd",
+            "python-interpreter-find-command",
             // values we won't be getting
             "extras",
             // values that must be Some (if flattened, their contents will be checked)
@@ -3569,7 +3573,7 @@ output-format = "omit-errors"
     fn test_interpreter_selection_options_are_mutually_exclusive() {
         let selections = [
             "python-interpreter-path",
-            "python-interpreter-find-cmd",
+            "python-interpreter-find-command",
             "fallback-python-interpreter-name",
             "conda-environment",
             "skip-interpreter-query",
@@ -3584,8 +3588,8 @@ output-format = "omit-errors"
                             interpreters.python_interpreter_path =
                                 Some(ConfigOrigin::config(PathBuf::from("ignored")));
                         }
-                        "python-interpreter-find-cmd" => {
-                            interpreters.python_interpreter_find_cmd = Some(
+                        "python-interpreter-find-command" => {
+                            interpreters.python_interpreter_find_command = Some(
                                 InterpreterDiscoveryCommand::try_from(vec!["ignored".to_owned()])
                                     .unwrap(),
                             );
@@ -3644,7 +3648,7 @@ output-format = "omit-errors"
             interpreters: Interpreters {
                 python_interpreter_path: Some(ConfigOrigin::config(PathBuf::from("abcd"))),
                 fallback_python_interpreter_name: None,
-                python_interpreter_find_cmd: None,
+                python_interpreter_find_command: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },

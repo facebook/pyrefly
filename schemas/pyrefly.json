@@ -182,7 +182,7 @@
           "description": "The Python interpreter to query when attempting to autoconfigure Python environment values (site-package-path, python-platform, python-version).",
           "type": "string"
         },
-        "python-interpreter-find-cmd": {
+        "python-interpreter-find-command": {
           "description": "A program and its arguments that print the path of the Python interpreter to query.",
           "type": "array",
           "items": [

@@ -186,14 +186,14 @@ impl EnvironmentArgs {
             config.interpreters.skip_interpreter_query = true;
             config.interpreters.python_interpreter_path = None;
             config.interpreters.fallback_python_interpreter_name = None;
-            config.interpreters.python_interpreter_find_cmd = None;
+            config.interpreters.python_interpreter_find_command = None;
             config.interpreters.conda_environment = None;
         }
         if let Some(x) = &self.python_interpreter_path {
             config.interpreters.skip_interpreter_query = false;
             config.interpreters.python_interpreter_path = Some(ConfigOrigin::cli(x.clone()));
             config.interpreters.fallback_python_interpreter_name = None;
-            config.interpreters.python_interpreter_find_cmd = None;
+            config.interpreters.python_interpreter_find_command = None;
             config.interpreters.conda_environment = None;
         }
         if let Some(x) = &self.fallback_python_interpreter_name {
@@ -201,7 +201,7 @@ impl EnvironmentArgs {
             config.interpreters.fallback_python_interpreter_name =
                 Some(ConfigOrigin::cli(x.clone()));
             config.interpreters.python_interpreter_path = None;
-            config.interpreters.python_interpreter_find_cmd = None;
+            config.interpreters.python_interpreter_find_command = None;
             config.interpreters.conda_environment = None;
         }
         if let Some(conda_environment) = &self.conda_environment {
@@ -210,7 +210,7 @@ impl EnvironmentArgs {
                 Some(ConfigOrigin::cli(conda_environment.clone()));
             config.interpreters.python_interpreter_path = None;
             config.interpreters.fallback_python_interpreter_name = None;
-            config.interpreters.python_interpreter_find_cmd = None;
+            config.interpreters.python_interpreter_find_command = None;
         }
         if let Some(x) = &self.typeshed_path {
             config.typeshed_path = Some(x.clone());

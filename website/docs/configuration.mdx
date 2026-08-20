@@ -390,7 +390,7 @@ We will query Conda for information about this environment, even when it's not s
 unless a Python environment (venv, Conda) is activated or `--python-interpreter-path` or
 `--conda-environment` are passed in through the CLI.
 
-**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-cmd`,
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
 `fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
 
 - Type: string of existing Conda environment name
@@ -406,7 +406,7 @@ The Python interpreter to query when attempting to autoconfigure
 Python environment values (`site-package-path`, `python-platform`, `python-version`).
 See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more information.
 
-**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-cmd`,
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
 `fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
 
 - Type: path to executable
@@ -425,7 +425,7 @@ testing specific behavior, or having trouble with [Environment Autoconfiguration
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
 to be reused between different systems and platforms.
 
-### `python-interpreter-find-cmd`
+### `python-interpreter-find-command`
 
 A command that prints the path of the Python interpreter Pyrefly should query. Configure it as an
 array containing the program followed by its arguments. Pyrefly runs the program directly from the
@@ -433,14 +433,14 @@ configuration file's directory; it does not invoke a shell. The command must suc
 one non-empty line. A relative path is resolved from the configuration file's directory.
 
 ```toml
-python-interpreter-find-cmd = ["poetry", "env", "info", "-e"]
+python-interpreter-find-command = ["poetry", "env", "info", "-e"]
 ```
 
 For workflows that require shell features, invoke the shell explicitly, for example
 `["sh", "-c", "eval \"$(direnv export bash)\"; command -v python"]`. On Windows, use the
 equivalent `cmd /C` or PowerShell command.
 
-**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-cmd`,
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
 `fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
 
 - Type: array of strings containing a program and its arguments
@@ -461,7 +461,7 @@ path when this option and [`python-interpreter-path`](#python-interpreter-path) 
 so this should primarily be used when you have a non-standard Python executable you want to
 use.
 
-**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-cmd`,
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
 `fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
 
 - Type: string of command to use
@@ -484,7 +484,7 @@ and [`python-platform`](#python-platform), and will use an empty
 [`site-package-path`](#site-package-path). It's likely you'll want to override
 these to match the environment you'll be running in.
 
-**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-cmd`,
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
 `fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
 
 - Type: bool
@@ -1214,7 +1214,7 @@ We look for an interpreter with the following logic:
 2. Determine if there's an active `venv` or `conda` environment. If both are active at
    the same time, we take `venv` over `conda`.
 3. Use [`python-interpreter-path`](#python-interpreter-path),
-   [`python-interpreter-find-cmd`](#python-interpreter-find-cmd),
+   [`python-interpreter-find-command`](#python-interpreter-find-command),
    [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if any are set in a config file.
    Only one of these options can be set in a configuration.
@@ -1483,7 +1483,7 @@ skip-interpreter-query = false
 # query the default Python interpreter on your system, if installed and `python_platform`,
 # `python-version`, or `site-package-path` are unset.
 # python-interpreter-path = null # this is commented out because there are no `null` values in TOML
-# python-interpreter-find-cmd = ["poetry", "env", "info", "-e"]
+# python-interpreter-find-command = ["poetry", "env", "info", "-e"]
 
 #### configuring your type check settings
 
