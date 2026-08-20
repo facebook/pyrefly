@@ -3436,6 +3436,48 @@ reveal_type(df.with_columns(bucket=pl.when(pl.col("units") > 10).then(pl.lit("hi
 "#,
 );
 
+// Review feedback on #4571: `pl.col("a", "b")` selects two columns at once, so aliasing
+// the whole when/then/otherwise chain to one name is a duplicate-column error in Polars —
+// pyrefly should fall back to plain DataFrame rather than confidently track one column.
+testcase!(
+    test_select_when_then_multi_output_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+reveal_type(df.select(pl.when(pl.col("a") > 0).then(pl.col("a", "b")).otherwise(0).alias("x")))  # E: revealed type: DataFrame
+"#,
+);
+
+// Review feedback on #4571: same issue via a keyword instead of an alias.
+testcase!(
+    test_select_keyword_multi_output_falls_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+reveal_type(df.select(x=pl.col("a", "b")))  # E: revealed type: DataFrame
+"#,
+);
+
+// Review feedback on #4571: a bare list literal is only Polars' "sequence of exprs"
+// shorthand when it's the sole positional argument. Alongside another positional arg it's
+// one opaque value (a List-dtype column in real Polars); since nested dtypes aren't
+// modeled, it should track as Unknown rather than incorrectly flattening and inferring the
+// dtype of its first element.
+testcase!(
+    test_with_columns_multi_positional_list_literal_is_unknown,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(pl.col("a").alias("x"), [1]))  # E: revealed type: DataFrame[a: Int64, x: Int64, literal: Unknown]
+"#,
+);
+
 testcase!(
     test_with_columns_spread_falls_back,
     env_with_polars_stubs(),

@@ -2114,6 +2114,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // same as with_columns, so a sibling's new column is not visible.
         for kw in &args.keywords {
             let name = kw.arg.as_ref()?.id.clone();
+            // A keyword value that itself resolves to multiple columns (e.g.
+            // `x=pl.col("a", "b")`) is a duplicate-column error in Polars, not a single
+            // named output — degrade the whole call, same as an opaque positional arg.
+            if !self.polars_expr_has_single_output(&kw.value) {
+                has_opaque = true;
+                continue;
+            }
             let resolved = match self.polars_column_arg(&kw.value) {
                 ColumnArg::Named(col) => resolve_column(schema, &col, kw.value.range(), errors),
                 ColumnArg::Opaque => None,
@@ -2327,10 +2334,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match expr {
             Expr::Call(call) => {
                 if let Expr::Attribute(attr) = &*call.func {
-                    // A `when(...).then(...)` / `.otherwise(...)` chain always evaluates to
-                    // one value per row, regardless of the predicates or branch values.
+                    // A `when(...).then(...)` / `.otherwise(...)` chain evaluates to one value
+                    // per row, unless a branch value itself resolves to multiple columns (e.g.
+                    // `pl.col("a", "b")`), in which case the chain inherits that multiplicity.
                     if matches!(attr.attr.id.as_str(), "then" | "otherwise") {
-                        return true;
+                        return self.polars_when_chain_has_single_output(expr);
                     }
                     if PolarsExprMethod::parse(attr.attr.id.as_str()).is_some() {
                         return self.polars_expr_has_single_output(&attr.value);
@@ -2359,6 +2367,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::BytesLiteral(_)
             | Expr::NoneLiteral(_) => true,
             _ => !self.is_polars_expr_value(expr),
+        }
+    }
+
+    /// Check that every branch value in a `when(...).then(...)[.when(...).then(...)]*
+    /// .otherwise(...)` chain is itself single-output. The chain's own `when`/`then`/
+    /// `otherwise` calls are a builder, not a data value, so only the branch *arguments*
+    /// need checking — an unrecognized receiver (e.g. the base `pl.when(...)` call) is
+    /// trivially fine since it isn't a data value either.
+    fn polars_when_chain_has_single_output(&self, expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else { return true };
+        let Expr::Attribute(attr) = &*call.func else {
+            return true;
+        };
+        match attr.attr.id.as_str() {
+            "then" | "otherwise" => {
+                matches!(&call.arguments.args[..], [value] if self.polars_expr_has_single_output(value))
+                    && self.polars_when_chain_has_single_output(&attr.value)
+            }
+            "when" => self.polars_when_chain_has_single_output(&attr.value),
+            _ => true,
         }
     }
 
@@ -2437,6 +2465,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::NoneLiteral(_) => {
                 literal_value(expr).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
             }
+            // A bare list/tuple display passed alongside other positional arguments (not as
+            // the sole argument, which `positional_elements` already flattens into individual
+            // column specs) becomes an anonymous value column in Polars too, regardless of its
+            // element types — its dtype is left to fall back to Unknown since nested/list
+            // dtypes aren't modeled.
+            Expr::List(_) | Expr::Tuple(_) => Some(Name::new_static(POLARS_LITERAL_OUTPUT_NAME)),
             _ => None,
         }
     }
@@ -2461,11 +2495,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        let positional = args
-            .args
-            .iter()
-            .flat_map(positional_elements)
-            .collect::<Vec<_>>();
+        // A bare list/tuple literal is only a shorthand for a sequence of expressions when
+        // it's the receiver's *sole* positional argument, matching Polars' actual behavior:
+        // `with_columns([e1, e2])` flattens, but `with_columns(e0, [e1])` does not — there,
+        // the list is one opaque value (e.g. a `List`-dtype column), not two column specs.
+        let positional: Vec<&Expr> = match &args.args[..] {
+            [arg] => positional_elements(arg).iter().collect(),
+            args => args.iter().collect(),
+        };
         // Validate names before inference so fallback does not duplicate diagnostics. A
         // positional arg with no well-defined output name is ambiguous in shape (it could
         // expand to any number of columns), so it degrades the whole call, the same as select.
