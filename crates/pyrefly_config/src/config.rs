@@ -1544,35 +1544,6 @@ impl ConfigFile {
         };
         self.root.enabled_ignores = Some(enabled_ignores);
 
-        let mut configure_source_db = |build_system: &mut BuildSystem| {
-            let root = match &self.source {
-                ConfigSource::File(path) => {
-                    let mut root = path.to_path_buf();
-                    root.pop();
-                    root
-                }
-                _ => {
-                    return Some(anyhow::anyhow!(
-                        "Invalid config state: `build-system` is set on project without config."
-                    ));
-                }
-            };
-
-            match build_system.get_source_db(root.to_path_buf())? {
-                Ok(source_db) => {
-                    self.source_db = Some(source_db);
-                    None
-                }
-                Err(error) => Some(error),
-            }
-        };
-
-        if let Some(build_system) = &mut self.build_system
-            && let Some(error) = configure_source_db(build_system)
-        {
-            configure_errors.push(error)
-        }
-
         // Honor `enable-fallback-search-path`: populate
         // `fallback_search_path` with a `DirectoryRelative` walk bounded by
         // the config root. The two guard conditions enforce non-clobber and
