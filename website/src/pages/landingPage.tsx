@@ -17,6 +17,7 @@ import LandingPageHeader from '../components/landing-page/landingPageHeader';
 import IDECarousel from '../components/landing-page/IDECarousel';
 import Banner from '../components/Banner';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
+import { log, LoggingEvent } from '../utils/LoggingUtils';
 
 export default function LandingPage(): React.ReactElement {
     const { siteConfig } = useDocusaurusContext();
@@ -28,11 +29,16 @@ export default function LandingPage(): React.ReactElement {
             description={siteConfig.description}
         >
             <Banner
-                text="🎉 Pyrefly v1.0 is now available!"
+                text="🐍 The Python Type System & Tooling Survey 2026 is live!"
                 dismissible={true}
                 cta={{
-                    text: 'Read the blog',
-                    href: '/blog/v1.0',
+                    text: 'Take the survey (5 min)',
+                    href: 'https://www.surveymonkey.com/r/python_typing',
+                    external: true,
+                    onClick: () =>
+                        log(LoggingEvent.CLICK, {
+                            button_id: 'banner_typing_survey_2026',
+                        }),
                 }}
             />
             <LandingPageSection

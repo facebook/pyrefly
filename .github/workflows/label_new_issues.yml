@@ -28,6 +28,11 @@ jobs:
               labels.push('crash');
             }
 
+            // Stubgen issues
+            if (text.includes('stubgen')) {
+              labels.push('stubgen');
+            }
+
             // Google team members
             const googleMembers = ['hurryabit', 'QEDady', 'jakevdp', 'superbobry', 'h-joo'];
             if (googleMembers.includes(author)) {
@@ -40,14 +45,29 @@ jobs:
               labels.push('quansight');
             }
 
+            // Arista
+            const aristaMembers = ['saimster-arista'];
+            if (aristaMembers.includes(author)) {
+              labels.push('arista');
+            }
+
             // False positive/negative reports
-            if (text.includes('false-positive') || text.includes('false positive') || text.includes('false-negative') || text.includes('false negative')) {
+            if (text.includes('false-positive') || text.includes('false positive') || text.includes('false-negative') || text.includes('false negative') || text.includes('unexpected error')) {
               labels.push('typechecking');
+            }
+
+            // Narrowing
+            if (text.includes('narrowing') || text.includes('refinement')) {
+              labels.push('typechecking');
+              labels.push('narrowing');
             }
 
             // Framework/library mentions
             if (text.includes('pydantic') || text.includes('basemodel')) {
               labels.push('pydantic');
+            }
+            if (text.includes('pytorch')) {
+              labels.push('pytorch');
             }
             if (text.includes('django')) {
               labels.push('django');
@@ -60,7 +80,7 @@ jobs:
             }
 
             // Language server issues
-            if (text.includes('inlay hint') || text.includes('hover') || text.includes('editor') || text.includes('lspconfig') || text.includes('completion') || text.includes('highlight') || text.includes('semantic')) {
+            if (text.includes('inlay hint') || text.includes('hover') || text.includes('editor') || text.includes('lspconfig') || text.includes('completion') || text.includes('highlight') || text.includes('semantic highlight') || text.includes('semantic token')) {
               labels.push('language-server');
             }
 

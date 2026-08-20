@@ -13,11 +13,11 @@ exports[`Home page renders external site correctly 1`] = `
       <div>
         <div>
           <span>
-            🎉 Pyrefly v1.0 is now available!
+            🐍 The Python Type System & Tooling Survey 2026 is live!
           </span>
           <div>
             <button>
-              Read the blog
+              Take the survey (5 min)
             </button>
           </div>
         </div>
@@ -568,11 +568,11 @@ exports[`Home page renders internal site correctly 1`] = `
       <div>
         <div>
           <span>
-            🎉 Pyrefly v1.0 is now available!
+            🐍 The Python Type System & Tooling Survey 2026 is live!
           </span>
           <div>
             <button>
-              Read the blog
+              Take the survey (5 min)
             </button>
           </div>
         </div>
