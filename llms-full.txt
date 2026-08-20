@@ -3129,15 +3129,15 @@ We look for an interpreter with the following logic:
    [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if either are set in a config file.
    Both cannot be set in a config at the same time.
-4. Starting from the project root, look for `pyvenv.cfg` in the root itself or in a
-   `.venv`, `venv`, or `env` directory. If none is found, repeat the search in each
-   ancestor directory up to the filesystem root, preferring the nearest match. Pyrefly
-   infers a project root from the files being checked when there is no config file or
-   other root marker. After finding `pyvenv.cfg`, Pyrefly probes the standard interpreter
-   paths: `bin/python3`, `bin/python`, `python3`, and `python` on macOS and Linux, or
-   `Scripts/python.exe` and `python.exe` on Windows. Environments in other directories or
-   with only a version-specific executable such as `python3.12` must be activated or set
-   explicitly with [`python-interpreter-path`](#python-interpreter-path).
+4. Starting from the project root, look for `pyvenv.cfg` in a `.venv`, `venv`, or `env`
+   directory. If none is found, repeat the search in each ancestor directory up to the
+   filesystem root, preferring the nearest match. Pyrefly infers a project root from the
+   files being checked when there is no config file or other root marker. After finding
+   `pyvenv.cfg`, Pyrefly probes the standard interpreter paths: `bin/python3`, `bin/python`,
+   `python3`, and `python` on macOS and Linux, or `Scripts/python.exe` and `python.exe` on
+   Windows. Environments in other directories or with only a version-specific executable
+   such as `python3.12` must be activated or set explicitly with
+   [`python-interpreter-path`](#python-interpreter-path).
 5. Query `$(which python3)` and `$(which python)` (platform independent) to use
    a system-installed interpreter.
 6. Fall back to Pyrefly's default values for any unspecified config options.
