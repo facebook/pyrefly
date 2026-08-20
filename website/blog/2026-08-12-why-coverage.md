@@ -21,7 +21,7 @@ Let's learn about what it is, why you might want to care about it, and what it c
 
 ## What's type coverage?
 
-Similarly to how test coverage measures how much of a library's source code is hit by its tests, type coverage measures what percentage of a library's typeables have type annotations. By typeable, we mean something which can be meaningfully annotated with a type, such as function arguments and return types, class variables, and constants. Local variables in function bodies, on the other hand, are excluded, as users would never interact with them anyway.
+Similarly to how test coverage measures how much of a library's source code is hit by its tests, type coverage measures what percentage of a library's typables have type annotations. By typable, we mean something which can be meaningfully annotated with a type, such as function arguments and return types, class variables, and constants. Local variables in function bodies, on the other hand, are excluded, as users would never interact with them anyway.
 
 If this sounds familiar to you, it may be because we've previously written about the topic in [typing pandas](https://pyrefly.org/blog/pandas-type-completeness/) and [typing numpy](https://pyrefly.org/blog/numpy-type-completeness/). In those posts, we were using Pyright's _verify-types_ feature. Now, however, Pyrefly ships its own type coverage tool (_pyrefly coverage_), which we're now recommending you use instead.
 
