@@ -71,6 +71,32 @@ assert_type(x, list[int])
 );
 
 testcase!(
+    tuple_unpack_preserves_independent_first_use_inference,
+    r#"
+from typing import assert_type
+xs, ys = [], []
+xs.append(1)
+ys.append("value")
+assert_type(xs, list[int])
+assert_type(ys, list[str])
+"#,
+);
+
+testcase!(
+    nested_tuple_unpack_preserves_first_use_inference,
+    r#"
+from typing import assert_type
+head, (left, right) = [], ([], [])
+head.append(1)
+left.append("value")
+right.append(b"value")
+assert_type(head, list[int])
+assert_type(left, list[str])
+assert_type(right, list[bytes])
+"#,
+);
+
+testcase!(
     test_empty_list_check,
     r#"
 from typing import Literal, assert_type
@@ -331,7 +357,7 @@ fn env_inconsistent_pins_for_non_name_assign_placeholder() -> TestEnv {
         r#"
 x, _ = [], 5
 y = x.append(1)
-z = x.append("1")
+z = x.append("1") # E: `Literal['1']` is not assignable to parameter `object` with type `int`
 "#,
     )
 }
@@ -340,11 +366,11 @@ testcase!(
     inconsistent_pins_for_non_name_assign_placeholder_a,
     env_inconsistent_pins_for_non_name_assign_placeholder(),
     r#"
-from typing import assert_type, Any
+from typing import assert_type
 from inconsistent_pins_for_non_name_assign_placeholder import y
 assert_type(y, None)
 from inconsistent_pins_for_non_name_assign_placeholder import x
-assert_type(x, list[Any])
+assert_type(x, list[int])
 "#,
 );
 
@@ -352,10 +378,21 @@ testcase!(
     inconsistent_pins_for_non_name_assign_placeholder_b,
     env_inconsistent_pins_for_non_name_assign_placeholder(),
     r#"
-from typing import assert_type, Any
+from typing import assert_type
 from inconsistent_pins_for_non_name_assign_placeholder import z
 assert_type(z, None)
 from inconsistent_pins_for_non_name_assign_placeholder import x
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    tuple_unpack_respects_disabled_first_use_inference,
+    TestEnv::new_with_infer_with_first_use(false),
+    r#"
+from typing import Any, assert_type
+x, _ = [], 5
+x.append(1)
 assert_type(x, list[Any])
 "#,
 );

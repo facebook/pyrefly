@@ -394,6 +394,14 @@ impl<'a> Transaction<'a> {
                                 Self::get_unpacked_element_expr(&bindings, *unpack_idx, *pos);
                             (element_expr, true)
                         }
+                        Binding::UnpackedName(unpacked) => {
+                            let element_expr = Self::get_unpacked_element_expr(
+                                &bindings,
+                                unpacked.source,
+                                unpacked.position,
+                            );
+                            (element_expr, true)
+                        }
                         _ => (None, false),
                     };
                     // If the inferred type is a class type w/ no type arguments and the
@@ -510,7 +518,10 @@ impl<'a> Transaction<'a> {
         pos: UnpackedPosition,
     ) -> Option<&'b Expr> {
         // Get the binding for the unpacked source
-        let source_binding = bindings.get(unpack_idx);
+        let source_binding = match bindings.get(unpack_idx) {
+            Binding::UnpackSource(source) => source.as_ref(),
+            source => source,
+        };
         // For top-level unpacking, the source is Binding::Expr containing the RHS.
         // For nested unpacking, it's Binding::UnpackedValue - we return None in that case.
         let source_expr = match source_binding {

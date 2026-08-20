@@ -2238,6 +2238,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let binding = self.bindings().get(target);
         match binding {
             Binding::NameAssign(na) if na.def_idx.is_some() => Some(target),
+            Binding::UnpackedName(_) => Some(target),
             _ => None,
         }
     }
