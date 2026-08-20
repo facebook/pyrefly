@@ -279,10 +279,7 @@ impl Type {
     fn try_combine_reconstructed_overload(&self, reconstructed: &[Type]) -> Option<Type> {
         let metadata = self
             .visit_toplevel_func_metadata(&|metadata| Some(metadata.clone()))
-            .unwrap_or(FuncMetadata {
-                kind: FunctionKind::Overload,
-                flags: FuncFlags::default(),
-            });
+            .unwrap_or_else(|| FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()));
         let signatures = reconstructed
             .iter()
             .cloned()

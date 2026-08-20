@@ -516,7 +516,6 @@ Messages: TypeAlias = list[str]
 type Payloads = list[str]
 
 def func(msgs: Messages) -> None:
-    # Leading body trivia must not make hover fall back to resolved types.
     pass
 
 def handle(payloads: Payloads) -> None:
@@ -548,6 +547,29 @@ handle
         !report.contains("def func(msgs: list[str]) -> None: ..."),
         "Expected hover not to expand the alias, got: {report}"
     );
+}
+
+#[test]
+fn hover_preserves_type_aliases_in_imported_function_signatures() {
+    let main = r#"
+from lib import handle
+
+handle
+#^
+"#;
+    let lib = r#"
+from typing import TypeAlias
+
+Messages: TypeAlias = list[str]
+type Payload[T] = list[T]
+
+def handle(messages: Messages, payload: Payload[str]) -> Payload[int]: ...
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", main), ("lib", lib)], get_test_report);
+    assert!(report.contains("messages: Messages"), "got: {report}");
+    assert!(report.contains("payload: Payload[str]"), "got: {report}");
+    assert!(report.contains(") -> Payload[int]: ..."), "got: {report}");
 }
 
 #[test]

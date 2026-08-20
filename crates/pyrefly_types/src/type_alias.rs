@@ -18,6 +18,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::commas_iter;
 use ruff_python_ast::name::Name;
 
+use crate::callable::DisplayOnly;
 use crate::display::TypeDisplayContext;
 use crate::stdlib::Stdlib;
 use crate::type_output::DisplayOutput;
@@ -45,6 +46,8 @@ pub struct TypeAlias {
     pub name: Box<Name>,
     ty: Box<Type>,
     pub style: TypeAliasStyle,
+    /// Specialized arguments retained only for displaying an alias reference.
+    display_args: DisplayOnly<Option<Box<[Type]>>>,
 }
 
 impl TypeAlias {
@@ -53,6 +56,7 @@ impl TypeAlias {
             name: Box::new(name),
             ty: Box::new(ty),
             style,
+            display_args: DisplayOnly(None),
         }
     }
 
@@ -77,6 +81,27 @@ impl TypeAlias {
 
     pub fn as_type_mut(&mut self) -> &mut Type {
         &mut self.ty
+    }
+
+    /// Borrows the type form stored by the alias.
+    pub fn as_type_ref(&self) -> &Type {
+        &self.ty
+    }
+
+    /// Replaces the stored type form while retaining presentation metadata.
+    pub fn with_type(mut self, ty: Type) -> Self {
+        self.ty = Box::new(ty);
+        self
+    }
+
+    /// Records the arguments from a specialized alias reference for display.
+    pub fn set_display_args(&mut self, args: Box<[Type]>) {
+        self.display_args.0 = Some(args);
+    }
+
+    /// Returns the arguments from a specialized alias reference.
+    pub fn display_args(&self) -> Option<&[Type]> {
+        self.display_args.as_deref()
     }
 
     pub fn fmt_with_type<O: TypeOutput>(

@@ -27,6 +27,7 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 
 use crate::callable::Callable;
+use crate::callable::DisplayOnly;
 use crate::callable::IdentityIgnored;
 use crate::class::Class;
 use crate::class::ClassType;
@@ -49,18 +50,28 @@ pub struct Function {
 pub struct FuncMetadata {
     pub kind: FunctionKind,
     pub flags: FuncFlags,
+    /// The source annotation spelling used only when rendering function hover.
+    pub display_signature: DisplayOnly<Option<Box<Callable>>>,
 }
 
 impl FuncMetadata {
-    pub fn synthesized(module: &Module, cls: Option<&Class>, name: Name) -> Self {
+    pub fn new(kind: FunctionKind, flags: FuncFlags) -> Self {
         Self {
-            kind: FunctionKind::Synthesized(Arc::new(FuncSymbol {
+            kind,
+            flags,
+            display_signature: DisplayOnly(None),
+        }
+    }
+
+    pub fn synthesized(module: &Module, cls: Option<&Class>, name: Name) -> Self {
+        Self::new(
+            FunctionKind::Synthesized(Arc::new(FuncSymbol {
                 module: module.dupe(),
                 cls: cls.map(Dupe::dupe),
                 name,
             })),
-            flags: FuncFlags::default(),
-        }
+            FuncFlags::default(),
+        )
     }
 
     pub fn method(cls: &Class, name: Name) -> Self {

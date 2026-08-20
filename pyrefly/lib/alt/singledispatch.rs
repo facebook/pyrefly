@@ -92,10 +92,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             let func = Function {
                 signature,
-                metadata: FuncMetadata {
-                    kind: FunctionKind::CallbackProtocol(Box::new(ct.clone())),
-                    flags: FuncFlags::default(),
-                },
+                metadata: FuncMetadata::new(
+                    FunctionKind::CallbackProtocol(Box::new(ct.clone())),
+                    FuncFlags::default(),
+                ),
             };
             return Forallable::Function(func).forall(forall.tparams.clone());
         }
@@ -107,10 +107,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             return self.heap.mk_function(Function {
                 signature,
-                metadata: FuncMetadata {
-                    kind: FunctionKind::CallbackProtocol(Box::new(ct.clone())),
-                    flags: FuncFlags::default(),
-                },
+                metadata: FuncMetadata::new(
+                    FunctionKind::CallbackProtocol(Box::new(ct.clone())),
+                    FuncFlags::default(),
+                ),
             });
         }
         ty
@@ -340,10 +340,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         if dispatch_class.is_some() && !has_func {
             self.heap.mk_kw_call(KwCall {
-                func_metadata: FuncMetadata {
-                    kind: FunctionKind::SingleDispatchRegister(Box::new(fallback_first)),
-                    flags: FuncFlags::default(),
-                },
+                func_metadata: FuncMetadata::new(
+                    FunctionKind::SingleDispatchRegister(Box::new(fallback_first)),
+                    FuncFlags::default(),
+                ),
                 keywords: TypeMap::new(),
                 return_ty,
             })

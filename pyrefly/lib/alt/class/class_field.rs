@@ -934,6 +934,7 @@ impl ClassField {
                     Some(Annotation {
                         ty: Some(ty),
                         qualifiers,
+                        ..
                     }),
                 ..
             } => Some(TypedDictField {
@@ -956,6 +957,7 @@ impl ClassField {
                     Some(Annotation {
                         ty: Some(ty),
                         qualifiers,
+                        ..
                     }),
                 ..
             } => Some(TypedDictField {
@@ -1689,6 +1691,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             direct_annotation = Some(Annotation {
                                 qualifiers: Vec::new(),
                                 ty: Some(ty),
+                                display_ty: None,
                             });
                         }
                     }
@@ -3010,10 +3013,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         direct_qualifiers: Option<&Vec<Qualifier>>,
     ) -> Option<Annotation> {
         match (inherited, direct_qualifiers) {
-            (inherited, Some(qualifiers)) => Some(Annotation {
-                ty: inherited.and_then(|ann| ann.ty),
-                qualifiers: qualifiers.clone(),
-            }),
+            (inherited, Some(qualifiers)) => {
+                let (ty, display_ty) = inherited
+                    .map(|annotation| (annotation.ty, annotation.display_ty))
+                    .unwrap_or_default();
+                Some(Annotation {
+                    ty,
+                    qualifiers: qualifiers.clone(),
+                    display_ty,
+                })
+            }
             (ann, None) => ann,
         }
     }

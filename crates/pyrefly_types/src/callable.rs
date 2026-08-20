@@ -92,6 +92,48 @@ impl<T> Deref for IdentityIgnored<T> {
     }
 }
 
+/// Auxiliary display data that is ignored by type identity but follows type transformations.
+#[derive(Debug, Clone, Default, Visit, VisitMut)]
+pub struct DisplayOnly<T>(pub T);
+
+impl<T> PartialEq for DisplayOnly<T> {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for DisplayOnly<T> {}
+
+impl<T> Hash for DisplayOnly<T> {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
+impl<T> PartialOrd for DisplayOnly<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for DisplayOnly<T> {
+    fn cmp(&self, _other: &Self) -> Ordering {
+        Ordering::Equal
+    }
+}
+
+impl<T> TypeEq for DisplayOnly<T> {
+    fn type_eq(&self, _other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        true
+    }
+}
+
+impl<T> Deref for DisplayOnly<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct Callable {

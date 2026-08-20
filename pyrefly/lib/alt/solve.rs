@@ -671,6 +671,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Annotation {
                     qualifiers: vec![qualifier],
                     ty: Some(self.expr_infer(&x.slice, errors)),
+                    display_ty: None,
                 }
             }
             _ => Annotation::new_type(self.expr_infer(x, errors)),
@@ -830,6 +831,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Annotation {
                     qualifiers: vec![qualifier],
                     ty: None,
+                    display_ty: None,
                 }
             }
             Expr::Subscript(x)
@@ -908,7 +910,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 ann
             }
-            _ => Annotation::new_type(self.expr_untype(x, type_form_context, errors)),
+            _ => {
+                let (ty, display_ty) = self.expr_untype_with_display(x, type_form_context, errors);
+                match display_ty {
+                    Some(display_ty) => Annotation::new_type_with_display(ty, display_ty),
+                    None => Annotation::new_type(ty),
+                }
+            }
         }
     }
 
@@ -2810,11 +2818,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(k) = annotation
                         && let AnnotationWithTarget {
                             target,
-                            annotation:
-                                Annotation {
-                                    ty: Some(want),
-                                    qualifiers: _,
-                                },
+                            annotation: Annotation { ty: Some(want), .. },
                         } = &*self.get_idx(*k)
                     {
                         ty = self.check_and_return_type(ty, want, expr.range(), errors, &|| {
@@ -4762,11 +4766,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(k) = ann
             && let AnnotationWithTarget {
                 target,
-                annotation:
-                    Annotation {
-                        ty: Some(want),
-                        qualifiers: _,
-                    },
+                annotation: Annotation { ty: Some(want), .. },
             } = &*self.get_idx(k)
         {
             // Validate the annotation but always preserve the special TypeVarTuple type,
@@ -5845,7 +5845,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn return_type_from_annotation(
+    pub(crate) fn return_type_from_annotation(
         &self,
         annotated_ty: Type,
         is_async: bool,
@@ -5961,11 +5961,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
                         target,
-                        annotation:
-                            Annotation {
-                                ty: Some(want),
-                                qualifiers: _,
-                            },
+                        annotation: Annotation { ty: Some(want), .. },
                     } = &*self.get_idx(*k)
                 {
                     // Validate the annotation but always preserve the special TypeVar type,
@@ -5984,11 +5980,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
                         target,
-                        annotation:
-                            Annotation {
-                                ty: Some(want),
-                                qualifiers: _,
-                            },
+                        annotation: Annotation { ty: Some(want), .. },
                     } = &*self.get_idx(*k)
                 {
                     // Validate the annotation but always preserve the special ParamSpec type,
@@ -6173,11 +6165,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
                         target,
-                        annotation:
-                            Annotation {
-                                ty: Some(want),
-                                qualifiers: _,
-                            },
+                        annotation: Annotation { ty: Some(want), .. },
                     } = &*self.get_idx(*k)
                 {
                     // Validate the annotation already on assigned name
@@ -6496,10 +6484,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub(crate) fn untype_opt_with_context(
         &self,
+        ty: Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: UntypeContext,
+    ) -> Option<Type> {
+        self.untype_opt_with_context_impl(ty, range, errors, context, false)
+    }
+
+    fn untype_opt_with_context_impl(
+        &self,
         mut ty: Type,
         range: TextRange,
         errors: &ErrorCollector,
         context: UntypeContext,
+        preserve_aliases: bool,
     ) -> Option<Type> {
         if let Type::Forall(forall) = ty {
             ty = self.promote_forall(*forall, range, errors);
@@ -6508,14 +6507,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Union(f) if !f.members.is_empty() => {
                 let mut ts = Vec::new();
                 for x in f.members {
-                    let t = self.untype_opt_with_context(x, range, errors, context)?;
+                    let t = self.untype_opt_with_context_impl(
+                        x,
+                        range,
+                        errors,
+                        context,
+                        preserve_aliases,
+                    )?;
                     ts.push(t);
                 }
                 Some(self.unions(ts))
             }
-            Type::Var(v) if let Some(_guard) = self.recurse(v) => {
-                self.untype_opt_with_context(self.solver().force_var(v), range, errors, context)
-            }
+            Type::Var(v) if let Some(_guard) = self.recurse(v) => self
+                .untype_opt_with_context_impl(
+                    self.solver().force_var(v),
+                    range,
+                    errors,
+                    context,
+                    preserve_aliases,
+                ),
             // These are all legal type forms, so we accept them (return `Some`).
             // Only the quantified kinds get a kind check from the validator;
             // `TypeForm`/`Args`/`Kwargs` pass through unchanged but must be listed
@@ -6568,12 +6578,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let TypeAliasData::Value(ta) = *ta else {
                     unreachable!("guarded by matches! above")
                 };
-                let mut aliased_type =
-                    self.untype_opt_with_context(ta.as_type(), range, errors, context)?;
+                let mut aliased_type = self.untype_opt_with_context_impl(
+                    ta.as_type(),
+                    range,
+                    errors,
+                    context,
+                    preserve_aliases,
+                )?;
                 if let Type::Union(f) = &mut aliased_type {
                     f.display_name = Some((self.module().name(), (*ta.name).clone()));
                 }
-                Some(aliased_type)
+                if preserve_aliases {
+                    let alias = ta.with_type(self.heap.mk_type(aliased_type));
+                    Some(Type::UntypedAlias(Box::new(TypeAliasData::Value(alias))))
+                } else {
+                    Some(aliased_type)
+                }
             }
             // `as_type_alias` untypes a type alias in order to validate that it is a legal type.
             // If we hit a recursive reference to the alias while untyping it, delay the untyping
@@ -6593,11 +6613,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Type::Var(v) = &**inner
                     && let Some(_guard) = self.recurse(*v) =>
             {
-                self.untype_opt_with_context(
+                self.untype_opt_with_context_impl(
                     self.heap.mk_unpack(self.solver().force_var(*v)),
                     range,
                     errors,
                     context,
+                    preserve_aliases,
                 )
             }
             // A quantified *value* (e.g. an `IntVar` used in value position) is
@@ -6621,7 +6642,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => {
                 let canonicalized =
                     self.canonicalize_all_class_types(Type::ClassDef(cls), range, errors);
-                self.untype_opt_with_context(canonicalized, range, errors, context)
+                self.untype_opt_with_context_impl(
+                    canonicalized,
+                    range,
+                    errors,
+                    context,
+                    preserve_aliases,
+                )
             }
             // Annotated[T, meta] in annotation/type-alias context unwraps to T
             Type::Annotated(t, _) => {
@@ -6987,13 +7014,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
-        let result = match x {
+        self.expr_untype_with_display(x, type_form_context, errors)
+            .0
+    }
+
+    fn expr_untype_with_display(
+        &self,
+        x: &Expr,
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> (Type, Option<Type>) {
+        let (result, display_ty) = match x {
             // A `IntVar`'s default (e.g. `N = 3`) is a dimension expression, not
             // an ordinary type, so route it through the dimension parser.
-            _ if type_form_context == TypeFormContext::IntVarDefault => self
-                .parse_dimension_list(slice::from_ref(x), type_form_context, errors)
-                .and_then(|dims| dims.into_iter().next())
-                .unwrap_or_else(Type::any_error),
+            _ if type_form_context == TypeFormContext::IntVarDefault => (
+                self.parse_dimension_list(slice::from_ref(x), type_form_context, errors)
+                    .and_then(|dims| dims.into_iter().next())
+                    .unwrap_or_else(Type::any_error),
+                None,
+            ),
             Expr::List(x)
                 if matches!(
                     type_form_context,
@@ -7008,20 +7047,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Param::PosOnly(None, ty, Required::Required)
                     })
                     .collect();
-                Type::ParamSpecValue(ParamList::new(elts))
+                (Type::ParamSpecValue(ParamList::new(elts)), None)
             }
             _ => {
                 let inferred_ty = self
                     .expr_infer_impl(x, None, errors, Some(type_form_context))
                     .into_ty();
-                self.untype_runtime_type(inferred_ty, x.range(), type_form_context, errors)
+                let result = self.untype_runtime_type(
+                    inferred_ty.clone(),
+                    x.range(),
+                    type_form_context,
+                    errors,
+                );
+                let display_ty = if inferred_ty.any(|ty| matches!(ty, Type::TypeAlias(_))) {
+                    self.untype_opt_with_context_impl(
+                        inferred_ty,
+                        x.range(),
+                        &self.error_swallower(),
+                        type_form_context.untype_context(),
+                        true,
+                    )
+                } else {
+                    None
+                };
+                (result, display_ty)
             }
         };
         let result = self.validate_type_form(result, x.range(), type_form_context, errors);
         if type_form_context.can_report_explicit_any() {
             self.check_explicit_any(&result, x.range(), errors);
         }
-        result
+        let display_ty = display_ty.filter(|display_ty| display_ty != &result);
+        (result, display_ty)
     }
 
     fn untype_runtime_type(

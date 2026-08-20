@@ -45,6 +45,8 @@ pub struct UndecoratedFunction {
     pub decorators: Box<[(Type, TextRange)]>,
     pub tparams: Arc<TParams>,
     pub params: Vec<Param>,
+    /// Alias-preserving parameter types used to construct the hover signature.
+    pub display_param_types: SmallMap<Name, Type>,
     pub paramspec: Option<Quantified>,
     pub defining_cls: Option<Class>,
     pub type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
@@ -108,6 +110,7 @@ impl UndecoratedFunction {
             decorators: Box::from([]),
             tparams: Arc::new(TParams::default()),
             params: Vec::new(),
+            display_param_types: SmallMap::new(),
             paramspec: None,
             defining_cls: None,
             type_shape_dsl_def: None,
