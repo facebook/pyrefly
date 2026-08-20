@@ -97,6 +97,7 @@ use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
+use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::steps::Step;
@@ -193,7 +194,8 @@ async fn run_check(
             display::intersperse_iter(";", || roots.iter().map(|p| p.display()))
         );
         let watcher = Watcher::notify(&roots)?;
-        args.run_watch(
+        run_watch(
+            args,
             watcher,
             version,
             files_to_check,
@@ -1200,6 +1202,140 @@ fn write_unconfigured_upsell<W: Write>(
     Ok(())
 }
 
+/// An initialized incremental checking session.
+struct IncrementalSession {
+    // These inputs are fixed for the session.
+    args: CheckArgs,
+    files_to_check: Box<dyn Includes>,
+
+    // These fields change as filesystem events are applied.
+    handles: Handles,
+    state: State,
+}
+
+/// An initialized session and the result of the check that initialized it.
+struct StartedIncrementalSession {
+    session: IncrementalSession,
+    initial_check: anyhow::Result<(CommandExitStatus, Vec<Error>)>,
+}
+
+impl IncrementalSession {
+    fn check_updates(
+        &mut self,
+        version: &str,
+        events: &CategorizedEvents,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let require_levels = self.args.get_required_levels();
+        let mut transaction = self.state.new_committable_transaction(
+            require_levels.default,
+            self.args.output.progress_bar_style().make_subscriber(),
+        );
+        transaction.as_mut().invalidate_events(events);
+        self.handles
+            .apply_events(events, self.files_to_check.as_ref());
+        finish_incremental_check(self, transaction, version, UpsellDecision::Skip)
+    }
+}
+
+fn start_incremental(
+    args: CheckArgs,
+    files_to_check: Box<dyn Includes>,
+    config_finder: ConfigFinder,
+    thread_count: ThreadCount,
+    version: &str,
+    upsell: UpsellDecision,
+) -> anyhow::Result<StartedIncrementalSession> {
+    args.output.validate_outputs()?;
+    let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
+    let handles = Handles::new(expanded_file_list);
+    let session = IncrementalSession {
+        args,
+        files_to_check,
+        handles,
+        state: State::new(config_finder, thread_count),
+    };
+    let require_levels = session.args.get_required_levels();
+    let transaction = session
+        .state
+        .new_committable_transaction(require_levels.default, None);
+    let initial_check = finish_incremental_check(&session, transaction, version, upsell);
+    Ok(StartedIncrementalSession {
+        session,
+        initial_check,
+    })
+}
+
+fn finish_incremental_check(
+    session: &IncrementalSession,
+    mut transaction: CommittingTransaction<'_>,
+    version: &str,
+    upsell: UpsellDecision,
+) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+    let timings = Timings::new();
+    let args = &session.args;
+    let require_levels = args.get_required_levels();
+
+    let (loaded_handles, reloaded_configs, sourcedb_errors) =
+        session.handles.all(session.state.config_finder());
+
+    let config = loaded_handles.first().map(|handle| {
+        session.state.config_finder().python_file(
+            ModuleNameWithKind::guaranteed(handle.module()),
+            handle.path(),
+        )
+    });
+    let defaults = args.output.resolve(config.as_deref());
+
+    transaction
+        .as_mut()
+        .invalidate_find_for_configs(reloaded_configs);
+    let result = args.run_inner(
+        timings,
+        transaction.as_mut(),
+        version,
+        &loaded_handles,
+        &defaults,
+        sourcedb_errors,
+        require_levels.specified,
+        upsell,
+    );
+    session.state.commit_transaction(transaction, None);
+    result
+}
+
+async fn run_watch(
+    args: CheckArgs,
+    mut watcher: Watcher,
+    version: &str,
+    files_to_check: Box<dyn Includes>,
+    config_finder: ConfigFinder,
+    upsell: UpsellDecision,
+    thread_count: ThreadCount,
+) -> anyhow::Result<()> {
+    // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
+    // - Config search is stable across incremental runs.
+    let StartedIncrementalSession {
+        mut session,
+        initial_check,
+    } = start_incremental(
+        args,
+        files_to_check,
+        config_finder,
+        thread_count,
+        version,
+        upsell,
+    )?;
+    if let Err(e) = initial_check {
+        eprintln!("{e:#}");
+    }
+    loop {
+        let events = get_watcher_events(&mut watcher).await?;
+        if let Err(e) = session.check_updates(version, &events) {
+            eprintln!("{e:#}");
+        }
+    }
+}
+
 impl CheckArgs {
     /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
     /// and a `CheckResult` suitable for telemetry logging.
@@ -1317,68 +1453,6 @@ impl CheckArgs {
             UpsellDecision::Skip,
         )?;
         Ok((status, CheckResult::from_errors(&errors, &relative_to, 1)))
-    }
-
-    pub async fn run_watch(
-        self,
-        mut watcher: Watcher,
-        version: &str,
-        files_to_check: Box<dyn Includes>,
-        config_finder: ConfigFinder,
-        mut upsell: UpsellDecision,
-        thread_count: ThreadCount,
-    ) -> anyhow::Result<()> {
-        self.output.validate_outputs()?;
-        // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
-        // - Config search is stable across incremental runs.
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
-        let require_levels = self.get_required_levels();
-        let mut handles = Handles::new(expanded_file_list);
-        let state = State::new(config_finder, thread_count);
-
-        let mut transaction = state.new_committable_transaction(require_levels.default, None);
-        loop {
-            let timings = Timings::new();
-            let (loaded_handles, reloaded_configs, sourcedb_errors) =
-                handles.all(state.config_finder());
-
-            let config = loaded_handles.first().map(|handle| {
-                state.config_finder().python_file(
-                    ModuleNameWithKind::guaranteed(handle.module()),
-                    handle.path(),
-                )
-            });
-            let defaults = self.output.resolve(config.as_deref());
-
-            let mut_transaction = transaction.as_mut();
-            mut_transaction.invalidate_find_for_configs(reloaded_configs);
-            let res = self.run_inner(
-                timings,
-                mut_transaction,
-                version,
-                &loaded_handles,
-                &defaults,
-                sourcedb_errors,
-                require_levels.specified,
-                upsell,
-            );
-            // The upsell is a one-time CTA. Re-nagging on every file
-            // save during a long watch session is noise — clamp to
-            // `Skip` after the first iteration regardless of decision.
-            upsell = UpsellDecision::Skip;
-            state.commit_transaction(transaction, None);
-            if let Err(e) = res {
-                eprintln!("{e:#}");
-            }
-            let events = get_watcher_events(&mut watcher).await?;
-            transaction = state.new_committable_transaction(
-                require_levels.default,
-                self.output.progress_bar_style().make_subscriber(),
-            );
-            let new_transaction_mut = transaction.as_mut();
-            new_transaction_mut.invalidate_events(&events);
-            handles.apply_events(&events, files_to_check.as_ref());
-        }
     }
 
     fn get_required_levels(&self) -> RequireLevels {
