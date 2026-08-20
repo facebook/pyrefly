@@ -493,27 +493,29 @@ impl OutputArgs {
         Ok(())
     }
 
-    fn inherit_defaults_from_config(&mut self, config: &ConfigFile) {
-        if self.baseline.is_none() {
-            self.baseline = config.baseline.clone();
+    /// Resolve the settings that a project configuration can supply.
+    ///
+    /// The result depends only on the arguments, so resolving again against a changed
+    /// configuration always yields the current values.
+    fn resolve(&self, config: Option<&ConfigFile>) -> OutputDefaults {
+        OutputDefaults {
+            baseline: self
+                .baseline
+                .clone()
+                .or_else(|| config.and_then(|config| config.baseline.clone())),
+            baseline_error_level: self
+                .baseline_error_level
+                .or_else(|| config.and_then(|config| config.baseline_error_level))
+                .unwrap_or(Severity::Ignore),
+            output_format: self
+                .output_format
+                .or_else(|| config.and_then(|config| config.output_format))
+                .unwrap_or_default(),
+            min_severity: self
+                .min_severity
+                .or_else(|| config.and_then(|config| config.min_severity))
+                .unwrap_or(Severity::Error),
         }
-        if self.baseline_error_level.is_none() {
-            self.baseline_error_level = config.baseline_error_level;
-        }
-        if self.output_format.is_none() {
-            self.output_format = config.output_format;
-        }
-        if self.min_severity.is_none() {
-            self.min_severity = config.min_severity;
-        }
-    }
-
-    fn output_format(&self) -> OutputFormat {
-        self.output_format.unwrap_or_default()
-    }
-
-    fn baseline_error_level(&self) -> Severity {
-        self.baseline_error_level.unwrap_or(Severity::Ignore)
     }
 
     /// Resolve the effective progress bar style, taking deprecated flags into account.
@@ -527,6 +529,15 @@ impl OutputArgs {
             ProgressBarStyle::Interactive
         }
     }
+}
+
+/// The effective values of the output settings that a project configuration can supply.
+#[derive(Clone, Debug, PartialEq)]
+struct OutputDefaults {
+    baseline: Option<PathBuf>,
+    baseline_error_level: Severity,
+    output_format: OutputFormat,
+    min_severity: Severity,
 }
 
 #[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
@@ -1193,7 +1204,7 @@ impl CheckArgs {
     /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
     /// and a `CheckResult` suitable for telemetry logging.
     pub fn run_once(
-        mut self,
+        self,
         version: &str,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
@@ -1230,19 +1241,13 @@ impl CheckArgs {
         );
         let (loaded_handles, _, sourcedb_errors) = handles.all(state.as_ref().config_finder());
 
-        // Project-level output settings can come from config when CLI flags are absent.
-        if (self.output.baseline.is_none()
-            || self.output.baseline_error_level.is_none()
-            || self.output.output_format.is_none()
-            || self.output.min_severity.is_none())
-            && let Some(handle) = loaded_handles.first()
-        {
-            let config = state.as_ref().config_finder().python_file(
+        let config = loaded_handles.first().map(|handle| {
+            state.as_ref().config_finder().python_file(
                 ModuleNameWithKind::guaranteed(handle.module()),
                 handle.path(),
-            );
-            self.output.inherit_defaults_from_config(&config);
-        }
+            )
+        });
+        let defaults = self.output.resolve(config.as_deref());
 
         let checked_file_count = loaded_handles.len();
         let relative_to = resolve_relative_to(self.output.relative_to.as_ref());
@@ -1251,6 +1256,7 @@ impl CheckArgs {
             transaction.as_mut(),
             version,
             &loaded_handles,
+            &defaults,
             sourcedb_errors,
             require_levels.specified,
             upsell,
@@ -1260,7 +1266,7 @@ impl CheckArgs {
     }
 
     pub fn run_once_with_snippet(
-        mut self,
+        self,
         code: String,
         version: &str,
         config_finder: ConfigFinder,
@@ -1282,14 +1288,7 @@ impl CheckArgs {
         let sys_info = config.get_sys_info();
         let handle = Handle::new(module_name, module_path.clone(), sys_info);
 
-        // Project-level output settings can come from config when CLI flags are absent.
-        if self.output.baseline.is_none()
-            || self.output.baseline_error_level.is_none()
-            || self.output.output_format.is_none()
-            || self.output.min_severity.is_none()
-        {
-            self.output.inherit_defaults_from_config(&config);
-        }
+        let defaults = self.output.resolve(Some(&config));
 
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
@@ -1311,6 +1310,7 @@ impl CheckArgs {
             transaction.as_mut(),
             version,
             &[handle],
+            &defaults,
             vec![],
             require_levels.specified,
             // Snippet checks are interactive ad-hoc inputs — never upsell.
@@ -1320,7 +1320,7 @@ impl CheckArgs {
     }
 
     pub async fn run_watch(
-        mut self,
+        self,
         mut watcher: Watcher,
         version: &str,
         files_to_check: Box<dyn Includes>,
@@ -1336,45 +1336,20 @@ impl CheckArgs {
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder, thread_count);
 
-        // Track which output settings were explicitly set on the CLI.
-        let cli_provided_baseline = self.output.baseline.is_some();
-        let cli_provided_baseline_error_level = self.output.baseline_error_level.is_some();
-        let cli_provided_min_severity = self.output.min_severity.is_some();
-        let cli_provided_output_format = self.output.output_format.is_some();
-
         let mut transaction = state.new_committable_transaction(require_levels.default, None);
         loop {
             let timings = Timings::new();
             let (loaded_handles, reloaded_configs, sourcedb_errors) =
                 handles.all(state.config_finder());
 
-            // Inherit project-level output settings from config on every iteration
-            // to pick up config file changes when the CLI did not override them.
-            // Reset non-CLI-provided fields first so updated config values are applied.
-            if (!cli_provided_baseline
-                || !cli_provided_baseline_error_level
-                || !cli_provided_output_format
-                || !cli_provided_min_severity)
-                && let Some(handle) = loaded_handles.first()
-            {
-                if !cli_provided_baseline {
-                    self.output.baseline = None;
-                }
-                if !cli_provided_output_format {
-                    self.output.output_format = None;
-                }
-                if !cli_provided_baseline_error_level {
-                    self.output.baseline_error_level = None;
-                }
-                if !cli_provided_min_severity {
-                    self.output.min_severity = None;
-                }
-                let config = state.config_finder().python_file(
+            let config = loaded_handles.first().map(|handle| {
+                state.config_finder().python_file(
                     ModuleNameWithKind::guaranteed(handle.module()),
                     handle.path(),
-                );
-                self.output.inherit_defaults_from_config(&config);
-            }
+                )
+            });
+            let defaults = self.output.resolve(config.as_deref());
+
             let mut_transaction = transaction.as_mut();
             mut_transaction.invalidate_find_for_configs(reloaded_configs);
             let res = self.run_inner(
@@ -1382,6 +1357,7 @@ impl CheckArgs {
                 mut_transaction,
                 version,
                 &loaded_handles,
+                &defaults,
                 sourcedb_errors,
                 require_levels.specified,
                 upsell,
@@ -1440,6 +1416,7 @@ impl CheckArgs {
         transaction: &mut Transaction,
         version: &str,
         handles: &[Handle],
+        defaults: &OutputDefaults,
         mut sourcedb_errors: Vec<ConfigError>,
         require: Require,
         upsell: UpsellDecision,
@@ -1456,7 +1433,7 @@ impl CheckArgs {
         };
         if let Some(flag) = baseline_action {
             ensure!(
-                self.output.baseline.is_some(),
+                defaults.baseline.is_some(),
                 "`{flag}` requires a baseline file set by `--baseline` or configuration"
             );
         }
@@ -1466,7 +1443,7 @@ impl CheckArgs {
         // wrong `--baseline` path) rather than a silent success.
         if let Some(flag) = baseline_action
             && !self.output.update_baseline
-            && let Some(baseline_path) = self.output.baseline.as_deref()
+            && let Some(baseline_path) = defaults.baseline.as_deref()
         {
             ensure!(
                 baseline_path.exists(),
@@ -1536,7 +1513,7 @@ impl CheckArgs {
             || std::env::current_dir().ok().unwrap_or_default(),
             |x| PathBuf::from_str(x.as_str()).unwrap(),
         );
-        let output_format = self.output.output_format();
+        let output_format = defaults.output_format;
 
         let mut collected = loads.collect_errors();
         // Pass pre-collected errors to avoid redundant error collection.
@@ -1545,7 +1522,7 @@ impl CheckArgs {
 
         let baseline_apply_result = loads.apply_baseline(
             &mut collected,
-            self.output.baseline.as_deref(),
+            defaults.baseline.as_deref(),
             relative_to.as_path(),
             self.output.prune_baseline || self.output.error_stale_baseline,
         );
@@ -1579,7 +1556,7 @@ impl CheckArgs {
 
         // Baseline matches are cloned for display. Baseline maintenance uses the
         // original severity and baseline representation.
-        let baseline_error_level = self.output.baseline_error_level();
+        let baseline_error_level = defaults.baseline_error_level;
         let displayed_baseline_errors = if baseline_error_level == Severity::Ignore {
             Vec::new()
         } else {
@@ -1606,7 +1583,7 @@ impl CheckArgs {
         // the user's severity threshold: a finding the user asked to hide
         // via `--min-severity` should not get a suppression comment written
         // into source.
-        let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
+        let min_severity = defaults.min_severity;
         let (ordinary_errors, mut hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
             .into_iter()
             .partition(|e| e.severity() >= min_severity);
@@ -1639,8 +1616,7 @@ impl CheckArgs {
         // `--prune-baseline` rewrites the file only when there is something to drop.
         let rewriting_baseline = self.output.prune_baseline && unused_baseline_entries > 0;
         if self.output.update_baseline {
-            let baseline_path = self
-                .output
+            let baseline_path = defaults
                 .baseline
                 .as_ref()
                 .expect("a baseline action requires a baseline path");
@@ -1658,8 +1634,7 @@ impl CheckArgs {
             });
             write_baseline_to_file(baseline_path, relative_to.as_path(), &new_baseline)?;
         } else if rewriting_baseline {
-            let baseline_path = self
-                .output
+            let baseline_path = defaults
                 .baseline
                 .as_ref()
                 .expect("a baseline action requires a baseline path");
@@ -2191,47 +2166,64 @@ mod tests {
 
     #[test]
     fn output_args_inherit_output_format_from_config() {
-        let mut output = OutputArgs::parse_from(["pyrefly-check"]);
+        let output = OutputArgs::parse_from(["pyrefly-check"]);
         let config = ConfigFile {
             output_format: Some(OutputFormat::MinText),
             ..Default::default()
         };
 
-        output.inherit_defaults_from_config(&config);
+        assert_eq!(
+            output.resolve(Some(&config)).output_format,
+            OutputFormat::MinText
+        );
+    }
 
-        assert_eq!(output.output_format(), OutputFormat::MinText);
+    #[test]
+    fn output_args_fall_back_to_built_in_defaults() {
+        let output = OutputArgs::parse_from(["pyrefly-check"]);
+        let defaults = output.resolve(None);
+
+        assert_eq!(defaults.baseline, None);
+        assert_eq!(defaults.baseline_error_level, Severity::Ignore);
+        assert_eq!(defaults.output_format, OutputFormat::default());
+        assert_eq!(defaults.min_severity, Severity::Error);
     }
 
     #[test]
     fn baseline_error_level_cli_and_config_precedence() {
-        let mut inherited = OutputArgs::parse_from(["pyrefly-check"]);
-        assert_eq!(inherited.baseline_error_level(), Severity::Ignore);
-        inherited.inherit_defaults_from_config(&ConfigFile {
+        let inherited = OutputArgs::parse_from(["pyrefly-check"]);
+        assert_eq!(
+            inherited.resolve(None).baseline_error_level,
+            Severity::Ignore
+        );
+        let warn = ConfigFile {
             baseline_error_level: Some(Severity::Warn),
             ..Default::default()
-        });
-        assert_eq!(inherited.baseline_error_level(), Severity::Warn);
+        };
+        assert_eq!(
+            inherited.resolve(Some(&warn)).baseline_error_level,
+            Severity::Warn
+        );
 
-        // Watch mode clears inherited values before reloading project configuration.
-        inherited.baseline_error_level = None;
-        inherited.inherit_defaults_from_config(&ConfigFile {
+        let info = ConfigFile {
             baseline_error_level: Some(Severity::Info),
             ..Default::default()
-        });
-        assert_eq!(inherited.baseline_error_level(), Severity::Info);
+        };
+        assert_eq!(
+            inherited.resolve(Some(&info)).baseline_error_level,
+            Severity::Info
+        );
 
-        let mut overridden =
-            OutputArgs::parse_from(["pyrefly-check", "--baseline-error-level=error"]);
-        overridden.inherit_defaults_from_config(&ConfigFile {
-            baseline_error_level: Some(Severity::Warn),
-            ..Default::default()
-        });
-        assert_eq!(overridden.baseline_error_level(), Severity::Error);
+        let overridden = OutputArgs::parse_from(["pyrefly-check", "--baseline-error-level=error"]);
+        assert_eq!(
+            overridden.resolve(Some(&warn)).baseline_error_level,
+            Severity::Error
+        );
     }
 
     #[test]
     fn cli_output_format_overrides_config_output_format() {
-        let mut output = OutputArgs::parse_from([
+        let output = OutputArgs::parse_from([
             "pyrefly-check",
             "--output-format",
             "json",
@@ -2241,49 +2233,47 @@ mod tests {
             output_format: Some(OutputFormat::MinText),
             ..Default::default()
         };
+        let defaults = output.resolve(Some(&config));
 
-        output.inherit_defaults_from_config(&config);
-
-        assert_eq!(output.output_format(), OutputFormat::Json);
+        assert_eq!(defaults.output_format, OutputFormat::Json);
         assert_eq!(
-            output.output[0].format.unwrap_or(output.output_format()),
+            output.output[0].format.unwrap_or(defaults.output_format),
             OutputFormat::Json
         );
     }
 
     #[test]
     fn explicit_output_formats_override_the_reloadable_default() {
-        let mut output = OutputArgs::parse_from([
+        let output = OutputArgs::parse_from([
             "pyrefly-check",
             "--output=json:explicit.json",
             "--output=default.txt",
         ]);
-        output.inherit_defaults_from_config(&ConfigFile {
-            output_format: Some(OutputFormat::MinText),
-            ..Default::default()
-        });
+        let min_text = output
+            .resolve(Some(&ConfigFile {
+                output_format: Some(OutputFormat::MinText),
+                ..Default::default()
+            }))
+            .output_format;
 
         assert_eq!(
-            output.output[0].format.unwrap_or(output.output_format()),
+            output.output[0].format.unwrap_or(min_text),
             OutputFormat::Json
         );
         assert_eq!(
-            output.output[1].format.unwrap_or(output.output_format()),
+            output.output[1].format.unwrap_or(min_text),
             OutputFormat::MinText
         );
 
-        // Watch mode resets only the inherited default before loading updated config.
-        output.output_format = None;
-        output.inherit_defaults_from_config(&ConfigFile {
-            output_format: Some(OutputFormat::Sarif),
-            ..Default::default()
-        });
+        let sarif = output
+            .resolve(Some(&ConfigFile {
+                output_format: Some(OutputFormat::Sarif),
+                ..Default::default()
+            }))
+            .output_format;
+        assert_eq!(output.output[0].format.unwrap_or(sarif), OutputFormat::Json);
         assert_eq!(
-            output.output[0].format.unwrap_or(output.output_format()),
-            OutputFormat::Json
-        );
-        assert_eq!(
-            output.output[1].format.unwrap_or(output.output_format()),
+            output.output[1].format.unwrap_or(sarif),
             OutputFormat::Sarif
         );
     }
