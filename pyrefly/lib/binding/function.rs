@@ -19,7 +19,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::function::BodyKind;
 use pyrefly_types::function::FuncFacts;
 use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
-use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
+use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
@@ -901,7 +901,7 @@ impl<'a> BindingsBuilder<'a> {
 
         let type_shape_dsl_def = if is_type_shape_dsl && !is_shape_dsl {
             let is_top_level = class_key.is_none() && !parent.has_function_ancestor();
-            match ValidatedTypeShapeDslFunction::try_new(x.clone(), is_top_level) {
+            match ParsedTypeShapeDslFunction::try_new(x.clone(), is_top_level) {
                 Ok(definition) => Some(Arc::new(definition)),
                 Err(error) => {
                     self.error(

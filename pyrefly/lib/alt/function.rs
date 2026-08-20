@@ -31,7 +31,7 @@ use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::meta_shape_dsl::validate_shape_dsl_functions;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
-use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
+use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::BoundMethod;
@@ -481,7 +481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
         parent: &NestingContext,
         shape_dsl_def: Option<Arc<ShapeDslFunction>>,
-        type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
+        type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
         uses_shape_dsl_ir_name: Option<ShortIdentifier>,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {

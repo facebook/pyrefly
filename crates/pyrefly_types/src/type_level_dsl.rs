@@ -81,76 +81,13 @@ pub struct TypeShapeDslDefinitionError {
     pub message: &'static str,
 }
 
-/// An owned function AST whose restricted declaration syntax has been validated.
-/// Future evaluation may interpret `definition` relying on these invariants.
+/// A type-level shape DSL declaration whose envelope was validated during binding.
 #[derive(Debug, Clone)]
-pub struct ValidatedTypeShapeDslFunction {
+pub struct ParsedTypeShapeDslFunction {
     definition: Arc<StmtFunctionDef>,
-    returned_parameter_index: usize,
 }
 
-// The AST is executable program state, not a derived cache, so its identity must participate in
-// incremental equality. Aliases within one module generation share this `Arc`; reparsing an edited
-// definition creates a new allocation and invalidates every dependent call result. In particular,
-// this must not be wrapped in `IdentityIgnored` like the derived V1 helper-closure cache.
-impl PartialEq for ValidatedTypeShapeDslFunction {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.definition, &other.definition)
-    }
-}
-
-impl Eq for ValidatedTypeShapeDslFunction {}
-
-impl Hash for ValidatedTypeShapeDslFunction {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (Arc::as_ptr(&self.definition) as *const () as usize).hash(state);
-    }
-}
-
-// This ordering is a process-local tie-breaker required by type nodes that derive `Ord`; it must
-// not be used for stable output. Comparing the same identity as equality keeps `cmp` consistent
-// with the pointer-based `Eq` above while distinguishing reparsed definitions.
-impl PartialOrd for ValidatedTypeShapeDslFunction {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ValidatedTypeShapeDslFunction {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let self_ptr = Arc::as_ptr(&self.definition) as *const () as usize;
-        let other_ptr = Arc::as_ptr(&other.definition) as *const () as usize;
-        self_ptr.cmp(&other_ptr)
-    }
-}
-
-impl Visit<Type> for ValidatedTypeShapeDslFunction {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-impl VisitMut<Type> for ValidatedTypeShapeDslFunction {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-
-impl Visit<Type> for Arc<ValidatedTypeShapeDslFunction> {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-impl VisitMut<Type> for Arc<ValidatedTypeShapeDslFunction> {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-
-impl TypeEqTrait for ValidatedTypeShapeDslFunction {
-    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
-        self == other
-    }
-}
-
-impl ValidatedTypeShapeDslFunction {
+impl ParsedTypeShapeDslFunction {
     pub fn try_new(
         definition: StmtFunctionDef,
         is_top_level: bool,
@@ -206,9 +143,18 @@ impl ValidatedTypeShapeDslFunction {
                 message: "does not support parameter defaults",
             });
         }
-        let [Stmt::Return(return_stmt)] = definition.body.as_slice() else {
+        Ok(Self {
+            definition: Arc::new(definition),
+        })
+    }
+
+    /// Validate the body, which so far may only be the identity `return <parameter>`.
+    pub fn validate_body(
+        &self,
+    ) -> Result<ValidatedTypeShapeDslFunction, TypeShapeDslDefinitionError> {
+        let [Stmt::Return(return_stmt)] = self.definition.body.as_slice() else {
             return Err(TypeShapeDslDefinitionError {
-                range: definition.name.range(),
+                range: self.definition.name.range(),
                 message: "body must contain exactly `return <parameter>`",
             });
         };
@@ -218,7 +164,9 @@ impl ValidatedTypeShapeDslFunction {
                 message: "return value must be the bare parameter name",
             });
         };
-        let Some(returned_parameter_index) = parameters
+        let Some(returned_parameter_index) = self
+            .definition
+            .parameters
             .args
             .iter()
             .position(|parameter| parameter.parameter.name.id == returned_name.id)
@@ -228,8 +176,8 @@ impl ValidatedTypeShapeDslFunction {
                 message: "returned name must match a parameter name",
             });
         };
-        Ok(Self {
-            definition: Arc::new(definition),
+        Ok(ValidatedTypeShapeDslFunction {
+            parsed: self.clone(),
             returned_parameter_index,
         })
     }
@@ -273,6 +221,118 @@ impl ValidatedTypeShapeDslFunction {
 
     pub fn has_return_annotation(&self) -> bool {
         self.definition.returns.is_some()
+    }
+}
+
+// The AST is executable program state, not a derived cache, so its identity must participate in
+// incremental equality. Aliases within one module generation share this `Arc`; reparsing an edited
+// definition creates a new allocation and invalidates every dependent call result. In particular,
+// this must not be wrapped in `IdentityIgnored` like the derived V1 helper-closure cache.
+impl PartialEq for ParsedTypeShapeDslFunction {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.definition, &other.definition)
+    }
+}
+
+impl Eq for ParsedTypeShapeDslFunction {}
+
+impl Hash for ParsedTypeShapeDslFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (Arc::as_ptr(&self.definition) as *const () as usize).hash(state);
+    }
+}
+
+// This ordering is a process-local tie-breaker required by type nodes that derive `Ord`; it must
+// not be used for stable output. Comparing the same identity as equality keeps `cmp` consistent
+// with the pointer-based `Eq` above while distinguishing reparsed definitions.
+impl PartialOrd for ParsedTypeShapeDslFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ParsedTypeShapeDslFunction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let self_ptr = Arc::as_ptr(&self.definition) as *const () as usize;
+        let other_ptr = Arc::as_ptr(&other.definition) as *const () as usize;
+        self_ptr.cmp(&other_ptr)
+    }
+}
+
+impl Visit<Type> for ParsedTypeShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for ParsedTypeShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl Visit<Type> for Arc<ParsedTypeShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for Arc<ParsedTypeShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl TypeEqTrait for ParsedTypeShapeDslFunction {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other
+    }
+}
+
+/// An owned function AST whose restricted declaration syntax and body have been validated.
+/// Future evaluation may interpret the definition relying on these invariants.
+///
+/// Identity is derived from the parsed program's pointer identity plus the body resolution, so
+/// two validations of the same AST that disagree on the returned parameter never alias.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ValidatedTypeShapeDslFunction {
+    parsed: ParsedTypeShapeDslFunction,
+    returned_parameter_index: usize,
+}
+
+impl Visit<Type> for ValidatedTypeShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for ValidatedTypeShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl Visit<Type> for Arc<ValidatedTypeShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for Arc<ValidatedTypeShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl TypeEqTrait for ValidatedTypeShapeDslFunction {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other
+    }
+}
+
+impl ValidatedTypeShapeDslFunction {
+    fn parameter_count(&self) -> usize {
+        self.parsed.parameter_count()
+    }
+
+    pub fn name(&self) -> &Name {
+        self.parsed.name()
+    }
+
+    pub fn parameter_name(&self, index: usize) -> &Name {
+        self.parsed.parameter_name(index)
     }
 
     pub fn returned_parameter_index(&self) -> usize {

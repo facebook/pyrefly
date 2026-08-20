@@ -11,10 +11,10 @@ use std::sync::Arc;
 use pyrefly_types::callable::Param;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::ResolvedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::TypeLevelDslCall;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
-use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
@@ -46,13 +46,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Validates resolved DSL annotations, emitting diagnostics and metadata only on success.
     pub(super) fn validate_type_shape_dsl_declaration(
         &self,
-        dsl: &Arc<ValidatedTypeShapeDslFunction>,
+        dsl: &Arc<ParsedTypeShapeDslFunction>,
         params: &[Param],
         return_type: &Type,
         function_kind: &FunctionKind,
         function_range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<FunctionKind> {
+        let validated = match dsl.validate_body() {
+            Ok(validated) => Arc::new(validated),
+            Err(error) => {
+                self.error(
+                    errors,
+                    error.range,
+                    ErrorKind::InvalidArgument,
+                    format!("@type_shape_dsl_function {}", error.message),
+                );
+                return None;
+            }
+        };
         assert_eq!(
             params.len(),
             dsl.parameter_count(),
@@ -95,7 +107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         if valid_parameters && let Some(result) = return_domain {
-            let returned_parameter = dsl.returned_parameter_index();
+            let returned_parameter = validated.returned_parameter_index();
             if parameter_domains[returned_parameter] != result {
                 self.error(
                     errors,
@@ -110,10 +122,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return Some(FunctionKind::TypeShapeDsl(
                     func_id.clone(),
                     Arc::new(
-                        ResolvedTypeShapeDslFunction::try_new(dsl.clone(), parameter_domains)
-                            .expect(
-                                "resolved DSL parameters were checked against the validated AST",
-                            ),
+                        ResolvedTypeShapeDslFunction::try_new(validated, parameter_domains).expect(
+                            "resolved DSL parameters were checked against the validated AST",
+                        ),
                     ),
                 ));
             } else {

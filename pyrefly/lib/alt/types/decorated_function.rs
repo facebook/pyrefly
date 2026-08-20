@@ -24,7 +24,7 @@ use pyrefly_types::function::Deprecation;
 use pyrefly_types::function::FuncDefIndex;
 use pyrefly_types::keywords::TypeMap;
 use pyrefly_types::quantified::Quantified;
-use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
+use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_types::types::TParams;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
@@ -47,7 +47,7 @@ pub struct UndecoratedFunction {
     pub params: Vec<Param>,
     pub paramspec: Option<Quantified>,
     pub defining_cls: Option<Class>,
-    pub type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
+    pub type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
     /// Maps parameter names to their resolved types - used to connect
     /// FunctionParameter and KeyUndecoratedFunction.
     pub resolved_param_types: SmallMap<Name, Type>,

@@ -27,7 +27,7 @@ use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasIndex;
-use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
+use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_util::assert_bytes;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
@@ -1968,8 +1968,8 @@ pub struct BindingUndecoratedFunction {
     /// When the function is decorated with `@shape_dsl_function`, this holds the
     /// parsed DSL IR so the solver can produce `FunctionKind::ShapeDsl`.
     pub shape_dsl_def: Option<Arc<ShapeDslFunction>>,
-    /// Validated source for a user-defined type-level shape DSL function.
-    pub type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
+    /// Parsed source for a user-defined type-level shape DSL function.
+    pub type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
     /// Identifier of the IR function passed as the first positional argument to
     /// `@uses_shape_dsl(ir_fn)`. Extracted at binding time so the solver can
     /// resolve it to a `FunctionKind::ShapeDsl` type.
