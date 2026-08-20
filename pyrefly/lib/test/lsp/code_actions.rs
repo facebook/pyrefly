@@ -4255,6 +4255,31 @@ def caller():
 }
 
 #[test]
+fn change_signature_move_parameter_right_updates_calls() {
+    let code = r#"
+def greet(name, message):
+#         ^
+    return f"{message}, {name}"
+
+def caller():
+    greet("Ada", "Hello")
+    greet(name="Bob", message="Hi")
+"#;
+    let updated = apply_change_signature_action(code, "Move parameter `name` right")
+        .expect("expected move-parameter action");
+    let expected = r#"
+def greet(message, name):
+#         ^
+    return f"{message}, {name}"
+
+def caller():
+    greet(message="Hello", name="Ada")
+    greet(message="Hi", name="Bob")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn change_signature_move_method_parameter_left_updates_bound_and_unbound_calls() {
     let code = r#"
 class Greeter:
