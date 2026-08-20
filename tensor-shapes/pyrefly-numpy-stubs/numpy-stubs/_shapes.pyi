@@ -3,6 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, type_shape_dsl_function
 from shape_extensions.dsl import Error, shape_dsl_function, ShapedArray, symint, Unknown
 
 @shape_dsl_function
@@ -11,15 +13,15 @@ def int_max(a: int, b: int) -> int:
         return a
     return b
 
-@shape_dsl_function
-def int_min(a: int | symint, b: int | symint) -> int | symint:
+@type_shape_dsl_function
+def int_min(a: Int, b: Int) -> Int:
     if a == b:
         return a
-    if isinstance(a, int) and isinstance(b, int):
+    if dsl.is_concrete_int(a) and dsl.is_concrete_int(b):
         if a < b:
             return a
         return b
-    return Unknown
+    return dsl.Int.gradual()
 
 @shape_dsl_function
 def broadcast_dim(
@@ -71,28 +73,6 @@ def matmul_2d_ir(a: ShapedArray, b: ShapedArray) -> ShapedArray:
     ):
         raise Error("matmul inner dimensions must match")
     return ShapedArray(shape=[a.shape[0], b.shape[1]])
-
-@shape_dsl_function
-def svd_reduced_2d_ir(
-    a: ShapedArray,
-    full_matrices: bool,
-    compute_uv: bool = True,
-    hermitian: bool = False,
-) -> list[ShapedArray]:
-    if len(a.shape) != 2:
-        raise Error("svd expects 2-D arrays")
-    if full_matrices:
-        raise Error("only reduced svd shapes are modeled")
-    if not compute_uv:
-        raise Error("svd without singular vectors is not modeled")
-    if hermitian:
-        raise Error("hermitian svd shapes are not modeled")
-    k = int_min(a.shape[0], a.shape[1])
-    return [
-        ShapedArray(shape=[a.shape[0], k]),
-        ShapedArray(shape=[k]),
-        ShapedArray(shape=[k, a.shape[1]]),
-    ]
 
 @shape_dsl_function
 def normalize_axis(rank: int, axis: int) -> int:

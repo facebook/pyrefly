@@ -5,8 +5,8 @@
 
 from typing import Literal, overload
 
-from numpy._shapes import svd_reduced_2d_ir
-from shape_extensions import IntVar, uses_shape_dsl
+from numpy._shapes import int_min
+from shape_extensions import IntVar
 
 from .. import ndarray
 
@@ -29,19 +29,15 @@ def norm[N: IntVar, M: IntVar, DType](
 def eigh[N: IntVar, DType](
     a: ndarray[[N, N], DType],
 ) -> tuple[ndarray[[N], DType], ndarray[[N, N], DType]]: ...
-@uses_shape_dsl(svd_reduced_2d_ir)
-def svd[Shape, DType](
-    a: ndarray[Shape, DType],
+def svd[M: IntVar, N: IntVar, DType](
+    a: ndarray[[M, N], DType],
     # NumPy defaults to full SVD; this MVP accepts only the reduced form needed
     # by PCA-style demos.
     full_matrices: Literal[False],
     compute_uv: Literal[True] = True,
     hermitian: Literal[False] = False,
-    # The `ndarray[Shape, DType]` returns below are only a coarse fallback: the
-    # precise reduced-SVD shapes are supplied by `@uses_shape_dsl(svd_reduced_2d_ir)`
-    # above, which yields U=[M, K], S=[K] (1-D), and Vh=[K, N] with K = min(M, N).
 ) -> tuple[
-    ndarray[Shape, DType],
-    ndarray[Shape, DType],
-    ndarray[Shape, DType],
+    ndarray[[M, int_min(M, N)], DType],
+    ndarray[[int_min(M, N)], DType],
+    ndarray[[int_min(M, N), N], DType],
 ]: ...

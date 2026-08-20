@@ -5,17 +5,47 @@
 
 from __future__ import annotations
 
+from typing import assert_type
+
 import numpy as np
 from shape_extensions import assert_shape, Int, IntVar
 
 N = IntVar("N")
+M = IntVar("M")
 
 
-def square_svd_components(
-    x: np.ndarray[[N, N]],
-) -> np.ndarray[[N, N]]:
-    _u, _s, vt = np.linalg.svd(x, full_matrices=False)
+def square_svd_components[N: IntVar, DType](
+    x: np.ndarray[[N, N], DType],
+) -> np.ndarray[[N, N], DType]:
+    u, s, vt = np.linalg.svd(x, full_matrices=False)
+    assert_type(u, np.ndarray[[N, N], DType])
+    assert_type(s, np.ndarray[[N], DType])
+    assert_type(vt, np.ndarray[[N, N], DType])
     return vt
+
+
+def unrelated_svd_components[M: IntVar, N: IntVar, DType](
+    x: np.ndarray[[M, N], DType],
+) -> tuple[
+    np.ndarray[[M, int], DType],
+    np.ndarray[[int], DType],
+    np.ndarray[[int, N], DType],
+]:
+    u, s, vt = np.linalg.svd(x, full_matrices=False)
+    assert_type(u, np.ndarray[[M, int], DType])
+    assert_type(s, np.ndarray[[int], DType])
+    assert_type(vt, np.ndarray[[int, N], DType])
+    return u, s, vt
+
+
+def reject_non_2d_svd(x: np.ndarray[[M, N, 3]]) -> None:
+    np.linalg.svd(x, full_matrices=False)  # E: not assignable
+
+
+def reject_unsupported_svd_options(x: np.ndarray[[M, N]]) -> None:
+    np.linalg.svd(x, full_matrices=True)  # E: not assignable
+    np.linalg.svd(x, full_matrices=False, compute_uv=False)  # E: not assignable
+    np.linalg.svd(x, full_matrices=False, hermitian=True)  # E: not assignable
 
 
 def test_matmul_function_2d() -> None:
@@ -125,6 +155,16 @@ def test_svd_reduced_wide_matrix() -> None:
     assert_shape(vt, (3, 5))
 
 
+def test_svd_reduced_tall_matrix() -> None:
+    x = np.ones((5, 3))
+
+    u, s, vt = np.linalg.svd(x, full_matrices=False)
+
+    assert_shape(u, (5, 3))
+    assert_shape(s, (3,))
+    assert_shape(vt, (3, 3))
+
+
 def test_svd_reduced_square_matrix() -> None:
     x = np.ones((4, 4))
 
@@ -134,6 +174,19 @@ def test_svd_reduced_square_matrix() -> None:
     assert_shape(s, (4,))
     assert_shape(vt, (4, 4))
     assert_shape(square_svd_components(x), (4, 4))
+
+
+def test_svd_reduced_dtype_preserved() -> None:
+    x = np.ones((5, 3), dtype=np.float32)
+
+    u, s, vt = np.linalg.svd(x, full_matrices=False)
+
+    assert_shape(u, (5, 3))
+    assert_shape(s, (3,))
+    assert_shape(vt, (3, 3))
+    assert_type(u.dtype, np.dtype[np.float32])
+    assert_type(s.dtype, np.dtype[np.float32])
+    assert_type(vt.dtype, np.dtype[np.float32])
 
 
 def test_svd_all_component_pca_projection() -> None:
