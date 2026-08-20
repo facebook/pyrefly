@@ -174,7 +174,7 @@ impl ConfigFinder {
                         |c: &ArcId<ConfigFile>| {
                             matches!(
                                 c.source,
-                                ConfigSource::File(_) | ConfigSource::FailedParse(_)
+                                ConfigSource::File(_)
                             )
                         },
                     ),

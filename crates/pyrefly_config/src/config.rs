@@ -171,10 +171,6 @@ pub enum ConfigSource {
     /// "marker" file that contains no pyrefly configuration but marks a project root (e.g., a
     /// `pyproject.toml` file with no `[tool.pyrefly]` section)
     Marker(PathBuf),
-    /// We found a config file and attempted to read/parse it, but failed. The config values
-    /// are defaults, but we respect the file's location for project root detection (similar
-    /// to `Marker`).
-    FailedParse(PathBuf),
     /// This config was synthesized without an on-disk source. The optional path is the inferred
     /// project root, when one is known.
     Synthetic(Option<PathBuf>),
@@ -226,8 +222,7 @@ impl ConfigSource {
         match self {
             Self::File(path)
             | Self::PythonToolMarker(path)
-            | Self::Marker(path)
-            | Self::FailedParse(path) => path.parent(),
+            | Self::Marker(path) => path.parent(),
             // Synthetic roots are deliberately excluded
             Self::Synthetic(_) => None,
         }
@@ -1666,7 +1661,7 @@ impl ConfigFile {
                 Ok(result) => result,
                 Err(e) => {
                     errors.push(ConfigError::error(e));
-                    (None, ConfigSource::FailedParse(config_path.to_path_buf()))
+                    (None, ConfigSource::File(config_path.to_path_buf()))
                 }
             };
             let mut config = match config_path.parent() {

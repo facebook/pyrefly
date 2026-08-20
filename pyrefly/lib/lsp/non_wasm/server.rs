@@ -3038,8 +3038,7 @@ impl Server {
         match &config.source {
             ConfigSource::Synthetic(_)
             | ConfigSource::PythonToolMarker(_)
-            | ConfigSource::Marker(_)
-            | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,
+            | ConfigSource::Marker(_) => TypeErrorDisplayStatus::NoConfigFile,
             ConfigSource::File(_) => {
                 if config.disable_type_errors_in_ide(path) {
                     TypeErrorDisplayStatus::DisabledInConfigFile

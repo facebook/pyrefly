@@ -128,8 +128,7 @@ fn dump_config(
                 println!("Default configuration");
             }
             ConfigSource::PythonToolMarker(path)
-            | ConfigSource::Marker(path)
-            | ConfigSource::FailedParse(path) => {
+            | ConfigSource::Marker(path) => {
                 println!(
                     "Default configuration for project root marked by `{}`",
                     path.display()
