@@ -422,8 +422,8 @@ def wrong_type(x: str) -> str:  # E: `@type_shape_dsl_function` parameter `x` mu
     return x
 
 @type_shape_dsl_function
-def cross_domain(x: Int) -> IntTuple:  # E: `@type_shape_dsl_function` return annotation must match returned parameter `x`
-    return x  # E: Returned type `Int[int]` is not assignable to declared return type `IntTuple`
+def cross_domain(x: Int) -> IntTuple:
+    return x  # E: `@type_shape_dsl_function` return annotation must match returned parameter `x`  # E: Returned type `Int[int]` is not assignable to declared return type `IntTuple`
 
 @type_shape_dsl_function
 def missing_second(x: Int, y) -> Int:  # E: `@type_shape_dsl_function` parameter `y` must be annotated as `Int` or `IntTuple`
@@ -1395,8 +1395,8 @@ def nested(x: Int) -> Int:
     return (official_gradual(),)  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return  # E: Returned type
 
 @type_shape_dsl_function
-def statement(x: Int) -> Int:  # E: @type_shape_dsl_function body must contain exactly `return <parameter>` or a gradual return
-    official_gradual()
+def statement(x: Int) -> Int:
+    official_gradual()  # E: @type_shape_dsl_function body supports only `if` and `return`
     return x
 
 @type_shape_dsl_function
@@ -1428,8 +1428,141 @@ def shadowed_module_alias(dsl: Int) -> Int:
     return dsl.Int.gradual()  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return  # E: Object of class `int` has no attribute `Int`
 
 @type_shape_dsl_function
-def wrong_domain(x: Int) -> Int:  # E: `@type_shape_dsl_function` declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`
-    return DslIntTuple.gradual()
+def wrong_domain(x: Int) -> Int:
+    return DslIntTuple.gradual()  # E: `@type_shape_dsl_function` declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_if_equality,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, IntVar, type_shape_dsl_function
+from shape_extensions.dsl import Int as DslInt
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def choose(a: Int, b: Int, equal: Int, different: Int) -> Int:
+    if a == b:
+        return equal
+    return different
+
+@type_shape_dsl_function
+def nested(a: Int, b: Int, c: Int, first: Int, second: Int, third: Int) -> Int:
+    if a == b:
+        if b == c:
+            return first
+        return second
+    return third
+
+@type_shape_dsl_function
+def gradual_if_equal(a: Int, b: Int, different: Int) -> Int:
+    if a == b:
+        return DslInt.gradual()
+    return different
+
+@type_shape_dsl_function
+def reflexive(a: Int, equal: Int, different: Int) -> Int:
+    if a == a:
+        return equal
+    return different
+
+def concrete_equal() -> Tensor[[choose(Int[2], Int[2], Int[7], Int[8])]]: ...
+def concrete_different() -> Tensor[[choose(Int[2], Int[3], Int[7], Int[8])]]: ...
+def same_symbol[N: IntVar](x: Tensor[[N]]) -> Tensor[[choose(N, N, Int[7], Int[8])]]: ...
+def different_symbols[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> Tensor[[choose(N, M, Int[7], Int[8])]]: ...
+def mixed_symbol_literal[N: IntVar](x: Tensor[[N]]) -> Tensor[[choose(N, Int[2], Int[7], Int[8])]]: ...
+def nested_first() -> Tensor[[nested(Int[2], Int[2], Int[2], Int[5], Int[6], Int[7])]]: ...
+def nested_second() -> Tensor[[nested(Int[2], Int[2], Int[3], Int[5], Int[6], Int[7])]]: ...
+def nested_third() -> Tensor[[nested(Int[2], Int[3], Int[2], Int[5], Int[6], Int[7])]]: ...
+def gradual_branch() -> Tensor[[gradual_if_equal(Int[2], Int[2], Int[9])]]: ...
+def precise_branch() -> Tensor[[gradual_if_equal(Int[2], Int[3], Int[9])]]: ...
+def reflexive_gradual() -> Tensor[[reflexive(Int, Int[7], Int[8])]]: ...
+def distinct_gradual() -> Tensor[[choose(Int, Int, Int[7], Int[8])]]: ...
+
+def test(x: Tensor[[2]], y: Tensor[[3]]) -> None:
+    assert_type(concrete_equal(), Tensor[[7]])
+    assert_type(concrete_different(), Tensor[[8]])
+    assert_type(nested_first(), Tensor[[5]])
+    assert_type(nested_second(), Tensor[[6]])
+    assert_type(nested_third(), Tensor[[7]])
+    assert_type(gradual_branch(), Tensor[[int]])
+    assert_type(precise_branch(), Tensor[[9]])
+    assert_type(reflexive_gradual(), Tensor[[7]])
+    assert_type(distinct_gradual(), Tensor[[int]])
+
+def test_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> None:
+    assert_type(same_symbol(x), Tensor[[7]])
+    assert_type(different_symbols(x, y), Tensor[[int]])
+    assert_type(mixed_symbol_literal(x), Tensor[[int]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_if_declarations,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions.dsl import IntTuple as DslIntTuple
+
+@type_shape_dsl_function
+def chained(a: Int, b: Int, c: Int) -> Int:
+    if a == b == c:  # E: @type_shape_dsl_function condition must be exactly `<Int parameter> == <Int parameter>`
+        return a
+    return b
+
+@type_shape_dsl_function
+def other_comparison(a: Int, b: Int) -> Int:
+    if a < b:  # E: @type_shape_dsl_function condition must be exactly `<Int parameter> == <Int parameter>`
+        return a
+    return b
+
+@type_shape_dsl_function
+def non_parameter(a: Int, b: Int) -> Int:
+    if a == 1:  # E: @type_shape_dsl_function condition operands must name parameters
+        return a
+    return b
+
+@type_shape_dsl_function
+def with_else(a: Int, b: Int) -> Int:
+    if a == b:  # E: @type_shape_dsl_function does not support `else` or `elif`
+        return a
+    else:
+        return b
+
+@type_shape_dsl_function
+def unsupported_statement(a: Int) -> Int:
+    x = a  # E: @type_shape_dsl_function body supports only `if` and `return`
+    return x
+
+@type_shape_dsl_function
+def unreachable(a: Int) -> Int:
+    return a
+    return a  # E: @type_shape_dsl_function statement is unreachable  # E: This `return` statement is unreachable
+
+@type_shape_dsl_function
+def fallthrough(a: Int, b: Int) -> Int:  # E: @type_shape_dsl_function every control-flow path must return  # E: one or more paths are missing an explicit `return`
+    if a == b:
+        return a
+
+@type_shape_dsl_function
+def tuple_condition(a: IntTuple, b: IntTuple) -> IntTuple:
+    if a == b:  # E: equality operands must be annotated as `Int`
+        return a
+    return b
+
+@type_shape_dsl_function
+def mismatched_return(a: Int, shape: IntTuple) -> Int:
+    if a == a:
+        return shape  # E: return annotation must match returned parameter `shape`  # E: Returned type
+    return a
+
+@type_shape_dsl_function
+def mismatched_gradual_paths(a: Int, b: Int) -> Int:
+    if a == b:
+        return DslIntTuple.gradual()  # E: declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`
+    return DslIntTuple.gradual()  # E: declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`
 "#,
 );
 

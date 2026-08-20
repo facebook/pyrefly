@@ -110,40 +110,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         if valid_parameters && let Some(result) = return_domain {
-            let return_ = validated
-                .returns()
-                .next()
-                .expect("validated type-level DSL function must return");
-            let valid_return = match return_.kind() {
-                TypeShapeDslReturnKind::Parameter(index) if parameter_domains[index] != result => {
+            let mut valid_body = true;
+            for equality in validated.conditions() {
+                let (left, right) = equality.parameters();
+                if parameter_domains[left] != TypeShapeDslDomain::Int
+                    || parameter_domains[right] != TypeShapeDslDomain::Int
+                {
                     self.error(
                         errors,
-                        dsl.return_annotation_range(),
+                        equality.range(),
                         ErrorKind::InvalidArgument,
-                        format!(
-                            "`@type_shape_dsl_function` return annotation must match returned parameter `{}`",
-                            dsl.parameter_name(index)
-                        ),
+                        "`@type_shape_dsl_function` equality operands must be annotated as `Int`"
+                            .to_owned(),
                     );
-                    false
+                    valid_body = false;
                 }
-                TypeShapeDslReturnKind::Gradual(domain) if domain != result => {
-                    self.error(
-                        errors,
-                        dsl.return_annotation_range(),
-                        ErrorKind::InvalidArgument,
-                        format!(
-                            "`@type_shape_dsl_function` declares return domain `{}`, but `shape_extensions.dsl.{}.gradual()` returns `{}`",
-                            result.as_str(),
-                            domain.as_str(),
-                            domain.as_str(),
-                        ),
-                    );
-                    false
+            }
+            for return_ in validated.returns() {
+                match return_.kind() {
+                    TypeShapeDslReturnKind::Parameter(index)
+                        if parameter_domains[index] != result =>
+                    {
+                        self.error(
+                            errors,
+                            return_.range(),
+                            ErrorKind::InvalidArgument,
+                            format!(
+                                "`@type_shape_dsl_function` return annotation must match returned parameter `{}`",
+                                dsl.parameter_name(index)
+                            ),
+                        );
+                        valid_body = false;
+                    }
+                    TypeShapeDslReturnKind::Gradual(domain) if domain != result => {
+                        self.error(
+                            errors,
+                            return_.range(),
+                            ErrorKind::InvalidArgument,
+                            format!(
+                                "`@type_shape_dsl_function` declares return domain `{}`, but `shape_extensions.dsl.{}.gradual()` returns `{}`",
+                                result.as_str(),
+                                domain.as_str(),
+                                domain.as_str(),
+                            ),
+                        );
+                        valid_body = false;
+                    }
+                    TypeShapeDslReturnKind::Parameter(_) | TypeShapeDslReturnKind::Gradual(_) => {}
                 }
-                TypeShapeDslReturnKind::Parameter(_) | TypeShapeDslReturnKind::Gradual(_) => true,
-            };
-            if valid_return && let FunctionKind::Def(func_id) = function_kind {
+            }
+            if valid_body && let FunctionKind::Def(func_id) = function_kind {
                 return Some(FunctionKind::TypeShapeDsl(
                     func_id.clone(),
                     Arc::new(
@@ -152,7 +168,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     ),
                 ));
-            } else if valid_return {
+            } else if valid_body {
                 self.error(
                     errors,
                     function_range,
