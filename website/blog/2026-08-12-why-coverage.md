@@ -43,7 +43,7 @@ Note how there are two issues with the stub file:
 - The `c` parameter in `two` is misnamed (it should be `b`). It's also unannotated.
 - The `three` function is missing entirely.
 
-Note that if a stub file is present, then that's all the type-checker looks at. Type [typing spec](https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering) enforces this: "If a stub file is found for a module, the type checker should not read the corresponding “real” module". So, if stub files are present, they could be both accurate and complete.
+Note that if a stub file is present, then that's all the type-checker looks at. The [typing spec](https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering) enforces this: "If a stub file is found for a module, the type checker should not read the corresponding “real” module". So, if stub files are present, they could be both accurate and complete.
 
 Here, however, the stub is incomplete. How could we have been alerted about this? Just running a type-checker isn't enough, `pyrefly check` would return zero errors in this code alone. Just running `ruff check` with `ANN` enabled isn't enough either, as that would only tell us that the `c` argument is unannotated (it wouldn't tell us anything about the `three` function missing from the stub). Fortunately, there is indeed a tool which can tell us that `three` is missing from the stubs: _pyrefly coverage_. In this case, running `pyrefly coverage check` tells us:
 
