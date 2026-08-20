@@ -59,6 +59,20 @@ class _Unknown:
 Unknown: _Unknown = _Unknown()
 
 
+class Int:
+    """Operations that produce values in the DSL integer domain."""
+
+    @staticmethod
+    def gradual() -> typing.Any: ...
+
+
+class IntTuple:
+    """Operations that produce values in the DSL integer-tuple domain."""
+
+    @staticmethod
+    def gradual() -> typing.Any: ...
+
+
 def prod(xs: list[int]) -> int:
     """Compute the product of a list of dimension sizes."""
     ...

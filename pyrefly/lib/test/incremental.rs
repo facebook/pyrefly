@@ -230,6 +230,80 @@ def identity(x: Int) -> Int:
 }
 
 #[test]
+fn test_type_shape_dsl_gradual_reexport_target_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "reexport".to_owned(),
+        "shape_extensions".to_owned(),
+        "shape_extensions.dsl".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "shape_extensions.dsl",
+        r#"
+from typing import Any
+class Int:
+    @staticmethod
+    def gradual() -> Any: ...
+class IntTuple:
+    @staticmethod
+    def gradual() -> Any: ...
+"#,
+    );
+    i.set(
+        "reexport",
+        "from shape_extensions.dsl import Int as Gradual\n",
+    );
+    i.set(
+        "main",
+        r#"
+from reexport import Gradual
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def gradual(x: Int) -> Int:
+    return Gradual.gradual()
+"#,
+    );
+    i.check(
+        &["main"],
+        &[
+            "main",
+            "reexport",
+            "shape_extensions",
+            "shape_extensions.dsl",
+        ],
+    );
+
+    i.set(
+        "reexport",
+        "from shape_extensions.dsl import IntTuple as Gradual\n",
+    );
+    let changed = i.unchecked(&["main"]);
+    changed.check_recompute(&["main", "reexport"]);
+    assert!(changed.errors.collect_display_errors().iter().any(|error| {
+        error
+            .msg()
+            .contains("declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`")
+    }));
+
+    // The restore leg covers re-resolving the intrinsic after an edit outside the declaration,
+    // and that changing then restoring the reexport invalidates and recovers the importer result.
+    i.set(
+        "reexport",
+        "from shape_extensions.dsl import Int as Gradual\n",
+    );
+    i.check(&["main"], &["main", "reexport"]);
+}
+
+#[test]
 #[should_panic]
 fn test_incremental_inception_errors() {
     let mut i = Incremental::new();

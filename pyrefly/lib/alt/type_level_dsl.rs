@@ -15,6 +15,8 @@ use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::ResolvedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::TypeLevelDslCall;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
+use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
+use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
@@ -53,7 +55,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         function_range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<FunctionKind> {
-        let validated = match dsl.validate_body() {
+        let validated = match dsl.validate_body(|expr| self.resolve_type_shape_dsl_intrinsic(expr))
+        {
             Ok(validated) => Arc::new(validated),
             Err(error) => {
                 self.error(
@@ -107,18 +110,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         if valid_parameters && let Some(result) = return_domain {
-            let returned_parameter = validated.returned_parameter_index();
-            if parameter_domains[returned_parameter] != result {
-                self.error(
-                    errors,
-                    dsl.return_annotation_range(),
-                    ErrorKind::InvalidArgument,
-                    format!(
-                        "`@type_shape_dsl_function` return annotation must match returned parameter `{}`",
-                        dsl.parameter_name(returned_parameter)
-                    ),
-                );
-            } else if let FunctionKind::Def(func_id) = function_kind {
+            let valid_return = match validated.return_kind() {
+                TypeShapeDslReturnKind::Parameter(index) if parameter_domains[index] != result => {
+                    self.error(
+                        errors,
+                        dsl.return_annotation_range(),
+                        ErrorKind::InvalidArgument,
+                        format!(
+                            "`@type_shape_dsl_function` return annotation must match returned parameter `{}`",
+                            dsl.parameter_name(index)
+                        ),
+                    );
+                    false
+                }
+                TypeShapeDslReturnKind::Gradual(domain) if domain != result => {
+                    self.error(
+                        errors,
+                        dsl.return_annotation_range(),
+                        ErrorKind::InvalidArgument,
+                        format!(
+                            "`@type_shape_dsl_function` declares return domain `{}`, but `shape_extensions.dsl.{}.gradual()` returns `{}`",
+                            result.as_str(),
+                            domain.as_str(),
+                            domain.as_str(),
+                        ),
+                    );
+                    false
+                }
+                TypeShapeDslReturnKind::Parameter(_) | TypeShapeDslReturnKind::Gradual(_) => true,
+            };
+            if valid_return && let FunctionKind::Def(func_id) = function_kind {
                 return Some(FunctionKind::TypeShapeDsl(
                     func_id.clone(),
                     Arc::new(
@@ -127,7 +148,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     ),
                 ));
-            } else {
+            } else if valid_return {
                 self.error(
                     errors,
                     function_range,
@@ -140,6 +161,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         None
     }
 
+    /// Recognize a DSL intrinsic by resolved callable identity, so imports, aliases, and
+    /// reexports work while unrelated same-spelling functions do not.
+    fn resolve_type_shape_dsl_intrinsic(&self, expr: &Expr) -> Option<TypeShapeDslIntrinsic> {
+        let callee = self.expr_infer(expr, &self.error_swallower());
+        let Some(CalleeKind::Function(FunctionKind::Def(id))) = callee.callee_kind() else {
+            return None;
+        };
+        let class = id.cls.as_ref()?;
+        if id.qname.module_name().as_str() != "shape_extensions.dsl"
+            || id.qname.id().as_str() != "gradual"
+        {
+            return None;
+        }
+        if class.has_toplevel_qname("shape_extensions.dsl", "Int") {
+            Some(TypeShapeDslIntrinsic::Gradual(TypeShapeDslDomain::Int))
+        } else if class.has_toplevel_qname("shape_extensions.dsl", "IntTuple") {
+            Some(TypeShapeDslIntrinsic::Gradual(TypeShapeDslDomain::IntTuple))
+        } else {
+            None
+        }
+    }
     pub(crate) fn parse_type_level_dsl_call(
         &self,
         call: &ExprCall,
@@ -244,7 +286,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     arg_expr.range(),
                     ErrorKind::InvalidAnnotation,
                     format!(
-                        "Expected an `{domain:?}` argument for parameter `{}` (position {}) of `{name}`, got `{}`",
+                        "Expected an `{}` argument for parameter `{}` (position {}) of `{name}`, got `{}`",
+                        domain.as_str(),
                         function.parameter_name(index),
                         index + 1,
                         self.for_display(arg.clone())

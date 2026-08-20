@@ -197,6 +197,17 @@ class Tensor[Shape: IntTuple]:
     env
 }
 
+fn type_shape_dsl_gradual_env() -> TestEnv {
+    let mut env = shape_dsl_tensor_env();
+    env.add(
+        "gradual_reexport",
+        r#"
+from shape_extensions.dsl import Int as ReexportedInt
+"#,
+    );
+    env
+}
+
 fn type_shape_dsl_import_env() -> TestEnv {
     let mut env = shape_dsl_tensor_env();
     env.add(
@@ -374,7 +385,7 @@ def duplicate(x: Int, x: Int) -> Int:  # E: @type_shape_dsl_function parameter n
 
 @type_shape_dsl_function
 def expression(x: Int) -> Int:
-    return x + 1  # E: @type_shape_dsl_function return value must be the bare parameter name
+    return x + 1  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
 
 @type_shape_dsl_function
 def wrong_name(x: Int) -> Int:
@@ -1270,6 +1281,155 @@ def test(dim: Tensor[[5]], shape: Tensor[[2, 3]], other: Tensor[[1, 3]]) -> None
     reveal_type(symbolic(dim, shape))  # E: revealed type: Tensor[[5]]
     reveal_type(nested(shape, other))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(overloaded(dim, shape))  # E: revealed type: Tensor[[5]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_gradual_returns,
+    type_shape_dsl_gradual_env(),
+    r#"
+import shape_extensions.dsl as shape_dsl
+import shape_extensions.dsl
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions.dsl import Int as DslInt, IntTuple as DslIntTuple
+from gradual_reexport import ReexportedInt
+from torch import Tensor
+from typing import Any, assert_type, reveal_type
+
+gradual_assignment = DslInt.gradual
+
+@type_shape_dsl_function
+def gradual_int(x: Int) -> Int:
+    return shape_dsl.Int.gradual()
+
+@type_shape_dsl_function
+def gradual_shape(x: IntTuple) -> IntTuple:
+    return DslIntTuple.gradual()
+
+@type_shape_dsl_function
+def gradual_assignment_alias(x: Int) -> Int:
+    return gradual_assignment()
+
+@type_shape_dsl_function
+def gradual_reexport(x: Int) -> Int:
+    return ReexportedInt.gradual()
+
+@type_shape_dsl_function
+def gradual_multi(dim: Int, shape: IntTuple) -> IntTuple:
+    return shape_dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def gradual_nested_import(x: Int) -> Int:
+    return shape_extensions.dsl.Int.gradual()
+
+@type_shape_dsl_function
+def identity_shape(shape: IntTuple) -> IntTuple:
+    return shape
+
+def int_result() -> Tensor[[gradual_int(Int[2])]]: ...
+def shape_result() -> Tensor[gradual_shape(IntTuple[2, 3])]: ...
+def assignment_alias_result() -> Tensor[[gradual_assignment_alias(Int[2])]]: ...
+def reexport_result() -> Tensor[[gradual_reexport(Int[2])]]: ...
+def nested_import_result() -> Tensor[[gradual_nested_import(Int[2])]]: ...
+def nested_multi_result() -> Tensor[identity_shape(gradual_multi(Int[2], IntTuple[3, 4]))]: ...
+
+def test() -> None:
+    assert_type(int_result(), Tensor[[int]])
+    assert_type(shape_result(), Tensor[IntTuple])
+    assert_type(assignment_alias_result(), Tensor[[int]])
+    assert_type(reexport_result(), Tensor[[int]])
+    assert_type(nested_import_result(), Tensor[[int]])
+    assert_type(nested_multi_result(), Tensor[IntTuple])
+    reveal_type(DslInt.gradual)  # E: revealed type: () -> Any
+    assert_type(DslInt.gradual(), Any)
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_gradual_returns,
+    type_shape_dsl_gradual_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions.dsl import Int as DslInt, IntTuple as DslIntTuple
+
+official_gradual = DslInt.gradual
+
+def ordinary() -> Int: ...
+def gradual() -> Int: ...
+
+class SpoofInt:
+    @staticmethod
+    def gradual() -> object: ...
+
+@type_shape_dsl_function
+def positional(x: Int) -> Int:
+    return official_gradual(x)  # E: @type_shape_dsl_function gradual return does not accept arguments  # E: Expected 0 positional arguments
+
+@type_shape_dsl_function
+def keyword(x: Int) -> Int:
+    return official_gradual(x=x)  # E: @type_shape_dsl_function gradual return does not accept arguments  # E: Unexpected keyword argument
+
+@type_shape_dsl_function
+def starred(x: Int) -> Int:
+    return official_gradual(*())  # E: @type_shape_dsl_function gradual return does not accept arguments
+
+@type_shape_dsl_function
+def keyword_starred(x: Int) -> Int:
+    return official_gradual(**{})  # E: @type_shape_dsl_function gradual return does not accept arguments
+
+@type_shape_dsl_function
+def bare(x: Int) -> Int:
+    return official_gradual  # E: @type_shape_dsl_function gradual return must be called  # E: Returned type
+
+@type_shape_dsl_function
+def bare_qualified_int(x: Int) -> Int:
+    return dsl.Int.gradual  # E: @type_shape_dsl_function gradual return must be called  # E: Returned type
+
+@type_shape_dsl_function
+def bare_qualified_shape(x: IntTuple) -> IntTuple:
+    return dsl.IntTuple.gradual  # E: @type_shape_dsl_function gradual return must be called  # E: Returned type
+
+@type_shape_dsl_function
+def nested(x: Int) -> Int:
+    return (official_gradual(),)  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return  # E: Returned type
+
+@type_shape_dsl_function
+def statement(x: Int) -> Int:  # E: @type_shape_dsl_function body must contain exactly `return <parameter>` or a gradual return
+    official_gradual()
+    return x
+
+@type_shape_dsl_function
+def non_intrinsic(x: Int) -> Int:
+    return ordinary()  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+
+@type_shape_dsl_function
+def same_spelling_is_not_intrinsic(x: Int) -> Int:
+    return gradual()  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+
+@type_shape_dsl_function
+def spoof_class(x: Int) -> Int:
+    return SpoofInt.gradual()  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return  # E: Returned type
+
+@type_shape_dsl_function
+def direct_cycle(x: Int) -> Int:
+    return direct_cycle(x)  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+
+@type_shape_dsl_function
+def mutual_cycle_left(x: Int) -> Int:
+    return mutual_cycle_right(x)  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+
+@type_shape_dsl_function
+def mutual_cycle_right(x: Int) -> Int:
+    return mutual_cycle_left(x)  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+
+@type_shape_dsl_function
+def shadowed_module_alias(dsl: Int) -> Int:
+    return dsl.Int.gradual()  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return  # E: Object of class `int` has no attribute `Int`
+
+@type_shape_dsl_function
+def wrong_domain(x: Int) -> Int:  # E: `@type_shape_dsl_function` declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`
+    return DslIntTuple.gradual()
 "#,
 );
 
