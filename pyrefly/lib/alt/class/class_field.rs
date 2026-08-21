@@ -3916,13 +3916,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return false;
         }
 
-        // Django models, marshmallow schemas, and factory-boy factories: skip override
-        // check for `Meta` class. These frameworks use a nested `Meta` class for
-        // configuration, and child classes define their own `Meta` without inheriting
-        // from the parent's `Meta`.
+        // These frameworks use a nested `Meta` class for configuration, and child classes
+        // define their own `Meta` without inheriting from the parent's `Meta`.
         if (class_metadata.is_django_model()
             || class_metadata.is_marshmallow_schema()
-            || class_metadata.is_factory_boy_factory())
+            || class_metadata.is_factory_boy_factory()
+            || class_metadata.is_django_rest_framework_model_serializer())
             && field_name.as_str() == "Meta"
         {
             return false;
