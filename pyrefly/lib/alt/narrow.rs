@@ -288,6 +288,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.intersect_with_fallback(left, right, IntersectFallback::Never)
     }
 
+    fn narrow_enum_after_equality_match(&self, left: &Type, right: &Type) -> Option<Type> {
+        let Type::ClassType(class) = left else {
+            return None;
+        };
+        if !self.get_metadata_for_class(class.class_object()).is_enum() {
+            return None;
+        }
+        let mut matches = self
+            .get_enum_members(class.class_object())
+            .into_iter()
+            .filter(|lit| match lit {
+                Lit::Enum(lit_enum) => Self::literal_equal(&lit_enum.ty, right),
+                _ => false,
+            })
+            .map(Lit::to_implicit_type)
+            .collect::<Vec<_>>();
+        matches.sort();
+        matches.dedup();
+        if matches.is_empty() {
+            None
+        } else {
+            Some(self.unions(matches))
+        }
+    }
+
+    /// Return the possible types of `left` after `left == right` evaluates to true.
+    fn narrow_after_equality_match(&self, left: &Type, right: &Type) -> Type {
+        let mut matches = Vec::new();
+        self.map_over_union(left, |left| {
+            self.map_over_union(right, |right| {
+                let narrowed = if self.equality_can_match_disjoint(left, right) {
+                    self.narrow_enum_after_equality_match(left, right)
+                        .unwrap_or_else(|| left.clone())
+                } else {
+                    self.intersect(left, right)
+                };
+                if !narrowed.is_never() {
+                    matches.push(narrowed);
+                }
+            });
+        });
+        matches.sort();
+        matches.dedup();
+        self.unions(matches)
+    }
+
     /// Calculate the intersection of a number of types
     pub fn intersects(&self, ts: &[Type]) -> Type {
         match ts {
@@ -1735,7 +1781,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AtomicNarrowOp::Eq(v) => {
                 let right = self.expr_infer(v, errors);
                 if Self::is_literal(&right) {
-                    self.intersect(ty, &right)
+                    self.narrow_after_equality_match(ty, &right)
                 } else {
                     ty.clone()
                 }
