@@ -5,9 +5,12 @@
 
 from typing import Any, overload, Self
 
+from shape_extensions import shaped_array
+
 class device:
     def __init__(self, type: str, index: int = 0) -> None: ...
 
+@shaped_array(shape="Shape")
 class Tensor[*Shape]:
     shape: tuple[int, ...]
     requires_grad: bool

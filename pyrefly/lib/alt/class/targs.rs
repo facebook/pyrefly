@@ -9,12 +9,14 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::Function;
+use pyrefly_types::dimension::Int;
+use pyrefly_types::dimension::gradual_size;
+use pyrefly_types::function::Function;
+use pyrefly_util::display::commas_iter;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
-use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -24,11 +26,13 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::QuantifiedHandle;
+use crate::solver::solver::type_as_intvar_solution;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::literal::Lit;
 use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedIdentity;
@@ -40,9 +44,23 @@ use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
+use crate::types::types::Substitution;
 use crate::types::types::TArgs;
 use crate::types::types::TParams;
 use crate::types::types::Type;
+
+/// Format a generic entity for implicit-any error messages, e.g.
+/// `` class `Foo[T, *Ts]` `` (or `` class `Foo` `` when there are no tparams).
+fn format_generic_entity(noun: &str, name: &Name, tparams: &TParams) -> String {
+    if tparams.is_empty() {
+        format!("{noun} `{name}`")
+    } else {
+        format!(
+            "{noun} `{name}[{}]`",
+            commas_iter(|| tparams.iter().map(|t| t.display_name_with_prefix()))
+        )
+    }
+}
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
@@ -52,6 +70,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ClassType::new(
             cls.dupe(),
             self.create_default_targs(self.get_class_tparams(cls), None),
+        )
+    }
+
+    /// Specialize a non-TypedDict class and return the underlying `ClassType`.
+    ///
+    /// This is for callers that wrap the class in another type form but still need
+    /// ordinary class type-argument validation and substitution.
+    pub(crate) fn specialize_nontypeddict_to_classtype(
+        &self,
+        cls: &Class,
+        targs: Vec<Type>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> ClassType {
+        ClassType::new(
+            cls.dupe(),
+            self.create_targs(
+                cls.name(),
+                self.get_class_tparams(cls),
+                targs,
+                range,
+                true,
+                errors,
+            ),
         )
     }
 
@@ -169,13 +211,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
+        let tparams = self.get_class_tparams(cls);
+        let tparams_for_error = tparams.dupe();
         let targs = self.create_default_targs(
-            self.get_class_tparams(cls),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("class `{}`", cls.name()),
+                    format_generic_entity("class", cls.name(), &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -189,13 +233,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        let tparams = forall.tparams.dupe();
+        let tparams_for_error = tparams.dupe();
+        let alias_name = forall.body.name();
         let targs = self.create_default_targs(
-            forall.tparams.dupe(),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("type alias `{}`", forall.body.name()),
+                    format_generic_entity("type alias", &alias_name, &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -250,11 +297,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             PreInferenceVariance::Covariant,
         );
         let tparams = TParams::new(vec![quantified.clone()]);
-        let tuple_ty = self.heap.mk_tuple(Tuple::Unpacked(Box::new((
+        let tuple_ty = self.heap.mk_tuple(Tuple::unpacked(
             Vec::new(),
             self.heap.mk_quantified(quantified),
             Vec::new(),
-        ))));
+        ));
         (tparams, tuple_ty)
     }
 
@@ -393,7 +440,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let nparams = tparams.len();
         let mut targs_cursor = TArgsCursor::new(targs);
         let mut checked_targs = Vec::new();
-        let mut name_to_idx = SmallMap::new();
         for (param_idx, param) in tparams.iter().enumerate() {
             if let Some(arg) = targs_cursor.peek() {
                 // Get next type argument
@@ -429,22 +475,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                         ));
                     }
+                    QuantifiedKind::IntVar => {
+                        checked_targs.push(self.create_next_intvar_arg(
+                            param,
+                            targs_cursor.consume_for_typevar_arg(),
+                            range,
+                            errors,
+                        ));
+                    }
                 }
             } else {
                 // We've run out of arguments, and we have type parameters left to consume.
-                checked_targs.extend(self.consume_remaining_tparams(
+                self.consume_remaining_tparams(
                     name,
                     &tparams,
                     param_idx,
-                    &checked_targs,
+                    &mut checked_targs,
                     targs_cursor.nargs(),
-                    &name_to_idx,
                     range,
                     errors,
-                ));
+                );
                 break;
             }
-            name_to_idx.insert(param.name(), param_idx);
         }
         if targs_cursor.nargs_unconsumed(targs_cursor.nargs()) > 0 {
             self.error(
@@ -459,7 +511,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
-        drop(name_to_idx);
         TArgs::new(tparams, checked_targs)
     }
 
@@ -546,7 +597,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if arg.is_any() {
             // Any is the universal type that is compatible with any ParamSpec.
             // Convert it to Ellipsis, which is the gradual type for ParamSpec.
-            self.heap.mk_ellipsis()
+            Type::Ellipsis
         } else {
             self.error(
                 errors,
@@ -557,7 +608,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.for_display(arg.clone())
                 ),
             );
-            self.heap.mk_ellipsis()
+            Type::Ellipsis
         }
     }
 
@@ -587,6 +638,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorKind::InvalidTypeVarTuple,
                         "`TypeVarTuple` must be unpacked".to_owned(),
                     )
+                } else if matches!(arg, Type::Ellipsis) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidAnnotation,
+                        "`...` cannot be used for type parameter".to_owned(),
+                    )
                 } else if arg.is_kind_param_spec() {
                     self.error(
                         errors,
@@ -596,6 +654,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 } else {
                     let restriction = param.restriction();
+                    // Match the cheap `arg` literal shape before materializing the
+                    // parameter's upper bound, so only an integer literal argument
+                    // pays for computing the bound.
+                    let arg =
+                        if let Type::Literal(lit) = arg
+                            && let Lit::Int(i) = &lit.value
+                            && matches!(param.upper_bound(self.stdlib, self.heap), Type::Int(_))
+                        {
+                            Type::Int(i.as_i64().map(Int::Literal).unwrap_or_else(|| {
+                                Int::Symbolic(Box::new(Type::Literal(lit.clone())))
+                            }))
+                        } else {
+                            arg.clone()
+                        };
                     if validate_restriction && restriction.is_restricted() {
                         let tcc = &|| {
                             TypeCheckContext::of_kind(TypeCheckKind::TypeVarSpecialization(
@@ -608,52 +680,62 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let arg = arg.clone();
                             arg.transform(&mut |x| {
                                 if let Type::TypeVar(tv) = x {
-                                    *x = tv.bound_type(self.stdlib, self.heap);
+                                    *x = tv.upper_bound(self.stdlib, self.heap);
                                 }
                             })
                         };
                         self.check_type(
                             &arg_for_check,
-                            &param.bound_type(self.stdlib, self.heap),
+                            &param.upper_bound(self.stdlib, self.heap),
                             range,
                             errors,
                             tcc,
                         );
                     }
-                    arg.clone()
+                    arg
                 }
             }
         }
     }
 
-    fn get_tparam_default(
+    fn create_next_intvar_arg(
         &self,
         param: &Quantified,
-        checked_targs: &[Type],
-        name_to_idx: &SmallMap<&Name, usize>,
+        arg: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
     ) -> Type {
-        if let Some(default) = param.default() {
-            default.clone().transform(&mut |default| {
-                let typevar_name = match default {
-                    Type::TypeVar(t) => Some(t.qname().id()),
-                    Type::TypeVarTuple(t) => Some(t.qname().id()),
-                    Type::ParamSpec(p) => Some(p.qname().id()),
-                    Type::Quantified(q) => Some(q.name()),
-                    _ => None,
-                };
-                if let Some(typevar_name) = typevar_name {
-                    *default = if let Some(i) = name_to_idx.get(typevar_name) {
-                        // The default of this TypeVar contains the value of a previous TypeVar.
-                        checked_targs[*i].clone()
-                    } else {
-                        // The default refers to the value of a TypeVar that isn't in scope. We've
-                        // already logged an error in TParams::new(); return a sensible default.
-                        self.heap.mk_any_implicit()
-                    }
-                }
-            })
-        } else {
-            param.as_gradual_type()
+        match arg {
+            Type::Unpack(_) => {
+                // Shape argument parsing normally rejects this first; keep the
+                // targ-level recovery path for callers that bypass that parser.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadUnpacking,
+                    format!(
+                        "Unpacked argument cannot be used for type parameter {}",
+                        param.name()
+                    ),
+                );
+                gradual_size()
+            }
+            _ => type_as_intvar_solution(arg).unwrap_or_else(|| {
+                // Shape argument parsing normally rejects concrete source errors
+                // first; this is the class-targ recovery path for invalid values
+                // that reach specialization directly.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadSpecialization,
+                    format!(
+                        "Expected a valid Int expression for type parameter `{}`, got `{}`",
+                        param.name(),
+                        self.for_display(arg.clone())
+                    ),
+                );
+                gradual_size()
+            }),
         }
     }
 
@@ -663,12 +745,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         tparams: &TParams,
         param_idx: usize,
-        checked_targs: &[Type],
+        checked_targs: &mut Vec<Type>,
         nargs: usize,
-        name_to_idx: &SmallMap<&Name, usize>,
         range: TextRange,
         errors: &ErrorCollector,
-    ) -> Vec<Type> {
+    ) {
         let all_remaining_params_can_be_empty = tparams
             .iter()
             .skip(param_idx)
@@ -686,20 +767,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
-        tparams
-            .iter()
-            .skip(param_idx)
-            .map(|x| {
-                // A TypeVarTuple with no remaining args captures zero types when
-                // the specialization is otherwise valid. In error recovery (not
-                // enough args for non-defaulted params), keep the gradual type
-                // to avoid cascading errors.
-                if all_remaining_params_can_be_empty && x.is_type_var_tuple() {
-                    self.heap.mk_concrete_tuple(Vec::new())
-                } else {
-                    self.get_tparam_default(x, checked_targs, name_to_idx)
-                }
-            })
-            .collect()
+        for x in tparams.iter().skip(param_idx) {
+            // A TypeVarTuple with no remaining args captures zero types when
+            // the specialization is otherwise valid. In error recovery (not
+            // enough args for non-defaulted params), keep the gradual type
+            // to avoid cascading errors.
+            let targ = if all_remaining_params_can_be_empty && x.is_type_var_tuple() {
+                self.heap.mk_concrete_tuple(Vec::new())
+            } else if let Some(default) = x.default() {
+                // A default may refer to the parameters declared before it.
+                Substitution::for_prefix(tparams, checked_targs).substitute_into(default.clone())
+            } else {
+                x.as_gradual_type()
+            };
+            checked_targs.push(targ);
+        }
     }
 }

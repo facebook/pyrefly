@@ -4,6 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 """Type checker speed benchmark.
 
 This script measures execution time and memory usage of type checkers

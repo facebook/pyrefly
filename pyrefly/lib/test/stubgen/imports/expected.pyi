@@ -1,6 +1,4 @@
 # @generated
-import os
-import sys
 from collections import OrderedDict
 from typing import List, Optional
 

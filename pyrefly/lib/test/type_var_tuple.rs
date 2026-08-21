@@ -134,6 +134,30 @@ assert_type(test((1, 2, 3)), tuple[int, int, int])
 );
 
 testcase!(
+    test_type_var_tuple_constructor_inference_from_generic,
+    r#"
+from collections.abc import Callable
+
+class Codec[*Ts]:
+    def map[T](
+        self,
+        f: Callable[[*Ts], T],
+        inv_f: Callable[[T], tuple[*Ts]],
+    ) -> Map[T, *Ts]:
+        return Map(self, f, inv_f)
+
+class Map[T, *Ts](Codec[T]):
+    def __init__(
+        self,
+        parser: Codec[*Ts],
+        f: Callable[[*Ts], T],
+        inv_f: Callable[[T], tuple[*Ts]],
+    ) -> None:
+        ...
+"#,
+);
+
+testcase!(
     test_type_var_tuple_subtype,
     r#"
 from typing import assert_type
@@ -438,6 +462,23 @@ def test3() -> None:
 
 infer3 = positional(test3)
 assert_type(infer3, Callable[[], None])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_splat_unpacked_with_hint,
+    r#"
+from typing import TypeVarTuple, Unpack, assert_type
+
+Ts = TypeVarTuple("Ts")
+
+def test(rest: tuple[int, Unpack[Ts], str]) -> None:
+    # Splatting `rest` yields a `Tuple::Unpacked` (prefix `int`, variadic middle, suffix `str`).
+    # With a tuple hint on the LHS, inference must advance past every remaining per-element hint
+    # slot so the trailing annotation element lines up with the splatted suffix instead of the
+    # variadic middle.
+    x: tuple[bool, int, Unpack[Ts], str] = (True, *rest)
+    assert_type(x, tuple[bool, int, *Ts, str])
 "#,
 );
 
