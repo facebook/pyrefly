@@ -1,0 +1,55 @@
+name: Retry command
+description: Run a shell command with retries and exponential backoff.
+inputs:
+  command:
+    description: Command to run.
+    required: true
+  working-directory:
+    description: Directory to run the command in.
+    required: false
+    default: .
+  attempts:
+    description: Maximum number of attempts.
+    required: false
+    default: "3"
+  delay-seconds:
+    description: Initial delay between attempts.
+    required: false
+    default: "20"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        RETRY_COMMAND: ${{ inputs.command }}
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        attempts="${{ inputs.attempts }}"
+        delay="${{ inputs.delay-seconds }}"
+        script="$(mktemp)"
+        trap 'rm -f "$script"' EXIT
+
+        printf '%s\n' "$RETRY_COMMAND" > "$script"
+
+        for attempt in $(seq 1 "$attempts"); do
+          echo "Running attempt ${attempt}/${attempts}"
+          set +e
+          bash -euo pipefail "$script"
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+
+          if [ "$attempt" -eq "$attempts" ]; then
+            echo "Command failed after ${attempts} attempts"
+            exit "$status"
+          fi
+
+          echo "Command failed with exit code ${status}; retrying in ${delay}s"
+          sleep "$delay"
+          delay=$((delay * 2))
+        done

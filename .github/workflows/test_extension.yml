@@ -78,13 +78,37 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-        working-directory: lsp/
+          cache-dependency-path: lsp/package-lock.json
+      - name: Set VS Code cache week
+        shell: bash
+        run: echo "VSCODE_CACHE_WEEK=$(date -u +%G-%V)" >> "$GITHUB_ENV"
+      - name: Restore VS Code test binary cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.vscode-test
+            .vscode-test
+            lsp/.vscode-test
+          key: ${{ runner.os }}-${{ matrix.platform }}-${{ matrix.arch }}-vscode-test-${{ env.VSCODE_CACHE_WEEK }}-${{ hashFiles('lsp/package-lock.json', 'lsp/.vscode-test.mjs') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.platform }}-${{ matrix.arch }}-vscode-test-${{ env.VSCODE_CACHE_WEEK }}-
+            ${{ runner.os }}-${{ matrix.platform }}-${{ matrix.arch }}-vscode-test-
+      - name: Install extension npm dependencies
+        uses: ./.github/actions/retry-command
+        with:
+          working-directory: lsp/
+          command: npm ci
       - run: npm run compile
         working-directory: lsp/
-      - run: xvfb-run -a npm run test
-        working-directory: lsp/
+      - name: Run extension tests on Linux
+        uses: ./.github/actions/retry-command
         if: runner.os == 'Linux'
-      - run: npm run test
-        working-directory: lsp/
+        with:
+          working-directory: lsp/
+          command: xvfb-run -a npm run test
+      - name: Run extension tests
+        uses: ./.github/actions/retry-command
         if: runner.os != 'Linux'
+        with:
+          working-directory: lsp/
+          command: npm run test

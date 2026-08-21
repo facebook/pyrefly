@@ -51,8 +51,21 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-issue-ranking-primer
+          cache-targets: false
+
       - name: Install type checkers
-        run: pip install pyright mypy
+        uses: ./.github/actions/retry-command
+        with:
+          command: pip install pyright mypy
+
+      - name: Fetch Cargo dependencies
+        uses: ./.github/actions/retry-command
+        with:
+          command: cargo fetch --locked --manifest-path pyrefly/Cargo.toml
 
       - name: Build pyrefly
         run: |
@@ -161,13 +174,15 @@ jobs:
       # Install type checkers for snippet checking
       - name: Install type checkers
         if: ${{ inputs.check_snippets }}
-        run: |
-          echo "=== Installing type checkers ==="
-          pip install pyrefly pyright mypy
-          echo "pyrefly version: $(pyrefly --version 2>&1 || echo 'not found')"
-          echo "pyright version: $(pyright --version 2>&1 || echo 'not found')"
-          echo "mypy version: $(mypy --version 2>&1 || echo 'not found')"
-          echo "pyrefly path: $(which pyrefly 2>&1 || echo 'not found')"
+        uses: ./.github/actions/retry-command
+        with:
+          command: |
+            echo "=== Installing type checkers ==="
+            pip install pyrefly pyright mypy
+            echo "pyrefly version: $(pyrefly --version 2>&1 || echo 'not found')"
+            echo "pyright version: $(pyright --version 2>&1 || echo 'not found')"
+            echo "mypy version: $(mypy --version 2>&1 || echo 'not found')"
+            echo "pyrefly path: $(which pyrefly 2>&1 || echo 'not found')"
 
       # Download primer results if available
       - name: Download primer results

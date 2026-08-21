@@ -29,10 +29,39 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "20.x"
+          cache: yarn
+          cache-dependency-path: website/yarn.lock
+      - name: Restore wasm tool cache
+        id: wasm-tool-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/wasm-pack
+            ~/.cargo/bin/wasm-opt
+          key: ${{ runner.os }}-${{ runner.arch }}-wasm-pack-0.15.0-wasm-opt-0.116.1
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-website
+          cache-targets: false
       - name: Install yarn deps
-        run: cd website && yarn install
+        uses: ./.github/actions/retry-command
+        with:
+          working-directory: website
+          command: yarn install --frozen-lockfile
       - name: Install wasm-pack
-        run: cargo install wasm-pack wasm-opt
+        if: steps.wasm-tool-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/retry-command
+        with:
+          command: |
+            cargo install wasm-pack --version 0.15.0 --locked
+            cargo install wasm-opt --version 0.116.1 --locked
+      - name: Fetch wasm Cargo dependencies
+        uses: ./.github/actions/retry-command
+        with:
+          command: |
+            rustup target add wasm32-unknown-unknown
+            cargo fetch --locked --manifest-path pyrefly_wasm/Cargo.toml --target wasm32-unknown-unknown
       - name: Build
         working-directory: ./website
         run: cargo version && chmod +x scripts/build.sh && scripts/build.sh && yarn build-wasm-for-test
