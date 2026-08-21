@@ -135,9 +135,9 @@ class SerialMaskNet[InD: IntVar, OutD: IntVar](nn.Module):
         assert_type(v_out, Tensor)
         for block in self.mask_blocks:
             # ModuleList iteration — blocks constructed with int from list, returns Unknown
-            v_out = block(V_emb, v_out)  # type: ignore[assignment, pyrefly:bad-assignment]
+            v_out = block(V_emb, v_out)  # type: ignore[pyrefly:bad-assignment]
         # Annotation fallback: last block outputs Tensor[[B, OutD]]
-        result: Tensor[[B, OutD]] = v_out  # type: ignore[assignment, pyrefly:bad-assignment]
+        result: Tensor[[B, OutD]] = v_out  # type: ignore[pyrefly:bad-assignment]
         assert_type(result, Tensor[[B, OutD]])
         return result
 
@@ -198,7 +198,7 @@ class ParallelMaskNet[InD: IntVar, BlkD: IntVar = 64, OutD: IntVar = 64](nn.Modu
         concat_out: Tensor = torch.cat(block_out, dim=-1)
         assert_type(concat_out, Tensor)
         # Sequential(*list) | Identity — both erase types
-        result: Tensor[[B, OutD]] = self.dnn(concat_out)  # type: ignore[assignment, pyrefly:bad-assignment]
+        result: Tensor[[B, OutD]] = self.dnn(concat_out)  # type: ignore[pyrefly:bad-assignment]
         assert_type(result, Tensor[[B, OutD]])
         return result
 
@@ -297,7 +297,7 @@ class MaskNetBackbone[F: IntVar, D: IntVar, OutD: IntVar](nn.Module):
         V_emb = working_embs.flatten(start_dim=1)
 
         # mask_net is nn.Module — forward returns Any
-        result: Tensor[[B, OutD]] = self.mask_net(V_emb, V_hidden)  # type: ignore[assignment, pyrefly:bad-assignment]
+        result: Tensor[[B, OutD]] = self.mask_net(V_emb, V_hidden)  # type: ignore[pyrefly:bad-assignment]
         assert_type(result, Tensor[[B, OutD]])
         return result
 

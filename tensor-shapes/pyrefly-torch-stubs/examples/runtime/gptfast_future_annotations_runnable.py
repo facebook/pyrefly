@@ -88,14 +88,14 @@ class ModelArgs[
     IntermediateSize: IntVar,
     NLocalHeads: IntVar,
 ]:
-    block_size: Int[BlockSize] = 2048  # type: ignore[assignment, pyrefly:bad-assignment]
-    vocab_size: Int[VocabSize] = 32000  # type: ignore[assignment, pyrefly:bad-assignment]
-    n_layer: Int[NLayer] = 32  # type: ignore[assignment, pyrefly:bad-assignment]
-    n_head: Int[NHead] = 32  # type: ignore[assignment, pyrefly:bad-assignment]
-    dim: Int[D] = 4096  # type: ignore[assignment, pyrefly:bad-assignment]
+    block_size: Int[BlockSize] = 2048  # type: ignore[pyrefly:bad-assignment]
+    vocab_size: Int[VocabSize] = 32000  # type: ignore[pyrefly:bad-assignment]
+    n_layer: Int[NLayer] = 32  # type: ignore[pyrefly:bad-assignment]
+    n_head: Int[NHead] = 32  # type: ignore[pyrefly:bad-assignment]
+    dim: Int[D] = 4096  # type: ignore[pyrefly:bad-assignment]
     intermediate_size: Int[IntermediateSize] | None = None
-    n_local_heads: Int[NLocalHeads] = -1  # type: ignore[assignment, pyrefly:bad-assignment]
-    head_dim: Int[D // NHead] = 64  # type: ignore[assignment, pyrefly:bad-assignment]
+    n_local_heads: Int[NLocalHeads] = -1  # type: ignore[pyrefly:bad-assignment]
+    head_dim: Int[D // NHead] = 64  # type: ignore[pyrefly:bad-assignment]
     rope_base: int = 10000
     norm_eps: float = 1e-5
     rope_scaling: RopeScalingDict | None = None

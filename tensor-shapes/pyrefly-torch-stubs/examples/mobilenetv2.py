@@ -97,14 +97,14 @@ class InvertedResidual[Inp: IntVar, Oup: IntVar, ER: IntVar, S: IntVar](nn.Modul
         if self.expand_ratio != 1:
             out = self.expand(x)
         else:
-            out = x  # type: ignore[assignment, pyrefly:bad-assignment]  # conditional: Inp*ER == Inp when ER==1
+            out = x  # type: ignore[pyrefly:bad-assignment]  # conditional: Inp*ER == Inp when ER==1
         assert_type(out, Tensor[[B, Inp * ER, H, W]])
         out2 = self.dw(out)
         assert_type(out2, Tensor[[B, Inp * ER, H, W]])
         out3 = self.project(out2)
         assert_type(out3, Tensor[[B, Oup, H, W]])
         if self.use_res_connect:
-            return x + out3  # type: ignore[return-value, pyrefly:bad-return, pyrefly:unsupported-operation]  # conditional: Inp==Oup
+            return x + out3  # type: ignore[pyrefly:bad-return, pyrefly:unsupported-operation]  # conditional: Inp==Oup
         return out3
 
 
@@ -192,14 +192,14 @@ class MobileNetV2[NC: IntVar = 1000, LC: IntVar = 1280](nn.Module):
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out")
                 if m.bias is not None:
-                    nn.init.zeros_(m.bias)  # type: ignore[arg-type, pyrefly:bad-argument-type]
+                    nn.init.zeros_(m.bias)  # type: ignore[pyrefly:bad-argument-type]
             elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, 0, 0.01)
                 if m.bias is not None:
-                    nn.init.zeros_(m.bias)  # type: ignore[arg-type, pyrefly:bad-argument-type]
+                    nn.init.zeros_(m.bias)  # type: ignore[pyrefly:bad-argument-type]
 
     def _forward_impl[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, 3, H, W]]

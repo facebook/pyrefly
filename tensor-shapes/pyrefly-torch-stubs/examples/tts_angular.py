@@ -322,7 +322,7 @@ def compute_embedding[ProjDim: IntVar](
     ).long()
     frames: list[Tensor] = []
     for offset in offsets:
-        start: int = offset.item()  # type: ignore[assignment, pyrefly:bad-assignment]
+        start: int = offset.item()  # type: ignore[pyrefly:bad-assignment]
         window: Tensor = utterance[start : start + partial_n_frames]
         frames.append(window)
     windows: Tensor = torch.stack(frames)  # (num_eval, partial_n_frames, InDim)

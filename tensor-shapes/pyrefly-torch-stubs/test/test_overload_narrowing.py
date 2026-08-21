@@ -54,7 +54,7 @@ class GenericDenseLayer(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
-    ) -> Tensor[[B, C + 32, H, W]]: ...  # type: ignore[return-type, pyrefly:bad-return]
+    ) -> Tensor[[B, C + 32, H, W]]: ...  # type: ignore[pyrefly:bad-return]
 
 
 @overload
