@@ -457,7 +457,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     None => TypeCheckOptions::new(errors, context),
                 };
-                if self.check_type_with_options(got.ty(), want, x.range(), check_options) {
+                if self
+                    .check_type_with_options(got.ty(), want, x.range(), check_options)
+                    .is_none()
+                {
                     got
                 } else {
                     got.with_ty(want.clone())
