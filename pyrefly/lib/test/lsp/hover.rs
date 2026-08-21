@@ -150,6 +150,10 @@ import numpy as np
 import torch as t
 import library as lib
 
+class Local: ...
+
+local = Local()
+#^
 tensor = t.Tensor()
 #^
 array = np.ndarray()
@@ -167,6 +171,10 @@ shape = lib.shape()
             ("main", main),
         ],
         get_test_report,
+    );
+    assert!(
+        report.contains("(variable) local: Local"),
+        "Expected hover to omit the current module, got: {report}"
     );
     assert!(
         report.contains("(variable) tensor: torch.Tensor"),
@@ -231,7 +239,7 @@ xyz = [foo.meth]
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     assert!(report.contains("(method) meth: def meth(self: Foo) -> None: ..."));
-    assert!(report.contains("(variable) xyz: list[(self: main.Foo) -> None]"));
+    assert!(report.contains("(variable) xyz: list[(self: Foo) -> None]"));
     assert!(
         report.contains("Go to [list]"),
         "Expected 'Go to [list]' link, got: {}",
@@ -552,8 +560,8 @@ def f(c: C) -> None:
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     assert!(
-        report.contains(": main.C"),
-        "Expected receiver hover to show `c`'s own qualified type, got: {report}"
+        report.contains(": C"),
+        "Expected receiver hover to show `c`'s own type `C`, got: {report}"
     );
     assert!(
         !report.contains("x: int"),
@@ -939,7 +947,7 @@ def f(x: E) -> None:
         }
     });
     assert!(
-        report.contains("Literal[main.E.y]"),
+        report.contains("Literal[E.y]"),
         "Expected hover to show remaining match type, got: {report}"
     );
 }
@@ -1384,7 +1392,7 @@ c[0]
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     // Hovering the base `c` still shows the variable.
     assert!(
-        report.contains("(variable) c: main.Container"),
+        report.contains("(variable) c: Container"),
         "Expected variable hover for base `c`, got: {report}"
     );
     // Hovering inside the brackets shows the dunder method, matching `c [0]`.

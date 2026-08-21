@@ -24,6 +24,7 @@ use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::module::Module;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
@@ -103,17 +104,18 @@ pub struct HoverOptions {
     pub verbosity_level: usize,
 }
 
-/// Render a hover type, optionally qualifying canonical names except for builtins.
+/// Render a hover type, optionally qualifying names from external modules.
 fn display_type_for_hover(
     type_: &Type,
     fallback_name: Option<&str>,
     expand_unions: bool,
-    qualify_names: bool,
+    qualify_external_names: bool,
+    current_module: ModuleName,
 ) -> String {
     let mut context = TypeDisplayContext::new(&[type_]);
     context.set_lsp_display_mode(LspDisplayMode::Hover);
-    if qualify_names {
-        context.always_display_qname_module_name_except_builtins();
+    if qualify_external_names {
+        context.always_display_external_qname_module_names(current_module);
     }
     if expand_unions {
         context.always_display_expanded_unions();
@@ -322,6 +324,7 @@ impl HoverValue {
                 self.name.as_deref(),
                 false,
                 self.kind != Some(SymbolKind::Class) && !self.type_.is_toplevel_callable(),
+                handle.module(),
             )
         });
 
@@ -1062,14 +1065,15 @@ pub fn get_hover_with_verbosity(
                     });
                     cloned
                 };
-                let qualify_names =
+                let qualify_external_names =
                     kind != Some(SymbolKind::Class) && !display_type.is_toplevel_callable();
                 let render = |expand| {
                     display_type_for_hover(
                         &display_type,
                         name_for_display.as_deref(),
                         expand,
-                        qualify_names,
+                        qualify_external_names,
+                        handle.module(),
                     )
                 };
                 let rendered = render(unions_expanded);
