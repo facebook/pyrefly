@@ -17,6 +17,8 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedIdentity;
 use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::simplify::unions;
+use pyrefly_types::type_var::FlagDomain;
+use pyrefly_types::type_var::FlagMember;
 use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
@@ -486,6 +488,37 @@ class MyTypedDict(TypedDict):
                     Restriction::Bound(context.answers_context.answers.heap().mk_class_type(
                         ClassType::new(get_class("test", "MyClass", &context), Default::default(),)
                     )),
+                    PreInferenceVariance::Invariant,
+                )),
+            &context,
+        ),
+    );
+
+    // A passive Flag restriction projects through reports like its builtin bound.
+    assert_eq!(
+        PysaType::new(
+            "F".to_owned(),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.int().class_object(),
+                &context,
+            )
+            .prepend_typevar_bound(),
+        )
+        .with_is_int(true),
+        PysaType::from_type(
+            &context
+                .answers_context
+                .answers
+                .heap()
+                .mk_quantified(Quantified::type_var(
+                    Name::new_static("F"),
+                    QuantifiedIdentity::new(
+                        ModuleName::from_str("__test__"),
+                        AnchorIndex::new(TextRange::default(), 2),
+                        QuantifiedOrigin::Pep695,
+                    ),
+                    None,
+                    Restriction::Flag(FlagDomain::of(FlagMember::Int)),
                     PreInferenceVariance::Invariant,
                 )),
             &context,

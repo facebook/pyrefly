@@ -384,6 +384,7 @@ impl Quantified {
                     }
                     write!(f, ")")?;
                 }
+                Restriction::Flag(domain) => write!(f, ": Flag[{domain}]")?,
                 Restriction::Unrestricted => {}
             }
             if let Some(default) = self.default() {

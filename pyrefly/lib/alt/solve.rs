@@ -3428,24 +3428,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if default.is_error() {
             return default.clone();
         }
+        let check_bound = |bound_ty: &Type| {
+            let default_for_check = match default {
+                Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
+                Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
+                _ => default.clone(),
+            };
+            if self.is_subset_eq(&default_for_check, bound_ty) {
+                true
+            } else {
+                self.error(
+                    errors,
+                    range,
+                    quantified_error(kind),
+                    format!(
+                        "Expected default `{default}` of `{name}` to be assignable to the upper bound of `{bound_ty}`",
+                    ),
+                );
+                false
+            }
+        };
         match restriction {
             // Default must be a subtype of the upper bound.
             // Per PEP 696: when default is a TypeVar, "T1's bound must be a subtype of T2's bound"
-            Restriction::Bound(bound_ty) => {
-                let default_for_check = match default {
-                    Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
-                    Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
-                    _ => default.clone(),
-                };
-                if !self.is_subset_eq(&default_for_check, bound_ty) {
-                    self.error(
-                        errors,
-                        range,
-                        quantified_error(kind),
-                        format!(
-                            "Expected default `{default}` of `{name}` to be assignable to the upper bound of `{bound_ty}`",
-                        ),
-                    );
+            Restriction::Bound(bound) => {
+                if !check_bound(bound) {
+                    return self.heap.mk_any_error();
+                }
+            }
+            // Generic default validation treats a `Flag` like its ordinary upper bound. Literal
+            // preservation is applied separately by the shape-specific call inference path.
+            Restriction::Flag(domain) => {
+                if !check_bound(&domain.as_type(self.stdlib, self.heap)) {
                     return self.heap.mk_any_error();
                 }
             }
@@ -3459,13 +3473,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Restriction::Constraints(default_constraints) => default_constraints
                             .iter()
                             .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
-                        Restriction::Bound(_) | Restriction::Unrestricted => false,
+                        Restriction::Bound(_)
+                        | Restriction::Flag(_)
+                        | Restriction::Unrestricted => false,
                     },
                     Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                         Restriction::Constraints(default_constraints) => default_constraints
                             .iter()
                             .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
-                        Restriction::Bound(_) | Restriction::Unrestricted => false,
+                        Restriction::Bound(_)
+                        | Restriction::Flag(_)
+                        | Restriction::Unrestricted => false,
                     },
                     _ => constraints.iter().any(|c| self.is_consistent(c, default)),
                 };

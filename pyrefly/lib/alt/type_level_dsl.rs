@@ -442,6 +442,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .iter()
                         .all(|constraint| matches!(constraint, Type::IntTuple(_)))
             }
+            Restriction::Flag(_) => false,
             Restriction::Unrestricted => false,
         }
     }

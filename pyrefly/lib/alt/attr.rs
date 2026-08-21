@@ -2558,6 +2558,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ));
                     }
                 }
+                Restriction::Flag(domain) => {
+                    // Every domain member is a builtin `ClassType`, so it always has an
+                    // attribute base. Neither the generic `object` fallback nor an empty
+                    // result would be correct here, so assert the invariant instead.
+                    for ty in domain.types(self.stdlib) {
+                        let base = self
+                            .as_attribute_base(ty)
+                            .expect("Flag domain members are builtin class types");
+                        for base1 in base.0 {
+                            acc.push(
+                                self.attribute_base_for_bounded_quantified(
+                                    (*quantified).clone(),
+                                    base1,
+                                )
+                                .expect("Flag domain members have class-instance bases"),
+                            );
+                        }
+                    }
+                }
                 Restriction::Unrestricted => acc.push(AttributeBase1::Quantified(
                     (*quantified).clone(),
                     self.stdlib.object().clone(),
@@ -2699,6 +2718,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             (*quantified).clone(),
                             self.stdlib.object().clone(),
                         )));
+                    }
+                }
+                Restriction::Flag(domain) => {
+                    // Every domain member is a builtin `ClassType`, so it always has a
+                    // class-instance base. Neither the generic `object` fallback nor an
+                    // empty result would be correct here, so assert the invariant instead.
+                    for ty in domain.types(self.stdlib) {
+                        let base = self
+                            .as_attribute_base(ty)
+                            .expect("Flag domain members are builtin class types");
+                        for base1 in base.0 {
+                            let cls = self
+                                .quantified_bound_class(base1)
+                                .expect("Flag domain members have class-instance bases");
+                            acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
+                                (*quantified).clone(),
+                                cls,
+                            )));
+                        }
                     }
                 }
                 Restriction::Unrestricted => acc.push(AttributeBase1::ClassObject(

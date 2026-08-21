@@ -31,6 +31,12 @@ use crate::simplify::unions;
 use crate::stdlib::Stdlib;
 use crate::types::Type;
 
+mod flag;
+
+pub use flag::FlagDomain;
+pub use flag::FlagMember;
+pub use flag::FlagTuple;
+
 /// Used to represent TypeVar calls. Each TypeVar is unique, so use the ArcId to separate them.
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct TypeVar(ArcId<TypeVarInner>);
@@ -57,18 +63,22 @@ impl Display for TypeVar {
 pub enum Restriction {
     Constraints(Vec<Type>),
     Bound(Type),
+    /// A literal-preserving upper bound for the experimental shape type system.
+    /// See [`FlagDomain`] for its relationship to ordinary type-variable bounds.
+    Flag(FlagDomain),
     Unrestricted,
 }
 
 impl Restriction {
     pub fn is_restricted(&self) -> bool {
-        matches!(self, Self::Bound(_) | Self::Constraints(_))
+        matches!(self, Self::Bound(_) | Self::Constraints(_) | Self::Flag(_))
     }
 
     fn as_type(&self, stdlib: &Stdlib, heap: &TypeHeap, kind: QuantifiedKind) -> Type {
         match self {
             Self::Bound(t) => t.clone(),
             Self::Constraints(ts) => unions(ts.clone(), heap),
+            Self::Flag(domain) => domain.as_type(stdlib, heap),
             Self::Unrestricted => match kind {
                 QuantifiedKind::TypeVar => stdlib.object().clone().to_type(),
                 QuantifiedKind::IntVar => gradual_size(),

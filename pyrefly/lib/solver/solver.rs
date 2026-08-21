@@ -3488,6 +3488,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     .iter()
                     .any(|c2| self.is_subset_eq(c1, c2).is_ok())
             }),
+            Restriction::Flag(domain) => {
+                domain.types(self.type_order.stdlib()).iter().all(|atom| {
+                    constraints
+                        .iter()
+                        .any(|constraint| self.is_subset_eq(atom, constraint).is_ok())
+                })
+            }
             Restriction::Unrestricted => {
                 // Check if the implicit bound `object` is assignable to any of the constraints
                 constraints.iter().any(|c| {

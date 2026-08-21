@@ -453,6 +453,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some(*quantified),
                         )
                     }
+                    Restriction::Flag(domain) => {
+                        let targets = domain
+                            .types(self.stdlib)
+                            .into_iter()
+                            .map(|ty| {
+                                let cls = match ty {
+                                    Type::ClassType(cls) => cls,
+                                    ty => unreachable!(
+                                        "Flag domain members materialize to builtin class types, got `{ty}`"
+                                    ),
+                                };
+                                CallTarget::Class(
+                                    cls,
+                                    ConstructorKind::TypeOfClass,
+                                    Some((*quantified).clone()),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        if targets.len() == 1 {
+                            targets.into_iter().next().expect("length checked")
+                        } else {
+                            CallTarget::Union(targets)
+                        }
+                    }
                     // For unhandled cases, we accept any arguments and return
                     // the quantified type itself.
                     // We can't handle constraints because we need to take
@@ -679,6 +703,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
+                Restriction::Flag(domain) => self
+                    .as_call_target_impl(domain.as_type(self.stdlib, self.heap), Some((*q).clone()))
+                    .with_error_type(|_| Type::Quantified(q)),
             },
             Type::KwCall(call) => {
                 let KwCall {

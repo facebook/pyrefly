@@ -3029,6 +3029,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .iter()
                         .all(|constraint| self.is_enum_class_type(constraint))
             }
+            Restriction::Flag(domain) => domain
+                .types(self.stdlib)
+                .iter()
+                .all(|ty| self.is_enum_class_type(ty)),
         }
     }
 
@@ -3536,6 +3540,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 )
                             }))
                         }
+                        Restriction::Flag(domain) => self
+                            .subscript_infer_for_type_with_key_present(
+                                &domain.as_type(self.stdlib, self.heap),
+                                slice,
+                                range,
+                                errors,
+                                key_present,
+                                type_form_context,
+                            ),
                         Restriction::Unrestricted => {
                             unreachable!("restricted TypeVar cannot be unrestricted")
                         }

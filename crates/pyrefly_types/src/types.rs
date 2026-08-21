@@ -204,6 +204,7 @@ impl TParams {
                             .map(|ty| Self::strip_recursive_class_targs(ty.clone()))
                             .collect(),
                     ),
+                    Restriction::Flag(domain) => Restriction::Flag(*domain),
                     Restriction::Unrestricted => Restriction::Unrestricted,
                 };
                 q.with_restriction(new_restriction)

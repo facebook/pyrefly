@@ -1832,6 +1832,20 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 Ok(())
             }
             (Type::Quantified(q), u)
+                if let Restriction::Flag(domain) = q.restriction()
+                    && self
+                        .solver
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
+                            self.is_subset_eq(
+                                &domain.as_type(self.type_order.stdlib(), &self.solver.heap),
+                                u,
+                            )
+                        })
+                        .is_ok() =>
+            {
+                Ok(())
+            }
+            (Type::Quantified(q), u)
                 if let Restriction::Constraints(constraints) = q.restriction()
                     && self
                         .solver
