@@ -2654,6 +2654,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 format!("{construct} cannot have both constraints and bound"),
                             );
                             restriction = Some(Restriction::Unrestricted);
+                        } else if self.reject_legacy_shape_flag_bound(
+                            &bound,
+                            kw.value.range(),
+                            errors,
+                        ) {
+                            restriction = Some(Restriction::Unrestricted);
                         } else {
                             restriction = Some(Restriction::Bound(bound));
                         }

@@ -940,6 +940,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams =
             self.collect_jaxtyping_tparams(&callable, &def.tparams, stmt.name.range, errors);
 
+        self.validate_shape_flag_function_parameters(stmt, &def.params, &tparams, errors);
+
         let mut metadata = def.metadata.clone();
         metadata.display_signature.0 = display_signature.map(Box::new);
         if let Some(dsl) = &def.type_shape_dsl_def
@@ -1243,7 +1245,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ..
                             }))
                         ) if i.as_i64().is_some() && matches!(inner.as_ref(), Type::Quantified(_))
-                    );
+                    ) || (default.is_some()
+                        && self.is_shape_flag_parameter_type(&param_ty));
                     let check: Option<(&Type, &dyn Fn() -> TypeCheckContext)> = if skip_check {
                         None
                     } else {

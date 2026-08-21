@@ -3389,9 +3389,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             TypeCheckCallContext::NoCall => None,
         };
-        let subset_result = self
-            .solver()
-            .is_subset_eq(got, want, self.type_order(), call_context);
+        let flag_source_context = match (want, call_context) {
+            (Type::Var(var), Some(call_context)) if call_context.is_shape_flag_var_type(want) => {
+                Some(call_context.clone().with_shape_flag_binding_source(*var))
+            }
+            _ => None,
+        };
+        let subset_result = self.solver().is_subset_eq(
+            got,
+            want,
+            self.type_order(),
+            flag_source_context.as_ref().or(call_context),
+        );
         match subset_result {
             Ok(()) => {
                 self.check_string_as_iterable(got, want, loc, options.errors);

@@ -2414,6 +2414,21 @@ impl Scopes {
         Some((value.idx, value.style.clone()))
     }
 
+    /// True when the currently visible binding is the module scope's binding.
+    pub fn current_binding_is_module_binding(&self, name: &Name) -> bool {
+        let Some((current_idx, _)) = self.binding_idx_for_name(name) else {
+            return false;
+        };
+        let module_scope = self.scopes.first();
+        assert!(matches!(module_scope.scope.kind, ScopeKind::Module));
+        module_scope
+            .scope
+            .flow
+            .get_value(name)
+            .map(|value| value.idx)
+            == Some(current_idx)
+    }
+
     /// Look up the FlowStyle for `name`, skipping class body scopes
     pub fn flow_style_for_name(&self, name: &Name) -> Option<FlowStyle> {
         let hashed = Hashed::new(name);

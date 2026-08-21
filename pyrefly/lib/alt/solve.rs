@@ -2099,8 +2099,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let restriction = if matches!(kind, QuantifiedKind::IntVar) {
             Restriction::Unrestricted
         } else if let Some(bound) = &tp.bound {
-            let bound_ty = self.expr_untype(bound, TypeFormContext::TypeVarConstraint, errors);
-            Restriction::Bound(bound_ty)
+            self.resolve_shape_type_parameter_bound(bound, errors)
         } else if let Some((constraints, range)) = &tp.constraints {
             if constraints.len() < 2 {
                 self.error(
@@ -2129,7 +2128,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 matches!(ty, Type::Int(_))
                     || matches!(ty, Type::ClassType(cls) if cls.has_qname("shape_extensions", "Int"))
             };
-            let default = if self.solver().tensor_shapes
+            let default = if matches!(restriction, Restriction::Flag(_)) {
+                self.expr_infer(default_expr, errors)
+            } else if self.solver().tensor_shapes
                 && matches!(&restriction, Restriction::Bound(bound) if is_size_bound(bound))
                 && let Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral { value, .. }) =
                     default_expr
@@ -2209,6 +2210,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         source: TParamsSource,
         errors: &ErrorCollector,
     ) -> Arc<TParams> {
+        self.validate_shape_flag_type_parameter_scope(&tparams, &source, range, errors);
         let mut last_tparam: Option<&Quantified> = None;
         let mut seen: SmallMap<&Name, &Quantified> = SmallMap::new();
         let mut typevartuple = None;
@@ -3428,38 +3430,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if default.is_error() {
             return default.clone();
         }
-        let check_bound = |bound_ty: &Type| {
-            let default_for_check = match default {
-                Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
-                Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
-                _ => default.clone(),
-            };
-            if self.is_subset_eq(&default_for_check, bound_ty) {
-                true
-            } else {
-                self.error(
-                    errors,
-                    range,
-                    quantified_error(kind),
-                    format!(
-                        "Expected default `{default}` of `{name}` to be assignable to the upper bound of `{bound_ty}`",
-                    ),
-                );
-                false
-            }
-        };
+        if let Some(default) = self.validate_shape_flag_type_parameter_default(
+            name,
+            default,
+            range,
+            restriction,
+            errors,
+        ) {
+            return default;
+        }
         match restriction {
             // Default must be a subtype of the upper bound.
             // Per PEP 696: when default is a TypeVar, "T1's bound must be a subtype of T2's bound"
-            Restriction::Bound(bound) => {
-                if !check_bound(bound) {
-                    return self.heap.mk_any_error();
-                }
-            }
-            // Generic default validation treats a `Flag` like its ordinary upper bound. Literal
-            // preservation is applied separately by the shape-specific call inference path.
-            Restriction::Flag(domain) => {
-                if !check_bound(&domain.as_type(self.stdlib, self.heap)) {
+            Restriction::Bound(bound_ty) => {
+                let default_for_check = match default {
+                    Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
+                    Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
+                    _ => default.clone(),
+                };
+                if !self.is_subset_eq(&default_for_check, bound_ty) {
+                    self.error(
+                        errors,
+                        range,
+                        quantified_error(kind),
+                        format!(
+                            "Expected default `{default}` of `{name}` to be assignable to the upper bound of `{bound_ty}`",
+                        ),
+                    );
                     return self.heap.mk_any_error();
                 }
             }
@@ -3504,6 +3501,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self.heap.mk_any_error();
                 }
             }
+            Restriction::Flag(_) => unreachable!("Flag defaults are validated by the shape layer"),
             Restriction::Unrestricted => {}
         };
         match kind {

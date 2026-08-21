@@ -120,6 +120,12 @@ class Int[T]:
     pass
 
 
+class Flag[T]:
+    """Marker for a scalar value that controls type-level evaluation."""
+
+    pass
+
+
 class ProxyMethod[T]:
     """Type-checker marker for method forwarding annotations."""
 

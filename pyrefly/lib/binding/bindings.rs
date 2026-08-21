@@ -106,6 +106,7 @@ use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
 use crate::binding::scope::is_constant_name;
+use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
 use crate::config::error_kind::ErrorKind;
@@ -998,6 +999,10 @@ impl<'a> BindingsBuilder<'a> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         self.table.get::<K>().1.get(idx)
+    }
+
+    pub(super) fn binding_is_class_def(&self, idx: Idx<Key>) -> bool {
+        matches!(self.idx_to_binding(idx), Some(Binding::ClassDef(..)))
     }
 
     fn idx_to_binding_mut<K>(&mut self, idx: Idx<K>) -> Option<&mut K::Value>
@@ -2112,12 +2117,15 @@ impl<'a> BindingsBuilder<'a> {
                             self.ensure_expr(bound_expr, &mut usage);
                             kind = QuantifiedKind::IntVar;
                         } else {
-                            self.ensure_type_with_usage(bound_expr, None, &mut usage);
-                            bound = Some((**bound_expr).clone());
+                            bound = Some(self.record_type_parameter_bound(bound_expr, &mut usage));
                         }
                     }
                     if let Some(default_expr) = &mut tv.default {
-                        self.ensure_type_with_usage(default_expr, None, &mut usage);
+                        if matches!(bound, Some(TypeParameterBound::ShapeFlag { .. })) {
+                            self.ensure_expr(default_expr, &mut usage);
+                        } else {
+                            self.ensure_type_with_usage(default_expr, None, &mut usage);
+                        }
                         default = Some((**default_expr).clone());
                     }
                     kind

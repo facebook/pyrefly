@@ -28,8 +28,10 @@ use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 
 use crate::heap::TypeHeap;
+use crate::literal::Lit;
 use crate::simplify::unions;
 use crate::stdlib::Stdlib;
+use crate::type_var::Restriction;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
@@ -64,6 +66,22 @@ impl FlagMember {
             Self::Str => "builtins.str",
             Self::Tuple => "builtins.tuple",
             Self::NoneType => "types.NoneType",
+        }
+    }
+
+    fn accepts(self, ty: &Type) -> bool {
+        match (self, ty) {
+            (Self::Int, Type::ClassType(cls)) => cls.is_builtin("int"),
+            (Self::Bool, Type::ClassType(cls)) => cls.is_builtin("bool"),
+            (Self::Str, Type::ClassType(cls)) => cls.is_builtin("str"),
+            (Self::Tuple, Type::ClassType(cls)) => cls.is_builtin("tuple"),
+            (Self::Tuple, Type::Tuple(_)) => true,
+            (Self::NoneType, Type::None) => true,
+            (Self::Int, Type::Int(_)) => true,
+            (Self::Int, Type::Literal(lit)) => matches!(lit.value, Lit::Int(_)),
+            (Self::Bool, Type::Literal(lit)) => matches!(lit.value, Lit::Bool(_)),
+            (Self::Str, Type::Literal(lit)) => matches!(lit.value, Lit::Str(_)),
+            _ => false,
         }
     }
 
@@ -112,6 +130,33 @@ pub struct FlagDomain {
 }
 
 impl FlagDomain {
+    /// Parses the source domains currently supported by `Flag`.
+    pub fn from_type(ty: &Type) -> Option<Self> {
+        match ty {
+            Type::ClassType(cls) if cls.is_builtin("int") => Some(Self::of(FlagMember::Int)),
+            Type::ClassType(cls) if cls.is_builtin("bool") => Some(Self::of(FlagMember::Bool)),
+            Type::ClassType(cls) if cls.is_builtin("str") => Some(Self::of(FlagMember::Str)),
+            _ => None,
+        }
+    }
+
+    /// Accepts the declared domain exactly, rather than applying Python subtyping.
+    pub fn accepts(self, ty: &Type) -> bool {
+        if ty.is_any() {
+            return true;
+        }
+        match ty {
+            Type::Quantified(q) => matches!(q.restriction(), Restriction::Flag(x) if *x == self),
+            Type::TypeVar(tv) => matches!(tv.restriction(), Restriction::Flag(x) if *x == self),
+            Type::Union(union) => union.members.iter().all(|member| self.accepts(member)),
+            _ => self.members().any(|member| member.accepts(ty)),
+        }
+    }
+
+    pub fn accepts_literal(self, ty: &Type) -> bool {
+        matches!(ty, Type::Literal(_)) && self.accepts(ty)
+    }
+
     pub const fn of(member: FlagMember) -> Self {
         if matches!(member, FlagMember::Tuple) {
             Self {

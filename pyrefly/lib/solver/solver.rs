@@ -17,6 +17,7 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::mem;
+use std::sync::Arc;
 
 use itertools::Either;
 use itertools::Itertools;
@@ -34,6 +35,7 @@ use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::gas::Gas;
@@ -2678,6 +2680,16 @@ impl Solver {
 
 #[derive(Debug, Clone)]
 pub enum TypeVarSpecializationError {
+    BadFlagSpecialization {
+        name: Name,
+        got: Type,
+        domain: FlagDomain,
+    },
+    ConflictingFlagSpecialization {
+        name: Name,
+        selected: Type,
+        constraint: Type,
+    },
     BadBoundSpecialization {
         name: Name,
         got: Type,
@@ -2696,15 +2708,29 @@ pub enum TypeVarSpecializationError {
 impl TypeVarSpecializationError {
     pub fn error_kind(&self) -> ErrorKind {
         match self {
-            Self::BadBoundSpecialization { .. } | Self::BadConstraintSpecialization { .. } => {
-                ErrorKind::BadSpecialization
-            }
+            Self::BadFlagSpecialization { .. }
+            | Self::ConflictingFlagSpecialization { .. }
+            | Self::BadBoundSpecialization { .. }
+            | Self::BadConstraintSpecialization { .. } => ErrorKind::BadSpecialization,
             Self::IncompatibleOverloadResidual { .. } => ErrorKind::IncompatibleOverloadResidual,
         }
     }
 
     pub fn to_error_msg<Ans: LookupAnswer>(self, ans: &AnswersSolver<Ans>) -> String {
         match self {
+            Self::BadFlagSpecialization { name, got, domain } => format!(
+                "`{}` is not a valid `Flag[{domain}]` value for type variable `{name}`",
+                ans.for_display(got),
+            ),
+            Self::ConflictingFlagSpecialization {
+                name,
+                selected,
+                constraint,
+            } => format!(
+                "`{}` is incompatible with selected `Flag` value `{}` for type variable `{name}`",
+                ans.for_display(constraint),
+                ans.for_display(selected),
+            ),
             Self::BadBoundSpecialization { name, got, want } => {
                 TypeCheckKind::TypeVarSpecialization(name).format_error(
                     &ans.for_display(got),
@@ -3077,6 +3103,8 @@ impl CallBoundary {
             witness: None,
             argument_side: ArgumentSide::default(),
             boundary: Some(self),
+            shape_flag_vars: None,
+            shape_flag_binding_source: None,
         }
     }
 
@@ -3163,6 +3191,8 @@ pub struct CallContext<'subset> {
     witness: Option<ResidualWitnessContext>,
     argument_side: ArgumentSide,
     boundary: Option<&'subset CallBoundary>,
+    shape_flag_vars: Option<Arc<SmallSet<Var>>>,
+    shape_flag_binding_source: Option<Var>,
 }
 
 impl<'subset> CallContext<'subset> {
@@ -3192,11 +3222,41 @@ impl<'subset> CallContext<'subset> {
         self
     }
 
+    pub(crate) fn with_shape_flag_vars(mut self, vars: Option<Arc<SmallSet<Var>>>) -> Self {
+        self.shape_flag_vars = vars;
+        self
+    }
+
+    pub(crate) fn is_shape_flag_var_type(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Var(var)
+                if self.shape_flag_vars.as_ref().is_some_and(|vars| vars.contains(var))
+        )
+    }
+
+    pub(crate) fn with_shape_flag_binding_source(mut self, var: Var) -> Self {
+        assert!(
+            self.shape_flag_vars
+                .as_ref()
+                .is_some_and(|vars| vars.contains(&var)),
+            "Flag binding source must be a precomputed Flag variable"
+        );
+        self.shape_flag_binding_source = Some(var);
+        self
+    }
+
+    fn is_shape_flag_binding_source(&self, var: Var) -> bool {
+        self.shape_flag_binding_source == Some(var)
+    }
+
     pub fn with_outside_context(mut self) -> Self {
         // Both capture writers require a non-default argument side, so this disables
         // capture while retaining the boundary's previously collected captures.
         self.witness = Default::default();
         self.argument_side = Default::default();
+        self.shape_flag_vars = Default::default();
+        self.shape_flag_binding_source = None;
         self
     }
 
@@ -3542,6 +3602,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         q: &Quantified,
         upper_bound: Option<&Type>,
     ) -> (Type, Option<TypeVarSpecializationError>) {
+        if let Restriction::Flag(domain) = q.restriction() {
+            let specialization_error =
+                (!domain.accepts(t1)).then(|| TypeVarSpecializationError::BadFlagSpecialization {
+                    name: q.name().clone(),
+                    got: t1.clone(),
+                    domain: *domain,
+                });
+            return (t1.clone(), specialization_error);
+        }
         let t1_p = {
             let t1_p = t1
                 .clone()
@@ -3761,6 +3830,32 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             }
                             Ok(())
                         }
+                        // An empty container contributes no evidence for a Flag. Keep its
+                        // validated direct source authoritative instead of preserving the partial.
+                        (
+                            Variable::PartialContained(_),
+                            Variable::Quantified {
+                                quantified: q2,
+                                bounds: _,
+                            },
+                        ) if matches!(q2.restriction(), Restriction::Flag(_)) => {
+                            drop(variable1);
+                            drop(variable2);
+                            variables.unify(*v1, *v2);
+                            Ok(())
+                        }
+                        (
+                            Variable::Quantified {
+                                quantified: q1,
+                                bounds: _,
+                            },
+                            Variable::PartialContained(_),
+                        ) if matches!(q1.restriction(), Restriction::Flag(_)) => {
+                            drop(variable1);
+                            drop(variable2);
+                            variables.unify(*v2, *v1);
+                            Ok(())
+                        }
                         (
                             _,
                             Variable::Quantified {
@@ -3953,6 +4048,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     } => {
                         let q = q.clone();
                         let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
+                        let is_shape_flag = matches!(q.restriction(), Restriction::Flag(_));
+                        let lower_bound = is_shape_flag
+                            .then(|| self.solver.get_current_bound(bounds.lower.clone()))
+                            .flatten();
                         drop(v2_ref);
                         drop(variables);
                         let (answer, specialization_error) =
@@ -3963,8 +4062,18 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                                 .write()
                                 .insert(*v2, specialization_error);
                         }
+                        if is_shape_flag
+                            && !self.active_call_context.is_shape_flag_binding_source(*v2)
+                        {
+                            return self.solver.add_lower_bound(*v2, answer, &mut |got, want| {
+                                self.is_subset_eq(got, want)
+                            });
+                        }
                         if q.kind() == QuantifiedKind::ParamSpec
-                            || matches!(q.restriction(), Restriction::Constraints(_))
+                            || matches!(
+                                q.restriction(),
+                                Restriction::Constraints(_) | Restriction::Flag(_)
+                            )
                         {
                             // If the TypeVar has constraints, we write the answer immediately to
                             // enforce that we always match the same constraint.
@@ -3972,6 +4081,31 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             // TODO(https://github.com/facebook/pyrefly/issues/105): figure out
                             // what to do with ParamSpec.
                             let answer = normalize_answer_for_kind(q.kind(), Cow::Owned(answer));
+                            let lower_mismatch = is_shape_flag
+                                && lower_bound.as_ref().is_some_and(|lower_bound| {
+                                    self.is_subset_eq(lower_bound, &answer).is_err()
+                                });
+                            let upper_mismatch = is_shape_flag
+                                && upper_bound.as_ref().is_some_and(|upper_bound| {
+                                    self.is_subset_eq(&answer, upper_bound).is_err()
+                                });
+                            let conflicting_bound = if lower_mismatch {
+                                lower_bound
+                            } else if upper_mismatch {
+                                upper_bound
+                            } else {
+                                None
+                            };
+                            if let Some(constraint) = conflicting_bound {
+                                self.solver.instantiation_errors.write().insert(
+                                    *v2,
+                                    TypeVarSpecializationError::ConflictingFlagSpecialization {
+                                        name: q.name().clone(),
+                                        selected: answer.clone(),
+                                        constraint,
+                                    },
+                                );
+                            }
                             self.solver
                                 .variables
                                 .lock()

@@ -490,6 +490,27 @@ drop_str
 }
 
 #[test]
+fn hover_shows_flag_type_parameter_domain() {
+    let code = r#"
+from shape_extensions import Flag
+
+def select[K: Flag[int]](key: K) -> K: ...
+
+select(1)
+#^
+"#;
+    let shape_extensions = "class Flag[T]: ...";
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("shape_extensions", shape_extensions)],
+        get_test_report,
+    );
+    assert!(
+        report.contains("def select[K: Flag[int]]("),
+        "Expected hover to display the Flag domain, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_callable_instance_uses_dunder_call_signature() {
     let code = r#"
 class Greeter:

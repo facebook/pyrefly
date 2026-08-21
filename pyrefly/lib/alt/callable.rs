@@ -40,6 +40,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::expr::ExprOptions;
 use crate::alt::expr::TypeOrExpr;
+use crate::alt::shape_flag::shape_flag_vars;
 use crate::alt::solve::Iterable;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
@@ -1574,8 +1575,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (name, ty, default) in default_check {
             // `ty` may contain type variables, so we record quantified bounds from the default and
             // check for inconsistent solutions. We mark any literals in the default as implicit so
-            // that type variables get solved to promoted types (`int` rather than `Literal[N]`).
-            let default_ty = default.ty.clone().with_literal_style(LitStyle::Implicit);
+            // that ordinary type variables get solved to promoted types (`int` rather than
+            // `Literal[N]`). A Flag's single binding source preserves the literal instead.
+            let default_ty = if call_context.is_shape_flag_var_type(ty) {
+                default.ty.clone()
+            } else {
+                default.ty.clone().with_literal_style(LitStyle::Implicit)
+            };
             self.check_type_with_options(
                 &default_ty,
                 ty,
@@ -1889,28 +1895,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let meta_shape_func: Option<&dyn MetaShapeFunction> = shape_transform_func.as_deref();
         let mut bound_args: Option<HashMap<String, Type>> = meta_shape_func.map(|_| HashMap::new());
 
-        let (callable_qs, mut callable) = if let Some(tparams) = tparams {
+        let (callable_qs, mut callable, shape_flag_vars) = if let Some(tparams) = tparams {
+            let instantiate = |callable| {
+                let (qs, callable) = self.instantiate_fresh_callable(tparams, callable);
+                let flag_vars = shape_flag_vars(tparams, qs.vars());
+                (qs, callable, flag_vars)
+            };
             // If we have a hint, we want to try to instantiate against it first, so we can contextually type
             // arguments. If we don't match the hint, we need to throw away any instantiations we might have made.
             // By invariant, hint will be None if we are calling a constructor.
             if let Some(hint) = hint {
-                let (qs, callable_) = self.instantiate_fresh_callable(tparams, callable.clone());
-                if self.is_subset_eq(&callable_.ret, hint)
-                    && !self.solver().has_instantiation_errors(&qs)
-                {
-                    (qs, callable_)
+                let (qs, callable_, flag_vars) = instantiate(callable.clone());
+                let matches_hint = if let Some(flag_vars) = &flag_vars {
+                    let mut ret_for_hint = callable_.ret.clone();
+                    ret_for_hint.transform_mut(&mut |ty| {
+                        if matches!(ty, Type::Var(var) if flag_vars.contains(var)) {
+                            *ty = self.heap.mk_any_implicit();
+                        }
+                    });
+                    self.is_subset_eq(&ret_for_hint, hint)
+                } else {
+                    self.is_subset_eq(&callable_.ret, hint)
+                };
+                if matches_hint && !self.solver().has_instantiation_errors(&qs) {
+                    (qs, callable_, flag_vars)
                 } else {
                     // Even though these quantifieds aren't used, let's make sure to not leave
                     // unfinished quantifieds around.
                     let _ = self.finish_quantified(qs, false);
-                    self.instantiate_fresh_callable(tparams, callable)
+                    instantiate(callable)
                 }
             } else {
-                self.instantiate_fresh_callable(tparams, callable)
+                instantiate(callable)
             }
         } else {
-            (QuantifiedHandle::empty(), callable)
+            (QuantifiedHandle::empty(), callable, None)
         };
+        let call_context = call_context.with_shape_flag_vars(shape_flag_vars);
         let (mut self_qs, remaining_callable_qs) = if self_obj.is_some()
             && let Some(first_param) = callable.get_first_param()
             // TODO(https://github.com/facebook/pyrefly/issues/105): handle nested vars

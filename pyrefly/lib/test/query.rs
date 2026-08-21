@@ -302,6 +302,40 @@ def f() -> None:
 }
 
 #[test]
+fn test_callees_flag_type_constructor() {
+    let tdir = TempDir::new().unwrap();
+    let path = tdir.path().join("shape_extensions.py");
+    fs_anyhow::write(
+        &path,
+        r#"
+class Flag[T]: ...
+
+def construct[K: Flag[int]](source: K, cls: type[K]) -> K:
+    return cls()
+"#,
+    )
+    .unwrap();
+
+    let query = create_query();
+    let shape_extensions = ModuleName::from_str("shape_extensions");
+    let errors = query.add_files(vec![(
+        shape_extensions,
+        ModulePath::filesystem(path.clone()),
+    )]);
+    assert!(errors.is_empty(), "Unexpected errors: {errors:?}");
+
+    let callees = query
+        .get_callees_with_location(shape_extensions, ModulePath::filesystem(path), None)
+        .unwrap();
+    assert!(
+        callees
+            .iter()
+            .any(|(_, callee)| callee.target.starts_with("builtins.int.__")),
+        "Expected the Flag domain's constructor callee, got: {callees:?}"
+    );
+}
+
+#[test]
 fn test_callees_attribute_narrow_does_not_overwrite_rhs_trace() {
     // Regression test: narrowing on an attribute facet (e.g. `c.p == k.v`) used to
     // record the LHS property getter's trace against the narrow expression's range,

@@ -208,6 +208,26 @@ class Tensor[Shape: IntTuple]:
     env
 }
 
+testcase!(
+    test_flag_int_accepts_shape_int_capture,
+    shaped_array_env(),
+    r#"
+from shape_extensions import Flag, Int, IntVar
+from typing import assert_type
+
+def capture[K: Flag[int]](value: K) -> K: ...
+def capture_bool[K: Flag[bool]](value: K) -> K: ...
+def capture_str[K: Flag[str]](value: K) -> K: ...
+
+def test[N: IntVar](symbolic: Int[N], literal: Int[3], broad: Int) -> None:
+    assert_type(capture(symbolic), Int[N])
+    assert_type(capture(literal), Int[3])
+    assert_type(capture(broad), Int)
+    capture_bool(symbolic)  # E: is not a valid `Flag[bool]` value
+    capture_str(symbolic)  # E: is not a valid `Flag[str]` value
+"#,
+);
+
 fn type_shape_dsl_gradual_env() -> TestEnv {
     let mut env = shape_dsl_tensor_env();
     env.add(

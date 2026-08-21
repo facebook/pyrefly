@@ -78,6 +78,7 @@ use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowingSubject;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::scope::is_constant_name;
+use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
@@ -2108,7 +2109,7 @@ pub struct TypeParameter {
     pub name: Name,
     pub identity: QuantifiedIdentity,
     pub kind: QuantifiedKind,
-    pub bound: Option<Expr>,
+    pub bound: Option<TypeParameterBound>,
     pub default: Option<Expr>,
     pub constraints: Option<(Vec<Expr>, TextRange)>,
     pub owner: Option<Name>,
