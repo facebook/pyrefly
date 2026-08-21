@@ -5,186 +5,243 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-/// Capturing group metadata inferred from a literal regex pattern.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RegexGroup {
-    pub name: Option<String>,
-    pub required: bool,
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RegexValidationError {
+    Invalid(&'static str),
+    Unsupported,
 }
 
-/// Parse enough of Python's regex syntax to identify capturing groups and
-/// whether they may be skipped. This intentionally mirrors basedmypy's
-/// lightweight analysis instead of using Rust's regex parser, whose accepted
-/// syntax differs from Python's.
-pub fn parse_groups(value: &str, mut verbose: bool) -> Result<Vec<RegexGroup>, String> {
-    let bytes = value.as_bytes();
-    let mut group_required = Vec::new();
-    let mut group_names = Vec::new();
-    let mut working = Vec::new();
-    let mut open_parens = Vec::new();
-    let mut escape = false;
-    let mut union: Option<usize> = None;
-    let mut character_set = 0u8;
-    let mut comment_group = false;
-    let mut comment = false;
-    let mut backreference = false;
+enum InlineFlags {
+    Global { end: usize, verbose: bool },
+    Scoped { end: usize, verbose: bool },
+}
+
+/// Validate structural errors in the subset of Python regex syntax understood here.
+/// Unknown extensions are left to Python at runtime rather than risking a false positive.
+pub(crate) fn validate_pattern(
+    pattern: &[u8],
+    mut verbose: bool,
+) -> Result<(), RegexValidationError> {
+    let mut open_groups = Vec::new();
+    let mut character_set_can_close = None;
+    let mut escaped = false;
     let mut i = 0;
 
-    while i < bytes.len() {
-        let char = bytes[i] as char;
-        if escape {
-            escape = false;
-            i += 1;
-            continue;
-        }
-        if backreference {
-            if char == ')' {
-                backreference = false;
+    while i < pattern.len() {
+        let byte = pattern[i];
+        if escaped {
+            escaped = false;
+            if let Some(can_close) = &mut character_set_can_close {
+                *can_close = true;
             }
             i += 1;
             continue;
         }
-        if comment_group && char == ')' {
-            comment_group = false;
-            open_parens
-                .pop()
-                .expect("a comment group must have an opening parenthesis");
+        if byte == b'\\' {
+            escaped = true;
             i += 1;
             continue;
         }
-        if char == '\n' && comment {
-            comment = false;
-            i += 1;
-            continue;
-        }
-        if char == '\\' {
-            if character_set != 0 {
-                character_set = 2;
+        if let Some(can_close) = character_set_can_close {
+            if byte == b']' && can_close {
+                character_set_can_close = None;
+            } else if byte != b'^' || can_close {
+                character_set_can_close = Some(true);
             }
-            escape = true;
             i += 1;
             continue;
         }
-        if comment_group || comment {
+        if byte == b'[' {
+            character_set_can_close = Some(false);
             i += 1;
             continue;
         }
-        if char == '^' && character_set == 1 {
-            i += 1;
+        if verbose && byte == b'#' {
+            i = pattern[i..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(pattern.len(), |offset| i + offset + 1);
             continue;
         }
-        if char == ']' && character_set == 2 {
-            character_set = 0;
-            i += 1;
-            continue;
-        }
-        if character_set != 0 {
-            character_set = 2;
-            i += 1;
-            continue;
-        }
-        if char == '[' {
-            character_set = 1;
-            i += 1;
-            continue;
-        }
-        if char == '|' && union.is_none_or(|u| u > open_parens.len()) {
-            union = Some(open_parens.len());
-            i += 1;
-            continue;
-        }
-        if verbose && char == '#' {
-            comment = true;
-            i += 1;
-            continue;
-        }
-        match char {
-            '(' => {
-                open_parens.push(i);
-                if bytes.get(i + 1) == Some(&b'?') {
-                    if bytes.get(i + 2) == Some(&b'P') && bytes.get(i + 3) == Some(&b'<') {
-                        let name_start = i + 4;
-                        let Some(name_end) = value[name_start..].find('>').map(|j| name_start + j)
-                        else {
-                            return Err(format!("missing >, unterminated name at position {i}"));
-                        };
-                        working.push(Some((group_required.len() + working.len(), true)));
-                        group_names.push(Some(value[name_start..name_end].to_owned()));
-                    } else if bytes.get(i + 2) == Some(&b'(') {
-                        backreference = true;
-                        working.push(None);
-                    } else if bytes.get(i + 2) == Some(&b'!') {
-                        working.push(Some((usize::MAX, false)));
-                    } else if bytes.get(i + 2) == Some(&b':') {
-                        working.push(None);
-                    } else if bytes.get(i + 2) == Some(&b'#') {
-                        comment_group = true;
-                    } else if let Some(end) = value[i + 2..].find(')') {
-                        if value[i + 2..i + 2 + end].contains('x') {
-                            verbose = true;
-                        } else {
-                            working.push(None);
-                        }
-                    } else {
-                        return Err(format!(
-                            "missing ), unterminated subpattern at position {i}"
+
+        match byte {
+            b'(' if pattern.get(i + 1) != Some(&b'?') => {
+                open_groups.push(verbose);
+                i += 1;
+            }
+            b'(' => match pattern.get(i + 2) {
+                Some(b'#') => {
+                    let Some(end) = pattern[i + 3..].iter().position(|byte| *byte == b')') else {
+                        return Err(RegexValidationError::Invalid(
+                            "missing ), unterminated comment",
                         ));
+                    };
+                    i += end + 4;
+                }
+                Some(b'P') if pattern.get(i + 3) == Some(&b'<') => {
+                    let Some(end) = pattern[i + 4..].iter().position(|byte| *byte == b'>') else {
+                        return Err(RegexValidationError::Invalid(
+                            "missing >, unterminated name",
+                        ));
+                    };
+                    open_groups.push(verbose);
+                    i += end + 5;
+                }
+                Some(b'P') if pattern.get(i + 3) == Some(&b'=') => {
+                    open_groups.push(verbose);
+                    i += 4;
+                }
+                Some(b'(') => {
+                    let Some(end) = pattern[i + 3..].iter().position(|byte| *byte == b')') else {
+                        return Err(RegexValidationError::Invalid(
+                            "missing ), unterminated conditional",
+                        ));
+                    };
+                    open_groups.push(verbose);
+                    i += end + 4;
+                }
+                Some(b':' | b'=' | b'!' | b'>') => {
+                    open_groups.push(verbose);
+                    i += 3;
+                }
+                Some(b'<') if matches!(pattern.get(i + 3), Some(b'=' | b'!')) => {
+                    open_groups.push(verbose);
+                    i += 4;
+                }
+                Some(_) => match parse_inline_flags(pattern, i, verbose) {
+                    Some(InlineFlags::Global {
+                        end,
+                        verbose: new_verbose,
+                    }) => {
+                        verbose = new_verbose;
+                        i = end + 1;
                     }
-                } else {
-                    working.push(Some((group_required.len() + working.len(), true)));
-                    group_names.push(None);
+                    Some(InlineFlags::Scoped {
+                        end,
+                        verbose: new_verbose,
+                    }) => {
+                        open_groups.push(verbose);
+                        verbose = new_verbose;
+                        i = end + 1;
+                    }
+                    None => return Err(RegexValidationError::Unsupported),
+                },
+                None => {
+                    return Err(RegexValidationError::Invalid(
+                        "missing ), unterminated subpattern",
+                    ));
+                }
+            },
+            b')' => {
+                let Some(previous_verbose) = open_groups.pop() else {
+                    return Err(RegexValidationError::Invalid("unbalanced parenthesis"));
+                };
+                verbose = previous_verbose;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+
+    if escaped {
+        Err(RegexValidationError::Invalid("bad escape (end of pattern)"))
+    } else if character_set_can_close.is_some() {
+        Err(RegexValidationError::Invalid("unterminated character set"))
+    } else if !open_groups.is_empty() {
+        Err(RegexValidationError::Invalid(
+            "missing ), unterminated subpattern",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn parse_inline_flags(pattern: &[u8], start: usize, verbose: bool) -> Option<InlineFlags> {
+    let mut i = start + 2;
+    let mut saw_enabled = false;
+    let mut saw_disabled = false;
+    let mut disabling = false;
+    let mut new_verbose = verbose;
+
+    while let Some(byte) = pattern.get(i) {
+        match byte {
+            b'a' | b'i' | b'L' | b'm' | b's' | b'u' | b'x' if !disabling => {
+                saw_enabled = true;
+                if *byte == b'x' {
+                    new_verbose = true;
                 }
             }
-            ')' => {
-                if open_parens.pop().is_none() {
-                    return Err(format!("unbalanced parenthesis at position {i}"));
-                }
-                let depth = open_parens.len();
-                if matches!(bytes.get(i + 1), Some(b'*' | b'?')) {
-                    for item in working.iter_mut().skip(depth) {
-                        if let Some((_, required)) = item {
-                            *required = false;
-                        }
-                    }
-                }
-                if union == Some(depth + 1)
-                    || working
-                        .get(depth)
-                        .is_some_and(|item| matches!(item, Some((usize::MAX, false))))
-                {
-                    for item in working.iter_mut().skip(depth + 1) {
-                        if let Some((_, required)) = item {
-                            *required = false;
-                        }
-                    }
-                    union = None;
-                }
-                if depth == 0 {
-                    for item in working.drain(..).flatten() {
-                        if item.0 != usize::MAX {
-                            group_required.push(item.1);
-                        }
-                    }
+            b'i' | b'm' | b's' | b'x' if disabling => {
+                saw_disabled = true;
+                if *byte == b'x' {
+                    new_verbose = false;
                 }
             }
-            _ => {}
+            b'-' if !disabling => disabling = true,
+            b')' if saw_enabled && !disabling => {
+                return Some(InlineFlags::Global {
+                    end: i,
+                    verbose: new_verbose,
+                });
+            }
+            b':' if saw_enabled || saw_disabled => {
+                return Some(InlineFlags::Scoped {
+                    end: i,
+                    verbose: new_verbose,
+                });
+            }
+            _ => return None,
         }
         i += 1;
     }
-    if let Some(i) = open_parens.first() {
-        return Err(format!(
-            "missing ), unterminated subpattern at position {i}"
-        ));
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RegexValidationError;
+    use super::validate_pattern;
+
+    #[test]
+    fn test_validate_pattern_parentheses() {
+        assert_eq!(
+            validate_pattern(b"a(b(c)", false),
+            Err(RegexValidationError::Invalid(
+                "missing ), unterminated subpattern"
+            ))
+        );
+        assert_eq!(
+            validate_pattern(b"a)b", false),
+            Err(RegexValidationError::Invalid("unbalanced parenthesis"))
+        );
+        assert_eq!(validate_pattern(b"[(]", false), Ok(()));
+        assert_eq!(validate_pattern(br"\(\)", false), Ok(()));
     }
-    if union == Some(0) {
-        group_required.fill(false);
+
+    #[test]
+    fn test_validate_pattern_verbose() {
+        assert_eq!(validate_pattern(b"(\n# ignored )\na)", true), Ok(()));
+        assert_eq!(validate_pattern(b"(?x:(\n# ignored )\na))", false), Ok(()));
+        assert_eq!(validate_pattern(b"(?x)(\n# ignored )\na)", false), Ok(()));
     }
-    Ok(group_required
-        .into_iter()
-        .enumerate()
-        .map(|(i, required)| RegexGroup {
-            name: group_names.get(i).cloned().flatten(),
-            required,
-        })
-        .collect())
+
+    #[test]
+    fn test_validate_pattern_extensions() {
+        for pattern in [
+            b"(?:x)".as_slice(),
+            b"(?=x)".as_slice(),
+            b"(?!x)".as_slice(),
+            b"(?<=x)".as_slice(),
+            b"(?<!x)".as_slice(),
+            b"(?>x)".as_slice(),
+            b"(?P<name>x)".as_slice(),
+            b"(?# comment)".as_slice(),
+        ] {
+            assert_eq!(validate_pattern(pattern, false), Ok(()));
+        }
+        assert_eq!(
+            validate_pattern(b"(?z:x)", false),
+            Err(RegexValidationError::Unsupported)
+        );
+    }
 }

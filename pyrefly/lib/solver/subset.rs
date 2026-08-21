@@ -76,7 +76,6 @@ use crate::types::type_var::Variance;
 use crate::types::types::Forallable;
 use crate::types::types::TArgs;
 use crate::types::types::Type;
-use crate::types::types::regex_metadata_groups;
 
 /// Extract a `TypeAliasData` reference from a `Type` that wraps one,
 /// either directly as `Type::TypeAlias` or inside `Type::Forall`.
@@ -1807,14 +1806,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
             (_, Type::UntypedAlias(want_data)) => {
                 self.is_subset_eq(got, &self.type_order.untype_alias(want_data))
-            }
-            (Type::Annotated(inner, metadata), _)
-                if !matches!(want, Type::Type(_)) && regex_metadata_groups(metadata).is_some() =>
-            {
-                self.is_subset_eq(inner, want)
-            }
-            (_, Type::Annotated(inner, metadata)) if regex_metadata_groups(metadata).is_some() => {
-                self.is_subset_eq(got, inner)
             }
             (Type::Quantified(q), Type::Ellipsis) | (Type::Ellipsis, Type::Quantified(q))
                 if q.kind() == QuantifiedKind::ParamSpec =>

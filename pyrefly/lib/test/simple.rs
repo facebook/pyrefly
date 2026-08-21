@@ -753,25 +753,29 @@ reveal_type(f(0))  # E: revealed type: int
 testcase!(
     test_regex_checks,
     r#"
-from typing import assert_type
 import re
+from re import X as verbose
 
-re.compile("(")  # E: missing ), unterminated subpattern at position 0
-re.search("(", "")  # E: missing ), unterminated subpattern at position 0
-re.compile("a(b(c)")  # E: missing ), unterminated subpattern at position 1
+re.compile("(")  # E: missing ), unterminated subpattern
+re.search("(", "")  # E: missing ), unterminated subpattern
+re.sub("(", "", "")  # E: missing ), unterminated subpattern
+re.compile(pattern="(")  # E: missing ), unterminated subpattern
+re.compile("a(b(c)")  # E: missing ), unterminated subpattern
+re.compile(b"(")  # E: missing ), unterminated subpattern
 re.compile("(?# comment)")
+re.compile("(\n# ignored )\na)", re.VERBOSE)
+re.search("(\n# ignored )\na)", "", flags=re.X)
+re.compile("(\n# ignored )\na)", re.I | re.X)
+re.compile("(\n# ignored )\na)", verbose)
+re.compile("(?i:x)(?P<n>a)#(b)")
+re.compile("(?=x)(?P<n>a)#(b)")
 
-if m := re.search("(a)?(b)", ""):
-    assert_type(m.group(0), str)
-    assert_type(m[0], str)
+def unknown_flags(flags: int) -> None:
+    # Unknown flags may enable verbose mode, so checking this pattern would be unsafe.
+    re.compile("(", flags)
 
-if m := re.search("(?P<foo>a)", ""):
-    m.group("bar")  # E: No such group: 'bar'
-    m["bar"]  # E: No such group: 'bar'
-
-p = re.compile("(a)")
-if m := p.search(""):
-    assert_type(m.group(0), str)
+def match_and(value: str) -> int | None:
+    return re.match("x", value) and 1
 "#,
 );
 

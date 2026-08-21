@@ -86,8 +86,8 @@ use crate::alt::callable::CallArg;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::polars_specials::is_polars_series;
-use crate::alt::regex::RegexGroup;
-use crate::alt::regex::parse_groups;
+use crate::alt::regex::RegexValidationError;
+use crate::alt::regex::validate_pattern;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
@@ -124,9 +124,7 @@ use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
-use crate::types::types::REGEX_GROUPS_METADATA_TAG;
 use crate::types::types::Type;
-use crate::types::types::regex_metadata_groups;
 
 #[derive(Debug, Clone, Copy)]
 pub enum TypeOrExpr<'a> {
@@ -162,19 +160,6 @@ impl DimensionExprContext {
             Self::Arithmetic => "in shape arithmetic",
         }
     }
-}
-
-enum RegexGroupKey {
-    Int(i64),
-    Str(String),
-}
-
-enum RegexCall {
-    Compile,
-    Match,
-    ValidatePattern,
-    PatternMatch,
-    MatchGroup,
 }
 
 impl Ranged for TypeOrExpr<'_> {
@@ -1110,12 +1095,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .into_ty()
             }
         } else {
-            let regex_call = self.regex_callee(&callee_ty);
+            let regex_pattern = Self::regex_pattern_argument(&x.arguments);
+            let regex_flags_position =
+                regex_pattern.and_then(|_| self.regex_flags_position(&callee_ty));
             let ret = self.expr_call_infer(x, callee_ty, hint, errors);
-            match regex_call {
-                Some(regex_call) => self.regex_call_result(x, regex_call, ret, errors),
-                None => ret,
+            if let (Some(pattern), Some(flags_position)) = (regex_pattern, regex_flags_position) {
+                self.regex_validate_pattern_argument(pattern, &x.arguments, flags_position, errors);
             }
+            ret
         }
     }
 
@@ -2004,45 +1991,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
-    fn regex_call_result(
-        &self,
-        call: &ExprCall,
-        regex_call: RegexCall,
-        ret: Type,
-        errors: &ErrorCollector,
-    ) -> Type {
-        match regex_call {
-            RegexCall::Compile => {
-                match self.regex_groups_from_pattern_argument(&call.arguments, errors) {
-                    Some(groups) => self.annotate_regex(ret, &groups),
-                    None => ret,
-                }
-            }
-            RegexCall::Match => {
-                match self.regex_groups_from_pattern_argument(&call.arguments, errors) {
-                    Some(groups) => self.annotate_regex_matches(ret, &groups),
-                    None => ret,
-                }
-            }
-            RegexCall::ValidatePattern => {
-                self.regex_groups_from_pattern_argument(&call.arguments, errors);
-                ret
-            }
-            RegexCall::PatternMatch => {
-                let groups = self.regex_groups_from_pattern_method_receiver(call, errors);
-                match groups {
-                    Some(groups) => self.annotate_regex_matches(ret, &groups),
-                    None => ret,
-                }
-            }
-            RegexCall::MatchGroup => {
-                self.regex_validate_match_group_call(call, errors);
-                ret
-            }
-        }
-    }
-
-    fn regex_callee(&self, callee_ty: &Type) -> Option<RegexCall> {
+    /// Return the positional index of `flags` for `re` functions that accept a pattern.
+    fn regex_flags_position(&self, callee_ty: &Type) -> Option<usize> {
         callee_ty.visit_toplevel_func_metadata(&|metadata| {
             if metadata.kind.module_name().as_str() != "re" {
                 return None;
@@ -2051,23 +2001,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let class = class.as_ref().map(|class| class.name().as_str());
             let function = metadata.kind.function_name();
             match (class, function.as_ref().as_str()) {
-                (None, "compile" | "template") => Some(RegexCall::Compile),
-                (None, "match" | "fullmatch" | "search") => Some(RegexCall::Match),
-                (None, "findall" | "finditer" | "split") => Some(RegexCall::ValidatePattern),
-                (Some("Pattern"), "match" | "fullmatch" | "search") => {
-                    Some(RegexCall::PatternMatch)
-                }
-                (Some("Match"), "group") => Some(RegexCall::MatchGroup),
+                (None, "compile" | "template") => Some(1),
+                (None, "match" | "fullmatch" | "search" | "findall" | "finditer") => Some(2),
+                (None, "split") => Some(3),
+                (None, "sub" | "subn") => Some(4),
                 _ => None,
             }
         })
     }
 
-    fn regex_groups_from_pattern_argument(
-        &self,
-        args: &Arguments,
-        errors: &ErrorCollector,
-    ) -> Option<Vec<RegexGroup>> {
+    fn regex_pattern_argument(args: &Arguments) -> Option<&Expr> {
         let pattern = args.args.first().or_else(|| {
             args.keywords.iter().find_map(|kw| {
                 (kw.arg
@@ -2076,178 +2019,71 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .then_some(&kw.value)
             })
         })?;
-        let Expr::StringLiteral(ExprStringLiteral { value, .. }) = pattern else {
-            return None;
-        };
-        match parse_groups(value.to_str(), false) {
-            Ok(groups) => Some(groups),
-            Err(error) => {
-                self.error(errors, pattern.range(), ErrorKind::Regex, error);
-                None
-            }
-        }
+        matches!(pattern, Expr::StringLiteral(_) | Expr::BytesLiteral(_)).then_some(pattern)
     }
 
-    fn regex_groups_from_pattern_method_receiver(
+    fn regex_validate_pattern_argument(
         &self,
-        call: &ExprCall,
+        pattern: &Expr,
+        args: &Arguments,
+        flags_position: usize,
         errors: &ErrorCollector,
-    ) -> Option<Vec<RegexGroup>> {
-        let Expr::Attribute(attr) = call.func.as_ref() else {
-            return None;
-        };
-        self.regex_groups_from_type(&self.expr_infer(&attr.value, errors))
-    }
-
-    fn annotate_regex(&self, ty: Type, groups: &[RegexGroup]) -> Type {
-        Type::Annotated(Box::new(ty), Box::new([self.regex_metadata(groups)]))
-    }
-
-    fn annotate_regex_matches(&self, ty: Type, groups: &[RegexGroup]) -> Type {
-        match ty {
-            Type::Union(union) => self.heap.mk_union(
-                union
-                    .members
-                    .into_iter()
-                    .map(|member| self.annotate_regex_matches(member, groups))
-                    .collect(),
-            ),
-            Type::ClassType(cls) if cls.has_qname("re", "Match") => {
-                self.annotate_regex(Type::ClassType(cls), groups)
-            }
-            _ => ty,
-        }
-    }
-
-    fn regex_metadata(&self, groups: &[RegexGroup]) -> Type {
-        let tag = self.str_literal(REGEX_GROUPS_METADATA_TAG);
-        let groups = self.heap.mk_concrete_tuple(
-            groups
-                .iter()
-                .map(|group| {
-                    self.heap.mk_concrete_tuple(vec![
-                        group
-                            .name
-                            .as_deref()
-                            .map_or(Type::None, |name| self.str_literal(name)),
-                        self.bool_literal(group.required),
-                    ])
-                })
-                .collect(),
-        );
-        self.heap.mk_concrete_tuple(vec![tag, groups])
-    }
-
-    fn regex_groups_from_type(&self, ty: &Type) -> Option<Vec<RegexGroup>> {
-        match ty {
-            Type::Annotated(_, metadata) => self.regex_groups_from_metadata(metadata),
-            Type::Union(union) => union
-                .members
-                .iter()
-                .find_map(|member| self.regex_groups_from_type(member)),
-            _ => None,
-        }
-    }
-
-    fn regex_groups_from_metadata(&self, metadata: &[Type]) -> Option<Vec<RegexGroup>> {
-        let groups = regex_metadata_groups(metadata)?;
-        groups
-            .iter()
-            .map(|group| {
-                let Type::Tuple(Tuple::Concrete(items)) = group else {
-                    return None;
-                };
-                let [name, required] = items.as_slice() else {
-                    return None;
-                };
-                let name = match name {
-                    Type::None => None,
-                    Type::Literal(lit) => match &lit.value {
-                        Lit::Str(name) => Some(name.to_string()),
-                        _ => return None,
-                    },
-                    _ => return None,
-                };
-                let Type::Literal(required) = required else {
-                    return None;
-                };
-                let Lit::Bool(required) = required.value else {
-                    return None;
-                };
-                Some(RegexGroup { name, required })
+    ) {
+        let flags = args.args.get(flags_position).or_else(|| {
+            args.keywords.iter().find_map(|kw| {
+                (kw.arg
+                    .as_ref()
+                    .is_some_and(|name| name.id.as_str() == "flags"))
+                .then_some(&kw.value)
             })
-            .collect()
-    }
-
-    fn is_regex_match_type(&self, ty: &Type) -> bool {
-        matches!(ty, Type::ClassType(cls) if cls.has_qname("re", "Match"))
-    }
-
-    fn regex_validate_match_group_call(&self, call: &ExprCall, errors: &ErrorCollector) {
-        let Expr::Attribute(attr) = call.func.as_ref() else {
+        });
+        let Some(verbose) =
+            flags.map_or(Some(false), |flags| self.regex_verbose_flag(flags, errors))
+        else {
             return;
         };
-        let base_ty = self.expr_infer(&attr.value, errors);
-        let Some(groups) = self.regex_groups_from_type(&base_ty) else {
-            return;
+        let result = match pattern {
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) => {
+                validate_pattern(value.to_str().as_bytes(), verbose)
+            }
+            Expr::BytesLiteral(value) => match Lit::from_bytes_literal(value) {
+                Some(Lit::Bytes(value)) => validate_pattern(&value, verbose),
+                _ => return,
+            },
+            _ => return,
         };
-        for arg in &call.arguments.args {
-            self.regex_validate_group_key(&groups, arg, errors);
+        if let Err(RegexValidationError::Invalid(error)) = result {
+            self.error(errors, pattern.range(), ErrorKind::Regex, error.to_owned());
         }
     }
 
-    fn regex_validate_group_key(&self, groups: &[RegexGroup], arg: &Expr, errors: &ErrorCollector) {
-        match self.regex_group_key(arg, errors) {
-            Some(RegexGroupKey::Int(0)) => {}
-            Some(RegexGroupKey::Int(index)) if index > 0 && index as usize <= groups.len() => {}
-            Some(RegexGroupKey::Int(index)) => {
-                self.error(
-                    errors,
-                    arg.range(),
-                    ErrorKind::Regex,
-                    format!("No such group: {index}"),
-                );
-            }
-            Some(RegexGroupKey::Str(name))
-                if !groups
-                    .iter()
-                    .any(|group| group.name.as_deref() == Some(name.as_str())) =>
-            {
-                self.error(
-                    errors,
-                    arg.range(),
-                    ErrorKind::Regex,
-                    format!("No such group: '{name}'"),
-                );
-            }
-            Some(RegexGroupKey::Str(_)) => {}
-            None => {}
-        }
-    }
-
-    fn regex_group_key(&self, expr: &Expr, errors: &ErrorCollector) -> Option<RegexGroupKey> {
-        match self.expr_infer(expr, errors) {
-            Type::Literal(lit) => match lit.value {
-                Lit::Str(value) => Some(RegexGroupKey::Str(value.to_string())),
-                Lit::Int(value) => value.as_i64().map(RegexGroupKey::Int),
+    fn regex_verbose_flag(&self, expr: &Expr, errors: &ErrorCollector) -> Option<bool> {
+        match expr {
+            Expr::BinOp(ExprBinOp {
+                left,
+                op: Operator::BitOr,
+                right,
+                ..
+            }) => match (
+                self.regex_verbose_flag(left, errors),
+                self.regex_verbose_flag(right, errors),
+            ) {
+                (Some(true), _) | (_, Some(true)) => Some(true),
+                (Some(false), Some(false)) => Some(false),
                 _ => None,
             },
-            _ => None,
+            _ => match self.expr_infer(expr, errors) {
+                Type::Literal(literal) => match literal.value {
+                    Lit::Int(value) => value.as_i64().map(|value| value & 64 != 0),
+                    Lit::Bool(_) => Some(false),
+                    Lit::Enum(value) if value.class.has_qname("re", "RegexFlag") => {
+                        Some(matches!(value.member.as_str(), "X" | "VERBOSE"))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
         }
-    }
-
-    fn str_literal(&self, value: &str) -> Type {
-        self.heap.mk_literal(Literal {
-            value: Lit::Str(value.into()),
-            style: LitStyle::Implicit,
-        })
-    }
-
-    fn bool_literal(&self, value: bool) -> Type {
-        self.heap.mk_literal(Literal {
-            value: Lit::Bool(value),
-            style: LitStyle::Implicit,
-        })
     }
 
     /// If `func(args)` is a `.<method>("<literal>", ...)` call, return the receiver's
@@ -3429,22 +3265,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
 
             match base {
-                Type::Annotated(inner, metadata) => {
-                    let ret = self.subscript_infer_for_type_with_key_present(
-                        &inner,
-                        slice,
-                        range,
-                        errors,
-                        key_present,
-                        type_form_context,
-                    );
-                    if self.is_regex_match_type(&inner)
-                        && let Some(groups) = self.regex_groups_from_metadata(&metadata)
-                    {
-                        self.regex_validate_group_key(&groups, slice, errors);
-                    }
-                    ret
-                }
                 Type::Forall(forall) => {
                     if matches!(forall.body, Forallable::TypeAlias(_)) {
                         let tys = self.parse_type_args_for_tparams(

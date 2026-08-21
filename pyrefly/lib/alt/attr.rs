@@ -62,7 +62,6 @@ use crate::types::types::BoundMethodType;
 use crate::types::types::Overload;
 use crate::types::types::SuperObj;
 use crate::types::types::Type;
-use crate::types::types::regex_metadata_groups;
 
 /// The result of looking up an attribute from a particular base.
 /// If the base type is a union, multiple results can be returned
@@ -2599,9 +2598,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::ElementOfTypeVarTuple(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
-            }
-            Type::Annotated(inner, metadata) if regex_metadata_groups(&metadata).is_some() => {
-                self.as_attribute_base1(*inner, acc)
             }
             // At runtime, `Annotated[T, ...]` is an instance of `typing._AnnotatedAlias`,
             // which inherits from `typing._GenericAlias`. We model it as `GenericAlias`.
