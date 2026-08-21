@@ -6,7 +6,6 @@
  */
 
 use std::mem;
-use std::sync::Arc;
 
 use dupe::Dupe as _;
 use pyrefly_graph::index::Idx;
@@ -18,8 +17,6 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::function::BodyKind;
 use pyrefly_types::function::FuncFacts;
-use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
-use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
@@ -881,106 +878,10 @@ impl<'a> BindingsBuilder<'a> {
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
 
         let class_key = self.scopes.current_class_key();
-
-        // Check whether this function is decorated with `@shape_dsl_function`
-        // before `decorators()` takes the decorator list.
-        let is_shape_dsl = x.decorator_list.iter().any(|d| {
-            self.as_special_export(&d.expression) == Some(SpecialExport::ShapeDslFunction)
-        });
-        let is_type_shape_dsl = x.decorator_list.iter().any(|d| {
-            self.as_special_export(&d.expression) == Some(SpecialExport::TypeShapeDslFunction)
-        });
-        if is_shape_dsl && is_type_shape_dsl {
-            self.error(
-                func_name.range(),
-                ErrorKind::InvalidArgument,
-                "`@shape_dsl_function` and `@type_shape_dsl_function` cannot be combined"
-                    .to_owned(),
-            );
-        }
-
-        let type_shape_dsl_def = if is_type_shape_dsl && !is_shape_dsl {
-            let is_top_level = class_key.is_none() && !parent.has_function_ancestor();
-            match ParsedTypeShapeDslFunction::try_new(x.clone(), is_top_level) {
-                Ok(definition) => Some(Arc::new(definition)),
-                Err(error) => {
-                    self.error(
-                        error.range,
-                        ErrorKind::InvalidArgument,
-                        format!("@type_shape_dsl_function {}", error.message),
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // Extract the IR function name from @uses_shape_dsl(ir_fn) if present.
-        let uses_shape_dsl_ir_name = x.decorator_list.iter().find_map(|d| {
-            let call = d.expression.as_call_expr()?;
-            if self.as_special_export(&call.func) != Some(SpecialExport::UsesShapeDsl) {
-                return None;
-            }
-            // The first positional argument is the IR function reference.
-            let first_arg = call.arguments.args.first()?;
-            // Must be a simple name (not a dotted path or arbitrary expression).
-            let name_expr = first_arg.as_name_expr()?;
-            Some(ShortIdentifier::expr_name(name_expr))
-        });
-
-        // Convert the function to DSL IR before `function_header` takes `returns`
-        // and before `function_body` takes `body`.
-        let shape_dsl_def = if is_shape_dsl && !is_type_shape_dsl {
-            // Warn about parameter kinds the DSL silently ignores.
-            if let Some(vararg) = &x.parameters.vararg {
-                self.error(
-                    vararg.range(),
-                    ErrorKind::InvalidArgument,
-                    "@shape_dsl_function: *args parameters are not supported in the shape DSL and will be ignored".to_owned(),
-                );
-            }
-            if let Some(kwarg) = &x.parameters.kwarg {
-                self.error(
-                    kwarg.range(),
-                    ErrorKind::InvalidArgument,
-                    "@shape_dsl_function: **kwargs parameters are not supported in the shape DSL and will be ignored".to_owned(),
-                );
-            }
-            if !x.parameters.kwonlyargs.is_empty() {
-                self.error(
-                    x.parameters.kwonlyargs[0].range(),
-                    ErrorKind::InvalidArgument,
-                    "@shape_dsl_function: keyword-only parameters are not supported in the shape DSL and will be ignored".to_owned(),
-                );
-            }
-            if !x.parameters.posonlyargs.is_empty() {
-                self.error(
-                    x.parameters.posonlyargs[0].range(),
-                    ErrorKind::InvalidArgument,
-                    "@shape_dsl_function: positional-only parameters are not supported in the shape DSL and will be ignored".to_owned(),
-                );
-            }
-
-            match convert_shape_dsl_function(&x) {
-                Ok(dsl_fn) => {
-                    let dsl_fn = Arc::new(dsl_fn);
-                    self.metadata
-                        .push_shape_dsl(func_name.id.clone(), Arc::clone(&dsl_fn));
-                    Some(dsl_fn)
-                }
-                Err(err) => {
-                    self.error(
-                        err.range,
-                        ErrorKind::InvalidArgument,
-                        format!("@shape_dsl_function: {}", err.message),
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let shape_metadata = self.record_shape_function_metadata(
+            &x,
+            class_key.is_none() && !parent.has_function_ancestor(),
+        );
 
         self.maybe_record_pytest_fixture_definition(&x, class_key);
 
@@ -1023,9 +924,9 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
                 parent: parent.dupe(),
-                shape_dsl_def,
-                type_shape_dsl_def,
-                uses_shape_dsl_ir_name,
+                shape_dsl_def: shape_metadata.shape_dsl_def,
+                type_shape_dsl_def: shape_metadata.type_shape_dsl_def,
+                uses_shape_dsl_ir_name: shape_metadata.uses_shape_dsl_ir_name,
             },
         );
 
