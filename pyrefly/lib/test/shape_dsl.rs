@@ -14,6 +14,9 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
+use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
+use pyrefly_types::type_var::FlagDomain;
+use pyrefly_types::type_var::FlagMember;
 use pyrefly_types::type_var::Restriction;
 use ruff_python_ast::name::Name;
 
@@ -270,6 +273,12 @@ def shape_identity(x: IntTuple) -> IntTuple:
 @type_shape_dsl_function
 def select_shape(dim: Int, shape: IntTuple) -> IntTuple:
     return shape
+
+@type_shape_dsl_function
+def diag_extent(n: Int, k: int) -> Int:
+    if k < 0:
+        return n - k
+    return n + k
 "#,
     );
     env
@@ -298,6 +307,12 @@ def select_int(shape: IntTuple, dim: Int) -> Int:
 @type_shape_dsl_function
 def select_shape(dim: Int, shape: IntTuple) -> IntTuple:
     return shape
+
+@type_shape_dsl_function
+def diag_extent(n: Int, k: int) -> Int:
+    if k < 0:
+        return n - k
+    return n + k
 "#,
     );
     let (state, handle) = env.to_state();
@@ -309,23 +324,37 @@ def select_shape(dim: Int, shape: IntTuple) -> IntTuple:
     for (name, expected_parameters, expected_result) in [
         (
             "int_identity",
-            vec![TypeShapeDslDomain::Int],
+            vec![TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)],
             TypeShapeDslDomain::Int,
         ),
         (
             "shape_identity",
-            vec![TypeShapeDslDomain::IntTuple],
+            vec![TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)],
             TypeShapeDslDomain::IntTuple,
         ),
         (
             "select_int",
-            vec![TypeShapeDslDomain::IntTuple, TypeShapeDslDomain::Int],
+            vec![
+                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
+                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int),
+            ],
             TypeShapeDslDomain::Int,
         ),
         (
             "select_shape",
-            vec![TypeShapeDslDomain::Int, TypeShapeDslDomain::IntTuple],
+            vec![
+                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int),
+                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
+            ],
             TypeShapeDslDomain::IntTuple,
+        ),
+        (
+            "diag_extent",
+            vec![
+                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int),
+                TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int)),
+            ],
+            TypeShapeDslDomain::Int,
         ),
     ] {
         let ty = solutions.get(&KeyExport(Name::new(name)));
@@ -429,7 +458,7 @@ def duplicate(x: Int, x: Int) -> Int:  # E: @type_shape_dsl_function parameter n
 
 @type_shape_dsl_function
 def expression(x: Int) -> Int:
-    return x + 1  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+    return x + 1  # E: @type_shape_dsl_function arithmetic return operands must be bare parameter names
 
 @type_shape_dsl_function
 def wrong_name(x: Int) -> Int:
@@ -454,7 +483,7 @@ testcase!(
 from shape_extensions import Int, IntTuple, type_shape_dsl_function
 
 @type_shape_dsl_function
-def missing_parameter(x) -> Int:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`
+def missing_parameter(x) -> Int:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int`, `IntTuple`, `int`, `bool`, or `str`
     return x
 
 @type_shape_dsl_function
@@ -462,7 +491,7 @@ def missing_return(x: Int):  # E: `@type_shape_dsl_function` return must be anno
     return x
 
 @type_shape_dsl_function
-def wrong_type(x: str) -> str:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`  # E: `@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`
+def wrong_type(x: str) -> str:  # E: Flag values are input-only
     return x
 
 @type_shape_dsl_function
@@ -470,11 +499,11 @@ def cross_domain(x: Int) -> IntTuple:
     return x  # E: `@type_shape_dsl_function` return annotation must match returned parameter `x`  # E: Returned type `Int[int]` is not assignable to declared return type `IntTuple`
 
 @type_shape_dsl_function
-def missing_second(x: Int, y) -> Int:  # E: `@type_shape_dsl_function` parameter `y` must be annotated as `Int` or `IntTuple`
+def missing_second(x: Int, y) -> Int:  # E: `@type_shape_dsl_function` parameter `y` must be annotated as `Int`, `IntTuple`, `int`, `bool`, or `str`
     return x
 
 @type_shape_dsl_function
-def invalid_first(x: str, y: Int) -> Int:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int` or `IntTuple`
+def valid_unused_flag(x: str, y: Int) -> Int:
     return y
 
 @type_shape_dsl_function
@@ -1232,6 +1261,8 @@ from identities import shape_identity
 from identities import shape_identity as renamed_identity
 from identities import select_shape
 from identities import select_shape as renamed_select_shape
+from identities import diag_extent
+from identities import diag_extent as renamed_diag_extent
 from shape_extensions import Int, IntTuple
 from torch import Tensor
 from typing import reveal_type
@@ -1248,6 +1279,11 @@ def multi_module_alias[S: IntTuple](x: Tensor[S]) -> Tensor[identities_alias.sel
 def multi_imported[S: IntTuple](x: Tensor[S]) -> Tensor[select_shape(Int[1], S)]: ...
 def multi_import_alias[S: IntTuple](x: Tensor[S]) -> Tensor[renamed_select_shape(Int[1], S)]: ...
 def multi_value_alias[S: IntTuple](x: Tensor[S]) -> Tensor[select_alias(Int[1], S)]: ...
+diag_alias = diag_extent
+def flag_imported() -> Tensor[[diag_extent(Int[3], -2)]]: ...
+def flag_import_alias() -> Tensor[[renamed_diag_extent(Int[3], 2)]]: ...
+def flag_value_alias() -> Tensor[[diag_alias(Int[3], 2)]]: ...
+def flag_qualified() -> Tensor[[identities.diag_extent(Int[3], -2)]]: ...
 
 def test(x: Tensor[[2, 3]]) -> None:
     reveal_type(qualified(x))  # E: revealed type: Tensor[[2, 3]]
@@ -1260,6 +1296,10 @@ def test(x: Tensor[[2, 3]]) -> None:
     reveal_type(multi_imported(x))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(multi_import_alias(x))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(multi_value_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(flag_imported())  # E: revealed type: Tensor[[5]]
+    reveal_type(flag_import_alias())  # E: revealed type: Tensor[[5]]
+    reveal_type(flag_value_alias())  # E: revealed type: Tensor[[5]]
+    reveal_type(flag_qualified())  # E: revealed type: Tensor[[5]]
 "#,
 );
 
@@ -1436,7 +1476,7 @@ def bare_qualified_shape(x: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def nested(x: Int) -> Int:
-    return (official_gradual(),)  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return  # E: Returned type
+    return (official_gradual(),)  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Returned type
 
 @type_shape_dsl_function
 def statement(x: Int) -> Int:
@@ -1445,31 +1485,31 @@ def statement(x: Int) -> Int:
 
 @type_shape_dsl_function
 def non_intrinsic(x: Int) -> Int:
-    return ordinary()  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+    return ordinary()  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def same_spelling_is_not_intrinsic(x: Int) -> Int:
-    return gradual()  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+    return gradual()  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def spoof_class(x: Int) -> Int:
-    return SpoofInt.gradual()  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return  # E: Returned type
+    return SpoofInt.gradual()  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Returned type
 
 @type_shape_dsl_function
 def direct_cycle(x: Int) -> Int:
-    return direct_cycle(x)  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+    return direct_cycle(x)  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def mutual_cycle_left(x: Int) -> Int:
-    return mutual_cycle_right(x)  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+    return mutual_cycle_right(x)  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def mutual_cycle_right(x: Int) -> Int:
-    return mutual_cycle_left(x)  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return
+    return mutual_cycle_left(x)  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def shadowed_module_alias(dsl: Int) -> Int:
-    return dsl.Int.gradual()  # E: @type_shape_dsl_function return value must be a bare parameter name or a gradual return  # E: Object of class `int` has no attribute `Int`
+    return dsl.Int.gradual()  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Object of class `int` has no attribute `Int`
 
 @type_shape_dsl_function
 def wrong_domain(x: Int) -> Int:
@@ -1540,6 +1580,192 @@ def test_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> None:
     assert_type(same_symbol(x), Tensor[[7]])
     assert_type(different_symbols(x, y), Tensor[[int]])
     assert_type(mixed_symbol_literal(x), Tensor[[int]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_flag_values,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Flag, Int, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import Any, Literal, assert_type
+
+@type_shape_dsl_function
+def diag_extent(n: Int, k: int) -> Int:
+    if k < 0:
+        return n - k
+    return n + k
+
+@type_shape_dsl_function
+def subtract_offset(n: Int, k: int) -> Int:
+    return n - k
+
+@type_shape_dsl_function
+def ignore_flags(n: Int, enabled: bool, label: str) -> Int:
+    return n
+
+@type_shape_dsl_function
+def below_minimum(n: Int, k: int) -> Int:
+    if k < -9223372036854775808:
+        return n + k
+    return n
+
+@type_shape_dsl_function
+def negative_cutoff(n: Int, k: int) -> Int:
+    if k < -1:
+        return n - k
+    return n + k
+
+@type_shape_dsl_function
+def above_maximum_threshold(n: Int, k: int) -> Int:
+    if k < 9223372036854775808:
+        return n
+    return n
+
+@type_shape_dsl_function
+def below_minimum_threshold(n: Int, k: int) -> Int:
+    if k < -9223372036854775809:
+        return n
+    return n
+
+def positive() -> Tensor[[diag_extent(Int[3], 2)]]: ...
+def negative() -> Tensor[[diag_extent(Int[3], -2)]]: ...
+def zero() -> Tensor[[diag_extent(Int[3], 0)]]: ...
+def broad() -> Tensor[[diag_extent(Int[3], int)]]: ...
+def dynamic() -> Tensor[[diag_extent(Int[3], Any)]]: ...
+def oversized() -> Tensor[[diag_extent(Int[3], 999999999999999999999999999999)]]: ...
+def overflow() -> Tensor[[diag_extent(Int[9223372036854775807], 1)]]: ...
+def ignored() -> Tensor[[ignore_flags(Int[4], True, "mode")]]: ...
+def ignored_broad() -> Tensor[[ignore_flags(Int[4], bool, str)]]: ...
+def nested_arithmetic_call() -> Tensor[[diag_extent(diag_extent(Int[3], 2), -1)]]: ...
+def minimum_threshold() -> Tensor[[below_minimum(Int[3], -9223372036854775808)]]: ...
+def negative_cutoff_true() -> Tensor[[negative_cutoff(Int[3], -2)]]: ...
+def negative_cutoff_false() -> Tensor[[negative_cutoff(Int[3], -1)]]: ...
+def positive_unrepresentable_threshold() -> Tensor[[above_maximum_threshold(Int[3], 0)]]: ...
+def negative_unrepresentable_threshold() -> Tensor[[below_minimum_threshold(Int[3], 0)]]: ...
+def wrong_bool() -> Tensor[[diag_extent(Int[3], True)]]: ...  # E: Expected a `Flag[int]` argument
+
+def resize[N: IntVar, K: Flag[int]](
+    x: Tensor[[N]], k: K,
+) -> Tensor[[diag_extent(N, K)]]: ...
+def captured[K: Flag[int]](k: K) -> Tensor[[diag_extent(Int[3], K)]]: ...
+def captured_twice[K: Flag[int]](first: K, second: K) -> Tensor[[diag_extent(Int[3], K)]]: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 2
+def symbolic_add[N: IntVar](x: Tensor[[N]]) -> Tensor[[diag_extent(N, 2)]]: ...
+def symbolic_sub[N: IntVar](x: Tensor[[N]]) -> Tensor[[subtract_offset(N, 2)]]: ...
+# Symbolic shape integers are valid `Flag[int]` values, but the DSL can inspect only values that
+# are already concrete. Later generic instantiation does not re-evaluate the DSL call.
+def instantiated_flag[N: IntVar](x: Tensor[[N]]) -> Tensor[[
+    diag_extent(Int[3], Int[N])
+]]: ...
+def instantiated_product_overflow[N: IntVar](x: Tensor[[N]]) -> Tensor[[
+    diag_extent(Int[N * 9223372036854775807], 1)
+]]: ...
+def instantiated_pow_overflow[N: IntVar](x: Tensor[[N]]) -> Tensor[[
+    diag_extent(Int[2 ** N], 1)
+]]: ...
+def symbolic_add_overflow[N: IntVar](x: Tensor[[N]]) -> Tensor[[
+    diag_extent(Int[N + 9223372036854775807], 1)
+]]: ...
+def symbolic_sub_overflow[N: IntVar](x: Tensor[[N]]) -> Tensor[[
+    subtract_offset(Int[N - 9223372036854775807], 2)
+]]: ...
+def symbolic_min_subtraction[N: IntVar](x: Tensor[[N]]) -> Tensor[[
+    subtract_offset(Int[N - 1], -9223372036854775808)
+]]: ...
+
+def test(x: Tensor[[3]], two: Tensor[[2]], sixty_three: Tensor[[63]]) -> None:
+    assert_type(positive(), Tensor[[5]])
+    assert_type(negative(), Tensor[[5]])
+    assert_type(zero(), Tensor[[3]])
+    assert_type(broad(), Tensor[[int]])
+    assert_type(dynamic(), Tensor[[int]])
+    assert_type(oversized(), Tensor[[int]])
+    assert_type(overflow(), Tensor[[int]])
+    assert_type(ignored(), Tensor[[4]])
+    assert_type(ignored_broad(), Tensor[[4]])
+    assert_type(nested_arithmetic_call(), Tensor[[6]])
+    assert_type(minimum_threshold(), Tensor[[3]])
+    assert_type(negative_cutoff_true(), Tensor[[5]])
+    assert_type(negative_cutoff_false(), Tensor[[2]])
+    assert_type(positive_unrepresentable_threshold(), Tensor[[int]])
+    assert_type(negative_unrepresentable_threshold(), Tensor[[int]])
+    assert_type(resize(x, 2), Tensor[[5]])
+    assert_type(resize(x, -2), Tensor[[5]])
+    assert_type(captured_twice(2, 2), Tensor[[5]])
+    captured_twice(2, 3)  # E: Argument `Literal[3]` is not assignable to parameter `second` with type `Literal[2]`
+    assert_type(instantiated_flag(two), Tensor[[int]])
+    assert_type(instantiated_product_overflow(two), Tensor[[int]])
+    assert_type(instantiated_pow_overflow(sixty_three), Tensor[[int]])
+
+def test_symbolic[N: IntVar](x: Tensor[[N]], k: Int[N], literal: Int[2], broad: Int) -> None:
+    assert_type(captured(literal), Tensor[[5]])
+    assert_type(captured(k), Tensor[[int]])
+    assert_type(captured(broad), Tensor[[int]])
+    assert_type(symbolic_add(x), Tensor[[(2 + N)]])
+    assert_type(symbolic_sub(x), Tensor[[(-2 + N)]])
+    assert_type(symbolic_add_overflow(x), Tensor[[int]])
+    assert_type(symbolic_sub_overflow(x), Tensor[[int]])
+    assert_type(symbolic_min_subtraction(x), Tensor[[int]])
+
+def test_union_flag(k: Literal[1, 2]) -> None:
+    assert_type(captured(k), Tensor[[int]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_flag_values,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def scalar_result(n: Int, k: int) -> int:  # E: Flag values are input-only
+    return k
+
+@type_shape_dsl_function
+def return_flag(n: Int, k: int) -> Int:
+    return k  # E: Flag parameter `k` is input-only
+
+@type_shape_dsl_function
+def reversed(n: Int, k: int) -> Int:
+    if 0 < k:  # E: left comparison operand must name a parameter
+        return n
+    return n
+
+@type_shape_dsl_function
+def nonliteral(n: Int, k: int, limit: int) -> Int:
+    if k < limit:  # E: parameter-to-parameter comparisons require `Int` parameters; `Flag[int]` values can only be compared with integer literals
+        return n
+    return n
+
+@type_shape_dsl_function
+def value_literal(n: Int) -> Int:
+    if n < 0:  # E: literal comparison requires the left parameter to be annotated as `int`
+        return n
+    return n
+
+@type_shape_dsl_function
+def wrong_condition_domain(n: Int, enabled: bool) -> Int:
+    if enabled < 0:  # E: literal comparison requires the left parameter to be annotated as `int`
+        return n
+    return n
+
+@type_shape_dsl_function
+def nested_arithmetic(n: Int, k: int) -> Int:
+    return (n + k) + k  # E: arithmetic return operands must be bare parameter names
+
+@type_shape_dsl_function
+def multiplication(n: Int, k: int) -> Int:
+    return n * k  # E: arithmetic return supports only
+
+@type_shape_dsl_function
+def reversed_arithmetic(n: Int, k: int) -> Int:
+    return k + n  # E: arithmetic return requires `Int +/- Flag[int]`
+
+@type_shape_dsl_function
+def wrong_result(n: Int, k: int) -> IntTuple:
+    return n + k  # E: arithmetic return requires `Int +/- Flag[int]`  # E: Returned type
 "#,
 );
 
@@ -1824,7 +2050,7 @@ def shadowed(is_concrete_int: Int, x: Int) -> Int:
 
 @type_shape_dsl_function
 def boolean_or(x: Int, y: Int) -> Int:
-    if dsl.is_concrete_int(x) or dsl.is_concrete_int(y):  # E: @type_shape_dsl_function condition supports only boolean `and`
+    if dsl.is_concrete_int(x) or dsl.is_concrete_int(y):  # E: @type_shape_dsl_function condition supports only the boolean operator `and`
         return x
     return y
 
@@ -1836,7 +2062,7 @@ def other_order(x: Int, y: Int) -> Int:
 
 @type_shape_dsl_function
 def tuple_lt(x: IntTuple, y: IntTuple) -> IntTuple:
-    if x < y:  # E: condition operands must be annotated as `Int`
+    if x < y:  # E: parameter-to-parameter comparisons require `Int` parameters
         return x
     return y
 "#,

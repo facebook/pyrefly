@@ -6,6 +6,7 @@
  */
 
 use std::cmp::Ordering;
+use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::Arc;
@@ -18,11 +19,14 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
+use ruff_python_ast::Number;
+use ruff_python_ast::Operator;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtIf;
 use ruff_python_ast::StmtReturn;
+use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -30,12 +34,16 @@ use ruff_text_size::TextSize;
 
 use crate::dimension::Int;
 use crate::dimension::ShapeError;
+use crate::dimension::canonicalize;
 use crate::dimension::gradual_size;
 use crate::equality::TypeEq as TypeEqTrait;
 use crate::equality::TypeEqCtx;
+use crate::literal::Lit;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::broadcast_shapes;
 use crate::shaped_array::tuple_carrier_to_shape;
+use crate::type_var::FlagDomain;
+use crate::type_var::FlagMember;
 use crate::types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
@@ -53,11 +61,27 @@ impl TypeShapeDslDomain {
     }
 }
 
+/// The input domains accepted by type-level shape DSL functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
+pub enum TypeShapeDslInputDomain {
+    Value(TypeShapeDslDomain),
+    Flag(FlagDomain),
+}
+
+impl fmt::Display for TypeShapeDslInputDomain {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Value(domain) => f.write_str(domain.as_str()),
+            Self::Flag(domain) => write!(f, "Flag[{domain}]"),
+        }
+    }
+}
+
 /// A syntax-validated DSL definition paired with its resolved parameter domains.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub struct ResolvedTypeShapeDslFunction {
     definition: Arc<ValidatedTypeShapeDslFunction>,
-    parameter_domains: Vec<TypeShapeDslDomain>,
+    parameter_domains: Vec<TypeShapeDslInputDomain>,
 }
 
 impl Visit<Type> for TypeShapeDslDomain {
@@ -66,6 +90,16 @@ impl Visit<Type> for TypeShapeDslDomain {
 }
 
 impl VisitMut<Type> for TypeShapeDslDomain {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl Visit<Type> for TypeShapeDslInputDomain {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for TypeShapeDslInputDomain {
     const RECURSE_CONTAINS: bool = false;
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
 }
@@ -114,7 +148,19 @@ pub enum TypeShapeDslIntrinsic {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslReturnKind {
     Parameter(usize),
+    IntFlagArithmetic {
+        left: usize,
+        op: TypeShapeDslArithmeticOp,
+        right: usize,
+    },
     Gradual(TypeShapeDslDomain),
+}
+
+/// Arithmetic supported between an `Int` value and a `Flag[int]` value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TypeShapeDslArithmeticOp {
+    Add,
+    Subtract,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,6 +175,10 @@ pub enum TypeShapeDslConditionKind {
     Equal(usize, usize),
     IsConcreteInt(usize),
     LessThan(usize, usize),
+    FlagIntLessThanLiteral {
+        parameter: usize,
+        literal: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -145,6 +195,37 @@ fn parameter_index(parameters: &Parameters, expr: &Expr) -> Option<usize> {
         .args
         .iter()
         .position(|parameter| parameter.parameter.name.id == name.id)
+}
+
+enum IntegerLiteral {
+    NotLiteral,
+    Unrepresentable,
+    Value(i64),
+}
+
+fn integer_literal(expr: &Expr) -> IntegerLiteral {
+    match expr {
+        Expr::NumberLiteral(number) => match &number.value {
+            Number::Int(value) => value
+                .as_i64()
+                .map_or(IntegerLiteral::Unrepresentable, IntegerLiteral::Value),
+            _ => IntegerLiteral::NotLiteral,
+        },
+        Expr::UnaryOp(unary) if unary.op == UnaryOp::USub => {
+            let Expr::NumberLiteral(number) = unary.operand.as_ref() else {
+                return IntegerLiteral::NotLiteral;
+            };
+            let Number::Int(value) = &number.value else {
+                return IntegerLiteral::NotLiteral;
+            };
+            value
+                .as_i64()
+                .and_then(i64::checked_neg)
+                .or_else(|| (value.as_u64() == Some(i64::MAX as u64 + 1)).then_some(i64::MIN))
+                .map_or(IntegerLiteral::Unrepresentable, IntegerLiteral::Value)
+        }
+        _ => IntegerLiteral::NotLiteral,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -253,10 +334,32 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
                 TypeShapeDslReturnKind::Gradual(domain)
             }
+            Some(Expr::BinOp(binop)) => {
+                let (Some(left), Some(right)) = (
+                    parameter_index(self.parameters, &binop.left),
+                    parameter_index(self.parameters, &binop.right),
+                ) else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: binop.range,
+                        message: "arithmetic return operands must be bare parameter names",
+                    });
+                };
+                let op = match binop.op {
+                    Operator::Add => TypeShapeDslArithmeticOp::Add,
+                    Operator::Sub => TypeShapeDslArithmeticOp::Subtract,
+                    _ => {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: binop.range,
+                            message: "arithmetic return supports only `Int parameter + Flag[int] parameter` or `Int parameter - Flag[int] parameter`",
+                        });
+                    }
+                };
+                TypeShapeDslReturnKind::IntFlagArithmetic { left, op, right }
+            }
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: return_stmt.range,
-                    message: "return value must be a bare parameter name or a gradual return",
+                    message: "return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression",
                 });
             }
         };
@@ -290,7 +393,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             if bool_op.op != BoolOp::And {
                 return Err(TypeShapeDslDefinitionError {
                     range: bool_op.range,
-                    message: "condition supports only boolean `and`",
+                    message: "condition supports only the boolean operator `and`",
                 });
             }
             for value in &bool_op.values {
@@ -319,23 +422,47 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 {
                     return Err(TypeShapeDslDefinitionError {
                         range: compare.range,
-                        message: "comparison must be exactly `<Int parameter> == <Int parameter>` or `<Int parameter> < <Int parameter>`",
+                        message: "comparison must be exactly `<Int parameter> == <Int parameter>`, `<Int parameter> < <Int parameter>`, or `<int parameter> < <integer literal>`",
                     });
                 }
-                let (Some(left), Some(right)) = (
-                    parameter_index(self.parameters, &compare.left),
-                    parameter_index(self.parameters, &compare.comparators[0]),
-                ) else {
+                let Some(left) = parameter_index(self.parameters, &compare.left) else {
                     return Err(TypeShapeDslDefinitionError {
-                        range: compare.range,
-                        message: "condition operands must name parameters",
+                        range: compare.left.range(),
+                        message: "left comparison operand must name a parameter",
                     });
                 };
-                Ok(match compare.ops[0] {
-                    CmpOp::Eq => TypeShapeDslConditionKind::Equal(left, right),
-                    CmpOp::Lt => TypeShapeDslConditionKind::LessThan(left, right),
-                    _ => unreachable!("validated comparison operator is equality or less-than"),
-                })
+                let right = &compare.comparators[0];
+                Ok(
+                    match (compare.ops[0], parameter_index(self.parameters, right)) {
+                        (CmpOp::Eq, Some(right)) => TypeShapeDslConditionKind::Equal(left, right),
+                        (CmpOp::Lt, Some(right)) => {
+                            TypeShapeDslConditionKind::LessThan(left, right)
+                        }
+                        (CmpOp::Lt, None) => {
+                            let literal = match integer_literal(right) {
+                                IntegerLiteral::NotLiteral => {
+                                    return Err(TypeShapeDslDefinitionError {
+                                        range: right.range(),
+                                        message: "right `<` operand must name a parameter or be an integer literal",
+                                    });
+                                }
+                                IntegerLiteral::Unrepresentable => None,
+                                IntegerLiteral::Value(value) => Some(value),
+                            };
+                            TypeShapeDslConditionKind::FlagIntLessThanLiteral {
+                                parameter: left,
+                                literal,
+                            }
+                        }
+                        (CmpOp::Eq, None) => {
+                            return Err(TypeShapeDslDefinitionError {
+                                range: right.range(),
+                                message: "condition operands must name parameters",
+                            });
+                        }
+                        _ => unreachable!("validated comparison operator is equality or less-than"),
+                    },
+                )
             }
             Expr::Call(call)
                 if (self.resolve_intrinsic)(&call.func)
@@ -671,7 +798,7 @@ impl TypeShapeDslCondition {
 impl ResolvedTypeShapeDslFunction {
     pub fn try_new(
         definition: Arc<ValidatedTypeShapeDslFunction>,
-        parameter_domains: Vec<TypeShapeDslDomain>,
+        parameter_domains: Vec<TypeShapeDslInputDomain>,
     ) -> Option<Self> {
         if definition.parameter_count() != parameter_domains.len() {
             return None;
@@ -684,15 +811,14 @@ impl ResolvedTypeShapeDslFunction {
             .definition
             .returns()
             .next()
-            .map(|x| resolved.return_domain(x.kind()))
-            .expect("validated type-level DSL function must return");
-        assert!(
-            resolved
-                .definition
-                .returns()
-                .all(|x| resolved.return_domain(x.kind()) == result_domain),
-            "resolved type-level DSL returns must have one domain"
-        );
+            .and_then(|return_| resolved.return_domain(return_.kind()))?;
+        if !resolved
+            .definition
+            .returns()
+            .all(|return_| resolved.return_domain(return_.kind()) == Some(result_domain))
+        {
+            return None;
+        }
         Some(resolved)
     }
 
@@ -704,7 +830,7 @@ impl ResolvedTypeShapeDslFunction {
         self.definition.parameter_name(index)
     }
 
-    pub fn parameter_domains(&self) -> &[TypeShapeDslDomain] {
+    pub fn parameter_domains(&self) -> &[TypeShapeDslInputDomain] {
         &self.parameter_domains
     }
 
@@ -715,12 +841,17 @@ impl ResolvedTypeShapeDslFunction {
             .next()
             .expect("validated type-level DSL function must return");
         self.return_domain(return_.kind())
+            .expect("resolved type-level DSL returns have a value domain")
     }
 
-    fn return_domain(&self, kind: TypeShapeDslReturnKind) -> TypeShapeDslDomain {
+    fn return_domain(&self, kind: TypeShapeDslReturnKind) -> Option<TypeShapeDslDomain> {
         match kind {
-            TypeShapeDslReturnKind::Parameter(index) => self.parameter_domains[index],
-            TypeShapeDslReturnKind::Gradual(domain) => domain,
+            TypeShapeDslReturnKind::Parameter(index) => match self.parameter_domains[index] {
+                TypeShapeDslInputDomain::Value(domain) => Some(domain),
+                TypeShapeDslInputDomain::Flag(_) => None,
+            },
+            TypeShapeDslReturnKind::IntFlagArithmetic { .. } => Some(TypeShapeDslDomain::Int),
+            TypeShapeDslReturnKind::Gradual(domain) => Some(domain),
         }
     }
 }
@@ -876,8 +1007,52 @@ impl ResolvedTypeShapeDslFunction {
                         .expect("validated return statement must have validation metadata");
                     return DslControlFlow::Return(match kind {
                         TypeShapeDslReturnKind::Parameter(index) => {
-                            DslValue::from_type(&args[index], self.parameter_domains[index])
+                            let TypeShapeDslInputDomain::Value(domain) =
+                                self.parameter_domains[index]
+                            else {
+                                unreachable!("resolved Flag parameters cannot be returned")
+                            };
+                            assert_eq!(
+                                domain,
+                                self.result_domain(),
+                                "resolved parameter return domain must match the result domain"
+                            );
+                            DslValue::from_type(&args[index], domain)
                                 .map_or(DslEvaluation::AutomaticFallback, DslEvaluation::Value)
+                        }
+                        TypeShapeDslReturnKind::IntFlagArithmetic { left, op, right } => {
+                            assert_eq!(
+                                self.result_domain(),
+                                TypeShapeDslDomain::Int,
+                                "resolved arithmetic return must produce Int"
+                            );
+                            assert_eq!(
+                                self.parameter_domains[left],
+                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int),
+                                "resolved arithmetic left operand must be Int"
+                            );
+                            assert_eq!(
+                                self.parameter_domains[right],
+                                TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int)),
+                                "resolved arithmetic right operand must be Flag[int]"
+                            );
+                            let (Some(left), Some(right)) =
+                                (Int::from_type(&args[left]), flag_int_literal(&args[right]))
+                            else {
+                                return DslControlFlow::Return(DslEvaluation::AutomaticFallback);
+                            };
+                            let result = match op {
+                                TypeShapeDslArithmeticOp::Add => {
+                                    Int::add(Type::Int(left), Type::Int(Int::Literal(right)))
+                                }
+                                TypeShapeDslArithmeticOp::Subtract => {
+                                    Int::sub(Type::Int(left), Type::Int(Int::Literal(right)))
+                                }
+                            };
+                            Int::from_type(&canonicalize(Type::Int(result)))
+                                .map_or(DslEvaluation::AutomaticFallback, |result| {
+                                    DslEvaluation::Value(DslValue::Int(result))
+                                })
                         }
                         TypeShapeDslReturnKind::Gradual(_) => DslEvaluation::ExplicitGradual,
                     });
@@ -955,9 +1130,33 @@ impl ResolvedTypeShapeDslFunction {
                     }
                 }
             }
+            TypeShapeDslConditionKind::FlagIntLessThanLiteral { parameter, literal } => {
+                match (flag_int_literal(&args[parameter]), literal) {
+                    (Some(left), Some(right)) if left < right => DslCondition::True,
+                    (Some(_), Some(_)) => DslCondition::False,
+                    _ => DslCondition::Unknown,
+                }
+            }
         }
     }
 }
+
+fn flag_int_literal(ty: &Type) -> Option<i64> {
+    if !FlagDomain::of(FlagMember::Int).accepts(ty) {
+        return None;
+    }
+    // Symbolic shape integers satisfy `Flag[int]`, but DSL flag operations inspect only concrete
+    // runtime values. Generic substitution does not re-evaluate a call that already fell back.
+    match ty {
+        Type::Int(Int::Literal(value)) => Some(*value),
+        Type::Literal(literal) => match &literal.value {
+            Lit::Int(value) => value.as_i64(),
+            _ => unreachable!("`Flag[int]` accepts only integer literals"),
+        },
+        _ => None,
+    }
+}
+
 impl DslValue {
     fn from_type(ty: &Type, domain: TypeShapeDslDomain) -> Option<Self> {
         match domain {
