@@ -752,7 +752,7 @@ export default function Sandbox({
         );
         setInlayHintFunctionForMonaco(
             model,
-            () => pyreService.inlayHint(showParameterHints) || []
+            () => pyreService?.inlayHint(showParameterHints) || []
         );
         setSemanticTokensFunctionForMonaco(model, (range) =>
             pyreService?.semanticTokens(range)
