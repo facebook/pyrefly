@@ -132,6 +132,68 @@ x: int = 0
     assert!(!compact_can_increase);
 }
 
+#[test]
+fn hover_shows_qualified_type_names() {
+    let torch = "class Tensor: ...";
+    let numpy = "class ndarray: ...";
+    let library = r#"
+from numpy import ndarray
+from torch import Tensor
+
+TensorLike = Tensor | ndarray
+
+def foo(value: TensorLike) -> TensorLike: ...
+def shape() -> list[int]: ...
+"#;
+    let main = r#"
+import numpy as np
+import torch as t
+import library as lib
+
+class Local: ...
+
+local = Local()
+#^
+tensor = t.Tensor()
+#^
+array = np.ndarray()
+#^
+combined = lib.foo(tensor)
+#^
+shape = lib.shape()
+#^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("torch", torch),
+            ("numpy", numpy),
+            ("library", library),
+            ("main", main),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("(variable) local: Local"),
+        "Expected hover to omit the current module, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) tensor: torch.Tensor"),
+        "Expected hover to include the canonical torch module, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) array: numpy.ndarray"),
+        "Expected hover to include the canonical numpy module, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) combined: torch.Tensor | numpy.ndarray"),
+        "Expected hover to qualify names in a library type alias, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) shape: list[int]"),
+        "Expected hover to omit the builtins module, got: {report}"
+    );
+}
+
 fn assert_sphinx_resolved_as_link(report: &str, role: &str, target: &str) {
     let raw = format!(":{role}:`{target}`");
     assert!(

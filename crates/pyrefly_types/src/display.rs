@@ -260,22 +260,28 @@ impl<'a> TypeDisplayContext<'a> {
         self.render_self_type_as_self = true;
     }
 
-    /// Always display the module name, except for builtins.
-    pub fn always_display_module_name_except_builtins(&mut self) {
-        let builtins_module = ModuleName::from_str("builtins");
+    fn qualify_qnames_except(&mut self, unqualified_modules: &[ModuleName]) {
         let fake_module = ModuleName::from_str("__pyrefly__type__display__context__");
         for c in self.qnames.values_mut() {
-            if c.info.len() > 1 {
-                continue; // Multiple modules, so we need to keep the module name to disambiguate.
-            }
-            if let Some(value) = c.info.get_mut(&builtins_module) {
-                // Name is a builtin, we set it a default location so we hit the fallback branch in `QNameInfo::fmt`.
-                *value = Some(TextRange::default());
-            } else {
-                // Name is not a builtins, so we add a fake module to force the module name to be displayed.
+            if c.info.len() == 1
+                && !c
+                    .info
+                    .keys()
+                    .any(|module| unqualified_modules.contains(module))
+            {
                 c.info.insert(fake_module, None);
             }
         }
+    }
+
+    /// Qualify names from outside the current module, except for builtins.
+    pub fn always_display_external_qname_module_names(&mut self, current_module: ModuleName) {
+        self.qualify_qnames_except(&[ModuleName::builtins(), current_module]);
+    }
+
+    /// Always display the module name, except for builtins.
+    pub fn always_display_module_name_except_builtins(&mut self) {
+        self.qualify_qnames_except(&[ModuleName::builtins()]);
         self.always_display_module_name = true;
     }
 
