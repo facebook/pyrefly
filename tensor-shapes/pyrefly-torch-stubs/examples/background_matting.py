@@ -493,7 +493,7 @@ class MultiscaleDiscriminator(nn.Module):
         results: list[Tensor] = []
         inp: Tensor = x
         for i in range(self.num_D):
-            model: nn.Sequential = getattr(self, "layer" + str(i))  # type: ignore[assignment]
+            model: nn.Sequential = getattr(self, "layer" + str(i))  # type: ignore[assignment, pyrefly:bad-assignment]
             results.append(model(inp))
             if i != self.num_D - 1:
                 inp = self.downsample(inp)

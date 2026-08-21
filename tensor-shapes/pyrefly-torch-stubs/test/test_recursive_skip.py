@@ -223,7 +223,7 @@ class GenericEncode(nn.Module):
 
     def forward[B: IntVar, C: IntVar](
         self, x: Tensor[[B, C]]
-    ) -> Tensor[[B, C + 4]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C + 4]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class GenericDecode(nn.Module):
@@ -231,13 +231,13 @@ class GenericDecode(nn.Module):
 
     def forward[B: IntVar, C: IntVar](
         self, skip: Tensor[[B, C]], deep: Tensor[[B, C + 4]]
-    ) -> Tensor[[B, C]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class GenericBottleneck(nn.Module):
     """Shape-preserving bottleneck."""
 
-    def forward[B: IntVar, C: IntVar](self, x: Tensor[[B, C]]) -> Tensor[[B, C]]: ...  # type: ignore[return-type]
+    def forward[B: IntVar, C: IntVar](self, x: Tensor[[B, C]]) -> Tensor[[B, C]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 def generic_one_level[B: IntVar, C: IntVar](
@@ -337,7 +337,7 @@ class Down2d(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
-    ) -> Tensor[[B, 2 * C, H // 2, W // 2]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, 2 * C, H // 2, W // 2]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class Up2d(nn.Module):
@@ -348,7 +348,7 @@ class Up2d(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, skip: Tensor[[B, C, H, W]], deep: Tensor[[B, 2 * C, H // 2, W // 2]]
-    ) -> Tensor[[B, C, H, W]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C, H, W]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class Bottleneck2d(nn.Module):
@@ -356,7 +356,7 @@ class Bottleneck2d(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
-    ) -> Tensor[[B, C, H, W]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C, H, W]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class RecursiveUNet2d(nn.Module):
@@ -468,7 +468,7 @@ class DownAdd2d(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
-    ) -> Tensor[[B, C + 64, H // 2, W // 2]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C + 64, H // 2, W // 2]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class UpSub2d(nn.Module):
@@ -476,7 +476,7 @@ class UpSub2d(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, skip: Tensor[[B, C, H, W]], deep: Tensor[[B, C + 64, H // 2, W // 2]]
-    ) -> Tensor[[B, C, H, W]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C, H, W]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class AdditiveUNet(nn.Module):
@@ -533,7 +533,7 @@ class GenericDenseLayer(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
-    ) -> Tensor[[B, C + 32, H, W]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C + 32, H, W]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 @overload
@@ -605,7 +605,7 @@ class SymbolicDenseLayer[GR: IntVar](nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
-    ) -> Tensor[[B, C + GR, H, W]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C + GR, H, W]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 @overload
@@ -694,7 +694,7 @@ class GenericDownStage(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
-    ) -> Tensor[[B, 2 * C, H // 2, W // 2]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, 2 * C, H // 2, W // 2]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 # Now that we have exponentials (SizeExpr::Pow), we CAN express the output type:
@@ -808,7 +808,7 @@ class GenericDenseBlock(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
-    ) -> Tensor[[B, C + 192, H, W]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C + 192, H, W]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class GenericTransition(nn.Module):
@@ -819,7 +819,7 @@ class GenericTransition(nn.Module):
 
     def forward[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
-    ) -> Tensor[[B, C // 2, H // 2, W // 2]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C // 2, H // 2, W // 2]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class GenericDenseStage(nn.Module):
@@ -902,7 +902,7 @@ class DemucsEncoder(nn.Module):
 
     def forward[B: IntVar, C: IntVar, T: IntVar](
         self, x: Tensor[[B, C, T]]
-    ) -> Tensor[[B, 2 * C, T // 2]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, 2 * C, T // 2]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class DemucsDecoder(nn.Module):
@@ -914,7 +914,7 @@ class DemucsDecoder(nn.Module):
 
     def forward[B: IntVar, C: IntVar, T: IntVar](
         self, skip: Tensor[[B, C, T]], deep: Tensor[[B, 2 * C, T // 2]]
-    ) -> Tensor[[B, C, T]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C, T]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class DemucsBottleneck(nn.Module):
@@ -922,7 +922,7 @@ class DemucsBottleneck(nn.Module):
 
     def forward[B: IntVar, C: IntVar, T: IntVar](
         self, x: Tensor[[B, C, T]]
-    ) -> Tensor[[B, C, T]]: ...  # type: ignore[return-type]
+    ) -> Tensor[[B, C, T]]: ...  # type: ignore[return-type, pyrefly:bad-return]
 
 
 class RecursiveDemucs(nn.Module):

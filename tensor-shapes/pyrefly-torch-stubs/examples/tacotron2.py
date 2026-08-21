@@ -172,8 +172,8 @@ class Encoder[EmbDim: IntVar](nn.Module):
         # BiLSTM
         outputs, _h_n, _c_n = self.lstm(h_t)
         # 2 * (EmbDim // 2) = EmbDim can't be proven algebraically
-        assert_type(outputs, Tensor[[B, T, EmbDim]])  # type: ignore[assert-type]
-        return outputs  # type: ignore[bad-return]
+        assert_type(outputs, Tensor[[B, T, EmbDim]])  # type: ignore[pyrefly:assert-type]
+        return outputs  # type: ignore[pyrefly:bad-return]
 
 
 # ============================================================================
@@ -455,7 +455,7 @@ class ConvNorm[InC: IntVar, OutC: IntVar](nn.Module):
     def forward[B: IntVar, T: IntVar](
         self, x: Tensor[[B, InC, T]]
     ) -> Tensor[[B, OutC, T]]:
-        return self.conv(x)  # type: ignore[bad-return]  # wrapper is used only for shape-preserving convs here
+        return self.conv(x)  # type: ignore[pyrefly:bad-return]  # wrapper is used only for shape-preserving convs here
 
 
 class LinearNorm[InF: IntVar, OutF: IntVar](nn.Module):

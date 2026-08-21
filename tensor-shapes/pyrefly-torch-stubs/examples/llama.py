@@ -150,7 +150,7 @@ def apply_rotary_emb[B: IntVar, NHead: IntVar, T: IntVar, HeadDim: IntVar](
     xq_out = torch.view_as_real(xq_c * freqs_bc).flatten(3)
     xk_out = torch.view_as_real(xk_c * freqs_bc).flatten(3)
     # A1: (HeadDim//2)*2 can't be proven equal to HeadDim
-    return xq_out.type_as(xq), xk_out.type_as(xk)  # type: ignore[bad-return]
+    return xq_out.type_as(xq), xk_out.type_as(xk)  # type: ignore[pyrefly:bad-return]
 
 
 # ============================================================================
