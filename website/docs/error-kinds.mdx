@@ -801,6 +801,36 @@ from bar import a  # error: `a` is not exported from module `bar`
 from foo import a as a  # or add `a` to `__all__`
 ```
 
+## implicit-relative-import
+
+Default severity: `ignore`
+
+This error is emitted when an unqualified `import` resolves only via the
+directory-upward fallback search path (walking the importing file's directory
+ancestors toward the configured execution root), and not through any configured
+absolute root. Such imports are fragile: they break when the importing file
+moves to another directory, and they can unexpectedly shadow installed packages
+of the same name.
+
+Pyrefly only reports this when the module is found *exclusively* through the
+fallback path. If the module is also discoverable through a configured search
+path root, no error is reported.
+
+```python
+# src/main.py
+import sibling  # error: `sibling` resolved only via the implicit directory walk
+
+# Fix option 1 — use an explicit relative import:
+from . import sibling
+
+# Fix option 2 — add `src/` to the configured search path
+# (so `sibling` resolves through a configured absolute root).
+```
+
+Suppress with `# pyrefly: ignore [implicit-relative-import]`. Note that
+suppressing `missing-import` does **not** suppress this kind — the two are
+independently configurable.
+
 ## implicitly-defined-attribute
 
 Default severity: `ignore`
