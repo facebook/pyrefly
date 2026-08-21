@@ -3975,7 +3975,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // per iteration. A limit of 3 lets truncation kick in by iteration 4
                 // while keeping the global fixpoint iteration budget at 5.
                 const MAX_INFERRED_RETURN_NESTING_DEPTH: usize = 3;
-                let return_ty = if return_ty.union_width() > MAX_INFERRED_RETURN_UNION_WIDTH {
+                // Callables do not accumulate a nesting level per iteration, so capping one
+                // cannot help convergence and would only replace the types in its signature
+                // with `Any`. Inferred types there are capped when their own function is solved.
+                let return_ty = if return_ty.is_toplevel_callable() {
+                    return_ty
+                } else if return_ty.union_width() > MAX_INFERRED_RETURN_UNION_WIDTH {
                     self.heap.mk_any_implicit()
                 } else {
                     let any = self.heap.mk_any_implicit();
