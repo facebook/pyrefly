@@ -26,6 +26,7 @@ use which::which_in;
 use crate::environment::active_environment::ActiveEnvironment;
 use crate::environment::conda;
 use crate::environment::environment::PythonEnvironment;
+use crate::environment::pixi;
 use crate::environment::venv;
 use crate::util::ConfigOrigin;
 
@@ -165,8 +166,9 @@ impl Interpreters {
     /// 3. Check for an IDE / LSP provided `python-interpreter`.
     /// 4. Check for an active venv or Conda environment.
     /// 5. Check for a `venv` in the current project.
-    /// 6. Use an interpreter we can find on the `$PATH`.
-    /// 7. Give up and return an error.
+    /// 6. Check for a Pixi default environment in the current project.
+    /// 7. Use an interpreter we can find on the `$PATH`.
+    /// 8. Give up and return an error.
     pub(crate) fn find_interpreter(
         &self,
         path: Option<&Path>,
@@ -224,9 +226,9 @@ impl Interpreters {
         }
 
         if let Some(start_path) = path
-            && let Some(venv) = venv::find(start_path)
+            && let Some(interpreter) = Self::find_project_interpreter(start_path)
         {
-            return Ok(ConfigOrigin::auto(venv));
+            return Ok(ConfigOrigin::auto(interpreter));
         }
 
         if let Some(interpreter) = Self::get_default_interpreter() {
@@ -238,6 +240,10 @@ impl Interpreters {
                 but no Python interpreter could be found to query for values. Falling back to \
                 Pyrefly defaults for missing values."
         ))
+    }
+
+    fn find_project_interpreter(start_path: &Path) -> Option<PathBuf> {
+        venv::find(start_path).or_else(|| pixi::find(start_path))
     }
 
     fn interpreter_path_or_cmd(&self) -> anyhow::Result<Option<ConfigOrigin<PathBuf>>> {
@@ -365,6 +371,40 @@ mod test {
             )],
         );
         tempdir
+    }
+
+    fn setup_pixi_test_dir() -> (TempDir, PathBuf) {
+        let tempdir = tempdir().unwrap();
+        let root = tempdir.path();
+        let interpreter = if cfg!(windows) {
+            TestPath::setup_test_directory(
+                root,
+                vec![TestPath::dir(
+                    ".pixi",
+                    vec![TestPath::dir(
+                        "envs",
+                        vec![TestPath::dir("default", vec![TestPath::file("python.exe")])],
+                    )],
+                )],
+            );
+            root.join(".pixi/envs/default/python.exe")
+        } else {
+            TestPath::setup_test_directory(
+                root,
+                vec![TestPath::dir(
+                    ".pixi",
+                    vec![TestPath::dir(
+                        "envs",
+                        vec![TestPath::dir(
+                            "default",
+                            vec![TestPath::dir("bin", vec![TestPath::file("python3")])],
+                        )],
+                    )],
+                )],
+            );
+            root.join(".pixi/envs/default/bin/python3")
+        };
+        (tempdir, interpreter)
     }
 
     /// Produces a conda environment name that should not actually be possible in conda.
@@ -630,6 +670,40 @@ mod test {
         assert_eq!(
             interpreters.to_string(),
             "interpreter at path /resolved/python (from command `poetry env info -e`)"
+        );
+    }
+
+    #[test]
+    fn test_find_project_interpreter_pixi() {
+        let (tempdir, interpreter) = setup_pixi_test_dir();
+
+        assert_eq!(
+            Interpreters::find_project_interpreter(tempdir.path()),
+            Some(interpreter)
+        );
+    }
+
+    #[test]
+    fn test_find_project_interpreter_prefers_venv() {
+        let tempdir = setup_test_dir();
+        let root = tempdir.path();
+        let pixi_environment = root.join(".pixi/envs/default");
+        std::fs::create_dir_all(if cfg!(windows) {
+            pixi_environment.clone()
+        } else {
+            pixi_environment.join("bin")
+        })
+        .unwrap();
+        std::fs::File::create(if cfg!(windows) {
+            pixi_environment.join("python.exe")
+        } else {
+            pixi_environment.join("bin/python3")
+        })
+        .unwrap();
+
+        assert_eq!(
+            Interpreters::find_project_interpreter(root),
+            Some(root.join("venv").join(test_venv_interpreter_name()))
         );
     }
 }
