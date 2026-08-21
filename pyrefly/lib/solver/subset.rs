@@ -2458,18 +2458,21 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             {
                 Err(SubsetError::Other)
             }
-            (Type::ClassDef(got), Type::Type(inner))
-                if let Type::ClassType(want_cls) = &**inner
-                    && self.type_order.is_protocol(want_cls.class_object())
-                    && self.type_order.is_protocol(got) =>
-            {
-                // We only allow concrete class names to be assigned to `type[T]` if `T` is a protocol
-                Err(SubsetError::TypeOfProtocolNeedsConcreteClass(
-                    want_cls.name().clone(),
-                ))
-            }
             (Type::ClassDef(got), Type::Type(want)) => {
-                self.is_subset_eq(&self.type_order.promote_silently(got), want)
+                let res = self.is_subset_eq(&self.type_order.promote_silently(got), want);
+                if res.is_ok()
+                    && got.is_protocol()
+                    && let Type::ClassType(want_cls) = &**want
+                    && want_cls.class_object().is_protocol()
+                {
+                    // We only allow concrete class names to be assigned to `type[T]` if `T` is a protocol.
+                    // We do this check after all other checks on these types so that callers in contexts
+                    // in which this error isn't applicable can drop it without losing other errors.
+                    return Err(SubsetError::TypeOfProtocolNeedsConcreteClass(
+                        want_cls.name().clone(),
+                    ));
+                }
+                res
             }
             (Type::Type(inner), Type::ClassDef(want))
                 if let Type::ClassType(got_cls) = &**inner =>
