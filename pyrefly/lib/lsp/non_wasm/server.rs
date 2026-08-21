@@ -985,6 +985,8 @@ pub struct Server {
     external_references: Arc<dyn ExternalProvider>,
     /// The time at which the server was started, for telemetry.
     server_start_time: Instant,
+    /// The version of Pyrefly that's currently running.
+    server_version: Option<String>,
 }
 
 pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id: RequestId) {
@@ -1501,6 +1503,7 @@ pub fn lsp_loop(
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
     lsp_start_time: Instant,
+    server_version: Option<String>,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
     let lsp_queue = LspQueue::new();
@@ -1525,6 +1528,7 @@ pub fn lsp_loop(
         wrapper,
         thread_count,
         lsp_start_time,
+        server_version,
     );
     std::thread::scope(|scope| {
         // Spawn the event processing loop on a thread with a large stack
@@ -2652,7 +2656,9 @@ impl Server {
                                 )
                             }
                             TypeErrorDisplayStatusVersion::V2 => {
-                                TypeErrorDisplayStatusResponse::V2(default_v2_response())
+                                TypeErrorDisplayStatusResponse::V2(default_v2_response(
+                                    self.server_version.clone(),
+                                ))
                             }
                         }
                     };
@@ -2700,6 +2706,7 @@ impl Server {
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
         lsp_start_time: Instant,
+        server_version: Option<String>,
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
@@ -2784,6 +2791,7 @@ impl Server {
             pending_invalidation_events: Arc::new(Mutex::new(CategorizedEvents::default())),
             external_references,
             server_start_time: lsp_start_time,
+            server_version,
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -3082,6 +3090,7 @@ impl Server {
             config.disable_type_errors_in_ide(path),
             workspace_disable_type_errors,
             workspace_type_checking_mode,
+            self.server_version.clone(),
         )
     }
 
