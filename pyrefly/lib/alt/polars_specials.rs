@@ -723,11 +723,10 @@ fn int_lit_with_dtype(d: PolarsDType, v: i128) -> Option<ExprValue> {
 }
 
 fn float_lit_with_dtype(d: PolarsDType) -> Option<ExprValue> {
-    use PolarsDType::*;
     match d {
-        Float32 => Some(ExprValue::Dtype(Float32)),
-        Float64 => Some(ExprValue::Dtype(Float64)),
-        d if d.is_integer() => Some(ExprValue::Dtype(Float64)),
+        PolarsDType::Float32 => Some(ExprValue::Dtype(PolarsDType::Float32)),
+        PolarsDType::Float64 => Some(ExprValue::Dtype(PolarsDType::Float64)),
+        d if d.is_integer() => Some(ExprValue::Dtype(PolarsDType::Float64)),
         _ => None,
     }
 }
@@ -748,17 +747,16 @@ fn pow(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
 }
 
 fn integer_dtype_with_literal(dtype: PolarsDType, value: i128) -> Option<PolarsDType> {
-    use PolarsDType::*;
     let (lower, upper) = dtype.int_bounds()?;
     if (lower..=upper).contains(&value)
         || value < i64::MIN as i128
         || value > u64::MAX as i128
-        || dtype == UInt128
+        || dtype == PolarsDType::UInt128
     {
         return Some(dtype);
     }
-    if dtype == UInt64 && value < 0 {
-        return Some(Int64);
+    if dtype == PolarsDType::UInt64 && value < 0 {
+        return Some(PolarsDType::Int64);
     }
     let smallest = |candidates: [PolarsDType; 4]| {
         candidates.into_iter().find(|candidate| {
@@ -768,13 +766,29 @@ fn integer_dtype_with_literal(dtype: PolarsDType, value: i128) -> Option<PolarsD
         })
     };
     let literal = if value < 0 {
-        smallest([Int8, Int16, Int32, Int64])
-            .expect("negative literal within i64 bounds must fit Int64")
+        smallest([
+            PolarsDType::Int8,
+            PolarsDType::Int16,
+            PolarsDType::Int32,
+            PolarsDType::Int64,
+        ])
+        .expect("negative literal within i64 bounds must fit Int64")
     } else if dtype.is_signed_int() {
-        smallest([Int8, Int16, Int32, Int64]).unwrap_or(UInt64)
+        smallest([
+            PolarsDType::Int8,
+            PolarsDType::Int16,
+            PolarsDType::Int32,
+            PolarsDType::Int64,
+        ])
+        .unwrap_or(PolarsDType::UInt64)
     } else {
-        smallest([UInt8, UInt16, UInt32, UInt64])
-            .expect("nonnegative literal within u64 bounds must fit UInt64")
+        smallest([
+            PolarsDType::UInt8,
+            PolarsDType::UInt16,
+            PolarsDType::UInt32,
+            PolarsDType::UInt64,
+        ])
+        .expect("nonnegative literal within u64 bounds must fit UInt64")
     };
     dtype.supertype(literal)
 }
@@ -858,25 +872,39 @@ impl Reducer {
     }
 
     fn output_dtype(self, d: PolarsDType) -> Option<PolarsDType> {
-        use PolarsDType::*;
         match self {
             Reducer::Identity => Some(d),
-            Reducer::Count => Some(UInt32),
+            Reducer::Count => Some(PolarsDType::UInt32),
             Reducer::FloatPromote => match d {
-                Float32 => Some(Float32),
-                Boolean => Some(Float64),
-                d if d.is_numeric() => Some(Float64),
+                PolarsDType::Float32 => Some(PolarsDType::Float32),
+                PolarsDType::Boolean => Some(PolarsDType::Float64),
+                d if d.is_numeric() => Some(PolarsDType::Float64),
                 _ => None,
             },
             Reducer::Sum => match d {
-                Boolean => Some(UInt32),
-                Int8 | Int16 | UInt8 | UInt16 => Some(Int64),
-                Int32 | Int64 | UInt32 | UInt64 | Float32 | Float64 => Some(d),
+                PolarsDType::Boolean => Some(PolarsDType::UInt32),
+                PolarsDType::Int8
+                | PolarsDType::Int16
+                | PolarsDType::UInt8
+                | PolarsDType::UInt16 => Some(PolarsDType::Int64),
+                PolarsDType::Int32
+                | PolarsDType::Int64
+                | PolarsDType::UInt32
+                | PolarsDType::UInt64
+                | PolarsDType::Float32
+                | PolarsDType::Float64 => Some(d),
                 _ => None,
             },
             Reducer::Product => match d {
-                UInt64 | Float32 | Float64 => Some(d),
-                Boolean | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 => Some(Int64),
+                PolarsDType::UInt64 | PolarsDType::Float32 | PolarsDType::Float64 => Some(d),
+                PolarsDType::Boolean
+                | PolarsDType::Int8
+                | PolarsDType::Int16
+                | PolarsDType::Int32
+                | PolarsDType::Int64
+                | PolarsDType::UInt8
+                | PolarsDType::UInt16
+                | PolarsDType::UInt32 => Some(PolarsDType::Int64),
                 _ => None,
             },
         }
@@ -3133,7 +3161,7 @@ mod tests {
 
     #[test]
     fn test_pow_dtype_matrix_matches_polars_runtime() {
-        use PolarsDType::*;
+        use pyrefly_types::polars_dtype::PolarsScalarDType::*;
 
         let dtypes = [
             Int8, Int16, Int32, Int64, Int128, UInt8, UInt16, UInt32, UInt64, UInt128, Float32,
@@ -3189,11 +3217,11 @@ mod tests {
             ],
         ];
 
-        for (left, expected_row) in dtypes.iter().zip(expected) {
-            for (right, expected_dtype) in dtypes.iter().zip(expected_row) {
+        for (left, expected_row) in dtypes.into_iter().zip(expected) {
+            for (right, expected_dtype) in dtypes.into_iter().zip(expected_row) {
                 assert_eq!(
-                    pow_dtype(left.clone(), right.clone()),
-                    Some(expected_dtype),
+                    pow_dtype(PolarsDType::Scalar(left), PolarsDType::Scalar(right)),
+                    Some(PolarsDType::Scalar(expected_dtype)),
                     "{} ** {}",
                     left.name(),
                     right.name(),
@@ -3204,14 +3232,20 @@ mod tests {
 
     #[test]
     fn test_pow_rejects_every_nonnumeric_dtype() {
-        use PolarsDType::*;
-
         let nonnumeric = [
-            Boolean, String, Binary, Date, Datetime, Duration, Time, Null, Unknown,
+            PolarsDType::Boolean,
+            PolarsDType::String,
+            PolarsDType::Binary,
+            PolarsDType::Date,
+            PolarsDType::Datetime,
+            PolarsDType::Duration,
+            PolarsDType::Time,
+            PolarsDType::Null,
+            PolarsDType::Unknown,
         ];
         for dtype in nonnumeric {
-            assert_eq!(pow_dtype(dtype.clone(), Int8), None);
-            assert_eq!(pow_dtype(Int8, dtype), None);
+            assert_eq!(pow_dtype(dtype.clone(), PolarsDType::Int8), None);
+            assert_eq!(pow_dtype(PolarsDType::Int8, dtype), None);
         }
     }
 }

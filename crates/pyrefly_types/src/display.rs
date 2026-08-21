@@ -998,7 +998,7 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     output.write_str(name.as_str())?;
                     output.write_str(": ")?;
-                    output.write_str(dtype.name())?;
+                    output.write_fmt(format_args!("{dtype}"))?;
                 }
                 if schema.completeness == SchemaCompleteness::Partial {
                     if !schema.columns.is_empty() {
@@ -1015,7 +1015,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Series(schema) => {
                 self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
                 output.write_str("[")?;
-                output.write_str(schema.dtype.name())?;
+                output.write_fmt(format_args!("{}", schema.dtype))?;
                 output.write_str("]")
             }
             Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
