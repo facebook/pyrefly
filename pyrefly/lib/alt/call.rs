@@ -19,7 +19,9 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
+use pyrefly_types::types::Forall;
 use pyrefly_types::types::NNModuleType;
+use pyrefly_types::types::Overload;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_util::prelude::SliceExt;
@@ -2273,6 +2275,93 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let constructor = self.constructor_to_callable(&self.as_class_type_unchecked(cls));
         // Quantify the free type parameters to make the resulting callable generic.
         self.normalize_class_constructor_tparams(constructor, class_tparams.as_ref())
+    }
+
+    /// Normalize class type parameters for each callable branch in `ty`.
+    /// Normalization sets type parameters that don't appear in the callable to their gradual
+    /// fallback and makes the callable generic over the type parameters that do appear.
+    fn normalize_class_constructor_tparams(&self, mut ty: Type, class_tparams: &TParams) -> Type {
+        self.expand_mut(&mut ty);
+        if let Type::Union(union) = ty {
+            let members = union
+                .members
+                .into_iter()
+                .map(|member| self.normalize_class_constructor_tparams(member, class_tparams))
+                .collect();
+            return self.unions(members);
+        }
+        ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+            let mut parameter_tparams = SmallSet::new();
+            callable
+                .params
+                .visit(&mut |ty| ty.collect_quantifieds(&mut parameter_tparams));
+            for q in class_tparams.iter() {
+                if !parameter_tparams.contains(q) {
+                    let gradual = q.as_gradual_type();
+                    callable
+                        .ret
+                        .subst_mut_fn(&mut |candidate| (candidate == q).then(|| gradual.clone()));
+                }
+            }
+        });
+
+        fn quantify<T: Visit<Type>>(
+            body: &T,
+            tparams: Option<&TParams>,
+            class_tparams: &TParams,
+        ) -> Arc<TParams> {
+            let mut used = SmallSet::new();
+            body.visit(&mut |ty| ty.collect_quantifieds(&mut used));
+            let mut quantifieds = Vec::new();
+            for q in tparams
+                .iter()
+                .flat_map(|tparams| tparams.iter())
+                .chain(class_tparams.iter())
+            {
+                if used.contains(q) && !quantifieds.contains(q) {
+                    quantifieds.push(q.clone());
+                }
+            }
+            Arc::new(TParams::new(quantifieds))
+        }
+
+        match ty {
+            Type::Forall(forall) => {
+                let Forall { tparams, body } = *forall;
+                let tparams = quantify(&body, Some(&tparams), class_tparams);
+                body.forall(tparams)
+            }
+            Type::Overload(Overload {
+                signatures,
+                metadata,
+            }) => {
+                let signatures = signatures.mapped(|sig| {
+                    let (body, tparams) = match sig {
+                        OverloadType::Function(body) => (body, None),
+                        OverloadType::Forall(Forall { tparams, body }) => (body, Some(tparams)),
+                    };
+                    let tparams = quantify(&body, tparams.as_deref(), class_tparams);
+                    if tparams.is_empty() {
+                        OverloadType::Function(body)
+                    } else {
+                        OverloadType::Forall(Forall { tparams, body })
+                    }
+                });
+                self.heap.mk_overload(Overload {
+                    signatures,
+                    metadata,
+                })
+            }
+            Type::Function(body) => {
+                let tparams = quantify(&*body, None, class_tparams);
+                Forallable::Function(*body).forall(tparams)
+            }
+            Type::Callable(body) => {
+                let tparams = quantify(&*body, None, class_tparams);
+                Forallable::Callable(*body).forall(tparams)
+            }
+            ty => ty,
+        }
     }
 
     pub fn expr_call_infer(
