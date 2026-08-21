@@ -611,8 +611,8 @@ fn partial_residual(
         // A positional can't follow a bound keyword, so demote later positionals to keyword-only.
         if matches!(remaining[idx], Param::Pos(..)) {
             for later in remaining.iter_mut().skip(idx + 1) {
-                if let Param::Pos(n, t, r) = later {
-                    *later = Param::KwOnly(n.clone(), t.clone(), r.clone());
+                if matches!(later, Param::Pos(..)) {
+                    *later = later.passed_by_name();
                 }
             }
         }

@@ -1019,6 +1019,17 @@ impl Param {
         }
     }
 
+    pub fn passed_by_name(&self) -> Param {
+        match self {
+            // `Pos` becomes `KwOnly`, the form a caller passing it by name sees.
+            Param::Pos(name, ty, required) => {
+                Param::KwOnly(name.clone(), ty.clone(), required.clone())
+            }
+            // Every other variant is returned unchanged.
+            param => param.clone(),
+        }
+    }
+
     pub fn is_required(&self) -> bool {
         match self {
             Param::PosOnly(_, _, Required::Required)

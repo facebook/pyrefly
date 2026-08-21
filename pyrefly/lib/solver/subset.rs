@@ -218,7 +218,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         result.map_err(|_| SubsetError::Other)
     }
 
-    /// Can a function with l_args be called as a function with u_args?
+    /// Can a function with `l_args` be called as a function with `u_args`?
     fn is_subset_param_list(
         &mut self,
         l_args: &[Param],
@@ -226,16 +226,49 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         l_gradual: bool,
         u_gradual: bool,
     ) -> Result<(), SubsetError> {
-        // Don't short-circuit because we may want to pin/solve variables
-        let result = self.is_subset_param_list_impl(l_args, u_args);
-        match result {
-            Err(_) if !self.solver.strict_callable_subtyping && (l_gradual || u_gradual) => Ok(()),
-            _ => result,
+        // Run the walk before the fallback below, because it may pin/solve variables.
+        let Err(pairwise_error) = self.is_subset_param_list_single_mapping(l_args, u_args) else {
+            return Ok(());
+        };
+        if !self.solver.strict_callable_subtyping && (l_gradual || u_gradual) {
+            return Ok(());
         }
+        // With no positional-or-keyword parameters there is only one mapping, already checked.
+        if !u_args.iter().any(|param| matches!(param, Param::Pos(..))) {
+            return Err(pairwise_error);
+        }
+        // The splits are speculative, so a `Var` pinned by one that then fails must be rolled back.
+        let vars: Vec<Var> = l_args
+            .iter()
+            .chain(u_args)
+            .flat_map(|param| param.as_type().collect_maybe_placeholder_vars())
+            .collect();
+
+        self.solver
+            .with_snapshot(&vars, || {
+                let mut u_split: Vec<Param> = u_args.iter().map(Param::passed_by_name).collect();
+                // A failing all-by-name split reports `pairwise_error`, which diagnoses the
+                // signatures as written; later splits report their own, more specific failure.
+                self.is_subset_param_list_single_mapping(l_args, &u_split)
+                    .map_err(|_| pairwise_error)?;
+
+                // Move the boundary right one parameter at a time; walk `u_args`,
+                // so parameters that were keyword-only are never made positional.
+                for (i, param) in u_args.iter().enumerate() {
+                    if let Param::Pos(name, ty, required) = param {
+                        u_split[i] =
+                            Param::PosOnly(Some(name.clone()), ty.clone(), required.clone());
+                        self.is_subset_param_list_single_mapping(l_args, &u_split)?;
+                    }
+                }
+                Ok(())
+            })
+            .into_result()
     }
 
-    /// Can a function with l_args be called as a function with u_args?
-    fn is_subset_param_list_impl(
+    /// Can a function with `l_args` be called as a function with `u_args`, under the single
+    /// mapping that passes each of `u_args`'s positional-or-keyword parameters positionally?
+    fn is_subset_param_list_single_mapping(
         &mut self,
         l_args: &[Param],
         u_args: &[Param],
@@ -461,7 +494,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     l_keywords.insert(name.clone(), (ty.clone(), *required == Required::Required));
                 }
                 Param::Kwargs(_, ty) => l_kwargs = Some(ty.clone()),
-                _ => (),
+                // A leftover positional-only parameter cannot be filled by name.
+                Param::PosOnly(_, _, Required::Required) => return Err(SubsetError::Other),
+                Param::PosOnly(_, _, Required::Optional(_)) | Param::Varargs(..) => (),
             }
         }
         let mut u_keywords = SmallMap::new();
@@ -472,7 +507,16 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     u_keywords.insert(name.clone(), (ty.clone(), *required == Required::Required));
                 }
                 Param::Kwargs(_, ty) => u_kwargs = Some(ty.clone()),
-                _ => (),
+                // A by-name split can leave `u`'s `*args` after the keyword block, where
+                // no argument can reach it; that needs every earlier parameter passed
+                // positionally, which is the final split.
+                Param::Varargs(..) => (),
+                Param::PosOnly(..) | Param::Pos(..) => {
+                    return Err(SubsetError::InternalError(
+                        "positional parameter of `want` left unconsumed by the positional loop"
+                            .to_owned(),
+                    ));
+                }
             }
         }
         let object_type = self
@@ -1539,13 +1583,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             want,
                         );
                         let vars = fresh_forall.handle.vars().to_vec();
-                        match self
-                            .solver
+                        self.solver
                             .with_snapshot(&vars, || self.is_subset_forall(fresh_forall, want))
-                        {
-                            SubsetWithSnapshotResult::Ok => Ok(()),
-                            SubsetWithSnapshotResult::Err(e) => Err(e),
-                        }
+                            .into_result()
                     }
                 })
                 .is_ok()

@@ -2519,3 +2519,28 @@ if TYPE_CHECKING:
     def f(a: str): ...
     "#,
 );
+
+// `f(1, 2)` fills the implementation's `lower_or_string` and `lower`, while `f(lower=1, upper=2)`
+// fills its `lower` and `upper`: a non-constant mapping. https://github.com/facebook/pyrefly/issues/3587
+testcase!(
+    test_non_constant_param_mapping,
+    r#"
+from typing import overload
+
+@overload
+def f(string: str, /) -> None: ...
+@overload
+def f(lower: int, upper: int) -> None: ...
+def f(
+    lower_or_string: str | int | None = None,
+    /,
+    lower: int | None = None,
+    upper: int | None = None,
+) -> None: ...
+
+f("a")
+f(1, 2)
+f(1, upper=2)
+f(lower=1, upper=2)
+    "#,
+);
