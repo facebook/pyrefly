@@ -75,6 +75,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 use vec1::vec1;
 
@@ -1394,10 +1395,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 continue;
             };
             let field_name = &field_identifier.id;
-            if mapped_fields.contains_key(field_name) {
+            if mapped_fields.contains(field_name) {
                 let expected_ty = self.sqlalchemy_mapped_field_type(&model, field_name);
                 let got_ty = self.expr_infer(&keyword.value, errors);
-                if !self.is_subset_eq(&got_ty, &expected_ty) {
+                if !self.is_subset_eq(&got_ty, &expected_ty)
+                    && !Self::is_sqlalchemy_owned_type(&got_ty)
+                {
                     self.error(
                         errors,
                         keyword.value.range(),
@@ -1412,12 +1415,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 let mut builder = errors.error_builder(
                     field_identifier.range(),
-                    ErrorKind::BadArgumentType,
+                    ErrorKind::UnexpectedKeyword,
                     format!("Unexpected SQLAlchemy update field `{field_name}`"),
                 );
                 if let Some(suggestion) = best_suggestion(
                     field_name,
-                    mapped_fields.keys().map(|candidate| (candidate, 0usize)),
+                    mapped_fields.iter().map(|candidate| (candidate, 0usize)),
                 ) {
                     builder = builder.with_detail(format!("Did you mean `{suggestion}`?"));
                 }
@@ -1446,11 +1449,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return false;
         };
         func_id.qname.id().as_str() == "update"
-            && func_id
-                .qname
-                .module_name()
-                .as_str()
-                .starts_with("sqlalchemy")
+            && Self::is_sqlalchemy_module(func_id.qname.module_name())
+    }
+
+    fn is_sqlalchemy_module(module: ModuleName) -> bool {
+        let name = module.as_str();
+        // The `.` keeps unrelated distributions such as `sqlalchemy_utils` out.
+        name == "sqlalchemy" || name.starts_with("sqlalchemy.")
+    }
+
+    /// SQLAlchemy accepts a SQL expression anywhere a column value is expected, so
+    /// a value the library itself produced is not checked against the mapped type.
+    fn is_sqlalchemy_owned_type(ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) => Self::is_sqlalchemy_module(cls.qname().module_name()),
+            Type::Annotated(inner, _) => Self::is_sqlalchemy_owned_type(inner),
+            Type::Union(union) => union.members.iter().any(Self::is_sqlalchemy_owned_type),
+            _ => false,
+        }
     }
 
     fn sqlalchemy_update_model_from_call(&self, call: &ExprCall) -> Option<Class> {
@@ -1466,7 +1482,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn sqlalchemy_mapped_model_fields(&self, model: &Class) -> SmallMap<Name, ()> {
+    fn sqlalchemy_mapped_model_fields(&self, model: &Class) -> SmallSet<Name> {
         self.get_class_field_map(model)
             .into_iter()
             .filter_map(|(name, field)| {
@@ -1474,13 +1490,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return None;
                 }
                 let (_, annotation, _) = field.for_variance_inference();
-                if annotation.is_some_and(|annotation| {
-                    Self::is_sqlalchemy_mapped_annotation(annotation.get_type())
-                }) {
-                    Some((name, ()))
-                } else {
-                    None
-                }
+                annotation
+                    .is_some_and(|annotation| {
+                        Self::is_sqlalchemy_mapped_annotation(annotation.get_type())
+                    })
+                    .then_some(name)
             })
             .collect()
     }
