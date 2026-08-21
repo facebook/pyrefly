@@ -5,6 +5,9 @@ name = "example-project"
 version = "0.1.0"
 
 [tool.pyrefly]
+# Configuration inheritance
+extends = "base.toml"
+
 # Basic project configuration
 project-includes = ["src", "tests"]
 project-excludes = ["**/node_modules", "**/__pycache__"]

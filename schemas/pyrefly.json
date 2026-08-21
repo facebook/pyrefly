@@ -105,6 +105,10 @@
     {
       "type": "object",
       "properties": {
+        "extends": {
+          "description": "Path to a pyrefly.toml or pyproject.toml [tool.pyrefly] configuration to inherit. The current file's explicit settings override inherited settings, and paths in each file are resolved relative to that file.",
+          "type": "string"
+        },
         "preset": {
           "description": "Named preset that provides default error severities and behavior settings. User-specified settings override the preset.",
           "type": "string",

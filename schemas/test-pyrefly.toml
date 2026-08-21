@@ -4,6 +4,9 @@
 # Preset (named collection of defaults applied as the base config)
 preset = "legacy"
 
+# Configuration inheritance
+extends = "base.toml"
+
 # Basic project configuration
 project-includes = ["src", "tests"]
 project-excludes = ["**/node_modules", "**/__pycache__"]

@@ -2290,10 +2290,20 @@ impl<'a> Transaction<'a> {
         self.invalidate_disk(&files);
 
         // If any config files changed, we need to invalidate the config step.
-        if events.iter().any(|x| {
-            x.file_name()
-                .and_then(|x| x.to_str())
-                .is_some_and(|x| ConfigFile::CONFIG_FILE_NAMES.contains(&x))
+        if events.iter().any(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| ConfigFile::CONFIG_FILE_NAMES.contains(&name))
+                || self
+                    .data
+                    .updated_modules
+                    .iter_unordered()
+                    .any(|(_, module)| module.config.read().extended_config_paths.contains(path))
+                || self
+                    .readable
+                    .modules
+                    .values()
+                    .any(|module| module.config.extended_config_paths.contains(path))
         }) {
             self.invalidate_config();
         }

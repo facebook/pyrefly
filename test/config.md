@@ -196,6 +196,19 @@ Configuration at `*/config_finder/project/pyrefly.toml` (glob)
 [0]
 ```
 
+## A pyrefly.toml can extend pyproject.toml
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/extends/src && \
+> printf '[tool.pyrefly]\npreset = "strict"\n' > $TMPDIR/extends/pyproject.toml && \
+> printf 'extends = "pyproject.toml"\nskip-interpreter-query = true\n' > $TMPDIR/extends/pyrefly.toml && \
+> printf 'def f(x):\n    return x\n' > $TMPDIR/extends/src/a.py && \
+> $PYREFLY check -c $TMPDIR/extends/pyrefly.toml --output-format=min-text $TMPDIR/extends/src/a.py
+ERROR */extends/src/a.py:1:7-8: `f` is missing an annotation for parameter `x` [implicit-any-parameter] (glob)
+ INFO 1 error
+[1]
+```
+
 ## Skip hidden directories
 
 ```scrut {output_stream.stdout}
