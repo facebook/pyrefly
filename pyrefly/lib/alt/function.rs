@@ -2532,7 +2532,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {
         self.bind_function(
             t,
-            &self.heap.mk_type_of(self.heap.mk_self_type(cls)),
+            &self.heap.mk_type_of(self.heap.mk_class_type(cls)),
             false,
             &mut |a, b| self.is_subset_eq(a, b),
         )

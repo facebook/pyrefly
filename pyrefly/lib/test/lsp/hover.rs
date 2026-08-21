@@ -2313,7 +2313,7 @@ class DCTransformDeclarative(DeclarativeAttributeIntercept):
         "Hover must not expose an internal inference variable, got: {report}"
     );
     assert!(
-        report.contains(") -> Self@DeclarativeAttributeIntercept: ..."),
+        report.contains(") -> DeclarativeAttributeIntercept: ..."),
         "Hover should resolve the constructor's return type, got: {report}"
     );
 }

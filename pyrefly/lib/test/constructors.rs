@@ -1336,3 +1336,26 @@ class Unused(Generic[T]):
 unused_ok: Callable[[int], Unused[str]] = Unused
     "#,
 );
+
+testcase!(
+    test_class_object_as_callable_with_cls_annotation,
+    r#"
+from typing import Callable, TypeVar
+S = TypeVar("S")
+class C:
+    def __new__(cls: type[S], x: int) -> list[S]: ...
+ok: Callable[[int], list[C]] = C
+    "#,
+);
+
+testcase!(
+    test_generic_class_object_as_callable_with_cls_annotation,
+    r#"
+from typing import Callable, Generic, TypeVar
+T = TypeVar("T")
+S = TypeVar("S")
+class C(Generic[T]):
+    def __new__(cls: type[S], x: T) -> list[S]: ...
+ok: Callable[[int], list[C[int]]] = C
+    "#,
+);
