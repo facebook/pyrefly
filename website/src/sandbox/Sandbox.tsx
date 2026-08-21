@@ -60,7 +60,7 @@ export interface PyreflyState {
     autoComplete: (line: number, column: number) => any;
     gotoDefinition: (line: number, column: number) => monaco.IRange[] | null;
     hover: (line: number, column: number) => any;
-    inlayHint: () => any;
+    inlayHint: (callArgumentNames: boolean) => any;
     semanticTokens: (range: any) => any;
     semanticTokensLegend: () => any;
 }
@@ -127,6 +127,7 @@ export default function Sandbox({
     const [activeTab, setActiveTab] = useState<string>('errors');
     const [isHovered, setIsHovered] = useState(false);
     const [pythonVersion, setPythonVersion] = useState('3.12');
+    const [showParameterHints, setShowParameterHints] = useState(false);
     // Absolute pixel height for the editor pane (null = not yet initialized)
     const [editorHeight, setEditorHeight] = useState<number | null>(null);
     const [isResizing, setIsResizing] = useState(false);
@@ -552,6 +553,17 @@ export default function Sandbox({
                     </button>
                 )}
             </div>
+            <label {...stylex.props(styles.parameterHintToggle)}>
+                <input
+                    id="parameter-hints-toggle"
+                    type="checkbox"
+                    checked={showParameterHints}
+                    onChange={(event) =>
+                        setShowParameterHints(event.target.checked)
+                    }
+                />
+                Parameter hints
+            </label>
         </div>
     );
 
@@ -695,7 +707,7 @@ export default function Sandbox({
     // Recheck when pyre service or model changes
     useEffect(() => {
         forceRecheck();
-    }, [pyreService, model]);
+    }, [pyreService, model, showParameterHints]);
 
     function updateAllFiles(forceUpdate: boolean): boolean {
         if (models.size > 0 && pyreService && model) {
@@ -740,7 +752,7 @@ export default function Sandbox({
         );
         setInlayHintFunctionForMonaco(
             model,
-            () => pyreService?.inlayHint() || []
+            () => pyreService.inlayHint(showParameterHints) || []
         );
         setSemanticTokensFunctionForMonaco(model, (range) =>
             pyreService?.semanticTokens(range)
@@ -1652,6 +1664,17 @@ const styles = stylex.create({
         alignItems: 'center',
         gap: '4px',
         marginLeft: '8px', // Small gap from last tab
+    },
+    parameterHintToggle: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        marginLeft: 'auto',
+        padding: '0 12px',
+        color: 'var(--color-text)',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        userSelect: 'none',
     },
     actionButton: {
         border: 'none',
