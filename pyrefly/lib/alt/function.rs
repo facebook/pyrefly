@@ -2538,21 +2538,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Bind `__new__` while keeping class type parameters used by the constructor callable.
-    pub fn bind_dunder_new_for_class_def(&self, t: &Type, cls: ClassType) -> Option<Type> {
-        let class_tparams = self.get_class_tparams(cls.class_object());
-        let mut bound = self.bind_function(
-            t,
-            &self.heap.mk_type_of(self.heap.mk_class_type(cls)),
-            false,
-            &mut |a, b| self.is_subset_eq(a, b),
-        )?;
-        self.expand_mut(&mut bound);
-        Some(self.normalize_class_constructor_tparams(bound, class_tparams.as_ref()))
-    }
-
-    /// Normalize class type parameters independently for each callable branch in `ty`.
-    fn normalize_class_constructor_tparams(&self, mut ty: Type, class_tparams: &TParams) -> Type {
+    /// Normalize class type parameters for each callable branch in `ty`.
+    /// Normalization sets type parameters that don't appear in the callable to their gradual
+    /// fallback and makes the callable generic over the type parameters that do appear.
+    pub fn normalize_class_constructor_tparams(
+        &self,
+        mut ty: Type,
+        class_tparams: &TParams,
+    ) -> Type {
+        self.expand_mut(&mut ty);
+        if let Type::Union(union) = ty {
+            let members = union
+                .members
+                .into_iter()
+                .map(|member| self.normalize_class_constructor_tparams(member, class_tparams))
+                .collect();
+            return self.unions(members);
+        }
         ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
             let mut parameter_tparams = SmallSet::new();
             callable
@@ -2628,28 +2630,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Bind a `__init__` method for constructor callable conversion.
-    /// Strips the first parameter and sets the return type to the first param's type.
+    /// Attempts to strip the first parameter and sets the return type to the first param's type.
     /// Does not instantiate type variables (they should be inferred at the call site).
-    pub fn bind_dunder_init_for_callable(&self, m: &BoundMethod) -> Option<Type> {
-        self.bind_dunder_init_type(m.func.clone().as_type(), &m.obj)
-    }
-
-    /// Bind `__init__` while keeping class type parameters used by the constructor callable.
-    pub fn bind_dunder_init_for_class_def(&self, t: &Type, cls: ClassType) -> Option<Type> {
-        let class_tparams = self.get_class_tparams(cls.class_object());
-        let mut bound = self.bind_dunder_init_type(t.clone(), &self.heap.mk_class_type(cls))?;
-        self.expand_mut(&mut bound);
-        Some(self.normalize_class_constructor_tparams(bound, class_tparams.as_ref()))
-    }
-
-    fn bind_dunder_init_type(&self, mut func_type: Type, obj: &Type) -> Option<Type> {
-        // For each callable, set its return type to its first param's type (i.e. `self`).
-        func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
-            if let Some(self_type) = c.get_first_param() {
-                c.ret = self_type.clone();
-            }
-        });
-        self.bind_function(&func_type, obj, true, &mut |_, _| false)
+    pub fn bind_dunder_init(&self, mut t: Type, cls: &ClassType) -> Type {
+        let bound = if let Type::BoundMethod(m) = &t {
+            let mut func_type = m.func.clone().as_type();
+            // For each callable, set its return type to its first param's type (i.e. `self`).
+            func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
+                if let Some(self_type) = c.get_first_param() {
+                    c.ret = self_type.clone();
+                }
+            });
+            self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
+        } else {
+            None
+        };
+        bound.unwrap_or_else(|| {
+            // Turn a `__init__` that could not be bound into a constructor callable by setting its return
+            // type, without stripping the `self` parameter.
+            let ret_type = t
+                .callable_first_param(self.heap)
+                .unwrap_or_else(|| self.heap.mk_class_type(cls.clone()));
+            t.transform_toplevel_callable(&mut |c: &mut Callable| c.ret = ret_type.clone());
+            t
+        })
     }
 
     /// Strip the first parameter from a BoundMethodType and optionally instantiate

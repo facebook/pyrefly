@@ -63,6 +63,7 @@ use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
+use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::function::FuncMetadata;
 use crate::types::function::Function;
@@ -2194,28 +2195,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn constructor_to_callable(&self, cls: &ClassType) -> Type {
-        let new_attr_ty = self.get_dunder_new(cls, false);
-        let init_attr_ty = self.get_dunder_init(cls, false);
-        self.constructor_to_callable_impl(cls, new_attr_ty, init_attr_ty, false)
-    }
-
-    /// Convert a bare class definition while keeping its type parameters generic.
-    pub fn constructor_to_callable_for_class_def(&self, cls: &ClassType) -> Option<Type> {
-        let new_attr_ty = self.get_dunder_new_for_class_def(cls);
-        let init_attr_ty = self.get_dunder_init_for_class_def(cls);
-        if new_attr_ty.is_none() && init_attr_ty.is_none() {
-            return None;
-        }
-        Some(self.constructor_to_callable_impl(cls, new_attr_ty, init_attr_ty, true))
-    }
-
-    fn constructor_to_callable_impl(
-        &self,
-        cls: &ClassType,
-        new_attr_ty: Option<Type>,
-        init_attr_ty: Option<Type>,
-        preserve_class_tparams: bool,
-    ) -> Type {
         let class_type = self.heap.mk_class_type(cls.clone());
         if let Some(metaclass_call_attr_ty) = self.get_metaclass_dunder_call(cls) {
             // Use the metaclass __call__ directly (ignoring __new__ and __init__) when either:
@@ -2240,14 +2219,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ))
         };
         // Check the __new__ method and whether it comes from object or has been overridden
-        let bind_new = |t: Type| {
-            if preserve_class_tparams {
-                self.bind_dunder_new_for_class_def(&t, cls.clone())
-            } else {
-                self.bind_dunder_new(&t, cls.clone())
-            }
-        };
-        let (new_attr_ty, overrides_new) = if let Some(t) = new_attr_ty.and_then(bind_new) {
+        let bound_new = self
+            .get_dunder_new(cls, false)
+            .and_then(|t| self.bind_dunder_new(&t, cls.clone()));
+        let (new_attr_ty, overrides_new) = if let Some(t) = bound_new {
             if t.callable_return_type(self.heap)
                 .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
             {
@@ -2259,27 +2234,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (default_constructor(), false)
         };
         // Check the __init__ method and whether it comes from object or has been overridden
-        let (init_attr_ty, overrides_init) = if let Some(t) = init_attr_ty {
-            // Try to strip self param and set return type (for generic handling)
-            let bound = if preserve_class_tparams {
-                self.bind_dunder_init_for_class_def(&t, cls.clone())
-            } else if let Type::BoundMethod(ref method) = t {
-                self.bind_dunder_init_for_callable(method)
-            } else {
-                None
-            };
-            let t = if let Some(bound) = bound {
-                bound
-            } else {
-                // Fallback: just set the return type without stripping self
-                let ret_type = t
-                    .callable_first_param(self.heap)
-                    .unwrap_or_else(|| class_type.clone());
-                let mut t = t;
-                t.transform_toplevel_callable(&mut |c: &mut Callable| c.ret = ret_type.clone());
-                t
-            };
-            (t, true)
+        let (init_attr_ty, overrides_init) = if let Some(t) = self.get_dunder_init(cls, false) {
+            (self.bind_dunder_init(t, cls), true)
         } else {
             (default_constructor(), false)
         };
@@ -2304,6 +2260,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If both are overridden, take the union
             self.unions(vec![new_attr_ty, init_attr_ty])
         }
+    }
+
+    /// Convert a bare class definition while keeping its type parameters generic.
+    pub fn constructor_to_callable_for_class_def(&self, cls: &Class) -> Type {
+        let class_tparams = self.get_class_tparams(cls);
+        if class_tparams.is_empty() {
+            return Type::type_of(self.promote_silently(cls));
+        }
+        // `cls` is generic. `constructor_to_callable` converts it to a constructor in which its
+        // type parameters are free in the signature.
+        let constructor = self.constructor_to_callable(&self.as_class_type_unchecked(cls));
+        // Quantify the free type parameters to make the resulting callable generic.
+        self.normalize_class_constructor_tparams(constructor, class_tparams.as_ref())
     }
 
     pub fn expr_call_infer(

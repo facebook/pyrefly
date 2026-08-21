@@ -1308,3 +1308,31 @@ class Outer:
 Outer(G([G([G([B()])])]))  # E: Argument `G[G[G[B]]]` is not assignable to parameter `g` with type `G[G[G[A]]]`
     "#,
 );
+
+testcase!(
+    test_generic_class_object_as_callable,
+    r#"
+from typing import Callable, Generic, TypeVar
+T = TypeVar("T")
+
+class NewAndInit(Generic[T]):
+    def __new__(cls, x: T) -> "NewAndInit[T]": ...
+    def __init__(self, x: T) -> None: ...
+
+both_ok: Callable[[int], NewAndInit[int]] = NewAndInit
+both_bad: Callable[[int], NewAndInit[str]] = NewAndInit  # E: `type[NewAndInit]` is not assignable to `(int) -> NewAndInit[str]`
+
+# A class that defines no constructor of its own is constructed with no arguments, and its type
+# parameters are gradual because there is nothing to infer them from.
+class Bare(Generic[T]): ...
+
+bare_ok: Callable[[], Bare[int]] = Bare
+bare_bad: Callable[[int], Bare[int]] = Bare  # E: `type[Bare]` is not assignable to `(int) -> Bare[int]`
+
+# A type parameter that the constructor does not mention is likewise gradual.
+class Unused(Generic[T]):
+    def __init__(self, x: int) -> None: ...
+
+unused_ok: Callable[[int], Unused[str]] = Unused
+    "#,
+);

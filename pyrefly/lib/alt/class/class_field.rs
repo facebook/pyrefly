@@ -5096,28 +5096,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn get_constructor_method_for_class_def(&self, cls: &ClassType, name: &Name) -> Option<Type> {
-        if self.get_class_tparams(cls.class_object()).is_empty() {
-            return None;
-        }
-        let member = self.get_class_member_with_defining_class(cls.class_object(), name)?;
-        if member.is_defined_on("builtins", "object") {
-            return None;
-        }
-        self.as_class_attribute_inner(name, &member.value, &ClassBase::ClassDef(cls.clone()), None)
-            .as_instance_method()
-    }
-
-    /// Get `__new__` through generic class-definition access.
-    pub fn get_dunder_new_for_class_def(&self, cls: &ClassType) -> Option<Type> {
-        self.get_constructor_method_for_class_def(cls, &dunder::NEW)
-    }
-
-    /// Get `__init__` through generic class-definition access.
-    pub fn get_dunder_init_for_class_def(&self, cls: &ClassType) -> Option<Type> {
-        self.get_constructor_method_for_class_def(cls, &dunder::INIT)
-    }
-
     fn get_dunder_init_helper(&self, instance: &Instance, get_object_init: bool) -> Option<Type> {
         let init_method =
             self.get_class_member_with_defining_class(instance.class, &dunder::INIT)?;
