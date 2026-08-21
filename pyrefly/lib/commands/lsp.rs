@@ -136,6 +136,7 @@ pub fn run_lsp(
     thread_count: ThreadCount,
 ) -> anyhow::Result<()> {
     let lsp_start_time = Instant::now();
+    let server_version = server_info.as_ref().and_then(|i| i.version.clone());
     if let Some(initialize_info) =
         initialize_connection(&connection, &mut reader, args.indexing_mode, server_info)?
     {
@@ -153,6 +154,7 @@ pub fn run_lsp(
             wrapper,
             thread_count,
             lsp_start_time,
+            server_version,
         )?;
     }
     Ok(())
