@@ -5,10 +5,14 @@
 
 from __future__ import annotations
 
-from typing import Any, cast, Literal
+from typing import Any, assert_type, cast, Literal
 
 import numpy as np
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, IntTuple
+
+GRADUAL_SHAPE_RUNTIME_TESTS = {
+    "test_binary_ufuncs_fall_back_for_unknown_shapes",
+}
 
 
 def make_array(shape: Any, value: Any = 1.0) -> Any:
@@ -61,17 +65,54 @@ def test_binary_ufuncs_broadcast_higher_rank_arrays() -> None:
     assert_shape(np.arctan2(a, b), (2, 3, 4, 5))
 
 
+def test_binary_ufuncs_fall_back_for_unknown_shapes() -> None:
+    unknown = cast("np.ndarray", make_array((2, 3)))
+    concrete = np.ones((2, 3), dtype=np.int64)
+
+    minimum = np.minimum(unknown, concrete)
+    # TODO(stroxler): Preserve more precision when broadcasting against unknown shapes.
+    assert_type(minimum, np.ndarray[IntTuple])
+    assert minimum.shape == (2, 3)
+
+
+def test_binary_ufuncs_keep_broad_mixed_dtype_results() -> None:
+    left = np.ones((2, 1), dtype=np.float32)
+    right = np.ones((1, 3), dtype=np.int64)
+
+    minimum = np.minimum(left, right)
+    assert_type(minimum, np.ndarray[[2, 3], Any])
+    assert_shape(minimum, (2, 3))
+
+
 def test_binary_ufuncs_reject_incompatible_broadcast() -> None:
     a = np.ones((3, 4))
     b = np.ones(5)
 
     assert_shape(np.minimum(a, np.ones((3, 4))), (3, 4))
     try:
-        np.minimum(a, b)  # E: operands could not be broadcast together
+        np.minimum(  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[4] with dimension Int[5] at position 1
+            a, b
+        )
     except ValueError:
         pass
     else:
         raise AssertionError("expected NumPy to reject incompatible shapes")
+
+
+def test_binary_ufuncs_remain_positional_only() -> None:
+    a = np.ones((3, 4))
+    b = np.ones((3, 4))
+
+    assert_shape(np.minimum(a, b), (3, 4))
+    try:
+        np.minimum(
+            x1=a,  # E: Expected argument `x1` to be positional
+            x2=b,  # E: Expected argument `x2` to be positional
+        )
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to require positional arguments")
 
 
 def test_trig_preserves_shape() -> None:
