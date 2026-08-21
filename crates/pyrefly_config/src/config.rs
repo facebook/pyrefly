@@ -752,6 +752,13 @@ impl ConfigFile {
             result.fallback_search_path = FallbackSearchPath::Explicit(Arc::new(vec![import_root]));
         } else {
             result.import_root = Some(import_root);
+            if matches!(layout, ProjectLayout::Src) {
+                // Pytest projects commonly keep importable test modules beside `src/`.
+                // Keep the project root lower precedence so modules under `src/` retain their
+                // canonical names.
+                result.fallback_search_path =
+                    FallbackSearchPath::Explicit(Arc::new(vec![root.to_path_buf()]));
+            }
         }
         // ignore failures rewriting path to config, since we're trying to construct
         // an ephemeral config for the user, and it's not fatal (but things might be
