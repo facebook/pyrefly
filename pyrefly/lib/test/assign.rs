@@ -57,6 +57,30 @@ frame["end"] = frame["start"].shift(-1)
 );
 
 testcase!(
+    test_subscript_assign_implicit_any_still_narrows,
+    r#"
+from typing import assert_type
+
+def f(frame):
+    values: list[float] = []
+    frame["start"] = values
+    assert_type(frame["start"], list[float])
+"#,
+);
+
+testcase!(
+    test_subscript_assign_error_any_still_narrows,
+    r#"
+from typing import assert_type
+
+def f(frame: MissingType) -> None:  # E: Could not find name `MissingType`
+    values: list[float] = []
+    frame["start"] = values
+    assert_type(frame["start"], list[float])
+"#,
+);
+
+testcase!(
     test_error_assign,
     r#"
 x: str = 1  # E: `Literal[1]` is not assignable to `str`
