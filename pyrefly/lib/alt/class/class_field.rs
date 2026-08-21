@@ -111,6 +111,7 @@ use crate::types::types::OverloadType;
 use crate::types::types::SuperObj;
 use crate::types::types::TArgs;
 use crate::types::types::Type;
+use crate::types::types::Union;
 
 /// The result of looking up an attribute access on a class (either as an instance or a
 /// class access, and possibly through a special case lookup such as a type var with a bound).
@@ -129,6 +130,15 @@ pub enum ClassAttribute {
     /// A descriptor is a user-defined type whose actions may dispatch to special method calls
     /// for the get and set actions.
     Descriptor(Descriptor, DescriptorBase),
+    /// An attribute whose declared type contains descriptor members. After attribute lookup,
+    /// reads apply `__get__` to descriptor members. Lookup precedence, writes, deletes, and
+    /// override checks use the raw declared union.
+    DescriptorRead {
+        union: Box<Union>,
+        range: TextRange,
+        base: DescriptorBase,
+        read_only_reason: Option<ReadOnlyReason>,
+    },
 }
 
 impl ClassAttribute {
@@ -152,6 +162,25 @@ impl ClassAttribute {
         Self::Descriptor(descriptor, base)
     }
 
+    /// Drops descriptor-read behavior so writes and deletes use the declared union.
+    fn into_declared(self) -> Self {
+        match self {
+            Self::DescriptorRead {
+                union,
+                read_only_reason,
+                ..
+            } => {
+                let ty = Type::Union(union);
+                if let Some(reason) = read_only_reason {
+                    Self::read_only(ty, reason)
+                } else {
+                    Self::read_write(ty)
+                }
+            }
+            attribute => attribute,
+        }
+    }
+
     pub fn read_only_equivalent(self, reason: ReadOnlyReason) -> Self {
         match self {
             Self::ReadWrite(ty) => Self::ReadOnly(ty, reason),
@@ -163,6 +192,17 @@ impl ClassAttribute {
                 },
                 base,
             ),
+            Self::DescriptorRead {
+                union,
+                range,
+                base,
+                read_only_reason,
+            } => Self::DescriptorRead {
+                union,
+                range,
+                base,
+                read_only_reason: read_only_reason.or(Some(reason)),
+            },
             attr @ (Self::NoAccess(..) | Self::ReadOnly(..)) => attr,
         }
     }
@@ -178,7 +218,8 @@ impl ClassAttribute {
             ClassAttribute::ReadWrite(ty) | ClassAttribute::ReadOnly(ty, _) => Some(ty),
             ClassAttribute::NoAccess(..)
             | ClassAttribute::Property(..)
-            | ClassAttribute::Descriptor(..) => None,
+            | ClassAttribute::Descriptor(..)
+            | ClassAttribute::DescriptorRead { .. } => None,
         }
     }
 
@@ -187,24 +228,9 @@ impl ClassAttribute {
             ClassAttribute::ReadOnly(_, _)
             | ClassAttribute::Property(_, None, _)
             | ClassAttribute::Descriptor(Descriptor { setter: false, .. }, _) => true,
-            _ => false,
-        }
-    }
-
-    /// Returns true if this attribute represents a data descriptor
-    /// (has either `__set__` or `__delete__`), including properties.
-    pub fn is_data_descriptor(&self) -> bool {
-        match self {
-            // All properties are data descriptors: https://docs.python.org/3/howto/descriptor.html#properties.
-            ClassAttribute::Property(..) => true,
-            // A data descriptor is one that defines `__set__` or `__delete__`:
-            // https://docs.python.org/3/reference/datamodel.html#invoking-descriptors
-            ClassAttribute::Descriptor(
-                Descriptor {
-                    setter, deleter, ..
-                },
-                _,
-            ) => *setter || *deleter,
+            ClassAttribute::DescriptorRead {
+                read_only_reason, ..
+            } => read_only_reason.is_some(),
             _ => false,
         }
     }
@@ -356,6 +382,7 @@ enum ClassFieldInner {
         annotation: Option<Annotation>,
         initialization: ClassFieldInitialization,
         read_only_reason: Option<ReadOnlyReason>,
+        descriptor_range: Option<TextRange>,
         /// ClassVar: can read from instance, but cannot write/shadow from instance
         is_classvar: bool,
         is_staticmethod: bool,
@@ -423,6 +450,7 @@ impl ClassField {
                 annotation,
                 initialization,
                 read_only_reason,
+                descriptor_range: None,
                 is_classvar: false,
                 is_staticmethod: false,
                 is_foreign_key,
@@ -538,6 +566,7 @@ impl ClassField {
                     annotation: None,
                     initialization: ClassFieldInitialization::ClassBody(None),
                     read_only_reason: None,
+                    descriptor_range: None,
                     is_classvar,
                     is_staticmethod: false,
                     is_foreign_key: false,
@@ -555,6 +584,7 @@ impl ClassField {
                 annotation: None,
                 initialization: ClassFieldInitialization::recursive(),
                 read_only_reason: None,
+                descriptor_range: None,
                 is_classvar: false,
                 is_staticmethod: false,
                 is_foreign_key: false,
@@ -647,6 +677,7 @@ impl ClassField {
                 annotation,
                 initialization,
                 read_only_reason,
+                descriptor_range,
                 is_classvar,
                 is_staticmethod,
                 is_foreign_key,
@@ -660,6 +691,7 @@ impl ClassField {
                         annotation: annotation.clone(),
                         initialization: initialization.clone(),
                         read_only_reason: read_only_reason.clone(),
+                        descriptor_range: *descriptor_range,
                         is_classvar: *is_classvar,
                         is_staticmethod: *is_staticmethod,
                         is_foreign_key: *is_foreign_key,
@@ -2025,6 +2057,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Identify whether this is a descriptor. Construct the stored descriptor only after
         // forcing the field type so its class cannot retain solver variables.
         let mut descriptor_methods = None;
+        let mut descriptor_range = None;
         let is_annotation_initialized_in_method = match field_definition {
             ClassFieldDefinition::DeclaredByAnnotation {
                 initialized_in_recognized_method,
@@ -2043,25 +2076,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | ClassFieldInitialization::Uninitialized
         ) {
             match &ty {
-                // TODO(stroxler): Do we care about distributing descriptor behavior over unions?
-                // If so, what about the case when the raw class field is a union of a descriptor
-                // and a non-descriptor? Do we want to allow this?
                 Type::ClassType(cls) => {
-                    let getter = self
-                        .get_class_member(cls.class_object(), &dunder::GET)
-                        .is_some();
-                    let setter = self
-                        .get_class_member(cls.class_object(), &dunder::SET)
-                        .is_some();
-                    let deleter = self
-                        .get_class_member(cls.class_object(), &dunder::DELETE)
-                        .is_some();
+                    let cls = cls.class_object();
+                    let has_getter = self.get_class_member(cls, &dunder::GET).is_some();
+                    let has_setter = self.get_class_member(cls, &dunder::SET).is_some();
+                    let has_deleter = self.get_class_member(cls, &dunder::DELETE).is_some();
                     // A getter-only annotation that is initialized on the instance does not
                     // install a descriptor on the class. Keep data-descriptor behavior,
                     // however, for metaclass-powered fields such as SQLAlchemy's `Mapped[T]`.
-                    if setter || deleter || getter && !is_annotation_initialized_in_method {
-                        descriptor_methods = Some((getter, setter, deleter));
+                    if has_setter
+                        || has_deleter
+                        || has_getter && !is_annotation_initialized_in_method
+                    {
+                        descriptor_methods = Some((has_getter, has_setter, has_deleter));
                     }
+                }
+                // Only members with `__get__` participate in descriptor reads. A member with only
+                // `__set__` or `__delete__` does not override a class attribute during read lookup.
+                // Writes and deletes continue to use the declared union.
+                Type::Union(union)
+                    if !is_annotation_initialized_in_method
+                        && union.members.iter().any(|member| {
+                            matches!(member, Type::ClassType(cls)
+                                if self.get_class_member(cls.class_object(), &dunder::GET).is_some())
+                        }) =>
+                {
+                    descriptor_range = Some(range);
                 }
                 _ => {}
             };
@@ -2088,12 +2128,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &ty,
             unpromoted_ty.as_ref(),
             field_definition,
-            descriptor_methods.is_some(),
+            descriptor_methods.is_some() || descriptor_range.is_some(),
             range,
             errors,
         ) {
             // Don't use the descriptor, since we've set a custom type instead.
             descriptor_methods = None;
+            descriptor_range = None;
             special_ty
         } else {
             ty
@@ -2305,6 +2346,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             annotation,
                             initialization,
                             read_only_reason,
+                            descriptor_range,
                             is_classvar: is_class_var,
                             is_staticmethod,
                             is_foreign_key,
@@ -3489,15 +3531,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 mut ty,
                 is_classvar,
                 read_only_reason,
+                descriptor_range,
                 ..
             } => {
                 ty = self.normalize_attr_ty(ty);
-                if is_classvar {
-                    ClassAttribute::read_only(ty, ReadOnlyReason::ClassVar)
-                } else if let Some(reason) = read_only_reason {
-                    ClassAttribute::read_only(ty, reason)
+                let read_only_reason = if is_classvar {
+                    Some(ReadOnlyReason::ClassVar)
                 } else {
-                    ClassAttribute::read_write(ty)
+                    read_only_reason
+                };
+                match (descriptor_range, ty) {
+                    (Some(range), Type::Union(union)) => {
+                        let Some(base) = instance.to_descriptor_base() else {
+                            // Unreachable because only TypedDicts can hit this, and we never construct
+                            // descriptor reads for typed dicts.
+                            unreachable!(
+                                "descriptor reads cannot be constructed for TypedDict instances"
+                            )
+                        };
+                        ClassAttribute::DescriptorRead {
+                            union,
+                            range,
+                            base,
+                            read_only_reason,
+                        }
+                    }
+                    (_, ty) => {
+                        if let Some(reason) = read_only_reason {
+                            ClassAttribute::read_only(ty, reason)
+                        } else {
+                            ClassAttribute::read_write(ty)
+                        }
+                    }
                 }
             }
             ClassFieldInner::InstanceAttribute {
@@ -3595,6 +3660,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ClassFieldInner::ClassAttribute {
                 mut ty,
                 read_only_reason,
+                descriptor_range,
                 ..
             } => {
                 ty = self.normalize_attr_ty(ty);
@@ -3603,7 +3669,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         cls.class_object().dupe(),
                     ))
                 } else {
-                    bind_class_attribute(self.heap, cls, ty, read_only_reason)
+                    match (descriptor_range, ty) {
+                        // Unions with bindable functions are classified as methods before this
+                        // branch, so descriptor unions need no classmethod binding here.
+                        (Some(range), Type::Union(union)) => ClassAttribute::DescriptorRead {
+                            union,
+                            range,
+                            base: DescriptorBase::ClassDef(cls.clone()),
+                            read_only_reason,
+                        },
+                        (_, ty) => bind_class_attribute(self.heap, cls, ty, read_only_reason),
+                    }
                 }
             }
             ClassFieldInner::InstanceAttribute { .. } => {
@@ -4754,6 +4830,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(attr)
     }
 
+    /// Returns true if this attribute represents a data descriptor
+    /// (has either `__set__` or `__delete__`), including properties.
+    pub(crate) fn class_attribute_is_data_descriptor(&self, attr: &ClassAttribute) -> bool {
+        match attr {
+            // All properties are data descriptors: https://docs.python.org/3/howto/descriptor.html#properties.
+            ClassAttribute::Property(..) => true,
+            // A data descriptor is one that defines `__set__` or `__delete__`:
+            // https://docs.python.org/3/reference/datamodel.html#invoking-descriptors
+            ClassAttribute::Descriptor(
+                Descriptor {
+                    setter, deleter, ..
+                },
+                _,
+            ) => *setter || *deleter,
+            _ => false,
+        }
+    }
+
     // When we're accessing the attribute of a string literal, we bind methods to
     // `LiteralString` instead of `str`, so that overload selection works correctly
     // for `LiteralString`-specific overloads defined in `str`.
@@ -5314,6 +5408,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 *should_narrow = false;
             }
+            attr @ ClassAttribute::DescriptorRead { .. } => self
+                .check_class_attr_set_and_infer_narrow(
+                    attr.into_declared(),
+                    instance_class,
+                    class_base,
+                    attr_name,
+                    got,
+                    allow_assign_to_final,
+                    range,
+                    errors,
+                    context,
+                    should_narrow,
+                    narrowed_types,
+                ),
         }
     }
 
@@ -5350,6 +5458,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | ClassAttribute::Descriptor(..) => {
                 // Allow deleting most attributes for now, for compatibility with mypy.
             }
+            attr @ ClassAttribute::DescriptorRead { .. } => self.check_class_attr_delete(
+                attr.into_declared(),
+                attr_name,
+                range,
+                errors,
+                context,
+            ),
         }
     }
 
@@ -5417,11 +5532,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         want: &ClassAttribute,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> Result<(), Box<AttrSubsetError>> {
-        match (got, want) {
-            (_, ClassAttribute::NoAccess(_)) => return Ok(()),
-            (ClassAttribute::NoAccess(_), _) => return Err(Box::new(AttrSubsetError::NoAccess)),
-            _ => {}
-        }
         // Both ClassVar and ClassObjectInitializedOnBody represent class-level read-only
         // attributes, so they are compatible for override purposes.
         let is_classvar_compatible = |attr: &ClassAttribute| {
@@ -5430,19 +5540,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassAttribute::ReadOnly(
                     _,
                     ReadOnlyReason::ClassVar | ReadOnlyReason::ClassObjectInitializedOnBody
-                )
+                ) | ClassAttribute::DescriptorRead {
+                    read_only_reason: Some(
+                        ReadOnlyReason::ClassVar | ReadOnlyReason::ClassObjectInitializedOnBody
+                    ),
+                    ..
+                }
             )
         };
         let got_is_classvar = is_classvar_compatible(got);
         let want_is_classvar = is_classvar_compatible(want);
-        if got_is_classvar != want_is_classvar {
-            return Err(Box::new(AttrSubsetError::ClassVarMismatch {
-                got_is_classvar,
-            }));
-        }
         match (got, want) {
-            (_, ClassAttribute::NoAccess(_)) | (ClassAttribute::NoAccess(_), _) => {
-                unreachable!("handled above")
+            (_, ClassAttribute::NoAccess(_)) => Ok(()),
+            (ClassAttribute::NoAccess(_), _) => Err(Box::new(AttrSubsetError::NoAccess)),
+            (_, _) if got_is_classvar != want_is_classvar => {
+                Err(Box::new(AttrSubsetError::ClassVarMismatch {
+                    got_is_classvar,
+                }))
+            }
+            (ClassAttribute::DescriptorRead { .. }, _) => {
+                let got = (*got).clone().into_declared();
+                self.is_class_attribute_subset(&got, want, is_subset)
+            }
+            (_, ClassAttribute::DescriptorRead { .. }) => {
+                let want = (*want).clone().into_declared();
+                self.is_class_attribute_subset(got, &want, is_subset)
             }
             (
                 ClassAttribute::Property(_, _, _),
@@ -5632,6 +5754,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Ok(self.heap.mk_class_type(x.cls.clone()))
                 }
             }
+            ClassAttribute::DescriptorRead {
+                union,
+                range: descriptor_range,
+                base,
+                ..
+            } => {
+                let ty = Type::Union(union);
+                Ok(self.distribute_over_union(&ty, |member| {
+                    if let Type::ClassType(cls) = member
+                        && let Some(getter) = self.resolve_descriptor_getter_for_class(
+                            attr_name,
+                            cls,
+                            descriptor_range,
+                            errors,
+                        )
+                    {
+                        self.call_descriptor_getter(getter, base.clone(), range, errors, context)
+                    } else {
+                        member.clone()
+                    }
+                }))
+            }
         }
     }
 
@@ -5641,23 +5785,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         x: &Descriptor,
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        if x.getter
-            && let Some(getter) = self.get_class_member(x.cls.class_object(), &dunder::GET)
-        {
-            let attr =
-                self.as_instance_attribute(&dunder::GET, &getter, &Instance::of_class(&x.cls));
+        if !x.getter {
+            return None;
+        }
+        self.resolve_descriptor_getter_for_class(attr_name, &x.cls, x.range, errors)
+    }
+
+    fn resolve_descriptor_getter_for_class(
+        &self,
+        attr_name: &Name,
+        cls: &ClassType,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        if let Some(getter) = self.get_class_member(cls.class_object(), &dunder::GET) {
+            let attr = self.as_instance_attribute(&dunder::GET, &getter, &Instance::of_class(cls));
             // `__get__` is bound and called like a method, never re-fed through the
             // descriptor protocol. If it is itself a descriptor, recursing here would
             // loop forever, so report no usable getter.
-            if matches!(attr, ClassAttribute::Descriptor(..)) {
+            if matches!(
+                attr,
+                ClassAttribute::Descriptor(..) | ClassAttribute::DescriptorRead { .. }
+            ) {
                 return None;
             }
             Some(
-                self.resolve_get_class_attr(attr_name, attr, x.range, errors, None)
+                self.resolve_get_class_attr(attr_name, attr, range, errors, None)
                     .unwrap_or_else(|e| {
                         self.error_with_context(
                             errors,
-                            x.range,
+                            range,
                             ErrorKind::NoAccess,
                             e.to_error_msg(&dunder::GET),
                             None,

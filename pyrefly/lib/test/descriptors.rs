@@ -286,6 +286,110 @@ C().d = 42  # E:  Attribute `d` of class `C` is a read-only descriptor with no `
 );
 
 testcase!(
+    test_descriptor_get_distributes_over_union,
+    r#"
+from typing import assert_type
+
+class Field[T]:
+    def __get__(self, obj: object | None, objtype: type | None = None) -> T:
+        raise NotImplementedError
+
+type Setting[T] = Field[T] | T
+
+class Settings:
+    with_default: Field[str] | str = Field()
+    optional: Field[str] | None = Field()
+    distinct: Field[str] | int = Field()
+    aliased: Setting[str] = Field()
+
+class GenericSettings[T]:
+    value: Field[T] | None = Field()
+
+class ChildSettings(Settings):
+    with_default: Field[str] | str = Field()
+
+settings = Settings()
+
+assert_type(settings.with_default, str)
+assert_type(settings.optional, str | None)
+assert_type(settings.distinct, str | int)
+assert_type(settings.aliased, str)
+assert_type(Settings.with_default, str)
+
+def check_generic(settings: GenericSettings[int]) -> None:
+    assert_type(settings.value, int | None)
+
+def takes_str(value: str) -> None: ...
+
+takes_str(settings.with_default)
+settings.with_default = "updated"
+Settings.with_default = "updated"
+del settings.optional
+    "#,
+);
+
+testcase!(
+    test_descriptor_union_does_not_change_lookup_precedence,
+    r#"
+from typing import reveal_type
+
+class Field[T]:
+    def __get__(self, obj: object | None, objtype: type | None = None) -> T: ...
+    def __set__(self, obj: object, value: T) -> None: ...
+
+class Meta(type):
+    value: Field[int] | int = Field()
+
+class C(metaclass=Meta):
+    @property
+    def value(self) -> str: ...
+
+reveal_type(C.value)  # E: revealed type: (self: C) -> str
+    "#,
+);
+
+testcase!(
+    test_descriptor_union_preserves_read_only_reason,
+    r#"
+from typing import ClassVar
+
+class Field[T]:
+    def __get__(self, obj: object | None, objtype: type | None = None) -> T: ...
+
+class Base:
+    value: ClassVar[Field[str] | str] = Field()
+
+class Child(Base):
+    def update(self) -> None:
+        super().value = "updated"  # E: Cannot set field `value`\n  A ClassVar may not be mutated from an instance of the class
+
+class InvalidInstanceOverride(Base):
+    value: Field[str] | str = Field()  # E: Instance variable `InvalidInstanceOverride.value` overrides ClassVar of the same name in parent class `Base`
+
+class InstanceBase:
+    value: Field[str] | str = Field()
+
+class InvalidClassVarOverride(InstanceBase):
+    value: ClassVar[Field[str] | str] = Field()  # E: ClassVar `InvalidClassVarOverride.value` overrides instance variable of the same name in parent class `InstanceBase`
+    "#,
+);
+
+testcase!(
+    test_recursive_descriptor_getter_union,
+    r#"
+from typing import assert_type
+
+class Recursive:
+    __get__: "Recursive | None" = None
+
+class C:
+    value: Recursive | int = Recursive()
+
+assert_type(C().value, Recursive | int)
+    "#,
+);
+
+testcase!(
     test_descriptor_dunder_call,
     r#"
 from typing import assert_type

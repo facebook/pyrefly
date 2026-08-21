@@ -1805,7 +1805,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.get_metaclass_attribute(class, metaclass, attr_name);
                         match metaclass_attr {
                             Some(meta_attr)
-                                if meta_attr.is_data_descriptor()
+                                if self.class_attribute_is_data_descriptor(&meta_attr)
                                     || metaclass.class_object().is_builtin("type") =>
                             {
                                 acc.found_class_attribute(meta_attr, base)
@@ -1828,7 +1828,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     self.get_metaclass_attribute(class, metaclass, attr_name);
                                 match metaclass_attr {
                                     Some(meta_attr)
-                                        if meta_attr.is_data_descriptor()
+                                        if self.class_attribute_is_data_descriptor(&meta_attr)
                                             || matches!(
                                                 meta_attr,
                                                 ClassAttribute::Property(_, _, _)
