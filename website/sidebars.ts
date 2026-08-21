@@ -157,6 +157,11 @@ let docsSidebar = [
         label: 'Bazel Integration',
     },
     {
+        type: 'doc' as const,
+        id: 'pants',
+        label: 'Pants Integration',
+    },
+    {
         type: 'category' as const,
         label: 'Tools',
         collapsed: false,
