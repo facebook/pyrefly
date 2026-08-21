@@ -810,10 +810,14 @@ from datetime import date
 f"{None:0>2}"  # E: doesn't support format specifiers
 f"{date(1, 1, 1):%}"  # E: Invalid trailing `%`, escape with `%%`
 f"{'s':.2f}"  # E: Incompatible types in string interpolation
+f"{'s':c}"  # E: Incompatible types in string interpolation
 
 i = 1
 f"{i:1}"
 f"{i:.1f}"
+f"{i:c}"
+x = -0.0
+f"{x:z.1f}"
 s = "s"
 f"{s:1}"
 f"{s:.2}"

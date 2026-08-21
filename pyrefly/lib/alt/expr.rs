@@ -224,7 +224,6 @@ enum FStringFormatPresentation {
     Any,
     Int,
     Numeric,
-    IntOrStr,
 }
 
 impl<'a, 'b, 'subset> ExprOptions<'a, 'b, 'subset> {
@@ -527,10 +526,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.heap.mk_class_type(self.stdlib.float().clone()),
                     self.heap.mk_class_type(self.stdlib.complex().clone()),
                 ]),
-                FStringFormatPresentation::IntOrStr => self.union(
-                    self.heap.mk_class_type(self.stdlib.int().clone()),
-                    self.heap.mk_class_type(self.stdlib.str().clone()),
-                ),
             };
             if !self.is_subset_eq(actual, &expected) {
                 errors
@@ -577,6 +572,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if chars.get(i).is_some_and(|c| matches!(c, '+' | '-' | ' ')) {
             i += 1;
         }
+        if chars.get(i) == Some(&'z') {
+            i += 1;
+        }
         if chars.get(i) == Some(&'#') {
             i += 1;
         }
@@ -606,8 +604,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         match presentation {
             's' => Ok(FStringFormatPresentation::Any),
-            'c' => Ok(FStringFormatPresentation::IntOrStr),
-            'b' | 'd' | 'o' | 'x' | 'X' => Ok(FStringFormatPresentation::Int),
+            'b' | 'c' | 'd' | 'o' | 'x' | 'X' => Ok(FStringFormatPresentation::Int),
             'e' | 'E' | 'f' | 'F' | 'g' | 'G' | 'n' | '%' => Ok(FStringFormatPresentation::Numeric),
             _ => Err(format!("Unrecognized format specification `{spec}`")),
         }
