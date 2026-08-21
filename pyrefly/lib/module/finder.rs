@@ -506,7 +506,16 @@ pub fn find_import_internal(
             config
                 .fallback_search_path
                 .for_directory(origin.and_then(|p| p.parent()))
-                .iter(),
+                .iter()
+                .filter(|path| {
+                    // A root equal to a site package path entry is searched by the site package
+                    // branch below, where bundled stubs take priority over the packages they stub.
+                    // A root nested deeper inside site packages is not on `sys.path` at runtime, so
+                    // it is dropped rather than demoted.
+                    !config
+                        .site_package_path()
+                        .any(|site_package| path.starts_with(site_package))
+                }),
             &mut namespaces_found,
             style_filter,
             None,
