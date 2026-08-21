@@ -144,7 +144,7 @@
                 "pyrefly.lspPath": {
                     "type": "string",
                     "default": "",
-                    "description": "The path to the binary (or the binary available in your $PATH) used as the language server. This is useful to guarantee version parity between your IDE and CLI, but means extension updates won't update which Pyrefly version you'll be using.",
+                    "description": "The command to run for the language server. Accepts an absolute path, a path relative to your workspace root, a path starting with ~, or a bare command name to look up on your $PATH. This is useful to guarantee version parity between your IDE and CLI, but means extension updates won't update which Pyrefly version you'll be using.",
                     "scope": "machine-overridable"
                 },
                 "pyrefly.lspArguments": {

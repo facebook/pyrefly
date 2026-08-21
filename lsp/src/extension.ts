@@ -10,7 +10,8 @@
 import {ExtensionContext, workspace} from 'vscode';
 import * as vscode from 'vscode';
 import {execFile} from 'child_process';
-import {basename, dirname} from 'path';
+import {basename, dirname, join, parse, resolve} from 'path';
+import {homedir} from 'os';
 import {
   CancellationToken,
   ConfigurationItem,
@@ -88,12 +89,23 @@ async function overridePythonPath(
   return newResult;
 }
 
-function resolveLspPath(lspPath: string, cwd: vscode.Uri | undefined) {
-  let lspPathIsRelative = lspPath.startsWith("./") || lspPath.startsWith("../");
-  if (cwd != null && lspPathIsRelative) {
-    return vscode.Uri.joinPath(cwd, lspPath).fsPath;
+/**
+ * Resolve a `pyrefly.lspPath`, expanding ~ and handling relative paths.
+ *
+ * We tell a `$PATH` lookup apart from a relative or absolute by checking
+ * for a path separator.
+ */
+export function resolveLspPath(
+  lspPath: string,
+  cwd: vscode.Uri | undefined,
+): string {
+  if (lspPath.startsWith('~/') || lspPath.startsWith('~\\')) {
+    return join(homedir(), lspPath.slice(1));
   }
-  return lspPath;
+  if (cwd == null || parse(lspPath).dir === '') {
+    return lspPath;
+  }
+  return resolve(cwd.fsPath, lspPath);
 }
 
 export async function activate(context: ExtensionContext) {
