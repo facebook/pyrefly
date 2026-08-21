@@ -278,6 +278,30 @@ class Env:
 );
 
 testcase!(
+    test_module_global_attr_assignment_uses_declared_type_after_impossible_narrow,
+    r#"
+from typing import assert_type
+
+class Container: pass
+
+class Env:
+    def __init__(self) -> None:
+        self.container: Container = Container()
+
+env = Env()
+
+def update() -> None:
+    if env.container is None:
+        env.container = Container()
+        assert_type(env.container, Container)
+
+def rejects_incompatible_write() -> None:
+    if env.container is None:
+        env.container = 1  # E: `Literal[1]` is not assignable to attribute `container` with type `Container`
+"#,
+);
+
+testcase!(
     test_attr_assignment_preserves_isinstance_narrow,
     r#"
 class UIElement: pass

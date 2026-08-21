@@ -448,12 +448,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut idx = self.bindings().key_to_idx(&key);
                 let mut gas = Gas::new(100);
                 let mut narrows = Vec::new();
+                let mut promote = false;
                 loop {
                     if gas.stop() {
                         break;
                     }
                     match self.bindings().get(idx) {
                         Binding::Forward(next) | Binding::PatternCapture(next) => idx = *next,
+                        Binding::PromoteForward(next) => {
+                            promote = true;
+                            idx = *next;
+                        }
                         Binding::Narrow(next, op, location) => {
                             narrows.push((op.as_ref(), location.range()));
                             idx = *next;
@@ -477,6 +482,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             type_info = narrowed;
                         }
                     }
+                }
+                if promote {
+                    type_info =
+                        type_info.map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib));
                 }
                 type_info
             }
