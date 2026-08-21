@@ -1203,28 +1203,35 @@ fn write_unconfigured_upsell<W: Write>(
 
 /// A checker that preserves type-checking state across caller-supplied filesystem events.
 pub struct IncrementalChecker {
-    args: CheckArgs,
+    require_levels: RequireLevels,
     files_to_check: Box<dyn Includes>,
 
     handles: Handles,
     state: State,
 }
 
+/// The diagnostics produced by an incremental check.
+pub struct IncrementalCheckResult {
+    /// Type-checking diagnostics for the configured file set.
+    pub diagnostics: Vec<Error>,
+    /// Configuration errors discovered while resolving or checking the file set.
+    pub config_errors: Vec<ConfigError>,
+}
+
 impl IncrementalChecker {
     /// Initialize a checker without running a check.
     pub fn new(
-        args: CheckArgs,
+        require_levels: RequireLevels,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
         thread_count: ThreadCount,
     ) -> anyhow::Result<Self> {
-        args.output.validate_outputs()?;
         let handles = {
             let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
             Handles::new(expanded_file_list)
         };
         Ok(Self {
-            args,
+            require_levels,
             files_to_check,
             handles,
             state: State::new(config_finder, thread_count),
@@ -1232,25 +1239,33 @@ impl IncrementalChecker {
     }
 
     /// Run a check after applying the filesystem events supplied by the caller.
-    pub fn check(
-        &mut self,
-        version: &str,
-        events: &CategorizedEvents,
-    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
-        self.check_with_upsell(version, events, UpsellDecision::Skip)
+    pub fn check(&mut self, events: &CategorizedEvents) -> IncrementalCheckResult {
+        self.with_transaction(
+            events,
+            |transaction, handles, mut sourcedb_errors, require| {
+                transaction.run(handles, require, None);
+                let diagnostics = transaction
+                    .get_errors(handles)
+                    .collect_display_errors_with_unused_ignores();
+                let mut config_errors = transaction.get_config_errors();
+                config_errors.append(&mut sourcedb_errors);
+                IncrementalCheckResult {
+                    diagnostics,
+                    config_errors,
+                }
+            },
+        )
     }
 
-    fn check_with_upsell(
+    /// The callback must run the transaction before returning; this method commits it afterward.
+    fn with_transaction<T>(
         &mut self,
-        version: &str,
         events: &CategorizedEvents,
-        upsell: UpsellDecision,
-    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
-        let timings = Timings::new();
-        let require_levels = self.args.get_required_levels();
+        f: impl FnOnce(&mut Transaction, &[Handle], Vec<ConfigError>, Require) -> T,
+    ) -> T {
         let mut transaction = self
             .state
-            .new_committable_transaction(require_levels.default, None);
+            .new_committable_transaction(self.require_levels.default, None);
         transaction.as_mut().invalidate_events(events);
         self.handles
             .apply_events(events, self.files_to_check.as_ref());
@@ -1258,29 +1273,74 @@ impl IncrementalChecker {
         let (loaded_handles, reloaded_configs, sourcedb_errors) =
             self.handles.all(self.state.config_finder());
 
-        let config = loaded_handles.first().map(|handle| {
-            self.state.config_finder().python_file(
-                ModuleNameWithKind::guaranteed(handle.module()),
-                handle.path(),
-            )
-        });
-        let defaults = self.args.output.resolve(config.as_deref());
-
         transaction
             .as_mut()
             .invalidate_find_for_configs(reloaded_configs);
-        let result = self.args.run_inner(
-            timings,
+        let result = f(
             transaction.as_mut(),
-            version,
             &loaded_handles,
-            &defaults,
             sourcedb_errors,
-            require_levels.specified,
-            upsell,
+            self.require_levels.specified,
         );
         self.state.commit_transaction(transaction, None);
         result
+    }
+}
+
+/// Adapts incremental checking to the existing CLI reporting and source-mutation behavior.
+struct IncrementalCheckCommand {
+    args: CheckArgs,
+    checker: IncrementalChecker,
+}
+
+impl IncrementalCheckCommand {
+    fn new(
+        args: CheckArgs,
+        files_to_check: Box<dyn Includes>,
+        config_finder: ConfigFinder,
+        thread_count: ThreadCount,
+    ) -> anyhow::Result<Self> {
+        args.output.validate_outputs()?;
+        let require_levels = args.get_required_levels();
+        Ok(Self {
+            args,
+            checker: IncrementalChecker::new(
+                require_levels,
+                files_to_check,
+                config_finder,
+                thread_count,
+            )?,
+        })
+    }
+
+    fn check(
+        &mut self,
+        version: &str,
+        events: &CategorizedEvents,
+        upsell: UpsellDecision,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let timings = Timings::new();
+        let args = &self.args;
+        self.checker
+            .with_transaction(events, |transaction, handles, sourcedb_errors, require| {
+                let config = handles.first().map(|handle| {
+                    transaction.config_finder().python_file(
+                        ModuleNameWithKind::guaranteed(handle.module()),
+                        handle.path(),
+                    )
+                });
+                let defaults = args.output.resolve(config.as_deref());
+                args.run_inner(
+                    timings,
+                    transaction,
+                    version,
+                    handles,
+                    &defaults,
+                    sourcedb_errors,
+                    require,
+                    upsell,
+                )
+            })
     }
 }
 
@@ -1295,13 +1355,14 @@ async fn run_watch(
 ) -> anyhow::Result<()> {
     // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
     // - Config search is stable across incremental runs.
-    let mut checker = IncrementalChecker::new(args, files_to_check, config_finder, thread_count)?;
-    if let Err(e) = checker.check_with_upsell(version, &CategorizedEvents::default(), upsell) {
+    let mut command =
+        IncrementalCheckCommand::new(args, files_to_check, config_finder, thread_count)?;
+    if let Err(e) = command.check(version, &CategorizedEvents::default(), upsell) {
         eprintln!("{e:#}");
     }
     loop {
         let events = get_watcher_events(&mut watcher).await?;
-        if let Err(e) = checker.check(version, &events) {
+        if let Err(e) = command.check(version, &events, UpsellDecision::Skip) {
             eprintln!("{e:#}");
         }
     }
@@ -1974,7 +2035,10 @@ mod tests {
         config.disable_search_path_heuristics = true;
         config.configure();
         IncrementalChecker::new(
-            CheckArgs::parse_from(["check", "--output-format=omit-errors", "--summary=none"]),
+            RequireLevels {
+                specified: Require::Errors,
+                default: Require::Exports,
+            },
             Box::new(TestIncludes {
                 root: root.to_path_buf(),
                 initial_files,
@@ -1988,8 +2052,19 @@ mod tests {
     fn check(
         checker: &mut IncrementalChecker,
         events: &CategorizedEvents,
-    ) -> (CommandExitStatus, Vec<Error>) {
-        checker.check("test", events).unwrap()
+    ) -> IncrementalCheckResult {
+        let result = checker.check(events);
+        assert!(
+            result.config_errors.is_empty(),
+            "unexpected config errors:\n{}",
+            result
+                .config_errors
+                .iter()
+                .map(ConfigError::get_message)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        result
     }
 
     fn sample_error(msg: String) -> Error {
@@ -2016,20 +2091,19 @@ mod tests {
         fs::write(&path, "x: int = 'bad'\n").unwrap();
         let mut checker = incremental_checker(&root, vec![path.clone()]);
 
-        let (status, errors) = check(&mut checker, &CategorizedEvents::default());
-        assert_eq!(status, CommandExitStatus::UserError);
+        let errors = check(&mut checker, &CategorizedEvents::default()).diagnostics;
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].path().as_path(), path);
 
         fs::write(&path, "x: int = 1\n").unwrap();
-        let (status, errors) = check(
+        let errors = check(
             &mut checker,
             &CategorizedEvents {
                 modified: vec![path],
                 ..Default::default()
             },
-        );
-        assert_eq!(status, CommandExitStatus::Success);
+        )
+        .diagnostics;
         assert!(errors.is_empty());
     }
 
@@ -2043,43 +2117,44 @@ mod tests {
         let mut checker = incremental_checker(&root, vec![initial]);
         assert!(
             check(&mut checker, &CategorizedEvents::default())
-                .1
+                .diagnostics
                 .is_empty()
         );
 
         let outside = temp.path().join("outside.py");
         fs::write(&outside, "x: int = 'bad'\n").unwrap();
-        let (_, errors) = check(
+        let errors = check(
             &mut checker,
             &CategorizedEvents {
                 created: vec![outside],
                 ..Default::default()
             },
-        );
+        )
+        .diagnostics;
         assert!(errors.is_empty());
 
         let created = root.join("created.py");
         fs::write(&created, "x: int = 'bad'\n").unwrap();
-        let (status, errors) = check(
+        let errors = check(
             &mut checker,
             &CategorizedEvents {
                 created: vec![created.clone()],
                 ..Default::default()
             },
-        );
-        assert_eq!(status, CommandExitStatus::UserError);
+        )
+        .diagnostics;
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].path().as_path(), created);
 
         fs::remove_file(&created).unwrap();
-        let (status, errors) = check(
+        let errors = check(
             &mut checker,
             &CategorizedEvents {
                 removed: vec![created],
                 ..Default::default()
             },
-        );
-        assert_eq!(status, CommandExitStatus::Success);
+        )
+        .diagnostics;
         assert!(errors.is_empty());
     }
 
@@ -2099,19 +2174,19 @@ mod tests {
         let mut checker = incremental_checker(&root, vec![dependency.clone(), dependent.clone()]);
         assert!(
             check(&mut checker, &CategorizedEvents::default())
-                .1
+                .diagnostics
                 .is_empty()
         );
 
         fs::write(&dependency, "value: int = 1\n").unwrap();
-        let (status, errors) = check(
+        let errors = check(
             &mut checker,
             &CategorizedEvents {
                 modified: vec![dependency],
                 ..Default::default()
             },
-        );
-        assert_eq!(status, CommandExitStatus::UserError);
+        )
+        .diagnostics;
         assert!(
             errors
                 .iter()
@@ -2131,19 +2206,19 @@ mod tests {
         let mut checker = incremental_checker(&root, vec![dependency.clone(), dependent.clone()]);
         assert!(
             check(&mut checker, &CategorizedEvents::default())
-                .1
+                .diagnostics
                 .is_empty()
         );
 
         fs::remove_file(&dependency).unwrap();
-        let (status, errors) = check(
+        let errors = check(
             &mut checker,
             &CategorizedEvents {
                 removed: vec![dependency],
                 ..Default::default()
             },
-        );
-        assert_eq!(status, CommandExitStatus::UserError);
+        )
+        .diagnostics;
         assert!(errors.iter().any(|error| {
             error.path().as_path() == dependent && error.error_kind() == ErrorKind::MissingImport
         }));
