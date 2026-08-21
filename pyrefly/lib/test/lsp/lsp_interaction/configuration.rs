@@ -360,6 +360,67 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
+// A config with `skip-interpreter-query = true` opts out of interpreter queries
+// entirely: a client-provided `pythonPath` must not be applied, even though it
+// would resolve the import. Regression test for the LSP eagerly querying (and
+// applying) the client interpreter despite the opt-out.
+// Only run this test on unix since windows has no way to mock a .exe without compiling something
+// (we call python with python.exe)
+#[cfg(unix)]
+#[test]
+fn test_skip_interpreter_query_ignores_lsp_pythonpath() {
+    let test_files_root = get_test_files_root();
+    // This interpreter *would* resolve `custom_module` if it were applied, so the
+    // test distinguishes "pythonPath applied" (0 errors) from "pythonPath ignored
+    // because of `skip-interpreter-query`" (1 error).
+    let good_interpreter_path =
+        setup_dummy_interpreter(&test_files_root.path().join("custom_interpreter"));
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("skip_interpreter_config/src/foo.py");
+    // `skip-interpreter-query = true` with no `site-package-path` in the config means
+    // the import cannot be resolved.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(
+            test_files_root.path().join("skip_interpreter_config/src/foo.py"),
+            1,
+        )
+        .unwrap();
+
+    // Even though this interpreter would resolve the import, the config opted out of
+    // interpreter queries, so the import error must persist.
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .unwrap()
+        .send_configuration_response(json!([
+            {
+                "pythonPath": good_interpreter_path.to_str().unwrap()
+            }
+        ]));
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(
+            test_files_root.path().join("skip_interpreter_config/src/foo.py"),
+            1,
+        )
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
 // Only run this test on unix since windows has no way to mock a .exe without compiling something
 // (we call python with python.exe)
 #[cfg(unix)]
