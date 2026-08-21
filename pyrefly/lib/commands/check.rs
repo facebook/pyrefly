@@ -97,6 +97,7 @@ use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
+use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::steps::Step;
@@ -1218,6 +1219,33 @@ pub struct IncrementalCheckResult {
     pub config_errors: Vec<ConfigError>,
 }
 
+/// An incremental transaction that runs before exposing results and commits afterward.
+struct IncrementalCheckTransaction<'a> {
+    state: &'a State,
+    transaction: CommittingTransaction<'a>,
+    handles: Vec<Handle>,
+    sourcedb_errors: Vec<ConfigError>,
+    require: Require,
+}
+
+impl IncrementalCheckTransaction<'_> {
+    fn run<T>(
+        mut self,
+        finish: impl FnOnce(&mut Transaction, &[Handle], Vec<ConfigError>) -> T,
+    ) -> T {
+        self.transaction
+            .as_mut()
+            .run(&self.handles, self.require, None);
+        let result = finish(
+            self.transaction.as_mut(),
+            &self.handles,
+            self.sourcedb_errors,
+        );
+        self.state.commit_transaction(self.transaction, None);
+        result
+    }
+}
+
 impl IncrementalChecker {
     /// Initialize a checker without running a check.
     pub fn new(
@@ -1240,10 +1268,8 @@ impl IncrementalChecker {
 
     /// Run a check after applying the filesystem events supplied by the caller.
     pub fn check(&mut self, events: &CategorizedEvents) -> IncrementalCheckResult {
-        self.with_transaction(
-            events,
-            |transaction, handles, mut sourcedb_errors, require| {
-                transaction.run(handles, require, None);
+        self.prepare_check(events)
+            .run(|transaction, handles, mut sourcedb_errors| {
                 let diagnostics = transaction
                     .get_errors(handles)
                     .collect_display_errors_with_unused_ignores();
@@ -1253,16 +1279,10 @@ impl IncrementalChecker {
                     diagnostics,
                     config_errors,
                 }
-            },
-        )
+            })
     }
 
-    /// The callback must run the transaction before returning; this method commits it afterward.
-    fn with_transaction<T>(
-        &mut self,
-        events: &CategorizedEvents,
-        f: impl FnOnce(&mut Transaction, &[Handle], Vec<ConfigError>, Require) -> T,
-    ) -> T {
+    fn prepare_check(&mut self, events: &CategorizedEvents) -> IncrementalCheckTransaction<'_> {
         let mut transaction = self
             .state
             .new_committable_transaction(self.require_levels.default, None);
@@ -1276,14 +1296,13 @@ impl IncrementalChecker {
         transaction
             .as_mut()
             .invalidate_find_for_configs(reloaded_configs);
-        let result = f(
-            transaction.as_mut(),
-            &loaded_handles,
+        IncrementalCheckTransaction {
+            state: &self.state,
+            transaction,
+            handles: loaded_handles,
             sourcedb_errors,
-            self.require_levels.specified,
-        );
-        self.state.commit_transaction(transaction, None);
-        result
+            require: self.require_levels.specified,
+        }
     }
 }
 
@@ -1321,26 +1340,28 @@ impl IncrementalCheckCommand {
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let timings = Timings::new();
         let args = &self.args;
-        self.checker
-            .with_transaction(events, |transaction, handles, sourcedb_errors, require| {
-                let config = handles.first().map(|handle| {
-                    transaction.config_finder().python_file(
-                        ModuleNameWithKind::guaranteed(handle.module()),
-                        handle.path(),
-                    )
-                });
-                let defaults = args.output.resolve(config.as_deref());
-                args.run_inner(
-                    timings,
-                    transaction,
-                    version,
-                    handles,
-                    &defaults,
-                    sourcedb_errors,
-                    require,
-                    upsell,
-                )
-            })
+        let mut check = self.checker.prepare_check(events);
+        let transaction = check.transaction.as_mut();
+        let handles = &check.handles;
+        let config = handles.first().map(|handle| {
+            transaction.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(handle.module()),
+                handle.path(),
+            )
+        });
+        let defaults = args.output.resolve(config.as_deref());
+        let run = args.prepare_cli_run(timings, transaction, handles, &defaults)?;
+        check.run(|transaction, handles, sourcedb_errors| {
+            args.finish_cli_run(
+                run,
+                transaction,
+                version,
+                handles,
+                &defaults,
+                sourcedb_errors,
+                upsell,
+            )
+        })
     }
 }
 
@@ -1366,6 +1387,14 @@ async fn run_watch(
             eprintln!("{e:#}");
         }
     }
+}
+
+/// CLI-owned state that must remain live across a type-checking run.
+struct PreparedCliRun {
+    timings: Timings,
+    memory_trace: MemoryUsageTrace,
+    demand_tree_subscriber: Option<TestSubscriber>,
+    type_check_start: Instant,
 }
 
 impl CheckArgs {
@@ -1513,15 +1542,35 @@ impl CheckArgs {
 
     fn run_inner(
         &self,
-        mut timings: Timings,
+        timings: Timings,
         transaction: &mut Transaction,
         version: &str,
         handles: &[Handle],
         defaults: &OutputDefaults,
-        mut sourcedb_errors: Vec<ConfigError>,
+        sourcedb_errors: Vec<ConfigError>,
         require: Require,
         upsell: UpsellDecision,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let run = self.prepare_cli_run(timings, transaction, handles, defaults)?;
+        transaction.run(handles, require, None);
+        self.finish_cli_run(
+            run,
+            transaction,
+            version,
+            handles,
+            defaults,
+            sourcedb_errors,
+            upsell,
+        )
+    }
+
+    fn prepare_cli_run(
+        &self,
+        timings: Timings,
+        transaction: &mut Transaction,
+        handles: &[Handle],
+        defaults: &OutputDefaults,
+    ) -> anyhow::Result<PreparedCliRun> {
         // Baseline maintenance actions are mutually exclusive.
         let baseline_action = if self.output.update_baseline {
             Some("--update-baseline")
@@ -1552,7 +1601,7 @@ impl CheckArgs {
                 baseline_path.display()
             );
         }
-        let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
+        let memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         if let Some(pysa_directory) = &self.output.report_pysa {
             let reporter = report::pysa::PysaReporter::new(
@@ -1589,7 +1638,31 @@ impl CheckArgs {
             transaction.set_subscriber(self.output.progress_bar_style().make_subscriber());
             None
         };
-        transaction.run(handles, require, None);
+
+        Ok(PreparedCliRun {
+            timings,
+            memory_trace,
+            demand_tree_subscriber,
+            type_check_start,
+        })
+    }
+
+    fn finish_cli_run(
+        &self,
+        run: PreparedCliRun,
+        transaction: &mut Transaction,
+        version: &str,
+        handles: &[Handle],
+        defaults: &OutputDefaults,
+        mut sourcedb_errors: Vec<ConfigError>,
+        upsell: UpsellDecision,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let PreparedCliRun {
+            mut timings,
+            mut memory_trace,
+            demand_tree_subscriber,
+            type_check_start,
+        } = run;
         transaction.set_subscriber(None);
 
         let loads = if self.behavior.check_all {
