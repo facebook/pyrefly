@@ -58,12 +58,21 @@ def run_test_file(path: Path) -> int:
         ]
         if not tests:
             raise AssertionError(f"{path} does not define any test functions")
+        gradual_shape_tests = set(getattr(module, "GRADUAL_SHAPE_RUNTIME_TESTS", ()))
+        unknown_markers = gradual_shape_tests - {name for name, _ in tests}
+        if unknown_markers:
+            raise AssertionError(
+                f"{path} marks unknown gradual-shape tests: {sorted(unknown_markers)}"
+            )
         for name, test in tests:
             current_test = name
             assert_shape_calls[name] = 0
             test()
             current_test = None
-            if assert_shape_calls[name] == 0:
+            # Gradual static shapes may use plain runtime assertions because assert_shape
+            # currently also requires an exact static shape.
+            # TODO(stroxler): Define how assert_shape should handle gradual static shapes.
+            if assert_shape_calls[name] == 0 and name not in gradual_shape_tests:
                 raise AssertionError(f"{path}::{name} did not execute assert_shape")
     finally:
         shape_extensions.assert_shape = original_assert_shape

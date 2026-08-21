@@ -6,8 +6,8 @@
 from typing import Any, Literal, overload
 
 import shape_extensions
-from numpy._shapes import binary_ufunc_ir, diag_1d_ir, matmul_2d_ir, reduce_ir
-from shape_extensions import broadcast, Int, IntTuple, IntVar, uses_shape_dsl
+from numpy._shapes import binary_ufunc_ir, diag_extent, matmul_2d_ir, reduce_ir
+from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar, uses_shape_dsl
 
 from . import linalg as linalg, random as random
 
@@ -211,9 +211,24 @@ def fill_diagonal[N: IntVar, DType](
     val: Any,
     wrap: bool = False,
 ) -> None: ...
-@uses_shape_dsl(diag_1d_ir)
-def diag[DType](
-    v: ndarray[_AnyShape, DType], k: int = 0
+@overload
+def diag[N: IntVar, DType, K: Flag[int] = 0](
+    v: ndarray[[N], DType], k: K = 0
+) -> ndarray[[diag_extent(N, K), diag_extent(N, K)], DType]: ...
+
+# TODO(stroxler): Model the shape arithmetic here; we can do better than `int`.
+@overload
+def diag[M: IntVar, N: IntVar, DType](
+    v: ndarray[[M, N], DType], k: int = 0
+) -> ndarray[[int], DType]: ...
+
+# Trailing fallback for ranks the precise overloads do not model, so their dtype survives
+# instead of degrading to `Any`. The parameter shape is a type variable rather than
+# `_AnyShape`: a gradual parameter shape would also match known-rank arguments whose dtype is
+# gradual, and that ambiguity collapses their precise result to a gradual shape.
+@overload
+def diag[S: _Shape, DType](
+    v: ndarray[S, DType], k: int = 0
 ) -> ndarray[_AnyShape, DType]: ...
 def arange[N: IntVar](stop: Int[N], /) -> ndarray[[N], dtype[intp]]: ...
 @overload

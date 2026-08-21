@@ -49,18 +49,12 @@ def broadcast_shape(a: list[int | symint], b: list[int | symint]) -> list[int | 
 def binary_ufunc_ir(x1: ShapedArray, x2: ShapedArray) -> ShapedArray:
     return ShapedArray(shape=broadcast_shape(x1.shape, x2.shape))
 
-@shape_dsl_function
-def abs_int(k: int) -> int:
+@type_shape_dsl_function
+def diag_extent(n: Int, k: int) -> Int:
+    # Non-literal Flag arguments become gradual before the DSL body is evaluated.
     if k < 0:
-        return 0 - k
-    return k
-
-@shape_dsl_function
-def diag_1d_ir(v: ShapedArray, k: int = 0) -> ShapedArray:
-    if len(v.shape) != 1:
-        raise Error("diag expects a 1-D array")
-    n = v.shape[0] + abs_int(k)
-    return ShapedArray(shape=[n, n])
+        return n - k
+    return n + k
 
 @shape_dsl_function
 def matmul_2d_ir(a: ShapedArray, b: ShapedArray) -> ShapedArray:
