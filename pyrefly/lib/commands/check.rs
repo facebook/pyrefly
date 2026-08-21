@@ -97,7 +97,6 @@ use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
-use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::steps::Step;
@@ -1202,105 +1201,87 @@ fn write_unconfigured_upsell<W: Write>(
     Ok(())
 }
 
-/// An initialized incremental checking session.
-struct IncrementalSession {
-    // These inputs are fixed for the session.
+/// A checker that preserves type-checking state across caller-supplied filesystem events.
+pub struct IncrementalChecker {
     args: CheckArgs,
     files_to_check: Box<dyn Includes>,
 
-    // These fields change as filesystem events are applied.
     handles: Handles,
     state: State,
 }
 
-/// An initialized session and the result of the check that initialized it.
-struct StartedIncrementalSession {
-    session: IncrementalSession,
-    initial_check: anyhow::Result<(CommandExitStatus, Vec<Error>)>,
-}
+impl IncrementalChecker {
+    /// Initialize a checker without running a check.
+    pub fn new(
+        args: CheckArgs,
+        files_to_check: Box<dyn Includes>,
+        config_finder: ConfigFinder,
+        thread_count: ThreadCount,
+    ) -> anyhow::Result<Self> {
+        args.output.validate_outputs()?;
+        let handles = {
+            let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
+            Handles::new(expanded_file_list)
+        };
+        Ok(Self {
+            args,
+            files_to_check,
+            handles,
+            state: State::new(config_finder, thread_count),
+        })
+    }
 
-impl IncrementalSession {
-    fn check_updates(
+    /// Run a check after applying the filesystem events supplied by the caller.
+    pub fn check(
         &mut self,
         version: &str,
         events: &CategorizedEvents,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        self.check_with_upsell(version, events, UpsellDecision::Skip)
+    }
+
+    fn check_with_upsell(
+        &mut self,
+        version: &str,
+        events: &CategorizedEvents,
+        upsell: UpsellDecision,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let timings = Timings::new();
         let require_levels = self.args.get_required_levels();
-        let mut transaction = self.state.new_committable_transaction(
-            require_levels.default,
-            self.args.output.progress_bar_style().make_subscriber(),
-        );
+        let mut transaction = self
+            .state
+            .new_committable_transaction(require_levels.default, None);
         transaction.as_mut().invalidate_events(events);
         self.handles
             .apply_events(events, self.files_to_check.as_ref());
-        finish_incremental_check(self, transaction, version, UpsellDecision::Skip)
+
+        let (loaded_handles, reloaded_configs, sourcedb_errors) =
+            self.handles.all(self.state.config_finder());
+
+        let config = loaded_handles.first().map(|handle| {
+            self.state.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(handle.module()),
+                handle.path(),
+            )
+        });
+        let defaults = self.args.output.resolve(config.as_deref());
+
+        transaction
+            .as_mut()
+            .invalidate_find_for_configs(reloaded_configs);
+        let result = self.args.run_inner(
+            timings,
+            transaction.as_mut(),
+            version,
+            &loaded_handles,
+            &defaults,
+            sourcedb_errors,
+            require_levels.specified,
+            upsell,
+        );
+        self.state.commit_transaction(transaction, None);
+        result
     }
-}
-
-fn start_incremental(
-    args: CheckArgs,
-    files_to_check: Box<dyn Includes>,
-    config_finder: ConfigFinder,
-    thread_count: ThreadCount,
-    version: &str,
-    upsell: UpsellDecision,
-) -> anyhow::Result<StartedIncrementalSession> {
-    args.output.validate_outputs()?;
-    let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
-    let handles = Handles::new(expanded_file_list);
-    let session = IncrementalSession {
-        args,
-        files_to_check,
-        handles,
-        state: State::new(config_finder, thread_count),
-    };
-    let require_levels = session.args.get_required_levels();
-    let transaction = session
-        .state
-        .new_committable_transaction(require_levels.default, None);
-    let initial_check = finish_incremental_check(&session, transaction, version, upsell);
-    Ok(StartedIncrementalSession {
-        session,
-        initial_check,
-    })
-}
-
-fn finish_incremental_check(
-    session: &IncrementalSession,
-    mut transaction: CommittingTransaction<'_>,
-    version: &str,
-    upsell: UpsellDecision,
-) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
-    let timings = Timings::new();
-    let args = &session.args;
-    let require_levels = args.get_required_levels();
-
-    let (loaded_handles, reloaded_configs, sourcedb_errors) =
-        session.handles.all(session.state.config_finder());
-
-    let config = loaded_handles.first().map(|handle| {
-        session.state.config_finder().python_file(
-            ModuleNameWithKind::guaranteed(handle.module()),
-            handle.path(),
-        )
-    });
-    let defaults = args.output.resolve(config.as_deref());
-
-    transaction
-        .as_mut()
-        .invalidate_find_for_configs(reloaded_configs);
-    let result = args.run_inner(
-        timings,
-        transaction.as_mut(),
-        version,
-        &loaded_handles,
-        &defaults,
-        sourcedb_errors,
-        require_levels.specified,
-        upsell,
-    );
-    session.state.commit_transaction(transaction, None);
-    result
 }
 
 async fn run_watch(
@@ -1314,23 +1295,13 @@ async fn run_watch(
 ) -> anyhow::Result<()> {
     // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
     // - Config search is stable across incremental runs.
-    let StartedIncrementalSession {
-        mut session,
-        initial_check,
-    } = start_incremental(
-        args,
-        files_to_check,
-        config_finder,
-        thread_count,
-        version,
-        upsell,
-    )?;
-    if let Err(e) = initial_check {
+    let mut checker = IncrementalChecker::new(args, files_to_check, config_finder, thread_count)?;
+    if let Err(e) = checker.check_with_upsell(version, &CategorizedEvents::default(), upsell) {
         eprintln!("{e:#}");
     }
     loop {
         let events = get_watcher_events(&mut watcher).await?;
-        if let Err(e) = session.check_updates(version, &events) {
+        if let Err(e) = checker.check(version, &events) {
             eprintln!("{e:#}");
         }
     }
@@ -1950,6 +1921,8 @@ impl CheckArgs {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1958,8 +1931,66 @@ mod tests {
     use pyrefly_python::module_path::ModulePath;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
+    use tempfile::TempDir;
 
     use super::*;
+
+    struct TestIncludes {
+        root: PathBuf,
+        initial_files: Vec<PathBuf>,
+    }
+
+    impl Includes for TestIncludes {
+        fn roots(&self) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+
+        fn files_iter(&self) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf> + '_>> {
+            Ok(Box::new(self.initial_files.clone().into_iter()))
+        }
+
+        fn covers(&self, path: &Path) -> bool {
+            path.starts_with(&self.root)
+                && matches!(
+                    path.extension().and_then(|x| x.to_str()),
+                    Some("py" | "pyi")
+                )
+        }
+
+        fn covers_ignoring_excludes(&self, path: &Path) -> bool {
+            self.covers(path)
+        }
+
+        fn errors(&mut self) -> Vec<anyhow::Error> {
+            Vec::new()
+        }
+    }
+
+    fn incremental_checker(root: &Path, initial_files: Vec<PathBuf>) -> IncrementalChecker {
+        let mut config = ConfigFile::default();
+        config.python_environment.set_empty_to_default();
+        config.interpreters.skip_interpreter_query = true;
+        config.search_path_from_file = vec![root.to_path_buf()];
+        config.disable_search_path_heuristics = true;
+        config.configure();
+        IncrementalChecker::new(
+            CheckArgs::parse_from(["check", "--output-format=omit-errors", "--summary=none"]),
+            Box::new(TestIncludes {
+                root: root.to_path_buf(),
+                initial_files,
+            }),
+            ConfigFinder::new_constant(ArcId::new(config)),
+            ThreadCount::Inline,
+        )
+        .unwrap()
+    }
+
+    fn check(
+        checker: &mut IncrementalChecker,
+        events: &CategorizedEvents,
+    ) -> (CommandExitStatus, Vec<Error>) {
+        checker.check("test", events).unwrap()
+    }
 
     fn sample_error(msg: String) -> Error {
         let module = Module::new(
@@ -1974,6 +2005,148 @@ mod tests {
             Vec::new(),
             ErrorKind::BadAssignment,
         )
+    }
+
+    #[test]
+    fn incremental_checker_rechecks_modified_files() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let path = root.join("main.py");
+        fs::write(&path, "x: int = 'bad'\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![path.clone()]);
+
+        let (status, errors) = check(&mut checker, &CategorizedEvents::default());
+        assert_eq!(status, CommandExitStatus::UserError);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path().as_path(), path);
+
+        fs::write(&path, "x: int = 1\n").unwrap();
+        let (status, errors) = check(
+            &mut checker,
+            &CategorizedEvents {
+                modified: vec![path],
+                ..Default::default()
+            },
+        );
+        assert_eq!(status, CommandExitStatus::Success);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn incremental_checker_updates_checked_files() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let initial = root.join("main.py");
+        fs::write(&initial, "x: int = 1\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![initial]);
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .1
+                .is_empty()
+        );
+
+        let outside = temp.path().join("outside.py");
+        fs::write(&outside, "x: int = 'bad'\n").unwrap();
+        let (_, errors) = check(
+            &mut checker,
+            &CategorizedEvents {
+                created: vec![outside],
+                ..Default::default()
+            },
+        );
+        assert!(errors.is_empty());
+
+        let created = root.join("created.py");
+        fs::write(&created, "x: int = 'bad'\n").unwrap();
+        let (status, errors) = check(
+            &mut checker,
+            &CategorizedEvents {
+                created: vec![created.clone()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(status, CommandExitStatus::UserError);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path().as_path(), created);
+
+        fs::remove_file(&created).unwrap();
+        let (status, errors) = check(
+            &mut checker,
+            &CategorizedEvents {
+                removed: vec![created],
+                ..Default::default()
+            },
+        );
+        assert_eq!(status, CommandExitStatus::Success);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn incremental_checker_rechecks_dependents() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let dependency = root.join("dependency.py");
+        let dependent = root.join("dependent.py");
+        fs::write(&dependency, "value: str = 'ok'\n").unwrap();
+        fs::write(
+            &dependent,
+            "from dependency import value\nresult: str = value\n",
+        )
+        .unwrap();
+        let mut checker = incremental_checker(&root, vec![dependency.clone(), dependent.clone()]);
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .1
+                .is_empty()
+        );
+
+        fs::write(&dependency, "value: int = 1\n").unwrap();
+        let (status, errors) = check(
+            &mut checker,
+            &CategorizedEvents {
+                modified: vec![dependency],
+                ..Default::default()
+            },
+        );
+        assert_eq!(status, CommandExitStatus::UserError);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path().as_path() == dependent)
+        );
+    }
+
+    #[test]
+    fn incremental_checker_reports_removed_imports() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let dependency = root.join("dependency.py");
+        let dependent = root.join("dependent.py");
+        fs::write(&dependency, "value = 1\n").unwrap();
+        fs::write(&dependent, "from dependency import value\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![dependency.clone(), dependent.clone()]);
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .1
+                .is_empty()
+        );
+
+        fs::remove_file(&dependency).unwrap();
+        let (status, errors) = check(
+            &mut checker,
+            &CategorizedEvents {
+                removed: vec![dependency],
+                ..Default::default()
+            },
+        );
+        assert_eq!(status, CommandExitStatus::UserError);
+        assert!(errors.iter().any(|error| {
+            error.path().as_path() == dependent && error.error_kind() == ErrorKind::MissingImport
+        }));
     }
 
     #[test]
