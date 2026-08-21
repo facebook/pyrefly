@@ -260,6 +260,7 @@ impl<'a> TypeDisplayContext<'a> {
         self.render_self_type_as_self = true;
     }
 
+    /// Always qualify names backed by a `QName`, except for builtins.
     fn qualify_qnames_except(&mut self, unqualified_modules: &[ModuleName]) {
         let fake_module = ModuleName::from_str("__pyrefly__type__display__context__");
         for c in self.qnames.values_mut() {
@@ -275,7 +276,7 @@ impl<'a> TypeDisplayContext<'a> {
     }
 
     /// Qualify names from outside the current module, except for builtins.
-    pub fn always_display_external_qname_module_names(&mut self, current_module: ModuleName) {
+    fn always_display_external_qname_module_names(&mut self, current_module: ModuleName) {
         self.qualify_qnames_except(&[ModuleName::builtins(), current_module]);
     }
 
@@ -1816,28 +1817,28 @@ fn annotation_context<'a>(ty: &'a Type, stdlib: Option<&'a Stdlib>) -> TypeDispl
 
 impl Type {
     pub fn as_lsp_string(&self, mode: LspDisplayMode) -> String {
-        self.as_lsp_string_with_fallback_name(None, mode)
+        self.as_lsp_string_with_options(None, mode, false, None)
     }
 
-    pub fn as_lsp_string_with_fallback_name(
-        &self,
-        fallback_name: Option<&str>,
-        mode: LspDisplayMode,
-    ) -> String {
-        self.as_lsp_string_with_fallback_name_and_expanded_unions(fallback_name, mode, false)
-    }
-
-    /// Render the type for LSP display. When `expand_unions` is true, named
-    /// nested unions are shown by their members instead of their alias name —
-    /// this backs the hover panel's "+" verbosity control.
-    pub fn as_lsp_string_with_fallback_name_and_expanded_unions(
+    /// Render the type for LSP display.
+    ///
+    /// A `fallback_name` renders a bare callable as `def <name>(...): ...`.
+    /// `expand_unions` shows named nested unions by their members instead of
+    /// their alias name, backing the hover panel's "+" verbosity control.
+    /// `qualify_outside` prefixes names backed by a `QName` with their module,
+    /// except for builtins and for the given module.
+    pub fn as_lsp_string_with_options(
         &self,
         fallback_name: Option<&str>,
         mode: LspDisplayMode,
         expand_unions: bool,
+        qualify_outside: Option<ModuleName>,
     ) -> String {
         let mut c = TypeDisplayContext::new(&[self]);
         c.set_lsp_display_mode(mode);
+        if let Some(current_module) = qualify_outside {
+            c.always_display_external_qname_module_names(current_module);
+        }
         if expand_unions {
             c.always_display_expanded_unions();
         }
@@ -1847,7 +1848,7 @@ impl Type {
         {
             let trimmed = rendered.trim_start();
             if trimmed.starts_with('(') {
-                return format!("def {}{}: ...", name, trimmed);
+                return format!("def {name}{trimmed}: ...");
             }
         }
         rendered
