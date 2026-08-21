@@ -1955,10 +1955,7 @@ mod tests {
         );
         let func = Function {
             signature: callable,
-            metadata: FuncMetadata {
-                kind: FunctionKind::Overload,
-                flags: FuncFlags::default(),
-            },
+            metadata: FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()),
         };
         let ty = PyreflyType::Function(Box::new(func));
         match convert_type(&ty) {
@@ -2037,10 +2034,7 @@ mod tests {
         let callable = Callable::list(ParamList::new(vec![]), PyreflyType::None);
         let func = Function {
             signature: callable,
-            metadata: FuncMetadata {
-                kind: FunctionKind::Overload,
-                flags: FuncFlags::default(),
-            },
+            metadata: FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()),
         };
         let ty = PyreflyType::Function(Box::new(func));
         let range = lsp_types::Range {

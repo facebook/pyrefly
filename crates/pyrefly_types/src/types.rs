@@ -617,7 +617,16 @@ pub struct Forall<T> {
 
 impl Forall<Forallable> {
     pub fn apply_targs(self, targs: TArgs) -> Type {
-        targs.substitute_into(self.body.as_type())
+        match self.body {
+            Forallable::TypeAlias(TypeAliasData::Value(mut alias)) => {
+                alias.set_display_args(targs.as_slice().to_vec().into_boxed_slice());
+                targs
+                    .substitution()
+                    .substitute_into_mut(alias.as_type_mut());
+                Type::TypeAlias(Box::new(TypeAliasData::Value(alias)))
+            }
+            body => targs.substitute_into(body.as_type()),
+        }
     }
 }
 

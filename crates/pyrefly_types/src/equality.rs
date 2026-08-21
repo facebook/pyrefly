@@ -446,10 +446,7 @@ mod tests {
 
             Forallable::Function(Function {
                 signature: Callable::list(ParamList::everything(), q.clone().to_type(heap)),
-                metadata: FuncMetadata {
-                    kind: FunctionKind::Overload,
-                    flags: FuncFlags::default(),
-                },
+                metadata: FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()),
             })
             .forall(Arc::new(tparams))
         }

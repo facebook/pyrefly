@@ -66,6 +66,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyDecorator;
@@ -135,6 +136,8 @@ struct PreparedDecoratorApplication {
 struct ParamTypeResult {
     /// The resolved type of the parameter.
     ty: Type,
+    /// The annotation type with source alias names retained for display.
+    display_ty: Type,
     /// Whether the parameter is required or optional.
     required: Required,
     /// Whether the parameter lacked a type annotation (was unannotated).
@@ -145,6 +148,8 @@ struct ParamTypeResult {
 struct FunctionParamsResult {
     /// The resolved function parameters.
     params: Vec<Param>,
+    /// Display-only replacements for annotated parameter types.
+    display_param_types: SmallMap<Name, Type>,
     /// The paramspec quantified type, if any.
     paramspec: Option<Quantified>,
     /// Maps parameter names to their resolved types for unannotated parameters.
@@ -622,6 +627,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let FunctionParamsResult {
             params,
+            display_param_types,
             paramspec,
             resolved_param_types,
         } = self.get_params_and_paramspec(
@@ -691,7 +697,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         flags.has_gradual_variadic_params = params_are_gradual_variadic(&params);
-        let metadata = FuncMetadata { kind, flags };
+        let metadata = FuncMetadata::new(kind, flags);
 
         Arc::new(UndecoratedFunction {
             def_index,
@@ -700,6 +706,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             decorators,
             tparams,
             params,
+            display_param_types,
             paramspec,
             defining_cls,
             type_shape_dsl_def,
@@ -718,6 +725,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .arc_clone_ty();
         // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
         let has_return_annotation = self.bindings().function_has_return_annotation(&stmt.name);
+        let display_ret = has_return_annotation
+            .then(|| {
+                let key = KeyAnnotation::ReturnAnnotation(ShortIdentifier::new(&stmt.name));
+                let annotation = self.get_idx(self.bindings().key_to_idx(&key));
+                annotation.annotation.display_ty.clone()
+            })
+            .flatten()
+            .map(|display_ret| {
+                if stmt.is_async && self.unwrap_coroutine(&ret).is_some() {
+                    self.return_type_from_annotation(display_ret, true, false)
+                } else {
+                    display_ret
+                }
+            });
         if !has_return_annotation && !def.metadata.flags.has_no_type_check {
             self.error(
                 errors,
@@ -849,26 +870,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        let callable = if let Some(q) = &def.paramspec {
-            Callable::concatenate(
-                def.params
-                    .iter()
-                    .filter_map(|p| match p {
-                        Param::PosOnly(name, ty, req) => {
-                            Some(PrefixParam::PosOnly(name.clone(), ty.clone(), req.clone()))
-                        }
-                        Param::Pos(name, ty, req) => {
-                            Some(PrefixParam::Pos(name.clone(), ty.clone(), req.clone()))
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-                self.heap.mk_quantified(q.clone()),
-                ret,
-            )
-        } else {
-            Callable::list(ParamList::new(def.params.clone()), ret)
+        let make_callable = |params: Vec<Param>, ret: Type| {
+            if let Some(q) = &def.paramspec {
+                Callable::concatenate(
+                    params
+                        .iter()
+                        .filter_map(|p| match p {
+                            Param::PosOnly(name, ty, req) => {
+                                Some(PrefixParam::PosOnly(name.clone(), ty.clone(), req.clone()))
+                            }
+                            Param::Pos(name, ty, req) => {
+                                Some(PrefixParam::Pos(name.clone(), ty.clone(), req.clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect(),
+                    self.heap.mk_quantified(q.clone()),
+                    ret,
+                )
+            } else {
+                Callable::list(ParamList::new(params), ret)
+            }
         };
+        let display_signature = if def.display_param_types.is_empty() && display_ret.is_none() {
+            None
+        } else {
+            let mut params = def.params.clone();
+            for param in &mut params {
+                if let Some(name) = param.name()
+                    && let Some(display_ty) = def.display_param_types.get(name)
+                {
+                    *param.as_type_mut() = display_ty.clone();
+                }
+            }
+            Some(make_callable(
+                params,
+                display_ret.unwrap_or_else(|| ret.clone()),
+            ))
+        };
+        let callable = make_callable(def.params.clone(), ret);
         if let Some(cls) = &def.defining_cls {
             // Constructors are always validated per spec. For other methods,
             // skip overload variants because self/cls annotations in overloads
@@ -901,6 +941,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.collect_jaxtyping_tparams(&callable, &def.tparams, stmt.name.range, errors);
 
         let mut metadata = def.metadata.clone();
+        metadata.display_signature.0 = display_signature.map(Box::new);
         if let Some(dsl) = &def.type_shape_dsl_def
             && let Some(kind) = self.validate_type_shape_dsl_declaration(
                 dsl,
@@ -1175,63 +1216,70 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> ParamTypeResult {
         // We only want to use self for the first param, so take & replace with None
         let self_type = std::mem::take(self_type);
-        let (ty, required, is_unannotated) = match self.bindings().get_function_param(name) {
-            FunctionParameter::Annotated(idx) => {
-                let param_ty = self.get_idx(*idx).annotation.get_type().clone();
-                let annot_range = self.annotation_range(*idx);
-                let make_context = || {
-                    TypeCheckContext::of_kind(TypeCheckKind::FunctionParameterDefault(
-                        name.id.clone(),
-                    ))
-                    .with_annotation(annot_range, "declared type".to_owned())
-                };
-                // Integer literal defaults are valid for symbolic integer parameters: at
-                // call time the dimension variable is bound from that default value.
-                let skip_check = matches!(
-                    (&param_ty, default),
-                    (
-                        Type::Int(Int::Symbolic(inner)),
-                        Some(Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral {
-                            value: ruff_python_ast::Number::Int(i),
-                            ..
-                        }))
-                    ) if i.as_i64().is_some() && matches!(inner.as_ref(), Type::Quantified(_))
-                );
-                let check: Option<(&Type, &dyn Fn() -> TypeCheckContext)> = if skip_check {
-                    None
-                } else {
-                    Some((&param_ty, &make_context))
-                };
-                let required = self.get_requiredness(default, check, is_stub, errors);
-                (param_ty, required, false)
-            }
-            FunctionParameter::Unannotated(_, _, _) => {
-                let required = self.get_requiredness(default, None, is_stub, errors);
-                // If this is the first parameter and there is a self type, resolve to `Self`.
-                // We only try to resolve the first param for now. Other unannotated params
-                // resolve to Any. If a default value of type T is provided, it will resolve to Any | T.
-                // Otherwise, it will be Any.
-                let ty = if let Some(ty) = self_type {
-                    ty.clone()
-                } else if let Some(hint) = hint {
-                    hint.clone()
-                } else if let Required::Optional(Some(default_val)) = &required {
-                    self.union(
-                        self.heap.mk_any_implicit(),
-                        default_val
-                            .ty
-                            .clone()
-                            .with_literal_style(LitStyle::Implicit)
-                            .promote_implicit_literals(self.stdlib),
-                    )
-                } else {
-                    self.heap.mk_any_implicit()
-                };
-                (ty, required, true)
-            }
-        };
+        let (ty, display_ty, required, is_unannotated) =
+            match self.bindings().get_function_param(name) {
+                FunctionParameter::Annotated(idx) => {
+                    let annotation = &self.get_idx(*idx).annotation;
+                    let param_ty = annotation.get_type().clone();
+                    let display_ty = annotation
+                        .display_ty
+                        .clone()
+                        .unwrap_or_else(|| param_ty.clone());
+                    let annot_range = self.annotation_range(*idx);
+                    let make_context = || {
+                        TypeCheckContext::of_kind(TypeCheckKind::FunctionParameterDefault(
+                            name.id.clone(),
+                        ))
+                        .with_annotation(annot_range, "declared type".to_owned())
+                    };
+                    // Integer literal defaults are valid for symbolic integer parameters: at
+                    // call time the dimension variable is bound from that default value.
+                    let skip_check = matches!(
+                        (&param_ty, default),
+                        (
+                            Type::Int(Int::Symbolic(inner)),
+                            Some(Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral {
+                                value: ruff_python_ast::Number::Int(i),
+                                ..
+                            }))
+                        ) if i.as_i64().is_some() && matches!(inner.as_ref(), Type::Quantified(_))
+                    );
+                    let check: Option<(&Type, &dyn Fn() -> TypeCheckContext)> = if skip_check {
+                        None
+                    } else {
+                        Some((&param_ty, &make_context))
+                    };
+                    let required = self.get_requiredness(default, check, is_stub, errors);
+                    (param_ty, display_ty, required, false)
+                }
+                FunctionParameter::Unannotated(_, _, _) => {
+                    let required = self.get_requiredness(default, None, is_stub, errors);
+                    // If this is the first parameter and there is a self type, resolve to `Self`.
+                    // We only try to resolve the first param for now. Other unannotated params
+                    // resolve to Any. If a default value of type T is provided, it will resolve to Any | T.
+                    // Otherwise, it will be Any.
+                    let ty = if let Some(ty) = self_type {
+                        ty.clone()
+                    } else if let Some(hint) = hint {
+                        hint.clone()
+                    } else if let Required::Optional(Some(default_val)) = &required {
+                        self.union(
+                            self.heap.mk_any_implicit(),
+                            default_val
+                                .ty
+                                .clone()
+                                .with_literal_style(LitStyle::Implicit)
+                                .promote_implicit_literals(self.stdlib),
+                        )
+                    } else {
+                        self.heap.mk_any_implicit()
+                    };
+                    (ty.clone(), ty, required, true)
+                }
+            };
         ParamTypeResult {
             ty,
+            display_ty,
             required,
             is_unannotated,
         }
@@ -1252,6 +1300,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut paramspec_args = None;
         let mut paramspec_kwargs = None;
         let mut resolved_param_types = SmallMap::new();
+        let mut display_param_types = SmallMap::new();
         let mut params = Vec::with_capacity(def.parameters.len());
         params.extend(def.parameters.posonlyargs.iter().map(|x| {
             let decorator_hint = decorator_param_hints
@@ -1266,6 +1315,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             let ParamTypeResult {
                 ty,
+                display_ty,
                 required,
                 is_unannotated,
             } = self.get_param_type_and_requiredness(
@@ -1278,6 +1328,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if is_unannotated {
                 resolved_param_types.insert(x.parameter.name.id.clone(), ty.clone());
+            }
+            if display_ty != ty {
+                display_param_types.insert(x.parameter.name.id.clone(), display_ty);
             }
             Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
         }));
@@ -1300,6 +1353,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             let ParamTypeResult {
                 ty,
+                display_ty,
                 required,
                 is_unannotated,
             } = self.get_param_type_and_requiredness(
@@ -1312,6 +1366,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if is_unannotated {
                 resolved_param_types.insert(x.parameter.name.id.clone(), ty.clone());
+            }
+            if display_ty != ty {
+                display_param_types.insert(x.parameter.name.id.clone(), display_ty);
             }
 
             // If the parameter begins but does not end with "__", it is a positional-only parameter.
@@ -1345,7 +1402,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // will need to have the same type as self/cls
             let _ = std::mem::take(self_type);
             let ParamTypeResult {
-                ty, is_unannotated, ..
+                ty,
+                display_ty,
+                is_unannotated,
+                ..
             } = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
@@ -1356,6 +1416,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if is_unannotated {
                 resolved_param_types.insert(x.name.id.clone(), ty.clone());
+            }
+            if display_ty != ty {
+                display_param_types.insert(x.name.id.clone(), display_ty);
             }
             if let Type::Args(q) = &ty {
                 paramspec_args = Some(q.clone());
@@ -1381,6 +1444,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .and_then(|hint| hint.take_kwonly(&x.parameter.name));
             let ParamTypeResult {
                 ty,
+                display_ty,
                 required,
                 is_unannotated,
             } = self.get_param_type_and_requiredness(
@@ -1394,6 +1458,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if is_unannotated {
                 resolved_param_types.insert(x.parameter.name.id.clone(), ty.clone());
             }
+            if display_ty != ty {
+                display_param_types.insert(x.parameter.name.id.clone(), display_ty);
+            }
             Param::KwOnly(x.parameter.name.id.clone(), ty, required)
         }));
         if let Some(x) = &def.parameters.kwarg {
@@ -1401,7 +1468,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .as_mut()
                 .and_then(|hint| hint.take_kwargs());
             let ParamTypeResult {
-                ty, is_unannotated, ..
+                ty,
+                display_ty,
+                is_unannotated,
+                ..
             } = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
@@ -1412,6 +1482,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if is_unannotated {
                 resolved_param_types.insert(x.name.id.clone(), ty.clone());
+            }
+            if display_ty != ty {
+                display_param_types.insert(x.name.id.clone(), display_ty);
             }
             if let Type::Kwargs(q) = &ty {
                 paramspec_kwargs = Some(q.clone());
@@ -1489,6 +1562,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         FunctionParamsResult {
             params,
+            display_param_types,
             paramspec,
             resolved_param_types,
         }
@@ -1744,10 +1818,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
                 if let Some(mut call_attr) = call_attr {
                     call_attr.transform_toplevel_func_metadata(|m| {
-                        *m = FuncMetadata {
-                            kind: FunctionKind::CallbackProtocol(Box::new(cls.clone())),
-                            flags: metadata.flags.clone(),
-                        };
+                        *m = FuncMetadata::new(
+                            FunctionKind::CallbackProtocol(Box::new(cls.clone())),
+                            metadata.flags.clone(),
+                        );
                     });
                     call_attr
                 } else {
