@@ -115,7 +115,7 @@ export async function activate(context: ExtensionContext) {
   }
 
   // There may be more than one URI due to multi-root workspaces, so just take the primary root.
-  let globalCwd: vscode.Uri | undefined = vscode.workspace.workspaceFolders?.[0].uri;
+  let globalCwd: vscode.Uri | undefined = vscode.workspace.workspaceFolders?.[0]?.uri;
 
   const lspPath: string = resolveLspPath(requireSetting('pyrefly.lspPath'), globalCwd);
   // `pyrefly.lspArguments` resolves to an empty array in some environments

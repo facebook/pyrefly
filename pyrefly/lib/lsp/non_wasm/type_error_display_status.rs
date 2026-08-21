@@ -343,6 +343,7 @@ mod tests {
                 false,
                 false,
                 Some(TypeCheckingMode::Strict),
+                None,
             );
             assert_eq!(r.label, None);
             assert!(r.tooltip.contains("typeCheckingMode"));
@@ -365,6 +366,7 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Legacy"));
             assert!(r.tooltip.contains("your `mypy.ini`"));
@@ -380,6 +382,7 @@ mod tests {
                 &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Legacy"));
@@ -397,6 +400,7 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Default"));
             assert!(r.tooltip.contains("your `pyrightconfig.json`"));
@@ -411,6 +415,7 @@ mod tests {
                 &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Default"));
@@ -429,6 +434,7 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Basic"));
             assert!(r.tooltip.contains("basic"));
@@ -446,6 +452,7 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
             );
             assert_eq!(r.label, None);
             assert!(r.tooltip.is_empty());
@@ -462,6 +469,7 @@ mod tests {
                 &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
                 true,
                 false,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
@@ -485,6 +493,7 @@ mod tests {
                 true,
                 false,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("disable-type-errors-in-ide"));
@@ -502,7 +511,14 @@ mod tests {
         /// know which knob to flip.
         #[test]
         fn workspace_kill_switch_yields_errors_off_label() {
-            let r = derive_v2_response(None, &ConfigSource::Synthetic(None), false, true, None);
+            let r = derive_v2_response(
+                None,
+                &ConfigSource::Synthetic(None),
+                false,
+                true,
+                None,
+                None,
+            );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("python.pyrefly.disableTypeErrors"));
         }
@@ -519,6 +535,7 @@ mod tests {
                 false,
                 true,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("python.pyrefly.disableTypeErrors"));
@@ -531,6 +548,7 @@ mod tests {
                 &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
                 true,
                 true,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
