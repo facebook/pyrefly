@@ -14,7 +14,7 @@ use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 
 /// A scalar column dtype. `Unknown` represents a column whose dtype cannot be determined.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum PolarsDType {
     Boolean,
@@ -69,7 +69,7 @@ impl PolarsDType {
             .find(|dtype| dtype.name() == name)
     }
 
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             PolarsDType::Boolean => "Boolean",
             PolarsDType::Int8 => "Int8",
@@ -95,7 +95,7 @@ impl PolarsDType {
         }
     }
 
-    fn signed_width(self) -> Option<u16> {
+    fn signed_width(&self) -> Option<u16> {
         match self {
             PolarsDType::Int8 => Some(8),
             PolarsDType::Int16 => Some(16),
@@ -106,7 +106,7 @@ impl PolarsDType {
         }
     }
 
-    fn unsigned_width(self) -> Option<u16> {
+    fn unsigned_width(&self) -> Option<u16> {
         match self {
             PolarsDType::UInt8 => Some(8),
             PolarsDType::UInt16 => Some(16),
@@ -128,20 +128,20 @@ impl PolarsDType {
         }
     }
 
-    pub fn is_float(self) -> bool {
+    pub fn is_float(&self) -> bool {
         matches!(self, PolarsDType::Float32 | PolarsDType::Float64)
     }
 
-    pub fn is_integer(self) -> bool {
+    pub fn is_integer(&self) -> bool {
         self.signed_width().is_some() || self.unsigned_width().is_some()
     }
 
-    pub fn is_signed_int(self) -> bool {
+    pub fn is_signed_int(&self) -> bool {
         self.signed_width().is_some()
     }
 
     /// `UInt128` is capped at `i128::MAX`, which still contains every representable literal.
-    pub fn int_bounds(self) -> Option<(i128, i128)> {
+    pub fn int_bounds(&self) -> Option<(i128, i128)> {
         use PolarsDType::*;
         Some(match self {
             Int8 => (i8::MIN as i128, i8::MAX as i128),
@@ -217,7 +217,7 @@ impl PolarsDType {
         None
     }
 
-    pub fn is_numeric(self) -> bool {
+    pub fn is_numeric(&self) -> bool {
         self.signed_width().is_some() || self.unsigned_width().is_some() || self.is_float()
     }
 
@@ -267,7 +267,11 @@ mod tests {
     #[test]
     fn supertype_is_reflexive() {
         for t in [Int8, Int64, UInt32, Float32, Float64, Boolean, String, Date] {
-            assert_eq!(t.supertype(t), Some(t), "{t} with itself");
+            assert_eq!(
+                t.clone().supertype(t.clone()),
+                Some(t.clone()),
+                "{t} with itself"
+            );
         }
     }
 

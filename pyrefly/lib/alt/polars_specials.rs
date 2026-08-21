@@ -490,7 +490,7 @@ fn positional_elements(arg: &Expr) -> &[Expr] {
 }
 
 /// A pinned dtype or a numeric literal that can adapt to its other operand.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ExprValue {
     Dtype(PolarsDType),
     IntLit(i128),
@@ -615,14 +615,14 @@ impl ExprValue {
         }
     }
 
-    fn is_numeric(self) -> bool {
+    fn is_numeric(&self) -> bool {
         match self {
             ExprValue::IntLit(_) | ExprValue::FloatLit => true,
             ExprValue::Dtype(d) => d.is_numeric(),
         }
     }
 
-    fn is_integer(self) -> bool {
+    fn is_integer(&self) -> bool {
         match self {
             ExprValue::IntLit(_) => true,
             ExprValue::FloatLit => false,
@@ -670,7 +670,7 @@ fn resolve_column(
     errors: &ErrorCollector,
 ) -> Option<PolarsDType> {
     match schema.columns.iter().find(|(c, _)| c == name) {
-        Some((_, ty)) => Some(*ty),
+        Some((_, ty)) => Some(ty.clone()),
         None => {
             if schema.is_complete() {
                 errors
@@ -698,11 +698,13 @@ fn report_duplicate_column(name: &Name, range: TextRange, errors: &ErrorCollecto
 
 fn arith(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     use ExprValue::*;
-    match (a, b) {
-        (Dtype(da), Dtype(db)) if da.is_numeric() && db.is_numeric() => da.supertype(db).map(Dtype),
+    match (&a, &b) {
+        (Dtype(da), Dtype(db)) if da.is_numeric() && db.is_numeric() => {
+            da.clone().supertype(db.clone()).map(Dtype)
+        }
         (Dtype(_), Dtype(_)) => None,
-        (Dtype(d), IntLit(v)) | (IntLit(v), Dtype(d)) => int_lit_with_dtype(d, v),
-        (Dtype(d), FloatLit) | (FloatLit, Dtype(d)) => float_lit_with_dtype(d),
+        (Dtype(d), IntLit(v)) | (IntLit(v), Dtype(d)) => int_lit_with_dtype(d.clone(), *v),
+        (Dtype(d), FloatLit) | (FloatLit, Dtype(d)) => float_lit_with_dtype(d.clone()),
         (IntLit(_), IntLit(_)) => a.dtype().supertype(b.dtype()).map(Dtype),
         (IntLit(_), FloatLit) | (FloatLit, IntLit(_)) | (FloatLit, FloatLit) => {
             Some(Dtype(PolarsDType::Float64))
@@ -790,7 +792,7 @@ fn combine_binop(op: Operator, a: ExprValue, b: ExprValue) -> Option<ExprValue> 
         }
         Operator::BitAnd | Operator::BitOr | Operator::BitXor => {
             if matches!(
-                (a, b),
+                (&a, &b),
                 (Dtype(PolarsDType::Boolean), Dtype(PolarsDType::Boolean))
             ) {
                 Some(Dtype(PolarsDType::Boolean))
@@ -830,7 +832,7 @@ fn unary_value(op: UnaryOp, a: ExprValue) -> Option<ExprValue> {
 fn comparison_value(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     use ExprValue::*;
     let comparable =
-        (a.is_numeric() && b.is_numeric()) || matches!((a, b), (Dtype(x), Dtype(y)) if x == y);
+        (a.is_numeric() && b.is_numeric()) || matches!((&a, &b), (Dtype(x), Dtype(y)) if x == y);
     comparable.then_some(Dtype(PolarsDType::Boolean))
 }
 
@@ -1561,7 +1563,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .map(|(name, dtype)| {
                     (
                         name.clone(),
-                        construct.overrides.get(name).copied().unwrap_or(*dtype),
+                        construct
+                            .overrides
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| dtype.clone()),
                     )
                 })
                 .collect(),
@@ -1585,7 +1591,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .map(|(name, values)| {
                     let element = match construct.overrides.get(name) {
-                        Some(dtype) => *dtype,
+                        Some(dtype) => dtype.clone(),
                         None => self
                             .dataframe_list_element_type(
                                 name,
@@ -1632,7 +1638,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for name in names {
                 let value = data.columns.get(name).copied()?;
                 let element = if let Some(dtype) = construct.overrides.get(name) {
-                    *dtype
+                    dtype.clone()
                 } else {
                     match element_from_data(name, value) {
                         Some(dtype) => dtype,
@@ -1686,9 +1692,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .map(|(name, dtype)| {
                 let element = if let Some(dtype) = construct.overrides.get(name) {
-                    *dtype
+                    dtype.clone()
                 } else if let Some(dtype) = dtype {
-                    *dtype
+                    dtype.clone()
                 } else {
                     match data.and_then(|d| d.columns.get(name).copied()) {
                         Some(value) => {
@@ -1883,9 +1889,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .enumerate()
                     .map(|(i, (name, dtype))| {
-                        let folded = rest
-                            .iter()
-                            .try_fold(*dtype, |acc, (columns, _)| acc.supertype(columns[i].1))?;
+                        let folded = rest.iter().try_fold(dtype.clone(), |acc, (columns, _)| {
+                            acc.supertype(columns[i].1.clone())
+                        })?;
                         Some((name.clone(), folded))
                     })
                     .collect::<Option<Vec<_>>>()?
@@ -1977,7 +1983,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 column = element;
                 continue;
             }
-            if element.supertype(column) != Some(column) {
+            if element.clone().supertype(column.clone()) != Some(column.clone()) {
                 if kind == DataFrameKind::Polars {
                     self.error(
                         errors,
@@ -2198,7 +2204,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let columns = schema
             .columns
             .iter()
-            .map(|(name, ty)| (target(name), *ty))
+            .map(|(name, ty)| (target(name), ty.clone()))
             .collect();
         Some(dataframe_type_with_columns(schema, columns))
     }
@@ -2681,7 +2687,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let columns = schema
             .columns
             .iter()
-            .map(|(name, dtype)| (name.clone(), value.widen_integer(*dtype)))
+            .map(|(name, dtype)| (name.clone(), value.widen_integer(dtype.clone())))
             .collect();
         Some(dataframe_type_with_columns(schema, columns))
     }
@@ -2815,7 +2821,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 schema
                     .columns
                     .iter()
-                    .map(|(name, ty)| (name.clone(), casts.get(name).map_or(*ty, |(_, d)| *d)))
+                    .map(|(name, ty)| {
+                        (
+                            name.clone(),
+                            casts
+                                .get(name)
+                                .map_or_else(|| ty.clone(), |(_, dtype)| dtype.clone()),
+                        )
+                    })
                     .collect()
             }
             _ => {
@@ -2823,7 +2836,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 schema
                     .columns
                     .iter()
-                    .map(|(name, _)| (name.clone(), dtype))
+                    .map(|(name, _)| (name.clone(), dtype.clone()))
                     .collect()
             }
         };
@@ -2898,7 +2911,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let key_set: SmallSet<Name> = keys.into_iter().map(|(name, _)| name).collect();
         let column_dtype = |columns: &[(Name, PolarsDType)], name: &Name| {
-            columns.iter().find(|(c, _)| c == name).map(|(_, t)| *t)
+            columns
+                .iter()
+                .find(|(column, _)| column == name)
+                .map(|(_, dtype)| dtype.clone())
         };
         // A coalesced key keeps the primary side's dtype, so paired keys with differing dtypes could
         // be cast or rejected at runtime; fall back rather than pick one side.
@@ -3061,7 +3077,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let len = schema.columns.len() as i128;
         let resolved = if index < 0 { index + len } else { index };
         let dtype = if (0..len).contains(&resolved) {
-            Some(schema.columns[resolved as usize].1)
+            Some(schema.columns[resolved as usize].1.clone())
         } else {
             errors
                 .error_builder(
@@ -3173,10 +3189,10 @@ mod tests {
             ],
         ];
 
-        for (left, expected_row) in dtypes.into_iter().zip(expected) {
-            for (right, expected_dtype) in dtypes.into_iter().zip(expected_row) {
+        for (left, expected_row) in dtypes.iter().zip(expected) {
+            for (right, expected_dtype) in dtypes.iter().zip(expected_row) {
                 assert_eq!(
-                    pow_dtype(left, right),
+                    pow_dtype(left.clone(), right.clone()),
                     Some(expected_dtype),
                     "{} ** {}",
                     left.name(),
@@ -3194,7 +3210,7 @@ mod tests {
             Boolean, String, Binary, Date, Datetime, Duration, Time, Null, Unknown,
         ];
         for dtype in nonnumeric {
-            assert_eq!(pow_dtype(dtype, Int8), None);
+            assert_eq!(pow_dtype(dtype.clone(), Int8), None);
             assert_eq!(pow_dtype(Int8, dtype), None);
         }
     }

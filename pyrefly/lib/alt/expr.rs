@@ -3339,7 +3339,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         match schema.columns.iter().find(|(c, _)| **c == name) {
                             Some((_, dtype)) if schema.kind == DataFrameKind::Polars => {
-                                column_dtype = Some(*dtype);
+                                column_dtype = Some(dtype.clone());
                             }
                             Some(_) => {}
                             None => {
