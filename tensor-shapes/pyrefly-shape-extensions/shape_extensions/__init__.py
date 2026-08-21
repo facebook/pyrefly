@@ -263,7 +263,7 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
     return decorator
 
 
-def broadcast(*_args):
+def broadcast(*_args: typing.Any) -> IntTuple:
     """Runtime placeholder for Pyrefly's native type-level broadcast intrinsic."""
 
     return IntTuple()

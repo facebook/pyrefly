@@ -186,6 +186,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         valid_body = false;
                     }
+                    TypeShapeDslReturnKind::Broadcast { left, right }
+                        if result != TypeShapeDslDomain::IntTuple
+                            || parameter_domains[left]
+                                != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
+                            || parameter_domains[right]
+                                != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple) =>
+                    {
+                        self.error(
+                            errors,
+                            return_.range(),
+                            ErrorKind::InvalidArgument,
+                            "`@type_shape_dsl_function` broadcast return requires two `IntTuple` parameters and an `IntTuple` result"
+                                .to_owned(),
+                        );
+                        valid_body = false;
+                    }
                     TypeShapeDslReturnKind::IntFlagArithmetic { left, right, .. }
                         if result != TypeShapeDslDomain::Int
                             || parameter_domains[left]
@@ -219,6 +235,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         valid_body = false;
                     }
                     TypeShapeDslReturnKind::Parameter(_)
+                    | TypeShapeDslReturnKind::Broadcast { .. }
                     | TypeShapeDslReturnKind::IntFlagArithmetic { .. }
                     | TypeShapeDslReturnKind::Gradual(_) => {}
                 }
@@ -252,6 +269,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Some(CalleeKind::Function(FunctionKind::Def(id))) = callee.callee_kind() else {
             return None;
         };
+        if id.has_toplevel_qname("shape_extensions", "broadcast") {
+            return Some(TypeShapeDslIntrinsic::Broadcast);
+        }
         if id.qname.module_name().as_str() != "shape_extensions.dsl" {
             return None;
         }

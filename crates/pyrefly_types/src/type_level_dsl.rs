@@ -139,6 +139,7 @@ pub struct ParsedTypeShapeDslFunction {
 /// A closed, canonical operation the DSL recognizes by callable identity rather than by spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeShapeDslIntrinsic {
+    Broadcast,
     Gradual(TypeShapeDslDomain),
     IsConcreteInt,
 }
@@ -148,6 +149,10 @@ pub enum TypeShapeDslIntrinsic {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslReturnKind {
     Parameter(usize),
+    Broadcast {
+        left: usize,
+        right: usize,
+    },
     IntFlagArithmetic {
         left: usize,
         op: TypeShapeDslArithmeticOp,
@@ -322,18 +327,41 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 };
                 TypeShapeDslReturnKind::Parameter(index)
             }
-            Some(Expr::Call(call))
-                if let Some(TypeShapeDslIntrinsic::Gradual(domain)) =
-                    (self.resolve_intrinsic)(&call.func) =>
-            {
-                if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
+            Some(Expr::Call(call)) => match (self.resolve_intrinsic)(&call.func) {
+                Some(TypeShapeDslIntrinsic::Gradual(domain)) => {
+                    if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: call.arguments.range,
+                            message: "gradual return does not accept arguments",
+                        });
+                    }
+                    TypeShapeDslReturnKind::Gradual(domain)
+                }
+                Some(TypeShapeDslIntrinsic::Broadcast) => {
+                    if call.arguments.args.len() != 2 || !call.arguments.keywords.is_empty() {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: call.arguments.range,
+                            message: "`broadcast` requires exactly two positional arguments",
+                        });
+                    }
+                    let (Some(left), Some(right)) = (
+                        parameter_index(self.parameters, &call.arguments.args[0]),
+                        parameter_index(self.parameters, &call.arguments.args[1]),
+                    ) else {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: call.arguments.range,
+                            message: "`broadcast` arguments must be bare parameter names",
+                        });
+                    };
+                    TypeShapeDslReturnKind::Broadcast { left, right }
+                }
+                Some(TypeShapeDslIntrinsic::IsConcreteInt) | None => {
                     return Err(TypeShapeDslDefinitionError {
-                        range: call.arguments.range,
-                        message: "gradual return does not accept arguments",
+                        range: return_stmt.range,
+                        message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression",
                     });
                 }
-                TypeShapeDslReturnKind::Gradual(domain)
-            }
+            },
             Some(Expr::BinOp(binop)) => {
                 let (Some(left), Some(right)) = (
                     parameter_index(self.parameters, &binop.left),
@@ -359,7 +387,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: return_stmt.range,
-                    message: "return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression",
+                    message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression",
                 });
             }
         };
@@ -850,6 +878,7 @@ impl ResolvedTypeShapeDslFunction {
                 TypeShapeDslInputDomain::Value(domain) => Some(domain),
                 TypeShapeDslInputDomain::Flag(_) => None,
             },
+            TypeShapeDslReturnKind::Broadcast { .. } => Some(TypeShapeDslDomain::IntTuple),
             TypeShapeDslReturnKind::IntFlagArithmetic { .. } => Some(TypeShapeDslDomain::Int),
             TypeShapeDslReturnKind::Gradual(domain) => Some(domain),
         }
@@ -954,20 +983,16 @@ impl TypeLevelDslCall {
                 let [left, right] = self.args.as_slice() else {
                     unreachable!("native broadcast DSL calls are constructed with two arguments");
                 };
-                let Some(left) =
-                    IntTuple::from_shape_arg_type(left).or_else(|| tuple_carrier_to_shape(left))
-                else {
-                    return Ok(self.fallback());
-                };
-                let Some(right) =
-                    IntTuple::from_shape_arg_type(right).or_else(|| tuple_carrier_to_shape(right))
-                else {
-                    return Ok(self.fallback());
-                };
-                broadcast_shapes(&left, &right).map(|shape| shape.to_shape_arg_type())
+                Ok(match evaluate_broadcast(left, right)? {
+                    DslEvaluation::Value(value) => value.into_type(),
+                    DslEvaluation::AutomaticFallback => self.fallback(),
+                    DslEvaluation::ExplicitGradual => {
+                        unreachable!("native broadcast does not return explicit gradual")
+                    }
+                })
             }
             TypeLevelDslFunction::UserDefined(function) => {
-                Ok(match function.evaluate(&self.args) {
+                Ok(match function.evaluate(&self.args)? {
                     DslEvaluation::Value(value) => value.into_type(),
                     DslEvaluation::ExplicitGradual | DslEvaluation::AutomaticFallback => {
                         self.fallback()
@@ -979,21 +1004,21 @@ impl TypeLevelDslCall {
 }
 
 impl ResolvedTypeShapeDslFunction {
-    fn evaluate(&self, args: &[Type]) -> DslEvaluation {
+    fn evaluate(&self, args: &[Type]) -> Result<DslEvaluation, ShapeError> {
         assert_eq!(
             args.len(),
             self.parameter_domains.len(),
             "type-level DSL values must align with resolved parameters"
         );
-        match self.evaluate_block(&self.definition.parsed.definition.body, args) {
-            DslControlFlow::Return(result) => result,
+        match self.evaluate_block(&self.definition.parsed.definition.body, args)? {
+            DslControlFlow::Return(result) => Ok(result),
             DslControlFlow::Continue => {
                 unreachable!("validated type-level DSL function cannot fall through")
             }
         }
     }
 
-    fn evaluate_block(&self, block: &[Stmt], args: &[Type]) -> DslControlFlow {
+    fn evaluate_block(&self, block: &[Stmt], args: &[Type]) -> Result<DslControlFlow, ShapeError> {
         for statement in block {
             match statement {
                 Stmt::Return(return_stmt) => {
@@ -1005,7 +1030,7 @@ impl ResolvedTypeShapeDslFunction {
                             (return_.statement_range == return_stmt.range).then_some(return_.kind)
                         })
                         .expect("validated return statement must have validation metadata");
-                    return DslControlFlow::Return(match kind {
+                    return Ok(DslControlFlow::Return(match kind {
                         TypeShapeDslReturnKind::Parameter(index) => {
                             let TypeShapeDslInputDomain::Value(domain) =
                                 self.parameter_domains[index]
@@ -1039,7 +1064,9 @@ impl ResolvedTypeShapeDslFunction {
                             let (Some(left), Some(right)) =
                                 (Int::from_type(&args[left]), flag_int_literal(&args[right]))
                             else {
-                                return DslControlFlow::Return(DslEvaluation::AutomaticFallback);
+                                return Ok(DslControlFlow::Return(
+                                    DslEvaluation::AutomaticFallback,
+                                ));
                             };
                             let result = match op {
                                 TypeShapeDslArithmeticOp::Add => {
@@ -1054,23 +1081,41 @@ impl ResolvedTypeShapeDslFunction {
                                     DslEvaluation::Value(DslValue::Int(result))
                                 })
                         }
+                        TypeShapeDslReturnKind::Broadcast { left, right } => {
+                            assert_eq!(
+                                self.result_domain(),
+                                TypeShapeDslDomain::IntTuple,
+                                "resolved broadcast return must produce IntTuple"
+                            );
+                            assert_eq!(
+                                self.parameter_domains[left],
+                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
+                                "resolved broadcast left operand must be IntTuple"
+                            );
+                            assert_eq!(
+                                self.parameter_domains[right],
+                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
+                                "resolved broadcast right operand must be IntTuple"
+                            );
+                            evaluate_broadcast(&args[left], &args[right])?
+                        }
                         TypeShapeDslReturnKind::Gradual(_) => DslEvaluation::ExplicitGradual,
-                    });
+                    }));
                 }
                 Stmt::If(if_stmt) => match self.evaluate_condition(&if_stmt.test, args) {
-                    DslCondition::True => match self.evaluate_block(&if_stmt.body, args) {
+                    DslCondition::True => match self.evaluate_block(&if_stmt.body, args)? {
                         DslControlFlow::Continue => {}
-                        result @ DslControlFlow::Return(_) => return result,
+                        result @ DslControlFlow::Return(_) => return Ok(result),
                     },
                     DslCondition::False => {}
                     DslCondition::Unknown => {
-                        return DslControlFlow::Return(DslEvaluation::AutomaticFallback);
+                        return Ok(DslControlFlow::Return(DslEvaluation::AutomaticFallback));
                     }
                 },
                 _ => unreachable!("validated type-level DSL block contains only if and return"),
             }
         }
-        DslControlFlow::Continue
+        Ok(DslControlFlow::Continue)
     }
 
     fn evaluate_condition(&self, condition: &Expr, args: &[Type]) -> DslCondition {
@@ -1139,6 +1184,21 @@ impl ResolvedTypeShapeDslFunction {
             }
         }
     }
+}
+
+fn evaluate_broadcast(left: &Type, right: &Type) -> Result<DslEvaluation, ShapeError> {
+    let Some(left) = IntTuple::from_shape_arg_type(left).or_else(|| tuple_carrier_to_shape(left))
+    else {
+        return Ok(DslEvaluation::AutomaticFallback);
+    };
+    let Some(right) =
+        IntTuple::from_shape_arg_type(right).or_else(|| tuple_carrier_to_shape(right))
+    else {
+        return Ok(DslEvaluation::AutomaticFallback);
+    };
+    broadcast_shapes(&left, &right)
+        .map(DslValue::IntTuple)
+        .map(DslEvaluation::Value)
 }
 
 fn flag_int_literal(ty: &Type) -> Option<i64> {

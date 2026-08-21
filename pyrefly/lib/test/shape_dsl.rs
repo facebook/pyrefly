@@ -284,6 +284,24 @@ def diag_extent(n: Int, k: int) -> Int:
     env
 }
 
+fn type_shape_dsl_broadcast_env() -> TestEnv {
+    let mut env = shape_dsl_tensor_env();
+    env.add(
+        "broadcast_reexport",
+        "from shape_extensions import broadcast as reexported_broadcast\n",
+    );
+    env.add(
+        "broadcast_lookalike",
+        r#"
+from shape_extensions import IntTuple
+
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return left
+"#,
+    );
+    env
+}
+
 #[test]
 fn test_type_shape_dsl_function_declarations() {
     let mut env = shaped_array_env();
@@ -1252,6 +1270,121 @@ def symbolic[N: IntVar](dim: Tensor[[N]]) -> None:
 );
 
 testcase!(
+    test_type_shape_dsl_broadcast_returns,
+    type_shape_dsl_broadcast_env(),
+    r#"
+import shape_extensions
+import shape_extensions as shapes
+from broadcast_reexport import reexported_broadcast
+from shape_extensions import IntTuple, IntVar, broadcast as imported_broadcast
+from shape_extensions import type_shape_dsl_function
+from torch import Tensor
+from typing import reveal_type
+
+broadcast_alias = imported_broadcast
+
+@type_shape_dsl_function
+def qualified(left: IntTuple, right: IntTuple) -> IntTuple:
+    return shape_extensions.broadcast(left, right)
+
+@type_shape_dsl_function
+def module_alias(left: IntTuple, right: IntTuple) -> IntTuple:
+    return shapes.broadcast(left, right)
+
+@type_shape_dsl_function
+def imported(left: IntTuple, right: IntTuple) -> IntTuple:
+    return imported_broadcast(left, right)
+
+@type_shape_dsl_function
+def value_alias(left: IntTuple, right: IntTuple) -> IntTuple:
+    return broadcast_alias(left, right)
+
+@type_shape_dsl_function
+def reexported(left: IntTuple, right: IntTuple) -> IntTuple:
+    return reexported_broadcast(left, right)
+
+def concrete() -> Tensor[qualified(IntTuple[2, 1, 4, 1], IntTuple[1, 3, 1, 5])]: ...
+def imported_result() -> Tensor[imported(IntTuple[2, 3], IntTuple[1, 3])]: ...
+def aliased_result() -> Tensor[value_alias(IntTuple[2, 3], IntTuple[1, 3])]: ...
+def reexported_result() -> Tensor[reexported(IntTuple[2, 3], IntTuple[1, 3])]: ...
+def gradual() -> Tensor[module_alias(IntTuple, IntTuple[2, 3])]: ...
+def symbolic[N: IntVar, M: IntVar](
+    x: Tensor[[N]], y: Tensor[[M]],
+) -> Tensor[qualified(IntTuple[N, 1], IntTuple[1, M])]: ...
+def nested() -> Tensor[qualified(
+    shape_extensions.broadcast(IntTuple[2, 1], IntTuple[1, 3]),
+    IntTuple[2, 3],
+)]: ...
+def incompatible() -> Tensor[qualified(IntTuple[2, 3], IntTuple[4, 3])]: ...
+
+def test() -> None:
+    reveal_type(concrete())  # E: revealed type: Tensor[[2, 3, 4, 5]]
+    reveal_type(imported_result())  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(aliased_result())  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(reexported_result())  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(gradual())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    incompatible()  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
+
+def test_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> None:
+    reveal_type(symbolic(x, y))  # E: revealed type: Tensor[[N, M]]
+    reveal_type(nested())  # E: revealed type: Tensor[[2, 3]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_broadcast_returns,
+    type_shape_dsl_broadcast_env(),
+    r#"
+import broadcast_lookalike as lookalike_module
+from broadcast_lookalike import broadcast as imported_lookalike
+from shape_extensions import Int, IntTuple, broadcast as native_broadcast
+from shape_extensions import type_shape_dsl_function
+from torch import Tensor
+
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return left
+
+@type_shape_dsl_function
+def local_lookalike(left: IntTuple, right: IntTuple) -> IntTuple:
+    return broadcast(left, right)  # E: return value must be a bare parameter name
+
+@type_shape_dsl_function
+def module_lookalike(left: IntTuple, right: IntTuple) -> IntTuple:
+    return imported_lookalike(left, right)  # E: return value must be a bare parameter name
+
+@type_shape_dsl_function
+def qualified_lookalike(left: IntTuple, right: IntTuple) -> IntTuple:
+    return lookalike_module.broadcast(left, right)  # E: return value must be a bare parameter name
+
+@type_shape_dsl_function
+def shadowed(left: IntTuple, right: IntTuple, native_broadcast: IntTuple) -> IntTuple:
+    return native_broadcast(left, right)  # E: return value must be a bare parameter name  # E: Expected a callable
+
+@type_shape_dsl_function
+def missing(left: IntTuple, right: IntTuple) -> IntTuple:
+    return native_broadcast(left)  # E: `broadcast` requires exactly two positional arguments
+
+@type_shape_dsl_function
+def keyword(left: IntTuple, right: IntTuple) -> IntTuple:
+    return native_broadcast(left, right=right)  # E: `broadcast` requires exactly two positional arguments  # E: Unexpected keyword argument
+
+@type_shape_dsl_function
+def expression(left: IntTuple, right: IntTuple) -> IntTuple:
+    return native_broadcast(native_broadcast(left, right), right)  # E: `broadcast` arguments must be bare parameter names
+
+@type_shape_dsl_function
+def wrong_parameter(left: Int, right: IntTuple) -> IntTuple:
+    return native_broadcast(left, right)  # E: broadcast return requires two `IntTuple` parameters
+
+@type_shape_dsl_function
+def wrong_result(left: IntTuple, right: IntTuple) -> Int:
+    return native_broadcast(left, right)  # E: broadcast return requires two `IntTuple` parameters  # E: Returned type
+
+def invalid_metadata() -> Tensor[local_lookalike(IntTuple[2], IntTuple[2])]: ...  # E: Expected a type-level DSL function
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_identity_import_resolution,
     type_shape_dsl_import_env(),
     r#"
@@ -1476,7 +1609,7 @@ def bare_qualified_shape(x: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def nested(x: Int) -> Int:
-    return (official_gradual(),)  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Returned type
+    return (official_gradual(),)  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Returned type
 
 @type_shape_dsl_function
 def statement(x: Int) -> Int:
@@ -1485,31 +1618,31 @@ def statement(x: Int) -> Int:
 
 @type_shape_dsl_function
 def non_intrinsic(x: Int) -> Int:
-    return ordinary()  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
+    return ordinary()  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def same_spelling_is_not_intrinsic(x: Int) -> Int:
-    return gradual()  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
+    return gradual()  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def spoof_class(x: Int) -> Int:
-    return SpoofInt.gradual()  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Returned type
+    return SpoofInt.gradual()  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Returned type
 
 @type_shape_dsl_function
 def direct_cycle(x: Int) -> Int:
-    return direct_cycle(x)  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
+    return direct_cycle(x)  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def mutual_cycle_left(x: Int) -> Int:
-    return mutual_cycle_right(x)  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
+    return mutual_cycle_right(x)  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def mutual_cycle_right(x: Int) -> Int:
-    return mutual_cycle_left(x)  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression
+    return mutual_cycle_left(x)  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
 
 @type_shape_dsl_function
 def shadowed_module_alias(dsl: Int) -> Int:
-    return dsl.Int.gradual()  # E: return value must be a bare parameter name, a gradual return, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Object of class `int` has no attribute `Int`
+    return dsl.Int.gradual()  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Object of class `int` has no attribute `Int`
 
 @type_shape_dsl_function
 def wrong_domain(x: Int) -> Int:
