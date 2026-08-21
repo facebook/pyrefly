@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import type * as monaco from 'monaco-editor';
 import stabilizeInlayHintDecorations from '../sandbox/stabilizeInlayHintDecorations';
 
 test('prevents Monaco inlay hint decorations from growing at their edges', () => {
@@ -32,7 +33,10 @@ test('prevents Monaco inlay hint decorations from growing at their edges', () =>
         }),
     };
 
-    stabilizeInlayHintDecorations(model, 1);
+    stabilizeInlayHintDecorations(
+        model as unknown as monaco.editor.ITextModel,
+        1
+    );
     decorations = [
         { id: 'inlay-hint', options: inlayHintOptions },
         { id: 'other', options: { description: 'other', stickiness: 0 } },

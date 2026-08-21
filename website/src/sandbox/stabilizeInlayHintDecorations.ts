@@ -5,34 +5,32 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-interface DecorationOptions {
-    description?: string;
-    stickiness?: number;
-    [key: string]: unknown;
-}
+import type * as monaco from 'monaco-editor';
 
-interface Decoration {
-    id: string;
-    options: DecorationOptions;
-}
+type InlayHintDecorationOptions = monaco.editor.IModelDecorationOptions & {
+    readonly description?: string;
+};
 
-interface DecorationChangeAccessor {
-    changeDecorationOptions(id: string, options: DecorationOptions): void;
-}
+type InlayHintDecoration = Pick<monaco.editor.IModelDecoration, 'id'> & {
+    readonly options: InlayHintDecorationOptions;
+};
 
-interface InlayHintModel {
+type InlayHintModel = monaco.editor.ITextModel & {
     changeDecorations(
-        callback: (accessor: DecorationChangeAccessor) => void
+        callback: (accessor: {
+            changeDecorationOptions(
+                id: string,
+                options: monaco.editor.IModelDecorationOptions
+            ): void;
+        }) => void
     ): void;
-    getAllDecorations(): Decoration[];
-    onDidChangeDecorations(listener: () => void): unknown;
-}
+};
 
-const stabilizedModels = new WeakSet<object>();
+const stabilizedModels = new WeakSet<monaco.editor.ITextModel>();
 
 /** Keep Monaco's inlay hint anchors from growing when text is inserted at an edge. */
 export default function stabilizeInlayHintDecorations(
-    model: object,
+    model: monaco.editor.ITextModel,
     stableStickiness: number
 ): void {
     if (stabilizedModels.has(model)) return;
@@ -41,13 +39,13 @@ export default function stabilizeInlayHintDecorations(
     const inlayHintModel = model as InlayHintModel;
 
     const stabilize = () => {
-        const decorations = inlayHintModel
-            .getAllDecorations()
-            .filter(
-                (decoration) =>
-                    decoration.options.description === 'InlayHint' &&
-                    decoration.options.stickiness !== stableStickiness
-            );
+        const decorations = (
+            inlayHintModel.getAllDecorations() as InlayHintDecoration[]
+        ).filter(
+            (decoration) =>
+                decoration.options.description === 'InlayHint' &&
+                decoration.options.stickiness !== stableStickiness
+        );
         if (decorations.length === 0) return;
 
         inlayHintModel.changeDecorations((accessor) => {
