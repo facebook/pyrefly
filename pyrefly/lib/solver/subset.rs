@@ -1890,10 +1890,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.solver.expand_with_bounds(&mut got_expanded);
                 self.solver.expand_with_bounds(&mut want_expanded);
 
-                // Gradual-size fast path. `type_is_gradual_fast` is a by-reference
-                // equivalent of `is_gradual_size(&canonicalize(..))` for `Int`
-                // types, so we can short-circuit without allocating canonical
-                // copies on the common success path.
+                // Gradual-size fast path. This catches existing gradual leaves
+                // without allocating canonical copies on the common success path.
                 //
                 // Short-circuiting here before solving a fresh symbolic `want`
                 // (e.g. `Int[N]` for an unconstrained `IntVar` N) is safe and
@@ -1907,6 +1905,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
                 let got_canonical = got_expanded.clone().canonicalize();
                 let want_canonical = want_expanded.clone().canonicalize();
+                if is_gradual_size(&got_canonical) || is_gradual_size(&want_canonical) {
+                    return Ok(());
+                }
                 if got_canonical == want_canonical {
                     return Ok(());
                 }

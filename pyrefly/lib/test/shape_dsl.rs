@@ -2508,6 +2508,19 @@ def ordinary_typevar[T](x: Int[2 ** T]) -> None:  # E: `T` must be an `IntVar` t
 );
 
 testcase!(
+    test_tensor_shapes_generic_pow_overflow_is_gradual,
+    shaped_array_env(),
+    r#"
+from shape_extensions import Int, IntVar
+
+def accepts_overflow[N: IntVar](exponent: Int[N], value: Int[2 ** N]) -> None: ...
+
+def test(exponent: Int[63], concrete: Int[7]) -> None:
+    accepts_overflow(exponent, concrete)
+"#,
+);
+
+testcase!(
     test_tensor_shapes_internal_dim_carrier_flows_to_size,
     shaped_array_env(),
     r#"
