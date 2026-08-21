@@ -19,6 +19,7 @@ python-platform = "linux"
 python-version = "3.12.0"
 skip-interpreter-query = false
 python-interpreter-path = "venv/bin/python3"
+python-interpreter-find-command = ["poetry", "env", "info", "-e"]
 conda-environment = "myenv"
 fallback-python-interpreter-name = "python3"
 typeshed-path = "/path/to/typeshed"
@@ -28,7 +29,6 @@ untyped-def-behavior = "check-and-infer-return-type"
 infer-with-first-use = true
 ignore-errors-in-generated-code = false
 disable-type-errors-in-ide = false
-tensor-shapes = false
 strict-callable-subtyping = false
 recursion-depth-limit = 100
 recursion-overflow-handler = "break-with-placeholder"
@@ -46,6 +46,7 @@ skip-lsp-config-indexing = false
 
 # Baseline
 baseline = "baseline.json"
+baseline-error-level = "warn"
 
 # Error configuration
 [errors]
@@ -53,6 +54,11 @@ bad-assignment = false
 bad-return = true
 missing-import = "warn"
 invalid-argument = "error"
+
+# Coverage command include/exclude overrides
+[coverage]
+includes = ["src/**"]
+excludes = ["src/vendored/**"]
 
 # SubConfig example 1: Test files
 [[sub-config]]

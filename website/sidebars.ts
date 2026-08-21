@@ -42,15 +42,42 @@ let docsSidebar = [
         items: ['installation', 'configuration'],
     },
     {
+        type: 'doc' as const,
+        id: 'compare',
+        label: 'Compare Type Checkers',
+    },
+    {
         type: 'category' as const,
         label: 'Migrating to Pyrefly',
         description:
-            'Never used a type system before or just new to Pyrefly? Start here!',
+            'Move an existing project from mypy or Pyright, one step at a time',
         collapsed: false,
         items: [
-            'migrating-to-pyrefly',
-            'migrating-from-mypy',
-            'migrating-from-pyright',
+            'migrate/index',
+            {
+                type: 'category' as const,
+                label: 'From mypy',
+                items: [
+                    'migrate/mypy/index',
+                    'migrate/mypy/plugins',
+                    'migrate/mypy/strict-mode',
+                    'migrate/mypy/ignore-missing-imports',
+                    'migrate/mypy/config-reference',
+                    'migrate/mypy/error-codes',
+                ],
+            },
+            {
+                type: 'category' as const,
+                label: 'From Pyright',
+                items: [
+                    'migrate/pyright/index',
+                    'migrate/pyright/strict-mode',
+                    'migrate/pyright/missing-imports',
+                    'migrate/pyright/unknown-member-type',
+                    'migrate/pyright/config-reference',
+                    'migrate/pyright/diagnostics-reference',
+                ],
+            },
         ],
     },
     {
@@ -82,6 +109,21 @@ let docsSidebar = [
             },
             {
                 type: 'doc' as const,
+                id: 'dataframes',
+                label: 'DataFrames (polars, pandas)',
+            },
+            {
+                type: 'doc' as const,
+                id: 'attrs',
+                label: 'attrs Support',
+            },
+            {
+                type: 'doc' as const,
+                id: 'pytest',
+                label: 'Pytest Support',
+            },
+            {
+                type: 'doc' as const,
                 id: 'django',
                 label: 'Django Support',
             },
@@ -108,6 +150,11 @@ let docsSidebar = [
         type: 'doc' as const,
         id: 'import-resolution',
         label: 'Import Resolution',
+    },
+    {
+        type: 'doc' as const,
+        id: 'bazel',
+        label: 'Bazel Integration',
     },
     {
         type: 'category' as const,

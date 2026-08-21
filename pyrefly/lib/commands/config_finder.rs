@@ -72,7 +72,7 @@ pub trait ConfigConfigurer: Send + Sync + 'static {
     ) -> (ArcId<ConfigFile>, Vec<ConfigError>);
 }
 
-/// A basic [`ConfigConfigurer`] implementation that only calls [`ConfigFile::configure()`]
+/// A basic [`ConfigConfigurer`] implementation that only calls [`ConfigFile::configure_at()`]
 /// and returns the configured config. Any errors are ignored, and an empty [`Vec<ConfigError>`]
 /// is always returned.
 pub struct DefaultConfigConfigurer {}
@@ -87,7 +87,7 @@ impl ConfigConfigurer for DefaultConfigConfigurer {
         // The CLI never has an explicit IDE override, so always pass
         // `Auto` and let the resolver auto-detect.
         apply_unconfigured_resolver_if_applicable(&mut config, root, UnconfiguredOverride::Auto);
-        config.configure();
+        config.configure_at(root);
         (ArcId::new(config), Vec::new())
     }
 }
@@ -162,7 +162,7 @@ impl ConfigConfigurer for DefaultConfigConfigurerWithOverrides {
         mut errors: Vec<ConfigError>,
     ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
         apply_unconfigured_resolver_if_applicable(&mut config, root, self.args.preset().into());
-        let (c, mut configure_errors) = self.args.override_config(config);
+        let (c, mut configure_errors) = self.args.override_config_at(config, root);
         if self.ignore_errors {
             errors.clear();
         } else {
@@ -275,7 +275,7 @@ pub fn standard_config_finder(
                     .entry(path.clone())
                     .or_insert_with(|| {
                         let (config, errors) = configure2.configure(
-                            path.parent(),
+                            Some(&path),
                             ConfigFile::init_at_root(&path, &ProjectLayout::Flat, true),
                             vec![],
                         );
@@ -314,6 +314,7 @@ pub fn standard_config_finder(
                             let fallback_search_path =
                                 FallbackSearchPath::Explicit(cache_ancestors.get_ancestors(parent));
                             let mut config = ConfigFile {
+                                source: ConfigSource::Synthetic(Some(parent.to_owned())),
                                 project_includes: ConfigFile::default_project_includes(),
                                 // We use `fallback_search_path` because otherwise a user with `/sys` on their
                                 // computer (all of them) will override `sys.version` in preference to typeshed.
@@ -339,16 +340,20 @@ pub fn standard_config_finder(
 #[cfg(test)]
 mod tests {
 
+    use std::fs;
     use std::ops::Deref as _;
 
     use pretty_assertions::assert_eq;
     use pyrefly_config::args::ConfigOverrideArgs;
+    use pyrefly_config::config::ConfigScope;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_name::ModuleNameWithKind;
     use pyrefly_python::module_path::ModulePath;
+    use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
+    use crate::commands::check::Handles;
     use crate::config::config::ConfigSource;
     use crate::config::environment::environment::PythonEnvironment;
 
@@ -461,13 +466,16 @@ mod tests {
         );
         assert_eq!(config_file.fallback_search_path, FallbackSearchPath::Empty);
 
-        // we should get a synthetic config with a search path = project_root/..
+        // we should get a synthetic config rooted at the inferred import root
         let config_file = finder(
-            Some(root),
+            Some(&root.join("no_config")),
             ModuleName::from_str("foo.bar"),
             ModulePath::filesystem(root.join("no_config/foo/bar.py")),
         );
-        assert_eq!(config_file.source, ConfigSource::Synthetic);
+        assert_eq!(
+            config_file.source,
+            ConfigSource::Synthetic(Some(root.join("no_config")))
+        );
         assert_eq!(
             config_file.search_path().cloned().collect::<Vec<_>>(),
             Vec::<PathBuf>::new()
@@ -504,7 +512,10 @@ mod tests {
             ModuleName::unknown(),
             ModulePath::namespace(root.join("no_config/foo")),
         );
-        assert_eq!(config_file.source, ConfigSource::Synthetic);
+        assert_eq!(
+            config_file.source,
+            ConfigSource::Synthetic(Some(root.join("no_config/foo")))
+        );
         assert_eq!(config_file.search_path_from_file, Vec::<PathBuf>::new());
         assert_eq!(
             config_file.fallback_search_path,
@@ -522,7 +533,10 @@ mod tests {
             ModuleName::unknown(),
             ModulePath::filesystem(root.join("no_config/foo/bar.py")),
         );
-        assert_eq!(config_file.source, ConfigSource::Synthetic);
+        assert_eq!(
+            config_file.source,
+            ConfigSource::Synthetic(Some(root.join("no_config/foo")))
+        );
         assert_eq!(config_file.search_path_from_file, Vec::<PathBuf>::new());
         assert_eq!(
             config_file.fallback_search_path,
@@ -533,6 +547,21 @@ mod tests {
                     .collect::<Vec<PathBuf>>()
             )),
         );
+    }
+
+    /// gh-4132: CLI handles must derive module names via the config's fallback
+    /// search path, so files in a config-less directory don't become `__unknown__`.
+    #[test]
+    fn test_handles_all_uses_fallback_search_path() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("foo.py")]);
+
+        let finder = TestConfigurer::new_standard(|_, x, _| {
+            ConfigOverrideArgs::default().override_config(x)
+        });
+        let (handles, _, _) = Handles::new(vec![root.join("foo.py")]).all(&finder);
+        assert_eq!(handles[0].module(), ModuleName::from_str("foo"));
     }
 
     /// A real pyrefly.toml should always take priority over a pyproject.toml
@@ -697,7 +726,10 @@ mod tests {
             &ModulePath::filesystem(root.join("pkg/mod.py")),
         );
 
-        assert_eq!(config.source, ConfigSource::Synthetic);
+        assert_eq!(
+            config.source,
+            ConfigSource::Synthetic(Some(root.to_path_buf()))
+        );
         assert_eq!(config.preset, Some(Preset::Basic));
         assert_eq!(
             config.synthesized_preset_reason,
@@ -715,6 +747,29 @@ mod tests {
             matches!(config.fallback_search_path, FallbackSearchPath::Explicit(_)),
             "carry-over lost `fallback_search_path` from input config; got {:?}",
             config.fallback_search_path,
+        );
+    }
+
+    #[test]
+    fn test_unconfigured_project_under_hidden_dir_is_not_excluded() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path().join(".codex/worktrees/wt/project");
+        fs::create_dir_all(&root).unwrap();
+        TestPath::setup_test_directory(
+            &root,
+            vec![TestPath::dir("pkg", vec![TestPath::file("mod.py")])],
+        );
+
+        let finder = default_config_finder(None);
+        let config = finder.python_file(
+            ModuleNameWithKind::guaranteed(ModuleName::from_str("pkg.mod")),
+            &ModulePath::filesystem(root.join("pkg/mod.py")),
+        );
+
+        assert!(
+            config
+                .get_filtered_globs(None, ConfigScope::Default)
+                .covers(&root.join("pkg/mod.py"))
         );
     }
 

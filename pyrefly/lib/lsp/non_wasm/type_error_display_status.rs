@@ -290,6 +290,7 @@ fn type_checking_mode_kebab(mode: TypeCheckingMode) -> &'static str {
         TypeCheckingMode::Legacy => "legacy",
         TypeCheckingMode::Default => "default",
         TypeCheckingMode::Strict => "strict",
+        TypeCheckingMode::All => "all",
     }
 }
 
@@ -328,7 +329,7 @@ mod tests {
         fn user_override_yields_null_label() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::UserOverride),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 Some(TypeCheckingMode::Strict),
@@ -350,7 +351,7 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
                     MigratedConfigSource::DedicatedFile,
                 ))),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -366,7 +367,7 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
                     MigratedConfigSource::PyprojectToml,
                 ))),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -382,7 +383,7 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(
                     MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile),
                 )),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -397,7 +398,7 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(
                     MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml),
                 )),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -414,7 +415,7 @@ mod tests {
         fn no_nearby_config_yields_basic_label() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::NoNearbyConfig),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 None,
@@ -491,7 +492,7 @@ mod tests {
         /// know which knob to flip.
         #[test]
         fn workspace_kill_switch_yields_errors_off_label() {
-            let r = derive_v2_response(None, &ConfigSource::Synthetic, false, true, None);
+            let r = derive_v2_response(None, &ConfigSource::Synthetic(None), false, true, None);
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("python.pyrefly.disableTypeErrors"));
         }
@@ -504,7 +505,7 @@ mod tests {
         fn workspace_kill_switch_wins_over_preset_reason() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::NoNearbyConfig),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 true,
                 None,
