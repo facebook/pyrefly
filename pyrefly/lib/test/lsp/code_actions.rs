@@ -1399,6 +1399,38 @@ fn remove_unused_import_quickfix_removes_import_alias() {
 }
 
 #[test]
+fn remove_unused_import_quickfix_removes_last_alias() {
+    let code = "import os, sys\nprint(os.getcwd())\n";
+    let cursor_offset = code.find("sys").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("import os\nprint(os.getcwd())\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_keeps_statement_after_semicolon() {
+    let code = "import os; x = 1\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_keeps_statement_before_semicolon() {
+    let code = "x = 1; import os\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_trailing_comment() {
+    let code = "import os  # only needed for os\nx = 1\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
+}
+
+#[test]
 fn remove_unused_import_quickfix_removes_from_import_alias() {
     let code = "from typing import Dict, List\nx: List[int] = []\n";
     let cursor_offset = code.find("Dict").unwrap();
