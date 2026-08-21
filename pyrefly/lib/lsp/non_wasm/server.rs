@@ -3323,11 +3323,13 @@ impl Server {
         }
     }
 
-    fn invalidate(
+    fn queue_invalidation(
         &self,
         kind: TelemetryEventKind,
         invalidate_find_reason: Option<TelemetryInvalidateFindReason>,
-        f: impl FnOnce(&mut Transaction) + Send + Sync + 'static,
+        invalidate: impl FnOnce(&mut Transaction) + Send + Sync + 'static,
+        before_commit: impl FnOnce(&Server) + Send + Sync + 'static,
+        finish: impl FnOnce(&Server) + Send + Sync + 'static,
     ) {
         let open_handles = self.get_open_file_handles();
         self.recheck_queue.queue_task(
@@ -3369,7 +3371,7 @@ impl Server {
                     .new_committable_transaction(Require::Exports, Some(subscriber));
                 let invalidate_start = Instant::now();
                 // Mark files as dirty
-                f(transaction.as_mut());
+                invalidate(transaction.as_mut());
                 telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
 
                 // Run transaction prioritizing currently-open files, sending diagnostics as soon as they are available via the subscriber
@@ -3379,10 +3381,7 @@ impl Server {
                     None,
                 );
 
-                // Wait in a loop while do_not_commit_recheck flag is set (testing only)
-                while server.do_not_commit_recheck.load(Ordering::SeqCst) {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
+                before_commit(server);
 
                 // Commit will be blocked until there are no ongoing reads.
                 // If we have some long running read jobs that can be cancelled, we should cancel them
@@ -3400,12 +3399,34 @@ impl Server {
                 );
                 *server.currently_streaming_diagnostics_for_handles.write() = None;
 
+                finish(server);
+            }),
+        );
+    }
+
+    fn invalidate(
+        &self,
+        kind: TelemetryEventKind,
+        invalidate_find_reason: Option<TelemetryInvalidateFindReason>,
+        invalidate: impl FnOnce(&mut Transaction) + Send + Sync + 'static,
+    ) {
+        self.queue_invalidation(
+            kind,
+            invalidate_find_reason,
+            invalidate,
+            |server| {
+                // Wait in a loop while do_not_commit_recheck flag is set (testing only)
+                while server.do_not_commit_recheck.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            },
+            |server| {
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
                 // all the in-memory files based on the fresh main State as soon as possible.
                 info!("Invalidated state, prepare to recheck open files.");
                 let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
-            }),
+            },
         );
     }
 
@@ -5917,62 +5938,12 @@ impl Server {
     /// Asynchronously invalidate configuration and then validate in-memory files
     /// This ensures validate_in_memory() only runs after config invalidation completes
     fn invalidate_config_and_validate_in_memory(&self) {
-        let open_handles = self.get_open_file_handles();
-        self.recheck_queue.queue_task(
+        self.queue_invalidation(
             TelemetryEventKind::InvalidateConfig,
-            Box::new(move |server, _telemetry, telemetry_event| {
-                // Filter to only include handles from workspaces with streaming enabled
-                let streaming_handles: SmallSet<Handle> = open_handles
-                    .iter()
-                    .filter(|h| {
-                        server
-                            .workspaces
-                            .should_stream_diagnostics(h.path().as_path())
-                    })
-                    .cloned()
-                    .collect();
-                let has_streaming = !streaming_handles.is_empty();
-                if has_streaming {
-                    *server.currently_streaming_diagnostics_for_handles.write() =
-                        Some(streaming_handles.clone());
-                }
-                let publish_callback =
-                    move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
-                        if changed && streaming_handles.contains(handle) {
-                            server.publish_for_handles(
-                                transaction,
-                                std::slice::from_ref(handle),
-                                DiagnosticSource::Streaming,
-                            )
-                        }
-                    };
-                let subscriber = server.make_recheck_subscriber(publish_callback);
-                let mut transaction = server
-                    .state
-                    .new_committable_transaction(Require::Exports, Some(subscriber));
-                let invalidate_start = Instant::now();
-                transaction.as_mut().invalidate_config();
-                telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
-                server.validate_in_memory_for_transaction(
-                    transaction.as_mut(),
-                    telemetry_event,
-                    None,
-                );
-                // Commit will be blocked until there are no ongoing reads.
-                // If we have some long running read jobs that can be cancelled, we should cancel them
-                // to unblock committing transactions.
-                for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
-                    cancellation_handle.cancel();
-                }
-                // we have to run, not just commit to process updates
-                server.state.run_with_committing_transaction(
-                    transaction,
-                    &[],
-                    Require::Everything,
-                    Some(telemetry_event),
-                    None,
-                );
-                *server.currently_streaming_diagnostics_for_handles.write() = None;
+            None,
+            |transaction| transaction.invalidate_config(),
+            |_| {},
+            |server| {
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
                 // all the in-memory files based on the fresh main State as soon as possible.
@@ -5983,7 +5954,7 @@ impl Server {
                 } else {
                     info!("Invalidated config, but no open files to recheck.");
                 }
-            }),
+            },
         );
     }
 
