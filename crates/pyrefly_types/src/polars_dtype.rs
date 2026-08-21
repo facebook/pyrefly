@@ -215,6 +215,16 @@ pub enum PolarsArrayShape {
     Unknown,
 }
 
+impl PolarsArrayShape {
+    fn supertype(self, other: Self) -> Option<Self> {
+        match (self, other) {
+            (Self::Known(left), Self::Known(right)) if left == right => Some(Self::Known(left)),
+            (Self::Known(_), Self::Known(_)) => None,
+            _ => Some(Self::Unknown),
+        }
+    }
+}
+
 /// A column dtype. `Unknown` represents a column whose dtype cannot be determined.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[derive(TypeEq)]
@@ -333,6 +343,33 @@ impl PolarsDType {
 
         match (self, other) {
             (Self::Scalar(left), Self::Scalar(right)) => left.supertype(right).map(Self::Scalar),
+            (Self::List(left), Self::List(right)) => left
+                .supertype(*right)
+                .map(|dtype| Self::List(Box::new(dtype))),
+            (
+                Self::Array {
+                    element: left_element,
+                    shape: left_shape,
+                },
+                Self::Array {
+                    element: right_element,
+                    shape: right_shape,
+                },
+            ) => Some(Self::Array {
+                element: Box::new(left_element.supertype(*right_element)?),
+                shape: left_shape.supertype(right_shape)?,
+            }),
+            (Self::Struct(left), Self::Struct(right)) if left.len() == right.len() => left
+                .into_iter()
+                .zip(right)
+                .map(|((left_name, left_dtype), (right_name, right_dtype))| {
+                    if left_name != right_name {
+                        return None;
+                    }
+                    Some((left_name, left_dtype.supertype(right_dtype)?))
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(Self::Struct),
             _ => None,
         }
     }
@@ -596,6 +633,59 @@ mod tests {
         assert_eq!(
             PolarsDType::String.supertype(PolarsDType::Null),
             Some(PolarsDType::String)
+        );
+    }
+
+    #[test]
+    fn supertype_recurses_through_nested_dtypes() {
+        assert_eq!(
+            PolarsDType::List(Box::new(PolarsDType::Int32))
+                .supertype(PolarsDType::List(Box::new(PolarsDType::Int64))),
+            Some(PolarsDType::List(Box::new(PolarsDType::Int64)))
+        );
+        assert_eq!(
+            PolarsDType::Array {
+                element: Box::new(PolarsDType::Int32),
+                shape: PolarsArrayShape::Known(vec1![2]),
+            }
+            .supertype(PolarsDType::Array {
+                element: Box::new(PolarsDType::Int64),
+                shape: PolarsArrayShape::Unknown,
+            }),
+            Some(PolarsDType::Array {
+                element: Box::new(PolarsDType::Int64),
+                shape: PolarsArrayShape::Unknown,
+            })
+        );
+        assert_eq!(
+            PolarsDType::Struct(vec![(Name::new("value"), PolarsDType::Int32)]).supertype(
+                PolarsDType::Struct(vec![(Name::new("value"), PolarsDType::Int64,)])
+            ),
+            Some(PolarsDType::Struct(vec![(
+                Name::new("value"),
+                PolarsDType::Int64,
+            )]))
+        );
+    }
+
+    #[test]
+    fn supertype_rejects_incompatible_nested_dtypes() {
+        assert_eq!(
+            PolarsDType::Array {
+                element: Box::new(PolarsDType::Int64),
+                shape: PolarsArrayShape::Known(vec1![2]),
+            }
+            .supertype(PolarsDType::Array {
+                element: Box::new(PolarsDType::Int64),
+                shape: PolarsArrayShape::Known(vec1![3]),
+            }),
+            None
+        );
+        assert_eq!(
+            PolarsDType::Struct(vec![(Name::new("left"), PolarsDType::Int64)]).supertype(
+                PolarsDType::Struct(vec![(Name::new("right"), PolarsDType::Int64,)])
+            ),
+            None
         );
     }
 
