@@ -6166,7 +6166,7 @@ from shape_extensions import Elements, Int, IntTuple, IntVar, type_shape_dsl_fun
 from shape_extensions.dsl import Invalid as invalid_alias
 from shape_extensions.dsl import IntTuple as make_shape
 from torch import Tensor
-from typing import assert_type
+from typing import Literal, assert_type
 
 @type_shape_dsl_function
 def reorder(shape: IntTuple) -> IntTuple:
@@ -6226,6 +6226,20 @@ def explicit_invalid(shape: IntTuple) -> IntTuple:
 def always_invalid(dim: Int) -> Int:
     return dsl.Invalid("no integer result")
 
+@type_shape_dsl_function
+def identity(shape: IntTuple) -> IntTuple:
+    return shape
+
+@type_shape_dsl_function
+def first(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[0],))
+
+@type_shape_dsl_function
+def require_rank_two(shape: IntTuple) -> IntTuple:
+    if len(shape) == 2:
+        return shape
+    return dsl.Invalid("expected rank two")
+
 def apply_reorder[S: IntTuple](x: Tensor[S]) -> Tensor[reorder(S)]: ...
 def apply_alias[S: IntTuple](x: Tensor[S]) -> Tensor[imported_alias(S)]: ...
 def apply_boundaries[S: IntTuple](x: Tensor[S]) -> Tensor[boundaries(S)]: ...
@@ -6238,8 +6252,11 @@ def apply_first_dimension[S: IntTuple](x: Tensor[S]) -> Tensor[first_dimension(S
 def apply_unknown[S: IntTuple](x: Tensor[S]) -> Tensor[explicit_unknown(S)]: ...
 def apply_invalid[S: IntTuple](x: Tensor[S]) -> Tensor[explicit_invalid(S)]: ...
 def apply_invalid_int() -> Tensor[[always_invalid(Int[1])]]: ...
+def apply_identity[S: IntTuple](x: Tensor[S]) -> Tensor[identity(S)]: ...
+def apply_first[S: IntTuple](x: Tensor[S]) -> Tensor[first(S)]: ...
+def apply_require_rank_two[S: IntTuple](x: Tensor[S]) -> Tensor[require_rank_two(S)]: ...
 
-def test[N: IntVar, S: IntTuple](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[N, 3, 4]], gradual: Tensor[IntTuple], unpacked: Tensor[IntTuple[2, *Elements[S]]]) -> None:
+def test[N: IntVar, S: IntTuple](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[N, 3, 4]], gradual: Tensor[IntTuple], unpacked: Tensor[IntTuple[2, *Elements[S]]], tuple_carrier: Tensor[tuple[Literal[2], Literal[3]]]) -> None:
     assert_type(apply_reorder(concrete), Tensor[[4, 2, 7]])
     assert_type(apply_reorder(symbolic), Tensor[[4, N, 7]])
     assert_type(apply_alias(concrete), Tensor[[2]])
@@ -6256,6 +6273,9 @@ def test[N: IntVar, S: IntTuple](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[
     apply_unknown_then_oob(concrete)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
     apply_invalid(concrete)  # E: Cannot evaluate type-level shape DSL call: expected rank one
     apply_invalid_int()  # E: Cannot evaluate type-level shape DSL call: no integer result
+    assert_type(apply_identity(tuple_carrier), Tensor[[2, 3]])
+    assert_type(apply_first(tuple_carrier), Tensor[[2]])
+    assert_type(apply_require_rank_two(tuple_carrier), Tensor[[2, 3]])
 "#,
 );
 

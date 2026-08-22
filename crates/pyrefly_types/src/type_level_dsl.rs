@@ -6,6 +6,7 @@
  */
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -219,16 +220,6 @@ pub struct TypeShapeDslCondition {
     kind: TypeShapeDslConditionKind,
 }
 
-fn parameter_index(parameters: &Parameters, expr: &Expr) -> Option<usize> {
-    let Expr::Name(name) = expr else {
-        return None;
-    };
-    parameters
-        .args
-        .iter()
-        .position(|parameter| parameter.parameter.name.id == name.id)
-}
-
 enum IntegerLiteral {
     NotLiteral,
     Unrepresentable,
@@ -283,8 +274,8 @@ enum DslStatementFlow {
 }
 
 struct DslValidator<'a, F> {
-    parameters: &'a Parameters,
     resolve_intrinsic: &'a F,
+    slots: HashMap<Name, usize>,
     returns: Vec<TypeShapeDslReturn>,
     conditions: Vec<TypeShapeDslCondition>,
     expressions: Vec<TypeShapeDslExpression>,
@@ -292,13 +283,26 @@ struct DslValidator<'a, F> {
 
 impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
     fn new(parameters: &'a Parameters, resolve_intrinsic: &'a F) -> Self {
+        let slots = parameters
+            .args
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| (parameter.parameter.name.id.clone(), index))
+            .collect();
         Self {
-            parameters,
             resolve_intrinsic,
+            slots,
             returns: Vec::new(),
             conditions: Vec::new(),
             expressions: Vec::new(),
         }
+    }
+
+    fn slot(&self, expression: &Expr) -> Option<usize> {
+        let Expr::Name(name) = expression else {
+            return None;
+        };
+        self.slots.get(&name.id).copied()
     }
 
     fn validate_block(
@@ -344,7 +348,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
     ) -> Result<(), TypeShapeDslDefinitionError> {
         let kind = match expression {
             Expr::Name(_) => {
-                let Some(parameter) = parameter_index(self.parameters, expression) else {
+                let Some(parameter) = self.slot(expression) else {
                     return Err(TypeShapeDslDefinitionError {
                         range: expression.range(),
                         message: "dimension name must match a parameter name",
@@ -377,7 +381,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 });
             }
             Expr::Subscript(subscript) => {
-                let Some(shape) = parameter_index(self.parameters, &subscript.value) else {
+                let Some(shape) = self.slot(&subscript.value) else {
                     return Err(TypeShapeDslDefinitionError {
                         range: subscript.value.range(),
                         message: "indexed value must name an `IntTuple` parameter",
@@ -470,7 +474,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         message: "gradual return must be called",
                     });
                 }
-                let Some(index) = parameter_index(self.parameters, returned) else {
+                let Some(index) = self.slot(returned) else {
                     return Err(TypeShapeDslDefinitionError {
                         range: returned_name.range,
                         message: "returned name must match a parameter name",
@@ -496,8 +500,8 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         });
                     }
                     let (Some(left), Some(right)) = (
-                        parameter_index(self.parameters, &call.arguments.args[0]),
-                        parameter_index(self.parameters, &call.arguments.args[1]),
+                        self.slot(&call.arguments.args[0]),
+                        self.slot(&call.arguments.args[1]),
                     ) else {
                         return Err(TypeShapeDslDefinitionError {
                             range: call.arguments.range,
@@ -530,10 +534,8 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
             },
             Some(Expr::BinOp(binop)) => {
-                let (Some(left), Some(right)) = (
-                    parameter_index(self.parameters, &binop.left),
-                    parameter_index(self.parameters, &binop.right),
-                ) else {
+                let (Some(left), Some(right)) = (self.slot(&binop.left), self.slot(&binop.right))
+                else {
                     return Err(TypeShapeDslDefinitionError {
                         range: binop.range,
                         message: "arithmetic return operands must be bare parameter names",
@@ -626,8 +628,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                             message: "`len` requires exactly one positional argument",
                         });
                     }
-                    let Some(shape) = parameter_index(self.parameters, &call.arguments.args[0])
-                    else {
+                    let Some(shape) = self.slot(&call.arguments.args[0]) else {
                         return Err(TypeShapeDslDefinitionError {
                             range: call.arguments.args[0].range(),
                             message: "`len` argument must name an `IntTuple` parameter",
@@ -650,44 +651,40 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         message: "comparison must be exactly `<Int parameter> == <Int parameter>`, `<Int parameter> < <Int parameter>`, or `<int parameter> < <integer literal>`",
                     });
                 }
-                let Some(left) = parameter_index(self.parameters, &compare.left) else {
+                let Some(left) = self.slot(&compare.left) else {
                     return Err(TypeShapeDslDefinitionError {
                         range: compare.left.range(),
                         message: "left comparison operand must name a parameter",
                     });
                 };
                 let right = &compare.comparators[0];
-                Ok(
-                    match (compare.ops[0], parameter_index(self.parameters, right)) {
-                        (CmpOp::Eq, Some(right)) => TypeShapeDslConditionKind::Equal(left, right),
-                        (CmpOp::Lt, Some(right)) => {
-                            TypeShapeDslConditionKind::LessThan(left, right)
-                        }
-                        (CmpOp::Lt, None) => {
-                            let literal = match integer_literal(right) {
-                                IntegerLiteral::NotLiteral => {
-                                    return Err(TypeShapeDslDefinitionError {
-                                        range: right.range(),
-                                        message: "right `<` operand must name a parameter or be an integer literal",
-                                    });
-                                }
-                                IntegerLiteral::Unrepresentable => None,
-                                IntegerLiteral::Value(value) => Some(value),
-                            };
-                            TypeShapeDslConditionKind::FlagIntLessThanLiteral {
-                                parameter: left,
-                                literal,
+                Ok(match (compare.ops[0], self.slot(right)) {
+                    (CmpOp::Eq, Some(right)) => TypeShapeDslConditionKind::Equal(left, right),
+                    (CmpOp::Lt, Some(right)) => TypeShapeDslConditionKind::LessThan(left, right),
+                    (CmpOp::Lt, None) => {
+                        let literal = match integer_literal(right) {
+                            IntegerLiteral::NotLiteral => {
+                                return Err(TypeShapeDslDefinitionError {
+                                    range: right.range(),
+                                    message: "right `<` operand must name a parameter or be an integer literal",
+                                });
                             }
+                            IntegerLiteral::Unrepresentable => None,
+                            IntegerLiteral::Value(value) => Some(value),
+                        };
+                        TypeShapeDslConditionKind::FlagIntLessThanLiteral {
+                            parameter: left,
+                            literal,
                         }
-                        (CmpOp::Eq, None) => {
-                            return Err(TypeShapeDslDefinitionError {
-                                range: right.range(),
-                                message: "condition operands must name parameters",
-                            });
-                        }
-                        _ => unreachable!("validated comparison operator is equality or less-than"),
-                    },
-                )
+                    }
+                    (CmpOp::Eq, None) => {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: right.range(),
+                            message: "condition operands must name parameters",
+                        });
+                    }
+                    _ => unreachable!("validated comparison operator is equality or less-than"),
+                })
             }
             Expr::Call(call)
                 if (self.resolve_intrinsic)(&call.func)
@@ -702,8 +699,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         message: "`is_concrete_int` condition requires exactly one positional argument",
                     });
                 }
-                let Some(parameter) = parameter_index(self.parameters, &call.arguments.args[0])
-                else {
+                let Some(parameter) = self.slot(&call.arguments.args[0]) else {
                     return Err(TypeShapeDslDefinitionError {
                         range: call.arguments.args[0].range(),
                         message: "`is_concrete_int` argument must name a parameter",
@@ -1114,8 +1110,10 @@ pub enum TypeLevelDslFunction {
 
 #[derive(Debug, Clone)]
 enum DslValue {
-    Int(Int),
-    IntTuple(IntTuple),
+    Unknown,
+    Dimension(Int),
+    Shape(IntTuple),
+    FlagInt(i64),
     DimensionTuple(Vec<Int>),
 }
 
@@ -1134,6 +1132,10 @@ enum DslCondition {
 enum DslControlFlow {
     Continue,
     Return(DslEvaluation),
+}
+
+struct DslEnvironment {
+    slots: Vec<DslValue>,
 }
 
 impl Visit<Type> for TypeLevelDslFunction {
@@ -1196,13 +1198,18 @@ impl TypeLevelDslCall {
                 let [left, right] = self.args.as_slice() else {
                     unreachable!("native broadcast DSL calls are constructed with two arguments");
                 };
-                Ok(match evaluate_broadcast(left, right)? {
-                    DslEvaluation::Value(value) => value.into_type(),
-                    DslEvaluation::AutomaticFallback => self.fallback(),
-                    DslEvaluation::ExplicitGradual => {
-                        unreachable!("native broadcast does not return explicit gradual")
-                    }
-                })
+                Ok(
+                    match evaluate_broadcast(
+                        &DslValue::from_type(left, TypeShapeDslDomain::IntTuple),
+                        &DslValue::from_type(right, TypeShapeDslDomain::IntTuple),
+                    )? {
+                        DslEvaluation::Value(value) => value.into_type(),
+                        DslEvaluation::AutomaticFallback => self.fallback(),
+                        DslEvaluation::ExplicitGradual => {
+                            unreachable!("native broadcast does not return explicit gradual")
+                        }
+                    },
+                )
             }
             TypeLevelDslFunction::UserDefined(function) => {
                 Ok(match function.evaluate(&self.args)? {
@@ -1223,7 +1230,14 @@ impl ResolvedTypeShapeDslFunction {
             self.parameter_domains.len(),
             "type-level DSL values must align with resolved parameters"
         );
-        match self.evaluate_block(&self.definition.parsed.definition.body, args)? {
+        let environment = DslEnvironment {
+            slots: args
+                .iter()
+                .zip(&self.parameter_domains)
+                .map(|(argument, domain)| lower_parameter(argument, *domain))
+                .collect(),
+        };
+        match self.evaluate_block(&self.definition.parsed.definition.body, &environment)? {
             DslControlFlow::Return(result) => Ok(result),
             DslControlFlow::Continue => {
                 unreachable!("validated type-level DSL function cannot fall through")
@@ -1231,7 +1245,11 @@ impl ResolvedTypeShapeDslFunction {
         }
     }
 
-    fn evaluate_block(&self, block: &[Stmt], args: &[Type]) -> Result<DslControlFlow, ShapeError> {
+    fn evaluate_block(
+        &self,
+        block: &[Stmt],
+        environment: &DslEnvironment,
+    ) -> Result<DslControlFlow, ShapeError> {
         for statement in block {
             match statement {
                 Stmt::Return(return_stmt) => {
@@ -1255,8 +1273,10 @@ impl ResolvedTypeShapeDslFunction {
                                 self.result_domain(),
                                 "resolved parameter return domain must match the result domain"
                             );
-                            DslValue::from_type(&args[index], domain)
-                                .map_or(DslEvaluation::AutomaticFallback, DslEvaluation::Value)
+                            match environment.value(index) {
+                                DslValue::Unknown => DslEvaluation::AutomaticFallback,
+                                value => DslEvaluation::Value(value.clone()),
+                            }
                         }
                         TypeShapeDslReturnKind::IntFlagArithmetic { left, op, right } => {
                             assert_eq!(
@@ -1275,23 +1295,25 @@ impl ResolvedTypeShapeDslFunction {
                                 "resolved arithmetic right operand must be Flag[int]"
                             );
                             let (Some(left), Some(right)) =
-                                (Int::from_type(&args[left]), flag_int_literal(&args[right]))
+                                (environment.dimension(left), environment.flag_int(right))
                             else {
                                 return Ok(DslControlFlow::Return(
                                     DslEvaluation::AutomaticFallback,
                                 ));
                             };
                             let result = match op {
-                                TypeShapeDslArithmeticOp::Add => {
-                                    Int::add(Type::Int(left), Type::Int(Int::Literal(right)))
-                                }
-                                TypeShapeDslArithmeticOp::Subtract => {
-                                    Int::sub(Type::Int(left), Type::Int(Int::Literal(right)))
-                                }
+                                TypeShapeDslArithmeticOp::Add => Int::add(
+                                    Type::Int(left.clone()),
+                                    Type::Int(Int::Literal(right)),
+                                ),
+                                TypeShapeDslArithmeticOp::Subtract => Int::sub(
+                                    Type::Int(left.clone()),
+                                    Type::Int(Int::Literal(right)),
+                                ),
                             };
                             Int::from_type(&canonicalize(Type::Int(result)))
                                 .map_or(DslEvaluation::AutomaticFallback, |result| {
-                                    DslEvaluation::Value(DslValue::Int(result))
+                                    DslEvaluation::Value(DslValue::Dimension(result))
                                 })
                         }
                         TypeShapeDslReturnKind::Broadcast { left, right } => {
@@ -1310,14 +1332,14 @@ impl ResolvedTypeShapeDslFunction {
                                 TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
                                 "resolved broadcast right operand must be IntTuple"
                             );
-                            evaluate_broadcast(&args[left], &args[right])?
+                            evaluate_broadcast(environment.value(left), environment.value(right))?
                         }
                         TypeShapeDslReturnKind::Expression => {
                             let expression = return_stmt
                                 .value
                                 .as_deref()
                                 .expect("validated expression return has a value");
-                            self.evaluate_expression(expression, args)?
+                            self.evaluate_expression(expression, environment)?
                         }
                         TypeShapeDslReturnKind::Invalid => {
                             let Some(Expr::Call(call)) = return_stmt.value.as_deref() else {
@@ -1334,8 +1356,8 @@ impl ResolvedTypeShapeDslFunction {
                         TypeShapeDslReturnKind::Gradual(_) => DslEvaluation::ExplicitGradual,
                     }));
                 }
-                Stmt::If(if_stmt) => match self.evaluate_condition(&if_stmt.test, args) {
-                    DslCondition::True => match self.evaluate_block(&if_stmt.body, args)? {
+                Stmt::If(if_stmt) => match self.evaluate_condition(&if_stmt.test, environment) {
+                    DslCondition::True => match self.evaluate_block(&if_stmt.body, environment)? {
                         DslControlFlow::Continue => {}
                         result @ DslControlFlow::Return(_) => return Ok(result),
                     },
@@ -1361,23 +1383,28 @@ impl ResolvedTypeShapeDslFunction {
     fn evaluate_expression(
         &self,
         expression: &Expr,
-        args: &[Type],
+        environment: &DslEnvironment,
     ) -> Result<DslEvaluation, ShapeError> {
         Ok(match self.expression_kind(expression) {
             TypeShapeDslExpressionKind::DimensionParameter(parameter) => {
-                DslValue::from_type(&args[parameter], TypeShapeDslDomain::Int)
-                    .map_or(DslEvaluation::AutomaticFallback, DslEvaluation::Value)
+                match environment.value(parameter) {
+                    DslValue::Unknown => DslEvaluation::AutomaticFallback,
+                    value @ DslValue::Dimension(_) => DslEvaluation::Value(value.clone()),
+                    _ => unreachable!("validated dimension parameter evaluates to an Int"),
+                }
             }
             TypeShapeDslExpressionKind::DimensionLiteral(literal) => literal
                 .map_or(DslEvaluation::AutomaticFallback, |literal| {
-                    DslEvaluation::Value(DslValue::Int(Int::Literal(literal)))
+                    DslEvaluation::Value(DslValue::Dimension(Int::Literal(literal)))
                 }),
             TypeShapeDslExpressionKind::IntTupleIndex { shape, index } => {
                 let Some(index) = index else {
                     return Ok(DslEvaluation::AutomaticFallback);
                 };
-                let Some(shape) = IntTuple::from_shape_arg_type(&args[shape]) else {
-                    return Ok(DslEvaluation::AutomaticFallback);
+                let shape = match environment.value(shape) {
+                    DslValue::Shape(shape) => shape,
+                    DslValue::Unknown => return Ok(DslEvaluation::AutomaticFallback),
+                    _ => unreachable!("validated IntTuple parameter evaluates to a shape"),
                 };
                 let IntTupleView::Concrete(shape) = shape.view() else {
                     return Ok(DslEvaluation::AutomaticFallback);
@@ -1390,7 +1417,7 @@ impl ResolvedTypeShapeDslFunction {
                         message: "IntTuple index out of bounds".to_owned(),
                     });
                 }
-                DslEvaluation::Value(DslValue::Int(shape[index as usize].clone()))
+                DslEvaluation::Value(DslValue::Dimension(shape[index as usize].clone()))
             }
             TypeShapeDslExpressionKind::DimensionTuple => {
                 let Expr::Tuple(tuple) = expression else {
@@ -1399,8 +1426,8 @@ impl ResolvedTypeShapeDslFunction {
                 let mut dimensions = Vec::with_capacity(tuple.elts.len());
                 let mut unknown = false;
                 for element in &tuple.elts {
-                    match self.evaluate_expression(element, args)? {
-                        DslEvaluation::Value(DslValue::Int(dimension)) => {
+                    match self.evaluate_expression(element, environment)? {
+                        DslEvaluation::Value(DslValue::Dimension(dimension)) => {
                             dimensions.push(dimension)
                         }
                         DslEvaluation::AutomaticFallback | DslEvaluation::ExplicitGradual => {
@@ -1421,9 +1448,9 @@ impl ResolvedTypeShapeDslFunction {
                 let Expr::Call(call) = expression else {
                     unreachable!("validated IntTuple constructor expression is a call")
                 };
-                match self.evaluate_expression(&call.arguments.args[0], args)? {
+                match self.evaluate_expression(&call.arguments.args[0], environment)? {
                     DslEvaluation::Value(DslValue::DimensionTuple(dimensions)) => {
-                        DslEvaluation::Value(DslValue::IntTuple(IntTuple::new(dimensions)))
+                        DslEvaluation::Value(DslValue::Shape(IntTuple::new(dimensions)))
                     }
                     DslEvaluation::AutomaticFallback | DslEvaluation::ExplicitGradual => {
                         DslEvaluation::AutomaticFallback
@@ -1436,11 +1463,11 @@ impl ResolvedTypeShapeDslFunction {
         })
     }
 
-    fn evaluate_condition(&self, condition: &Expr, args: &[Type]) -> DslCondition {
+    fn evaluate_condition(&self, condition: &Expr, environment: &DslEnvironment) -> DslCondition {
         if let Expr::BoolOp(bool_op) = condition {
             let mut result = DslCondition::True;
             for value in &bool_op.values {
-                match self.evaluate_condition(value, args) {
+                match self.evaluate_condition(value, environment) {
                     DslCondition::False => return DslCondition::False,
                     DslCondition::Unknown => result = DslCondition::Unknown,
                     DslCondition::True => {}
@@ -1459,7 +1486,7 @@ impl ResolvedTypeShapeDslFunction {
             .expect("validated atomic condition must have validation metadata");
         match kind {
             TypeShapeDslConditionKind::IsConcreteInt(parameter) => {
-                match Int::from_type(&args[parameter]) {
+                match environment.dimension(parameter) {
                     Some(Int::Literal(_)) => DslCondition::True,
                     Some(_) => DslCondition::False,
                     None => DslCondition::Unknown,
@@ -1469,7 +1496,7 @@ impl ResolvedTypeShapeDslFunction {
                 if left == right {
                     DslCondition::False
                 } else {
-                    match (Int::from_type(&args[left]), Int::from_type(&args[right])) {
+                    match (environment.dimension(left), environment.dimension(right)) {
                         (Some(Int::Int), _) | (_, Some(Int::Int)) => DslCondition::Unknown,
                         (Some(left), Some(right)) if left == right => DslCondition::False,
                         (Some(Int::Literal(left)), Some(Int::Literal(right))) if left < right => {
@@ -1485,7 +1512,7 @@ impl ResolvedTypeShapeDslFunction {
                 if left == right {
                     DslCondition::True
                 } else {
-                    match (Int::from_type(&args[left]), Int::from_type(&args[right])) {
+                    match (environment.dimension(left), environment.dimension(right)) {
                         (Some(Int::Int), _) | (_, Some(Int::Int)) => DslCondition::Unknown,
                         (Some(left), Some(right)) if left == right => DslCondition::True,
                         (Some(Int::Literal(_)), Some(Int::Literal(_))) => DslCondition::False,
@@ -1494,14 +1521,14 @@ impl ResolvedTypeShapeDslFunction {
                 }
             }
             TypeShapeDslConditionKind::FlagIntLessThanLiteral { parameter, literal } => {
-                match (flag_int_literal(&args[parameter]), literal) {
+                match (environment.flag_int(parameter), literal) {
                     (Some(left), Some(right)) if left < right => DslCondition::True,
                     (Some(_), Some(_)) => DslCondition::False,
                     _ => DslCondition::Unknown,
                 }
             }
             TypeShapeDslConditionKind::LengthEqualLiteral { shape, literal } => {
-                let Some(shape) = IntTuple::from_shape_arg_type(&args[shape]) else {
+                let Some(shape) = environment.shape(shape) else {
                     return DslCondition::Unknown;
                 };
                 let IntTupleView::Concrete(shape) = shape.view() else {
@@ -1519,18 +1546,45 @@ impl ResolvedTypeShapeDslFunction {
     }
 }
 
-fn evaluate_broadcast(left: &Type, right: &Type) -> Result<DslEvaluation, ShapeError> {
-    let Some(left) = IntTuple::from_shape_arg_type(left).or_else(|| tuple_carrier_to_shape(left))
-    else {
-        return Ok(DslEvaluation::AutomaticFallback);
+impl DslEnvironment {
+    fn value(&self, slot: usize) -> &DslValue {
+        &self.slots[slot]
+    }
+
+    fn dimension(&self, slot: usize) -> Option<&Int> {
+        match self.value(slot) {
+            DslValue::Dimension(value) => Some(value),
+            DslValue::Unknown => None,
+            _ => unreachable!("validated dimension slot evaluates to an Int"),
+        }
+    }
+
+    fn flag_int(&self, slot: usize) -> Option<i64> {
+        match self.value(slot) {
+            DslValue::FlagInt(value) => Some(*value),
+            DslValue::Unknown => None,
+            _ => unreachable!("validated Flag[int] slot evaluates to a Flag[int] value"),
+        }
+    }
+
+    fn shape(&self, slot: usize) -> Option<&IntTuple> {
+        match self.value(slot) {
+            DslValue::Shape(value) => Some(value),
+            DslValue::Unknown => None,
+            _ => unreachable!("validated shape slot evaluates to an IntTuple"),
+        }
+    }
+}
+
+fn evaluate_broadcast(left: &DslValue, right: &DslValue) -> Result<DslEvaluation, ShapeError> {
+    let (DslValue::Shape(left), DslValue::Shape(right)) = (left, right) else {
+        if matches!(left, DslValue::Unknown) || matches!(right, DslValue::Unknown) {
+            return Ok(DslEvaluation::AutomaticFallback);
+        }
+        unreachable!("validated broadcast operands evaluate to shapes")
     };
-    let Some(right) =
-        IntTuple::from_shape_arg_type(right).or_else(|| tuple_carrier_to_shape(right))
-    else {
-        return Ok(DslEvaluation::AutomaticFallback);
-    };
-    broadcast_shapes(&left, &right)
-        .map(DslValue::IntTuple)
+    broadcast_shapes(left, right)
+        .map(DslValue::Shape)
         .map(DslEvaluation::Value)
 }
 
@@ -1551,20 +1605,38 @@ fn flag_int_literal(ty: &Type) -> Option<i64> {
 }
 
 impl DslValue {
-    fn from_type(ty: &Type, domain: TypeShapeDslDomain) -> Option<Self> {
+    fn from_type(ty: &Type, domain: TypeShapeDslDomain) -> Self {
         match domain {
-            TypeShapeDslDomain::Int => Int::from_type(ty).map(Self::Int),
-            TypeShapeDslDomain::IntTuple => IntTuple::from_shape_arg_type(ty).map(Self::IntTuple),
+            TypeShapeDslDomain::Int => Int::from_type(ty).map_or(Self::Unknown, Self::Dimension),
+            TypeShapeDslDomain::IntTuple => IntTuple::from_shape_arg_type(ty)
+                .or_else(|| tuple_carrier_to_shape(ty))
+                .map_or(Self::Unknown, Self::Shape),
         }
     }
 
     fn into_type(self) -> Type {
         match self {
-            Self::Int(value) => Type::Int(value),
-            Self::IntTuple(value) => value.to_shape_arg_type(),
+            Self::Dimension(value) => Type::Int(value),
+            Self::Shape(value) => value.to_shape_arg_type(),
+            Self::Unknown => unreachable!("unknown DSL values project through fallback"),
+            Self::FlagInt(_) => {
+                unreachable!("Flag controls cannot be returned from the type-level DSL")
+            }
             Self::DimensionTuple(_) => {
                 unreachable!("intermediate DSL values cannot be returned directly")
             }
+        }
+    }
+}
+
+fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
+    match domain {
+        TypeShapeDslInputDomain::Value(domain) => DslValue::from_type(ty, domain),
+        TypeShapeDslInputDomain::Flag(domain) => {
+            if domain != FlagDomain::of(FlagMember::Int) {
+                return DslValue::Unknown;
+            }
+            flag_int_literal(ty).map_or(DslValue::Unknown, DslValue::FlagInt)
         }
     }
 }
