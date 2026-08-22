@@ -35,7 +35,6 @@ mod flag;
 
 pub use flag::FlagDomain;
 pub use flag::FlagMember;
-pub use flag::FlagTuple;
 
 /// Used to represent TypeVar calls. Each TypeVar is unique, so use the ArcId to separate them.
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]

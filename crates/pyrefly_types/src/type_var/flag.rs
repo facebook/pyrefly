@@ -108,25 +108,15 @@ impl Display for FlagMember {
     }
 }
 
-/// The tuple component of a `Flag` domain. Tuples are tracked apart from the scalar atom
-/// bitset because their lattice will eventually carry element structure rather than plain
-/// set membership. Variants are ordered so that the lattice join is `max`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
-pub enum FlagTuple {
-    Absent,
-    Unparameterized,
-}
-
 /// The set of builtin types a `Flag` type parameter ranges over.
 ///
 /// Invariant: a domain is never empty. `of` and `join` are the only constructors and both
 /// yield at least one member, so materialization may assume a member exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub struct FlagDomain {
-    /// Bitset over the scalar members, indexed by `FlagMember` discriminant. Iteration
+    /// Bitset indexed by `FlagMember` discriminant. Iteration
     /// order comes from `FlagMember::ALL`, never from construction order.
-    atoms: u8,
-    tuple: FlagTuple,
+    members: u8,
 }
 
 impl FlagDomain {
@@ -158,33 +148,20 @@ impl FlagDomain {
     }
 
     pub const fn of(member: FlagMember) -> Self {
-        if matches!(member, FlagMember::Tuple) {
-            Self {
-                atoms: 0,
-                tuple: FlagTuple::Unparameterized,
-            }
-        } else {
-            Self {
-                atoms: 1 << member as u8,
-                tuple: FlagTuple::Absent,
-            }
+        Self {
+            members: 1 << member as u8,
         }
     }
 
     /// Least upper bound: the domain admitting everything either side admits.
     pub fn join(self, other: Self) -> Self {
         Self {
-            atoms: self.atoms | other.atoms,
-            tuple: self.tuple.max(other.tuple),
+            members: self.members | other.members,
         }
     }
 
     pub fn contains(self, member: FlagMember) -> bool {
-        if matches!(member, FlagMember::Tuple) {
-            self.tuple != FlagTuple::Absent
-        } else {
-            self.atoms & (1 << member as u8) != 0
-        }
+        self.members & (1 << member as u8) != 0
     }
 
     fn members(self) -> impl Iterator<Item = FlagMember> {
@@ -297,10 +274,9 @@ mod tests {
         );
     }
 
-    /// The tuple lattice is stored apart from the scalar bitset, so a tuple-only domain must
-    /// not be confused with an empty one.
+    /// Tuple membership uses the same representation as every other domain member.
     #[test]
-    fn passive_flag_tuple_is_tracked_separately() {
+    fn passive_flag_tuple_is_an_atom() {
         let tuple_only = FlagDomain::of(FlagMember::Tuple);
         assert_eq!(tuple_only.class_names(), vec!["builtins.tuple"]);
         assert!(!tuple_only.contains(FlagMember::Int));
