@@ -24,7 +24,7 @@ modules, make it generic so dimensions propagate through constructors:
 
 ```python
 @dataclass
-class GPTConfig[VocabSize, BlockSize, NEmbedding, NHead, NLayer]:
+class GPTConfig[VocabSize: IntVar, BlockSize: IntVar, NEmbedding: IntVar, NHead: IntVar, NLayer: IntVar]:
     block_size: Int[BlockSize]
     vocab_size: Int[VocabSize]
     n_layer: Int[NLayer]
@@ -37,17 +37,17 @@ class GPTConfig[VocabSize, BlockSize, NEmbedding, NHead, NLayer]:
 Modules extract only the type parameters they need, using `Any` for the rest:
 
 ```python
-class MLP[NEmbedding](nn.Module):
+class MLP[NEmbedding: IntVar](nn.Module):
     def __init__(self, config: GPTConfig[Any, Any, NEmbedding, Any, Any]):
         super().__init__()
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd)
 
-    def forward[B, T](
-        self, x: Tensor[B, T, NEmbedding]
-    ) -> Tensor[B, T, NEmbedding]:
+    def forward[B: IntVar, T: IntVar](
+        self, x: Tensor[[B, T, NEmbedding]]
+    ) -> Tensor[[B, T, NEmbedding]]:
         h = F.gelu(self.c_fc(x))
-        assert_type(h, Tensor[B, T, 4 * NEmbedding])
+        assert_type(h, Tensor[[B, T, 4 * NEmbedding]])
         return self.c_proj(h)
 ```
 
@@ -101,7 +101,7 @@ remain grouped:
 self.fc1 = nn.Linear(dim, hidden)
 self.fc2 = nn.Linear(hidden, dim)
 
-def forward[B](self, x: Tensor[B, D]) -> Tensor[B, D]:
+def forward[B: IntVar](self, x: Tensor[[B, D]]) -> Tensor[[B, D]]:
     h = F.relu(self.fc1(x))
     return self.fc2(h)
 ```
@@ -124,16 +124,16 @@ Fix: use a class with a typed `forward` method:
 
 ```python
 # Good: class preserves shape contract
-class Block[InC, OutC](nn.Module):
+class Block[InC: IntVar, OutC: IntVar](nn.Module):
     def __init__(self, in_c: Int[InC], out_c: Int[OutC]) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(in_c, 128, ...), nn.Conv2d(128, out_c, ...)
         )
 
-    def forward[B, H, W](
-        self, x: Tensor[B, InC, H, W]
-    ) -> Tensor[B, OutC, H, W]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, InC, H, W]]
+    ) -> Tensor[[B, OutC, H, W]]:
         return self.net(x)
 ```
 
@@ -150,7 +150,7 @@ Fix: add an explicit `Int` field to the config:
 
 ```python
 @dataclass
-class Config[K, MlpOut]:
+class Config[K: IntVar, MlpOut: IntVar]:
     num_output_features: Int[K]
     mlp_output_dim: Int[MlpOut]        # explicit — was hidden_units[-1]
     mlp_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
@@ -163,7 +163,7 @@ resort is a **typed interface**: the module's `forward` signature provides
 the shape contract, and `type: ignore` narrows the internal result:
 
 ```python
-class DynamicMLP[InDim, OutDim](nn.Module):
+class DynamicMLP[InDim: IntVar, OutDim: IntVar](nn.Module):
     def __init__(self, in_dim: Int[InDim], out_dim: Int[OutDim],
                  hidden: list[int]) -> None:
         super().__init__()
@@ -175,15 +175,15 @@ class DynamicMLP[InDim, OutDim](nn.Module):
         layers.append(nn.Linear(prev, out_dim))
         self.layers = nn.ModuleList(layers)
 
-    def forward[B](self, x: Tensor[B, InDim]) -> Tensor[B, OutDim]:
+    def forward[B: IntVar](self, x: Tensor[[B, InDim]]) -> Tensor[[B, OutDim]]:
         h = x
         for layer in self.layers:
             h = layer(h)
-        result: Tensor[B, OutDim] = h  # type: ignore[bad-assignment]
+        result: Tensor[[B, OutDim]] = h  # type: ignore[bad-assignment]
         return result
 ```
 
-The caller sees a clean `Tensor[B, InDim] -> Tensor[B, OutDim]` contract.
+The caller sees a clean `Tensor[[B, InDim]] -> Tensor[[B, OutDim]]` contract.
 The `type: ignore` is localized to the module's internals.
 
 Use typed interfaces only after exhausting all restructuring options —
