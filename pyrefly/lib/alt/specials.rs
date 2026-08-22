@@ -593,7 +593,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let inner = self.expr_untype(&arguments[0], type_argument_context, errors);
                 let metadata: Vec<Type> = arguments[1..]
                     .iter()
-                    .map(|e| self.expr_infer(e, &self.error_swallower()))
+                    .map(|e| self.expr_infer(e, errors))
                     .collect();
                 Type::Annotated(Box::new(inner), metadata.into_boxed_slice())
             }
