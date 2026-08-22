@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anstream::eprintln;
@@ -32,8 +33,6 @@ use ruff_python_ast::ModModule;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::walk_expr;
 use ruff_text_size::Ranged;
-use ruff_text_size::TextRange;
-use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -641,11 +640,6 @@ impl Errors {
                         .and_then(|m| m.get(applies_to_line))
                         .cloned()
                         .unwrap_or_default();
-                    let comment_start = module.lined_buffer().line_start(supp.comment_line())
-                        + TextSize::try_from(supp.comment_offset())
-                            .expect("Python source offsets fit in TextSize");
-                    let comment_range =
-                        TextRange::new(comment_start, comment_start + TextSize::new(1));
 
                     // For Tool::Pyre, error code filtering is not enforced
                     // (any Pyre suppression suppresses all errors on the line),
@@ -655,11 +649,10 @@ impl Errors {
                         if !used_codes.is_empty() {
                             continue; // Pyre suppression is used
                         }
-                        unused_errors.push(Error::new(
-                            module.dupe(),
-                            comment_range,
+                        unused_errors.push(Error::unused_ignore(
+                            module,
+                            supp,
                             "Unused pyre-fixme comment".to_owned(),
-                            Vec::new(),
                             ErrorKind::UnusedIgnore,
                         ));
                         continue;
@@ -670,34 +663,33 @@ impl Errors {
                         if !used_codes.is_empty() {
                             continue; // type: ignore is used
                         }
-                        unused_errors.push(Error::new(
-                            module.dupe(),
-                            comment_range,
+                        unused_errors.push(Error::unused_ignore(
+                            module,
+                            supp,
                             "Unused `# type: ignore` comment".to_owned(),
-                            Vec::new(),
                             ErrorKind::UnusedTypeIgnore,
                         ));
                         continue;
                     }
 
                     // Tool::Pyrefly: check individual error codes
-                    let declared_codes: SmallSet<String> =
-                        supp.error_codes().iter().cloned().collect();
-
-                    // Determine if the suppression is unused
-                    let unused_codes: SmallSet<String> = if declared_codes.is_empty() {
-                        // Blanket ignore - unused if no errors were suppressed
-                        if used_codes.is_empty() {
-                            SmallSet::new() // Mark as unused (empty set signals blanket unused)
-                        } else {
+                    let declared = supp.error_codes();
+                    let unused_codes: Vec<&str> = if declared.is_empty() {
+                        // Blanket ignore: unused only when nothing was suppressed on the line.
+                        if !used_codes.is_empty() {
                             continue; // Used, skip
                         }
+                        Vec::new()
                     } else {
-                        // Specific codes - find which are unused
-                        let unused: SmallSet<String> = declared_codes
+                        // Coverage codes are emitted only by `coverage check`, never here, so they
+                        // are never unused during ordinary checking.
+                        let unused: Vec<&str> = declared
                             .iter()
-                            .filter(|code| !used_codes.contains(*code))
-                            .cloned()
+                            .map(String::as_str)
+                            .filter(|&c| {
+                                !used_codes.contains(c)
+                                    && !ErrorKind::from_str(c).is_ok_and(ErrorKind::is_coverage)
+                            })
                             .collect();
                         if unused.is_empty() {
                             continue; // All codes used, skip
@@ -705,27 +697,11 @@ impl Errors {
                         unused
                     };
 
-                    // Create an error for the unused suppression
-                    let msg = if declared_codes.is_empty() {
-                        "Unused `# pyrefly: ignore` comment".to_owned()
-                    } else if unused_codes.len() == declared_codes.len() {
-                        format!(
-                            "Unused `# pyrefly: ignore` comment for code(s): {}",
-                            unused_codes.iter().cloned().collect::<Vec<_>>().join(", ")
-                        )
-                    } else {
-                        format!(
-                            "Unused error code(s) in `# pyrefly: ignore`: {}",
-                            unused_codes.iter().cloned().collect::<Vec<_>>().join(", ")
-                        )
-                    };
-
-                    unused_errors.push(Error::new(
-                        module.dupe(),
-                        comment_range,
-                        msg,
-                        Vec::new(),
-                        ErrorKind::UnusedIgnore,
+                    unused_errors.push(Error::unused_pyrefly_ignore(
+                        module,
+                        supp,
+                        declared.len(),
+                        &unused_codes,
                     ));
                 }
             }
@@ -899,6 +875,35 @@ def f() -> int:
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("bad-override"));
+    }
+
+    #[test]
+    fn test_coverage_code_ignore_not_unused() {
+        // Coverage codes are emitted only by `pyrefly coverage check`, so an ordinary check
+        // shouldn't flag them as unused.
+        let contents = r#"
+def f(x):  # pyrefly: ignore[coverage-missing]
+    return x
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn test_mixed_coverage_and_real_code_ignore() {
+        // A coverage code is skipped while a genuinely-unused real code is reported.
+        let contents = r#"
+def f(x):  # pyrefly: ignore[coverage-missing, bad-override]
+    return x
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("bad-override"));
+        assert!(!unused[0].msg().contains("coverage-missing"));
     }
 
     #[test]
