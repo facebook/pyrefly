@@ -44,6 +44,7 @@ use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Forallable;
+use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -95,6 +96,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::int_from_slice;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -117,6 +119,7 @@ use crate::types::quantified::QuantifiedKind;
 use crate::types::sentinel::Sentinel;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
+use crate::types::type_info::JoinStyle;
 use crate::types::type_info::TypeInfo;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
@@ -421,6 +424,104 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn expr_infer(&self, x: &Expr, errors: &ErrorCollector) -> Type {
         self.expr_with_options(x, ExprOptions::infer(errors, None))
             .into_ty()
+    }
+
+    /// Infer the receiver of an attribute assignment. In an unreachable branch, narrowing a
+    /// receiver through one of its facets can reduce the receiver itself to `Never`. Attribute
+    /// writes still need to be checked against their declared type in that case.
+    pub fn expr_infer_for_attribute_assignment(&self, x: &Expr, errors: &ErrorCollector) -> Type {
+        let narrowed = self.expr_infer(x, errors);
+        if !narrowed.is_never() {
+            return narrowed;
+        }
+        self.expr_infer_without_impossible_narrowing(x, errors)
+            .into_ty()
+    }
+
+    fn expr_infer_without_impossible_narrowing(
+        &self,
+        x: &Expr,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
+        match x {
+            Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => {
+                let key = Key::BoundName(ShortIdentifier::expr_name(name));
+                let mut idx = self.bindings().key_to_idx(&key);
+                let mut gas = Gas::new(100);
+                let mut narrows = Vec::new();
+                let mut promote = false;
+                loop {
+                    if gas.stop() {
+                        break;
+                    }
+                    match self.bindings().get(idx) {
+                        Binding::Forward(next) | Binding::PatternCapture(next) => idx = *next,
+                        Binding::PromoteForward(next) => {
+                            promote = true;
+                            idx = *next;
+                        }
+                        Binding::Narrow(next, op, location) => {
+                            narrows.push((op.as_ref(), location.range()));
+                            idx = *next;
+                        }
+                        Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
+                        _ => break,
+                    }
+                }
+                let mut type_info = TypeInfo::of_ty(self.get_idx(idx).ty().clone());
+                for (op, range) in narrows.into_iter().rev() {
+                    let narrowed = self.narrow(&type_info, op, range, errors);
+                    if !narrowed.ty().is_never() {
+                        type_info = narrowed;
+                    } else if Self::is_positive_type_narrow(op) {
+                        // A positive runtime check is still useful after an earlier, contradictory
+                        // narrow made the declared type impossible.
+                        let object =
+                            TypeInfo::of_ty(self.heap.mk_class_type(self.stdlib.object().clone()));
+                        let narrowed = self.narrow(&object, op, range, errors);
+                        if !narrowed.ty().is_never() {
+                            type_info = narrowed;
+                        }
+                    }
+                }
+                if promote {
+                    type_info =
+                        type_info.map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib));
+                }
+                type_info
+            }
+            Expr::Attribute(attr) => {
+                let base = self.expr_infer_without_impossible_narrowing(&attr.value, errors);
+                self.attr_access_infer(attr, &base, errors)
+            }
+            Expr::Subscript(subscript) => {
+                let base = self.expr_infer_without_impossible_narrowing(&subscript.value, errors);
+                self.subscript_infer(
+                    &base,
+                    &subscript.slice,
+                    subscript.range(),
+                    TypeFormContext::TypeExpression,
+                    errors,
+                )
+            }
+            _ => TypeInfo::of_ty(self.expr_infer(x, errors)),
+        }
+    }
+
+    fn is_positive_type_narrow(op: &NarrowOp) -> bool {
+        match op {
+            NarrowOp::Atomic(
+                None,
+                AtomicNarrowOp::IsInstance(..)
+                | AtomicNarrowOp::IsSubclass(..)
+                | AtomicNarrowOp::TypeEq(..)
+                | AtomicNarrowOp::TypeGuard(..)
+                | AtomicNarrowOp::TypeIs(..)
+                | AtomicNarrowOp::Call(..),
+            ) => true,
+            NarrowOp::And(ops) | NarrowOp::Or(ops) => ops.iter().any(Self::is_positive_type_narrow),
+            _ => false,
+        }
     }
 
     /// Infer a type for an expression, with an optional type hint that influences the inferred type.
