@@ -1702,6 +1702,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::NotTypeGuard(_, _) => ty.clone(),
             AtomicNarrowOp::TypeIs(t, arguments) => {
+                let is_builtin_callable =
+                    t.callee_kind() == Some(CalleeKind::Function(FunctionKind::Callable));
                 if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
@@ -1718,7 +1720,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None,
                     );
                     if let Type::TypeIs(t) = ret {
-                        return self.narrow_typeis(ty, &t, range, errors);
+                        let target = if is_builtin_callable {
+                            // `callable` proves callability but reveals nothing about the return type.
+                            self.heap.mk_callable_ellipsis(self.heap.mk_any_implicit())
+                        } else {
+                            *t
+                        };
+                        return self.narrow_typeis(ty, &target, range, errors);
                     }
                 }
                 ty.clone()

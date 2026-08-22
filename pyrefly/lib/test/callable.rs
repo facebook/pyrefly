@@ -1518,6 +1518,29 @@ def f(
 );
 
 testcase!(
+    test_builtins_callable_narrow_unknown,
+    r#"
+from typing import Any, Callable, TypeIs, assert_type
+
+def f(x):
+    assert callable(x)
+    assert_type(x, Callable[..., Any])
+    assert_type(x(), Any)
+
+def g(x: object):
+    assert callable(x)
+    assert_type(x, Callable[..., Any])
+
+def is_object_callable(x: object) -> TypeIs[Callable[..., object]]:
+    return callable(x)
+
+def h(x):
+    assert is_object_callable(x)
+    assert_type(x(), object)
+    "#,
+);
+
+testcase!(
     test_narrow_union,
     r#"
 from typing import Any, Callable, assert_type
