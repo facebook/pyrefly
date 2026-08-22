@@ -55,11 +55,53 @@ impl TypeFormContext<'_> {
     }
 }
 
-/// The widest `Flag` domain the DSL's Flag operations can inspect.
-fn type_shape_dsl_flag_domain() -> FlagDomain {
+/// The domain accepted by scalar and sequence narrowing operations. Boolean conditions are
+/// validated separately against `Flag[bool]`.
+fn type_shape_dsl_narrowable_flag_domain() -> FlagDomain {
     FlagDomain::of(FlagMember::Int)
         .join(FlagDomain::of(FlagMember::Tuple))
         .join(FlagDomain::of(FlagMember::NoneType))
+}
+
+#[derive(Clone, Copy)]
+enum TypeShapeDslSlotComparisonDomain {
+    Dimension,
+    FlagInt,
+}
+
+fn type_shape_dsl_slot_comparison_domain(
+    left_parameters: Option<&[usize]>,
+    right_parameters: Option<&[usize]>,
+    parameter_domains: &[TypeShapeDslInputDomain],
+) -> Option<TypeShapeDslSlotComparisonDomain> {
+    let has_known_dimension = left_parameters.is_none() || right_parameters.is_none();
+    let mut domains = left_parameters
+        .into_iter()
+        .chain(right_parameters)
+        .flatten()
+        .map(|parameter| parameter_domains[*parameter]);
+    if has_known_dimension {
+        return domains
+            .all(|domain| domain == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int))
+            .then_some(TypeShapeDslSlotComparisonDomain::Dimension);
+    }
+
+    // Parameter provenance starts from singleton slots and merges only preserve or add origins.
+    let first = domains
+        .next()
+        .expect("unresolved comparison operands retain parameter origins");
+    if !domains.all(|domain| domain == first) {
+        return None;
+    }
+    match first {
+        TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => {
+            Some(TypeShapeDslSlotComparisonDomain::Dimension)
+        }
+        TypeShapeDslInputDomain::Flag(domain) if domain == FlagDomain::of(FlagMember::Int) => {
+            Some(TypeShapeDslSlotComparisonDomain::FlagInt)
+        }
+        _ => None,
+    }
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -248,34 +290,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         right_parameters,
                         op,
                         ..
-                    } => {
-                        let mut domains = left_parameters
-                            .iter()
-                            .chain(right_parameters)
-                            .map(|parameter| parameter_domains[*parameter]);
-                        let Some(first) = domains.next() else {
-                            unreachable!("slot comparison must retain parameter origins")
-                        };
-                        let same_domain = domains.all(|domain| domain == first);
-                        if same_domain
-                            && first
-                                == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
-                        {
-                            (!matches!(
-                                op,
-                                TypeShapeDslFlagIntComparisonOp::Equal
-                                    | TypeShapeDslFlagIntComparisonOp::LessThan
-                            ))
-                            .then_some("`@type_shape_dsl_function` `Int` comparisons support only `==` and `<`")
-                        } else if same_domain
-                            && first
-                                == TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int))
-                        {
-                            None
-                        } else {
-                            Some("`@type_shape_dsl_function` comparison operands must both be annotated as `Int` or both be `Flag[int]`")
-                        }
-                    }
+                    } => match type_shape_dsl_slot_comparison_domain(
+                        left_parameters.as_deref(),
+                        right_parameters.as_deref(),
+                        &parameter_domains,
+                    ) {
+                        Some(TypeShapeDslSlotComparisonDomain::Dimension) => (!matches!(
+                            op,
+                            TypeShapeDslFlagIntComparisonOp::Equal
+                                | TypeShapeDslFlagIntComparisonOp::LessThan
+                        ))
+                        .then_some("`@type_shape_dsl_function` `Int` comparisons support only `==` and `<`"),
+                        Some(TypeShapeDslSlotComparisonDomain::FlagInt) => None,
+                        None => Some("`@type_shape_dsl_function` comparison operands must both be annotated as `Int` or both be `Flag[int]`"),
+                    },
                     TypeShapeDslConditionKind::Any { .. }
                     | TypeShapeDslConditionKind::GeneratorElementSelfCompare(_) => None,
                     TypeShapeDslConditionKind::IsConcreteInt {
@@ -297,9 +325,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         (!parameters.iter().all(|parameter| matches!(
                             parameter_domains[*parameter],
                             TypeShapeDslInputDomain::Flag(domain)
-                                if domain.is_subset_of(type_shape_dsl_flag_domain())
+                                if domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                         )))
                         .then_some("`@type_shape_dsl_function` control-flow narrowing requires a Flag[int | tuple[int, ...] | None] value")
+                    }),
+                    TypeShapeDslConditionKind::BoolSlot {
+                        parameter_origins,
+                        ..
+                    } => parameter_origins.as_deref().and_then(|parameters| {
+                        (!parameters.iter().all(|parameter| {
+                            parameter_domains[*parameter]
+                                == TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Bool))
+                        }))
+                        .then_some("`@type_shape_dsl_function` a name used directly as a condition requires a `Flag[bool]` value")
                     }),
                     TypeShapeDslConditionKind::FlagIntCompare(_)
                     | TypeShapeDslConditionKind::Membership { .. } => None,
@@ -363,7 +401,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
                             ) || match parameter_domains[*parameter] {
                                 TypeShapeDslInputDomain::Flag(domain) if *narrowed => {
-                                    domain.is_subset_of(type_shape_dsl_flag_domain())
+                                    domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                 }
                                 TypeShapeDslInputDomain::Flag(domain) => {
                                     domain == FlagDomain::of(FlagMember::Tuple)
@@ -389,7 +427,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let valid = parameters.iter().all(|parameter| {
                             match parameter_domains[*parameter] {
                                 TypeShapeDslInputDomain::Flag(domain) if *narrowed => {
-                                    domain.is_subset_of(type_shape_dsl_flag_domain())
+                                    domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                 }
                                 TypeShapeDslInputDomain::Flag(domain) => match required {
                                     TypeShapeDslFlagValueKind::Int => {
@@ -414,6 +452,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::Slot(_)
                     | TypeShapeDslExpressionKind::FlagValueSlot { .. }
                     | TypeShapeDslExpressionKind::FlagIntLiteral(_)
+                    | TypeShapeDslExpressionKind::FlagBool(_)
                     | TypeShapeDslExpressionKind::FlagNone
                     | TypeShapeDslExpressionKind::FlagTuple
                     | TypeShapeDslExpressionKind::FlagRange

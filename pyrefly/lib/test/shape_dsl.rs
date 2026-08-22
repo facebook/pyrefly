@@ -6289,6 +6289,32 @@ def alias_dimension_compare(
     return greater
 
 @type_shape_dsl_function
+def indexed_dimension_compare(
+    shape: IntTuple, right: Int, equal: IntTuple, less: IntTuple, greater: IntTuple,
+) -> IntTuple:
+    left = shape[0]
+    if left == right:
+        return equal
+    if left < right:
+        return less
+    return greater
+
+@type_shape_dsl_function
+def two_indexed_dimensions(shape: IntTuple, equal: IntTuple, unequal: IntTuple) -> IntTuple:
+    left = shape[0]
+    right = shape[1]
+    if left == right:
+        return equal
+    return unequal
+
+@type_shape_dsl_function
+def dimension_and_flag(shape: IntTuple, right: int) -> IntTuple:
+    left = shape[0]
+    if left == right:  # E: comparison operands must both be annotated as `Int` or both be `Flag[int]`
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
 def merged_narrowing(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
     local_axis = axis
     if dsl.is_int_value(local_axis):
@@ -6328,6 +6354,10 @@ def apply_broadcast[Left: IntTuple, Right: IntTuple](
 ) -> Tensor[alias_broadcast(Left, Right)]: ...
 def alias_equal() -> Tensor[alias_dimension_compare(Int[2], Int[2], IntTuple[1], IntTuple[2], IntTuple[3])]: ...
 def alias_less() -> Tensor[alias_dimension_compare(Int[1], Int[2], IntTuple[1], IntTuple[2], IntTuple[3])]: ...
+def indexed_equal() -> Tensor[indexed_dimension_compare(IntTuple[2], Int[2], IntTuple[1], IntTuple[2], IntTuple[3])]: ...
+def indexed_less() -> Tensor[indexed_dimension_compare(IntTuple[1], Int[2], IntTuple[1], IntTuple[2], IntTuple[3])]: ...
+def indexed_pair_equal() -> Tensor[two_indexed_dimensions(IntTuple[2, 2], IntTuple[1], IntTuple[2])]: ...
+def indexed_pair_unequal() -> Tensor[two_indexed_dimensions(IntTuple[2, 3], IntTuple[1], IntTuple[2])]: ...
 def apply_merged[Shape: IntTuple, Axis: Flag[int | tuple[int, ...] | None]](
     x: Tensor[Shape], axis: Axis,
 ) -> Tensor[merged_narrowing(Shape, Axis)]: ...
@@ -6344,6 +6374,10 @@ def test(x: Tensor[[2, 3]], left: Tensor[[2, 1]], right: Tensor[[1, 3]]) -> None
     reveal_type(apply_broadcast(left, right))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(alias_equal())  # E: revealed type: Tensor[[1]]
     reveal_type(alias_less())  # E: revealed type: Tensor[[2]]
+    reveal_type(indexed_equal())  # E: revealed type: Tensor[[1]]
+    reveal_type(indexed_less())  # E: revealed type: Tensor[[2]]
+    reveal_type(indexed_pair_equal())  # E: revealed type: Tensor[[1]]
+    reveal_type(indexed_pair_unequal())  # E: revealed type: Tensor[[2]]
     reveal_type(apply_merged(x, 1))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(apply_length(x))  # E: revealed type: Tensor[[2]]
     reveal_type(disjoint_equal())  # E: revealed type: Tensor[[4, 5]]
@@ -6779,7 +6813,11 @@ def mutation(shape: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def nonliteral_index(shape: IntTuple, index: int) -> IntTuple:
-    return dsl.IntTuple((shape[index],))  # E: @type_shape_dsl_function `IntTuple` index must be an integer literal
+    return dsl.IntTuple((shape[index],))
+
+@type_shape_dsl_function
+def wrong_flag_index(shape: IntTuple, choose: bool) -> IntTuple:
+    return dsl.IntTuple((shape[choose],))  # E: Flag operation requires a compatible Flag parameter
 
 @type_shape_dsl_function
 def wrong_index_domain(dim: Int) -> IntTuple:
@@ -7346,7 +7384,7 @@ def multiple_filters(shape: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def non_boolean_element(shape: IntTuple) -> IntTuple:
-    if any(item for item in range(2)):  # E: condition supports only
+    if any(item for item in range(2)):  # E: a name used directly as a condition requires a `Flag[bool]` value
         return shape
     return shape
 "#,
@@ -7634,5 +7672,288 @@ def apply_small(x: Tensor[[2, 3]]) -> Tensor[small_root(IntTuple[2, 3])]: ...
 def test(x: Tensor[[2, 3]]) -> None:
     reveal_type(apply_large(x))  # E: revealed type: Tensor[tuple[Unknown, ...]]
     assert_type(apply_small(x), Tensor[[2, 3]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_boolean_flags,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import Literal, reveal_type
+
+@type_shape_dsl_function
+def choose(shape: IntTuple, keep: bool) -> IntTuple:
+    alias = keep
+    if not alias:
+        return shape
+    return dsl.IntTuple((1,))
+
+@type_shape_dsl_function
+def conjunction(shape: IntTuple, left: bool, right: bool) -> IntTuple:
+    if left and right:
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def disjunction(shape: IntTuple, left: bool, right: bool) -> IntTuple:
+    if left or right:
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def bool_helper(shape: IntTuple, keep: bool) -> IntTuple:
+    if keep:
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def call_bool_helper(shape: IntTuple, keep: bool) -> IntTuple:
+    return bool_helper(shape, keep)
+
+@type_shape_dsl_function
+def local_literal(shape: IntTuple) -> IntTuple:
+    keep = True
+    if keep:
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def conditional_local(shape: IntTuple, keep: bool, choose_branch: bool) -> IntTuple:
+    local = keep if choose_branch else False
+    if local:
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def conditional_helper(shape: IntTuple, keep: bool, choose_branch: bool) -> IntTuple:
+    local = keep if choose_branch else False
+    return bool_helper(shape, local)
+
+@type_shape_dsl_function
+def bool_local_is_not_none(shape: IntTuple) -> IntTuple:
+    local = True
+    if local is None:  # E: `is None` requires a `Flag[int | tuple[int, ...] | None]` value  # E: Identity comparison
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def mixed_flag_is_not_int(shape: IntTuple, choose_branch: bool) -> IntTuple:
+    local = True if choose_branch else 0
+    if dsl.is_int_value(local):  # E: `is_int_value` requires a `Flag[int | tuple[int, ...] | None]` value
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def joined_non_bool_is_not_bool(
+    shape: IntTuple, candidate: tuple[int, ...], choose_branch: bool,
+) -> IntTuple:
+    local = candidate if choose_branch else False
+    if local:  # E: a name used directly as a condition requires a `Flag[bool]` value
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def joined_bool_is_not_int_comparison(
+    shape: IntTuple, candidate: bool, choose_branch: bool,
+) -> IntTuple:
+    local = candidate if choose_branch else 0
+    zero = 0
+    if local == zero:  # E: Flag operation requires a compatible Flag parameter
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def wrong_condition(shape: IntTuple, axis: int) -> IntTuple:
+    if axis:  # E: a name used directly as a condition requires a `Flag[bool]` value
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def bool_is_not_int(shape: IntTuple) -> IntTuple:
+    keep = True
+    if dsl.is_int_value(keep):  # E: `is_int_value` requires a `Flag[int | tuple[int, ...] | None]` value
+        return dsl.IntTuple((1,))
+    return shape
+
+# A parameter's Flag domain is checked after the function body has been validated.
+@type_shape_dsl_function
+def bool_parameter_is_not_int(shape: IntTuple, keep: bool) -> IntTuple:
+    if dsl.is_int_value(keep):  # E: control-flow narrowing requires a Flag[int | tuple[int, ...] | None] value
+        return dsl.IntTuple((1,))
+    return shape
+
+def apply[Shape: IntTuple, Keep: Flag[bool]](
+    x: Tensor[Shape], keep: Keep = True,
+) -> Tensor[choose(Shape, Keep)]: ...
+
+def apply_and[Shape: IntTuple, Left: Flag[bool], Right: Flag[bool]](
+    x: Tensor[Shape], left: Left, right: Right,
+) -> Tensor[conjunction(Shape, Left, Right)]: ...
+
+def apply_or[Shape: IntTuple, Left: Flag[bool], Right: Flag[bool]](
+    x: Tensor[Shape], left: Left, right: Right,
+) -> Tensor[disjunction(Shape, Left, Right)]: ...
+
+def apply_helper[Shape: IntTuple, Keep: Flag[bool]](
+    x: Tensor[Shape], keep: Keep,
+) -> Tensor[call_bool_helper(Shape, Keep)]: ...
+
+def apply_literal[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[local_literal(Shape)]: ...
+
+def apply_conditional[Shape: IntTuple, Keep: Flag[bool], Choose: Flag[bool]](
+    x: Tensor[Shape], keep: Keep, choose_branch: Choose,
+) -> Tensor[conditional_local(Shape, Keep, Choose)]: ...
+
+def apply_conditional_helper[Shape: IntTuple, Keep: Flag[bool], Choose: Flag[bool]](
+    x: Tensor[Shape], keep: Keep, choose_branch: Choose,
+) -> Tensor[conditional_helper(Shape, Keep, Choose)]: ...
+
+def check(x: Tensor[[2, 3]]) -> None:
+    reveal_type(apply(x))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply(x, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply(x, False))  # E: revealed type: Tensor[[2, 3]]
+
+def bool_results(x: Tensor[[2, 3]], broad: bool) -> None:
+    reveal_type(apply_and(x, True, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_and(x, False, broad))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_or(x, True, broad))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_or(x, False, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply(x, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_helper(x, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_helper(x, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_literal(x))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_conditional(x, True, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_conditional(x, True, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_conditional(x, broad, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_conditional_helper(x, True, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_conditional_helper(x, broad, False))  # E: revealed type: Tensor[[2, 3]]
+
+def union_bool(x: Tensor[[2, 3]], keep: Literal[True, False]) -> None:
+    reveal_type(apply(x, keep))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_dynamic_int_tuple_index,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Elements, Flag, IntTuple, IntVar, broadcast, type_shape_dsl_function
+from torch import Tensor
+from typing import reveal_type
+
+@type_shape_dsl_function
+def select(shape: IntTuple, index: int) -> IntTuple:
+    return dsl.IntTuple((shape[index],))
+
+@type_shape_dsl_function
+def select_next(shape: IntTuple, index: int) -> IntTuple:
+    next_index = index + 1
+    return dsl.IntTuple((shape[next_index],))
+
+@type_shape_dsl_function
+def invalid_join_index(
+    shape: IntTuple, candidate: tuple[int, ...], choose_branch: bool,
+) -> IntTuple:
+    index = candidate if choose_branch else 0
+    return dsl.IntTuple((shape[index],))  # E: Cannot index into `IntTuple`  # E: Flag operation requires a compatible Flag parameter
+
+@type_shape_dsl_function
+def invalid_join_helper(
+    shape: IntTuple, candidate: tuple[int, ...], choose_branch: bool,
+) -> IntTuple:
+    index = candidate if choose_branch else 0
+    return select(shape, index)  # E: helper argument domains must exactly match  # E: not assignable to parameter `index`
+
+@type_shape_dsl_function
+def narrowed_int_comparison(
+    shape: IntTuple, candidate: int | tuple[int, ...],
+) -> IntTuple:
+    if dsl.is_int_value(candidate):
+        zero = 0
+        if candidate == zero:
+            return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def invalid_join_broadcast(
+    shape: IntTuple, candidate: int, choose_branch: bool,
+) -> IntTuple:
+    right = candidate if choose_branch else 0
+    return broadcast(shape, right)  # E: `broadcast` arguments must be IntTuple parameters
+
+@type_shape_dsl_function
+def copy_by_binder(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[index] for index in range(len(shape))))
+
+@type_shape_dsl_function
+def reverse_by_binder(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[index] for index in range(-1, -4, -1)))
+
+@type_shape_dsl_function
+def divide_index(shape: IntTuple, divisor: int) -> IntTuple:
+    return dsl.IntTuple((shape[1 // divisor],))
+
+@type_shape_dsl_function
+def lazy_index(shape: IntTuple, choose: bool) -> IntTuple:
+    if choose:
+        return dsl.IntTuple((shape[1 // 0],))  # E: Cannot divide by zero
+    return shape
+
+@type_shape_dsl_function
+def huge_index(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[999999999999999999999999],))
+
+def apply_select[Shape: IntTuple, Index: Flag[int]](
+    x: Tensor[Shape], index: Index,
+) -> Tensor[select(Shape, Index)]: ...
+
+def apply_next[Shape: IntTuple, Index: Flag[int]](
+    x: Tensor[Shape], index: Index,
+) -> Tensor[select_next(Shape, Index)]: ...
+
+def apply_copy[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[copy_by_binder(Shape)]: ...
+def apply_reverse[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[reverse_by_binder(Shape)]: ...
+def apply_huge[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[huge_index(Shape)]: ...
+
+def apply_divide[Shape: IntTuple, Divisor: Flag[int]](
+    x: Tensor[Shape], divisor: Divisor,
+) -> Tensor[divide_index(Shape, Divisor)]: ...
+
+def apply_lazy[Shape: IntTuple, Choose: Flag[bool]](
+    x: Tensor[Shape], choose: Choose,
+) -> Tensor[lazy_index(Shape, Choose)]: ...
+
+def apply_narrowed_comparison[
+    Shape: IntTuple, Candidate: Flag[int | tuple[int, ...]],
+](x: Tensor[Shape], candidate: Candidate) -> Tensor[narrowed_int_comparison(Shape, Candidate)]: ...
+
+def index_results[N: IntVar, Tail: IntTuple](
+    symbolic: Tensor[[N, 3, 4]],
+    empty: Tensor[[]],
+    gradual: Tensor[IntTuple],
+    unpacked: Tensor[IntTuple[2, *Elements[Tail]]],
+    broad: int,
+) -> None:
+    reveal_type(apply_select(symbolic, 0))  # E: revealed type: Tensor[[N]]
+    reveal_type(apply_select(symbolic, -1))  # E: revealed type: Tensor[[4]]
+    reveal_type(apply_next(symbolic, 0))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_copy(symbolic))  # E: revealed type: Tensor[[N, 3, 4]]
+    reveal_type(apply_reverse(symbolic))  # E: revealed type: Tensor[[4, 3, N]]
+    reveal_type(apply_select(symbolic, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_select(gradual, 0))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_select(unpacked, 0))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_huge(symbolic))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_lazy(symbolic, False))  # E: revealed type: Tensor[[N, 3, 4]]
+    reveal_type(apply_narrowed_comparison(symbolic, 0))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_narrowed_comparison(symbolic, (0,)))  # E: revealed type: Tensor[[N, 3, 4]]
+    apply_select(symbolic, 3)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
+    apply_select(symbolic, -4)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
+    apply_select(empty, 0)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
+    apply_divide(gradual, 0)  # E: Cannot evaluate type-level shape DSL call: Flag integer division by zero
+    apply_lazy(symbolic, True)  # E: Cannot evaluate type-level shape DSL call: Flag integer division by zero
 "#,
 );
