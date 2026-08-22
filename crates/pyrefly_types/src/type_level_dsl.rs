@@ -443,7 +443,28 @@ const FLAG_INT: u8 = 1;
 const FLAG_SEQUENCE: u8 = 2;
 const FLAG_NONE: u8 = 4;
 const FLAG_ANY: u8 = FLAG_INT | FLAG_SEQUENCE | FLAG_NONE;
-const MAX_GENERATOR_ITEMS: usize = 4096;
+const MAX_GENERATOR_STEPS: usize = 4096;
+
+/// Bounds the total generator iterations performed by one public DSL evaluation.
+struct DslEvaluationBudget {
+    remaining_generator_steps: usize,
+}
+
+impl DslEvaluationBudget {
+    fn new() -> Self {
+        Self {
+            remaining_generator_steps: MAX_GENERATOR_STEPS,
+        }
+    }
+
+    fn consume_generator_step(&mut self) -> bool {
+        let Some(remaining) = self.remaining_generator_steps.checked_sub(1) else {
+            return false;
+        };
+        self.remaining_generator_steps = remaining;
+        true
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GeneratorResultKind {
@@ -2279,7 +2300,13 @@ impl ValidatedTypeShapeDslFunction {
             parameter_count: args.len(),
             slots,
         };
-        match self.evaluate_suite(&self.parsed.definition.body, &mut environment, signature) {
+        let mut budget = DslEvaluationBudget::new();
+        match self.evaluate_suite(
+            &self.parsed.definition.body,
+            &mut environment,
+            signature,
+            &mut budget,
+        ) {
             DslControlFlow::Return(result) => result,
             DslControlFlow::Continue => {
                 unreachable!("validated type-level DSL function cannot fall through")
@@ -2292,6 +2319,7 @@ impl ValidatedTypeShapeDslFunction {
         suite: &[Stmt],
         environment: &mut DslEnvironment,
         signature: &ResolvedTypeShapeDslFunction,
+        budget: &mut DslEvaluationBudget,
     ) -> DslControlFlow {
         for statement in suite {
             match statement {
@@ -2305,7 +2333,7 @@ impl ValidatedTypeShapeDslFunction {
                             (assignment.range == assign.range).then_some(assignment.slot)
                         })
                         .expect("validated assignment must have indexed-storage metadata");
-                    match self.evaluate_expression(&assign.value, environment) {
+                    match self.evaluate_expression(&assign.value, environment, budget) {
                         DslOutcome::Value(value) => environment.assign(slot, value),
                         DslOutcome::ExplicitGradual => {
                             unreachable!("validated assignment expression cannot return gradual")
@@ -2395,7 +2423,7 @@ impl ValidatedTypeShapeDslFunction {
                                 .value
                                 .as_deref()
                                 .expect("validated expression return has a value");
-                            self.evaluate_expression(expression, environment)
+                            self.evaluate_expression(expression, environment, budget)
                         }
                         TypeShapeDslReturnKind::Invalid => {
                             let Some(Expr::Call(call)) = return_stmt.value.as_deref() else {
@@ -2419,10 +2447,12 @@ impl ValidatedTypeShapeDslFunction {
                         }
                     });
                 }
-                Stmt::If(if_stmt) => match self.evaluate_if(if_stmt, environment, signature) {
-                    DslControlFlow::Continue => {}
-                    result @ DslControlFlow::Return(_) => return result,
-                },
+                Stmt::If(if_stmt) => {
+                    match self.evaluate_if(if_stmt, environment, signature, budget) {
+                        DslControlFlow::Continue => {}
+                        result @ DslControlFlow::Return(_) => return result,
+                    }
+                }
                 _ => unreachable!(
                     "validated type-level DSL suite contains only assignments, if, and return"
                 ),
@@ -2436,11 +2466,12 @@ impl ValidatedTypeShapeDslFunction {
         if_stmt: &StmtIf,
         environment: &mut DslEnvironment,
         signature: &ResolvedTypeShapeDslFunction,
+        budget: &mut DslEvaluationBudget,
     ) -> DslControlFlow {
-        match self.evaluate_condition(&if_stmt.test, environment) {
+        match self.evaluate_condition(&if_stmt.test, environment, budget) {
             Err(error) => return DslControlFlow::Return(DslOutcome::Invalid(error)),
             Ok(DslCondition::True) => {
-                return self.evaluate_suite(&if_stmt.body, environment, signature);
+                return self.evaluate_suite(&if_stmt.body, environment, signature, budget);
             }
             Ok(DslCondition::False) => {}
             Ok(DslCondition::Unknown) => {
@@ -2449,17 +2480,17 @@ impl ValidatedTypeShapeDslFunction {
         }
         for clause in &if_stmt.elif_else_clauses {
             match &clause.test {
-                Some(test) => match self.evaluate_condition(test, environment) {
+                Some(test) => match self.evaluate_condition(test, environment, budget) {
                     Err(error) => return DslControlFlow::Return(DslOutcome::Invalid(error)),
                     Ok(DslCondition::True) => {
-                        return self.evaluate_suite(&clause.body, environment, signature);
+                        return self.evaluate_suite(&clause.body, environment, signature, budget);
                     }
                     Ok(DslCondition::False) => {}
                     Ok(DslCondition::Unknown) => {
                         return DslControlFlow::Return(DslOutcome::Value(DslValue::Unknown));
                     }
                 },
-                None => return self.evaluate_suite(&clause.body, environment, signature),
+                None => return self.evaluate_suite(&clause.body, environment, signature, budget),
             }
         }
         DslControlFlow::Continue
@@ -2482,11 +2513,14 @@ impl ValidatedTypeShapeDslFunction {
         binder: usize,
         environment: &DslEnvironment,
         result: GeneratorResultKind,
+        budget: &mut DslEvaluationBudget,
     ) -> DslOutcome {
         let [comprehension] = generator.generators.as_slice() else {
             unreachable!("validated constructor generator has exactly one clause")
         };
-        let (values, truncated) = match self.evaluate_expression(&comprehension.iter, environment) {
+        let source = self.evaluate_expression(&comprehension.iter, environment, budget);
+        let item_limit = budget.remaining_generator_steps;
+        let (values, truncated) = match source {
             DslOutcome::Value(DslValue::Shape(shape)) => {
                 let IntTupleView::Concrete(shape) = shape.view() else {
                     return DslOutcome::Value(DslValue::Unknown);
@@ -2494,15 +2528,15 @@ impl ValidatedTypeShapeDslFunction {
                 (
                     shape
                         .iter()
-                        .take(MAX_GENERATOR_ITEMS + 1)
+                        .take(item_limit)
                         .cloned()
                         .map(DslValue::Dimension)
                         .collect::<Vec<_>>(),
-                    shape.len() > MAX_GENERATOR_ITEMS,
+                    shape.len() > item_limit,
                 )
             }
             DslOutcome::Value(DslValue::FlagSequence(sequence)) => {
-                let Some((values, truncated)) = sequence.bounded_values() else {
+                let Some((values, truncated)) = sequence.bounded_values(item_limit) else {
                     return DslOutcome::Value(DslValue::Unknown);
                 };
                 (
@@ -2526,13 +2560,13 @@ impl ValidatedTypeShapeDslFunction {
         let mut flag_values = Vec::new();
         let mut unknown = false;
         let mut iteration = environment.clone();
-        for (index, value) in values.into_iter().enumerate() {
-            if index == MAX_GENERATOR_ITEMS {
-                break;
+        for value in values {
+            if !budget.consume_generator_step() {
+                return DslOutcome::Value(DslValue::Unknown);
             }
             iteration.assign(binder, value);
             if let Some(filter) = comprehension.ifs.first() {
-                match self.evaluate_condition(filter, &iteration) {
+                match self.evaluate_condition(filter, &iteration, budget) {
                     Err(error) => return DslOutcome::Invalid(error),
                     Ok(DslCondition::False) => continue,
                     Ok(DslCondition::Unknown) => {
@@ -2542,7 +2576,10 @@ impl ValidatedTypeShapeDslFunction {
                     Ok(DslCondition::True) => {}
                 }
             }
-            match (result, self.evaluate_expression(&generator.elt, &iteration)) {
+            match (
+                result,
+                self.evaluate_expression(&generator.elt, &iteration, budget),
+            ) {
                 (_, invalid @ DslOutcome::Invalid(_)) => return invalid,
                 (_, DslOutcome::Value(DslValue::Unknown)) => unknown = true,
                 (
@@ -2572,7 +2609,12 @@ impl ValidatedTypeShapeDslFunction {
         }
     }
 
-    fn evaluate_expression(&self, expression: &Expr, environment: &DslEnvironment) -> DslOutcome {
+    fn evaluate_expression(
+        &self,
+        expression: &Expr,
+        environment: &DslEnvironment,
+        budget: &mut DslEvaluationBudget,
+    ) -> DslOutcome {
         match self.expression_kind(expression) {
             TypeShapeDslExpressionKind::DimensionSlot { slot, .. } => {
                 DslOutcome::Value(environment.value(slot).clone())
@@ -2624,7 +2666,7 @@ impl ValidatedTypeShapeDslFunction {
                 let mut dimensions = Vec::with_capacity(tuple.elts.len());
                 let mut unknown = false;
                 for element in &tuple.elts {
-                    match self.evaluate_expression(element, environment) {
+                    match self.evaluate_expression(element, environment, budget) {
                         DslOutcome::Value(DslValue::Dimension(dimension)) => {
                             dimensions.push(dimension)
                         }
@@ -2648,7 +2690,7 @@ impl ValidatedTypeShapeDslFunction {
                 let Expr::Call(call) = expression else {
                     unreachable!("validated IntTuple constructor expression is a call")
                 };
-                match self.evaluate_expression(&call.arguments.args[0], environment) {
+                match self.evaluate_expression(&call.arguments.args[0], environment, budget) {
                     DslOutcome::Value(DslValue::DimensionTuple(dimensions)) => {
                         DslOutcome::Value(DslValue::Shape(IntTuple::new(dimensions)))
                     }
@@ -2710,7 +2752,7 @@ impl ValidatedTypeShapeDslFunction {
                 let mut values = Vec::with_capacity(tuple.elts.len());
                 let mut unknown = false;
                 for element in &tuple.elts {
-                    match self.evaluate_expression(element, environment) {
+                    match self.evaluate_expression(element, environment, budget) {
                         DslOutcome::Value(DslValue::FlagInt(value)) => values.push(value),
                         DslOutcome::Value(DslValue::Unknown) => unknown = true,
                         DslOutcome::ExplicitGradual => {
@@ -2734,7 +2776,7 @@ impl ValidatedTypeShapeDslFunction {
                 };
                 let mut values = Vec::with_capacity(call.arguments.args.len());
                 for argument in &call.arguments.args {
-                    match self.evaluate_expression(argument, environment) {
+                    match self.evaluate_expression(argument, environment, budget) {
                         DslOutcome::Value(DslValue::FlagInt(value)) => values.push(Some(value)),
                         DslOutcome::Value(DslValue::Unknown) => values.push(None),
                         DslOutcome::ExplicitGradual => {
@@ -2770,7 +2812,7 @@ impl ValidatedTypeShapeDslFunction {
                 let Expr::Call(call) = expression else {
                     unreachable!("validated Flag sequence length expression is a call")
                 };
-                match self.evaluate_expression(&call.arguments.args[0], environment) {
+                match self.evaluate_expression(&call.arguments.args[0], environment, budget) {
                     DslOutcome::Value(DslValue::FlagSequence(sequence)) => sequence
                         .len()
                         .map_or(DslOutcome::Value(DslValue::Unknown), |length| {
@@ -2790,11 +2832,11 @@ impl ValidatedTypeShapeDslFunction {
                 let Expr::BinOp(binop) = expression else {
                     unreachable!("validated Flag arithmetic expression is a binary operation")
                 };
-                let left = match self.evaluate_expression(&binop.left, environment) {
+                let left = match self.evaluate_expression(&binop.left, environment, budget) {
                     DslOutcome::Invalid(error) => return DslOutcome::Invalid(error),
                     left => left,
                 };
-                let right = match self.evaluate_expression(&binop.right, environment) {
+                let right = match self.evaluate_expression(&binop.right, environment, budget) {
                     DslOutcome::Invalid(error) => return DslOutcome::Invalid(error),
                     right => right,
                 };
@@ -2825,11 +2867,13 @@ impl ValidatedTypeShapeDslFunction {
                 let Expr::If(if_expr) = expression else {
                     unreachable!("validated conditional expression is an if-expression")
                 };
-                match self.evaluate_condition(&if_expr.test, environment) {
+                match self.evaluate_condition(&if_expr.test, environment, budget) {
                     Err(error) => DslOutcome::Invalid(error),
-                    Ok(DslCondition::True) => self.evaluate_expression(&if_expr.body, environment),
+                    Ok(DslCondition::True) => {
+                        self.evaluate_expression(&if_expr.body, environment, budget)
+                    }
                     Ok(DslCondition::False) => {
-                        self.evaluate_expression(&if_expr.orelse, environment)
+                        self.evaluate_expression(&if_expr.orelse, environment, budget)
                     }
                     Ok(DslCondition::Unknown) => DslOutcome::Value(DslValue::Unknown),
                 }
@@ -2843,6 +2887,7 @@ impl ValidatedTypeShapeDslFunction {
                     binder,
                     environment,
                     GeneratorResultKind::Dimensions,
+                    budget,
                 )
             }
             TypeShapeDslExpressionKind::FlagGenerator { binder } => {
@@ -2857,6 +2902,7 @@ impl ValidatedTypeShapeDslFunction {
                     binder,
                     environment,
                     GeneratorResultKind::FlagValues,
+                    budget,
                 )
             }
         }
@@ -2868,11 +2914,12 @@ impl ValidatedTypeShapeDslFunction {
         &self,
         condition: &Expr,
         environment: &DslEnvironment,
+        budget: &mut DslEvaluationBudget,
     ) -> Result<DslCondition, ShapeError> {
         if let Expr::BoolOp(bool_op) = condition {
             let mut unknown = false;
             for value in &bool_op.values {
-                let value = match self.evaluate_condition(value, environment) {
+                let value = match self.evaluate_condition(value, environment, budget) {
                     Ok(value) => value,
                     // An unknown prefix may short-circuit before this operand for a concrete
                     // instantiation, so an error here is not deterministic.
@@ -2900,7 +2947,7 @@ impl ValidatedTypeShapeDslFunction {
             && unary.op == UnaryOp::Not
         {
             return Ok(
-                match self.evaluate_condition(&unary.operand, environment)? {
+                match self.evaluate_condition(&unary.operand, environment, budget)? {
                     DslCondition::True => DslCondition::False,
                     DslCondition::False => DslCondition::True,
                     DslCondition::Unknown => DslCondition::Unknown,
@@ -2946,8 +2993,8 @@ impl ValidatedTypeShapeDslFunction {
                 let Expr::Compare(compare) = condition else {
                     unreachable!("validated Flag comparison is a comparison")
                 };
-                let left = self.evaluate_expression(&compare.left, environment);
-                let right = self.evaluate_expression(&compare.comparators[0], environment);
+                let left = self.evaluate_expression(&compare.left, environment, budget);
+                let right = self.evaluate_expression(&compare.comparators[0], environment, budget);
                 match (left, right) {
                     (
                         DslOutcome::Value(DslValue::FlagInt(left)),
@@ -2971,8 +3018,9 @@ impl ValidatedTypeShapeDslFunction {
                 let Expr::Compare(compare) = condition else {
                     unreachable!("validated membership condition is a comparison")
                 };
-                let item = self.evaluate_expression(&compare.left, environment);
-                let sequence = self.evaluate_expression(&compare.comparators[0], environment);
+                let item = self.evaluate_expression(&compare.left, environment, budget);
+                let sequence =
+                    self.evaluate_expression(&compare.comparators[0], environment, budget);
                 match (item, sequence) {
                     (
                         DslOutcome::Value(DslValue::FlagInt(item)),
@@ -3172,9 +3220,9 @@ fn evaluate_flag_int_arithmetic(
 }
 
 impl DslFlagSequence {
-    fn bounded_values(&self) -> Option<(Vec<i64>, bool)> {
+    fn bounded_values(&self, item_limit: usize) -> Option<(Vec<i64>, bool)> {
         let length = usize::try_from(self.len()?).ok()?;
-        let take = length.min(MAX_GENERATOR_ITEMS + 1);
+        let take = length.min(item_limit);
         let values = match self {
             Self::Values(values) => values.iter().take(take).copied().collect(),
             Self::Range { start, step, .. } => (0..take)
@@ -3185,7 +3233,7 @@ impl DslFlagSequence {
                 })
                 .collect::<Option<Vec<_>>>()?,
         };
-        Some((values, length > MAX_GENERATOR_ITEMS))
+        Some((values, length > item_limit))
     }
 
     fn contains(&self, value: i64) -> bool {

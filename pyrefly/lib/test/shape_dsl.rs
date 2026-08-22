@@ -7032,3 +7032,60 @@ def test(x: Tensor[[2, 3]]) -> None:
     apply_invalid_source(x)  # E: range() arg 3 must not be zero
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_shared_generator_budget,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def exact_budget(shape: IntTuple) -> IntTuple:
+    first = tuple(item for item in range(2048))
+    return dsl.IntTuple(7 for item in range(2048) if item == 0)
+
+@type_shape_dsl_function
+def shared_overflow(shape: IntTuple) -> IntTuple:
+    first = tuple(item for item in range(2048))
+    return dsl.IntTuple(7 for item in range(2049) if item == 0)
+
+@type_shape_dsl_function
+def prefix_error(shape: IntTuple) -> IntTuple:
+    first = tuple(item for item in range(4095))
+    second = tuple(1 // item for item in range(2))
+    return shape
+
+@type_shape_dsl_function
+def beyond_budget_error(shape: IntTuple) -> IntTuple:
+    first = tuple(item for item in range(4096))
+    second = tuple(1 // item for item in range(1))
+    if 0 in second:
+        return dsl.IntTuple((7,))
+    return shape
+
+@type_shape_dsl_function
+def nested_budget(shape: IntTuple) -> IntTuple:
+    values = tuple(
+        outer for outer in range(3000) if outer in tuple(inner for inner in (1, 2))
+    )
+    if 0 in values:
+        return dsl.IntTuple((7,))
+    return shape
+
+def apply_exact() -> Tensor[exact_budget(IntTuple[2])]: ...
+def apply_overflow() -> Tensor[shared_overflow(IntTuple[2])]: ...
+def apply_prefix_error() -> Tensor[prefix_error(IntTuple[2])]: ...
+def apply_beyond_budget_error() -> Tensor[beyond_budget_error(IntTuple[2])]: ...
+def apply_nested_budget() -> Tensor[nested_budget(IntTuple[2])]: ...
+
+def test() -> None:
+    assert_type(apply_exact(), Tensor[[7]])
+    reveal_type(apply_overflow())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    apply_prefix_error()  # E: Flag integer division by zero
+    reveal_type(apply_beyond_budget_error())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_nested_budget())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
