@@ -415,6 +415,7 @@ impl FuncSymbol {
 pub enum FunctionKind {
     IsInstance,
     IsSubclass,
+    Callable,
     /// The builtin `len`. Special-cased so that when the argument's `__len__`
     /// returns a subtype of `int` (e.g. a shaped array's `Int[N]`), `len(x)`
     /// yields that type instead of typeshed's plain `int`.
@@ -514,6 +515,7 @@ impl FunctionKind {
         match (qname.module_name().as_str(), qname.id().as_str()) {
             ("builtins", "isinstance") => Self::IsInstance,
             ("builtins", "issubclass") => Self::IsSubclass,
+            ("builtins", "callable") => Self::Callable,
             ("builtins", "len") => Self::Len,
             ("builtins", "classmethod") => Self::ClassMethod,
             ("dataclasses", "dataclass") => Self::Dataclass,
@@ -550,6 +552,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => ModuleName::builtins(),
             Self::IsSubclass => ModuleName::builtins(),
+            Self::Callable => ModuleName::builtins(),
             Self::Len => ModuleName::builtins(),
             Self::ClassMethod => ModuleName::builtins(),
             Self::Dataclass => ModuleName::dataclasses(),
@@ -590,6 +593,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => Cow::Owned(Name::new_static("isinstance")),
             Self::IsSubclass => Cow::Owned(Name::new_static("issubclass")),
+            Self::Callable => Cow::Owned(Name::new_static("callable")),
             Self::Len => Cow::Owned(Name::new_static("len")),
             Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
@@ -630,6 +634,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => None,
             Self::IsSubclass => None,
+            Self::Callable => None,
             Self::Len => None,
             Self::ClassMethod => None,
             Self::Dataclass => None,
