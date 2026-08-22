@@ -1461,6 +1461,7 @@ impl<'a> Transaction<'a> {
                 infer_return_types: config.infer_return_types(module_data.handle.path().as_path()),
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
+                check_all_matches: config.check_all_matches(module_data.handle.path().as_path()),
                 tensor_shapes,
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
@@ -2474,6 +2475,7 @@ impl<'a> Transaction<'a> {
                 check_unannotated_defs: config.check_unannotated_defs(m.handle.path().as_path()),
                 infer_return_types: config.infer_return_types(m.handle.path().as_path()),
                 infer_with_first_use: config.infer_with_first_use(m.handle.path().as_path()),
+                check_all_matches: config.check_all_matches(m.handle.path().as_path()),
                 // This is a one-shot timing/diagnostic dump, so we intentionally do not
                 // store the bit on `module_data` (no later dirty.find() re-check applies).
                 tensor_shapes: self.tensor_shapes_available(&config, &m.handle, None),

@@ -2243,9 +2243,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    /// Determines if a type should be checked for match exhaustiveness.
-    /// We check exhaustiveness when the type has a finite, known set of possible values.
-    fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
+    /// Whether the subject type is closed enough for default exhaustiveness checking.
+    pub(crate) fn should_check_exhaustiveness_by_default(&self, ty: &Type) -> bool {
         match ty {
             Type::ClassType(cls) => {
                 // Non-subclassable classes are exhaustible, with the exception of Flag enums,
@@ -2267,7 +2266,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && union
                         .members
                         .iter()
-                        .all(|m| self.should_check_exhaustiveness(m))
+                        .all(|m| self.should_check_exhaustiveness_by_default(m))
             }
 
             _ => false,
@@ -2307,8 +2306,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
         let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
-        // We only check match exhaustiveness if the subject is an enum or a union of enum literals
-        if !self.should_check_exhaustiveness(subject_info.ty()) {
+        if !self.solver().check_all_matches
+            && !self.should_check_exhaustiveness_by_default(subject_info.ty())
+        {
             return;
         }
         let ignore_errors = self.error_swallower();

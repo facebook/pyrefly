@@ -27,6 +27,7 @@ typeshed-path = "/path/to/typeshed"
 # Type checking behavior
 untyped-def-behavior = "check-and-infer-return-type"
 infer-with-first-use = true
+check-all-matches = false
 ignore-errors-in-generated-code = false
 disable-type-errors-in-ide = false
 strict-callable-subtyping = false

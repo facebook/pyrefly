@@ -277,6 +277,10 @@ pub struct ConfigBase {
     /// By default this is enabled.
     pub infer_with_first_use: Option<bool>,
 
+    /// Whether to check every match statement for exhaustiveness.
+    /// By default, only matches over closed subject types are checked.
+    pub check_all_matches: Option<bool>,
+
     /// Deprecated: set the `pytorch-efficiency-lints` error kind in `[errors]` instead.
     /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
     /// When true, all `pytorch-efficiency-lint-*` error kinds are set to `Warn` severity
@@ -395,6 +399,10 @@ impl ConfigBase {
 
     pub fn get_infer_with_first_use(base: &Self) -> Option<bool> {
         base.infer_with_first_use
+    }
+
+    pub fn get_check_all_matches(base: &Self) -> Option<bool> {
+        base.check_all_matches
     }
 
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {

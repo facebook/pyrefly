@@ -843,6 +843,30 @@ set `infer-return-types` to `"never"` in your config or pass it as a flag.
 - Default: `"checked"`
 - Flag equivalent: `--infer-return-types`
 
+### `check-all-matches`
+
+Controls whether Pyrefly checks every `match` statement for exhaustiveness.
+
+By default, Pyrefly checks only closed subject types, such as enums, literal
+unions, `None`, `bool`, and non-subclassable classes. When this option is
+enabled, Pyrefly also reports `non-exhaustive-match` for open-domain subjects
+when its narrowing logic can prove that execution may fall through the match.
+
+```toml
+check-all-matches = true
+```
+
+This option does not affect the severity of the diagnostic. Configure
+[`non-exhaustive-match`](./error-kinds.mdx#non-exhaustive-match) in the
+`[errors]` table to change its severity or disable it.
+
+Use `typing.assert_never` in a fallback arm when exhaustiveness should be
+required for one specific match without enabling this project-wide policy.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--check-all-matches`
+
 ### `strict-callable-subtyping`
 
 Controls whether Pyrefly enforces strict parameter compatibility when checking
@@ -1318,6 +1342,7 @@ We currently allow the following config options to be overridden in a SubConfig:
 - `replace-imports-with-any`
 - `check-unannotated-defs`
 - `infer-return-types`
+- `check-all-matches`
 - `ignore-errors-in-generated-code`
 
 Most SubConfig overrides _replace_ the values appearing in the 'root' or top-level of the
@@ -1497,6 +1522,8 @@ ignore-errors-in-generated-code = false
 check-unannotated-defs = true
 # when should Pyrefly infer return types for functions without return annotations?
 infer-return-types = "checked"
+# should Pyrefly check every match statement for exhaustiveness?
+check-all-matches = false
 # can Pyrefly recognize ignore directives other than `# pyrefly: ignore` and `# type: ignore`
 permissive-ignores = false
 

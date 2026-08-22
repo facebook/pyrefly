@@ -527,6 +527,7 @@ pub struct Solver {
     /// Like protocol_cache, only caches Var-free types.
     typed_dict_cache: Mutex<HashMap<(TypedDict, TypedDict), Result<(), SubsetError>>>,
     pub infer_with_first_use: bool,
+    pub check_all_matches: bool,
     pub heap: TypeHeap,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
@@ -587,6 +588,7 @@ impl Solver {
     /// Create a new solver.
     pub fn new(
         infer_with_first_use: bool,
+        check_all_matches: bool,
         tensor_shapes: bool,
         strict_callable_subtyping: bool,
         strict_partial_subtyping: bool,
@@ -599,6 +601,7 @@ impl Solver {
             protocol_cache: Default::default(),
             typed_dict_cache: Default::default(),
             infer_with_first_use,
+            check_all_matches,
             heap: TypeHeap::new(),
             tensor_shapes,
             strict_callable_subtyping,
@@ -4239,7 +4242,7 @@ mod tests {
     use super::*;
 
     fn solver_with_answer(answer: Type) -> (Solver, Var) {
-        let solver = Solver::new(false, true, false, false, false, false);
+        let solver = Solver::new(false, false, true, false, false, false, false);
         let uniques = UniqueFactory::new();
         let var = Var::new(&uniques);
         solver
@@ -4282,7 +4285,7 @@ mod tests {
 
     #[test]
     fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
-        let solver = Solver::new(false, true, false, false, false, false);
+        let solver = Solver::new(false, false, true, false, false, false, false);
         let uniques = UniqueFactory::new();
         let range = TextRange::new(TextSize::new(1), TextSize::new(3));
         let partial = solver.fresh_partial_contained(&uniques, range);
@@ -4312,7 +4315,7 @@ mod tests {
 
     #[test]
     fn sanitize_type_vars_freezes_through_residual_answers() {
-        let solver = Solver::new(false, true, false, false, false, false);
+        let solver = Solver::new(false, false, true, false, false, false, false);
         let uniques = UniqueFactory::new();
         let range = TextRange::new(TextSize::new(1), TextSize::new(3));
         let partial = solver.fresh_partial_contained(&uniques, range);
@@ -4794,7 +4797,7 @@ mod tests {
         ];
         for (index, (v1_quantified, k1, r1, v2_quantified, k2, r2)) in cases.into_iter().enumerate()
         {
-            let solver = Solver::new(false, true, false, false, false, false);
+            let solver = Solver::new(false, false, true, false, false, false, false);
             let uniques = UniqueFactory::new();
             let v1 = Var::new(&uniques);
             let v2 = Var::new(&uniques);

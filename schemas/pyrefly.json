@@ -64,6 +64,11 @@
           "type": "boolean",
           "default": true
         },
+        "check-all-matches": {
+          "description": "Whether to check every match statement for exhaustiveness instead of limiting checks to closed subject types.",
+          "type": "boolean",
+          "default": false
+        },
         "untyped-def-behavior": {
           "description": "How should Pyrefly treat function definitions with no parameter or return type annotations?",
           "type": "string",
