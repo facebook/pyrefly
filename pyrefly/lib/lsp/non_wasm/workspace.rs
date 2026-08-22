@@ -42,26 +42,16 @@ use crate::state::lsp::ImportFormat;
 use crate::state::lsp::InlayHintConfig;
 use crate::state::lsp::TypeCheckingMode;
 
-/// Information about the Python environment provided by this workspace.
+/// A Python interpreter path provided by the client (e.g. via `pythonPath`).
 #[derive(Debug, Clone)]
 pub struct PythonInfo {
-    /// The path to the interpreter used to query this `PythonInfo`'s [`PythonEnvironment`].
+    /// The path to the Python interpreter.
     interpreter: PathBuf,
-    /// The [`PythonEnvironment`] values all [`ConfigFile`]s in a given workspace should
-    /// use if no explicit [`ConfigFile::python_interpreter`] is provided, or any
-    /// `PythonEnvironment` values in that `ConfigFile` are unfiled. If the `interpreter
-    /// provided fails to execute or is invalid, this `PythonEnvironment` might instead
-    /// be a system interpreter or [`PythonEnvironment::pyrefly_default()`].
-    env: PythonEnvironment,
 }
 
 impl PythonInfo {
     pub fn new(interpreter: PathBuf) -> Self {
-        let (env, query_error) = PythonEnvironment::get_interpreter_env(&interpreter);
-        if let Some(error) = query_error {
-            error!("{error}");
-        }
-        Self { interpreter, env }
+        Self { interpreter }
     }
 }
 
@@ -172,12 +162,19 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                     config.fallback_search_path =
                         FallbackSearchPath::Explicit(Arc::new(new_fallback_search_path));
                 }
-                if let Some(PythonInfo {
-                    interpreter,
-                    mut env,
-                }) = w.python_info.clone()
+                // Use the client-provided interpreter (e.g. `pythonPath`) only when the
+                // config doesn't already specify an interpreter and hasn't opted out of
+                // interpreter queries entirely (`skip-interpreter-query`). The query is
+                // deferred until here so an opt-out config never pays for it.
+                if let Some(PythonInfo { interpreter }) = w.python_info.clone()
                     && config.interpreters.is_empty()
+                    && !config.interpreters.skip_interpreter_query
                 {
+                    let (mut env, query_error) =
+                        PythonEnvironment::get_interpreter_env(&interpreter);
+                    if let Some(error) = query_error {
+                        error!("{error}");
+                    }
                     let site_package_path: Option<Vec<PathBuf>> =
                         config.python_environment.site_package_path.take();
                     env.site_package_path = site_package_path;
@@ -1527,5 +1524,41 @@ mod tests {
             );
             assert!(!modified);
         }
+    }
+
+    /// A client-supplied `pythonPath` must not be applied to a config that opted
+    /// out of interpreter queries (`skip-interpreter-query = true`), and it must
+    /// only be applied to a config that hasn't already picked an interpreter. This
+    /// pins the workspace side of the `skip-interpreter-query` contract: a config
+    /// that opts out should never pay for — or even perform — an interpreter query.
+    /// Regression test for facebook/pyrefly#4445.
+    #[test]
+    fn test_skip_interpreter_query_blocks_client_pythonpath() {
+        let workspaces = Workspaces::new(Workspace::new(), &[]);
+        workspaces
+            .default
+            .write()
+            .python_info = Some(PythonInfo::new(PathBuf::from("/fake/python")));
+        let configurer = WorkspaceConfigConfigurer(Arc::new(workspaces));
+
+        // A config with `skip-interpreter-query = true`: the client interpreter is
+        // ignored entirely (neither queried nor applied as an interpreter path).
+        let mut skip_config = ConfigFile::parse_config("skip-interpreter-query = true").unwrap();
+        // Mark it as file-loaded so the unconfigured resolver (which would otherwise
+        // rebuild the config) doesn't drop the opt-out flag.
+        skip_config.source = ConfigSource::File(PathBuf::from("/fake/root/pyrefly.toml"));
+        let (applied, _) = configurer.configure(Some(Path::new("/fake/root")), skip_config, vec![]);
+        assert!(
+            applied.interpreters.is_empty(),
+            "client pythonPath must be ignored when skip-interpreter-query is set"
+        );
+
+        // A config that is silent about interpreters: the client interpreter is applied.
+        let (applied, _) =
+            configurer.configure(Some(Path::new("/fake/root")), ConfigFile::default(), vec![]);
+        assert!(
+            !applied.interpreters.is_empty(),
+            "client pythonPath is applied when the config is silent about interpreters"
+        );
     }
 }
