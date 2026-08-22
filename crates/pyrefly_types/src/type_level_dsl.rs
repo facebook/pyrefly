@@ -383,6 +383,7 @@ pub enum TypeShapeDslExpressionKind {
     FlagRange,
     FlagSequenceLength,
     FlagIntArithmetic(TypeShapeDslFlagIntArithmeticOp),
+    Conditional,
 }
 
 /// The Flag value domain a validated operation requires of its operand. Reached through
@@ -653,6 +654,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         expression: &Expr,
         flow: &DslValidationFlow,
     ) -> Result<(), TypeShapeDslDefinitionError> {
+        if let Expr::If(if_expr) = expression {
+            let (when_true, when_false) = self.validate_condition(&if_expr.test, flow)?;
+            self.validate_dimension(&if_expr.body, &when_true)?;
+            self.validate_dimension(&if_expr.orelse, &when_false)?;
+            self.expressions.push(TypeShapeDslExpression {
+                range: if_expr.range,
+                kind: TypeShapeDslExpressionKind::Conditional,
+            });
+            return Ok(());
+        }
         let kind = match expression {
             Expr::Name(_) => {
                 let slot = self.slot(expression, flow)?;
@@ -776,6 +787,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         expression: &Expr,
         flow: &DslValidationFlow,
     ) -> Result<(), TypeShapeDslDefinitionError> {
+        if let Expr::If(if_expr) = expression {
+            let (when_true, when_false) = self.validate_condition(&if_expr.test, flow)?;
+            self.validate_flag_int(&if_expr.body, &when_true)?;
+            self.validate_flag_int(&if_expr.orelse, &when_false)?;
+            self.expressions.push(TypeShapeDslExpression {
+                range: if_expr.range,
+                kind: TypeShapeDslExpressionKind::Conditional,
+            });
+            return Ok(());
+        }
         match integer_literal(expression) {
             IntegerLiteral::NotLiteral => {}
             IntegerLiteral::Unrepresentable => {
@@ -959,6 +980,22 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         expression: &Expr,
         flow: &DslValidationFlow,
     ) -> Result<DslStaticKind, TypeShapeDslDefinitionError> {
+        if let Expr::If(if_expr) = expression {
+            let (when_true, when_false) = self.validate_condition(&if_expr.test, flow)?;
+            let when_true = self.validate_assignment_value(&if_expr.body, &when_true)?;
+            let when_false = self.validate_assignment_value(&if_expr.orelse, &when_false)?;
+            let Some(kind) = when_true.join(when_false) else {
+                return Err(TypeShapeDslDefinitionError {
+                    range: if_expr.range,
+                    message: "conditional expression branches must have the same value domain",
+                });
+            };
+            self.expressions.push(TypeShapeDslExpression {
+                range: if_expr.range,
+                kind: TypeShapeDslExpressionKind::Conditional,
+            });
+            return Ok(kind);
+        }
         match expression {
             Expr::Name(_) => {
                 let slot = self.slot(expression, flow)?;
@@ -2464,6 +2501,19 @@ impl ValidatedTypeShapeDslFunction {
                         unreachable!("invalid eager operands are propagated before arithmetic")
                     }
                     _ => unreachable!("validated Flag arithmetic operands are integers"),
+                }
+            }
+            TypeShapeDslExpressionKind::Conditional => {
+                let Expr::If(if_expr) = expression else {
+                    unreachable!("validated conditional expression is an if-expression")
+                };
+                match self.evaluate_condition(&if_expr.test, environment) {
+                    Err(error) => DslOutcome::Invalid(error),
+                    Ok(DslCondition::True) => self.evaluate_expression(&if_expr.body, environment),
+                    Ok(DslCondition::False) => {
+                        self.evaluate_expression(&if_expr.orelse, environment)
+                    }
+                    Ok(DslCondition::Unknown) => DslOutcome::Value(DslValue::Unknown),
                 }
             }
         }

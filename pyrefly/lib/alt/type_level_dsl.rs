@@ -283,7 +283,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::FlagRange
                     | TypeShapeDslExpressionKind::FlagSequenceLength
                     | TypeShapeDslExpressionKind::FlagIntArithmetic(_)
-                    | TypeShapeDslExpressionKind::DimensionTuple => None,
+                    | TypeShapeDslExpressionKind::DimensionTuple
+                    | TypeShapeDslExpressionKind::Conditional => None,
                 };
                 if let Some(message) = invalid_domain {
                     self.error(

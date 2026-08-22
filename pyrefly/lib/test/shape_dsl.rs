@@ -6353,6 +6353,39 @@ def test(x: Tensor[[2, 3]], left: Tensor[[2, 1]], right: Tensor[[1, 3]]) -> None
 );
 
 testcase!(
+    test_type_shape_dsl_conditional_expressions,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def choose_dimension(shape: IntTuple, axis: int) -> IntTuple:
+    return dsl.IntTuple((shape[0] if axis == 0 else shape[1],))
+
+@type_shape_dsl_function
+def choose_flag(shape: IntTuple, axis: int) -> IntTuple:
+    selected = 0 if axis == 0 else 1
+    if selected == 0:
+        return dsl.IntTuple((shape[0],))
+    return dsl.IntTuple((shape[1],))
+
+def apply_dimension[Axis: Flag[int]](x: Tensor[[2, 3]], axis: Axis) -> Tensor[choose_dimension(IntTuple[2, 3], Axis)]: ...
+def apply_flag[Axis: Flag[int]](x: Tensor[[2, 3]], axis: Axis) -> Tensor[choose_flag(IntTuple[2, 3], Axis)]: ...
+def broad() -> Tensor[choose_dimension(IntTuple[2, 3], int)]: ...
+
+def test(x: Tensor[[2, 3]]) -> None:
+    assert_type(apply_dimension(x, 0), Tensor[[2]])
+    assert_type(apply_dimension(x, 1), Tensor[[3]])
+    assert_type(apply_flag(x, 0), Tensor[[2]])
+    assert_type(apply_flag(x, 1), Tensor[[3]])
+    reveal_type(broad())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_invalid_flag_value_regressions,
     shape_dsl_tensor_env(),
     r#"
