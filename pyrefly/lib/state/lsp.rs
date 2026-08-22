@@ -3767,6 +3767,13 @@ impl<'a> Transaction<'a> {
         quick_fixes::convert_dict::convert_dict_code_actions(self, handle, selection)
     }
 
+    pub fn unwrap_block_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::unwrap_block::unwrap_block_code_actions(self, handle, selection)
+    }
     pub fn change_signature_code_actions(
         &self,
         handle: &Handle,
