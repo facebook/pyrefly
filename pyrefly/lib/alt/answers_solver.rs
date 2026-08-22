@@ -3329,7 +3329,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> Type {
-        if self.check_type_with_options(&got, want, loc, TypeCheckOptions::new(errors, tcc)) {
+        if self
+            .check_type_with_options(&got, want, loc, TypeCheckOptions::new(errors, tcc))
+            .is_none()
+        {
             got
         } else {
             want.clone()
@@ -3346,6 +3349,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> bool {
         self.check_type_with_options(got, want, loc, TypeCheckOptions::new(errors, tcc))
+            .is_none()
     }
 
     /// Check `got` against `want` as an argument outside a call boundary.
@@ -3367,16 +3371,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 call_context: TypeCheckCallContext::ArgumentOutsideCall,
             },
         )
+        .is_none()
     }
 
-    /// Check if `got` matches `want`.
+    /// Check if `got` matches `want`. Returns the error on an unsuccessful match.
     pub fn check_type_with_options(
         &self,
         got: &Type,
         want: &Type,
         loc: TextRange,
         options: TypeCheckOptions<'_, '_>,
-    ) -> bool {
+    ) -> Option<SubsetError> {
         // Record expected type for LSP query
         self.record_expected_type_trace(loc, want);
 
@@ -3404,11 +3409,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match subset_result {
             Ok(()) => {
                 self.check_string_as_iterable(got, want, loc, options.errors);
-                true
+                None
             }
             Err(error) => {
-                self.report_type_error(got, want, options.errors, loc, options.context, error);
-                false
+                self.report_type_error(
+                    got,
+                    want,
+                    options.errors,
+                    loc,
+                    options.context,
+                    error.clone(),
+                );
+                Some(error)
             }
         }
     }
