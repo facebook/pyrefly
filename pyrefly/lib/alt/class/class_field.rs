@@ -2970,8 +2970,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         };
         // Otherwise, analyze the value to determine the type
-        let (inherited_ty, inherited_annotation) =
+        let (inherited_ty, mut inherited_annotation) =
             self.get_inherited_type_and_annotation(class, name);
+        // `Model.objects` is a fallback for models without an explicit manager. An assignment
+        // installs that manager at runtime, so preserve its concrete type and custom methods.
+        let is_django_manager_assignment = direct_annotation.is_none()
+            && matches!(value, ExprOrBinding::Expr(_))
+            && self.get_metadata_for_class(class).is_django_model()
+            && name.as_str() == "objects";
+        if is_django_manager_assignment {
+            inherited_annotation = None;
+        }
         let mut is_inherited = if inherited_ty.is_none() {
             IsInherited::No
         } else {
@@ -3011,7 +3020,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         // If there are no explicit annotations, use the inherited type as a contextual hint.
                         let errors2 = self.error_collector();
-                        self.attribute_expr_infer(
+                        let hinted_ty = self.attribute_expr_infer(
                             e,
                             Some(&Annotation::new_type(inherited_ty.clone())),
                             name,
@@ -3022,7 +3031,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // inferred type to preserve type precision. Skip the override check
                             // since we've already validated compatibility above.
                             is_inherited = IsInherited::No;
-                            self.attribute_expr_infer(e, None, name, errors)
+                            if is_django_manager_assignment {
+                                hinted_ty
+                            } else {
+                                self.attribute_expr_infer(e, None, name, errors)
+                            }
                         } else {
                             // The hint was no good; infer the type without it.
                             self.attribute_expr_infer(e, None, name, errors)
