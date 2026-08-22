@@ -34,6 +34,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
+use crate::state::ide::fallback_import_insertion_point;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::import_tracker::ImportTracker;
@@ -141,17 +142,19 @@ impl TypeHintRenderer<'_, '_> {
 
         let mut missing = missing.into_iter().collect::<Vec<_>>();
         missing.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-        let mut import_edit = None;
+        // Inlay hints apply all imports as one edit, so every import must be a
+        // complete line at the same legal insertion point rather than a merge suffix.
+        let import_position = fallback_import_insertion_point(self.ast.as_ref());
+        let mut import_text = String::new();
         for module in missing {
             if let Some(handle_to_import) = self
                 .transaction
                 .import_handle(self.handle, module, None)
                 .finding()
             {
-                let (position, insert_text, _) =
+                let (_, insert_text, _) =
                     import_regular_import_edit(self.ast.as_ref(), handle_to_import, None);
-                let (_, combined) = import_edit.get_or_insert((position, String::new()));
-                combined.push_str(&insert_text);
+                import_text.push_str(&insert_text);
             }
         }
         for import in direct {
@@ -163,12 +166,13 @@ impl TypeHintRenderer<'_, '_> {
                 &import.heads.join(", "),
                 self.import_format,
             );
-            let (_, combined) = import_edit.get_or_insert((edit.range.start(), String::new()));
-            combined.push_str(&edit.insert_text);
+            import_text.push_str(&edit.display_text);
+            import_text.push('\n');
         }
-        let imports = match import_edit {
-            Some(import_edit) => vec![import_edit],
-            None => Vec::new(),
+        let imports = if import_text.is_empty() {
+            Vec::new()
+        } else {
+            vec![(import_position, import_text)]
         };
         InlayHintEdits {
             annotation: format!("{prefix}{text}"),
