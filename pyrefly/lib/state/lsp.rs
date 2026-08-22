@@ -96,6 +96,7 @@ use crate::types::module::ModuleType;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
+pub(crate) mod ast_helpers;
 mod dict_completions;
 mod extra_extensions;
 mod pytest;
@@ -3767,6 +3768,13 @@ impl<'a> Transaction<'a> {
         quick_fixes::convert_dict::convert_dict_code_actions(self, handle, selection)
     }
 
+    pub fn use_function_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::use_function::use_function_code_actions(self, handle, selection)
+    }
     pub fn change_signature_code_actions(
         &self,
         handle: &Handle,
