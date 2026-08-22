@@ -82,6 +82,7 @@ const MANY_TO_MANY_FIELD: Name = Name::new_static("ManyToManyField");
 const MODEL: Name = Name::new_static("Model");
 const MANYRELATEDMANAGER: Name = Name::new_static("ManyRelatedManager");
 const SYMMETRICAL: Name = Name::new_static("symmetrical");
+const AS_MANAGER: Name = Name::new_static("as_manager");
 
 /// Find a keyword argument by name and return its value expression.
 fn find_keyword<'a>(call_expr: &'a ExprCall, name: &Name) -> Option<&'a Expr> {
@@ -237,6 +238,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
+    fn inherits_from_django_queryset(&self, cls: &Class) -> bool {
+        cls.has_toplevel_qname("django.db.models.query", "QuerySet")
+            || self
+                .get_mro_for_class(cls)
+                .ancestors(self.stdlib)
+                .any(|ancestor| ancestor.has_qname("django.db.models.query", "QuerySet"))
+    }
+
+    pub fn get_django_manager_from_queryset_type(
+        &self,
+        model: &Class,
+        initial_value_expr: Option<&Expr>,
+    ) -> Option<Type> {
+        if !self.get_metadata_for_class(model).is_django_model() {
+            return None;
+        }
+        let call_expr = initial_value_expr?.as_call_expr()?;
+        let Expr::Attribute(attr) = call_expr.func.as_ref() else {
+            return None;
+        };
+        if attr.attr.id != AS_MANAGER {
+            return None;
+        }
+
+        match self.expr_infer(&attr.value, &self.error_swallower()) {
+            Type::ClassDef(queryset_cls) if self.inherits_from_django_queryset(&queryset_cls) => {
+                Some(self.instantiate(&queryset_cls))
+            }
+            _ => None,
+        }
+    }
+
+    // Get ManyRelatedManager class from django stubs
     fn get_manager_type(&self, target_model_type: Type) -> Option<Type> {
         let model_class = self.try_get_from_export(ModuleName::django_models(), MODEL)?;
         let model_instance_type = self.class_def_to_instance_type(&model_class);

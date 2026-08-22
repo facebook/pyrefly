@@ -88,3 +88,21 @@ total_sum_typed = Default.objects.aggregate(
 assert_type(total_sum_typed, dict[str, Any]) 
 "#,
 );
+
+django_testcase!(
+    test_queryset_as_manager_preserves_custom_methods,
+    r#"
+from django.db import models
+
+class NotificationQuerySet(models.QuerySet["Notification"]):
+    def resolved(self):
+        return self.filter(resolved_at__isnull=False)
+
+class Notification(models.Model):
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    objects = NotificationQuerySet.as_manager()
+
+Notification.objects.resolved()
+Notification.objects.all().resolved()
+"#,
+);
