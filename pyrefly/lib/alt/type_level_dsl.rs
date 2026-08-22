@@ -298,13 +298,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(TypeShapeDslSlotComparisonDomain::Dimension) => (!matches!(
                             op,
                             TypeShapeDslFlagIntComparisonOp::Equal
+                                | TypeShapeDslFlagIntComparisonOp::NotEqual
                                 | TypeShapeDslFlagIntComparisonOp::LessThan
                         ))
-                        .then_some("`@type_shape_dsl_function` `Int` comparisons support only `==` and `<`"),
+                        .then_some("`@type_shape_dsl_function` `Int` comparisons support only `==`, `!=`, and `<`"),
                         Some(TypeShapeDslSlotComparisonDomain::FlagInt) => None,
                         None => Some("`@type_shape_dsl_function` comparison operands must both be annotated as `Int` or both be `Flag[int]`"),
                     },
                     TypeShapeDslConditionKind::Any { .. }
+                    | TypeShapeDslConditionKind::DimensionEquality { .. }
                     | TypeShapeDslConditionKind::GeneratorElementSelfCompare(_) => None,
                     TypeShapeDslConditionKind::IsConcreteInt {
                         parameter_origins,

@@ -801,6 +801,9 @@ pub enum TypeShapeDslConditionKind {
         right_parameters: Option<Box<[usize]>>,
         op: TypeShapeDslFlagIntComparisonOp,
     },
+    DimensionEquality {
+        negated: bool,
+    },
     GeneratorElementSelfCompare(TypeShapeDslFlagIntComparisonOp),
     IsConcreteInt {
         slot: usize,
@@ -1889,6 +1892,35 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok((slot, parameter_origins))
     }
 
+    /// Selects the expression comparison path when syntax and local flow identify a dimension.
+    /// This is intentionally narrower than `validate_dimension`: bare parameters and literals do
+    /// not establish a domain by themselves, though the other operand can select this path for
+    /// them. This only routes the comparison; `validate_dimension` still checks assignment and
+    /// records the expression's complete validation metadata.
+    fn is_dimension_comparison_operand(&self, expression: &Expr, flow: &DslValidationFlow) -> bool {
+        match expression {
+            Expr::Name(name) => self.slots.get(&name.id).is_some_and(|slot| {
+                matches!(flow.kinds.get(*slot), Some(DslStaticKind::Dimension))
+            }),
+            Expr::Subscript(subscript) => {
+                let Expr::Name(name) = &*subscript.value else {
+                    return false;
+                };
+                self.slots.get(&name.id).is_some_and(|slot| {
+                    matches!(
+                        flow.kinds.get(*slot),
+                        Some(DslStaticKind::UnknownParameters(_))
+                    )
+                })
+            }
+            Expr::If(if_expr) => {
+                self.is_dimension_comparison_operand(&if_expr.body, flow)
+                    || self.is_dimension_comparison_operand(&if_expr.orelse, flow)
+            }
+            _ => false,
+        }
+    }
+
     fn validate_condition(
         &mut self,
         condition: &Expr,
@@ -2070,7 +2102,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let Expr::Compare(compare) = condition else {
             return Err(TypeShapeDslDefinitionError {
                 range: condition.range(),
-                message: "condition supports only `is_concrete_int`, `and`, `==`, and `<`, plus `is_int_value` and validated Flag boolean/comparison/membership forms",
+                message: "condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`, plus `is_int_value` and validated Flag boolean/comparison/membership forms",
             });
         };
         if compare.ops.len() != 1 || compare.comparators.len() != 1 {
@@ -2130,8 +2162,23 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             }
             _ => None,
         };
+        let has_dimension_expression = self.is_dimension_comparison_operand(&compare.left, flow)
+            || self.is_dimension_comparison_operand(right, flow);
         let kind = match slot_comparison {
             Some(kind) => kind,
+            None if has_dimension_expression => {
+                if !matches!(op, CmpOp::Eq | CmpOp::NotEq) {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: compare.range,
+                        message: "derived dimension comparisons support only `==` and `!=`",
+                    });
+                }
+                self.validate_dimension(&compare.left, flow)?;
+                self.validate_dimension(right, flow)?;
+                TypeShapeDslConditionKind::DimensionEquality {
+                    negated: op == CmpOp::NotEq,
+                }
+            }
             None => {
                 self.validate_flag_int(&compare.left, flow)?;
                 self.validate_flag_int(right, flow)?;
@@ -3763,6 +3810,54 @@ impl ValidatedTypeShapeDslFunction {
         })
     }
 
+    fn dimension_equality(left: &Int, right: &Int) -> DslCondition {
+        match (left, right) {
+            (Int::Literal(left), Int::Literal(right)) => {
+                if left == right {
+                    DslCondition::True
+                } else {
+                    DslCondition::False
+                }
+            }
+            (Int::Int, _) | (_, Int::Int) => DslCondition::Unknown,
+            (left, right) if left == right => DslCondition::True,
+            _ => DslCondition::Unknown,
+        }
+    }
+
+    fn negate_condition(condition: DslCondition) -> DslCondition {
+        match condition {
+            DslCondition::True => DslCondition::False,
+            DslCondition::False => DslCondition::True,
+            DslCondition::Unknown => DslCondition::Unknown,
+            DslCondition::UnknownWithPossibleError => DslCondition::UnknownWithPossibleError,
+        }
+    }
+
+    fn compare_dimensions(
+        left: &Int,
+        right: &Int,
+        op: TypeShapeDslFlagIntComparisonOp,
+    ) -> DslCondition {
+        match op {
+            TypeShapeDslFlagIntComparisonOp::Equal => Self::dimension_equality(left, right),
+            TypeShapeDslFlagIntComparisonOp::NotEqual => {
+                Self::negate_condition(Self::dimension_equality(left, right))
+            }
+            TypeShapeDslFlagIntComparisonOp::LessThan => match (left, right) {
+                (left, right) if left == right && !matches!(left, Int::Int) => DslCondition::False,
+                (Int::Literal(left), Int::Literal(right)) if left < right => DslCondition::True,
+                (Int::Literal(_), Int::Literal(_)) => DslCondition::False,
+                _ => DslCondition::Unknown,
+            },
+            TypeShapeDslFlagIntComparisonOp::LessThanOrEqual
+            | TypeShapeDslFlagIntComparisonOp::GreaterThan
+            | TypeShapeDslFlagIntComparisonOp::GreaterThanOrEqual => {
+                unreachable!("validated Int comparison uses only `==`, `!=`, or `<`")
+            }
+        }
+    }
+
     // TODO(stroxler): Compile validated conditions into the same IR rather than traversing their
     // boolean/comparison AST again during evaluation.
     fn evaluate_condition(
@@ -3811,16 +3906,11 @@ impl ValidatedTypeShapeDslFunction {
         if let Expr::UnaryOp(unary) = condition
             && unary.op == UnaryOp::Not
         {
-            return Ok(
-                match self.evaluate_condition(&unary.operand, environment, budget)? {
-                    DslCondition::True => DslCondition::False,
-                    DslCondition::False => DslCondition::True,
-                    DslCondition::Unknown => DslCondition::Unknown,
-                    DslCondition::UnknownWithPossibleError => {
-                        DslCondition::UnknownWithPossibleError
-                    }
-                },
-            );
+            return Ok(Self::negate_condition(self.evaluate_condition(
+                &unary.operand,
+                environment,
+                budget,
+            )?));
         }
 
         let kind = self
@@ -3939,6 +4029,32 @@ impl ValidatedTypeShapeDslFunction {
                     _ => unreachable!("validated membership uses an integer and Flag sequence"),
                 }
             }
+            TypeShapeDslConditionKind::DimensionEquality { negated } => {
+                let Expr::Compare(compare) = condition else {
+                    unreachable!("validated dimension comparison is a comparison")
+                };
+                let left = self.evaluate_expression(&compare.left, environment, budget);
+                let right = self.evaluate_expression(&compare.comparators[0], environment, budget);
+                match (left, right) {
+                    (
+                        DslOutcome::Value(DslValue::Dimension(left)),
+                        DslOutcome::Value(DslValue::Dimension(right)),
+                    ) => {
+                        let equality = Self::dimension_equality(&left, &right);
+                        if negated {
+                            Self::negate_condition(equality)
+                        } else {
+                            equality
+                        }
+                    }
+                    (DslOutcome::Invalid(error), _) | (_, DslOutcome::Invalid(error)) => {
+                        return Err(error);
+                    }
+                    (DslOutcome::Value(DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::Unknown)) => DslCondition::Unknown,
+                    _ => unreachable!("validated dimension comparison operands are dimensions"),
+                }
+            }
             TypeShapeDslConditionKind::SlotCompare {
                 left, right, op, ..
             } => {
@@ -3953,31 +4069,9 @@ impl ValidatedTypeShapeDslFunction {
                     }
                 } else {
                     match (environment.value(left), environment.value(right)) {
-                        (DslValue::Dimension(left), DslValue::Dimension(right)) => match op {
-                            TypeShapeDslFlagIntComparisonOp::Equal => match (left, right) {
-                                (Int::Literal(left), Int::Literal(right)) => {
-                                    if left == right {
-                                        DslCondition::True
-                                    } else {
-                                        DslCondition::False
-                                    }
-                                }
-                                (Int::Int, _) | (_, Int::Int) => DslCondition::Unknown,
-                                (left, right) if left == right => DslCondition::True,
-                                _ => DslCondition::Unknown,
-                            },
-                            TypeShapeDslFlagIntComparisonOp::LessThan => match (left, right) {
-                                (left, right) if left == right && !matches!(left, Int::Int) => {
-                                    DslCondition::False
-                                }
-                                (Int::Literal(left), Int::Literal(right)) if left < right => {
-                                    DslCondition::True
-                                }
-                                (Int::Literal(_), Int::Literal(_)) => DslCondition::False,
-                                _ => DslCondition::Unknown,
-                            },
-                            _ => unreachable!("validated Int comparison uses only `==` or `<`"),
-                        },
+                        (DslValue::Dimension(left), DslValue::Dimension(right)) => {
+                            Self::compare_dimensions(left, right, op)
+                        }
                         (DslValue::FlagInt(left), DslValue::FlagInt(right)) => {
                             if op.apply(*left, *right) {
                                 DslCondition::True

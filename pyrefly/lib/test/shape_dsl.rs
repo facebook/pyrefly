@@ -233,6 +233,159 @@ def test[N: IntVar](symbolic: Int[N], literal: Int[3], broad: Int) -> None:
 "#,
 );
 
+testcase!(
+    test_type_shape_dsl_dimension_equality,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def require_equal(left: IntTuple, right: IntTuple) -> IntTuple:
+    if left[0] == right[0]:
+        return left
+    return dsl.Invalid("dimensions differ")
+
+@type_shape_dsl_function
+def select_not_equal(left: IntTuple, right: IntTuple) -> IntTuple:
+    if left[0] != right[0]:
+        return dsl.IntTuple(())
+    return left
+
+@type_shape_dsl_function
+def require_equal_local(left: IntTuple, right: IntTuple) -> IntTuple:
+    left_item = left[0]
+    right_item = right[0]
+    if left_item != right_item:
+        return dsl.Invalid("local dimensions differ")
+    return left
+
+@type_shape_dsl_function
+def require_equal_negated(left: IntTuple, right: IntTuple) -> IntTuple:
+    if not (left[0] == right[0]):
+        return dsl.Invalid("negated dimensions differ")
+    return left
+
+@type_shape_dsl_function
+def reflexive_local(shape: IntTuple) -> IntTuple:
+    item = shape[0]
+    if item == item:
+        return dsl.IntTuple(())
+    return dsl.Invalid("dimension is not reflexive")
+
+@type_shape_dsl_function
+def irreflexive_local(shape: IntTuple) -> IntTuple:
+    item = shape[0]
+    if item != item:
+        return dsl.Invalid("dimension is irreflexive")
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def literal_left_equal(right: IntTuple) -> IntTuple:
+    if 2 == right[0]:
+        return right
+    return dsl.Invalid("right dimension differs")
+
+@type_shape_dsl_function
+def literal_right_equal(left: IntTuple) -> IntTuple:
+    if left[0] == 2:
+        return left
+    return dsl.Invalid("left dimension differs")
+
+@type_shape_dsl_function
+def conditional_equal(shape: IntTuple, choose_first: bool) -> IntTuple:
+    if (shape[0] if choose_first else shape[1]) == shape[0]:
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def compare_out_of_bounds(left: IntTuple, right: IntTuple) -> IntTuple:
+    if left[1] == right[0]:
+        return left
+    return right
+
+@type_shape_dsl_function
+def reflexive_out_of_bounds(shape: IntTuple) -> IntTuple:
+    if shape[1] == shape[1]:
+        return shape
+    return shape
+
+def apply_equal[Left: IntTuple, Right: IntTuple](
+    left: Tensor[Left], right: Tensor[Right],
+) -> Tensor[require_equal(Left, Right)]: ...
+
+def apply_not_equal[Left: IntTuple, Right: IntTuple](
+    left: Tensor[Left], right: Tensor[Right],
+) -> Tensor[select_not_equal(Left, Right)]: ...
+
+def apply_equal_local[Left: IntTuple, Right: IntTuple](
+    left: Tensor[Left], right: Tensor[Right],
+) -> Tensor[require_equal_local(Left, Right)]: ...
+
+def apply_equal_negated[Left: IntTuple, Right: IntTuple](
+    left: Tensor[Left], right: Tensor[Right],
+) -> Tensor[require_equal_negated(Left, Right)]: ...
+
+def apply_reflexive[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[reflexive_local(Shape)]: ...
+def apply_irreflexive[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[irreflexive_local(Shape)]: ...
+def apply_literal_left[Right: IntTuple](right: Tensor[Right]) -> Tensor[literal_left_equal(Right)]: ...
+def apply_literal_right[Left: IntTuple](left: Tensor[Left]) -> Tensor[literal_right_equal(Left)]: ...
+def apply_conditional[Shape: IntTuple, ChooseFirst: Flag[bool]](
+    shape: Tensor[Shape], choose_first: ChooseFirst,
+) -> Tensor[conditional_equal(Shape, ChooseFirst)]: ...
+
+def apply_out_of_bounds[Left: IntTuple, Right: IntTuple](
+    left: Tensor[Left], right: Tensor[Right],
+) -> Tensor[compare_out_of_bounds(Left, Right)]: ...
+def apply_reflexive_out_of_bounds[Shape: IntTuple](
+    x: Tensor[Shape],
+) -> Tensor[reflexive_out_of_bounds(Shape)]: ...
+
+def test(
+    two: Tensor[[2]],
+    another_two: Tensor[[2]],
+    three: Tensor[[3]],
+    pair: Tensor[[2, 3]],
+    fixed_gradual: Tensor[[int]],
+    gradual: Tensor[IntTuple],
+) -> None:
+    assert_type(apply_equal(two, another_two), Tensor[[2]])
+    apply_equal(two, three)  # E: Cannot evaluate type-level shape DSL call: dimensions differ
+    assert_type(apply_not_equal(two, another_two), Tensor[[2]])
+    assert_type(apply_not_equal(two, three), Tensor[[]])
+    apply_equal_local(two, three)  # E: Cannot evaluate type-level shape DSL call: local dimensions differ
+    apply_equal_negated(two, three)  # E: Cannot evaluate type-level shape DSL call: negated dimensions differ
+    assert_type(apply_reflexive(fixed_gradual), Tensor[[]])
+    assert_type(apply_irreflexive(fixed_gradual), Tensor[[]])
+    assert_type(apply_reflexive(gradual), Tensor[[]])
+    assert_type(apply_irreflexive(gradual), Tensor[[]])
+    assert_type(apply_literal_left(two), Tensor[[2]])
+    apply_literal_left(three)  # E: Cannot evaluate type-level shape DSL call: right dimension differs
+    assert_type(apply_literal_right(two), Tensor[[2]])
+    apply_literal_right(three)  # E: Cannot evaluate type-level shape DSL call: left dimension differs
+    assert_type(apply_conditional(pair, True), Tensor[[2, 3]])
+    assert_type(apply_conditional(pair, False), Tensor[[]])
+    reveal_type(apply_equal(fixed_gradual, fixed_gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_equal(gradual, gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_not_equal(fixed_gradual, fixed_gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_not_equal(gradual, gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    apply_out_of_bounds(two, another_two)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
+    apply_reflexive_out_of_bounds(two)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
+
+def test_symbolic[N: IntVar, M: IntVar](
+    same_left: Tensor[[N]], same_right: Tensor[[N]], other: Tensor[[M]],
+) -> None:
+    assert_type(apply_equal(same_left, same_right), Tensor[[N]])
+    reveal_type(apply_equal(same_left, other))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_not_equal(same_left, same_right), Tensor[[N]])
+    reveal_type(apply_not_equal(same_left, other))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_equal_local(same_left, same_right), Tensor[[N]])
+    reveal_type(apply_equal_local(same_left, other))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
 // Shape-derived tuples mix literals with symbolic `Int[N]` dimensions, so a tuple domain has
 // to admit both rather than only integer classes.
 testcase!(
@@ -1686,6 +1839,12 @@ def choose(a: Int, b: Int, equal: Int, different: Int) -> Int:
     return different
 
 @type_shape_dsl_function
+def choose_not_equal(a: Int, b: Int, equal: Int, different: Int) -> Int:
+    if a != b:
+        return different
+    return equal
+
+@type_shape_dsl_function
 def nested(a: Int, b: Int, c: Int, first: Int, second: Int, third: Int) -> Int:
     if a == b:
         if b == c:
@@ -1707,6 +1866,8 @@ def reflexive(a: Int, equal: Int, different: Int) -> Int:
 
 def concrete_equal() -> Tensor[[choose(Int[2], Int[2], Int[7], Int[8])]]: ...
 def concrete_different() -> Tensor[[choose(Int[2], Int[3], Int[7], Int[8])]]: ...
+def not_equal_concrete_equal() -> Tensor[[choose_not_equal(Int[2], Int[2], Int[7], Int[8])]]: ...
+def not_equal_concrete_different() -> Tensor[[choose_not_equal(Int[2], Int[3], Int[7], Int[8])]]: ...
 def same_symbol[N: IntVar](x: Tensor[[N]]) -> Tensor[[choose(N, N, Int[7], Int[8])]]: ...
 def different_symbols[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> Tensor[[choose(N, M, Int[7], Int[8])]]: ...
 def mixed_symbol_literal[N: IntVar](x: Tensor[[N]]) -> Tensor[[choose(N, Int[2], Int[7], Int[8])]]: ...
@@ -1721,6 +1882,8 @@ def distinct_gradual() -> Tensor[[choose(Int, Int, Int[7], Int[8])]]: ...
 def test(x: Tensor[[2]], y: Tensor[[3]]) -> None:
     assert_type(concrete_equal(), Tensor[[7]])
     assert_type(concrete_different(), Tensor[[8]])
+    assert_type(not_equal_concrete_equal(), Tensor[[7]])
+    assert_type(not_equal_concrete_different(), Tensor[[8]])
     assert_type(nested_first(), Tensor[[5]])
     assert_type(nested_second(), Tensor[[6]])
     assert_type(nested_third(), Tensor[[7]])
@@ -1941,7 +2104,7 @@ def chained(a: Int, b: Int, c: Int) -> Int:
 
 @type_shape_dsl_function
 def other_comparison(a: Int, b: Int) -> Int:
-    if a <= b:  # E: `Int` comparisons support only `==` and `<`
+    if a <= b:  # E: `Int` comparisons support only `==`, `!=`, and `<`
         return a
     return b
 
@@ -1978,6 +2141,39 @@ def tuple_condition(a: IntTuple, b: IntTuple) -> IntTuple:
     if a == b:  # E: comparison operands must both be annotated as `Int` or both be `Flag[int]`
         return a
     return b
+
+@type_shape_dsl_function
+def mixed_comparison(a: Int, b: int) -> Int:
+    if a == b:  # E: comparison operands must both be annotated as `Int` or both be `Flag[int]`
+        return a
+    return a
+
+@type_shape_dsl_function
+def bool_comparison(a: bool, b: bool, result: Int) -> Int:
+    if a == b:  # E: comparison operands must both be annotated as `Int` or both be `Flag[int]`
+        return result
+    return result
+
+@type_shape_dsl_function
+def indexed_order(shape: IntTuple) -> IntTuple:
+    if shape[0] < shape[1]:  # E: derived dimension comparisons support only `==` and `!=`
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def local_derived_order(shape: IntTuple) -> IntTuple:
+    item = shape[0]
+    if item < shape[1]:  # E: derived dimension comparisons support only `==` and `!=`
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def branch_local(shape: IntTuple, choose: bool) -> IntTuple:
+    if choose:
+        item = shape[0]
+    if item == 0:  # E: local value must be definitely assigned before use  # E: may be uninitialized
+        return shape
+    return shape
 
 @type_shape_dsl_function
 def mismatched_return(a: Int, shape: IntTuple) -> Int:
@@ -2183,25 +2379,25 @@ def wrong_domain(x: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def builtin_isinstance(x: Int) -> Int:
-    if isinstance(x, int):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
+    if isinstance(x, int):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`
         return x
     return x
 
 @type_shape_dsl_function
 def imported_lookalike(x: Int) -> Int:
-    if lookalike(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
+    if lookalike(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`
         return x
     return x
 
 @type_shape_dsl_function
 def spoof(x: Int) -> Int:
-    if Spoof.is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
+    if Spoof.is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`
         return x
     return x
 
 @type_shape_dsl_function
 def shadowed(is_concrete_int: Int, x: Int) -> Int:
-    if is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`  # E: Expected a callable
+    if is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`  # E: Expected a callable
         return x
     return x
 
@@ -2213,7 +2409,7 @@ def boolean_or(x: Int, y: Int) -> Int:
 
 @type_shape_dsl_function
 def other_order(x: Int, y: Int) -> Int:
-    if x <= y:  # E: `Int` comparisons support only `==` and `<`
+    if x <= y:  # E: `Int` comparisons support only `==`, `!=`, and `<`
         return x
     return y
 
