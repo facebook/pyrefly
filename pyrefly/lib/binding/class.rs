@@ -416,11 +416,6 @@ impl<'a> BindingsBuilder<'a> {
                 class_idx: class_indices.class_idx,
             },
         );
-        self.insert_binding_idx(
-            class_indices.synthesized_fields_idx,
-            BindingClassSynthesizedFields(class_indices.class_idx),
-        );
-
         self.add_name_definitions(&legacy);
 
         self.scopes.push(Scope::class_body(
@@ -443,7 +438,16 @@ impl<'a> BindingsBuilder<'a> {
             body,
             &NestingContext::class(ShortIdentifier::new(&x.name), parent.dupe()),
         );
-        let field_definitions = self.scopes.finish_class_and_get_field_definitions();
+        let (field_definitions, nn_module_registrations) =
+            self.scopes.finish_class_and_get_field_definitions();
+        self.insert_binding_idx(
+            class_indices.synthesized_fields_idx,
+            BindingClassSynthesizedFields {
+                class_idx: class_indices.class_idx,
+                nn_module_registrations: (!nn_module_registrations.is_empty())
+                    .then(|| Box::new(nn_module_registrations)),
+            },
+        );
 
         let django_field_info = self.extract_django_fields_from_class_body(&field_definitions);
         let mut fields = SmallMap::with_capacity(field_definitions.len());
@@ -1055,7 +1059,10 @@ impl<'a> BindingsBuilder<'a> {
         );
         self.insert_binding_idx(
             class_indices.synthesized_fields_idx,
-            BindingClassSynthesizedFields(class_indices.class_idx),
+            BindingClassSynthesizedFields {
+                class_idx: class_indices.class_idx,
+                nn_module_registrations: None,
+            },
         );
 
         let mut fields = SmallMap::new();

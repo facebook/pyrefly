@@ -532,6 +532,17 @@ impl ClassField {
         Self::new_synthesized_inner(ty, false)
     }
 
+    pub fn new_synthesized_instance_attribute(ty: Type) -> Self {
+        ClassField(
+            ClassFieldInner::InstanceAttribute {
+                ty,
+                annotation: None,
+                read_only_reason: None,
+            },
+            IsInherited::Maybe,
+        )
+    }
+
     /// Like `new_synthesized`, but marks the field as a ClassVar.
     pub fn new_synthesized_classvar(ty: Type) -> Self {
         Self::new_synthesized_inner(ty, true)
