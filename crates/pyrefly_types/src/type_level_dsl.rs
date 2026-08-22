@@ -46,6 +46,7 @@ use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
 use crate::shaped_array::broadcast_shapes;
 use crate::shaped_array::tuple_carrier_to_shape;
+use crate::tuple::Tuple;
 use crate::type_var::FlagDomain;
 use crate::types::Type;
 
@@ -186,7 +187,7 @@ pub struct ValidatedTypeShapeDslFunction {
     conditions: Vec<TypeShapeDslCondition>,
     expressions: Vec<TypeShapeDslExpression>,
     assignments: Vec<TypeShapeDslAssignment>,
-    /// The number of lexical slots the body needs: one per parameter, then one per local.
+    /// The number of indexed storage entries the body needs: one per parameter, then one per local.
     slot_count: usize,
 }
 
@@ -280,7 +281,7 @@ pub enum TypeShapeDslReturnKind {
     Gradual(TypeShapeDslDomain),
 }
 
-/// The arithmetic a validated dimension or `Flag` expression applies. Reached through
+/// The arithmetic a validated dimension or Flag expression applies. Reached through
 /// `TypeShapeDslReturnKind` and `TypeShapeDslExpressionKind`, so it shares their identity
 /// requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -299,7 +300,7 @@ pub enum TypeShapeDslFlagIntArithmeticOp {
     Modulo,
 }
 
-/// The comparison a validated `Flag` condition applies. `CmpOp` has no total order, so the DSL
+/// The comparison a validated Flag condition applies. `CmpOp` has no total order, so the DSL
 /// records its own closed operator set, which also keeps the evaluator's match exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslFlagIntComparisonOp {
@@ -346,6 +347,7 @@ pub enum TypeShapeDslIntrinsic {
     IntTuple,
     Invalid,
     Len,
+    Range,
 }
 
 /// What a validated DSL value expression computes. Like `TypeShapeDslReturnKind` this depends on
@@ -377,14 +379,18 @@ pub enum TypeShapeDslExpressionKind {
     },
     FlagIntLiteral(Option<i64>),
     FlagNone,
+    FlagTuple,
+    FlagRange,
+    FlagSequenceLength,
     FlagIntArithmetic(TypeShapeDslFlagIntArithmeticOp),
 }
 
-/// The `Flag` value domain required by a validated operation. Reached through
+/// The Flag value domain a validated operation requires of its operand. Reached through
 /// `TypeShapeDslExpressionKind`, so it shares that type's identity requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslFlagValueKind {
     Int,
+    Sequence,
 }
 
 /// What a validated DSL condition tests. Like `TypeShapeDslReturnKind` this depends on intrinsic
@@ -411,11 +417,15 @@ pub enum TypeShapeDslConditionKind {
         parameter_origins: Option<Box<[usize]>>,
     },
     FlagIntCompare(TypeShapeDslFlagIntComparisonOp),
+    Membership {
+        negated: bool,
+    },
 }
 
 const FLAG_INT: u8 = 1;
-const FLAG_NONE: u8 = 2;
-const FLAG_ANY: u8 = FLAG_INT | FLAG_NONE;
+const FLAG_SEQUENCE: u8 = 2;
+const FLAG_NONE: u8 = 4;
+const FLAG_ANY: u8 = FLAG_INT | FLAG_SEQUENCE | FLAG_NONE;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DslStaticKind {
@@ -735,6 +745,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let slot = self.slot(expression, flow)?;
         let expected = match required {
             TypeShapeDslFlagValueKind::Int => FLAG_INT,
+            TypeShapeDslFlagValueKind::Sequence => FLAG_SEQUENCE,
         };
         let (parameter_origins, narrowed) = match &flow.kinds[slot] {
             DslStaticKind::UnknownParameters(parameters) => (Some(parameters.clone()), false),
@@ -744,7 +755,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: expression.range(),
-                    message: "`Flag` value has the wrong domain for this operation",
+                    message: "Flag value has the wrong domain for this operation",
                 });
             }
         };
@@ -796,7 +807,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     _ => {
                         return Err(TypeShapeDslDefinitionError {
                             range: binop.range,
-                            message: "`Flag[int]` arithmetic supports only `+`, `-`, `*`, `//`, and `%`",
+                            message: "Flag integer arithmetic supports only `+`, `-`, `*`, `//`, and `%`",
                         });
                     }
                 };
@@ -817,27 +828,91 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
                 let argument = &call.arguments.args[0];
                 let slot = self.slot(argument, flow)?;
-                let parameter_origins = match &flow.kinds[slot] {
-                    DslStaticKind::UnknownParameters(parameters) => Some(parameters.clone()),
+                match &flow.kinds[slot] {
+                    DslStaticKind::UnknownParameters(parameters) => {
+                        self.expressions.push(TypeShapeDslExpression {
+                            range: call.range,
+                            kind: TypeShapeDslExpressionKind::IntTupleLength {
+                                shape: slot,
+                                parameter_origins: Some(parameters.clone()),
+                            },
+                        });
+                    }
+                    DslStaticKind::Flag { kinds, .. } if *kinds == FLAG_SEQUENCE => {
+                        self.validate_flag_slot(
+                            argument,
+                            flow,
+                            TypeShapeDslFlagValueKind::Sequence,
+                        )?;
+                        self.expressions.push(TypeShapeDslExpression {
+                            range: call.range,
+                            kind: TypeShapeDslExpressionKind::FlagSequenceLength,
+                        });
+                    }
                     _ => {
                         return Err(TypeShapeDslDefinitionError {
                             range: argument.range(),
-                            message: "`len` requires an IntTuple value",
+                            message: "`len` requires an IntTuple or Flag sequence",
                         });
                     }
-                };
+                }
+                Ok(())
+            }
+            _ => Err(TypeShapeDslDefinitionError {
+                range: expression.range(),
+                message: "Flag integer expression is not supported",
+            }),
+        }
+    }
+
+    fn validate_flag_sequence(
+        &mut self,
+        expression: &Expr,
+        flow: &DslValidationFlow,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        match expression {
+            Expr::Name(_) => {
+                self.validate_flag_slot(expression, flow, TypeShapeDslFlagValueKind::Sequence)
+            }
+            Expr::Tuple(tuple) => {
+                for element in &tuple.elts {
+                    if matches!(element, Expr::Starred(_)) {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: element.range(),
+                            message: "Flag tuple expressions do not support starred elements",
+                        });
+                    }
+                    self.validate_flag_int(element, flow)?;
+                }
+                self.expressions.push(TypeShapeDslExpression {
+                    range: tuple.range,
+                    kind: TypeShapeDslExpressionKind::FlagTuple,
+                });
+                Ok(())
+            }
+            Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Range) =>
+            {
+                if !(1..=3).contains(&call.arguments.args.len())
+                    || !call.arguments.keywords.is_empty()
+                {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: call.arguments.range,
+                        message: "`range` requires one to three positional arguments",
+                    });
+                }
+                for argument in &call.arguments.args {
+                    self.validate_flag_int(argument, flow)?;
+                }
                 self.expressions.push(TypeShapeDslExpression {
                     range: call.range,
-                    kind: TypeShapeDslExpressionKind::IntTupleLength {
-                        shape: slot,
-                        parameter_origins,
-                    },
+                    kind: TypeShapeDslExpressionKind::FlagRange,
                 });
                 Ok(())
             }
             _ => Err(TypeShapeDslDefinitionError {
                 range: expression.range(),
-                message: "`Flag[int]` expression is not supported",
+                message: "Flag sequence must be a Flag value, tuple display, or `range(...)`",
             }),
         }
     }
@@ -922,6 +997,22 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             Expr::Subscript(_) => {
                 self.validate_dimension(expression, flow)?;
                 Ok(DslStaticKind::Dimension)
+            }
+            Expr::Tuple(_) => {
+                self.validate_flag_sequence(expression, flow)?;
+                Ok(DslStaticKind::Flag {
+                    origins: None,
+                    kinds: FLAG_SEQUENCE,
+                })
+            }
+            Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Range) =>
+            {
+                self.validate_flag_sequence(expression, flow)?;
+                Ok(DslStaticKind::Flag {
+                    origins: None,
+                    kinds: FLAG_SEQUENCE,
+                })
             }
             Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
                 self.validate_flag_int(expression, flow)?;
@@ -1049,7 +1140,8 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             let mut when_true = flow.clone();
             let mut when_false = flow.clone();
             when_true.kinds[slot] = Self::narrow_flag(flow.kinds[slot].clone(), FLAG_NONE);
-            when_false.kinds[slot] = Self::narrow_flag(flow.kinds[slot].clone(), FLAG_INT);
+            when_false.kinds[slot] =
+                Self::narrow_flag(flow.kinds[slot].clone(), FLAG_INT | FLAG_SEQUENCE);
             self.conditions.push(TypeShapeDslCondition {
                 range: compare.range,
                 kind: TypeShapeDslConditionKind::IsNone {
@@ -1104,7 +1196,8 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     });
                 }
                 when_true.kinds[slot] = Self::narrow_flag(flow.kinds[slot].clone(), FLAG_INT);
-                when_false.kinds[slot] = Self::narrow_flag(flow.kinds[slot].clone(), FLAG_NONE);
+                when_false.kinds[slot] =
+                    Self::narrow_flag(flow.kinds[slot].clone(), FLAG_SEQUENCE | FLAG_NONE);
                 TypeShapeDslConditionKind::IsIntValue {
                     slot,
                     parameter_origins,
@@ -1134,7 +1227,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let Expr::Compare(compare) = condition else {
             return Err(TypeShapeDslDefinitionError {
                 range: condition.range(),
-                message: "condition supports only `is_concrete_int`, `is_int_value`, `is None`, boolean operators, and integer comparisons",
+                message: "condition supports only `is_concrete_int`, `and`, `==`, and `<`, plus `is_int_value` and validated Flag boolean/comparison/membership forms",
             });
         };
         if compare.ops.len() != 1 || compare.comparators.len() != 1 {
@@ -1145,7 +1238,18 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         }
         let op = compare.ops[0];
         let right = &compare.comparators[0];
-        let Some(flag_op) = TypeShapeDslFlagIntComparisonOp::from_cmp_op(op) else {
+        if matches!(op, CmpOp::In | CmpOp::NotIn) {
+            self.validate_flag_int(&compare.left, flow)?;
+            self.validate_flag_sequence(right, flow)?;
+            self.conditions.push(TypeShapeDslCondition {
+                range: compare.range,
+                kind: TypeShapeDslConditionKind::Membership {
+                    negated: op == CmpOp::NotIn,
+                },
+            });
+            return Ok((flow.clone(), flow.clone()));
+        }
+        let Some(comparison_op) = TypeShapeDslFlagIntComparisonOp::from_cmp_op(op) else {
             return Err(TypeShapeDslDefinitionError {
                 range: compare.range,
                 message: "comparison operator is not supported",
@@ -1165,7 +1269,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                             right,
                             left_parameters: left_parameters.to_vec().into_boxed_slice(),
                             right_parameters: right_parameters.to_vec().into_boxed_slice(),
-                            op: flag_op,
+                            op: comparison_op,
                         }
                     })
             }
@@ -1176,7 +1280,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             None => {
                 self.validate_flag_int(&compare.left, flow)?;
                 self.validate_flag_int(right, flow)?;
-                TypeShapeDslConditionKind::FlagIntCompare(flag_op)
+                TypeShapeDslConditionKind::FlagIntCompare(comparison_op)
             }
         };
         self.conditions.push(TypeShapeDslCondition {
@@ -1242,7 +1346,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                             _ => {
                                 return Err(TypeShapeDslDefinitionError {
                                     range: returned.range(),
-                                    message: "Flag locals cannot be returned as shape values",
+                                    message: "Flag values cannot be returned as shape values",
                                 });
                             }
                         };
@@ -1808,7 +1912,14 @@ enum DslValue {
     Shape(IntTuple),
     FlagInt(i64),
     FlagNone,
+    FlagSequence(DslFlagSequence),
     DimensionTuple(Vec<Int>),
+}
+
+#[derive(Debug, Clone)]
+enum DslFlagSequence {
+    Values(Vec<i64>),
+    Range { start: i64, stop: i64, step: i64 },
 }
 
 #[derive(Clone)]
@@ -2131,6 +2242,8 @@ impl ValidatedTypeShapeDslFunction {
             .expect("validated DSL value expression must have validation metadata")
     }
 
+    // TODO(stroxler): Compile validated expressions into a small IR so evaluation does not need
+    // to look up source-range metadata and then re-read the AST structure.
     fn evaluate_expression(&self, expression: &Expr, environment: &DslEnvironment) -> DslOutcome {
         match self.expression_kind(expression) {
             TypeShapeDslExpressionKind::DimensionSlot { slot, .. } => {
@@ -2221,7 +2334,7 @@ impl ValidatedTypeShapeDslFunction {
                     return DslOutcome::Value(DslValue::Unknown);
                 };
                 let length = i64::try_from(shape.len())
-                    .expect("concrete IntTuple length must fit in a `Flag[int]` value");
+                    .expect("concrete IntTuple length must fit in a Flag integer");
                 DslOutcome::Value(DslValue::FlagInt(length))
             }
             TypeShapeDslExpressionKind::Slot(slot) => {
@@ -2235,11 +2348,92 @@ impl ValidatedTypeShapeDslFunction {
                     DslOutcome::Value(DslValue::FlagInt(literal))
                 }),
             TypeShapeDslExpressionKind::FlagNone => DslOutcome::Value(DslValue::FlagNone),
+            TypeShapeDslExpressionKind::FlagTuple => {
+                let Expr::Tuple(tuple) = expression else {
+                    unreachable!("validated Flag tuple expression is a tuple display")
+                };
+                let mut values = Vec::with_capacity(tuple.elts.len());
+                let mut unknown = false;
+                for element in &tuple.elts {
+                    match self.evaluate_expression(element, environment) {
+                        DslOutcome::Value(DslValue::FlagInt(value)) => values.push(value),
+                        DslOutcome::Value(DslValue::Unknown) => unknown = true,
+                        DslOutcome::ExplicitGradual => {
+                            unreachable!("validated value expression cannot return gradual")
+                        }
+                        invalid @ DslOutcome::Invalid(_) => return invalid,
+                        DslOutcome::Value(_) => {
+                            unreachable!("validated Flag tuple elements evaluate to Flag integers")
+                        }
+                    }
+                }
+                if unknown {
+                    DslOutcome::Value(DslValue::Unknown)
+                } else {
+                    DslOutcome::Value(DslValue::FlagSequence(DslFlagSequence::Values(values)))
+                }
+            }
+            TypeShapeDslExpressionKind::FlagRange => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated range expression is a call")
+                };
+                let mut values = Vec::with_capacity(call.arguments.args.len());
+                for argument in &call.arguments.args {
+                    match self.evaluate_expression(argument, environment) {
+                        DslOutcome::Value(DslValue::FlagInt(value)) => values.push(Some(value)),
+                        DslOutcome::Value(DslValue::Unknown) => values.push(None),
+                        DslOutcome::ExplicitGradual => {
+                            unreachable!("validated value expression cannot return gradual")
+                        }
+                        invalid @ DslOutcome::Invalid(_) => return invalid,
+                        DslOutcome::Value(_) => {
+                            unreachable!("validated range arguments are Flag integers")
+                        }
+                    }
+                }
+                let (start, stop, step) = match values.as_slice() {
+                    [stop] => (Some(0), *stop, Some(1)),
+                    [start, stop] => (*start, *stop, Some(1)),
+                    [start, stop, step] => (*start, *stop, *step),
+                    _ => unreachable!("validated range has one to three arguments"),
+                };
+                if step == Some(0) {
+                    return DslOutcome::Invalid(ShapeError::ShapeComputation {
+                        message: "range() arg 3 must not be zero".to_owned(),
+                    });
+                }
+                let (Some(start), Some(stop), Some(step)) = (start, stop, step) else {
+                    return DslOutcome::Value(DslValue::Unknown);
+                };
+                DslOutcome::Value(DslValue::FlagSequence(DslFlagSequence::Range {
+                    start,
+                    stop,
+                    step,
+                }))
+            }
+            TypeShapeDslExpressionKind::FlagSequenceLength => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated Flag sequence length expression is a call")
+                };
+                match self.evaluate_expression(&call.arguments.args[0], environment) {
+                    DslOutcome::Value(DslValue::FlagSequence(sequence)) => sequence
+                        .len()
+                        .map_or(DslOutcome::Value(DslValue::Unknown), |length| {
+                            DslOutcome::Value(DslValue::FlagInt(length))
+                        }),
+                    DslOutcome::Value(DslValue::Unknown) => DslOutcome::Value(DslValue::Unknown),
+                    DslOutcome::ExplicitGradual => {
+                        unreachable!("validated value expression cannot return gradual")
+                    }
+                    invalid @ DslOutcome::Invalid(_) => invalid,
+                    DslOutcome::Value(_) => {
+                        unreachable!("validated Flag length operand is a sequence")
+                    }
+                }
+            }
             TypeShapeDslExpressionKind::FlagIntArithmetic(op) => {
                 let Expr::BinOp(binop) = expression else {
-                    unreachable!(
-                        "validated `Flag[int]` arithmetic expression is a binary operation"
-                    )
+                    unreachable!("validated Flag arithmetic expression is a binary operation")
                 };
                 let left = match self.evaluate_expression(&binop.left, environment) {
                     DslOutcome::Invalid(error) => return DslOutcome::Invalid(error),
@@ -2269,12 +2463,14 @@ impl ValidatedTypeShapeDslFunction {
                     (DslOutcome::Invalid(_), _) | (_, DslOutcome::Invalid(_)) => {
                         unreachable!("invalid eager operands are propagated before arithmetic")
                     }
-                    _ => unreachable!("validated `Flag[int]` arithmetic operands are integers"),
+                    _ => unreachable!("validated Flag arithmetic operands are integers"),
                 }
             }
         }
     }
 
+    // TODO(stroxler): Compile validated conditions into the same IR rather than traversing their
+    // boolean/comparison AST again during evaluation.
     fn evaluate_condition(
         &self,
         condition: &Expr,
@@ -2340,22 +2536,22 @@ impl ValidatedTypeShapeDslFunction {
             }
             TypeShapeDslConditionKind::IsIntValue { slot, .. } => match environment.value(slot) {
                 DslValue::FlagInt(_) => DslCondition::True,
-                DslValue::FlagNone => DslCondition::False,
+                DslValue::FlagNone | DslValue::FlagSequence(_) => DslCondition::False,
                 DslValue::Unknown => DslCondition::Unknown,
-                _ => unreachable!("validated is_int_value operand is a `Flag` value"),
+                _ => unreachable!("validated is_int_value operand is a Flag value"),
             },
             TypeShapeDslConditionKind::IsNone { slot, .. } => match environment.value(slot) {
                 DslValue::FlagNone => DslCondition::True,
-                DslValue::FlagInt(_) => DslCondition::False,
+                DslValue::FlagInt(_) | DslValue::FlagSequence(_) => DslCondition::False,
                 DslValue::Unknown => DslCondition::Unknown,
                 DslValue::Dimension(_) | DslValue::Shape(_) | DslValue::DimensionTuple(_) => {
                     // Function-level domain validation rejects non-Flag parameter origins.
-                    unreachable!("validated `is None` operand is a `Flag` value")
+                    unreachable!("validated `is None` operand is a Flag value")
                 }
             },
             TypeShapeDslConditionKind::FlagIntCompare(op) => {
                 let Expr::Compare(compare) = condition else {
-                    unreachable!("validated `Flag[int]` comparison is a comparison")
+                    unreachable!("validated Flag comparison is a comparison")
                 };
                 let left = self.evaluate_expression(&compare.left, environment);
                 let right = self.evaluate_expression(&compare.comparators[0], environment);
@@ -2375,7 +2571,33 @@ impl ValidatedTypeShapeDslFunction {
                     }
                     (DslOutcome::Value(DslValue::Unknown), _)
                     | (_, DslOutcome::Value(DslValue::Unknown)) => DslCondition::Unknown,
-                    _ => unreachable!("validated `Flag[int]` comparison operands are integers"),
+                    _ => unreachable!("validated Flag comparison operands are integers"),
+                }
+            }
+            TypeShapeDslConditionKind::Membership { negated } => {
+                let Expr::Compare(compare) = condition else {
+                    unreachable!("validated membership condition is a comparison")
+                };
+                let item = self.evaluate_expression(&compare.left, environment);
+                let sequence = self.evaluate_expression(&compare.comparators[0], environment);
+                match (item, sequence) {
+                    (
+                        DslOutcome::Value(DslValue::FlagInt(item)),
+                        DslOutcome::Value(DslValue::FlagSequence(sequence)),
+                    ) => {
+                        let contains = sequence.contains(item);
+                        if contains != negated {
+                            DslCondition::True
+                        } else {
+                            DslCondition::False
+                        }
+                    }
+                    (DslOutcome::Invalid(error), _) | (_, DslOutcome::Invalid(error)) => {
+                        return Err(error);
+                    }
+                    (DslOutcome::Value(DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::Unknown)) => DslCondition::Unknown,
+                    _ => unreachable!("validated membership uses an integer and Flag sequence"),
                 }
             }
             TypeShapeDslConditionKind::SlotCompare {
@@ -2479,6 +2701,21 @@ fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
                     Lit::Int(value) => value.as_i64().map_or(DslValue::Unknown, DslValue::FlagInt),
                     _ => DslValue::Unknown,
                 },
+                Type::Tuple(Tuple::Concrete(elements)) => {
+                    let values = elements
+                        .iter()
+                        .map(|element| match element {
+                            Type::Literal(literal) => match &literal.value {
+                                Lit::Int(value) => value.as_i64(),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>();
+                    values.map_or(DslValue::Unknown, |values| {
+                        DslValue::FlagSequence(DslFlagSequence::Values(values))
+                    })
+                }
                 // Nonliteral Flags are gradual DSL inputs and intentionally propagate to the
                 // annotated result fallback.
                 _ => DslValue::Unknown,
@@ -2499,10 +2736,10 @@ fn evaluate_flag_int_arithmetic(
         TypeShapeDslFlagIntArithmeticOp::FloorDivide => {
             if right == 0 {
                 return DslOutcome::Invalid(ShapeError::ShapeComputation {
-                    message: "`Flag[int]` division by zero".to_owned(),
+                    message: "Flag integer division by zero".to_owned(),
                 });
             }
-            // Python's `i64::MIN // -1` result is outside the DSL's `Flag[int]` value domain,
+            // Python's `i64::MIN // -1` result is outside the DSL's `Flag[int]` domain,
             // so checked overflow intentionally becomes an automatic unknown.
             left.checked_div(right).and_then(|quotient| {
                 let remainder = left.checked_rem(right)?;
@@ -2512,7 +2749,7 @@ fn evaluate_flag_int_arithmetic(
         TypeShapeDslFlagIntArithmeticOp::Modulo => {
             if right == 0 {
                 return DslOutcome::Invalid(ShapeError::ShapeComputation {
-                    message: "`Flag[int]` modulo by zero".to_owned(),
+                    message: "Flag integer modulo by zero".to_owned(),
                 });
             }
             if right == -1 {
@@ -2531,6 +2768,45 @@ fn evaluate_flag_int_arithmetic(
     result.map_or(DslOutcome::Value(DslValue::Unknown), |value| {
         DslOutcome::Value(DslValue::FlagInt(value))
     })
+}
+
+impl DslFlagSequence {
+    fn contains(&self, value: i64) -> bool {
+        match self {
+            Self::Values(values) => values.contains(&value),
+            Self::Range { start, stop, step } => {
+                let in_bounds = if *step > 0 {
+                    *start <= value && value < *stop
+                } else {
+                    *stop < value && value <= *start
+                };
+                in_bounds && (i128::from(value) - i128::from(*start)) % i128::from(*step) == 0
+            }
+        }
+    }
+
+    fn len(&self) -> Option<i64> {
+        match self {
+            Self::Values(values) => i64::try_from(values.len()).ok(),
+            Self::Range { start, stop, step } => {
+                let start = i128::from(*start);
+                let stop = i128::from(*stop);
+                let step = i128::from(*step);
+                let length = if step > 0 {
+                    if start >= stop {
+                        0
+                    } else {
+                        (stop - start - 1) / step + 1
+                    }
+                } else if start <= stop {
+                    0
+                } else {
+                    (start - stop - 1) / -step + 1
+                };
+                i64::try_from(length).ok()
+            }
+        }
+    }
 }
 
 impl DslValue {
@@ -2552,7 +2828,7 @@ impl DslValue {
             Self::Dimension(value) => Type::Int(value),
             Self::Shape(value) => value.to_shape_arg_type(),
             Self::Unknown => unreachable!("unknown DSL values project through the fallback"),
-            Self::FlagInt(_) | Self::FlagNone | Self::DimensionTuple(_) => {
+            Self::FlagInt(_) | Self::FlagNone | Self::FlagSequence(_) | Self::DimensionTuple(_) => {
                 unreachable!("intermediate DSL values cannot be returned directly")
             }
         }
@@ -2576,7 +2852,7 @@ impl DslEnvironment {
         match &self.slots[parameter] {
             DslValue::FlagInt(value) => Some(*value),
             DslValue::Unknown => None,
-            _ => unreachable!("validated `Flag[int]` parameter has the integer value domain"),
+            _ => unreachable!("validated Flag[int] parameter has the Flag integer domain"),
         }
     }
 

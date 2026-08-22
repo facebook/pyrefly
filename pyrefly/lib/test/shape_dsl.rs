@@ -2181,25 +2181,25 @@ def wrong_domain(x: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def builtin_isinstance(x: Int) -> Int:
-    if isinstance(x, int):  # E: condition supports only `is_concrete_int`, `is_int_value`, `is None`, boolean operators, and integer comparisons
+    if isinstance(x, int):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
         return x
     return x
 
 @type_shape_dsl_function
 def imported_lookalike(x: Int) -> Int:
-    if lookalike(x):  # E: condition supports only `is_concrete_int`, `is_int_value`, `is None`, boolean operators, and integer comparisons
+    if lookalike(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
         return x
     return x
 
 @type_shape_dsl_function
 def spoof(x: Int) -> Int:
-    if Spoof.is_concrete_int(x):  # E: condition supports only `is_concrete_int`, `is_int_value`, `is None`, boolean operators, and integer comparisons
+    if Spoof.is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
         return x
     return x
 
 @type_shape_dsl_function
 def shadowed(is_concrete_int: Int, x: Int) -> Int:
-    if is_concrete_int(x):  # E: condition supports only `is_concrete_int`, `is_int_value`, `is None`, boolean operators, and integer comparisons  # E: Expected a callable
+    if is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`  # E: Expected a callable
         return x
     return x
 
@@ -6105,15 +6105,38 @@ def f(shapeless: Array[IntTuple, int], concrete: Array[[3], int]) -> None:
     assert_type(concrete, Array[[3], int])
 "#,
 );
-
 testcase!(
-    test_type_shape_dsl_locals_and_scalar_flag_values,
+    test_type_shape_dsl_reduction_flag_values,
     shape_dsl_tensor_env(),
     r#"
 import shape_extensions.dsl as dsl
-from shape_extensions import Flag, Int, IntTuple, broadcast, type_shape_dsl_function
+from shape_extensions import Flag, IntTuple, type_shape_dsl_function
 from torch import Tensor
-from typing import reveal_type
+from typing import Literal, reveal_type
+
+@type_shape_dsl_function
+def reduction_shape(
+    shape: IntTuple, axis: int | tuple[int, ...] | None,
+) -> IntTuple:
+    if axis is None:
+        axes = range(len(shape))
+    elif dsl.is_int_value(axis):
+        normalized = axis % len(shape)
+        axes = (normalized,)
+    else:
+        axes = axis
+    if 0 not in axes and 1 not in axes:
+        return shape
+    if 0 in axes and 1 in axes:
+        return dsl.IntTuple(())
+    if 0 in axes:
+        return dsl.IntTuple((shape[1],))
+    return dsl.IntTuple((shape[0],))
+
+@type_shape_dsl_function
+def unused_flag(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
+    ignored = axis
+    return shape
 
 @type_shape_dsl_function
 def choose_shape(left: IntTuple, right: IntTuple, choose: int) -> IntTuple:
@@ -6122,6 +6145,128 @@ def choose_shape(left: IntTuple, right: IntTuple, choose: int) -> IntTuple:
     else:
         result = right
     return result
+
+@type_shape_dsl_function
+def choose_axis(
+    shape: IntTuple,
+    first: int | tuple[int, ...] | None,
+    second: int | tuple[int, ...] | None,
+    choose: int,
+) -> IntTuple:
+    if choose < 0:
+        axis = first
+    elif dsl.is_int_value(first):
+        axis = first
+    else:
+        axis = second
+    if dsl.is_int_value(axis):
+        return dsl.IntTuple((shape[0],))
+    return shape
+
+def reduce[Shape: IntTuple, Axis: Flag[int | tuple[int, ...] | None]](
+    x: Tensor[Shape], axis: Axis = None,
+) -> Tensor[reduction_shape(Shape, Axis)]: ...
+
+def default_axis(x: Tensor[[2, 3]]) -> None:
+    reveal_type(reduce(x))  # E: revealed type: Tensor[[]]
+    reveal_type(reduce(x, 0))  # E: revealed type: Tensor[[3]]
+    reveal_type(reduce(x, -1))  # E: revealed type: Tensor[[2]]
+    reveal_type(reduce(x, (0, 1)))  # E: revealed type: Tensor[[]]
+    reveal_type(reduce(x, ()))  # E: revealed type: Tensor[[2, 3]]
+
+def broad() -> Tensor[reduction_shape(IntTuple[2, 3], int)]: ...
+def unused_broad() -> Tensor[unused_flag(IntTuple[2, 3], int)]: ...
+def choose_left() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], -1)]: ...
+def choose_right() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], 1)]: ...
+def choose_first_axis() -> Tensor[choose_axis(IntTuple[2, 3], 0, tuple[Literal[1]], -1)]: ...
+def choose_narrowed_axis() -> Tensor[choose_axis(IntTuple[2, 3], 1, tuple[Literal[0]], 0)]: ...
+def choose_second_axis() -> Tensor[choose_axis(IntTuple[2, 3], tuple[Literal[1]], 0, 1)]: ...
+def choose_second_sequence() -> Tensor[choose_axis(IntTuple[2, 3], tuple[Literal[1]], tuple[Literal[0]], 1)]: ...
+
+def check_broad() -> None:
+    reveal_type(broad())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(unused_broad())  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(choose_left())  # E: revealed type: Tensor[[2]]
+    reveal_type(choose_right())  # E: revealed type: Tensor[[3]]
+    reveal_type(choose_first_axis())  # E: revealed type: Tensor[[2]]
+    reveal_type(choose_narrowed_axis())  # E: revealed type: Tensor[[2]]
+    reveal_type(choose_second_axis())  # E: revealed type: Tensor[[2]]
+    reveal_type(choose_second_sequence())  # E: revealed type: Tensor[[2, 3]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_locals_and_flag_values,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def reassigned(shape: IntTuple) -> IntTuple:
+    rank = len(shape)
+    rank = 2  # E: locals are immutable and cannot be reassigned
+    return shape
+
+@type_shape_dsl_function
+def assigned_parameter(shape: IntTuple) -> IntTuple:
+    shape = shape  # E: parameters are immutable and cannot be assigned
+    return shape
+
+@type_shape_dsl_function
+def unnarrowed_flag_length(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
+    if len(axes) == 0:  # E: `len` of a Flag value requires control-flow narrowing to a sequence
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def branch_only(shape: IntTuple, choose: int) -> IntTuple:
+    if choose < 0:
+        axes = (0,)
+    if 0 in axes:  # E: local value must be definitely assigned before use  # E: may be uninitialized
+        return dsl.IntTuple((shape[0],))
+    return shape
+
+@type_shape_dsl_function
+def mutable(shape: IntTuple) -> IntTuple:
+    axes = [0]  # E: local assignment value is not supported
+    return shape
+
+@type_shape_dsl_function
+def wrong_domain(shape: IntTuple) -> IntTuple:
+    axes = (shape,)  # E: Flag operation requires a compatible Flag parameter
+    return shape
+
+@type_shape_dsl_function
+def mutation(shape: IntTuple) -> IntTuple:
+    shape[0] = 1  # E: local assignment requires exactly one bare name target  # E: Cannot set item
+    return shape
+
+@type_shape_dsl_function
+def incompatible_branch_alias(left: Int, right: IntTuple, choose: int) -> IntTuple:
+    if choose < 0:
+        result = left
+    else:
+        result = right
+    return result  # E: local alias return domain must match the declared result  # E: Returned type
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_flag_value_regressions,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, Int, IntTuple, broadcast, type_shape_dsl_function
+from torch import Tensor
+from typing import reveal_type
+
+@type_shape_dsl_function
+def alias_isinstance(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
+    local_axis = axis
+    if dsl.is_int_value(local_axis):
+        return dsl.IntTuple((shape[0],))
+    return shape
 
 @type_shape_dsl_function
 def alias_broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
@@ -6142,11 +6287,16 @@ def alias_dimension_compare(
     return greater
 
 @type_shape_dsl_function
-def scalar_flag_value(shape: IntTuple, axis: int | None) -> IntTuple:
+def merged_narrowing(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
     local_axis = axis
-    if local_axis is None:
-        return dsl.IntTuple(())
-    if dsl.is_int_value(local_axis) and local_axis % 2 == 0:
+    if dsl.is_int_value(local_axis):
+        marker = local_axis + 1
+    return shape
+
+@type_shape_dsl_function
+def sequence_length(shape: IntTuple) -> IntTuple:
+    axes = (3, 2, 1, 0)
+    if len(axes) == 4 and 0 in range(3, -1, -1):
         return dsl.IntTuple((shape[0],))
     return shape
 
@@ -6168,31 +6318,32 @@ def disjoint_local_domains(shape: IntTuple, a: Int, b: Int) -> IntTuple:
     result = shape
     return result
 
-def choose_left() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], -1)]: ...
-def choose_right() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], 1)]: ...
+def alias_axis[Shape: IntTuple, Axis: Flag[int | tuple[int, ...] | None]](
+    x: Tensor[Shape], axis: Axis,
+) -> Tensor[alias_isinstance(Shape, Axis)]: ...
 def apply_broadcast[Left: IntTuple, Right: IntTuple](
     left: Tensor[Left], right: Tensor[Right],
 ) -> Tensor[alias_broadcast(Left, Right)]: ...
 def alias_equal() -> Tensor[alias_dimension_compare(Int[2], Int[2], IntTuple[1], IntTuple[2], IntTuple[3])]: ...
 def alias_less() -> Tensor[alias_dimension_compare(Int[1], Int[2], IntTuple[1], IntTuple[2], IntTuple[3])]: ...
-def apply_flag_value[Shape: IntTuple, Axis: Flag[int | None]](
+def apply_merged[Shape: IntTuple, Axis: Flag[int | tuple[int, ...] | None]](
     x: Tensor[Shape], axis: Axis,
-) -> Tensor[scalar_flag_value(Shape, Axis)]: ...
+) -> Tensor[merged_narrowing(Shape, Axis)]: ...
 def disjoint_equal() -> Tensor[disjoint_local_domains(IntTuple[4, 5], Int[1], Int[1])]: ...
 def disjoint_unequal() -> Tensor[disjoint_local_domains(IntTuple[4, 5], Int[1], Int[2])]: ...
 def flags_equal() -> Tensor[compare_flag_values(1, 1, IntTuple[1], IntTuple[2], IntTuple[3])]: ...
 def flags_less() -> Tensor[compare_flag_values(1, 2, IntTuple[1], IntTuple[2], IntTuple[3])]: ...
 def flags_greater() -> Tensor[compare_flag_values(2, 1, IntTuple[1], IntTuple[2], IntTuple[3])]: ...
+def apply_length[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[sequence_length(Shape)]: ...
 
 def test(x: Tensor[[2, 3]], left: Tensor[[2, 1]], right: Tensor[[1, 3]]) -> None:
-    reveal_type(choose_left())  # E: revealed type: Tensor[[2]]
-    reveal_type(choose_right())  # E: revealed type: Tensor[[3]]
+    reveal_type(alias_axis(x, 1))  # E: revealed type: Tensor[[2]]
+    reveal_type(alias_axis(x, None))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(apply_broadcast(left, right))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(alias_equal())  # E: revealed type: Tensor[[1]]
     reveal_type(alias_less())  # E: revealed type: Tensor[[2]]
-    reveal_type(apply_flag_value(x, None))  # E: revealed type: Tensor[[]]
-    reveal_type(apply_flag_value(x, 2))  # E: revealed type: Tensor[[2]]
-    reveal_type(apply_flag_value(x, 1))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_merged(x, 1))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_length(x))  # E: revealed type: Tensor[[2]]
     reveal_type(disjoint_equal())  # E: revealed type: Tensor[[4, 5]]
     reveal_type(disjoint_unequal())  # E: revealed type: Tensor[[4, 5]]
     reveal_type(flags_equal())  # E: revealed type: Tensor[[1]]
@@ -6202,54 +6353,180 @@ def test(x: Tensor[[2, 3]], left: Tensor[[2, 1]], right: Tensor[[1, 3]]) -> None
 );
 
 testcase!(
-    test_type_shape_dsl_invalid_locals_and_scalar_flag_values,
+    test_type_shape_dsl_invalid_flag_value_regressions,
     shape_dsl_tensor_env(),
     r#"
 import shape_extensions.dsl as dsl
-from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions import IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import Tuple as TypingTuple, reveal_type
 
 @type_shape_dsl_function
-def reassigned(shape: IntTuple) -> IntTuple:
-    rank = len(shape)
-    rank = 2  # E: locals are immutable and cannot be reassigned
+def maybe_reassigned(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
+    if axis is None:
+        axes = (0,)
+    axes = (1,)  # E: locals are immutable and cannot be reassigned
     return shape
 
 @type_shape_dsl_function
-def assigned_parameter(shape: IntTuple) -> IntTuple:
-    shape = shape  # E: parameters are immutable and cannot be assigned
+def typing_tuple_is_not_dsl(shape: IntTuple) -> IntTuple:
+    axes = TypingTuple((0,))  # E: local assignment value is not supported  # E: Expected a callable
     return shape
 
 @type_shape_dsl_function
-def branch_only(shape: IntTuple, choose: int) -> IntTuple:
-    if choose < 0:
-        result = shape
-    return result  # E: local value must be definitely assigned before use  # E: may be uninitialized
-
-@type_shape_dsl_function
-def mutable(shape: IntTuple) -> IntTuple:
-    value = [0]  # E: local assignment value is not supported
-    return shape
-
-@type_shape_dsl_function
-def incompatible_branch_alias(left: Int, right: IntTuple, choose: int) -> IntTuple:
-    if choose < 0:
-        result = left
-    else:
-        result = right
-    return result  # E: local alias return domain must match the declared result  # E: Returned type
-
-@type_shape_dsl_function
-def incompatible_branch_domains(shape: IntTuple, a: Int, b: Int) -> IntTuple:
-    if a == b:  # E: all continuing branch assignments to a local must have the same value domain
-        result = shape[0]
-    else:
-        result = shape
+def zero_step(shape: IntTuple, axis: int) -> IntTuple:
+    unused = range(axis, 3, 0)
     return shape
 
 @type_shape_dsl_function
 def zero_division(shape: IntTuple, axis: int) -> IntTuple:
     unused = axis // 0  # E: Cannot divide by zero
     return shape
+
+@type_shape_dsl_function
+def overflow(shape: IntTuple) -> IntTuple:
+    unused = 9223372036854775807 + 1
+    return shape
+
+@type_shape_dsl_function
+def overflow_subtract(shape: IntTuple) -> IntTuple:
+    unused = -9223372036854775808 - 1
+    return shape
+
+@type_shape_dsl_function
+def overflow_multiply(shape: IntTuple) -> IntTuple:
+    unused = 9223372036854775807 * 2
+    return shape
+
+@type_shape_dsl_function
+def overflow_floor_divide(shape: IntTuple) -> IntTuple:
+    unused = -9223372036854775808 // -1
+    return shape
+
+@type_shape_dsl_function
+def overflow_negative_literal(shape: IntTuple) -> IntTuple:
+    unused = -9223372036854775809
+    return shape
+
+@type_shape_dsl_function
+def exact_min_modulo_negative_one(shape: IntTuple) -> IntTuple:
+    remainder = -9223372036854775808 % -1
+    if remainder == 0:
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def used_overflow(shape: IntTuple) -> IntTuple:
+    marker = 9223372036854775807 + 1
+    if marker == 0:
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_right_operand_after_overflow(shape: IntTuple) -> IntTuple:
+    unused = (9223372036854775807 + 1) + (1 % 0)  # E: Cannot divide by zero
+    return shape
+
+@type_shape_dsl_function
+def unknown_modulo_zero(shape: IntTuple, axis: int) -> IntTuple:
+    unused = axis % 0  # E: Cannot divide by zero
+    return shape
+
+@type_shape_dsl_function
+def nested_invalid(shape: IntTuple) -> IntTuple:
+    unused = (1 % 0) // 0  # E: Cannot divide by zero  # E: Cannot divide by zero
+    return shape
+
+@type_shape_dsl_function
+def invalid_comparison(shape: IntTuple, axis: int) -> IntTuple:
+    if axis < 1 // 0:  # E: Cannot divide by zero
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_membership(shape: IntTuple, axis: int) -> IntTuple:
+    if axis in range(0, 1, 0):
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def unknown_then_false(shape: IntTuple, axis: int, false_result: IntTuple) -> IntTuple:
+    if axis < 0 and 1 == 1 and 0 == 1:
+        return false_result
+    return shape
+
+@type_shape_dsl_function
+def unknown_then_true(shape: IntTuple, axis: int, false_result: IntTuple) -> IntTuple:
+    if axis < 0 or 0 == 1 or 1 == 1:
+        return shape
+    return false_result
+
+@type_shape_dsl_function
+def unknown_before_invalid(shape: IntTuple, axis: int) -> IntTuple:
+    if axis < 0 and 1 % 0 == 0:  # E: Cannot divide by zero
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def known_before_invalid(shape: IntTuple) -> IntTuple:
+    if 1 == 1 and 1 % 0 == 0:  # E: Cannot divide by zero
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_before_unknown(shape: IntTuple, axis: int) -> IntTuple:
+    if 1 % 0 == 0 and axis < 0:  # E: Cannot divide by zero
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def false_before_invalid(shape: IntTuple, true_result: IntTuple) -> IntTuple:
+    if 0 == 1 and 1 % 0 == 0:
+        return true_result
+    return shape
+
+def check_zero_step(x: Tensor[[2, 3]]) -> Tensor[zero_step(IntTuple[2, 3], int)]: ...
+def check_zero_division(x: Tensor[[2, 3]]) -> Tensor[zero_division(IntTuple[2, 3], int)]: ...
+def check_overflow(x: Tensor[[2, 3]]) -> Tensor[overflow(IntTuple[2, 3])]: ...
+def check_overflow_subtract(x: Tensor[[2, 3]]) -> Tensor[overflow_subtract(IntTuple[2, 3])]: ...
+def check_overflow_multiply(x: Tensor[[2, 3]]) -> Tensor[overflow_multiply(IntTuple[2, 3])]: ...
+def check_overflow_floor_divide(x: Tensor[[2, 3]]) -> Tensor[overflow_floor_divide(IntTuple[2, 3])]: ...
+def check_overflow_negative_literal(x: Tensor[[2, 3]]) -> Tensor[overflow_negative_literal(IntTuple[2, 3])]: ...
+def check_exact_modulo(x: Tensor[[2, 3]]) -> Tensor[exact_min_modulo_negative_one(IntTuple[2, 3])]: ...
+def check_used_overflow(x: Tensor[[2, 3]]) -> Tensor[used_overflow(IntTuple[2, 3])]: ...
+def check_invalid_right_operand(x: Tensor[[2, 3]]) -> Tensor[invalid_right_operand_after_overflow(IntTuple[2, 3])]: ...
+def check_unknown_modulo_zero(x: Tensor[[2, 3]]) -> Tensor[unknown_modulo_zero(IntTuple[2, 3], int)]: ...
+def check_nested_invalid(x: Tensor[[2, 3]]) -> Tensor[nested_invalid(IntTuple[2, 3])]: ...
+def check_comparison(x: Tensor[[2, 3]]) -> Tensor[invalid_comparison(IntTuple[2, 3], int)]: ...
+def check_membership(x: Tensor[[2, 3]]) -> Tensor[invalid_membership(IntTuple[2, 3], int)]: ...
+def check_unknown_then_false(x: Tensor[[2, 3]]) -> Tensor[unknown_then_false(IntTuple[2, 3], int, IntTuple[1])]: ...
+def check_unknown_then_true(x: Tensor[[2, 3]]) -> Tensor[unknown_then_true(IntTuple[2, 3], int, IntTuple[1])]: ...
+def check_unknown_before_invalid(x: Tensor[[2, 3]]) -> Tensor[unknown_before_invalid(IntTuple[2, 3], int)]: ...
+def check_known_before_invalid(x: Tensor[[2, 3]]) -> Tensor[known_before_invalid(IntTuple[2, 3])]: ...
+def check_invalid_before_unknown(x: Tensor[[2, 3]]) -> Tensor[invalid_before_unknown(IntTuple[2, 3], int)]: ...
+def check_false_before_invalid(x: Tensor[[2, 3]]) -> Tensor[false_before_invalid(IntTuple[2, 3], IntTuple[1])]: ...
+
+def test(x: Tensor[[2, 3]]) -> None:
+    check_zero_step(x)  # E: range() arg 3 must not be zero
+    check_zero_division(x)  # E: Flag integer division by zero
+    reveal_type(check_overflow(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_overflow_subtract(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_overflow_multiply(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_overflow_floor_divide(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_overflow_negative_literal(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_exact_modulo(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_used_overflow(x))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    check_invalid_right_operand(x)  # E: Flag integer modulo by zero
+    check_unknown_modulo_zero(x)  # E: Flag integer modulo by zero
+    check_nested_invalid(x)  # E: Flag integer modulo by zero
+    check_comparison(x)  # E: Flag integer division by zero
+    check_membership(x)  # E: range() arg 3 must not be zero
+    reveal_type(check_unknown_then_false(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_unknown_then_true(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_unknown_before_invalid(x))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    check_known_before_invalid(x)  # E: Flag integer modulo by zero
+    check_invalid_before_unknown(x)  # E: Flag integer modulo by zero
+    reveal_type(check_false_before_invalid(x))  # E: revealed type: Tensor[[2, 3]]
 "#,
 );
 

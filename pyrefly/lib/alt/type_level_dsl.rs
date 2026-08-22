@@ -52,9 +52,11 @@ impl TypeFormContext<'_> {
     }
 }
 
-/// The widest `Flag` value domain that DSL operations can inspect.
+/// The widest `Flag` domain the DSL's Flag operations can inspect.
 fn type_shape_dsl_flag_domain() -> FlagDomain {
-    FlagDomain::of(FlagMember::Int).join(FlagDomain::of(FlagMember::NoneType))
+    FlagDomain::of(FlagMember::Int)
+        .join(FlagDomain::of(FlagMember::Tuple))
+        .join(FlagDomain::of(FlagMember::NoneType))
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -187,9 +189,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             TypeShapeDslInputDomain::Flag(domain)
                                 if domain.is_subset_of(type_shape_dsl_flag_domain())
                         )))
-                        .then_some("`@type_shape_dsl_function` control-flow narrowing requires a Flag[int | None] value")
+                        .then_some("`@type_shape_dsl_function` control-flow narrowing requires a Flag[int | tuple[int, ...] | None] value")
                     }),
-                    TypeShapeDslConditionKind::FlagIntCompare(_) => None,
+                    TypeShapeDslConditionKind::FlagIntCompare(_)
+                    | TypeShapeDslConditionKind::Membership { .. } => None,
                 };
                 if let Some(message) = invalid_domain {
                     self.error(
@@ -223,11 +226,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         parameter_origins: Some(shapes),
                         ..
                     } => {
-                        (!shapes.iter().all(|shape| {
+                        if shapes.iter().all(|shape| {
                             parameter_domains[*shape]
                                 == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
-                        }))
-                        .then_some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter")
+                        }) {
+                            None
+                        } else if shapes.iter().any(|shape| {
+                            matches!(
+                                parameter_domains[*shape],
+                                TypeShapeDslInputDomain::Flag(_)
+                            )
+                        }) {
+                            Some("`@type_shape_dsl_function` `len` of a Flag value requires control-flow narrowing to a sequence")
+                        } else {
+                            Some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter")
+                        }
                     }
                     TypeShapeDslExpressionKind::IntTupleConstructor => {
                         (result != TypeShapeDslDomain::IntTuple).then_some(
@@ -249,6 +262,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     TypeShapeDslFlagValueKind::Int => {
                                         domain == FlagDomain::of(FlagMember::Int)
                                     }
+                                    TypeShapeDslFlagValueKind::Sequence => {
+                                        domain == FlagDomain::of(FlagMember::Tuple)
+                                    }
                                 },
                                 _ => false,
                             }
@@ -263,6 +279,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::FlagValueSlot { .. }
                     | TypeShapeDslExpressionKind::FlagIntLiteral(_)
                     | TypeShapeDslExpressionKind::FlagNone
+                    | TypeShapeDslExpressionKind::FlagTuple
+                    | TypeShapeDslExpressionKind::FlagRange
+                    | TypeShapeDslExpressionKind::FlagSequenceLength
                     | TypeShapeDslExpressionKind::FlagIntArithmetic(_)
                     | TypeShapeDslExpressionKind::DimensionTuple => None,
                 };
@@ -408,6 +427,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && class.qname().id().as_str() == "IntTuple"
         {
             return Some(TypeShapeDslIntrinsic::IntTuple);
+        }
+        if let Type::ClassDef(class) = &callee
+            && class.qname().module_name().as_str() == "builtins"
+            && class.qname().id().as_str() == "range"
+        {
+            return Some(TypeShapeDslIntrinsic::Range);
         }
         let Some(CalleeKind::Function(function_kind)) = callee.callee_kind() else {
             return None;
