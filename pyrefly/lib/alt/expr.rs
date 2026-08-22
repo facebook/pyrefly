@@ -87,6 +87,8 @@ use crate::alt::callable::CallArg;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::polars_specials::is_polars_series;
+use crate::alt::regex::RegexValidationError;
+use crate::alt::regex::validate_pattern;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
@@ -1097,7 +1099,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .into_ty()
             }
         } else {
-            self.expr_call_infer(x, callee_ty, hint, errors)
+            let regex_pattern = Self::regex_pattern_argument(&x.arguments);
+            let regex_flags_position =
+                regex_pattern.and_then(|_| self.regex_flags_position(&callee_ty));
+            let ret = self.expr_call_infer(x, callee_ty, hint, errors);
+            if let (Some(pattern), Some(flags_position)) = (regex_pattern, regex_flags_position) {
+                self.regex_validate_pattern_argument(pattern, &x.arguments, flags_position, errors);
+            }
+            ret
         }
     }
 
@@ -1997,6 +2006,101 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 value: kw.value.clone(),
             }
         }))
+    }
+
+    /// Return the positional index of `flags` for `re` functions that accept a pattern.
+    fn regex_flags_position(&self, callee_ty: &Type) -> Option<usize> {
+        callee_ty.visit_toplevel_func_metadata(&|metadata| {
+            if metadata.kind.module_name().as_str() != "re" {
+                return None;
+            }
+            let class = metadata.kind.class();
+            let class = class.as_ref().map(|class| class.name().as_str());
+            let function = metadata.kind.function_name();
+            match (class, function.as_ref().as_str()) {
+                (None, "compile" | "template") => Some(1),
+                (None, "match" | "fullmatch" | "search" | "findall" | "finditer") => Some(2),
+                (None, "split") => Some(3),
+                (None, "sub" | "subn") => Some(4),
+                _ => None,
+            }
+        })
+    }
+
+    fn regex_pattern_argument(args: &Arguments) -> Option<&Expr> {
+        let pattern = args.args.first().or_else(|| {
+            args.keywords.iter().find_map(|kw| {
+                (kw.arg
+                    .as_ref()
+                    .is_some_and(|name| name.id.as_str() == "pattern"))
+                .then_some(&kw.value)
+            })
+        })?;
+        matches!(pattern, Expr::StringLiteral(_) | Expr::BytesLiteral(_)).then_some(pattern)
+    }
+
+    fn regex_validate_pattern_argument(
+        &self,
+        pattern: &Expr,
+        args: &Arguments,
+        flags_position: usize,
+        errors: &ErrorCollector,
+    ) {
+        let flags = args.args.get(flags_position).or_else(|| {
+            args.keywords.iter().find_map(|kw| {
+                (kw.arg
+                    .as_ref()
+                    .is_some_and(|name| name.id.as_str() == "flags"))
+                .then_some(&kw.value)
+            })
+        });
+        let Some(verbose) =
+            flags.map_or(Some(false), |flags| self.regex_verbose_flag(flags, errors))
+        else {
+            return;
+        };
+        let result = match pattern {
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) => {
+                validate_pattern(value.to_str().as_bytes(), verbose)
+            }
+            Expr::BytesLiteral(value) => match Lit::from_bytes_literal(value) {
+                Some(Lit::Bytes(value)) => validate_pattern(&value, verbose),
+                _ => return,
+            },
+            _ => return,
+        };
+        if let Err(RegexValidationError::Invalid(error)) = result {
+            self.error(errors, pattern.range(), ErrorKind::Regex, error.to_owned());
+        }
+    }
+
+    fn regex_verbose_flag(&self, expr: &Expr, errors: &ErrorCollector) -> Option<bool> {
+        match expr {
+            Expr::BinOp(ExprBinOp {
+                left,
+                op: Operator::BitOr,
+                right,
+                ..
+            }) => match (
+                self.regex_verbose_flag(left, errors),
+                self.regex_verbose_flag(right, errors),
+            ) {
+                (Some(true), _) | (_, Some(true)) => Some(true),
+                (Some(false), Some(false)) => Some(false),
+                _ => None,
+            },
+            _ => match self.expr_infer(expr, errors) {
+                Type::Literal(literal) => match literal.value {
+                    Lit::Int(value) => value.as_i64().map(|value| value & 64 != 0),
+                    Lit::Bool(_) => Some(false),
+                    Lit::Enum(value) if value.class.has_qname("re", "RegexFlag") => {
+                        Some(matches!(value.member.as_str(), "X" | "VERBOSE"))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+        }
     }
 
     /// If `func(args)` is a `.<method>("<literal>", ...)` call, return the receiver's

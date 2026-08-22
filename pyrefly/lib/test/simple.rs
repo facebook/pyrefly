@@ -751,6 +751,35 @@ reveal_type(f(0))  # E: revealed type: int
 );
 
 testcase!(
+    test_regex_checks,
+    r#"
+import re
+from re import X as verbose
+
+re.compile("(")  # E: missing ), unterminated subpattern
+re.search("(", "")  # E: missing ), unterminated subpattern
+re.sub("(", "", "")  # E: missing ), unterminated subpattern
+re.compile(pattern="(")  # E: missing ), unterminated subpattern
+re.compile("a(b(c)")  # E: missing ), unterminated subpattern
+re.compile(b"(")  # E: missing ), unterminated subpattern
+re.compile("(?# comment)")
+re.compile("(\n# ignored )\na)", re.VERBOSE)
+re.search("(\n# ignored )\na)", "", flags=re.X)
+re.compile("(\n# ignored )\na)", re.I | re.X)
+re.compile("(\n# ignored )\na)", verbose)
+re.compile("(?i:x)(?P<n>a)#(b)")
+re.compile("(?=x)(?P<n>a)#(b)")
+
+def unknown_flags(flags: int) -> None:
+    # Unknown flags may enable verbose mode, so checking this pattern would be unsafe.
+    re.compile("(", flags)
+
+def match_and(value: str) -> int | None:
+    return re.match("x", value) and 1
+"#,
+);
+
+testcase!(
     test_forward_refs_in_bases,
     r#"
 from typing import assert_type, Any

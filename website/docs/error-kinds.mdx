@@ -1850,6 +1850,16 @@ if "abc":
   ...
 ```
 
+## regex
+
+This error is raised when Pyrefly can statically detect an invalid regular expression pattern.
+
+```python
+import re
+
+re.compile("(")  # missing ), unterminated subpattern [regex]
+```
+
 ## reveal-type
 
 Default severity: `info`
