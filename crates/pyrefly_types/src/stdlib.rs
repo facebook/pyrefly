@@ -115,6 +115,8 @@ pub struct Stdlib {
     builtins_type: StdlibResult<ClassType>,
     /// At runtime, `types.EllipsisType` is new in 3.10, but typeshed defines it unconditionally.
     ellipsis_type: StdlibResult<ClassType>,
+    /// At runtime, `types.NotImplementedType` is new in 3.10, but typeshed defines it unconditionally.
+    not_implemented_type: StdlibResult<ClassType>,
     /// Moved from `_typeshed` to `types` in 3.10.
     none_type: StdlibResult<ClassType>,
     function_type: StdlibResult<ClassType>,
@@ -248,6 +250,7 @@ impl Stdlib {
             enumerate: lookup_generic(builtins, "enumerate", 1),
             builtins_type: lookup_concrete(builtins, "type"),
             ellipsis_type: lookup_concrete(types, "EllipsisType"),
+            not_implemented_type: lookup_concrete(types, "NotImplementedType"),
             none_type: lookup_concrete(none_location, "NoneType"),
             iterable: lookup_generic(typing, "Iterable", 1),
             iterator: lookup_generic(typing, "Iterator", 1),
@@ -364,6 +367,10 @@ impl Stdlib {
 
     pub fn ellipsis_type(&self) -> &ClassType {
         Self::primitive(&self.ellipsis_type)
+    }
+
+    pub fn not_implemented_type(&self) -> &ClassType {
+        Self::primitive(&self.not_implemented_type)
     }
 
     pub fn none_type(&self) -> &ClassType {
