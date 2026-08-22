@@ -11,6 +11,8 @@ Only used inside DSL definition files (e.g. torch/_shapes.pyi), not in
 normal stubs or user code.
 """
 
+from __future__ import annotations
+
 import typing
 
 from . import IntTuple as _IntTupleSchema
@@ -85,6 +87,9 @@ class IntTuple(_IntTupleSchema):
 
 
 def is_concrete_int(value: typing.Any) -> bool: ...
+
+
+def is_int_value(value: object) -> typing.TypeIs[int]: ...
 
 
 def prod(xs: list[int]) -> int:

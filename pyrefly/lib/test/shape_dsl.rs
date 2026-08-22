@@ -955,7 +955,7 @@ testcase!(
     test_intvar_rejects_non_int_specialization_with_int_recovery,
     shaped_array_env(),
     r#"
-from typing import reveal_type
+from typing import Literal, reveal_type
 from shape_extensions import Int, IntVar
 
 class Box[N: IntVar]:
@@ -1880,31 +1880,25 @@ def return_flag(n: Int, k: int) -> Int:
 
 @type_shape_dsl_function
 def reversed(n: Int, k: int) -> Int:
-    if 0 < k:  # E: left comparison operand must name a parameter
+    if 0 < k:
         return n
     return n
 
 @type_shape_dsl_function
-def nonliteral(n: Int, k: int, limit: int) -> Int:
-    if k < limit:  # E: parameter-to-parameter comparisons require `Int` parameters; `Flag[int]` values can only be compared with integer literals
-        return n
-    return n
-
-@type_shape_dsl_function
-def value_literal(n: Int) -> Int:
-    if n < 0:  # E: literal comparison requires the left parameter to be annotated as `int`
+def mixed_comparison(n: Int, k: int) -> Int:
+    if n < k:  # E: comparison operands must both be annotated as `Int` or both be `Flag[int]`
         return n
     return n
 
 @type_shape_dsl_function
 def wrong_condition_domain(n: Int, enabled: bool) -> Int:
-    if enabled < 0:  # E: literal comparison requires the left parameter to be annotated as `int`
+    if enabled < 0:  # E: Flag operation requires a compatible Flag parameter
         return n
     return n
 
 @type_shape_dsl_function
 def union_condition_domain(n: Int, offset: int | bool) -> Int:
-    if offset < 0:  # E: literal comparison requires the left parameter to be annotated as `int`
+    if offset < 0:  # E: Flag operation requires a compatible Flag parameter
         return n
     return n
 
@@ -1945,13 +1939,13 @@ def chained(a: Int, b: Int, c: Int) -> Int:
 
 @type_shape_dsl_function
 def other_comparison(a: Int, b: Int) -> Int:
-    if a <= b:  # E: @type_shape_dsl_function comparison must be exactly
+    if a <= b:  # E: `Int` comparisons support only `==` and `<`
         return a
     return b
 
 @type_shape_dsl_function
 def non_parameter(a: Int, b: Int) -> Int:
-    if a == 1:  # E: @type_shape_dsl_function condition operands must name parameters
+    if a == 1:  # E: Flag operation requires a compatible Flag parameter
         return a
     return b
 
@@ -1979,7 +1973,7 @@ def fallthrough(a: Int, b: Int) -> Int:  # E: @type_shape_dsl_function every con
 
 @type_shape_dsl_function
 def tuple_condition(a: IntTuple, b: IntTuple) -> IntTuple:
-    if a == b:  # E: condition operands must be annotated as `Int`
+    if a == b:  # E: comparison operands must both be annotated as `Int` or both be `Flag[int]`
         return a
     return b
 
@@ -2187,43 +2181,43 @@ def wrong_domain(x: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def builtin_isinstance(x: Int) -> Int:
-    if isinstance(x, int):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
+    if isinstance(x, int):  # E: condition supports only `is_concrete_int`, `is_int_value`, `is None`, boolean operators, and integer comparisons
         return x
     return x
 
 @type_shape_dsl_function
 def imported_lookalike(x: Int) -> Int:
-    if lookalike(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
+    if lookalike(x):  # E: condition supports only `is_concrete_int`, `is_int_value`, `is None`, boolean operators, and integer comparisons
         return x
     return x
 
 @type_shape_dsl_function
 def spoof(x: Int) -> Int:
-    if Spoof.is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`
+    if Spoof.is_concrete_int(x):  # E: condition supports only `is_concrete_int`, `is_int_value`, `is None`, boolean operators, and integer comparisons
         return x
     return x
 
 @type_shape_dsl_function
 def shadowed(is_concrete_int: Int, x: Int) -> Int:
-    if is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, and `<`  # E: Expected a callable
+    if is_concrete_int(x):  # E: condition supports only `is_concrete_int`, `is_int_value`, `is None`, boolean operators, and integer comparisons  # E: Expected a callable
         return x
     return x
 
 @type_shape_dsl_function
 def boolean_or(x: Int, y: Int) -> Int:
-    if dsl.is_concrete_int(x) or dsl.is_concrete_int(y):  # E: @type_shape_dsl_function condition supports only the boolean operator `and`
+    if dsl.is_concrete_int(x) or dsl.is_concrete_int(y):
         return x
     return y
 
 @type_shape_dsl_function
 def other_order(x: Int, y: Int) -> Int:
-    if x <= y:  # E: @type_shape_dsl_function comparison must be exactly
+    if x <= y:  # E: `Int` comparisons support only `==` and `<`
         return x
     return y
 
 @type_shape_dsl_function
 def tuple_lt(x: IntTuple, y: IntTuple) -> IntTuple:
-    if x < y:  # E: parameter-to-parameter comparisons require `Int` parameters
+    if x < y:  # E: comparison operands must both be annotated as `Int` or both be `Flag[int]`
         return x
     return y
 "#,
@@ -6113,17 +6107,17 @@ def f(shapeless: Array[IntTuple, int], concrete: Array[[3], int]) -> None:
 );
 
 testcase!(
-    test_type_shape_dsl_single_assignment_locals,
+    test_type_shape_dsl_locals_and_scalar_flag_values,
     shape_dsl_tensor_env(),
     r#"
-from shape_extensions import Int, IntTuple, broadcast, type_shape_dsl_function
 import shape_extensions.dsl as dsl
+from shape_extensions import Flag, Int, IntTuple, broadcast, type_shape_dsl_function
 from torch import Tensor
 from typing import reveal_type
 
 @type_shape_dsl_function
-def choose_shape(left: IntTuple, right: IntTuple, a: Int, b: Int) -> IntTuple:
-    if a == b:
+def choose_shape(left: IntTuple, right: IntTuple, choose: int) -> IntTuple:
+    if choose < 0:
         result = left
     else:
         result = right
@@ -6136,9 +6130,35 @@ def alias_broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
     return broadcast(local_left, local_right)
 
 @type_shape_dsl_function
-def select_dimension(shape: IntTuple) -> IntTuple:
-    first = shape[0]
-    return dsl.IntTuple((first,))
+def alias_dimension_compare(
+    left: Int, right: Int, equal: IntTuple, less: IntTuple, greater: IntTuple,
+) -> IntTuple:
+    local_left = left
+    local_right = right
+    if local_left == local_right:
+        return equal
+    if local_left < local_right:
+        return less
+    return greater
+
+@type_shape_dsl_function
+def scalar_flag_value(shape: IntTuple, axis: int | None) -> IntTuple:
+    local_axis = axis
+    if local_axis is None:
+        return dsl.IntTuple(())
+    if dsl.is_int_value(local_axis) and local_axis % 2 == 0:
+        return dsl.IntTuple((shape[0],))
+    return shape
+
+@type_shape_dsl_function
+def compare_flag_values(
+    left: int, right: int, equal: IntTuple, less: IntTuple, greater: IntTuple,
+) -> IntTuple:
+    if left == right:
+        return equal
+    if left < right:
+        return less
+    return greater
 
 @type_shape_dsl_function
 def disjoint_local_domains(shape: IntTuple, a: Int, b: Int) -> IntTuple:
@@ -6148,36 +6168,51 @@ def disjoint_local_domains(shape: IntTuple, a: Int, b: Int) -> IntTuple:
     result = shape
     return result
 
-def choose_left() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], Int[1], Int[1])]: ...
-def choose_right() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], Int[1], Int[2])]: ...
+def choose_left() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], -1)]: ...
+def choose_right() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], 1)]: ...
 def apply_broadcast[Left: IntTuple, Right: IntTuple](
     left: Tensor[Left], right: Tensor[Right],
 ) -> Tensor[alias_broadcast(Left, Right)]: ...
-def apply_select[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[select_dimension(Shape)]: ...
+def alias_equal() -> Tensor[alias_dimension_compare(Int[2], Int[2], IntTuple[1], IntTuple[2], IntTuple[3])]: ...
+def alias_less() -> Tensor[alias_dimension_compare(Int[1], Int[2], IntTuple[1], IntTuple[2], IntTuple[3])]: ...
+def apply_flag_value[Shape: IntTuple, Axis: Flag[int | None]](
+    x: Tensor[Shape], axis: Axis,
+) -> Tensor[scalar_flag_value(Shape, Axis)]: ...
 def disjoint_equal() -> Tensor[disjoint_local_domains(IntTuple[4, 5], Int[1], Int[1])]: ...
 def disjoint_unequal() -> Tensor[disjoint_local_domains(IntTuple[4, 5], Int[1], Int[2])]: ...
+def flags_equal() -> Tensor[compare_flag_values(1, 1, IntTuple[1], IntTuple[2], IntTuple[3])]: ...
+def flags_less() -> Tensor[compare_flag_values(1, 2, IntTuple[1], IntTuple[2], IntTuple[3])]: ...
+def flags_greater() -> Tensor[compare_flag_values(2, 1, IntTuple[1], IntTuple[2], IntTuple[3])]: ...
 
-def test(left: Tensor[[2, 1]], right: Tensor[[1, 3]], x: Tensor[[4, 5]]) -> None:
+def test(x: Tensor[[2, 3]], left: Tensor[[2, 1]], right: Tensor[[1, 3]]) -> None:
     reveal_type(choose_left())  # E: revealed type: Tensor[[2]]
     reveal_type(choose_right())  # E: revealed type: Tensor[[3]]
     reveal_type(apply_broadcast(left, right))  # E: revealed type: Tensor[[2, 3]]
-    reveal_type(apply_select(x))  # E: revealed type: Tensor[[4]]
+    reveal_type(alias_equal())  # E: revealed type: Tensor[[1]]
+    reveal_type(alias_less())  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_flag_value(x, None))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_flag_value(x, 2))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_flag_value(x, 1))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(disjoint_equal())  # E: revealed type: Tensor[[4, 5]]
     reveal_type(disjoint_unequal())  # E: revealed type: Tensor[[4, 5]]
+    reveal_type(flags_equal())  # E: revealed type: Tensor[[1]]
+    reveal_type(flags_less())  # E: revealed type: Tensor[[2]]
+    reveal_type(flags_greater())  # E: revealed type: Tensor[[3]]
 "#,
 );
 
 testcase!(
-    test_type_shape_dsl_invalid_single_assignment_locals,
+    test_type_shape_dsl_invalid_locals_and_scalar_flag_values,
     shape_dsl_tensor_env(),
     r#"
+import shape_extensions.dsl as dsl
 from shape_extensions import Int, IntTuple, type_shape_dsl_function
 
 @type_shape_dsl_function
 def reassigned(shape: IntTuple) -> IntTuple:
-    result = shape
-    result = shape  # E: locals are immutable and cannot be reassigned
-    return result
+    rank = len(shape)
+    rank = 2  # E: locals are immutable and cannot be reassigned
+    return shape
 
 @type_shape_dsl_function
 def assigned_parameter(shape: IntTuple) -> IntTuple:
@@ -6185,14 +6220,19 @@ def assigned_parameter(shape: IntTuple) -> IntTuple:
     return shape
 
 @type_shape_dsl_function
-def branch_only(shape: IntTuple, a: Int, b: Int) -> IntTuple:
-    if a == b:
+def branch_only(shape: IntTuple, choose: int) -> IntTuple:
+    if choose < 0:
         result = shape
     return result  # E: local value must be definitely assigned before use  # E: may be uninitialized
 
 @type_shape_dsl_function
-def incompatible_branch_alias(left: Int, right: IntTuple, a: Int, b: Int) -> IntTuple:
-    if a == b:
+def mutable(shape: IntTuple) -> IntTuple:
+    value = [0]  # E: local assignment value is not supported
+    return shape
+
+@type_shape_dsl_function
+def incompatible_branch_alias(left: Int, right: IntTuple, choose: int) -> IntTuple:
+    if choose < 0:
         result = left
     else:
         result = right
@@ -6204,6 +6244,11 @@ def incompatible_branch_domains(shape: IntTuple, a: Int, b: Int) -> IntTuple:
         result = shape[0]
     else:
         result = shape
+    return shape
+
+@type_shape_dsl_function
+def zero_division(shape: IntTuple, axis: int) -> IntTuple:
+    unused = axis // 0  # E: Cannot divide by zero
     return shape
 "#,
 );

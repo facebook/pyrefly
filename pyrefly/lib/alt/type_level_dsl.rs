@@ -17,6 +17,8 @@ use pyrefly_types::type_level_dsl::TypeLevelDslCall;
 use pyrefly_types::type_level_dsl::TypeShapeDslConditionKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslExpressionKind;
+use pyrefly_types::type_level_dsl::TypeShapeDslFlagIntComparisonOp;
+use pyrefly_types::type_level_dsl::TypeShapeDslFlagValueKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
 use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
@@ -48,6 +50,11 @@ impl TypeFormContext<'_> {
             _ => false,
         }
     }
+}
+
+/// The widest `Flag` value domain that DSL operations can inspect.
+fn type_shape_dsl_flag_domain() -> FlagDomain {
+    FlagDomain::of(FlagMember::Int).join(FlagDomain::of(FlagMember::NoneType))
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -126,19 +133,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut valid_body = true;
             for condition in validated.conditions() {
                 let invalid_domain = match condition.kind() {
-                    TypeShapeDslConditionKind::Equal(left, right) => {
-                        (parameter_domains[*left]
-                            != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
-                            || parameter_domains[*right]
-                                != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int))
-                            .then_some("`@type_shape_dsl_function` condition operands must be annotated as `Int`")
-                    }
-                    TypeShapeDslConditionKind::LessThan(left, right) => {
-                        (parameter_domains[*left]
-                            != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
-                            || parameter_domains[*right]
-                                != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int))
-                            .then_some("`@type_shape_dsl_function` parameter-to-parameter comparisons require `Int` parameters; `Flag[int]` values can only be compared with integer literals")
+                    TypeShapeDslConditionKind::SlotCompare {
+                        left_parameters,
+                        right_parameters,
+                        op,
+                        ..
+                    } => {
+                        let mut domains = left_parameters
+                            .iter()
+                            .chain(right_parameters)
+                            .map(|parameter| parameter_domains[*parameter]);
+                        let Some(first) = domains.next() else {
+                            unreachable!("slot comparison must retain parameter origins")
+                        };
+                        let same_domain = domains.all(|domain| domain == first);
+                        if same_domain
+                            && first
+                                == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
+                        {
+                            (!matches!(
+                                op,
+                                TypeShapeDslFlagIntComparisonOp::Equal
+                                    | TypeShapeDslFlagIntComparisonOp::LessThan
+                            ))
+                            .then_some("`@type_shape_dsl_function` `Int` comparisons support only `==` and `<`")
+                        } else if same_domain
+                            && first
+                                == TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int))
+                        {
+                            None
+                        } else {
+                            Some("`@type_shape_dsl_function` comparison operands must both be annotated as `Int` or both be `Flag[int]`")
+                        }
                     }
                     TypeShapeDslConditionKind::IsConcreteInt {
                         parameter_origins,
@@ -150,16 +176,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }))
                             .then_some("`@type_shape_dsl_function` condition operands must be annotated as `Int`")
                     }),
-                    TypeShapeDslConditionKind::FlagIntLessThanLiteral { parameter, .. } => {
-                        (parameter_domains[*parameter]
-                            != TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int)))
-                        .then_some("`@type_shape_dsl_function` literal comparison requires the left parameter to be annotated as `int`")
+                    TypeShapeDslConditionKind::IsIntValue {
+                        parameter_origins, ..
                     }
-                    TypeShapeDslConditionKind::LengthEqualLiteral { shape, .. } => {
-                        (parameter_domains[*shape]
-                            != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple))
-                        .then_some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter")
-                    }
+                    | TypeShapeDslConditionKind::IsNone {
+                        parameter_origins, ..
+                    } => parameter_origins.as_deref().and_then(|parameters| {
+                        (!parameters.iter().all(|parameter| matches!(
+                            parameter_domains[*parameter],
+                            TypeShapeDslInputDomain::Flag(domain)
+                                if domain.is_subset_of(type_shape_dsl_flag_domain())
+                        )))
+                        .then_some("`@type_shape_dsl_function` control-flow narrowing requires a Flag[int | None] value")
+                    }),
+                    TypeShapeDslConditionKind::FlagIntCompare(_) => None,
                 };
                 if let Some(message) = invalid_domain {
                     self.error(
@@ -189,15 +219,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
                     }))
                     .then_some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter"),
+                    TypeShapeDslExpressionKind::IntTupleLength {
+                        parameter_origins: Some(shapes),
+                        ..
+                    } => {
+                        (!shapes.iter().all(|shape| {
+                            parameter_domains[*shape]
+                                == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
+                        }))
+                        .then_some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter")
+                    }
                     TypeShapeDslExpressionKind::IntTupleConstructor => {
                         (result != TypeShapeDslDomain::IntTuple).then_some(
                             "`@type_shape_dsl_function` dsl.IntTuple requires an `IntTuple` result",
                         )
                     }
+                    TypeShapeDslExpressionKind::FlagValueSlot {
+                        parameter_origins: Some(parameters),
+                        required,
+                        narrowed,
+                        ..
+                    } => {
+                        let valid = parameters.iter().all(|parameter| {
+                            match parameter_domains[*parameter] {
+                                TypeShapeDslInputDomain::Flag(domain) if *narrowed => {
+                                    domain.is_subset_of(type_shape_dsl_flag_domain())
+                                }
+                                TypeShapeDslInputDomain::Flag(domain) => match required {
+                                    TypeShapeDslFlagValueKind::Int => {
+                                        domain == FlagDomain::of(FlagMember::Int)
+                                    }
+                                },
+                                _ => false,
+                            }
+                        });
+                        (!valid).then_some("`@type_shape_dsl_function` Flag operation requires a compatible Flag parameter")
+                    }
                     TypeShapeDslExpressionKind::DimensionLiteral(_)
                     | TypeShapeDslExpressionKind::DimensionSlot { .. }
                     | TypeShapeDslExpressionKind::IntTupleIndex { .. }
+                    | TypeShapeDslExpressionKind::IntTupleLength { .. }
                     | TypeShapeDslExpressionKind::Slot(_)
+                    | TypeShapeDslExpressionKind::FlagValueSlot { .. }
+                    | TypeShapeDslExpressionKind::FlagIntLiteral(_)
+                    | TypeShapeDslExpressionKind::FlagNone
+                    | TypeShapeDslExpressionKind::FlagIntArithmetic(_)
                     | TypeShapeDslExpressionKind::DimensionTuple => None,
                 };
                 if let Some(message) = invalid_domain {
@@ -357,6 +423,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if id.has_toplevel_qname("shape_extensions.dsl", "is_concrete_int") {
             return Some(TypeShapeDslIntrinsic::IsConcreteInt);
+        }
+        if id.has_toplevel_qname("shape_extensions.dsl", "is_int_value") {
+            return Some(TypeShapeDslIntrinsic::IsIntValue);
         }
         if id.has_toplevel_qname("shape_extensions.dsl", "Invalid") {
             return Some(TypeShapeDslIntrinsic::Invalid);
