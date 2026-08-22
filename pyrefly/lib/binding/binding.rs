@@ -1104,6 +1104,8 @@ pub enum KeyExpect {
     PrivateAttributeAccess(TextRange),
     /// Deferred uninitialized variable check.
     UninitializedCheck(TextRange),
+    /// Check that an attribute declaration is initialized on every control-flow path.
+    UninitializedAttributeCheck(TextRange),
     /// Forward reference string literal in union type check.
     ForwardRefUnion(TextRange),
     /// A name used in annotation position that may be an invalid implicit alias.
@@ -1125,6 +1127,7 @@ impl Ranged for KeyExpect {
             | KeyExpect::MatchCaseReachability(range)
             | KeyExpect::PrivateAttributeAccess(range)
             | KeyExpect::UninitializedCheck(range)
+            | KeyExpect::UninitializedAttributeCheck(range)
             | KeyExpect::ForwardRefUnion(range)
             | KeyExpect::ImplicitAliasCheck(range)
             | KeyExpect::ValidateImplicitReturn(range) => *range,
@@ -1145,6 +1148,7 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::MatchCaseReachability(r) => ("MatchCaseReachability", r),
             KeyExpect::PrivateAttributeAccess(r) => ("PrivateAttributeAccess", r),
             KeyExpect::UninitializedCheck(r) => ("UninitializedCheck", r),
+            KeyExpect::UninitializedAttributeCheck(r) => ("UninitializedAttributeCheck", r),
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
             KeyExpect::ImplicitAliasCheck(r) => ("ImplicitAliasCheck", r),
             KeyExpect::ValidateImplicitReturn(r) => ("ValidateImplicitReturn", r),
@@ -1246,6 +1250,17 @@ pub enum BindingExpect {
         /// At solve time, we check if ALL of these have Never type.
         /// If any don't, the variable may be uninitialized.
         termination_keys: Vec<Idx<Key>>,
+    },
+    /// Check that a class attribute is initialized on every control-flow path.
+    UninitializedAttributeCheck {
+        name: Name,
+        range: TextRange,
+        /// The owning class when this is an instance attribute. Its `__getattr__` may make a
+        /// conditionally initialized attribute safe to access.
+        getattr_class: Option<Idx<KeyClass>>,
+        /// `None` means binding proved the declaration conditional. Otherwise, initialization
+        /// depends on whether all of these branches terminate with `Never`.
+        termination_keys: Option<Vec<Idx<Key>>>,
     },
     /// Check for forward reference string literal in union type.
     /// At runtime, `type.__or__` cannot handle string literals, so expressions
@@ -1376,6 +1391,21 @@ impl DisplayWith<Bindings> for BindingExpect {
                     "UninitializedCheck({}, {}, {:?})",
                     name,
                     ctx.module().display(range),
+                    termination_keys
+                )
+            }
+            Self::UninitializedAttributeCheck {
+                name,
+                range,
+                getattr_class,
+                termination_keys,
+            } => {
+                write!(
+                    f,
+                    "UninitializedAttributeCheck({}, {}, {:?}, {:?})",
+                    name,
+                    ctx.module().display(range),
+                    getattr_class,
                     termination_keys
                 )
             }

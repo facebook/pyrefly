@@ -2690,6 +2690,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .emit();
                 }
             }
+            BindingExpect::UninitializedAttributeCheck {
+                name,
+                range,
+                getattr_class,
+                termination_keys,
+            } => {
+                let may_be_uninitialized = termination_keys
+                    .as_ref()
+                    .is_none_or(|keys| !keys.iter().all(|key| self.get_idx(*key).ty().is_never()));
+                let has_getattr_fallback = getattr_class.is_some_and(|class_idx| {
+                    self.get_idx(class_idx)
+                        .0
+                        .as_ref()
+                        .is_some_and(|cls| self.get_class_member(cls, &dunder::GETATTR).is_some())
+                });
+                if may_be_uninitialized && !has_getattr_fallback {
+                    errors
+                        .error_builder(
+                            *range,
+                            ErrorKind::MissingAttribute,
+                            format!("Attribute `{name}` may be uninitialized"),
+                        )
+                        .emit();
+                }
+            }
             BindingExpect::ForwardRefUnion {
                 left,
                 right,

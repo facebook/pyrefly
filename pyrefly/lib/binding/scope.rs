@@ -1118,13 +1118,21 @@ pub struct InstanceAttribute(
     pub Option<Idx<KeyAnnotation>>,
     pub TextRange,
     pub MethodSelfKind,
+    pub InitializedInFlow,
 );
+
+fn instance_attribute_flow_name(name: &Name) -> Name {
+    // This cannot collide with a Python identifier, but lets attribute initialization reuse
+    // the same branch-merging machinery as local variables.
+    Name::new(format!("$self.{name}"))
+}
 
 #[derive(Clone, Debug)]
 struct ScopeMethod {
     name: Identifier,
     self_name: Option<Identifier>,
     instance_attributes: SmallMap<Name, InstanceAttribute>,
+    return_attribute_initialization: Vec<SmallMap<Name, InitializedInFlow>>,
     parameters: SmallMap<Name, ParameterUsage>,
     yields_and_returns: YieldsAndReturns,
     is_async: bool,
@@ -1196,6 +1204,7 @@ impl ScopeMethod {
             name,
             self_name: None,
             instance_attributes: SmallMap::new(),
+            return_attribute_initialization: Vec::new(),
             parameters: SmallMap::new(),
             yields_and_returns: Default::default(),
             is_async,
@@ -2018,15 +2027,60 @@ impl Scopes {
         let scope = self.pop();
         let unused_variables = Self::collect_unused_variables(scope.variables.clone());
         match scope.kind {
-            ScopeKind::Method(method_scope) => (
-                method_scope.yields_and_returns,
-                Some(SelfAssignments {
-                    method_name: method_scope.name.id,
-                    instance_attributes: method_scope.instance_attributes,
-                }),
-                Self::collect_unused_parameters(method_scope.parameters),
-                unused_variables,
-            ),
+            ScopeKind::Method(mut method_scope) => {
+                for (name, attribute) in method_scope.instance_attributes.iter_mut() {
+                    let mut initialized = if scope.flow.has_terminated {
+                        None
+                    } else {
+                        Some(
+                            scope
+                                .flow
+                                .get_info(&instance_attribute_flow_name(name))
+                                .map_or(InitializedInFlow::Conditionally, FlowInfo::initialized),
+                        )
+                    };
+                    for return_initialization in &method_scope.return_attribute_initialization {
+                        let on_return = return_initialization
+                            .get(name)
+                            .cloned()
+                            .unwrap_or(InitializedInFlow::Conditionally);
+                        initialized = Some(match (initialized, on_return) {
+                            (None, initialized) => initialized,
+                            (Some(InitializedInFlow::Yes), InitializedInFlow::Yes) => {
+                                InitializedInFlow::Yes
+                            }
+                            (
+                                Some(InitializedInFlow::DeferredCheck(mut existing)),
+                                InitializedInFlow::DeferredCheck(mut new),
+                            ) => {
+                                existing.append(&mut new);
+                                InitializedInFlow::DeferredCheck(existing)
+                            }
+                            (
+                                Some(InitializedInFlow::Yes),
+                                InitializedInFlow::DeferredCheck(keys),
+                            )
+                            | (
+                                Some(InitializedInFlow::DeferredCheck(keys)),
+                                InitializedInFlow::Yes,
+                            ) => InitializedInFlow::DeferredCheck(keys),
+                            _ => InitializedInFlow::Conditionally,
+                        });
+                    }
+                    // If every path raises or otherwise terminates without returning an instance,
+                    // there is no successfully initialized object missing this attribute.
+                    attribute.4 = initialized.unwrap_or(InitializedInFlow::Yes);
+                }
+                (
+                    method_scope.yields_and_returns,
+                    Some(SelfAssignments {
+                        method_name: method_scope.name.id,
+                        instance_attributes: method_scope.instance_attributes,
+                    }),
+                    Self::collect_unused_parameters(method_scope.parameters),
+                    unused_variables,
+                )
+            }
             ScopeKind::Function(function_scope) => (
                 function_scope.yields_and_returns,
                 None,
@@ -2060,12 +2114,29 @@ impl Scopes {
         x: &ExprAttribute,
         value: ExprOrBinding,
         annotation: Option<Idx<KeyAnnotation>>,
+        idx: Option<Idx<Key>>,
     ) -> bool {
+        let in_loop = self.loop_depth() != 0;
         for scope in self.iter_rev_mut() {
             if let ScopeKind::Method(method_scope) = &mut scope.kind
                 && let Some(self_name) = &method_scope.self_name
                 && matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
             {
+                if let Some(idx) = idx {
+                    match scope
+                        .flow
+                        .info
+                        .entry(instance_attribute_flow_name(&x.attr.id))
+                    {
+                        Entry::Vacant(entry) => {
+                            entry.insert(FlowInfo::new_value(idx, FlowStyle::Other));
+                        }
+                        Entry::Occupied(mut entry) => {
+                            *entry.get_mut() =
+                                entry.get().updated_value(idx, FlowStyle::Other, in_loop);
+                        }
+                    }
+                }
                 if let Some(attr) = method_scope.instance_attributes.get_mut(&x.attr.id) {
                     // Accumulate subsequent assignments in the method.
                     attr.0.push(value);
@@ -2082,6 +2153,7 @@ impl Scopes {
                             annotation,
                             x.attr.range(), // Keep the range of the first assignment as the definition location.
                             method_scope.receiver_kind,
+                            InitializedInFlow::Yes,
                         ),
                     );
                 }
@@ -2843,15 +2915,43 @@ impl Scopes {
         x: StmtReturn,
         is_unreachable: bool,
     ) -> Result<(), (CurrentIdx, StmtReturn)> {
-        match self.current_yields_and_returns_mut() {
-            Some(yields_and_returns) => {
-                yields_and_returns
-                    .returns
-                    .push((ret.into_idx(), x, is_unreachable));
-                Ok(())
+        for scope in self.iter_rev_mut() {
+            match &mut scope.kind {
+                ScopeKind::Function(function) => {
+                    function
+                        .yields_and_returns
+                        .returns
+                        .push((ret.into_idx(), x, is_unreachable));
+                    return Ok(());
+                }
+                ScopeKind::Method(method) => {
+                    if !is_unreachable {
+                        let mut initialization =
+                            SmallMap::with_capacity(method.instance_attributes.len());
+                        for name in method.instance_attributes.keys() {
+                            initialization.insert(
+                                name.clone(),
+                                scope
+                                    .flow
+                                    .get_info(&instance_attribute_flow_name(name))
+                                    .map_or(
+                                        InitializedInFlow::Conditionally,
+                                        FlowInfo::initialized,
+                                    ),
+                            );
+                        }
+                        method.return_attribute_initialization.push(initialization);
+                    }
+                    method
+                        .yields_and_returns
+                        .returns
+                        .push((ret.into_idx(), x, is_unreachable));
+                    return Ok(());
+                }
+                _ => {}
             }
-            None => Err((ret, x)),
         }
+        Err((ret, x))
     }
 
     /// Record a yield in the enclosing function body there is one.
@@ -2912,7 +3012,7 @@ impl Scopes {
     /// - Panics if the current scope is not a class body.
     pub fn finish_class_and_get_field_definitions(
         &mut self,
-    ) -> SmallMap<Name, (ClassFieldDefinition, TextRange)> {
+    ) -> SmallMap<Name, (ClassFieldDefinition, TextRange, InitializedInFlow)> {
         let mut field_definitions = SmallMap::new();
         let class_body = self.pop();
         let class_scope = {
@@ -3004,14 +3104,28 @@ impl Scopes {
                         definition: value.idx,
                     },
                 };
-                field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
+                let initialized = match &value.style {
+                    FlowStyle::PossiblyUninitialized => InitializedInFlow::Conditionally,
+                    FlowStyle::MaybeInitialized(keys) => {
+                        InitializedInFlow::DeferredCheck(keys.clone())
+                    }
+                    _ => InitializedInFlow::Yes,
+                };
+                field_definitions.insert_hashed(
+                    name.owned(),
+                    (definition, static_info.range, initialized),
+                );
             }
         });
         // Merge assignments from different methods.
         // `method_attrs` yields attributes from recognized constructor methods first (e.g. __init__),
         // followed by other helper methods.
         method_attrs.into_iter().for_each(
-            |(name, method, InstanceAttribute(values, annotation, range, receiver_kind))| {
+            |(
+                name,
+                method,
+                InstanceAttribute(values, annotation, range, receiver_kind, initialized),
+            )| {
                 if let Some((
                     ClassFieldDefinition::DefinedInMethod {
                         values: existing_values,
@@ -3020,6 +3134,7 @@ impl Scopes {
                         receiver_kind: existing_receiver,
                     },
                     _,
+                    existing_initialized,
                 )) = field_definitions.get_mut(name.key())
                 {
                     if existing_method.recognized_attribute_defining_method
@@ -3039,6 +3154,31 @@ impl Scopes {
                         if matches!(receiver_kind, MethodSelfKind::Class) {
                             *existing_receiver = MethodSelfKind::Class;
                         }
+                        match (&mut *existing_initialized, initialized) {
+                            (InitializedInFlow::Yes, _) | (_, InitializedInFlow::Yes) => {
+                                *existing_initialized = InitializedInFlow::Yes;
+                            }
+                            (
+                                InitializedInFlow::DeferredCheck(existing),
+                                InitializedInFlow::DeferredCheck(mut new),
+                            ) => existing.append(&mut new),
+                            (
+                                InitializedInFlow::DeferredCheck(_),
+                                InitializedInFlow::Conditionally,
+                            )
+                            | (
+                                InitializedInFlow::Conditionally,
+                                InitializedInFlow::DeferredCheck(_),
+                            )
+                            | (
+                                InitializedInFlow::Conditionally,
+                                InitializedInFlow::Conditionally,
+                            )
+                            | (InitializedInFlow::No, _)
+                            | (_, InitializedInFlow::No) => {
+                                *existing_initialized = InitializedInFlow::Conditionally;
+                            }
+                        }
                     }
                 } else if !field_definitions.contains_key_hashed(name.as_ref()) {
                     field_definitions.insert_hashed(
@@ -3051,6 +3191,7 @@ impl Scopes {
                                 receiver_kind,
                             },
                             range,
+                            initialized,
                         ),
                     );
                 }
