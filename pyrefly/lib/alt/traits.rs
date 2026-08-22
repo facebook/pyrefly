@@ -152,11 +152,22 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
     }
 
     fn create_recursive(answers: &AnswersSolver<Ans>, binding: &Self::Value) -> Var {
-        answers.create_recursive(binding)
+        if matches!(binding, Binding::Function { .. }) {
+            // Function-definition SCCs grow from `Never`, so they do not need a recursive
+            // variable. A variable nested in the callable's return type cannot be simplified
+            // by `record_recursive` and would remain `Unknown` in the inferred return.
+            Var::ZERO
+        } else {
+            answers.create_recursive(binding)
+        }
     }
 
-    fn promote_recursive(_heap: &TypeHeap, x: Var) -> Self::Answer {
-        TypeInfo::of_ty(Type::Var(x))
+    fn promote_recursive(heap: &TypeHeap, x: Var) -> Self::Answer {
+        TypeInfo::of_ty(if x == Var::ZERO {
+            heap.mk_never()
+        } else {
+            Type::Var(x)
+        })
     }
 
     fn record_recursive(
@@ -164,6 +175,10 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
         answer: Arc<TypeInfo>,
         recursive: Var,
     ) -> Arc<TypeInfo> {
+        if recursive == Var::ZERO {
+            // The `Never` function-definition seed does not occur in the computed answer.
+            return answer;
+        }
         let ty_info = answer
             .arc_clone()
             .map_ty(|ty| answers.record_recursive(ty, recursive));
