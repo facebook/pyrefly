@@ -475,6 +475,8 @@ pub enum FunctionKind {
     UsesShapeDsl,
     /// The `shape_extensions.defines_assert_shape` decorator function itself.
     DefinesAssertShape,
+    /// `sqlalchemy.orm.mapped_column()`.
+    SqlAlchemyMappedColumn,
 }
 
 impl FunctionKind {
@@ -537,6 +539,9 @@ impl FunctionKind {
             ("numba.core.decorators", "njit") => Self::NumbaNjit,
             ("shape_extensions", "uses_shape_dsl") => Self::UsesShapeDsl,
             ("shape_extensions", "defines_assert_shape") => Self::DefinesAssertShape,
+            ("sqlalchemy.orm" | "sqlalchemy.orm._orm_constructors", "mapped_column") => {
+                Self::SqlAlchemyMappedColumn
+            }
             _ => Self::Def(id),
         }
     }
@@ -578,6 +583,7 @@ impl FunctionKind {
             Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _) => id.qname.module_name(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
             Self::DefinesAssertShape => ModuleName::from_str("shape_extensions"),
+            Self::SqlAlchemyMappedColumn => ModuleName::from_str("sqlalchemy.orm"),
         }
     }
 
@@ -618,6 +624,7 @@ impl FunctionKind {
             Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _) => Cow::Borrowed(id.qname.id()),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
             Self::DefinesAssertShape => Cow::Owned(Name::new_static("defines_assert_shape")),
+            Self::SqlAlchemyMappedColumn => Cow::Owned(Name::new_static("mapped_column")),
         }
     }
 
@@ -658,6 +665,7 @@ impl FunctionKind {
             Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _) => id.cls.clone(),
             Self::UsesShapeDsl => None,
             Self::DefinesAssertShape => None,
+            Self::SqlAlchemyMappedColumn => None,
         }
     }
 
