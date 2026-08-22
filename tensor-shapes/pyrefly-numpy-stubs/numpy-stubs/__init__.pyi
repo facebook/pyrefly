@@ -6,8 +6,8 @@
 from typing import Any, Literal, overload
 
 import shape_extensions
-from numpy._shapes import diag_extent, matmul_2d_ir, reduce_shape
-from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar, uses_shape_dsl
+from numpy._shapes import diag_extent, matmul_shape, reduce_shape
+from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
 
 from . import linalg as linalg, random as random
 
@@ -142,8 +142,6 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     def __rpow__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
     ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
-    # TODO: Bridge until operator dunders/bound methods can share the DSL-backed
-    # `np.matmul` rule and diagnostics.
     def __matmul__[N: IntVar, M: IntVar, P: IntVar](
         self: ndarray[[N, M], DType],
         other: ndarray[[M, P]],
@@ -297,8 +295,14 @@ def argmin[N: IntVar, M: IntVar](
     *,
     keepdims: Literal[False] = False,
 ) -> ndarray[[N], dtype[intp]]: ...
-@uses_shape_dsl(matmul_2d_ir)
-def matmul(a: ndarray, b: ndarray, /) -> ndarray: ...
+
+# NumPy uses the typed DSL for this rule; Torch still uses the legacy shaped-array
+# mechanism. This MVP models only two-dimensional inputs. The result dtype stays
+# gradual because dtype promotion is not modeled, while `ndarray.__matmul__`
+# carries the left operand's dtype.
+def matmul[LeftShape: _Shape, RightShape: _Shape](
+    a: ndarray[LeftShape], b: ndarray[RightShape], /
+) -> ndarray[matmul_shape(LeftShape, RightShape), Any]: ...
 
 # TODO(stroxler): Replace these finite tuple-shape constructor overloads with a
 # generic `Shape: tuple[int, ...]` overload once carrier shapes flow through

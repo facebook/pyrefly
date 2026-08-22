@@ -5,7 +5,6 @@
 
 import shape_extensions.dsl as dsl
 from shape_extensions import Int, IntTuple, type_shape_dsl_function
-from shape_extensions.dsl import Error, shape_dsl_function, ShapedArray
 
 @type_shape_dsl_function
 def int_min(a: Int, b: Int) -> Int:
@@ -24,17 +23,19 @@ def diag_extent(n: Int, k: int) -> Int:
         return n - k
     return n + k
 
-@shape_dsl_function
-def matmul_2d_ir(a: ShapedArray, b: ShapedArray) -> ShapedArray:
-    if len(a.shape) != 2 or len(b.shape) != 2:
-        raise Error("matmul expects 2-D arrays")
+@type_shape_dsl_function
+def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    if len(left) != 2 or len(right) != 2:
+        return dsl.Invalid("matmul expects 2-D arrays")
+    left_inner = left[1]
+    right_inner = right[0]
     if (
-        isinstance(a.shape[1], int)
-        and isinstance(b.shape[0], int)
-        and a.shape[1] != b.shape[0]
+        dsl.is_concrete_int(left_inner)
+        and dsl.is_concrete_int(right_inner)
+        and left_inner != right_inner
     ):
-        raise Error("matmul inner dimensions must match")
-    return ShapedArray(shape=[a.shape[0], b.shape[1]])
+        return dsl.Invalid("matmul inner dimensions must match")
+    return dsl.IntTuple((left[0], right[1]))
 
 @type_shape_dsl_function
 def reduce_shape(
