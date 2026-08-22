@@ -60,7 +60,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 TypeFormContext::FunctionArgument,
                 errors,
             ));
-            if !b.is_error() && !self.is_equivalent(&a, &b) {
+            // Pseudo-generic arguments are an inference detail, not part of the user-visible type.
+            let erase_pseudo_generic_args = |ty: &Type| {
+                ty.clone().transform(&mut |ty| {
+                    if let Type::ClassType(class_type) = ty
+                        && class_type.tparams().is_pseudo_generic()
+                    {
+                        for arg in class_type.targs_mut().as_mut() {
+                            *arg = Type::any_implicit();
+                        }
+                    }
+                })
+            };
+            if !b.is_error()
+                && !self.is_equivalent(&a, &b)
+                && !self.is_equivalent(
+                    &erase_pseudo_generic_args(&a),
+                    &erase_pseudo_generic_args(&b),
+                )
+            {
                 self.error(
                     errors,
                     range,
