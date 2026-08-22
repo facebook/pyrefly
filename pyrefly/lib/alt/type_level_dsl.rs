@@ -168,6 +168,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some("`@type_shape_dsl_function` comparison operands must both be annotated as `Int` or both be `Flag[int]`")
                         }
                     }
+                    TypeShapeDslConditionKind::GeneratorElementSelfCompare(_) => None,
                     TypeShapeDslConditionKind::IsConcreteInt {
                         parameter_origins,
                         ..
@@ -242,6 +243,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter")
                         }
                     }
+                    TypeShapeDslExpressionKind::GeneratorSourceSlot {
+                        parameter_origins: Some(parameters),
+                        narrowed,
+                        ..
+                    } => {
+                        let valid = parameters.iter().all(|parameter| {
+                            matches!(
+                                parameter_domains[*parameter],
+                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
+                            ) || match parameter_domains[*parameter] {
+                                TypeShapeDslInputDomain::Flag(domain) if *narrowed => {
+                                    domain.is_subset_of(type_shape_dsl_flag_domain())
+                                }
+                                TypeShapeDslInputDomain::Flag(domain) => {
+                                    domain == FlagDomain::of(FlagMember::Tuple)
+                                }
+                                _ => false,
+                            }
+                        });
+                        (!valid).then_some(
+                            "`@type_shape_dsl_function` generator source must be an `IntTuple` or Flag sequence",
+                        )
+                    }
                     TypeShapeDslExpressionKind::IntTupleConstructor => {
                         (result != TypeShapeDslDomain::IntTuple).then_some(
                             "`@type_shape_dsl_function` dsl.IntTuple requires an `IntTuple` result",
@@ -275,6 +299,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::DimensionSlot { .. }
                     | TypeShapeDslExpressionKind::IntTupleIndex { .. }
                     | TypeShapeDslExpressionKind::IntTupleLength { .. }
+                    | TypeShapeDslExpressionKind::GeneratorSourceSlot { .. }
+                    | TypeShapeDslExpressionKind::GeneratorElementAsDimension(_)
+                    | TypeShapeDslExpressionKind::GeneratorElementAsFlagInt(_)
                     | TypeShapeDslExpressionKind::Slot(_)
                     | TypeShapeDslExpressionKind::FlagValueSlot { .. }
                     | TypeShapeDslExpressionKind::FlagIntLiteral(_)
@@ -284,7 +311,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::FlagSequenceLength
                     | TypeShapeDslExpressionKind::FlagIntArithmetic(_)
                     | TypeShapeDslExpressionKind::DimensionTuple
-                    | TypeShapeDslExpressionKind::Conditional => None,
+                    | TypeShapeDslExpressionKind::Conditional
+                    | TypeShapeDslExpressionKind::DimensionGenerator { .. }
+                    | TypeShapeDslExpressionKind::FlagGenerator { .. } => None,
                 };
                 if let Some(message) = invalid_domain {
                     self.error(
@@ -434,6 +463,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && class.qname().id().as_str() == "range"
         {
             return Some(TypeShapeDslIntrinsic::Range);
+        }
+        if let Type::ClassDef(class) = &callee
+            && class.qname().module_name().as_str() == "builtins"
+            && class.qname().id().as_str() == "tuple"
+        {
+            return Some(TypeShapeDslIntrinsic::Tuple);
         }
         let Some(CalleeKind::Function(function_kind)) = callee.callee_kind() else {
             return None;

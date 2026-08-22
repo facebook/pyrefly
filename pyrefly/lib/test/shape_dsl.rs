@@ -6768,7 +6768,7 @@ def list_argument(shape: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def generator_argument(shape: IntTuple) -> IntTuple:
-    return dsl.IntTuple(x for x in shape)  # E: @type_shape_dsl_function `dsl.IntTuple` argument must be a fixed tuple
+    return dsl.IntTuple(x for x in shape)
 
 @type_shape_dsl_function
 def mutation(shape: IntTuple) -> IntTuple:
@@ -6814,5 +6814,221 @@ def unsupported_unary(shape: IntTuple) -> IntTuple:
     return dsl.IntTuple((~1,))  # E: @type_shape_dsl_function dimension literal supports only unary `+` or `-`
 
 def invalid_metadata() -> Tensor[local_lookalike(IntTuple[2])]: ...  # E: Expected a type-level DSL function
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_bounded_generators,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def copy_shape(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(dim for dim in shape)
+
+@type_shape_dsl_function
+def reflexive_filter(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(dim for dim in shape if dim == dim)
+
+@type_shape_dsl_function
+def from_range(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(index if index > 0 else 7 for index in range(len(shape)) if index != 1)
+
+@type_shape_dsl_function
+def from_sequence(shape: IntTuple) -> IntTuple:
+    values = (2, 3, 5)
+    return dsl.IntTuple(value for value in values if value != 3)
+
+@type_shape_dsl_function
+def captured_filter(shape: IntTuple, axis: int) -> IntTuple:
+    return dsl.IntTuple(index for index in range(len(shape)) if index != axis)
+
+@type_shape_dsl_function
+def captured_dimension(shape: IntTuple, dimension: Int) -> IntTuple:
+    return dsl.IntTuple(dimension for index in range(1))
+
+@type_shape_dsl_function
+def flags(shape: IntTuple) -> IntTuple:
+    axes = tuple(index for index in range(len(shape)) if index != 0)
+    if 1 in axes:
+        return dsl.IntTuple((shape[0],))
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def dimension_flags(shape: IntTuple) -> IntTuple:
+    axes = tuple(dim for dim in shape)
+    if 3 in axes:
+        return dsl.IntTuple((shape[0],))
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def narrowed_flag_source(
+    shape: IntTuple, axis: int | tuple[int, ...] | None,
+) -> IntTuple:
+    if axis is None:
+        return dsl.IntTuple(())
+    elif dsl.is_int_value(axis):
+        return dsl.IntTuple(())
+    return dsl.IntTuple(item for item in axis)
+
+@type_shape_dsl_function
+def empty(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(index for index in range(0))
+
+@type_shape_dsl_function
+def bounded_fallback(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(index for index in range(4097))
+
+@type_shape_dsl_function
+def lazy_unknown_filter(shape: IntTuple, axis: int) -> IntTuple:
+    values = tuple(item // 0 for item in range(1) if item == axis)  # E: Cannot divide by zero
+    if 0 in values:
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def later_included_invalid(shape: IntTuple, axis: int) -> IntTuple:
+    values = tuple(1 // (item - 1) for item in range(2) if item != 0 or item == axis)
+    return shape
+
+@type_shape_dsl_function
+def bounded_prefix_error(shape: IntTuple) -> IntTuple:
+    values = tuple(1 // item for item in range(4097))
+    return shape
+
+@type_shape_dsl_function
+def shadowed(shape: IntTuple, index: Int) -> IntTuple:
+    axes = tuple(index for index in range(2))
+    if index == index:
+        return shape
+    return dsl.IntTuple(())
+
+def apply_copy[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[copy_shape(Shape)]: ...
+def apply_reflexive[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[reflexive_filter(Shape)]: ...
+def apply_range[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[from_range(Shape)]: ...
+def apply_sequence[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[from_sequence(Shape)]: ...
+def apply_capture[Shape: IntTuple, Axis: Flag[int]](
+    x: Tensor[Shape], axis: Axis,
+) -> Tensor[captured_filter(Shape, Axis)]: ...
+def apply_flags[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[flags(Shape)]: ...
+def apply_dimension[Dimension: IntVar](x: Tensor[[Dimension]]) -> Tensor[captured_dimension(IntTuple[2], Dimension)]: ...
+def apply_dimension_flags[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[dimension_flags(Shape)]: ...
+def apply_narrowed_source[Axis: Flag[int | tuple[int, ...] | None]](
+    axis: Axis,
+) -> Tensor[narrowed_flag_source(IntTuple[2, 3], Axis)]: ...
+def apply_empty[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[empty(Shape)]: ...
+def apply_bounded[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[bounded_fallback(Shape)]: ...
+def anonymous_gradual(x: Tensor[[int, 3]]) -> Tensor[copy_shape(IntTuple[int, 3])]: ...
+def lazy_fallback(x: Tensor[[2]]) -> Tensor[lazy_unknown_filter(IntTuple[2], int)]: ...
+def apply_later_invalid(x: Tensor[[2]]) -> Tensor[later_included_invalid(IntTuple[2], int)]: ...
+def apply_prefix_error(x: Tensor[[2]]) -> Tensor[bounded_prefix_error(IntTuple[2])]: ...
+def apply_shadowed[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[shadowed(Shape, Int[9])]: ...
+
+def broad() -> Tensor[captured_filter(IntTuple[2, 3], int)]: ...
+def broad_dimension(x: Tensor[[2]]) -> Tensor[captured_dimension(IntTuple[2], Int)]: ...
+
+def test[N: IntVar](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[N, 3]], one_dim: Tensor[[N]], literal: Tensor[[2]], anonymous: Tensor[[int, 3]], gradual: Tensor[IntTuple]) -> None:
+    assert_type(apply_copy(concrete), Tensor[[2, 3, 4]])
+    assert_type(apply_copy(symbolic), Tensor[[N, 3]])
+    assert_type(apply_reflexive(symbolic), Tensor[[N, 3]])
+    reveal_type(apply_copy(gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_range(concrete), Tensor[[7, 2]])
+    assert_type(apply_sequence(concrete), Tensor[[2, 5]])
+    reveal_type(apply_capture(concrete, 1))  # E: revealed type: Tensor[[0, 2]]
+    reveal_type(broad())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_flags(concrete), Tensor[[2]])
+    assert_type(apply_dimension(one_dim), Tensor[[N]])
+    assert_type(broad_dimension(literal), Tensor[[int]])
+    assert_type(apply_dimension_flags(concrete), Tensor[[2]])
+    assert_type(apply_narrowed_source((2, 3)), Tensor[[2, 3]])
+    assert_type(apply_empty(concrete), Tensor[[]])
+    reveal_type(apply_bounded(concrete))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(anonymous_gradual(anonymous), Tensor[[int, 3]])
+    reveal_type(lazy_fallback(literal))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    apply_later_invalid(literal)  # E: Flag integer division by zero
+    apply_prefix_error(literal)  # E: Flag integer division by zero
+    assert_type(apply_shadowed(concrete), Tensor[[2, 3, 4]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_bounded_generators,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, type_shape_dsl_function
+from torch import Tensor
+
+@type_shape_dsl_function
+def multiple(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x in range(2) for y in range(2))  # E: generators require exactly one
+
+@type_shape_dsl_function
+def destructured(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x, y in ((1, 2),))  # E: generator target must be exactly one bare name
+
+@type_shape_dsl_function
+def arbitrary_iterator(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x in [1, 2])  # E: generator source must be an IntTuple
+
+@type_shape_dsl_function
+def multiple_filters(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x in range(3) if x != 0 if x != 1)  # E: support at most one
+
+@type_shape_dsl_function
+def wrong_inttuple_element(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(shape for x in range(1))  # E: IntTuple elements must be
+
+@type_shape_dsl_function
+def wrong_tuple_element(shape: IntTuple) -> IntTuple:
+    values = tuple(shape for x in range(1))  # E: Flag operation requires a compatible Flag parameter
+    return shape
+
+@type_shape_dsl_function
+def nested(shape: IntTuple) -> IntTuple:
+    values = tuple(x for x in tuple(y for y in range(2)))  # E: nested generators are not supported
+    return shape
+
+async def async_values():
+    yield 1
+
+@type_shape_dsl_function
+def async_generator(shape: IntTuple) -> IntTuple:
+    values = tuple(item async for item in async_values())  # E: async generators are not supported  # E: not assignable to parameter `iterable`
+    return shape
+
+@type_shape_dsl_function
+def mutation(shape: IntTuple) -> IntTuple:
+    captured = 0
+    values = tuple((captured := item) for item in range(2))  # E: Flag integer expression is not supported
+    return shape
+
+@type_shape_dsl_function
+def escaped(shape: IntTuple) -> IntTuple:
+    values = tuple(item for item in range(2))
+    if item == 0:  # E: local value must be assigned before use  # E: Could not find name
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_element(shape: IntTuple) -> IntTuple:
+    values = tuple(item // 0 for item in range(2))  # E: Cannot divide by zero
+    return shape
+
+@type_shape_dsl_function
+def invalid_source(shape: IntTuple) -> IntTuple:
+    values = tuple(item for item in range(0, 2, 0))
+    return shape
+
+def apply_invalid_element(x: Tensor[[2, 3]]) -> Tensor[invalid_element(IntTuple[2, 3])]: ...
+def apply_invalid_source(x: Tensor[[2, 3]]) -> Tensor[invalid_source(IntTuple[2, 3])]: ...
+
+def test(x: Tensor[[2, 3]]) -> None:
+    apply_invalid_element(x)  # E: Flag integer division by zero
+    apply_invalid_source(x)  # E: range() arg 3 must not be zero
 "#,
 );
