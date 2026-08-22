@@ -19,6 +19,7 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprCall;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Parameters;
@@ -40,6 +41,7 @@ use crate::equality::TypeEq as TypeEqTrait;
 use crate::equality::TypeEqCtx;
 use crate::literal::Lit;
 use crate::shaped_array::IntTuple;
+use crate::shaped_array::IntTupleView;
 use crate::shaped_array::broadcast_shapes;
 use crate::shaped_array::tuple_carrier_to_shape;
 use crate::type_var::FlagDomain;
@@ -82,6 +84,7 @@ impl fmt::Display for TypeShapeDslInputDomain {
 pub struct ResolvedTypeShapeDslFunction {
     definition: Arc<ValidatedTypeShapeDslFunction>,
     parameter_domains: Vec<TypeShapeDslInputDomain>,
+    result_domain: TypeShapeDslDomain,
 }
 
 impl Visit<Type> for TypeShapeDslDomain {
@@ -142,6 +145,9 @@ pub enum TypeShapeDslIntrinsic {
     Broadcast,
     Gradual(TypeShapeDslDomain),
     IsConcreteInt,
+    IntTuple,
+    Invalid,
+    Len,
 }
 
 /// What a validated DSL body returns. Resolving this depends on more than the AST, so it
@@ -158,6 +164,8 @@ pub enum TypeShapeDslReturnKind {
         op: TypeShapeDslArithmeticOp,
         right: usize,
     },
+    Expression,
+    Invalid,
     Gradual(TypeShapeDslDomain),
 }
 
@@ -176,12 +184,31 @@ pub struct TypeShapeDslReturn {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TypeShapeDslExpressionKind {
+    DimensionParameter(usize),
+    DimensionLiteral(Option<i64>),
+    IntTupleIndex { shape: usize, index: Option<i64> },
+    DimensionTuple,
+    IntTupleConstructor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TypeShapeDslExpression {
+    range: TextRange,
+    kind: TypeShapeDslExpressionKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslConditionKind {
     Equal(usize, usize),
     IsConcreteInt(usize),
     LessThan(usize, usize),
     FlagIntLessThanLiteral {
         parameter: usize,
+        literal: Option<i64>,
+    },
+    LengthEqualLiteral {
+        shape: usize,
         literal: Option<i64>,
     },
 }
@@ -208,6 +235,16 @@ enum IntegerLiteral {
     Value(i64),
 }
 
+impl IntegerLiteral {
+    fn into_value(self) -> Result<Option<i64>, ()> {
+        match self {
+            Self::NotLiteral => Err(()),
+            Self::Unrepresentable => Ok(None),
+            Self::Value(value) => Ok(Some(value)),
+        }
+    }
+}
+
 fn integer_literal(expr: &Expr) -> IntegerLiteral {
     match expr {
         Expr::NumberLiteral(number) => match &number.value {
@@ -216,18 +253,24 @@ fn integer_literal(expr: &Expr) -> IntegerLiteral {
                 .map_or(IntegerLiteral::Unrepresentable, IntegerLiteral::Value),
             _ => IntegerLiteral::NotLiteral,
         },
-        Expr::UnaryOp(unary) if unary.op == UnaryOp::USub => {
+        Expr::UnaryOp(unary) if matches!(unary.op, UnaryOp::UAdd | UnaryOp::USub) => {
             let Expr::NumberLiteral(number) = unary.operand.as_ref() else {
                 return IntegerLiteral::NotLiteral;
             };
             let Number::Int(value) = &number.value else {
                 return IntegerLiteral::NotLiteral;
             };
-            value
-                .as_i64()
-                .and_then(i64::checked_neg)
-                .or_else(|| (value.as_u64() == Some(i64::MAX as u64 + 1)).then_some(i64::MIN))
-                .map_or(IntegerLiteral::Unrepresentable, IntegerLiteral::Value)
+            if unary.op == UnaryOp::UAdd {
+                value
+                    .as_i64()
+                    .map_or(IntegerLiteral::Unrepresentable, IntegerLiteral::Value)
+            } else {
+                value
+                    .as_i64()
+                    .and_then(i64::checked_neg)
+                    .or_else(|| (value.as_u64() == Some(i64::MAX as u64 + 1)).then_some(i64::MIN))
+                    .map_or(IntegerLiteral::Unrepresentable, IntegerLiteral::Value)
+            }
         }
         _ => IntegerLiteral::NotLiteral,
     }
@@ -244,6 +287,7 @@ struct DslValidator<'a, F> {
     resolve_intrinsic: &'a F,
     returns: Vec<TypeShapeDslReturn>,
     conditions: Vec<TypeShapeDslCondition>,
+    expressions: Vec<TypeShapeDslExpression>,
 }
 
 impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
@@ -253,6 +297,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             resolve_intrinsic,
             returns: Vec::new(),
             conditions: Vec::new(),
+            expressions: Vec::new(),
         }
     }
 
@@ -291,6 +336,112 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 message: "body supports only `if` and `return`",
             }),
         }
+    }
+
+    fn validate_dimension_expression(
+        &mut self,
+        expression: &Expr,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        let kind = match expression {
+            Expr::Name(_) => {
+                let Some(parameter) = parameter_index(self.parameters, expression) else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: expression.range(),
+                        message: "dimension name must match a parameter name",
+                    });
+                };
+                TypeShapeDslExpressionKind::DimensionParameter(parameter)
+            }
+            Expr::NumberLiteral(_) => {
+                let Ok(literal) = integer_literal(expression).into_value() else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: expression.range(),
+                        message: "dimension literal must be an integer",
+                    });
+                };
+                TypeShapeDslExpressionKind::DimensionLiteral(literal)
+            }
+            Expr::UnaryOp(unary) if matches!(unary.op, UnaryOp::UAdd | UnaryOp::USub) => {
+                let Ok(literal) = integer_literal(expression).into_value() else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: expression.range(),
+                        message: "dimension literal must be an integer",
+                    });
+                };
+                TypeShapeDslExpressionKind::DimensionLiteral(literal)
+            }
+            Expr::UnaryOp(_) => {
+                return Err(TypeShapeDslDefinitionError {
+                    range: expression.range(),
+                    message: "dimension literal supports only unary `+` or `-`",
+                });
+            }
+            Expr::Subscript(subscript) => {
+                let Some(shape) = parameter_index(self.parameters, &subscript.value) else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: subscript.value.range(),
+                        message: "indexed value must name an `IntTuple` parameter",
+                    });
+                };
+                let Ok(index) = integer_literal(&subscript.slice).into_value() else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: subscript.slice.range(),
+                        message: "`IntTuple` index must be an integer literal",
+                    });
+                };
+                TypeShapeDslExpressionKind::IntTupleIndex { shape, index }
+            }
+            _ => {
+                return Err(TypeShapeDslDefinitionError {
+                    range: expression.range(),
+                    message: "`IntTuple` elements must be Int parameters, integer literals, or indexed IntTuple parameters",
+                });
+            }
+        };
+        self.expressions.push(TypeShapeDslExpression {
+            range: expression.range(),
+            kind,
+        });
+        Ok(())
+    }
+
+    fn validate_int_tuple_constructor(
+        &mut self,
+        call: &ExprCall,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        if call.arguments.args.len() != 1
+            || !call.arguments.keywords.is_empty()
+            || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
+        {
+            return Err(TypeShapeDslDefinitionError {
+                range: call.arguments.range,
+                message: "`dsl.IntTuple` requires exactly one positional tuple argument",
+            });
+        }
+        let Expr::Tuple(tuple) = &call.arguments.args[0] else {
+            return Err(TypeShapeDslDefinitionError {
+                range: call.arguments.args[0].range(),
+                message: "`dsl.IntTuple` argument must be a fixed tuple",
+            });
+        };
+        for element in &tuple.elts {
+            if matches!(element, Expr::Starred(_)) {
+                return Err(TypeShapeDslDefinitionError {
+                    range: element.range(),
+                    message: "`dsl.IntTuple` does not support starred elements",
+                });
+            }
+            self.validate_dimension_expression(element)?;
+        }
+        self.expressions.push(TypeShapeDslExpression {
+            range: tuple.range,
+            kind: TypeShapeDslExpressionKind::DimensionTuple,
+        });
+        self.expressions.push(TypeShapeDslExpression {
+            range: call.range,
+            kind: TypeShapeDslExpressionKind::IntTupleConstructor,
+        });
+        Ok(())
     }
 
     fn validate_return(
@@ -355,10 +506,26 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     };
                     TypeShapeDslReturnKind::Broadcast { left, right }
                 }
-                Some(TypeShapeDslIntrinsic::IsConcreteInt) | None => {
+                Some(TypeShapeDslIntrinsic::IntTuple) => {
+                    self.validate_int_tuple_constructor(call)?;
+                    TypeShapeDslReturnKind::Expression
+                }
+                Some(TypeShapeDslIntrinsic::Invalid) => {
+                    if call.arguments.args.len() != 1
+                        || !call.arguments.keywords.is_empty()
+                        || !matches!(call.arguments.args.first(), Some(Expr::StringLiteral(_)))
+                    {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: call.arguments.range,
+                            message: "`dsl.Invalid` requires exactly one positional string literal",
+                        });
+                    }
+                    TypeShapeDslReturnKind::Invalid
+                }
+                Some(TypeShapeDslIntrinsic::IsConcreteInt | TypeShapeDslIntrinsic::Len) | None => {
                     return Err(TypeShapeDslDefinitionError {
                         range: return_stmt.range,
-                        message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression",
+                        message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)` or `dsl.IntTuple(...)`",
                     });
                 }
             },
@@ -387,7 +554,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: return_stmt.range,
-                    message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression",
+                    message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)` or `dsl.IntTuple(...)`",
                 });
             }
         };
@@ -444,6 +611,36 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
     ) -> Result<TypeShapeDslConditionKind, TypeShapeDslDefinitionError> {
         match condition {
             Expr::Compare(compare) => {
+                if compare.ops.len() == 1
+                    && compare.ops[0] == CmpOp::Eq
+                    && compare.comparators.len() == 1
+                    && let Expr::Call(call) = compare.left.as_ref()
+                    && (self.resolve_intrinsic)(&call.func) == Some(TypeShapeDslIntrinsic::Len)
+                {
+                    if call.arguments.args.len() != 1
+                        || !call.arguments.keywords.is_empty()
+                        || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
+                    {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: call.arguments.range,
+                            message: "`len` requires exactly one positional argument",
+                        });
+                    }
+                    let Some(shape) = parameter_index(self.parameters, &call.arguments.args[0])
+                    else {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: call.arguments.args[0].range(),
+                            message: "`len` argument must name an `IntTuple` parameter",
+                        });
+                    };
+                    let Ok(literal) = integer_literal(&compare.comparators[0]).into_value() else {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: compare.comparators[0].range(),
+                            message: "`len` comparison requires an integer literal",
+                        });
+                    };
+                    return Ok(TypeShapeDslConditionKind::LengthEqualLiteral { shape, literal });
+                }
                 if compare.ops.len() != 1
                     || !matches!(compare.ops[0], CmpOp::Eq | CmpOp::Lt)
                     || compare.comparators.len() != 1
@@ -599,6 +796,7 @@ impl ParsedTypeShapeDslFunction {
             parsed: self.clone(),
             returns: validator.returns,
             conditions: validator.conditions,
+            expressions: validator.expressions,
         })
     }
 
@@ -717,6 +915,7 @@ pub struct ValidatedTypeShapeDslFunction {
     // These source-keyed facts are validation invariants for the retained AST, not a body IR.
     returns: Vec<TypeShapeDslReturn>,
     conditions: Vec<TypeShapeDslCondition>,
+    expressions: Vec<TypeShapeDslExpression>,
 }
 
 // `TextRange` has no total order, so the resolved metadata is ordered by its offsets. Like the
@@ -751,6 +950,12 @@ impl Ord for ValidatedTypeShapeDslFunction {
                     .iter()
                     .map(|x| (offsets(x.range), x.kind))
                     .cmp(other.conditions.iter().map(|x| (offsets(x.range), x.kind)))
+            })
+            .then_with(|| {
+                self.expressions
+                    .iter()
+                    .map(|x| (offsets(x.range), x.kind))
+                    .cmp(other.expressions.iter().map(|x| (offsets(x.range), x.kind)))
             })
     }
 }
@@ -801,6 +1006,10 @@ impl ValidatedTypeShapeDslFunction {
     pub fn conditions(&self) -> impl Iterator<Item = TypeShapeDslCondition> + '_ {
         self.conditions.iter().copied()
     }
+
+    pub fn expressions(&self) -> impl Iterator<Item = TypeShapeDslExpression> + '_ {
+        self.expressions.iter().copied()
+    }
 }
 
 impl TypeShapeDslReturn {
@@ -823,10 +1032,21 @@ impl TypeShapeDslCondition {
     }
 }
 
+impl TypeShapeDslExpression {
+    pub fn range(self) -> TextRange {
+        self.range
+    }
+
+    pub fn kind(self) -> TypeShapeDslExpressionKind {
+        self.kind
+    }
+}
+
 impl ResolvedTypeShapeDslFunction {
     pub fn try_new(
         definition: Arc<ValidatedTypeShapeDslFunction>,
         parameter_domains: Vec<TypeShapeDslInputDomain>,
+        result_domain: TypeShapeDslDomain,
     ) -> Option<Self> {
         if definition.parameter_count() != parameter_domains.len() {
             return None;
@@ -834,12 +1054,8 @@ impl ResolvedTypeShapeDslFunction {
         let resolved = Self {
             definition,
             parameter_domains,
+            result_domain,
         };
-        let result_domain = resolved
-            .definition
-            .returns()
-            .next()
-            .and_then(|return_| resolved.return_domain(return_.kind()))?;
         if !resolved
             .definition
             .returns()
@@ -863,13 +1079,7 @@ impl ResolvedTypeShapeDslFunction {
     }
 
     pub fn result_domain(&self) -> TypeShapeDslDomain {
-        let return_ = self
-            .definition
-            .returns()
-            .next()
-            .expect("validated type-level DSL function must return");
-        self.return_domain(return_.kind())
-            .expect("resolved type-level DSL returns have a value domain")
+        self.result_domain
     }
 
     fn return_domain(&self, kind: TypeShapeDslReturnKind) -> Option<TypeShapeDslDomain> {
@@ -880,6 +1090,8 @@ impl ResolvedTypeShapeDslFunction {
             },
             TypeShapeDslReturnKind::Broadcast { .. } => Some(TypeShapeDslDomain::IntTuple),
             TypeShapeDslReturnKind::IntFlagArithmetic { .. } => Some(TypeShapeDslDomain::Int),
+            TypeShapeDslReturnKind::Expression => Some(TypeShapeDslDomain::IntTuple),
+            TypeShapeDslReturnKind::Invalid => Some(self.result_domain),
             TypeShapeDslReturnKind::Gradual(domain) => Some(domain),
         }
     }
@@ -904,6 +1116,7 @@ pub enum TypeLevelDslFunction {
 enum DslValue {
     Int(Int),
     IntTuple(IntTuple),
+    DimensionTuple(Vec<Int>),
 }
 
 enum DslEvaluation {
@@ -1099,6 +1312,25 @@ impl ResolvedTypeShapeDslFunction {
                             );
                             evaluate_broadcast(&args[left], &args[right])?
                         }
+                        TypeShapeDslReturnKind::Expression => {
+                            let expression = return_stmt
+                                .value
+                                .as_deref()
+                                .expect("validated expression return has a value");
+                            self.evaluate_expression(expression, args)?
+                        }
+                        TypeShapeDslReturnKind::Invalid => {
+                            let Some(Expr::Call(call)) = return_stmt.value.as_deref() else {
+                                unreachable!("validated Invalid return is a call")
+                            };
+                            let Some(Expr::StringLiteral(message)) = call.arguments.args.first()
+                            else {
+                                unreachable!("validated Invalid return has a string message")
+                            };
+                            return Err(ShapeError::ShapeComputation {
+                                message: message.value.to_str().to_owned(),
+                            });
+                        }
                         TypeShapeDslReturnKind::Gradual(_) => DslEvaluation::ExplicitGradual,
                     }));
                 }
@@ -1116,6 +1348,92 @@ impl ResolvedTypeShapeDslFunction {
             }
         }
         Ok(DslControlFlow::Continue)
+    }
+
+    fn expression_kind(&self, expression: &Expr) -> TypeShapeDslExpressionKind {
+        self.definition
+            .expressions
+            .iter()
+            .find_map(|metadata| (metadata.range == expression.range()).then_some(metadata.kind))
+            .expect("validated DSL value expression must have validation metadata")
+    }
+
+    fn evaluate_expression(
+        &self,
+        expression: &Expr,
+        args: &[Type],
+    ) -> Result<DslEvaluation, ShapeError> {
+        Ok(match self.expression_kind(expression) {
+            TypeShapeDslExpressionKind::DimensionParameter(parameter) => {
+                DslValue::from_type(&args[parameter], TypeShapeDslDomain::Int)
+                    .map_or(DslEvaluation::AutomaticFallback, DslEvaluation::Value)
+            }
+            TypeShapeDslExpressionKind::DimensionLiteral(literal) => literal
+                .map_or(DslEvaluation::AutomaticFallback, |literal| {
+                    DslEvaluation::Value(DslValue::Int(Int::Literal(literal)))
+                }),
+            TypeShapeDslExpressionKind::IntTupleIndex { shape, index } => {
+                let Some(index) = index else {
+                    return Ok(DslEvaluation::AutomaticFallback);
+                };
+                let Some(shape) = IntTuple::from_shape_arg_type(&args[shape]) else {
+                    return Ok(DslEvaluation::AutomaticFallback);
+                };
+                let IntTupleView::Concrete(shape) = shape.view() else {
+                    return Ok(DslEvaluation::AutomaticFallback);
+                };
+                let length = shape.len() as i128;
+                let index = i128::from(index);
+                let index = if index < 0 { index + length } else { index };
+                if index < 0 || index >= length {
+                    return Err(ShapeError::ShapeComputation {
+                        message: "IntTuple index out of bounds".to_owned(),
+                    });
+                }
+                DslEvaluation::Value(DslValue::Int(shape[index as usize].clone()))
+            }
+            TypeShapeDslExpressionKind::DimensionTuple => {
+                let Expr::Tuple(tuple) = expression else {
+                    unreachable!("validated dimension tuple expression is a tuple")
+                };
+                let mut dimensions = Vec::with_capacity(tuple.elts.len());
+                let mut unknown = false;
+                for element in &tuple.elts {
+                    match self.evaluate_expression(element, args)? {
+                        DslEvaluation::Value(DslValue::Int(dimension)) => {
+                            dimensions.push(dimension)
+                        }
+                        DslEvaluation::AutomaticFallback | DslEvaluation::ExplicitGradual => {
+                            unknown = true;
+                        }
+                        DslEvaluation::Value(_) => {
+                            unreachable!("validated IntTuple element produces an Int value")
+                        }
+                    }
+                }
+                if unknown {
+                    DslEvaluation::AutomaticFallback
+                } else {
+                    DslEvaluation::Value(DslValue::DimensionTuple(dimensions))
+                }
+            }
+            TypeShapeDslExpressionKind::IntTupleConstructor => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated IntTuple constructor expression is a call")
+                };
+                match self.evaluate_expression(&call.arguments.args[0], args)? {
+                    DslEvaluation::Value(DslValue::DimensionTuple(dimensions)) => {
+                        DslEvaluation::Value(DslValue::IntTuple(IntTuple::new(dimensions)))
+                    }
+                    DslEvaluation::AutomaticFallback | DslEvaluation::ExplicitGradual => {
+                        DslEvaluation::AutomaticFallback
+                    }
+                    DslEvaluation::Value(_) => {
+                        unreachable!("validated IntTuple constructor receives dimensions")
+                    }
+                }
+            }
+        })
     }
 
     fn evaluate_condition(&self, condition: &Expr, args: &[Type]) -> DslCondition {
@@ -1182,6 +1500,21 @@ impl ResolvedTypeShapeDslFunction {
                     _ => DslCondition::Unknown,
                 }
             }
+            TypeShapeDslConditionKind::LengthEqualLiteral { shape, literal } => {
+                let Some(shape) = IntTuple::from_shape_arg_type(&args[shape]) else {
+                    return DslCondition::Unknown;
+                };
+                let IntTupleView::Concrete(shape) = shape.view() else {
+                    return DslCondition::Unknown;
+                };
+                match literal {
+                    Some(literal) if i128::from(literal) == shape.len() as i128 => {
+                        DslCondition::True
+                    }
+                    Some(_) => DslCondition::False,
+                    None => DslCondition::Unknown,
+                }
+            }
         }
     }
 }
@@ -1229,6 +1562,9 @@ impl DslValue {
         match self {
             Self::Int(value) => Type::Int(value),
             Self::IntTuple(value) => value.to_shape_arg_type(),
+            Self::DimensionTuple(_) => {
+                unreachable!("intermediate DSL values cannot be returned directly")
+            }
         }
     }
 }

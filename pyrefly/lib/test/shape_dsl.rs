@@ -6156,3 +6156,192 @@ symbolic: IntTuple[2, *Elements[IntTuple], 3]
         }
     }
 }
+
+testcase!(
+    test_type_shape_dsl_int_tuple_values,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Elements, Int, IntTuple, IntVar, type_shape_dsl_function
+from shape_extensions.dsl import Invalid as invalid_alias
+from shape_extensions.dsl import IntTuple as make_shape
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def reorder(shape: IntTuple) -> IntTuple:
+    if len(shape) == 3:
+        return dsl.IntTuple((shape[-1], shape[0], 7))
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def imported_alias(shape: IntTuple) -> IntTuple:
+    return make_shape((shape[0],))
+
+@type_shape_dsl_function
+def boundaries(shape: IntTuple) -> IntTuple:
+    if len(shape) == 3:
+        return dsl.IntTuple((shape[-3], shape[2], +7))
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def empty(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def out_of_bounds(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[3],))
+
+@type_shape_dsl_function
+def negative_out_of_bounds(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[-4],))
+
+@type_shape_dsl_function
+def unknown_then_out_of_bounds(unknown: Int, shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((unknown, shape[3]))
+
+@type_shape_dsl_function
+def rank_two_prefix(shape: IntTuple) -> IntTuple:
+    if len(shape) == 2:
+        return dsl.IntTuple((shape[0],))
+    return dsl.Invalid("expected rank two")
+
+@type_shape_dsl_function
+def first_dimension(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[0],))
+
+@type_shape_dsl_function
+def explicit_unknown(shape: IntTuple) -> IntTuple:
+    if len(shape) == 1:
+        return shape
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def explicit_invalid(shape: IntTuple) -> IntTuple:
+    if len(shape) == 1:
+        return shape
+    return invalid_alias("expected rank one")
+
+@type_shape_dsl_function
+def always_invalid(dim: Int) -> Int:
+    return dsl.Invalid("no integer result")
+
+def apply_reorder[S: IntTuple](x: Tensor[S]) -> Tensor[reorder(S)]: ...
+def apply_alias[S: IntTuple](x: Tensor[S]) -> Tensor[imported_alias(S)]: ...
+def apply_boundaries[S: IntTuple](x: Tensor[S]) -> Tensor[boundaries(S)]: ...
+def apply_empty[S: IntTuple](x: Tensor[S]) -> Tensor[empty(S)]: ...
+def apply_oob[S: IntTuple](x: Tensor[S]) -> Tensor[out_of_bounds(S)]: ...
+def apply_negative_oob[S: IntTuple](x: Tensor[S]) -> Tensor[negative_out_of_bounds(S)]: ...
+def apply_unknown_then_oob[S: IntTuple](x: Tensor[S]) -> Tensor[unknown_then_out_of_bounds(int, S)]: ...
+def apply_rank_two_prefix[S: IntTuple](x: Tensor[S]) -> Tensor[rank_two_prefix(S)]: ...
+def apply_first_dimension[S: IntTuple](x: Tensor[S]) -> Tensor[first_dimension(S)]: ...
+def apply_unknown[S: IntTuple](x: Tensor[S]) -> Tensor[explicit_unknown(S)]: ...
+def apply_invalid[S: IntTuple](x: Tensor[S]) -> Tensor[explicit_invalid(S)]: ...
+def apply_invalid_int() -> Tensor[[always_invalid(Int[1])]]: ...
+
+def test[N: IntVar, S: IntTuple](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[N, 3, 4]], gradual: Tensor[IntTuple], unpacked: Tensor[IntTuple[2, *Elements[S]]]) -> None:
+    assert_type(apply_reorder(concrete), Tensor[[4, 2, 7]])
+    assert_type(apply_reorder(symbolic), Tensor[[4, N, 7]])
+    assert_type(apply_alias(concrete), Tensor[[2]])
+    assert_type(apply_boundaries(concrete), Tensor[[2, 4, 7]])
+    assert_type(apply_empty(concrete), Tensor[[]])
+    assert_type(apply_reorder(gradual), Tensor[IntTuple])
+    assert_type(apply_rank_two_prefix(gradual), Tensor[IntTuple])
+    assert_type(apply_first_dimension(gradual), Tensor[IntTuple])
+    assert_type(apply_rank_two_prefix(unpacked), Tensor[IntTuple])
+    assert_type(apply_first_dimension(unpacked), Tensor[IntTuple])
+    assert_type(apply_unknown(concrete), Tensor[IntTuple])
+    apply_oob(concrete)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
+    apply_negative_oob(concrete)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
+    apply_unknown_then_oob(concrete)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
+    apply_invalid(concrete)  # E: Cannot evaluate type-level shape DSL call: expected rank one
+    apply_invalid_int()  # E: Cannot evaluate type-level shape DSL call: no integer result
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_int_tuple_values,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions.dsl import IntTuple as body_int_tuple
+from torch import Tensor
+from typing import Any
+
+def make_shape(values: tuple[int, ...]) -> IntTuple: ...
+
+body_int_tuple_alias = body_int_tuple
+
+def Invalid(message: str) -> Any: ...
+
+@type_shape_dsl_function
+def local_lookalike(shape: IntTuple) -> IntTuple:
+    return make_shape((shape[0],))  # E: @type_shape_dsl_function return value must be
+
+@type_shape_dsl_function
+def value_alias(shape: IntTuple) -> IntTuple:
+    return body_int_tuple_alias((shape[0],))
+
+@type_shape_dsl_function
+def local_invalid(shape: IntTuple) -> IntTuple:
+    return Invalid("bad")  # E: @type_shape_dsl_function return value must be
+
+@type_shape_dsl_function
+def shadowed_invalid(Invalid: IntTuple) -> IntTuple:
+    return Invalid("bad")  # E: @type_shape_dsl_function return value must be  # E: Expected a callable
+
+@type_shape_dsl_function
+def list_argument(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple([shape[0]])  # E: @type_shape_dsl_function `dsl.IntTuple` argument must be a fixed tuple
+
+@type_shape_dsl_function
+def generator_argument(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x in shape)  # E: @type_shape_dsl_function `dsl.IntTuple` argument must be a fixed tuple
+
+@type_shape_dsl_function
+def mutation(shape: IntTuple) -> IntTuple:
+    shape[0] = 1  # E: @type_shape_dsl_function body supports only `if` and `return`  # E: Cannot set item
+    return shape
+
+@type_shape_dsl_function
+def nonliteral_index(shape: IntTuple, index: int) -> IntTuple:
+    return dsl.IntTuple((shape[index],))  # E: @type_shape_dsl_function `IntTuple` index must be an integer literal
+
+@type_shape_dsl_function
+def wrong_index_domain(dim: Int) -> IntTuple:
+    return dsl.IntTuple((dim[0],))  # E: len and indexing require an `IntTuple` parameter  # E: not subscriptable
+
+@type_shape_dsl_function
+def wrong_len_domain(dim: Int) -> IntTuple:
+    if len(dim) == 1:  # E: len and indexing require an `IntTuple` parameter  # E: not assignable
+        return dsl.IntTuple((dim,))
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def wrong_element_domain(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape,))  # E: IntTuple elements must be annotated as `Int`
+
+@type_shape_dsl_function
+def wrong_result(dim: Int) -> Int:
+    return dsl.IntTuple((dim,))  # E: dsl.IntTuple requires an `IntTuple` result  # E: Returned type
+
+@type_shape_dsl_function
+def invalid_message(shape: IntTuple, message: str) -> IntTuple:
+    return dsl.Invalid(message)  # E: @type_shape_dsl_function `dsl.Invalid` requires exactly one positional string literal
+
+@type_shape_dsl_function
+def invalid_keyword(shape: IntTuple) -> IntTuple:
+    return dsl.Invalid(message="bad")  # E: @type_shape_dsl_function `dsl.Invalid` requires exactly one positional string literal
+
+@type_shape_dsl_function
+def gradual_arguments(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple.gradual(1)  # E: @type_shape_dsl_function gradual return does not accept arguments  # E: Expected 0 positional arguments
+
+@type_shape_dsl_function
+def unsupported_unary(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((~1,))  # E: @type_shape_dsl_function dimension literal supports only unary `+` or `-`
+
+def invalid_metadata() -> Tensor[local_lookalike(IntTuple[2])]: ...  # E: Expected a type-level DSL function
+"#,
+);

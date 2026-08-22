@@ -16,6 +16,7 @@ use pyrefly_types::type_level_dsl::ResolvedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::TypeLevelDslCall;
 use pyrefly_types::type_level_dsl::TypeShapeDslConditionKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
+use pyrefly_types::type_level_dsl::TypeShapeDslExpressionKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
 use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
@@ -150,11 +151,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             != TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int)))
                             .then_some("`@type_shape_dsl_function` literal comparison requires the left parameter to be annotated as `int`")
                     }
+                    TypeShapeDslConditionKind::LengthEqualLiteral { shape, .. } => {
+                        (parameter_domains[shape]
+                            != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple))
+                        .then_some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter")
+                    }
                 };
                 if let Some(message) = invalid_domain {
                     self.error(
                         errors,
                         condition.range(),
+                        ErrorKind::InvalidArgument,
+                        message.to_owned(),
+                    );
+                    valid_body = false;
+                }
+            }
+            for expression in validated.expressions() {
+                let invalid_domain = match expression.kind() {
+                    TypeShapeDslExpressionKind::DimensionParameter(parameter) => {
+                        (parameter_domains[parameter]
+                            != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int))
+                        .then_some("`@type_shape_dsl_function` IntTuple elements must be annotated as `Int`")
+                    }
+                    TypeShapeDslExpressionKind::IntTupleIndex { shape, .. } => {
+                        (parameter_domains[shape]
+                            != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple))
+                        .then_some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter")
+                    }
+                    TypeShapeDslExpressionKind::IntTupleConstructor => {
+                        (result != TypeShapeDslDomain::IntTuple).then_some(
+                            "`@type_shape_dsl_function` dsl.IntTuple requires an `IntTuple` result",
+                        )
+                    }
+                    TypeShapeDslExpressionKind::DimensionLiteral(_)
+                    | TypeShapeDslExpressionKind::DimensionTuple => None,
+                };
+                if let Some(message) = invalid_domain {
+                    self.error(
+                        errors,
+                        expression.range(),
                         ErrorKind::InvalidArgument,
                         message.to_owned(),
                     );
@@ -237,6 +273,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     TypeShapeDslReturnKind::Parameter(_)
                     | TypeShapeDslReturnKind::Broadcast { .. }
                     | TypeShapeDslReturnKind::IntFlagArithmetic { .. }
+                    | TypeShapeDslReturnKind::Expression
+                    | TypeShapeDslReturnKind::Invalid
                     | TypeShapeDslReturnKind::Gradual(_) => {}
                 }
             }
@@ -244,9 +282,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return Some(FunctionKind::TypeShapeDsl(
                     func_id.clone(),
                     Arc::new(
-                        ResolvedTypeShapeDslFunction::try_new(validated, parameter_domains).expect(
-                            "resolved DSL parameters were checked against the validated AST",
-                        ),
+                        ResolvedTypeShapeDslFunction::try_new(validated, parameter_domains, result)
+                            .expect("resolved DSL domains were checked against the validated AST"),
                     ),
                 ));
             } else if valid_body {
@@ -266,17 +303,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// reexports work while unrelated same-spelling functions do not.
     fn resolve_type_shape_dsl_intrinsic(&self, expr: &Expr) -> Option<TypeShapeDslIntrinsic> {
         let callee = self.expr_infer(expr, &self.error_swallower());
-        let Some(CalleeKind::Function(FunctionKind::Def(id))) = callee.callee_kind() else {
+        if let Type::ClassDef(class) = &callee
+            && class.qname().module_name().as_str() == "shape_extensions.dsl"
+            && class.qname().id().as_str() == "IntTuple"
+        {
+            return Some(TypeShapeDslIntrinsic::IntTuple);
+        }
+        let Some(CalleeKind::Function(function_kind)) = callee.callee_kind() else {
+            return None;
+        };
+        if function_kind == FunctionKind::Len {
+            return Some(TypeShapeDslIntrinsic::Len);
+        }
+        let FunctionKind::Def(id) = function_kind else {
             return None;
         };
         if id.has_toplevel_qname("shape_extensions", "broadcast") {
             return Some(TypeShapeDslIntrinsic::Broadcast);
         }
+        if id.has_toplevel_qname("shape_extensions.dsl", "is_concrete_int") {
+            return Some(TypeShapeDslIntrinsic::IsConcreteInt);
+        }
+        if id.has_toplevel_qname("shape_extensions.dsl", "Invalid") {
+            return Some(TypeShapeDslIntrinsic::Invalid);
+        }
         if id.qname.module_name().as_str() != "shape_extensions.dsl" {
             return None;
-        }
-        if id.cls.is_none() && id.qname.id().as_str() == "is_concrete_int" {
-            return Some(TypeShapeDslIntrinsic::IsConcreteInt);
         }
         let class = id.cls.as_ref()?;
         if id.qname.id().as_str() != "gradual" {

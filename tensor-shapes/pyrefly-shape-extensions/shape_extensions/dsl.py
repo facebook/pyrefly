@@ -13,6 +13,8 @@ normal stubs or user code.
 
 import typing
 
+from . import IntTuple as _IntTupleSchema
+
 
 def shape_dsl_function(fn: typing.Callable) -> typing.Callable:
     """Marks a function as a shape DSL function.
@@ -59,6 +61,12 @@ class _Unknown:
 Unknown: _Unknown = _Unknown()
 
 
+def Invalid(message: str) -> typing.Any:
+    """Return an invalid shape computation from a type-shape DSL body."""
+
+    ...
+
+
 class Int:
     """Operations that produce values in the DSL integer domain."""
 
@@ -66,8 +74,11 @@ class Int:
     def gradual() -> typing.Any: ...
 
 
-class IntTuple:
+class IntTuple(_IntTupleSchema):
     """Operations that produce values in the DSL integer-tuple domain."""
+
+    def __new__(cls, values: typing.Iterable[typing.Any]) -> _IntTupleSchema:
+        return _IntTupleSchema(values)
 
     @staticmethod
     def gradual() -> typing.Any: ...
