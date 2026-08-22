@@ -168,7 +168,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some("`@type_shape_dsl_function` comparison operands must both be annotated as `Int` or both be `Flag[int]`")
                         }
                     }
-                    TypeShapeDslConditionKind::GeneratorElementSelfCompare(_) => None,
+                    TypeShapeDslConditionKind::Any { .. }
+                    | TypeShapeDslConditionKind::GeneratorElementSelfCompare(_) => None,
                     TypeShapeDslConditionKind::IsConcreteInt {
                         parameter_origins,
                         ..
@@ -482,6 +483,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         if id.has_toplevel_qname("shape_extensions", "broadcast") {
             return Some(TypeShapeDslIntrinsic::Broadcast);
+        }
+        if id.has_toplevel_qname("builtins", "any") {
+            return Some(TypeShapeDslIntrinsic::Any);
         }
         if id.has_toplevel_qname("shape_extensions.dsl", "is_concrete_int") {
             return Some(TypeShapeDslIntrinsic::IsConcreteInt);

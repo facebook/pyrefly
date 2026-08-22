@@ -341,6 +341,7 @@ impl TypeShapeDslFlagIntComparisonOp {
 /// A closed, canonical operation the DSL recognizes by callable identity rather than by spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeShapeDslIntrinsic {
+    Any,
     Broadcast,
     Gradual(TypeShapeDslDomain),
     IsConcreteInt,
@@ -414,6 +415,9 @@ pub enum TypeShapeDslFlagValueKind {
 /// resolution, so it participates in `ValidatedTypeShapeDslFunction` identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslConditionKind {
+    Any {
+        binder: usize,
+    },
     SlotCompare {
         left: usize,
         right: usize,
@@ -471,6 +475,13 @@ impl DslEvaluationBudget {
 enum GeneratorResultKind {
     Dimensions,
     FlagValues,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneratorValidationKind {
+    Condition,
+    Dimension,
+    FlagValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1026,7 +1037,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     });
                 };
                 let binder =
-                    self.validate_generator(generator, flow, GeneratorResultKind::FlagValues)?;
+                    self.validate_generator(generator, flow, GeneratorValidationKind::FlagValue)?;
                 self.expressions.push(TypeShapeDslExpression {
                     range: call.range,
                     kind: TypeShapeDslExpressionKind::FlagGenerator { binder },
@@ -1091,12 +1102,19 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         &mut self,
         generator: &ExprGenerator,
         flow: &DslValidationFlow,
-        result: GeneratorResultKind,
+        kind: GeneratorValidationKind,
     ) -> Result<usize, TypeShapeDslDefinitionError> {
         let [comprehension] = generator.generators.as_slice() else {
             return Err(TypeShapeDslDefinitionError {
                 range: generator.range,
-                message: "constructor generators require exactly one `for` clause",
+                message: match kind {
+                    GeneratorValidationKind::Condition => {
+                        "`any` generators require exactly one `for` clause"
+                    }
+                    GeneratorValidationKind::Dimension | GeneratorValidationKind::FlagValue => {
+                        "constructor generators require exactly one `for` clause"
+                    }
+                },
             });
         };
         if comprehension.is_async {
@@ -1114,7 +1132,14 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         if comprehension.ifs.len() > 1 {
             return Err(TypeShapeDslDefinitionError {
                 range: comprehension.range,
-                message: "constructor generators support at most one `if` filter",
+                message: match kind {
+                    GeneratorValidationKind::Condition => {
+                        "`any` generators support at most one `if` filter"
+                    }
+                    GeneratorValidationKind::Dimension | GeneratorValidationKind::FlagValue => {
+                        "constructor generators support at most one `if` filter"
+                    }
+                },
             });
         }
 
@@ -1134,11 +1159,14 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 let (when_true, _) = self.validate_condition(filter, &generator_flow)?;
                 generator_flow = when_true;
             }
-            match result {
-                GeneratorResultKind::Dimensions => {
+            match kind {
+                GeneratorValidationKind::Condition => self
+                    .validate_condition(&generator.elt, &generator_flow)
+                    .map(|_| ()),
+                GeneratorValidationKind::Dimension => {
                     self.validate_dimension(&generator.elt, &generator_flow)
                 }
-                GeneratorResultKind::FlagValues => {
+                GeneratorValidationKind::FlagValue => {
                     self.validate_flag_int(&generator.elt, &generator_flow)
                 }
             }
@@ -1165,7 +1193,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         }
         if let Expr::Generator(generator) = &call.arguments.args[0] {
             let binder =
-                self.validate_generator(generator, flow, GeneratorResultKind::Dimensions)?;
+                self.validate_generator(generator, flow, GeneratorValidationKind::Dimension)?;
             self.expressions.push(TypeShapeDslExpression {
                 range: generator.range,
                 kind: TypeShapeDslExpressionKind::DimensionGenerator { binder },
@@ -1373,6 +1401,29 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         condition: &Expr,
         flow: &DslValidationFlow,
     ) -> Result<(DslValidationFlow, DslValidationFlow), TypeShapeDslDefinitionError> {
+        if let Expr::Call(call) = condition
+            && self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Any)
+        {
+            if call.arguments.args.len() != 1 || !call.arguments.keywords.is_empty() {
+                return Err(TypeShapeDslDefinitionError {
+                    range: call.arguments.range,
+                    message: "`any` requires exactly one positional boolean generator",
+                });
+            }
+            let Expr::Generator(generator) = &call.arguments.args[0] else {
+                return Err(TypeShapeDslDefinitionError {
+                    range: call.arguments.args[0].range(),
+                    message: "`any` argument must be a bounded boolean generator",
+                });
+            };
+            let binder =
+                self.validate_generator(generator, flow, GeneratorValidationKind::Condition)?;
+            self.conditions.push(TypeShapeDslCondition {
+                range: call.range,
+                kind: TypeShapeDslConditionKind::Any { binder },
+            });
+            return Ok((flow.clone(), flow.clone()));
+        }
         if let Expr::BoolOp(bool_op) = condition {
             let mut sequential = flow.clone();
             match bool_op.op {
@@ -2223,10 +2274,24 @@ struct DslEnvironment {
     slots: Vec<DslValue>,
 }
 
+/// The result of evaluating a DSL condition.
+///
+/// `UnknownWithPossibleError` means some concrete instantiation can raise before the condition
+/// reaches a decisive value. Unlike ordinary `Unknown`, a later short-circuiting operand cannot
+/// erase it. Condition consumers eventually project either unknown state to a gradual value.
 #[derive(Clone, Copy)]
 enum DslCondition {
     True,
     False,
+    Unknown,
+    UnknownWithPossibleError,
+}
+
+enum EvaluatedGeneratorItems {
+    Known {
+        values: Vec<DslValue>,
+        truncated: bool,
+    },
     Unknown,
 }
 
@@ -2510,7 +2575,7 @@ impl ValidatedTypeShapeDslFunction {
                 return self.evaluate_suite(&if_stmt.body, environment, signature, budget);
             }
             Ok(DslCondition::False) => {}
-            Ok(DslCondition::Unknown) => {
+            Ok(DslCondition::Unknown | DslCondition::UnknownWithPossibleError) => {
                 return DslControlFlow::Return(DslOutcome::Value(DslValue::Unknown));
             }
         }
@@ -2522,7 +2587,7 @@ impl ValidatedTypeShapeDslFunction {
                         return self.evaluate_suite(&clause.body, environment, signature, budget);
                     }
                     Ok(DslCondition::False) => {}
-                    Ok(DslCondition::Unknown) => {
+                    Ok(DslCondition::Unknown | DslCondition::UnknownWithPossibleError) => {
                         return DslControlFlow::Return(DslOutcome::Value(DslValue::Unknown));
                     }
                 },
@@ -2543,6 +2608,49 @@ impl ValidatedTypeShapeDslFunction {
 
     // TODO(stroxler): Compile validated expressions into a small IR so evaluation does not need
     // to look up source-range metadata and then re-read the AST structure.
+    fn evaluate_generator_items(
+        &self,
+        source: &Expr,
+        environment: &DslEnvironment,
+        budget: &mut DslEvaluationBudget,
+    ) -> Result<EvaluatedGeneratorItems, ShapeError> {
+        let source = self.evaluate_expression(source, environment, budget);
+        let item_limit = budget.remaining_generator_steps;
+        Ok(match source {
+            DslOutcome::Value(DslValue::Shape(shape)) => {
+                let IntTupleView::Concrete(shape) = shape.view() else {
+                    return Ok(EvaluatedGeneratorItems::Unknown);
+                };
+                EvaluatedGeneratorItems::Known {
+                    values: shape
+                        .iter()
+                        .take(item_limit)
+                        .cloned()
+                        .map(DslValue::Dimension)
+                        .collect(),
+                    truncated: shape.len() > item_limit,
+                }
+            }
+            DslOutcome::Value(DslValue::FlagSequence(sequence)) => {
+                let Some((values, truncated)) = sequence.bounded_values(item_limit) else {
+                    return Ok(EvaluatedGeneratorItems::Unknown);
+                };
+                EvaluatedGeneratorItems::Known {
+                    values: values.into_iter().map(DslValue::FlagInt).collect(),
+                    truncated,
+                }
+            }
+            DslOutcome::Value(DslValue::Unknown) => EvaluatedGeneratorItems::Unknown,
+            DslOutcome::Invalid(error) => return Err(error),
+            DslOutcome::ExplicitGradual => {
+                unreachable!("validated generator source cannot return gradual")
+            }
+            DslOutcome::Value(_) => {
+                unreachable!("validated generator source is an IntTuple or Flag sequence")
+            }
+        })
+    }
+
     fn evaluate_generator(
         &self,
         generator: &ExprGenerator,
@@ -2554,43 +2662,14 @@ impl ValidatedTypeShapeDslFunction {
         let [comprehension] = generator.generators.as_slice() else {
             unreachable!("validated constructor generator has exactly one clause")
         };
-        let source = self.evaluate_expression(&comprehension.iter, environment, budget);
-        let item_limit = budget.remaining_generator_steps;
-        let (values, truncated) = match source {
-            DslOutcome::Value(DslValue::Shape(shape)) => {
-                let IntTupleView::Concrete(shape) = shape.view() else {
+        let (values, truncated) =
+            match self.evaluate_generator_items(&comprehension.iter, environment, budget) {
+                Ok(EvaluatedGeneratorItems::Known { values, truncated }) => (values, truncated),
+                Ok(EvaluatedGeneratorItems::Unknown) => {
                     return DslOutcome::Value(DslValue::Unknown);
-                };
-                (
-                    shape
-                        .iter()
-                        .take(item_limit)
-                        .cloned()
-                        .map(DslValue::Dimension)
-                        .collect::<Vec<_>>(),
-                    shape.len() > item_limit,
-                )
-            }
-            DslOutcome::Value(DslValue::FlagSequence(sequence)) => {
-                let Some((values, truncated)) = sequence.bounded_values(item_limit) else {
-                    return DslOutcome::Value(DslValue::Unknown);
-                };
-                (
-                    values.into_iter().map(DslValue::FlagInt).collect(),
-                    truncated,
-                )
-            }
-            DslOutcome::Value(DslValue::Unknown) => {
-                return DslOutcome::Value(DslValue::Unknown);
-            }
-            invalid @ DslOutcome::Invalid(_) => return invalid,
-            DslOutcome::ExplicitGradual => {
-                unreachable!("validated generator source cannot return gradual")
-            }
-            DslOutcome::Value(_) => {
-                unreachable!("validated generator source is an IntTuple or Flag sequence")
-            }
-        };
+                }
+                Err(error) => return DslOutcome::Invalid(error),
+            };
 
         let mut dimensions = Vec::new();
         let mut flag_values = Vec::new();
@@ -2605,7 +2684,7 @@ impl ValidatedTypeShapeDslFunction {
                 match self.evaluate_condition(filter, &iteration, budget) {
                     Err(error) => return DslOutcome::Invalid(error),
                     Ok(DslCondition::False) => continue,
-                    Ok(DslCondition::Unknown) => {
+                    Ok(DslCondition::Unknown | DslCondition::UnknownWithPossibleError) => {
                         unknown = true;
                         continue;
                     }
@@ -2942,7 +3021,9 @@ impl ValidatedTypeShapeDslFunction {
                     Ok(DslCondition::False) => {
                         self.evaluate_expression(&if_expr.orelse, environment, budget)
                     }
-                    Ok(DslCondition::Unknown) => DslOutcome::Value(DslValue::Unknown),
+                    Ok(DslCondition::Unknown | DslCondition::UnknownWithPossibleError) => {
+                        DslOutcome::Value(DslValue::Unknown)
+                    }
                 }
             }
             TypeShapeDslExpressionKind::DimensionGenerator { binder } => {
@@ -2975,6 +3056,89 @@ impl ValidatedTypeShapeDslFunction {
         }
     }
 
+    fn evaluate_any_generator(
+        &self,
+        generator: &ExprGenerator,
+        binder: usize,
+        environment: &DslEnvironment,
+        budget: &mut DslEvaluationBudget,
+    ) -> Result<DslCondition, ShapeError> {
+        let [comprehension] = generator.generators.as_slice() else {
+            unreachable!("validated `any` generator has exactly one clause")
+        };
+        let (values, truncated) =
+            match self.evaluate_generator_items(&comprehension.iter, environment, budget)? {
+                EvaluatedGeneratorItems::Known { values, truncated } => (values, truncated),
+                EvaluatedGeneratorItems::Unknown => return Ok(DslCondition::Unknown),
+            };
+
+        let mut saw_unknown = false;
+        let mut possible_error = false;
+        let mut iteration = environment.clone();
+        for value in values {
+            if !budget.consume_generator_step() {
+                return Ok(if possible_error {
+                    DslCondition::UnknownWithPossibleError
+                } else {
+                    DslCondition::Unknown
+                });
+            }
+            iteration.assign(binder, value);
+            if let Some(filter) = comprehension.ifs.first() {
+                let filter = match self.evaluate_condition(filter, &iteration, budget) {
+                    Ok(filter) => filter,
+                    Err(_) if saw_unknown || possible_error => {
+                        return Ok(DslCondition::UnknownWithPossibleError);
+                    }
+                    Err(error) => return Err(error),
+                };
+                match filter {
+                    DslCondition::False => continue,
+                    DslCondition::Unknown => {
+                        saw_unknown = true;
+                        // A concrete instantiation may include this item, so a guarded error must
+                        // prevent a later item from making the reduction precisely true.
+                        match self.evaluate_condition(&generator.elt, &iteration, budget) {
+                            Err(_) | Ok(DslCondition::UnknownWithPossibleError) => {
+                                possible_error = true;
+                            }
+                            Ok(_) => {}
+                        }
+                        continue;
+                    }
+                    DslCondition::UnknownWithPossibleError => {
+                        possible_error = true;
+                        continue;
+                    }
+                    DslCondition::True => {}
+                }
+            }
+            let condition = match self.evaluate_condition(&generator.elt, &iteration, budget) {
+                Ok(condition) => condition,
+                Err(_) if saw_unknown || possible_error => {
+                    return Ok(DslCondition::UnknownWithPossibleError);
+                }
+                Err(error) => return Err(error),
+            };
+            match condition {
+                DslCondition::True if possible_error => {
+                    return Ok(DslCondition::UnknownWithPossibleError);
+                }
+                DslCondition::True => return Ok(DslCondition::True),
+                DslCondition::False => {}
+                DslCondition::Unknown => saw_unknown = true,
+                DslCondition::UnknownWithPossibleError => possible_error = true,
+            }
+        }
+        Ok(if possible_error {
+            DslCondition::UnknownWithPossibleError
+        } else if saw_unknown || truncated {
+            DslCondition::Unknown
+        } else {
+            DslCondition::False
+        })
+    }
+
     // TODO(stroxler): Compile validated conditions into the same IR rather than traversing their
     // boolean/comparison AST again during evaluation.
     fn evaluate_condition(
@@ -2984,24 +3148,34 @@ impl ValidatedTypeShapeDslFunction {
         budget: &mut DslEvaluationBudget,
     ) -> Result<DslCondition, ShapeError> {
         if let Expr::BoolOp(bool_op) = condition {
-            let mut unknown = false;
+            let mut saw_unknown = false;
+            let mut possible_error = false;
             for value in &bool_op.values {
                 let value = match self.evaluate_condition(value, environment, budget) {
                     Ok(value) => value,
                     // An unknown prefix may short-circuit before this operand for a concrete
                     // instantiation, so an error here is not deterministic.
-                    Err(_error) if unknown => return Ok(DslCondition::Unknown),
+                    Err(_) if saw_unknown || possible_error => {
+                        return Ok(DslCondition::UnknownWithPossibleError);
+                    }
                     Err(error) => return Err(error),
                 };
                 match (bool_op.op, value) {
                     (BoolOp::And, DslCondition::False) | (BoolOp::Or, DslCondition::True) => {
-                        return Ok(value);
+                        return Ok(if possible_error {
+                            DslCondition::UnknownWithPossibleError
+                        } else {
+                            value
+                        });
                     }
-                    (_, DslCondition::Unknown) => unknown = true,
+                    (_, DslCondition::Unknown) => saw_unknown = true,
+                    (_, DslCondition::UnknownWithPossibleError) => possible_error = true,
                     _ => {}
                 }
             }
-            return Ok(if unknown {
+            return Ok(if possible_error {
+                DslCondition::UnknownWithPossibleError
+            } else if saw_unknown {
                 DslCondition::Unknown
             } else {
                 match bool_op.op {
@@ -3018,6 +3192,9 @@ impl ValidatedTypeShapeDslFunction {
                     DslCondition::True => DslCondition::False,
                     DslCondition::False => DslCondition::True,
                     DslCondition::Unknown => DslCondition::Unknown,
+                    DslCondition::UnknownWithPossibleError => {
+                        DslCondition::UnknownWithPossibleError
+                    }
                 },
             );
         }
@@ -3030,6 +3207,15 @@ impl ValidatedTypeShapeDslFunction {
             })
             .expect("validated atomic condition must have validation metadata");
         Ok(match kind {
+            TypeShapeDslConditionKind::Any { binder } => {
+                let Expr::Call(call) = condition else {
+                    unreachable!("validated `any` condition is a call")
+                };
+                let Expr::Generator(generator) = &call.arguments.args[0] else {
+                    unreachable!("validated `any` condition retains its generator")
+                };
+                return self.evaluate_any_generator(generator, binder, environment, budget);
+            }
             TypeShapeDslConditionKind::IsConcreteInt { slot, .. } => {
                 match environment.value(slot) {
                     DslValue::Dimension(Int::Literal(_)) => DslCondition::True,

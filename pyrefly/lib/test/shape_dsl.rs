@@ -7150,3 +7150,202 @@ def test() -> None:
     reveal_type(apply_nested_budget())  # E: revealed type: Tensor[tuple[Unknown, ...]]
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_any,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def from_flag_sequence(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
+    if any(axis == 1 for axis in axes):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def from_shape(shape: IntTuple) -> IntTuple:
+    if any(dimension == 3 for dimension in shape):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def filtered(shape: IntTuple, axis: int) -> IntTuple:
+    if any(item == 1 for item in range(3) if item == axis):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def lazy_true(shape: IntTuple) -> IntTuple:
+    if any(item == 0 or 1 // (item - 1) > 0 for item in range(2)):
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def unknown_before_error(shape: IntTuple, axis: int) -> IntTuple:
+    if any((item == 0 and item == axis) or (item != 0 and 1 // (item - 1) > 0) for item in range(2)):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def unknown_filter_then_true(shape: IntTuple, axis: int) -> IntTuple:
+    if any(item == 1 for item in range(2) if item == axis or item == 1):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def unknown_filter_guards_error(shape: IntTuple, axis: int) -> IntTuple:
+    if any(1 // item > 0 for item in range(2) if axis == 0 or item == 1):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def capped_false(shape: IntTuple) -> IntTuple:
+    if any(item == 4096 for item in range(4097)):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def capped_prefix_true(shape: IntTuple) -> IntTuple:
+    if any(item == 4095 for item in range(4097)):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def capped_prefix_error(shape: IntTuple) -> IntTuple:
+    if any(1 // item > 0 for item in range(4097)):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def nested_precise(shape: IntTuple) -> IntTuple:
+    if any(any(inner == outer for inner in range(2)) for outer in range(2)):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def nested_exhausted(shape: IntTuple) -> IntTuple:
+    if any(any(inner == -1 for inner in range(4096)) for outer in range(2)):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def nested_guarded_error(shape: IntTuple, axis: int) -> IntTuple:
+    if any(
+        any(1 // inner > 0 for inner in range(2) if axis == 0 or inner == 1)
+        or outer == 1
+        for outer in range(2)
+    ):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def budget_after_possible_error(shape: IntTuple, axis: int) -> IntTuple:
+    if any(
+        any(1 // inner < 0 for inner in range(4096) if axis == 0 or inner > 0)
+        for outer in range(2)
+    ) or 1 == 1:
+        return dsl.IntTuple(())
+    return shape
+
+def apply_flags[Axes: Flag[tuple[int, ...]]](axes: Axes) -> Tensor[from_flag_sequence(IntTuple[2, 3], Axes)]: ...
+def broad_flags() -> Tensor[from_flag_sequence(IntTuple[2, 3], tuple[int, ...])]: ...
+def apply_shape[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[from_shape(Shape)]: ...
+def apply_filtered[Axis: Flag[int]](axis: Axis) -> Tensor[filtered(IntTuple[2, 3], Axis)]: ...
+def broad_filtered() -> Tensor[filtered(IntTuple[2, 3], int)]: ...
+def apply_lazy() -> Tensor[lazy_true(IntTuple[2, 3])]: ...
+def apply_unknown[Axis: Flag[int]](axis: Axis) -> Tensor[unknown_before_error(IntTuple[2, 3], Axis)]: ...
+def broad_unknown() -> Tensor[unknown_before_error(IntTuple[2, 3], int)]: ...
+def broad_filter_then_true() -> Tensor[unknown_filter_then_true(IntTuple[2, 3], int)]: ...
+def apply_guarded_error[Axis: Flag[int]](axis: Axis) -> Tensor[unknown_filter_guards_error(IntTuple[2, 3], Axis)]: ...
+def broad_guarded_error() -> Tensor[unknown_filter_guards_error(IntTuple[2, 3], int)]: ...
+def apply_capped_false() -> Tensor[capped_false(IntTuple[2, 3])]: ...
+def apply_capped_true() -> Tensor[capped_prefix_true(IntTuple[2, 3])]: ...
+def apply_capped_error() -> Tensor[capped_prefix_error(IntTuple[2, 3])]: ...
+def apply_nested_precise() -> Tensor[nested_precise(IntTuple[2, 3])]: ...
+def apply_nested_exhausted() -> Tensor[nested_exhausted(IntTuple[2, 3])]: ...
+def apply_nested_guarded_error[Axis: Flag[int]](axis: Axis) -> Tensor[nested_guarded_error(IntTuple[2, 3], Axis)]: ...
+def broad_nested_guarded_error() -> Tensor[nested_guarded_error(IntTuple[2, 3], int)]: ...
+def broad_budget_after_error() -> Tensor[budget_after_possible_error(IntTuple[2, 3], int)]: ...
+
+def test[N: IntVar](symbolic: Tensor[[N, 3]], one_symbolic: Tensor[[N]]) -> None:
+    assert_type(apply_flags((0, 1)), Tensor[[]])
+    assert_type(apply_flags((0, 2)), Tensor[[2, 3]])
+    reveal_type(broad_flags())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_shape(symbolic), Tensor[[]])
+    reveal_type(apply_shape(one_symbolic))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_filtered(1), Tensor[[]])
+    assert_type(apply_filtered(4), Tensor[[2, 3]])
+    reveal_type(broad_filtered())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_lazy(), Tensor[[2, 3]])
+    assert_type(apply_unknown(0), Tensor[[]])
+    reveal_type(broad_unknown())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(broad_filter_then_true(), Tensor[[]])
+    assert_type(apply_guarded_error(1), Tensor[[]])
+    apply_guarded_error(0)  # E: Flag integer division by zero
+    reveal_type(broad_guarded_error())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    apply_unknown(2)  # E: Flag integer division by zero
+    reveal_type(apply_capped_false())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_capped_true(), Tensor[[]])
+    apply_capped_error()  # E: Flag integer division by zero
+    assert_type(apply_nested_precise(), Tensor[[]])
+    reveal_type(apply_nested_exhausted())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_nested_guarded_error(1), Tensor[[]])
+    apply_nested_guarded_error(0)  # E: Flag integer division by zero
+    reveal_type(broad_nested_guarded_error())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(broad_budget_after_error())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_any,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def no_arguments(shape: IntTuple) -> IntTuple:
+    if any():  # E: `any` requires exactly one positional boolean generator  # E: Missing positional argument
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def two_arguments(shape: IntTuple) -> IntTuple:
+    if any((item == 0 for item in range(1)), (item == 1 for item in range(1))):  # E: `any` requires exactly one positional boolean generator  # E: Expected 1 positional argument
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def not_a_generator(shape: IntTuple) -> IntTuple:
+    if any((True, False)):  # E: `any` argument must be a bounded boolean generator
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_source(shape: IntTuple) -> IntTuple:
+    if any(item == 0 for item in [0, 1]):  # E: generator source must be an IntTuple
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def multiple_clauses(shape: IntTuple) -> IntTuple:
+    if any(left == right for left in range(2) for right in range(2)):  # E: `any` generators require exactly one `for` clause
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def multiple_filters(shape: IntTuple) -> IntTuple:
+    if any(item == 0 for item in range(2) if item >= 0 if item <= 1):  # E: `any` generators support at most one `if` filter
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def non_boolean_element(shape: IntTuple) -> IntTuple:
+    if any(item for item in range(2)):  # E: condition supports only
+        return shape
+    return shape
+"#,
+);
