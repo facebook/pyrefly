@@ -18,6 +18,7 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprDict;
+use ruff_python_ast::ExprSet;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
@@ -54,6 +55,11 @@ enum DictKeyLiteralContext {
         dict: ExprDict,
         literal: ExprStringLiteral,
     },
+    /// Ruff parses an empty string in braces as a set until a colon is typed.
+    RecoveredSetLiteral {
+        range: TextRange,
+        literal: ExprStringLiteral,
+    },
     /// An empty subscript slot, before any key string has been typed.
     /// Example: `cfg[|]`. Completions insert a quoted key since there is no
     /// surrounding string.
@@ -67,7 +73,8 @@ impl DictKeyLiteralContext {
         match self {
             Self::KeyAccess { literal, .. }
             | Self::CallArgument { literal, .. }
-            | Self::DictLiteral { literal, .. } => Some(literal.range()),
+            | Self::DictLiteral { literal, .. }
+            | Self::RecoveredSetLiteral { literal, .. } => Some(literal.range()),
             Self::BareSubscript { .. } => None,
         }
     }
@@ -397,9 +404,8 @@ impl<'a> Transaction<'a> {
             self.dict_key_string_literal_at(handle, module, position)
         {
             Some(DictKeyLiteralContext::KeyAccess { base_expr, literal })
-        } else if let Some((dict, literal)) = Self::dict_literal_string_literal_at(module, position)
-        {
-            Some(DictKeyLiteralContext::DictLiteral { dict, literal })
+        } else if let Some(context) = Self::dict_literal_string_literal_at(module, position) {
+            Some(context)
         } else if let Some((source_expr, literal)) =
             self.dataframe_call_argument_string_literal_at(handle, module, position)
         {
@@ -459,38 +465,64 @@ impl<'a> Transaction<'a> {
     fn dict_literal_string_literal_at(
         module: &ModModule,
         position: TextSize,
-    ) -> Option<(ExprDict, ExprStringLiteral)> {
+    ) -> Option<DictKeyLiteralContext> {
         let nodes = Ast::locate_node(module, position);
-        let mut best: Option<(u8, TextSize, ExprDict, ExprStringLiteral)> = None;
+        let mut best: Option<(u8, TextSize, DictKeyLiteralContext)> = None;
         for node in nodes {
-            let AnyNodeRef::ExprDict(dict) = node else {
+            let best_in_expr = match node {
+                // Ruff recovers `{""}` as a set until a `:` turns it into a dict item.
+                // Treat that shape like a dict-key placeholder so completion can recover.
+                AnyNodeRef::ExprSet(set) => Self::best_string_literal_in_set(set, position).map(
+                    |(priority, dist, range, literal)| {
+                        (
+                            priority,
+                            dist,
+                            DictKeyLiteralContext::RecoveredSetLiteral { range, literal },
+                        )
+                    },
+                ),
+                AnyNodeRef::ExprDict(dict) => Self::best_string_literal_in_dict(dict, position)
+                    .map(|(priority, dist, dict, literal)| {
+                        (
+                            priority,
+                            dist,
+                            DictKeyLiteralContext::DictLiteral { dict, literal },
+                        )
+                    }),
+                _ => None,
+            };
+            let Some((priority, dist, context)) = best_in_expr else {
                 continue;
             };
-            let mut best_in_dict: Option<(u8, TextSize, ExprStringLiteral)> = None;
-            for item in &dict.items {
-                let Some(key_expr) = item.key.as_ref() else {
-                    continue;
-                };
-                let Expr::StringLiteral(literal) = key_expr else {
-                    continue;
-                };
-                let (priority, dist) = Self::string_literal_priority(position, literal.range());
-                let should_update = match &best_in_dict {
-                    Some((best_prio, best_dist, _)) => {
-                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
-                    }
-                    None => true,
-                };
-                if should_update {
-                    best_in_dict = Some((priority, dist, literal.clone()));
-                    if priority == 0 && dist == TextSize::from(0) {
-                        break;
-                    }
+            let should_update = match &best {
+                Some((best_prio, best_dist, _)) => {
+                    priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                }
+                None => true,
+            };
+            if should_update {
+                best = Some((priority, dist, context));
+                if priority == 0 && dist == TextSize::from(0) {
+                    break;
                 }
             }
-            let Some((priority, dist, literal)) = best_in_dict else {
+        }
+        best.map(|(_, _, context)| context)
+    }
+
+    fn best_string_literal_in_dict(
+        dict: &ExprDict,
+        position: TextSize,
+    ) -> Option<(u8, TextSize, ExprDict, ExprStringLiteral)> {
+        let mut best = None;
+        for item in &dict.items {
+            let Some(key_expr) = item.key.as_ref() else {
                 continue;
             };
+            let Expr::StringLiteral(literal) = key_expr else {
+                continue;
+            };
+            let (priority, dist) = Self::string_literal_priority(position, literal.range());
             let should_update = match &best {
                 Some((best_prio, best_dist, _, _)) => {
                     priority < *best_prio || (priority == *best_prio && dist < *best_dist)
@@ -498,13 +530,39 @@ impl<'a> Transaction<'a> {
                 None => true,
             };
             if should_update {
-                best = Some((priority, dist, dict.clone(), literal));
+                best = Some((priority, dist, dict.clone(), literal.clone()));
                 if priority == 0 && dist == TextSize::from(0) {
                     break;
                 }
             }
         }
-        best.map(|(_, _, dict, literal)| (dict, literal))
+        best
+    }
+
+    fn best_string_literal_in_set(
+        set: &ExprSet,
+        position: TextSize,
+    ) -> Option<(u8, TextSize, TextRange, ExprStringLiteral)> {
+        let mut best = None;
+        for elt in &set.elts {
+            let Expr::StringLiteral(literal) = elt else {
+                continue;
+            };
+            let (priority, dist) = Self::string_literal_priority(position, literal.range());
+            let should_update = match &best {
+                Some((best_prio, best_dist, _, _)) => {
+                    priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                }
+                None => true,
+            };
+            if should_update {
+                best = Some((priority, dist, set.range(), literal.clone()));
+                if priority == 0 && dist == TextSize::from(0) {
+                    break;
+                }
+            }
+        }
+        best
     }
 
     fn dict_literal_value_string_literal_at(
@@ -665,6 +723,56 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn assignment_expected_type(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
+        range: TextRange,
+    ) -> Option<Type> {
+        for node in Ast::locate_node(module, position) {
+            let target = match node {
+                AnyNodeRef::StmtAnnAssign(assign)
+                    if assign
+                        .value
+                        .as_ref()
+                        .is_some_and(|value| value.range() == range) =>
+                {
+                    Some(assign.target.as_ref())
+                }
+                AnyNodeRef::StmtAssign(assign)
+                    if assign.value.range() == range && assign.targets.len() == 1 =>
+                {
+                    assign.targets.first()
+                }
+                _ => None,
+            };
+            if let Some(ty) = target.and_then(|target| self.named_target_type(handle, target)) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
+    fn contextual_typed_dict_type(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
+        range: TextRange,
+    ) -> Option<Type> {
+        self.get_type_trace(handle, range)
+            .filter(Self::type_contains_typed_dict)
+            .or_else(|| {
+                self.expected_call_argument_type(handle, position)
+                    .filter(Self::type_contains_typed_dict)
+            })
+            .or_else(|| {
+                self.assignment_expected_type(handle, module, position, range)
+                    .filter(Self::type_contains_typed_dict)
+            })
+    }
+
     /// Adds dict key completions for the given position. Handles a key string being
     /// typed (`d["k|"]`, `{"k|": …}`) as well as an empty subscript slot (`d[|]`),
     /// where the inserted key is quoted. Returns `true` if this function claimed the
@@ -699,6 +807,8 @@ impl<'a> Transaction<'a> {
             | DictKeyLiteralContext::BareSubscript { base_expr } => self
                 .extend_dict_key_suggestions(
                     handle,
+                    module,
+                    position,
                     Some(base_expr),
                     base_expr.range(),
                     &mut suggestions,
@@ -706,6 +816,8 @@ impl<'a> Transaction<'a> {
             DictKeyLiteralContext::CallArgument { source_expr, .. } => self
                 .extend_dict_key_suggestions(
                     handle,
+                    module,
+                    position,
                     Some(source_expr),
                     source_expr.range(),
                     &mut suggestions,
@@ -738,9 +850,25 @@ impl<'a> Transaction<'a> {
                         }
                     }
                 } else {
-                    self.extend_dict_key_suggestions(handle, None, dict.range(), &mut suggestions);
+                    self.extend_dict_key_suggestions(
+                        handle,
+                        module,
+                        position,
+                        None,
+                        dict.range(),
+                        &mut suggestions,
+                    );
                 }
             }
+            DictKeyLiteralContext::RecoveredSetLiteral { range, .. } => self
+                .extend_dict_key_suggestions(
+                    handle,
+                    module,
+                    position,
+                    None,
+                    *range,
+                    &mut suggestions,
+                ),
         }
         if suggestions.is_empty() {
             return false;
@@ -767,6 +895,8 @@ impl<'a> Transaction<'a> {
     fn extend_dict_key_suggestions(
         &self,
         handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
         base_expr: Option<&Expr>,
         base_range: TextRange,
         suggestions: &mut BTreeMap<String, Option<Type>>,
@@ -814,19 +944,22 @@ impl<'a> Transaction<'a> {
 
         // For key access we query the container expression; for literals we query the
         // literal itself to pick up contextual TypedDict typing from assignments.
-        if let Some(base_type) = self.get_type_trace(handle, base_range) {
-            if let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type.clone()) {
-                for (key, ty) in typed_keys {
-                    let entry = suggestions.entry(key).or_insert(None);
-                    if entry.is_none() {
-                        *entry = Some(ty);
-                    }
+        if let Some(base_type) =
+            self.contextual_typed_dict_type(handle, module, position, base_range)
+            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
+        {
+            for (key, ty) in typed_keys {
+                let entry = suggestions.entry(key).or_insert(None);
+                if entry.is_none() {
+                    *entry = Some(ty);
                 }
             }
-            if let Some(columns) = Self::collect_dataframe_columns(&base_type) {
-                for column in columns {
-                    suggestions.entry(column).or_insert(None);
-                }
+        }
+        if let Some(base_type) = self.get_type_trace(handle, base_range)
+            && let Some(columns) = Self::collect_dataframe_columns(&base_type)
+        {
+            for column in columns {
+                suggestions.entry(column).or_insert(None);
             }
         }
     }
@@ -844,6 +977,49 @@ impl<'a> Transaction<'a> {
                 detail,
                 kind: Some(CompletionItemKind::FIELD),
                 insert_text,
+                ..Default::default()
+            }));
+        }
+    }
+
+    pub(crate) fn add_typed_dict_constructor_kwargs_completions(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
+        completions: &mut Vec<RankedCompletion>,
+    ) {
+        let Some(call) =
+            Ast::locate_node(module, position)
+                .into_iter()
+                .find_map(|node| match node {
+                    AnyNodeRef::ExprCall(call)
+                        if call.arguments.range.contains_inclusive(position)
+                            && matches!(
+                                call.func.as_ref(),
+                                Expr::Name(name) if name.id.as_str() == "dict"
+                            ) =>
+                    {
+                        Some(call.clone())
+                    }
+                    _ => None,
+                })
+        else {
+            return;
+        };
+        let Some(base_type) =
+            self.contextual_typed_dict_type(handle, module, position, call.range())
+        else {
+            return;
+        };
+        let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type) else {
+            return;
+        };
+        for (label, ty) in typed_keys {
+            completions.push(RankedCompletion::new(CompletionItem {
+                label: format!("{label}="),
+                detail: Some(ty.to_string()),
+                kind: Some(CompletionItemKind::VARIABLE),
                 ..Default::default()
             }));
         }
