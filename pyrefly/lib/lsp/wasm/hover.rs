@@ -46,6 +46,9 @@ use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::token::Token;
+use ruff_python_ast::token::TokenKind;
+use ruff_python_ast::token::Tokens;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -751,6 +754,480 @@ fn in_keyword_in_iteration_at(ast: Option<&ModModule>, position: TextSize) -> Op
     None
 }
 
+fn keyword_token_at(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    module: &Module,
+    position: TextSize,
+) -> Option<Token> {
+    fn find(tokens: &Tokens, position: TextSize) -> Option<Token> {
+        tokens
+            .at_offset(position)
+            .find(|token| token.kind().is_keyword())
+    }
+
+    let parsed = transaction.get_parsed_module(handle)?;
+    if let Some(tokens) = parsed.tokens() {
+        find(&tokens, position)
+    } else {
+        let (parsed, _, _) = Ast::parse_with_version(
+            module.contents(),
+            handle.sys_info().version(),
+            module.source_type(),
+        );
+        find(parsed.tokens(), position)
+    }
+}
+
+/// Soft keywords remain valid identifiers outside their specific grammar constructs.
+fn soft_keyword_is_syntax(token: Token, ast: &ModModule) -> bool {
+    let position = token.range().start();
+    Ast::locate_node(ast, position)
+        .into_iter()
+        .any(|node| match (token.kind(), node) {
+            (TokenKind::Match, AnyNodeRef::StmtMatch(stmt)) => {
+                position < stmt.subject.range().start()
+            }
+            (TokenKind::Case, AnyNodeRef::MatchCase(case)) => {
+                position < case.pattern.range().start()
+            }
+            (TokenKind::Lazy, AnyNodeRef::StmtImport(stmt)) => {
+                stmt.is_lazy && position == stmt.range().start()
+            }
+            (TokenKind::Lazy, AnyNodeRef::StmtImportFrom(stmt)) => {
+                stmt.is_lazy && position == stmt.range().start()
+            }
+            (TokenKind::Type, AnyNodeRef::StmtTypeAlias(stmt)) => {
+                position < stmt.name.range().start()
+            }
+            _ => false,
+        })
+}
+
+fn keyword_documentation(
+    token: Token,
+    module: &Module,
+    ast: &ModModule,
+) -> (&'static str, &'static str) {
+    let compound = "https://docs.python.org/3/reference/compound_stmts.html";
+    let position = token.range().start();
+    let nodes = Ast::locate_node(ast, position);
+    let source = module.contents();
+    let before = source
+        .get(..usize::from(token.range().start()))
+        .expect("token range is within the module")
+        .trim_end();
+    let after = source
+        .get(usize::from(token.range().end())..)
+        .expect("token range is within the module")
+        .trim_start();
+    let preceded_by = |keyword: &str| {
+        before.strip_suffix(keyword).is_some_and(|prefix| {
+            prefix
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+        })
+    };
+    let followed_by = |keyword: &str| {
+        after.strip_prefix(keyword).is_some_and(|suffix| {
+            suffix
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+        })
+    };
+    match token.kind() {
+        TokenKind::False => (
+            "The false value of the `bool` type.",
+            "https://docs.python.org/3/reference/expressions.html#literals",
+        ),
+        TokenKind::None => (
+            "The singleton value used to represent the absence of a value.",
+            "https://docs.python.org/3/reference/expressions.html#literals",
+        ),
+        TokenKind::True => (
+            "The true value of the `bool` type.",
+            "https://docs.python.org/3/reference/expressions.html#literals",
+        ),
+        TokenKind::And => (
+            "Evaluates the right operand only when the left operand is true, then returns one of the operands.",
+            "https://docs.python.org/3/reference/expressions.html#boolean-operations",
+        ),
+        TokenKind::Or => (
+            "Evaluates the right operand only when the left operand is false, then returns one of the operands.",
+            "https://docs.python.org/3/reference/expressions.html#boolean-operations",
+        ),
+        TokenKind::Not if followed_by("in") => (
+            "Negates a membership test, producing `True` when the left operand is not a member of the right operand.",
+            "https://docs.python.org/3/reference/expressions.html#membership-test-operations",
+        ),
+        TokenKind::Not if preceded_by("is") => (
+            "Completes the `is not` operator, which tests whether two references point to different objects.",
+            "https://docs.python.org/3/reference/expressions.html#is-not",
+        ),
+        TokenKind::Not => (
+            "Negates the truth value of its operand.",
+            "https://docs.python.org/3/reference/expressions.html#boolean-operations",
+        ),
+        TokenKind::In if preceded_by("not") => (
+            "Tests whether the left operand is not a member of the right operand.",
+            "https://docs.python.org/3/reference/expressions.html#membership-test-operations",
+        ),
+        TokenKind::In => (
+            "Tests whether the left operand is a member of the right operand.",
+            "https://docs.python.org/3/reference/expressions.html#membership-test-operations",
+        ),
+        TokenKind::Is if followed_by("not") => (
+            "Tests whether two references point to different objects.",
+            "https://docs.python.org/3/reference/expressions.html#is-not",
+        ),
+        TokenKind::Is => (
+            "Tests whether two references point to the same object.",
+            "https://docs.python.org/3/reference/expressions.html#is-not",
+        ),
+        TokenKind::Lambda => (
+            "Creates an anonymous function whose body is a single expression.",
+            "https://docs.python.org/3/reference/expressions.html#lambdas",
+        ),
+        TokenKind::Yield
+            if nodes
+                .iter()
+                .any(|node| matches!(node, AnyNodeRef::ExprYieldFrom(_))) =>
+        {
+            (
+                "Delegates part of a generator's operation to another iterable with `yield from`.",
+                "https://docs.python.org/3/reference/expressions.html#yield-expressions",
+            )
+        }
+        TokenKind::Yield => (
+            "Suspends a generator and produces a value for its caller.",
+            "https://docs.python.org/3/reference/expressions.html#yield-expressions",
+        ),
+        TokenKind::Await => (
+            "Suspends the current coroutine until the awaitable completes.",
+            "https://docs.python.org/3/reference/expressions.html#await-expression",
+        ),
+        TokenKind::Assert => (
+            "Checks a condition and raises `AssertionError` when it is false. Assertions may be disabled with optimization.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-assert-statement",
+        ),
+        TokenKind::Break => (
+            "Exits the nearest enclosing loop and skips that loop's `else` clause.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-break-statement",
+        ),
+        TokenKind::Continue => (
+            "Skips the rest of the current loop iteration and proceeds with the next one.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-continue-statement",
+        ),
+        TokenKind::Del => (
+            "Deletes a name, item, slice, or attribute according to the target.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-del-statement",
+        ),
+        TokenKind::From
+            if nodes
+                .iter()
+                .any(|node| matches!(node, AnyNodeRef::ExprYieldFrom(_))) =>
+        {
+            (
+                "Delegates part of a generator's operation to another iterable.",
+                "https://docs.python.org/3/reference/expressions.html#yield-expressions",
+            )
+        }
+        TokenKind::From
+            if nodes
+                .iter()
+                .any(|node| matches!(node, AnyNodeRef::StmtRaise(_))) =>
+        {
+            (
+                "Introduces the explicit cause of an exception, or suppresses its context with `from None`.",
+                "https://docs.python.org/3/reference/simple_stmts.html#the-raise-statement",
+            )
+        }
+        TokenKind::From => (
+            "Introduces the module in a `from ... import ...` statement.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-import-statement",
+        ),
+        TokenKind::Import
+            if nodes.iter().any(|node| {
+                matches!(node, AnyNodeRef::StmtImport(stmt) if stmt.is_lazy)
+                    || matches!(node, AnyNodeRef::StmtImportFrom(stmt) if stmt.is_lazy)
+            }) =>
+        {
+            (
+                "Binds names through an import whose module loading is deferred until first use.",
+                "https://docs.python.org/3.15/reference/simple_stmts.html#lazy-imports",
+            )
+        }
+        TokenKind::Import => (
+            "Loads a module and binds selected names, or binds the module itself.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-import-statement",
+        ),
+        TokenKind::Global => (
+            "Makes listed names refer to bindings in the module's global scope.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-global-statement",
+        ),
+        TokenKind::Nonlocal => (
+            "Makes listed names refer to existing bindings in the nearest enclosing function scope.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-nonlocal-statement",
+        ),
+        TokenKind::Pass => (
+            "Performs no operation; it is a placeholder where syntax requires a statement.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-pass-statement",
+        ),
+        TokenKind::Raise => nodes
+            .iter()
+            .find_map(|node| match node {
+                AnyNodeRef::StmtRaise(stmt) if stmt.cause.is_some() => Some((
+                    "Raises an exception with an explicit cause set or suppressed by `from`.",
+                    "https://docs.python.org/3/reference/simple_stmts.html#the-raise-statement",
+                )),
+                AnyNodeRef::StmtRaise(stmt) if stmt.exc.is_none() => Some((
+                    "Re-raises the exception currently being handled.",
+                    "https://docs.python.org/3/reference/simple_stmts.html#the-raise-statement",
+                )),
+                AnyNodeRef::StmtRaise(_) => Some((
+                    "Raises the specified exception.",
+                    "https://docs.python.org/3/reference/simple_stmts.html#the-raise-statement",
+                )),
+                _ => None,
+            })
+            .unwrap_or((
+                "Raises an exception, or re-raises the exception currently being handled.",
+                "https://docs.python.org/3/reference/simple_stmts.html#the-raise-statement",
+            )),
+        TokenKind::Return => (
+            "Leaves the current function and supplies its result to the caller.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-return-statement",
+        ),
+        TokenKind::Type => (
+            "Declares a type alias. `type` is a soft keyword in this context.",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-type-statement",
+        ),
+        TokenKind::Lazy => (
+            "Marks an import as potentially lazy, deferring module loading until the imported name is first used. `lazy` is a soft keyword added in Python 3.15.",
+            "https://docs.python.org/3.15/reference/simple_stmts.html#lazy-imports",
+        ),
+        TokenKind::As => nodes
+            .iter()
+            .find_map(|node| match node {
+                AnyNodeRef::Alias(_) => Some((
+                    "Binds an imported module or name under an alternate name.",
+                    "https://docs.python.org/3/reference/simple_stmts.html#the-import-statement",
+                )),
+                AnyNodeRef::ExceptHandlerExceptHandler(_) => Some((
+                    "Binds the handled exception to a name for the duration of the handler.",
+                    "https://docs.python.org/3/reference/compound_stmts.html#except-clause",
+                )),
+                AnyNodeRef::WithItem(_) => Some((
+                    "Binds the value returned by a context manager's enter method.",
+                    "https://docs.python.org/3/reference/compound_stmts.html#the-with-statement",
+                )),
+                AnyNodeRef::PatternMatchAs(_) => Some((
+                    "Binds the value matched by a pattern to a name.",
+                    "https://docs.python.org/3/reference/compound_stmts.html#the-match-statement",
+                )),
+                _ => None,
+            })
+            .unwrap_or((
+                "Binds a value under a name in the surrounding construct.",
+                compound,
+            )),
+        TokenKind::Async
+            if nodes
+                .iter()
+                .any(|node| matches!(node, AnyNodeRef::Comprehension(_))) =>
+        {
+            (
+                "Marks a comprehension clause as asynchronous.",
+                "https://docs.python.org/3/reference/expressions.html#displays-for-lists-sets-and-dictionaries",
+            )
+        }
+        TokenKind::Async
+            if nodes
+                .iter()
+                .any(|node| matches!(node, AnyNodeRef::StmtFor(_))) =>
+        {
+            (
+                "Marks a `for` statement as asynchronous, iterating with the asynchronous iteration protocol.",
+                "https://docs.python.org/3/reference/compound_stmts.html#the-async-for-statement",
+            )
+        }
+        TokenKind::Async
+            if nodes
+                .iter()
+                .any(|node| matches!(node, AnyNodeRef::StmtWith(_))) =>
+        {
+            (
+                "Marks a `with` statement as asynchronous, using asynchronous context managers.",
+                "https://docs.python.org/3/reference/compound_stmts.html#the-async-with-statement",
+            )
+        }
+        TokenKind::Async => (
+            "Marks a function definition as asynchronous.",
+            "https://docs.python.org/3/reference/compound_stmts.html#coroutine-function-definition",
+        ),
+        TokenKind::Class => (
+            "Creates a class object by executing the class body in a new namespace.",
+            "https://docs.python.org/3/reference/compound_stmts.html#class-definitions",
+        ),
+        TokenKind::Def => (
+            "Defines a function and binds the resulting function object to a name.",
+            "https://docs.python.org/3/reference/compound_stmts.html#function-definitions",
+        ),
+        TokenKind::Elif => (
+            "Tests another condition when all preceding conditions in the `if` statement were false.",
+            "https://docs.python.org/3/reference/compound_stmts.html#the-if-statement",
+        ),
+        TokenKind::Else => nodes
+            .iter()
+            .find_map(|node| match node {
+                AnyNodeRef::ExprIf(_) => Some((
+                    "Introduces the value selected when a conditional expression's condition is false.",
+                    "https://docs.python.org/3/reference/expressions.html#conditional-expressions",
+                )),
+                AnyNodeRef::StmtIf(_) => Some((
+                    "Introduces the suite selected when all preceding conditions are false.",
+                    "https://docs.python.org/3/reference/compound_stmts.html#the-if-statement",
+                )),
+                AnyNodeRef::StmtFor(_) => Some((
+                    "Introduces the suite run after iteration is exhausted, but not after `break`.",
+                    "https://docs.python.org/3/reference/compound_stmts.html#the-for-statement",
+                )),
+                AnyNodeRef::StmtWhile(_) => Some((
+                    "Introduces the suite run when the condition becomes false, but not after `break`.",
+                    "https://docs.python.org/3/reference/compound_stmts.html#the-while-statement",
+                )),
+                AnyNodeRef::StmtTry(_) => Some((
+                    "Introduces the suite run when the `try` suite completes without an exception or control-flow exit.",
+                    "https://docs.python.org/3/reference/compound_stmts.html#the-try-statement",
+                )),
+                _ => None,
+            })
+            .unwrap_or((
+                "Introduces a fallback branch in the surrounding construct.",
+                compound,
+            )),
+        TokenKind::Except
+            if nodes
+                .iter()
+                .any(|node| matches!(node, AnyNodeRef::StmtTry(stmt) if stmt.is_star)) =>
+        {
+            (
+                "Handles matching subgroups from an exception group independently with `except*`.",
+                "https://docs.python.org/3/reference/compound_stmts.html#except-clause",
+            )
+        }
+        TokenKind::Except => (
+            "Handles an exception raised by the associated `try` suite when its type matches.",
+            "https://docs.python.org/3/reference/compound_stmts.html#except-clause",
+        ),
+        TokenKind::Finally => (
+            "Runs a cleanup suite when control leaves the associated `try` statement, including during exceptions and returns.",
+            "https://docs.python.org/3/reference/compound_stmts.html#finally-clause",
+        ),
+        TokenKind::For
+            if nodes
+                .iter()
+                .any(|node| matches!(node, AnyNodeRef::Comprehension(_))) =>
+        {
+            (
+                "Introduces an iteration clause in a comprehension.",
+                "https://docs.python.org/3/reference/expressions.html#displays-for-lists-sets-and-dictionaries",
+            )
+        }
+        TokenKind::For => (
+            "Iterates over an iterable, assigning each item to the target. Its `else` suite runs after exhaustion, but not after `break`.",
+            "https://docs.python.org/3/reference/compound_stmts.html#the-for-statement",
+        ),
+        TokenKind::If => nodes
+            .iter()
+            .find_map(|node| match node {
+                AnyNodeRef::ExprIf(_) => Some((
+                    "Selects one of two values according to a condition.",
+                    "https://docs.python.org/3/reference/expressions.html#conditional-expressions",
+                )),
+                AnyNodeRef::Comprehension(_) => Some((
+                    "Filters items in a comprehension according to a condition.",
+                    "https://docs.python.org/3/reference/expressions.html#displays-for-lists-sets-and-dictionaries",
+                )),
+                AnyNodeRef::MatchCase(_) => Some((
+                    "Introduces a guard that must succeed after a `case` pattern matches.",
+                    "https://docs.python.org/3/reference/compound_stmts.html#guards",
+                )),
+                AnyNodeRef::StmtIf(_) => Some((
+                    "Conditionally selects a suite.",
+                    "https://docs.python.org/3/reference/compound_stmts.html#the-if-statement",
+                )),
+                _ => None,
+            })
+            .unwrap_or((
+                "Conditionally selects a suite or value.",
+                "https://docs.python.org/3/reference/compound_stmts.html#the-if-statement",
+            )),
+        TokenKind::Match => (
+            "Evaluates a subject and selects the first `case` whose pattern and optional guard succeed. `match` is a soft keyword.",
+            "https://docs.python.org/3/reference/compound_stmts.html#the-match-statement",
+        ),
+        TokenKind::Case => (
+            "Introduces a pattern and optional guard within a `match` statement. `case` is a soft keyword.",
+            "https://docs.python.org/3/reference/compound_stmts.html#the-match-statement",
+        ),
+        TokenKind::Try => (
+            "Runs a protected suite with optional exception handlers, an `else` suite, and cleanup in `finally`.",
+            "https://docs.python.org/3/reference/compound_stmts.html#the-try-statement",
+        ),
+        TokenKind::While => (
+            "Repeats a suite while its condition is true. Its `else` suite runs when the condition becomes false, but not after `break`.",
+            "https://docs.python.org/3/reference/compound_stmts.html#the-while-statement",
+        ),
+        TokenKind::With => (
+            "Runs a suite under one or more context managers, ensuring their exit methods are called.",
+            "https://docs.python.org/3/reference/compound_stmts.html#the-with-statement",
+        ),
+        _ => unreachable!("keyword hover only requests documented Python keywords"),
+    }
+}
+
+fn format_keyword_documentation(token: Token, module: &Module, ast: &ModModule) -> String {
+    let (documentation, reference) = keyword_documentation(token, module, ast);
+    format!("{documentation}\n\n[Python language reference]({reference})")
+}
+
+fn keyword_hover(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    module: Option<&Module>,
+    ast: Option<&ModModule>,
+    position: TextSize,
+) -> Option<HoverResult> {
+    let module = module?;
+    let ast = ast?;
+    let token = keyword_token_at(transaction, handle, module, position)?;
+    // Keep the existing type-aware hovers for boolean, identity, and membership operators.
+    if matches!(
+        token.kind(),
+        TokenKind::And | TokenKind::In | TokenKind::Is | TokenKind::Not | TokenKind::Or
+    ) {
+        return None;
+    }
+    if token.kind().is_soft_keyword() && !soft_keyword_is_syntax(token, ast) {
+        return None;
+    }
+    let documentation = format_keyword_documentation(token, module, ast);
+    let keyword = module.code_at(token.range());
+    Some(HoverResult {
+        hover: Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!("```python\n(keyword) {keyword}\n```\n---\n{documentation}"),
+            }),
+            range: Some(module.to_lsp_range(token.range())),
+        },
+        can_increase_verbosity: false,
+    })
+}
+
 /// Hover contents when the cursor is on an ignore comment covering suppressed errors.
 fn ignore_comment_hover(
     transaction: &Transaction<'_>,
@@ -791,14 +1268,29 @@ fn in_keyword_hover(
     ast: Option<&ModModule>,
     position: TextSize,
 ) -> Option<HoverResult> {
-    let iterable_range = in_keyword_in_iteration_at(ast, position)?;
+    let ast = ast?;
+    let iterable_range = in_keyword_in_iteration_at(Some(ast), position)?;
     let iterable_type = transaction.get_type_at_for_display(handle, iterable_range.start())?;
+    let (documentation, reference) = if Ast::locate_node(ast, position)
+        .iter()
+        .any(|node| matches!(node, AnyNodeRef::Comprehension(_)))
+    {
+        (
+            "Separates the target and iterable in a comprehension's iteration clause.",
+            "https://docs.python.org/3/reference/expressions.html#displays-for-lists-sets-and-dictionaries",
+        )
+    } else {
+        (
+            "Separates the target and iterable in a `for` statement. The iterable is evaluated once, then its items are assigned to the target one by one.",
+            "https://docs.python.org/3/reference/compound_stmts.html#the-for-statement",
+        )
+    };
     Some(HoverResult {
         hover: Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
-                    "```python\n(keyword) in\n```\n---\nIteration over `{iterable_type}`"
+                    "```python\n(keyword) in\n```\n---\nIteration over `{iterable_type}`\n\n{documentation}\n\n[Python language reference]({reference})"
                 ),
             }),
             range: None,
@@ -943,6 +1435,16 @@ pub fn get_hover_with_verbosity(
         return Some(result);
     }
 
+    if let Some(result) = keyword_hover(
+        transaction,
+        handle,
+        module_info.as_ref(),
+        ast.as_deref(),
+        position,
+    ) {
+        return Some(result);
+    }
+
     let type_ = resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
 
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
@@ -1070,19 +1572,50 @@ pub fn get_hover_with_verbosity(
 
     let parameter_doc = resolve_hover_parameter_doc(transaction, handle, position);
 
+    let mut hover = HoverValue {
+        kind,
+        name,
+        type_,
+        range,
+        docstring,
+        parameter_doc,
+        type_sources: type_sources_for_hover(transaction, handle, position),
+        display: type_display,
+        show_go_to_links: options.show_go_to_links,
+    }
+    .format(transaction, handle);
+
+    if let Some((module, ast, token)) =
+        module_info
+            .as_ref()
+            .zip(ast.as_deref())
+            .and_then(|(module, ast)| {
+                keyword_token_at(transaction, handle, module, position)
+                    .filter(|token| {
+                        matches!(
+                            token.kind(),
+                            TokenKind::And
+                                | TokenKind::In
+                                | TokenKind::Is
+                                | TokenKind::Not
+                                | TokenKind::Or
+                        )
+                    })
+                    .map(|token| (module, ast, token))
+            })
+    {
+        let keyword = module.code_at(token.range());
+        let documentation = format_keyword_documentation(token, module, ast);
+        let HoverContents::Markup(contents) = &mut hover.contents else {
+            unreachable!("type hover always uses markdown contents")
+        };
+        contents.value.push_str(&format!(
+            "\n---\n```python\n(keyword) {keyword}\n```\n{documentation}"
+        ));
+    }
+
     Some(HoverResult {
-        hover: HoverValue {
-            kind,
-            name,
-            type_,
-            range,
-            docstring,
-            parameter_doc,
-            type_sources: type_sources_for_hover(transaction, handle, position),
-            display: type_display,
-            show_go_to_links: options.show_go_to_links,
-        }
-        .format(transaction, handle),
+        hover,
         can_increase_verbosity,
     })
 }
