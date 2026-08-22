@@ -90,7 +90,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             domain.range(),
                             ErrorKind::InvalidTypeVar,
                             format!(
-                                "`Flag` domain must resolve to exactly `int`, `bool`, or `str`, got `{domain_ty}`"
+                                "`Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these, got `{domain_ty}`"
                             ),
                         );
                         Restriction::Unrestricted
@@ -105,7 +105,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                     *range,
                     ErrorKind::InvalidTypeVar,
-                    "`shape_extensions.Flag` requires exactly one `int`, `bool`, or `str` domain"
+                    "`shape_extensions.Flag` requires one domain argument: `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these"
                         .to_owned(),
                 );
                 Restriction::Unrestricted
@@ -162,6 +162,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         let Restriction::Flag(domain) = restriction else {
             return None;
+        };
+        // Tuple type expressions infer as `type[...]`; defaults store the corresponding value.
+        let default = match default {
+            Type::Type(inner) => inner.as_ref(),
+            _ => default,
         };
         if domain.accepts_literal(default) {
             Some(default.clone())

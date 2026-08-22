@@ -121,7 +121,7 @@ class Int[T]:
 
 
 class Flag[T]:
-    """Marker for a scalar value that controls type-level evaluation."""
+    """Marker for a literal-preserving value that controls type-level evaluation."""
 
     pass
 

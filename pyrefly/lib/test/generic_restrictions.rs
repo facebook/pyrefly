@@ -201,13 +201,124 @@ assert_type(unrelated(ordinary_flag), Flag[int])
 Marker = ShapeFlag
 def marker_alias[K: Marker[int]](k: K) -> K: ...
 assert_type(marker_alias(1), Literal[1])
-def bare_alias[K: Marker](k: K) -> K: ...  # E: `shape_extensions.Flag` requires exactly one `int`, `bool`, or `str` domain
-def bare_direct[K: ShapeFlag](k: K) -> K: ...  # E: `shape_extensions.Flag` requires exactly one `int`, `bool`, or `str` domain
+def bare_alias[K: Marker](k: K) -> K: ...  # E: `shape_extensions.Flag` requires one domain argument: `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+def bare_direct[K: ShapeFlag](k: K) -> K: ...  # E: `shape_extensions.Flag` requires one domain argument: `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
 
 Legacy = TypeVar("Legacy", bound=ShapeFlag[int])  # E: `shape_extensions.Flag` is supported only as a direct PEP 695 type parameter bound
 
-def union_domain[K: ShapeFlag[int | str]](k: K) -> K: ...  # E: `Flag` domain must resolve to exactly `int`, `bool`, or `str`, got `int | str`
-def noncore_domain[K: ShapeFlag[bytes]](k: K) -> K: ...  # E: `Flag` domain must resolve to exactly `int`, `bool`, or `str`, got `bytes`
+def union_domain[K: ShapeFlag[int | str]](k: K) -> K: ...
+def noncore_domain[K: ShapeFlag[bytes]](k: K) -> K: ...  # E: `Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+def float_domain[K: ShapeFlag[float]](k: K) -> K: ...  # E: `Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+def fixed_tuple_domain[K: ShapeFlag[tuple[int, int]]](k: K) -> K: ...  # E: `Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+"#,
+);
+
+testcase!(
+    test_flag_union_and_tuple_literal_preservation,
+    flag_env(),
+    r#"
+from typing import Any, Literal, assert_type
+from shape_extensions import Flag
+
+type Axis = int | tuple[int, ...] | None
+type ReorderedAxis = None | int | tuple[int, ...] | int
+
+def capture[A: Flag[Axis]](axis: A) -> A: ...
+def capture_reordered[A: Flag[ReorderedAxis]](axis: A) -> A: ...
+
+assert_type(capture(0), Literal[0])
+assert_type(capture(-1), Literal[-1])
+assert_type(capture((0, -1)), tuple[Literal[0], Literal[-1]])
+assert_type(capture(()), tuple[()])
+assert_type(capture(None), None)
+assert_type(capture_reordered((1, 2)), tuple[Literal[1], Literal[2]])
+
+broad_int: int = 0
+broad_tuple: tuple[int, ...] = (0, 1)
+broad_unpacked: tuple[Literal[0], *tuple[int, ...], Literal[-1]] = (0, 1, -1)
+broad_axis: Axis = 0
+dynamic: Any = 0
+assert_type(capture(broad_int), int)
+assert_type(capture(broad_tuple), tuple[int, ...])
+assert_type(
+    capture(broad_unpacked),
+    tuple[Literal[0], *tuple[int, ...], Literal[-1]],
+)
+assert_type(capture(broad_axis), Axis)
+assert_type(capture(dynamic), Any)
+
+capture(True)  # E: `Literal[True]` is not a valid `Flag[int | tuple[int, ...] | None]` value
+capture((0, "x"))  # E: is not a valid `Flag[int | tuple[int, ...] | None]` value
+"#,
+);
+
+testcase!(
+    test_flag_union_defaults_context_and_overloads,
+    flag_env(),
+    r#"
+from typing import Literal, assert_type, overload, reveal_type
+from shape_extensions import Flag
+
+type Axis = int | tuple[int, ...] | None
+
+def runtime_default[A: Flag[Axis]](axis: A = None) -> A: ...
+def type_default[A: Flag[Axis] = None](axis: A = None) -> A: ...
+def tuple_type_default[
+    A: Flag[tuple[int, ...]] = tuple[Literal[0], Literal[-1]]
+](axis: A = (0, -1)) -> A: ...
+def bool_default[A: Flag[bool]](enabled: A = False) -> A: ...
+
+assert_type(runtime_default(), None)
+assert_type(type_default(), None)
+assert_type(tuple_type_default(), tuple[Literal[0], Literal[-1]])
+assert_type(tuple_type_default((1,)), tuple[Literal[1]])
+assert_type(bool_default(), Literal[False])
+assert_type(bool_default(True), Literal[True])
+
+precise: tuple[Literal[0], Literal[-1]] = runtime_default((0, -1))
+wrong: tuple[Literal[1], Literal[-1]] = runtime_default((0, -1))  # E: not assignable
+
+@overload
+def pick[A: Flag[Axis]](axis: A, mode: Literal[0]) -> A: ...
+@overload
+def pick[A: Flag[Axis]](axis: A, mode: Literal[1]) -> tuple[A]: ...
+def pick(axis: Axis, mode: int) -> Axis | tuple[Axis]: ...
+
+assert_type(pick((0, -1), 0), tuple[Literal[0], Literal[-1]])
+assert_type(pick((0, -1), 1), tuple[tuple[Literal[0], Literal[-1]]])
+
+def accepts_union[A: Flag[int | str]](value: A) -> A: ...
+def capture_int[A: Flag[int]](value: A) -> A: ...
+def constrained[T: (int, str)](value: T) -> T: ...
+def forwards_int[A: Flag[int]](value: A) -> A:
+    return accepts_union(value)
+def forwards_constraints[A: Flag[int | str]](value: A) -> A:
+    return constrained(value)
+def rejects_union[A: Flag[int | str]](value: A) -> None:
+    capture_int(value)  # E: is not a valid `Flag[int]` value
+
+def rejects_wrong_tuple_element[A: Flag[tuple[int, ...]]](value: A) -> tuple[str, ...]:
+    return value  # E: not assignable
+
+def merge_narrowed[A: Flag[int | str]](value: A) -> None:
+    if isinstance(value, int):
+        merged = value
+    else:
+        merged = value
+    reveal_type(merged)  # E: revealed type: A
+"#,
+);
+
+// A union domain makes `type[K]` resolve to several constructors at once. Targeting the call
+// used to assume a single class, so this pins that a union domain stays a graceful diagnostic.
+testcase!(
+    test_flag_union_constructor_target_does_not_panic,
+    flag_env(),
+    r#"
+from shape_extensions import Flag
+
+def construct[K: Flag[int | str]](value: K, cls: type[K]) -> K:
+    return cls()
 "#,
 );
 

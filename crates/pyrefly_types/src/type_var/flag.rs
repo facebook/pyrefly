@@ -22,6 +22,7 @@
 
 use std::fmt;
 use std::fmt::Display;
+use std::slice;
 
 use pyrefly_derive::TypeEq;
 use pyrefly_util::visit::Visit;
@@ -31,8 +32,8 @@ use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::simplify::unions;
 use crate::stdlib::Stdlib;
+use crate::tuple::Tuple;
 use crate::type_var::Restriction;
-use crate::types::AnyStyle;
 use crate::types::Type;
 
 /// A member of the builtin universe a `Flag` type parameter can range over. The variant
@@ -45,6 +46,41 @@ pub enum FlagMember {
     Str,
     Tuple,
     NoneType,
+}
+
+/// Whether every element of `tuple` is an integer. `Type::Int` covers symbolic `Int[N]`
+/// dimensions, which are legitimate entries in a shape-derived tuple.
+fn is_int_tuple(tuple: &Tuple) -> bool {
+    fn is_int(ty: &Type) -> bool {
+        match ty {
+            Type::Any(_) | Type::Int(_) => true,
+            Type::ClassType(cls) => cls.is_builtin("int"),
+            Type::Literal(lit) => matches!(lit.value, Lit::Int(_)),
+            Type::Union(union) => union.members.iter().all(is_int),
+            Type::Quantified(q) => {
+                matches!(q.restriction(), Restriction::Flag(d) if d.is_subset_of(FlagDomain::of(FlagMember::Int)))
+            }
+            Type::TypeVar(tv) => {
+                matches!(tv.restriction(), Restriction::Flag(d) if d.is_subset_of(FlagDomain::of(FlagMember::Int)))
+            }
+            _ => false,
+        }
+    }
+
+    match tuple {
+        Tuple::Concrete(elements) => elements.iter().all(is_int),
+        Tuple::Unbounded(element) => is_int(element),
+        Tuple::Unpacked(unpacked) => {
+            let (prefix, middle, suffix) = unpacked.parts();
+            prefix.iter().all(is_int)
+                && suffix.iter().all(is_int)
+                && match middle {
+                    Type::Any(_) => true,
+                    Type::Tuple(tuple) => is_int_tuple(tuple),
+                    _ => false,
+                }
+        }
+    }
 }
 
 impl FlagMember {
@@ -69,13 +105,38 @@ impl FlagMember {
         }
     }
 
+    /// The source spelling this member is written as inside `Flag[...]`.
+    fn source_spelling(self) -> &'static str {
+        match self {
+            Self::Int => "int",
+            Self::Bool => "bool",
+            Self::Str => "str",
+            Self::Tuple => "tuple[int, ...]",
+            Self::NoneType => "None",
+        }
+    }
+
+    /// The member this type spells, when written as a `Flag[...]` domain member.
+    fn from_type(ty: &Type) -> Option<Self> {
+        match ty {
+            Type::ClassType(cls) if cls.is_builtin("int") => Some(Self::Int),
+            Type::ClassType(cls) if cls.is_builtin("bool") => Some(Self::Bool),
+            Type::ClassType(cls) if cls.is_builtin("str") => Some(Self::Str),
+            Type::None => Some(Self::NoneType),
+            Type::Tuple(Tuple::Unbounded(element)) if matches!(element.as_ref(), Type::ClassType(cls) if cls.is_builtin("int")) => {
+                Some(Self::Tuple)
+            }
+            _ => None,
+        }
+    }
+
     fn accepts(self, ty: &Type) -> bool {
         match (self, ty) {
             (Self::Int, Type::ClassType(cls)) => cls.is_builtin("int"),
             (Self::Bool, Type::ClassType(cls)) => cls.is_builtin("bool"),
             (Self::Str, Type::ClassType(cls)) => cls.is_builtin("str"),
             (Self::Tuple, Type::ClassType(cls)) => cls.is_builtin("tuple"),
-            (Self::Tuple, Type::Tuple(_)) => true,
+            (Self::Tuple, Type::Tuple(tuple)) => is_int_tuple(tuple),
             (Self::NoneType, Type::None) => true,
             (Self::Int, Type::Int(_)) => true,
             (Self::Int, Type::Literal(lit)) => matches!(lit.value, Lit::Int(_)),
@@ -90,7 +151,7 @@ impl FlagMember {
             Self::Int => stdlib.int().clone().to_type(),
             Self::Bool => stdlib.bool().clone().to_type(),
             Self::Str => stdlib.str().clone().to_type(),
-            Self::Tuple => stdlib.tuple(Type::Any(AnyStyle::Implicit)).to_type(),
+            Self::Tuple => stdlib.tuple(stdlib.int().clone().to_type()).to_type(),
             Self::NoneType => stdlib.none_type().clone().to_type(),
         }
     }
@@ -98,13 +159,7 @@ impl FlagMember {
 
 impl Display for FlagMember {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Int => "int",
-            Self::Bool => "bool",
-            Self::Str => "str",
-            Self::Tuple => "tuple",
-            Self::NoneType => "None",
-        })
+        f.write_str(self.source_spelling())
     }
 }
 
@@ -120,14 +175,17 @@ pub struct FlagDomain {
 }
 
 impl FlagDomain {
-    /// Parses the source domains currently supported by `Flag`.
+    /// Parses a nonempty union of supported `Flag` domain members.
     pub fn from_type(ty: &Type) -> Option<Self> {
-        match ty {
-            Type::ClassType(cls) if cls.is_builtin("int") => Some(Self::of(FlagMember::Int)),
-            Type::ClassType(cls) if cls.is_builtin("bool") => Some(Self::of(FlagMember::Bool)),
-            Type::ClassType(cls) if cls.is_builtin("str") => Some(Self::of(FlagMember::Str)),
-            _ => None,
-        }
+        let members = match ty {
+            Type::Union(union) => union.members.as_slice(),
+            _ => slice::from_ref(ty),
+        };
+        let mut members = members.iter();
+        let first = Self::of(FlagMember::from_type(members.next()?)?);
+        members.try_fold(first, |domain, member| {
+            FlagMember::from_type(member).map(|member| domain.join(Self::of(member)))
+        })
     }
 
     /// Accepts the declared domain exactly, rather than applying Python subtyping.
@@ -136,15 +194,29 @@ impl FlagDomain {
             return true;
         }
         match ty {
-            Type::Quantified(q) => matches!(q.restriction(), Restriction::Flag(x) if *x == self),
-            Type::TypeVar(tv) => matches!(tv.restriction(), Restriction::Flag(x) if *x == self),
+            Type::Quantified(q) => {
+                matches!(q.restriction(), Restriction::Flag(x) if x.is_subset_of(self))
+            }
+            Type::TypeVar(tv) => {
+                matches!(tv.restriction(), Restriction::Flag(x) if x.is_subset_of(self))
+            }
             Type::Union(union) => union.members.iter().all(|member| self.accepts(member)),
             _ => self.members().any(|member| member.accepts(ty)),
         }
     }
 
+    /// Accepts a literal scalar, `None`, or a tuple of integer literals.
     pub fn accepts_literal(self, ty: &Type) -> bool {
-        matches!(ty, Type::Literal(_)) && self.accepts(ty)
+        match ty {
+            Type::Literal(_) | Type::None => self.accepts(ty),
+            Type::Tuple(Tuple::Concrete(elements)) => {
+                self.contains(FlagMember::Tuple)
+                    && elements.iter().all(|element| {
+                        matches!(element, Type::Literal(lit) if matches!(lit.value, Lit::Int(_)))
+                    })
+            }
+            _ => false,
+        }
     }
 
     pub const fn of(member: FlagMember) -> Self {
@@ -158,6 +230,11 @@ impl FlagDomain {
         Self {
             members: self.members | other.members,
         }
+    }
+
+    /// Whether everything this domain admits is also admitted by `other`.
+    pub fn is_subset_of(self, other: Self) -> bool {
+        self.members & !other.members == 0
     }
 
     pub fn contains(self, member: FlagMember) -> bool {
@@ -198,7 +275,7 @@ impl Display for FlagDomain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, member) in self.members().enumerate() {
             if i > 0 {
-                write!(f, ", ")?;
+                write!(f, " | ")?;
             }
             write!(f, "{member}")?;
         }
@@ -222,12 +299,12 @@ mod tests {
     use crate::type_var::Restriction;
 
     #[test]
-    fn passive_flag_singleton_metadata() {
+    fn flag_singleton_metadata() {
         for (member, display, class_name) in [
             (FlagMember::Int, "int", "builtins.int"),
             (FlagMember::Bool, "bool", "builtins.bool"),
             (FlagMember::Str, "str", "builtins.str"),
-            (FlagMember::Tuple, "tuple", "builtins.tuple"),
+            (FlagMember::Tuple, "tuple[int, ...]", "builtins.tuple"),
             (FlagMember::NoneType, "None", "types.NoneType"),
         ] {
             let domain = FlagDomain::of(member);
@@ -241,7 +318,7 @@ mod tests {
     /// Joining is order-independent and idempotent, and the resulting domain always reports
     /// its members in canonical order rather than join order.
     #[test]
-    fn passive_flag_join_is_deterministic() {
+    fn flag_join_is_deterministic() {
         let members = [
             FlagMember::NoneType,
             FlagMember::Tuple,
@@ -255,7 +332,10 @@ mod tests {
             .reduce(FlagDomain::join)
             .unwrap();
 
-        assert_eq!(joined.to_string(), "int, bool, str, tuple, None");
+        assert_eq!(
+            joined.to_string(),
+            "int | bool | str | tuple[int, ...] | None"
+        );
         assert_eq!(
             joined.class_names(),
             vec![
@@ -276,7 +356,7 @@ mod tests {
 
     /// Tuple membership uses the same representation as every other domain member.
     #[test]
-    fn passive_flag_tuple_is_an_atom() {
+    fn flag_tuple_is_an_atom() {
         let tuple_only = FlagDomain::of(FlagMember::Tuple);
         assert_eq!(tuple_only.class_names(), vec!["builtins.tuple"]);
         assert!(!tuple_only.contains(FlagMember::Int));
@@ -284,5 +364,19 @@ mod tests {
         let scalar_only = FlagDomain::of(FlagMember::Int);
         assert!(!scalar_only.contains(FlagMember::Tuple));
         assert!(scalar_only.join(tuple_only).contains(FlagMember::Tuple));
+    }
+
+    #[test]
+    fn flag_subset_covers_scalars_and_tuples() {
+        let int = FlagDomain::of(FlagMember::Int);
+        let tuple = FlagDomain::of(FlagMember::Tuple);
+        let both = int.join(tuple);
+
+        assert!(int.is_subset_of(both));
+        assert!(tuple.is_subset_of(both));
+        assert!(both.is_subset_of(both));
+        assert!(!both.is_subset_of(int));
+        assert!(!tuple.is_subset_of(int));
+        assert!(!int.is_subset_of(tuple));
     }
 }

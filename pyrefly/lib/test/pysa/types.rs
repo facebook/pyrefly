@@ -525,6 +525,54 @@ class MyTypedDict(TypedDict):
         ),
     );
 
+    // A Flag union domain projects every member, in canonical order rather than source order.
+    let union_flag_domain = FlagDomain::from_type(&unions(
+        vec![
+            context.answers_context.stdlib.int().clone().to_type(),
+            context.answers_context.stdlib.str().clone().to_type(),
+        ],
+        context.answers_context.answers.heap(),
+    ))
+    .expect("int and str form a valid Flag domain");
+    assert_eq!(
+        PysaType::new(
+            "G".to_owned(),
+            ClassNamesFromType::from_classes(
+                vec![
+                    ClassRef::from_class(
+                        context.answers_context.stdlib.int().class_object(),
+                        &context,
+                    ),
+                    ClassRef::from_class(
+                        context.answers_context.stdlib.str().class_object(),
+                        &context,
+                    ),
+                ],
+                true,
+            )
+            .prepend_typevar_bound(),
+        )
+        .with_is_int(true),
+        PysaType::from_type(
+            &context
+                .answers_context
+                .answers
+                .heap()
+                .mk_quantified(Quantified::type_var(
+                    Name::new_static("G"),
+                    QuantifiedIdentity::new(
+                        ModuleName::from_str("__test__"),
+                        AnchorIndex::new(TextRange::default(), 3),
+                        QuantifiedOrigin::Pep695,
+                    ),
+                    None,
+                    Restriction::Flag(union_flag_domain),
+                    PreInferenceVariance::Invariant,
+                )),
+            &context,
+        ),
+    );
+
     // Strip type variable with constraints
     assert_eq!(
         PysaType::new(

@@ -231,6 +231,24 @@ def test[N: IntVar](symbolic: Int[N], literal: Int[3], broad: Int) -> None:
 "#,
 );
 
+// Shape-derived tuples mix literals with symbolic `Int[N]` dimensions, so a tuple domain has
+// to admit both rather than only integer classes.
+testcase!(
+    test_flag_tuple_accepts_symbolic_shape_ints,
+    shaped_array_env(),
+    r#"
+from shape_extensions import Flag, Int, IntVar
+from typing import Literal, assert_type
+
+def capture_axes[A: Flag[tuple[int, ...]]](axes: A) -> A: ...
+
+def test[N: IntVar](symbolic: Int[N], literal: Int[3], broad: Int) -> None:
+    assert_type(capture_axes((symbolic, 3)), tuple[Int[N], Literal[3]])
+    assert_type(capture_axes((literal, broad)), tuple[Int[3], Int])
+    capture_axes((symbolic, "x"))  # E: is not a valid `Flag[tuple[int, ...]]` value
+"#,
+);
+
 fn type_shape_dsl_gradual_env() -> TestEnv {
     let mut env = shape_dsl_tensor_env();
     env.add(
@@ -1885,6 +1903,12 @@ def wrong_condition_domain(n: Int, enabled: bool) -> Int:
     return n
 
 @type_shape_dsl_function
+def union_condition_domain(n: Int, offset: int | bool) -> Int:
+    if offset < 0:  # E: literal comparison requires the left parameter to be annotated as `int`
+        return n
+    return n
+
+@type_shape_dsl_function
 def nested_arithmetic(n: Int, k: int) -> Int:
     return (n + k) + k  # E: arithmetic return operands must be bare parameter names
 
@@ -1895,6 +1919,10 @@ def multiplication(n: Int, k: int) -> Int:
 @type_shape_dsl_function
 def reversed_arithmetic(n: Int, k: int) -> Int:
     return k + n  # E: arithmetic return requires `Int +/- Flag[int]`
+
+@type_shape_dsl_function
+def union_arithmetic(n: Int, k: int | bool) -> Int:
+    return n + k  # E: arithmetic return requires `Int +/- Flag[int]`
 
 @type_shape_dsl_function
 def wrong_result(n: Int, k: int) -> IntTuple:
