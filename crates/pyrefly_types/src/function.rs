@@ -469,7 +469,12 @@ pub enum FunctionKind {
         Arc<ShapeDslFunction>,
         IdentityIgnored<Arc<Vec<Arc<ShapeDslFunction>>>>,
     ),
-    /// A resolved user-defined type-level shape DSL function.
+    /// A user-defined type-level shape DSL function.
+    ///
+    /// The first field preserves ordinary function identity for generic type-system machinery.
+    /// The resolved program repeats that root identity and owns every resolved function definition
+    /// used during evaluation, so changes anywhere in the shape-specific program affect
+    /// incremental equality.
     TypeShapeDsl(Arc<FuncDefId>, Arc<ResolvedTypeShapeDslFunction>),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,

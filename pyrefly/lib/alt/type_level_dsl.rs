@@ -433,8 +433,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return Some(FunctionKind::TypeShapeDsl(
                     func_id.clone(),
                     Arc::new(
-                        ResolvedTypeShapeDslFunction::try_new(validated, parameter_domains, result)
-                            .expect("resolved DSL domains were checked against the validated AST"),
+                        ResolvedTypeShapeDslFunction::try_new(
+                            func_id.clone(),
+                            validated,
+                            parameter_domains,
+                            result,
+                        )
+                        .expect("resolved DSL domains were checked against the validated AST"),
                     ),
                 ));
             } else if valid_body {

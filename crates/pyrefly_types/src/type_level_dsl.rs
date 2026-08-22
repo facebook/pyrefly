@@ -42,6 +42,7 @@ use crate::dimension::canonicalize;
 use crate::dimension::gradual_size;
 use crate::equality::TypeEq as TypeEqTrait;
 use crate::equality::TypeEqCtx;
+use crate::function::FuncDefId;
 use crate::literal::Lit;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
@@ -81,16 +82,73 @@ impl fmt::Display for TypeShapeDslInputDomain {
     }
 }
 
-/// A validated DSL definition paired with its resolved input and result domains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
+struct ResolvedTypeShapeDslNodeId(u32);
+
+impl ResolvedTypeShapeDslNodeId {
+    const ROOT: Self = Self(0);
+
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
-pub struct ResolvedTypeShapeDslFunction {
+struct ResolvedTypeShapeDslNode {
+    id: Arc<FuncDefId>,
     definition: Arc<ValidatedTypeShapeDslFunction>,
     parameter_domains: Vec<TypeShapeDslInputDomain>,
     result_domain: TypeShapeDslDomain,
 }
 
+impl ResolvedTypeShapeDslNode {
+    fn parameter_domains(&self) -> &[TypeShapeDslInputDomain] {
+        &self.parameter_domains
+    }
+
+    fn result_domain(&self) -> TypeShapeDslDomain {
+        self.result_domain
+    }
+}
+
+/// The complete evaluation program for one type-level shape DSL entry point.
+///
+/// A function with no helper calls has only its root node. Keeping nodes in a flat program lets
+/// helper definitions be shared rather than recursively embedded once helper calls are resolved.
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
+struct ResolvedTypeShapeDslProgram {
+    nodes: Box<[ResolvedTypeShapeDslNode]>,
+}
+
+impl ResolvedTypeShapeDslProgram {
+    fn root(&self) -> &ResolvedTypeShapeDslNode {
+        self.node(ResolvedTypeShapeDslNodeId::ROOT)
+    }
+
+    fn node(&self, id: ResolvedTypeShapeDslNodeId) -> &ResolvedTypeShapeDslNode {
+        &self.nodes[id.index()]
+    }
+
+    fn evaluate(
+        &self,
+        id: ResolvedTypeShapeDslNodeId,
+        args: &[Type],
+        budget: &mut DslEvaluationBudget,
+    ) -> DslOutcome {
+        let node = self.node(id);
+        node.definition.evaluate(args, self, id, budget)
+    }
+}
+
+/// A validated DSL definition paired with its resolved program.
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
+pub struct ResolvedTypeShapeDslFunction {
+    program: Arc<ResolvedTypeShapeDslProgram>,
+}
+
 impl ResolvedTypeShapeDslFunction {
     pub fn try_new(
+        id: Arc<FuncDefId>,
         definition: Arc<ValidatedTypeShapeDslFunction>,
         parameter_domains: Vec<TypeShapeDslInputDomain>,
         result_domain: TypeShapeDslDomain,
@@ -98,27 +156,43 @@ impl ResolvedTypeShapeDslFunction {
         if definition.parsed.parameter_count() != parameter_domains.len() {
             return None;
         }
-        Some(Self {
+        let root = ResolvedTypeShapeDslNode {
+            id,
             definition,
             parameter_domains,
             result_domain,
+        };
+        Some(Self {
+            program: Arc::new(ResolvedTypeShapeDslProgram {
+                nodes: vec![root].into_boxed_slice(),
+            }),
         })
     }
 
+    fn root(&self) -> &ResolvedTypeShapeDslNode {
+        self.program.root()
+    }
+
+    fn evaluate(&self, args: &[Type]) -> DslOutcome {
+        let mut budget = DslEvaluationBudget::new();
+        self.program
+            .evaluate(ResolvedTypeShapeDslNodeId::ROOT, args, &mut budget)
+    }
+
     pub fn name(&self) -> &Name {
-        self.definition.name()
+        self.root().definition.name()
     }
 
     pub fn parameter_name(&self, index: usize) -> &Name {
-        self.definition.parameter_name(index)
+        self.root().definition.parameter_name(index)
     }
 
     pub fn parameter_domains(&self) -> &[TypeShapeDslInputDomain] {
-        &self.parameter_domains
+        &self.root().parameter_domains
     }
 
     pub fn result_domain(&self) -> TypeShapeDslDomain {
-        self.result_domain
+        self.root().result_domain
     }
 }
 
@@ -2371,15 +2445,20 @@ impl TypeLevelDslCall {
                     &DslValue::from_shape_type(right),
                 ))
             }
-            TypeLevelDslFunction::UserDefined(function) => {
-                project(function.definition.evaluate(&self.args, function))
-            }
+            TypeLevelDslFunction::UserDefined(function) => project(function.evaluate(&self.args)),
         }
     }
 }
 
 impl ValidatedTypeShapeDslFunction {
-    fn evaluate(&self, args: &[Type], signature: &ResolvedTypeShapeDslFunction) -> DslOutcome {
+    fn evaluate(
+        &self,
+        args: &[Type],
+        program: &ResolvedTypeShapeDslProgram,
+        node_id: ResolvedTypeShapeDslNodeId,
+        budget: &mut DslEvaluationBudget,
+    ) -> DslOutcome {
+        let signature = program.node(node_id);
         let parameter_count = self.parsed.parameter_count();
         assert_eq!(
             parameter_count,
@@ -2401,12 +2480,12 @@ impl ValidatedTypeShapeDslFunction {
             parameter_count: args.len(),
             slots,
         };
-        let mut budget = DslEvaluationBudget::new();
         match self.evaluate_suite(
             &self.parsed.definition.body,
             &mut environment,
-            signature,
-            &mut budget,
+            program,
+            node_id,
+            budget,
         ) {
             DslControlFlow::Return(result) => result,
             DslControlFlow::Continue => {
@@ -2419,9 +2498,11 @@ impl ValidatedTypeShapeDslFunction {
         &self,
         suite: &[Stmt],
         environment: &mut DslEnvironment,
-        signature: &ResolvedTypeShapeDslFunction,
+        program: &ResolvedTypeShapeDslProgram,
+        node_id: ResolvedTypeShapeDslNodeId,
         budget: &mut DslEvaluationBudget,
     ) -> DslControlFlow {
+        let signature = program.node(node_id);
         for statement in suite {
             match statement {
                 Stmt::Assign(assign) => {
@@ -2549,7 +2630,7 @@ impl ValidatedTypeShapeDslFunction {
                     });
                 }
                 Stmt::If(if_stmt) => {
-                    match self.evaluate_if(if_stmt, environment, signature, budget) {
+                    match self.evaluate_if(if_stmt, environment, program, node_id, budget) {
                         DslControlFlow::Continue => {}
                         result @ DslControlFlow::Return(_) => return result,
                     }
@@ -2566,13 +2647,14 @@ impl ValidatedTypeShapeDslFunction {
         &self,
         if_stmt: &StmtIf,
         environment: &mut DslEnvironment,
-        signature: &ResolvedTypeShapeDslFunction,
+        program: &ResolvedTypeShapeDslProgram,
+        node_id: ResolvedTypeShapeDslNodeId,
         budget: &mut DslEvaluationBudget,
     ) -> DslControlFlow {
         match self.evaluate_condition(&if_stmt.test, environment, budget) {
             Err(error) => return DslControlFlow::Return(DslOutcome::Invalid(error)),
             Ok(DslCondition::True) => {
-                return self.evaluate_suite(&if_stmt.body, environment, signature, budget);
+                return self.evaluate_suite(&if_stmt.body, environment, program, node_id, budget);
             }
             Ok(DslCondition::False) => {}
             Ok(DslCondition::Unknown | DslCondition::UnknownWithPossibleError) => {
@@ -2584,14 +2666,28 @@ impl ValidatedTypeShapeDslFunction {
                 Some(test) => match self.evaluate_condition(test, environment, budget) {
                     Err(error) => return DslControlFlow::Return(DslOutcome::Invalid(error)),
                     Ok(DslCondition::True) => {
-                        return self.evaluate_suite(&clause.body, environment, signature, budget);
+                        return self.evaluate_suite(
+                            &clause.body,
+                            environment,
+                            program,
+                            node_id,
+                            budget,
+                        );
                     }
                     Ok(DslCondition::False) => {}
                     Ok(DslCondition::Unknown | DslCondition::UnknownWithPossibleError) => {
                         return DslControlFlow::Return(DslOutcome::Value(DslValue::Unknown));
                     }
                 },
-                None => return self.evaluate_suite(&clause.body, environment, signature, budget),
+                None => {
+                    return self.evaluate_suite(
+                        &clause.body,
+                        environment,
+                        program,
+                        node_id,
+                        budget,
+                    );
+                }
             }
         }
         DslControlFlow::Continue
