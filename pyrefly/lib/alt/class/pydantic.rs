@@ -92,7 +92,8 @@ impl PydanticRangeConstraints {
 #[derive(Clone)]
 struct PydanticParamConstraint {
     field_name: Name,
-    constraints: PydanticRangeConstraints,
+    range: Option<PydanticRangeConstraints>,
+    lax_bool_field: Option<Type>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -655,7 +656,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         None
     }
 
-    pub fn check_pydantic_argument_range_constraints(
+    pub fn check_pydantic_argument_constraints(
         &self,
         cls: &Class,
         dataclass: &DataclassMetadata,
@@ -709,18 +710,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut constraints = SmallMap::new();
         let mut position = 0;
         let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
-        for (field_name, _field, keywords) in
+        for (field_name, field, keywords) in
             self.iter_fields(cls, dataclass, true, &kw_only_by_class)
         {
             if !keywords.init {
                 continue;
             }
-            let Some(constraint) = PydanticRangeConstraints::from_keywords(&keywords) else {
-                continue;
+            let range = PydanticRangeConstraints::from_keywords(&keywords);
+            let field_ty = field.ty();
+            let lax_bool_field = if !keywords.strict.unwrap_or(dataclass.kws.strict)
+                && match &field_ty {
+                    Type::ClassType(cls) => cls == self.stdlib.bool(),
+                    Type::Union(union) => union
+                        .members
+                        .iter()
+                        .any(|member| matches!(member, Type::ClassType(cls) if cls == self.stdlib.bool())),
+                    _ => false,
+                }
+            {
+                Some(field_ty)
+            } else {
+                None
             };
+            if range.is_none() && lax_bool_field.is_none() {
+                continue;
+            }
             let info = PydanticParamConstraint {
                 field_name: field_name.clone(),
-                constraints: constraint,
+                range,
+                lax_bool_field,
             };
             if keywords.init_by_name {
                 constraints.insert(PydanticParamKey::Name(field_name), info.clone());
@@ -747,14 +765,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
+        // A literal rejected by `bool` may still be valid for another member of the field union.
+        if let Some(field_ty) = &info.lax_bool_field
+            && !self.is_subset_eq(value_ty, field_ty)
+        {
+            let is_bool_string = |value: &str| {
+                matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "0" | "1"
+                        | "f"
+                        | "false"
+                        | "n"
+                        | "no"
+                        | "off"
+                        | "on"
+                        | "t"
+                        | "true"
+                        | "y"
+                        | "yes"
+                )
+            };
+            let invalid_bool = match value_ty {
+                Type::Literal(lit) => match &lit.value {
+                    Lit::Int(value) => !matches!(value.as_i64(), Some(0 | 1)),
+                    Lit::Str(value) => !is_bool_string(value),
+                    _ => false,
+                },
+                _ => false,
+            };
+            if invalid_bool {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadArgumentType,
+                    format!(
+                        "Argument value `{}` is not valid for Pydantic `bool` field `{}`",
+                        self.for_display(value_ty.clone()),
+                        info.field_name
+                    ),
+                );
+            }
+        }
+        let Some(constraints) = &info.range else {
+            return;
+        };
         let Some(value_lit) = int_literal_from_type(value_ty) else {
             return;
         };
         let checks = [
-            ("gt", info.constraints.gt.as_ref()),
-            ("ge", info.constraints.ge.as_ref()),
-            ("lt", info.constraints.lt.as_ref()),
-            ("le", info.constraints.le.as_ref()),
+            ("gt", constraints.gt.as_ref()),
+            ("ge", constraints.ge.as_ref()),
+            ("lt", constraints.lt.as_ref()),
+            ("le", constraints.le.as_ref()),
         ];
         for (label, constraint_ty) in checks {
             let Some(constraint_ty) = constraint_ty else {

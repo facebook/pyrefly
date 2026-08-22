@@ -262,6 +262,39 @@ reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, y: Decimal | b
 );
 
 pydantic_testcase!(
+    test_lax_mode_coercion_union_rejects_invalid_values,
+    r#"
+from pydantic import BaseModel
+
+class Something(BaseModel):
+    pass
+
+class OtherThing(BaseModel):
+    pass
+
+class Model(BaseModel):
+    scalar: str | bool
+    model: Something | OtherThing
+
+Model(scalar=5, model=Something())  # E: Argument value `Literal[5]` is not valid for Pydantic `bool` field `scalar`
+Model(scalar="value", model=5)  # E: Argument `Literal[5]` is not assignable to parameter `model`
+
+class BoolModel(BaseModel):
+    value: bool
+
+BoolModel(value=0)
+BoolModel(value="yes")
+BoolModel(value=2)  # E: Argument value `Literal[2]` is not valid for Pydantic `bool` field `value`
+BoolModel(value="maybe")  # E: Argument value `Literal['maybe']` is not valid for Pydantic `bool` field `value`
+
+class IntOrBoolModel(BaseModel):
+    value: int | bool
+
+IntOrBoolModel(value=5)
+    "#,
+);
+
+pydantic_testcase!(
     test_lax_mode_list_and_set_invariance,
     r#"
 from pydantic import BaseModel

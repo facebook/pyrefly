@@ -1292,7 +1292,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if class_metadata.is_pydantic_model()
             && let Some(dataclass) = class_metadata.dataclass_metadata()
         {
-            self.check_pydantic_argument_range_constraints(
+            self.check_pydantic_argument_constraints(
                 cls.class_object(),
                 dataclass,
                 args,
