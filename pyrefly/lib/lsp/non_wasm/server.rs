@@ -309,6 +309,8 @@ use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::queue::QueuedEvent;
+use crate::lsp::non_wasm::rename::append_comment_and_string_occurrences;
+use crate::lsp::non_wasm::rename::text_occurrence_edits_in_workspace;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
@@ -4948,6 +4950,12 @@ impl Server {
         &'a self,
         transaction: &Transaction<'a>,
         request: FindReferencesRequest,
+        extend_local_results: impl FnOnce(
+            &CancellableTransaction<'_>,
+            &mut Vec<(ModuleInfo, Vec<TextRange>)>,
+        ) + Send
+        + Sync
+        + 'static,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) -> Result<(), EmptyResponseReason> {
         let FindReferencesRequest {
@@ -5015,7 +5023,9 @@ impl Server {
                     .transpose()
                     .map_err(|e| RequestError::Internal(e.to_string()))?
                     .unwrap_or_default();
-                Ok((local_results?, external_results))
+                let mut local_results = local_results?;
+                extend_local_results(transaction, &mut local_results);
+                Ok((local_results, external_results))
             },
             move |results: (Vec<(ModuleInfo, Vec<TextRange>)>, Vec<(Url, Vec<Range>)>)| {
                 let (local_results, external_results) = results;
@@ -5077,6 +5087,7 @@ impl Server {
                 options: ReferenceOptions::all(params.context.include_declaration),
                 activity_key,
             },
+            |_, _| {},
             move |results| {
                 let mut locations = Vec::new();
                 for (uri, ranges) in results {
@@ -5101,7 +5112,25 @@ impl Server {
     ) -> Result<(), EmptyResponseReason> {
         let uri = &params.text_document_position.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
+        let info = transaction
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        let position = self.from_lsp_position(uri, &info, params.text_document_position.position);
+        let old_name = transaction
+            .identifier_at(&handle, position)
+            .map(|id| id.identifier.id.as_str().to_owned())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| EmptyResponseReason::NotAnIdentifier {
+                found: "none".to_owned(),
+            })?;
+        let rename_config = self.workspaces.rename_config(handle.path().as_path());
+        let workspace_root = self
+            .workspaces
+            .get_with(handle.path().as_path().to_path_buf(), |(root, _)| {
+                root.cloned()
+            });
         let new_name = params.new_name.clone();
+        let old_name_for_comments = old_name.clone();
         self.async_find_references_helper(
             transaction,
             FindReferencesRequest {
@@ -5117,16 +5146,45 @@ impl Server {
                 options: ReferenceOptions::textual_only(true),
                 activity_key,
             },
+            move |transaction, references| {
+                if rename_config.comments_and_strings {
+                    append_comment_and_string_occurrences(
+                        transaction,
+                        &old_name_for_comments,
+                        references,
+                    );
+                }
+            },
             move |results| {
-                let mut changes = HashMap::new();
+                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
                 for (uri, ranges) in results {
-                    changes.insert(
-                        uri,
-                        ranges.into_map(|range| TextEdit {
+                    changes
+                        .entry(uri)
+                        .or_default()
+                        .extend(ranges.into_map(|range| TextEdit {
                             range,
                             new_text: new_name.clone(),
-                        }),
-                    );
+                        }));
+                }
+                if rename_config.text_occurrences {
+                    for (uri, edits) in text_occurrence_edits_in_workspace(
+                        workspace_root.as_deref(),
+                        &old_name,
+                        &new_name,
+                    ) {
+                        changes.entry(uri).or_default().extend(edits);
+                    }
+                }
+                for edits in changes.values_mut() {
+                    edits.sort_by_key(|edit| {
+                        (
+                            edit.range.start.line,
+                            edit.range.start.character,
+                            edit.range.end.line,
+                            edit.range.end.character,
+                        )
+                    });
+                    edits.dedup_by(|a, b| a.range == b.range);
                 }
                 WorkspaceEdit {
                     changes: Some(changes),
