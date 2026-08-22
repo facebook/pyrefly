@@ -1809,6 +1809,9 @@ impl Server {
                 // But in practice though the operations are usually cheap so it's OK.
                 self.publish_workspace_diagnostics_if_enabled();
             }
+            LspEvent::RefreshFileWatchers => {
+                self.setup_file_watcher_if_necessary(Some(telemetry_event));
+            }
             LspEvent::CancelRequest(id) => {
                 telemetry_event.request_id = Some(id.to_string());
                 info!("We should cancel request {id:?}");
@@ -3241,6 +3244,7 @@ impl Server {
         self.invalidate(
             TelemetryEventKind::InvalidateFind,
             Some(TelemetryInvalidateFindReason::SourceDbConfigChanged),
+            false,
             |t| t.invalidate_find_for_configs(invalidated_configs),
         );
     }
@@ -3336,6 +3340,7 @@ impl Server {
         &self,
         kind: TelemetryEventKind,
         invalidate_find_reason: Option<TelemetryInvalidateFindReason>,
+        refresh_file_watchers: bool,
         f: impl FnOnce(&mut Transaction) + Send + Sync + 'static,
     ) {
         let open_handles = self.get_open_file_handles();
@@ -3409,6 +3414,9 @@ impl Server {
                 );
                 *server.currently_streaming_diagnostics_for_handles.write() = None;
 
+                if refresh_file_watchers {
+                    let _ = server.lsp_queue.send(LspEvent::RefreshFileWatchers);
+                }
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
                 // all the in-memory files based on the fresh main State as soon as possible.
@@ -3643,7 +3651,7 @@ impl Server {
 
     fn did_save(&self, url: Url) {
         if let Some(path) = self.path_for_uri(&url) {
-            self.invalidate(TelemetryEventKind::InvalidateDisk, None, move |t| {
+            self.invalidate(TelemetryEventKind::InvalidateDisk, None, false, move |t| {
                 t.invalidate_disk(&[path])
             })
         }
@@ -3984,6 +3992,11 @@ impl Server {
         });
 
         let should_requery_build_system = should_requery_build_system(&events);
+        let interpreter_environment_changed = events.iter().any(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pth"))
+        });
 
         // Rewatch files if necessary (config changed, files added/removed, etc.)
         if Self::should_rewatch(&events) {
@@ -4000,6 +4013,7 @@ impl Server {
         self.invalidate(
             TelemetryEventKind::InvalidateFind,
             Some(TelemetryInvalidateFindReason::WatcherEvents),
+            interpreter_environment_changed,
             move |t| {
                 let events = std::mem::take(&mut *pending.lock());
                 if !events.is_empty() {

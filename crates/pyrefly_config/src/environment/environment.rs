@@ -75,6 +75,11 @@ pub struct PythonEnvironment {
 }
 
 impl PythonEnvironment {
+    /// Clear cached interpreter queries after environment metadata changes.
+    pub fn clear_interpreter_cache() {
+        INTERPRETER_ENV_REGISTRY.lock().clear();
+    }
+
     fn pyrefly_default() -> Self {
         let mut env = Self::default();
         env.set_empty_to_default();
