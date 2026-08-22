@@ -8,6 +8,7 @@
 use std::fmt;
 
 use dupe::Dupe;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -15,6 +16,7 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::equality::TypeEq;
 use pyrefly_types::equality::TypeEqCtx;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::type_info::TypeInfo;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_util::display::commas_iter;
 use ruff_python_ast::Expr;
@@ -44,7 +46,7 @@ use crate::types::types::Type;
 ///
 /// The reason this is tracked separately from `ClassMetadata` is to avoid the possibility of
 /// cycles when type arguments of the base classes may depend on the class itself.
-#[derive(Debug, Clone, PartialEq, Eq, VisitMut, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Visit, VisitMut, Default)]
 pub struct ClassBases {
     /// The direct base types in the base class list
     base_types: Box<[ClassType]>,
@@ -125,23 +127,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .heap
                 .mk_type_of(self.heap.mk_special_form(SpecialForm::Tuple));
         }
+        let type_form_context = TypeFormContext::BaseClassList;
+        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         let mut has_strict = false;
         let arguments_untype = |slice: &Expr, has_strict: &mut bool| {
             Ast::unpack_slice(slice)
                 .iter()
                 .map(|x| match BaseClassExpr::from_expr(x) {
                     Some(base_expr) => {
-                        let (ty, arg_has_strict) = self.base_class_expr_untype(
-                            &base_expr,
-                            TypeFormContext::TypeArgument,
-                            errors,
-                        );
+                        let (ty, arg_has_strict) =
+                            self.base_class_expr_untype(&base_expr, type_argument_context, errors);
                         if arg_has_strict {
                             *has_strict = true;
                         }
                         ty
                     }
-                    None => self.expr_untype(x, TypeFormContext::TypeArgument, errors),
+                    None => self.expr_untype(x, type_argument_context, errors),
                 })
                 .collect::<Vec<_>>()
         };
@@ -157,7 +158,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             )),
             Type::Type(f) if let Type::SpecialForm(special) = *f => {
-                self.apply_special_form(special, slice, range, errors)
+                self.apply_special_form(special, slice, range, type_form_context, errors)
             }
             Type::Any(style) => style.propagate(),
             t => self.error(
@@ -173,17 +174,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         (result, has_strict)
     }
 
-    fn base_class_expr_infer(&self, expr: &BaseClassExpr, errors: &ErrorCollector) -> (Type, bool) {
+    fn base_class_expr_infer(
+        &self,
+        expr: &BaseClassExpr,
+        errors: &ErrorCollector,
+    ) -> (TypeInfo, bool) {
         match expr {
             BaseClassExpr::Name(x) => (
                 self.get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                    .arc_clone_ty(),
+                    .arc_clone(),
                 false,
             ),
             BaseClassExpr::Attribute { value, attr, range } => {
                 let (base, has_strict) = self.base_class_expr_infer(value, errors);
                 (
-                    self.attr_infer_for_type(&base, &attr.id, *range, errors, None),
+                    self.attr_infer(&base, &attr.id, *range, errors, None),
                     has_strict,
                 )
             }
@@ -194,9 +199,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } => {
                 let (base_ty, has_strict_from_value) = self.base_class_expr_infer(value, errors);
                 let (result_ty, has_strict_from_subscript) =
-                    self.base_class_subscript_infer(base_ty, slice, *range, errors);
+                    self.base_class_subscript_infer(base_ty.into_ty(), slice, *range, errors);
                 (
-                    result_ty,
+                    TypeInfo::of_ty(result_ty),
                     has_strict_from_value || has_strict_from_subscript,
                 )
             }
@@ -223,14 +228,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn base_class_expr_untype(
         &self,
         base_expr: &BaseClassExpr,
-        type_form_context: TypeFormContext,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> (Type, bool) {
         let range = base_expr.range();
         let (inferred_ty, has_strict_from_infer) = self.base_class_expr_infer(base_expr, errors);
-        let has_pydantic_strict_metadata =
-            self.is_type_alias_with_pydantic_strict_metadata(&inferred_ty) || has_strict_from_infer;
-        let ty = self.untype(inferred_ty, range, errors);
+        let has_pydantic_strict_metadata = self
+            .is_type_alias_with_pydantic_strict_metadata(inferred_ty.ty())
+            || has_strict_from_infer;
+        let ty = self.untype(inferred_ty.into_ty(), range, errors);
         (
             self.validate_type_form(ty, range, type_form_context, errors),
             has_pydantic_strict_metadata,
@@ -253,13 +259,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter_map(|x| match x {
                 BaseClass::BaseClassExpr(x) => {
-                    let (ty, base_has_strict) = self.base_class_expr_untype(
+                    let (mut ty, base_has_strict) = self.base_class_expr_untype(
                         x,
                         TypeFormContext::BaseClassList,
                         &fake_error_collector,
                     );
                     if base_has_strict {
                         has_pydantic_strict_metadata = true;
+                    }
+                    // A base class may reference a legacy TypeVar that is out of scope.
+                    // Skip NewType, which reports its own "unbound generic" error for the same type.
+                    if !is_new_type {
+                        self.check_legacy_typevar_scoping(&mut ty, x.range(), errors);
                     }
                     Some((ty, x.range()))
                 }
@@ -276,7 +287,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 BaseClass::TypeOf(inner_expr, _) => {
                     let (ty, _) = self.base_class_expr_infer(inner_expr, &fake_error_collector);
-                    match self.untype_opt(ty.clone(), inner_expr.range(), &fake_error_collector) {
+                    match self.untype_opt(
+                        ty.ty().clone(),
+                        inner_expr.range(),
+                        &fake_error_collector,
+                    ) {
                         Some(Type::ClassType(c)) => {
                             // X is a class. type(X) = metaclass of X.
                             let class_obj = c.class_object();
@@ -286,8 +301,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         None => {
                             // X is an instance. type(X) = its class.
-                            match &ty {
-                                Type::ClassType(_) => Some((ty, x.range())),
+                            match ty.ty() {
+                                Type::ClassType(_) => Some((ty.into_ty(), x.range())),
                                 _ => None,
                             }
                         }

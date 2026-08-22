@@ -10,12 +10,12 @@ use lsp_types::CodeLensOptions;
 use lsp_types::Url;
 use lsp_types::request::CodeLensRequest;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn runnable_code_lens_config() -> serde_json::Value {
     json!([{

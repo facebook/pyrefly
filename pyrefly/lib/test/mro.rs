@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 
 use crate::alt::types::class_metadata::ClassMro;
@@ -21,7 +20,7 @@ pub fn get_class_mro(name: &str, handle: &Handle, state: &State) -> Arc<ClassMro
     let solutions = state.transaction().get_solutions(handle).unwrap();
 
     let cls = get_class(name, handle, state);
-    solutions.get(&KeyClassMro(cls.index())).dupe()
+    solutions.get_arc(&KeyClassMro(cls.index()))
 }
 
 fn get_mro_names(name: &str, handle: &Handle, state: &State) -> Vec<String> {

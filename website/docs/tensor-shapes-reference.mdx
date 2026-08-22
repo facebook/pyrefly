@@ -1,6 +1,6 @@
 ---
 title: API Reference
-description: Complete reference for Dim, Tensor, and tensor shape type system APIs.
+description: Complete reference for Int, Tensor, and tensor shape type system APIs.
 ---
 
 {/*
@@ -17,57 +17,61 @@ up pyrefly's tensor shape type system.
 
 ```sandbox
 dir: tensor-shapes-reference
-description: Experiment with Dim operators, type-level arithmetic in shapes, and concatenation.
+description: Experiment with Int operators, type-level arithmetic in shapes, and concatenation.
 ```
 
-## `Dim[X]`
+## `Int[X]`
 
-`Dim[X]` is a type constructor that bridges runtime integer values to
-type-level symbols. It is defined in the `shape_extensions` package.
+`Int[X]` is a type constructor that bridges runtime integer values to
+type-level symbols. It is defined in the `shape_extensions` package,
+alongside the other names used throughout this page: `IntVar` (the bound
+for shape type parameters), `IntTuple` (the bound for whole-shape type
+parameters), and `Elements` (splices a whole-shape type parameter into a
+`Tensor` argument list).
 
 ### Basics
 
-`Dim[X]` denotes the type of an integer value whose type-level identity is
+`Int[X]` denotes the type of an integer value whose type-level identity is
 `X`. For example:
 
-- `Dim[5]` is the type of the literal `5`
-- `Dim[N]` (where `N` is a type variable) is the type of an integer whose
+- `Int[5]` is the type of the literal `5`
+- `Int[N]` (where `N` is a type variable) is the type of an integer whose
   value is bound to `N` at the type level
 
-`Dim` is a subtype of `int`, so `Dim` values can be used anywhere `int` is
+`Int` is a subtype of `int`, so `Int` values can be used anywhere `int` is
 expected. However, the reverse is not true — passing a plain `int` where
-`Dim[X]` is expected loses tracking.
+`Int[X]` is expected loses tracking.
 
 ### Arithmetic
 
-Arithmetic on `Dim` values produces `Dim` results with the corresponding
+Arithmetic on `Int` values produces `Int` results with the corresponding
 type-level expression:
 
 | Expression | Type |
 |-----------|------|
-| `a + b` where `a: Dim[A]`, `b: Dim[B]` | `Dim[A + B]` |
-| `a - b` | `Dim[A - B]` |
-| `a * b` | `Dim[A * B]` |
-| `a // b` | `Dim[A // B]` |
-| `a ** b` | `Dim[A ** B]` |
+| `a + b` where `a: Int[A]`, `b: Int[B]` | `Int[A + B]` |
+| `a - b` | `Int[A - B]` |
+| `a * b` | `Int[A * B]` |
+| `a // b` | `Int[A // B]` |
+| `a ** b` | `Int[A ** B]` |
 
-**Caution:** `int * Dim` produces `Unknown` because the `int` side has no
-type-level identity. Use `Dim * Dim` or literal `* Dim` instead.
+**Caution:** `int * Int` produces `Unknown` because the `int` side has no
+type-level identity. Use `Int * Int` or literal `* Int` instead.
 
-### `Dim[X] | None`
+### `Int[X] | None`
 
 For optional dimensions — parameters that may or may not be present — use
-`Dim[X] | None`. In the forward method, narrow with
-`if param is not None:` to recover `Dim[X]` inside the branch:
+`Int[X] | None`. In the forward method, narrow with
+`if param is not None:` to recover `Int[X]` inside the branch:
 
 ```python
-class Attention[D, RK](nn.Module):
-    def __init__(self, dim: Dim[D], rank_k: Dim[RK] | None = None):
+class Attention[D: IntVar, RK: IntVar](nn.Module):
+    def __init__(self, dim: Int[D], rank_k: Int[RK] | None = None):
         ...
 
-    def forward[B, T](self, x: Tensor[B, T, D]) -> Tensor[B, T, D]:
+    def forward[B: IntVar, T: IntVar](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
         if self.rank_k is not None:
-            # rank_k is Dim[RK] here
+            # rank_k is Int[RK] here
             ...
 ```
 
@@ -75,12 +79,12 @@ class Attention[D, RK](nn.Module):
 
 | Pattern | Purpose |
 |---------|---------|
-| `def __init__(self, dim: Dim[D])` | Accept a dimension as a constructor parameter |
-| `class Model[D](nn.Module)` | Make a dimension a class-level type parameter |
-| `def forward[B](self, x: Tensor[B, D])` | Bind a per-call dimension |
-| `self.head_dim = dim // n_head` | Compute a derived dimension (`Dim[D // NHead]`) |
+| `def __init__(self, dim: Int[D])` | Accept a dimension as a constructor parameter |
+| `class Model[D: IntVar](nn.Module)` | Make a dimension a class-level type parameter |
+| `def forward[B: IntVar](self, x: Tensor[[B, D]])` | Bind a per-call dimension |
+| `self.head_dim = dim // n_head` | Compute a derived dimension (`Int[D // NHead]`) |
 
-## `Tensor[D1, D2, ...]`
+## `Tensor[[D1, D2, ...]]`
 
 `Tensor` with type arguments represents a tensor with a known shape. The
 type arguments are the dimensions, in order.
@@ -89,19 +93,20 @@ type arguments are the dimensions, in order.
 
 | Form | Meaning |
 |------|---------|
-| `Tensor[3, 4]` | Concrete 2D tensor with shape `(3, 4)` |
-| `Tensor[B, C, H, W]` | Generic 4D tensor with symbolic dimensions |
-| `Tensor[B, 3 * C, H // 2]` | Dimensions can contain arithmetic expressions |
-| `Tensor[*Bs, D]` | Variadic: any number of leading batch dimensions |
+| `Tensor[[3, 4]]` | Concrete 2D tensor with shape `(3, 4)` |
+| `Tensor[[B, C, H, W]]` | Generic 4D tensor with symbolic dimensions |
+| `Tensor[[B, 3 * C, H // 2]]` | Dimensions can contain arithmetic expressions |
+| `Tensor[[*Elements[Bs], D]]` | Variadic: any number of leading batch dimensions (`Bs: IntTuple`) |
 | `Tensor` (bare) | Shape unknown — tracking gap |
 
-### Variadic dimensions with `*Bs`
+### Variadic dimensions with `Elements`
 
-Use `TypeVarTuple` (or PEP 646 `*Bs` syntax) for dimensions that should be
-propagated without being enumerated:
+Use a type parameter bound to `IntTuple`, spliced into the shape list with
+`*Elements[...]`, for dimensions that should be propagated without being
+enumerated:
 
 ```python
-def forward[*Bs](self, x: Tensor[*Bs, InDim]) -> Tensor[*Bs, OutDim]:
+def forward[Bs: IntTuple](self, x: Tensor[[*Elements[Bs], InDim]]) -> Tensor[[*Elements[Bs], OutDim]]:
     ...
 ```
 
@@ -109,15 +114,16 @@ This accepts any number of leading dimensions (batch, sequence, etc.) and
 preserves them in the output.
 
 **Don't hide known class dims inside variadic params.** If the module has a
-class-level Dim `D`, use `Tensor[*Bs, D]` not `Tensor[*S]`.
+class-level Int `D`, use `Tensor[[*Elements[Bs], D]]` not folding `D` into
+the variadic carrier itself.
 
 ### `.shape` and `.size()`
 
-When `x: Tensor[B, C, H, W]`:
+When `x: Tensor[[B, C, H, W]]`:
 
-- `x.shape` has type `tuple[Dim[B], Dim[C], Dim[H], Dim[W]]`
-- `x.size(0)` has type `Dim[B]`
-- `x.size()` has type `tuple[Dim[B], Dim[C], Dim[H], Dim[W]]`
+- `x.shape` has type `tuple[Int[B], Int[C], Int[H], Int[W]]`
+- `x.size(0)` has type `Int[B]`
+- `x.size()` has type `tuple[Int[B], Int[C], Int[H], Int[W]]`
 
 This means you can extract dimensions from tensors and use them to construct
 new tensors with matching shapes.
@@ -130,7 +136,7 @@ reports an error.
 
 ```python
 h = self.fc1(x)
-assert_type(h, Tensor[B, 512])  # checked by pyrefly
+assert_type(h, Tensor[[B, 512]])  # checked by pyrefly
 ```
 
 Use `assert_type` during development to verify inferred shapes as you port
@@ -161,7 +167,7 @@ Use it to understand what pyrefly infers before writing `assert_type`:
 
 ```python
 h = self.fc1(x)
-reveal_type(h)  # Revealed type: Tensor[B, 512]
+reveal_type(h)  # Revealed type: Tensor[[B, 512]]
 ```
 
 Replace `reveal_type` with `assert_type` once you know the expected type.
@@ -172,11 +178,11 @@ Annotations can contain arithmetic on type parameters and literals:
 
 | Expression | Example |
 |-----------|---------|
-| Addition | `Tensor[B, C1 + C2, H, W]` — concatenation |
-| Subtraction | `Tensor[B, T, D - 1]` |
-| Multiplication | `Tensor[B, NHead * DK]` — multi-head reshape |
-| Floor division | `Tensor[B, NHead, T, D // NHead]` |
-| Exponentiation | `Tensor[B, C * 2 ** I, H // 2 ** I]` |
+| Addition | `Tensor[[B, C1 + C2, H, W]]` — concatenation |
+| Subtraction | `Tensor[[B, T, D - 1]]` |
+| Multiplication | `Tensor[[B, NHead * DK]]` — multi-head reshape |
+| Floor division | `Tensor[[B, NHead, T, D // NHead]]` |
+| Exponentiation | `Tensor[[B, C * 2 ** I, H // 2 ** I]]` |
 
 ### Simplification rules
 
@@ -201,7 +207,7 @@ When annotating local variables, choose from most to least desirable:
 
 1. **`assert_type`** — verifies the checker's inference. Proves the system
    works, not just that you annotated correctly.
-2. **Annotation fallback** — `x: Tensor[B, C, H, W] = untracked_op(...)`.
+2. **Annotation fallback** — `x: Tensor[[B, C, H, W]] = untracked_op(...)`.
    The checker can't infer the shape, but the annotation is compatible.
    Document WHY.
 3. **`type: ignore`** — the checker produces a WRONG type (algebraic gap).
@@ -216,8 +222,8 @@ annotations as an alternative front-end:
 
 | Pyrefly native | Jaxtyping equivalent |
 |---------------|---------------------|
-| `Tensor[M, 2, M // 2]` | `Shaped[Tensor, "M 2 M//2"]` |
-| `Tensor[B, C, H, W]` | `Shaped[Tensor, "B C H W"]` |
+| `Tensor[[M, 2, M // 2]]` | `Shaped[Tensor, "M 2 M//2"]` |
+| `Tensor[[B, C, H, W]]` | `Shaped[Tensor, "B C H W"]` |
 
 Jaxtyping annotations are translated internally to generics and display
 back in jaxtyping syntax. Note that jaxtyping cannot share symbolic

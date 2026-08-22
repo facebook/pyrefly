@@ -153,10 +153,20 @@
           "default": []
         },
         "python-platform": {
-          "description": "The value used with conditions based on type checking against sys.platform values. Common values include 'linux', 'darwin', 'win32', but any valid sys.platform string is accepted.",
-          "type": "string",
+          "description": "The value used with conditions based on type checking against sys.platform values. Common values include 'linux', 'darwin', 'win32', but any valid sys.platform string is accepted. Use 'all' or a list of values to type check against multiple platforms.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
           "default": "linux",
-          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix"]
+          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix", "all", ["linux", "darwin"]]
         },
         "python-version": {
           "description": "The Python version to use for type checking. Format: <major>[.<minor>[.<micro>]]",
@@ -171,6 +181,20 @@
         "python-interpreter-path": {
           "description": "The Python interpreter to query when attempting to autoconfigure Python environment values (site-package-path, python-platform, python-version).",
           "type": "string"
+        },
+        "python-interpreter-find-command": {
+          "description": "A program and its arguments that print the path of the Python interpreter to query.",
+          "type": "array",
+          "items": [
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ],
+          "additionalItems": {
+            "type": "string"
+          },
+          "minItems": 1
         },
         "fallback-python-interpreter-name": {
           "description": "The Python interpreter, available on your $PATH, to use. Pyrefly will perform 'which <your command>', and automatically fill in python-interpreter-path for you with the found path.",
@@ -198,6 +222,12 @@
         "baseline": {
           "description": "Path to a baseline file for suppressing existing errors.",
           "type": "string"
+        },
+        "baseline-error-level": {
+          "description": "Severity assigned to errors that match the baseline.",
+          "type": "string",
+          "enum": ["ignore", "info", "warn", "error"],
+          "default": "ignore"
         },
         "build-system": {
           "description": "Pyrefly supports integrating into build systems to discover targets to type check and their dependencies. Currently supports Buck2 and custom queries.",
@@ -276,6 +306,26 @@
               }
             }
           ]
+        },
+        "coverage": {
+          "description": "Include/exclude overrides used only by the pyrefly coverage commands. Each field falls back to the corresponding project glob setting when unset.",
+          "type": "object",
+          "properties": {
+            "includes": {
+              "description": "The glob patterns describing which files the coverage commands report on. Takes precedence over project-includes when set.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "excludes": {
+              "description": "The glob patterns describing which files the coverage commands skip. Takes precedence over project-excludes when set, and the --project-excludes flag over both.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
         },
         "sub-config": {
           "description": "Override specific config values for matched paths in your project. SubConfigs allow fine-grained configuration based on filepath glob matching.",

@@ -39,12 +39,12 @@ use crate::error::context::TypeCheckKind;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
+use crate::types::function::FuncMetadata;
+use crate::types::function::Function;
 use crate::types::literal::Lit;
 use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
@@ -71,6 +71,8 @@ const DEFAULT_PARAM: Name = Name::new_static("default");
 const UPDATE_METHOD: Name = Name::new_static("update");
 const ITEMS_METHOD: Name = Name::new_static("items");
 const VALUES_METHOD: Name = Name::new_static("values");
+pub(crate) const REQUIRED_KEYS: Name = Name::new_static("__required_keys__");
+pub(crate) const OPTIONAL_KEYS: Name = Name::new_static("__optional_keys__");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn check_dict_items_against_typed_dict(
@@ -248,8 +250,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<TypedDictField> {
         let member = self.get_non_synthesized_class_member(typed_dict.class_object(), name)?;
         let instantiated_ty = self.instantiate_typed_dict_field_type(typed_dict, name, &member)?;
-        let mut typed_dict_field =
-            Arc::unwrap_or_clone(member).as_typed_dict_field_info(is_total)?;
+        let mut typed_dict_field = member.as_typed_dict_field_info(is_total)?;
         typed_dict_field.ty = instantiated_ty;
         Some(typed_dict_field)
     }
@@ -312,7 +313,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         fields.iter().filter_map(|(name, is_total)| {
             self.get_non_synthesized_class_member(cls, name)
                 .and_then(|member| {
-                    Arc::unwrap_or_clone(member)
+                    member
                         .as_typed_dict_field_info(*is_total)
                         .map(|field| (name, field))
                 })
@@ -466,6 +467,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    /// Get a (key, default: ValueType) -> ValueType overload.
+    fn get_overload_with_value_default(
+        &self,
+        metadata: &FuncMetadata,
+        self_param: &Param,
+        name: Option<&Name>,
+        ty: Type,
+    ) -> OverloadType {
+        OverloadType::Function(Function {
+            signature: Callable::list(
+                ParamList::new(vec![
+                    self_param.clone(),
+                    self.key_param(name),
+                    Param::PosOnly(Some(DEFAULT_PARAM.clone()), ty.clone(), Required::Required),
+                ]),
+                ty,
+            ),
+            metadata: metadata.clone(),
+        })
+    }
+
     /// Get a (key, default: T) -> ValueType | T overload.
     fn get_overload_with_default(
         &self,
@@ -552,6 +574,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     metadata: metadata.clone(),
                 }));
+                // (self, key: Literal["key"], default: ValueType) -> ValueType
+                literal_signatures.push(self.get_overload_with_value_default(
+                    &metadata,
+                    &self_param,
+                    Some(name),
+                    field.ty.clone(),
+                ));
                 // (self, key: Literal["key"], default: T) -> ValueType | T
                 literal_signatures.push(self.get_overload_with_default(
                     cls,
@@ -634,7 +663,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             metadata: metadata.clone(),
         }));
 
-        // 2) default: (self, key: Literal["field_name"], default: _T) -> FieldType | _T
+        // 2) default: (self, key: Literal["field_name"], default: FieldType) -> FieldType
+        overloads.push(self.get_overload_with_value_default(
+            metadata,
+            self_param,
+            name,
+            ty.clone(),
+        ));
+
+        // 3) default: (self, key: Literal["field_name"], default: _T) -> FieldType | _T
         overloads.push(self.get_overload_with_default(cls, metadata, self_param, name, ty));
     }
 
@@ -887,12 +924,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_typed_dict_synthesized_fields(&self, cls: &Class) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
         let td = metadata.typed_dict_metadata()?;
+        let keys_type = self.heap.mk_class_type(
+            self.stdlib
+                .frozenset(self.heap.mk_class_type(self.stdlib.str().clone())),
+        );
         let mut fields = smallmap! {
             dunder::INIT => self.get_typed_dict_init(cls, &td.fields),
             ITEMS_METHOD => self.get_typed_dict_items(cls, &td.fields),
             GET_METHOD => self.get_typed_dict_get(cls, &td.fields),
             UPDATE_METHOD => self.get_typed_dict_update(cls, &td.fields),
             VALUES_METHOD => self.get_typed_dict_values(cls, &td.fields),
+            REQUIRED_KEYS => ClassSynthesizedField::new_classvar(keys_type.clone()),
+            OPTIONAL_KEYS => ClassSynthesizedField::new_classvar(keys_type),
         };
         if let Some(m) = self.get_typed_dict_clear(cls, &td.fields) {
             fields.insert(CLEAR_METHOD, m);
@@ -970,6 +1013,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("`{q}` may not be used for TypedDict members",),
                 );
             }
+        }
+        if annotation
+            .ty
+            .as_ref()
+            .is_some_and(Self::is_proxy_method_type)
+        {
+            self.error(
+                errors,
+                range,
+                ErrorKind::InvalidAnnotation,
+                "`ProxyMethod` cannot be declared in typed dictionaries or named tuples".to_owned(),
+            );
         }
         if let Some(td) = metadata.typed_dict_metadata()
             && let Some(is_total) = td.fields.get(name)
