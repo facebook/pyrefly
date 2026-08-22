@@ -600,6 +600,30 @@ set on the CLI.
     - `"sarif"` emits a SARIF 2.1.0 report suitable for static-analysis
       integrations.
 
+### `required-version`
+
+Enforces a requirement on the version of Pyrefly at runtime. Pyrefly reports a
+configuration error if its version does not satisfy the requirement. This can
+keep local CLI runs, editor integrations, and CI on compatible versions.
+
+```toml
+# pyrefly.toml
+required-version = ">=1.2.0,<2.0.0"
+```
+
+```toml
+# pyproject.toml
+[tool.pyrefly]
+required-version = ">=1.2.0,<2.0.0"
+```
+
+- Type: string containing a [PEP 440 version specifier](https://peps.python.org/pep-0440/#version-specifiers)
+- Default: none
+- Flag equivalent: none
+- Notes:
+    - `required-version` is a **project-level setting** and cannot be overridden
+      in [`sub-config`](#sub-configs) sections.
+
 ### `preset`
 
 A named collection of error severities and behavior settings that serves as the base configuration.
