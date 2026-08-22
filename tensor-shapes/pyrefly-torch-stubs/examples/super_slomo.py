@@ -177,7 +177,7 @@ class UNet[InC: IntVar, OutC: IntVar](nn.Module):
         """
         idx = len(self.ups) - depth
         up: Up[2 * C, C] = self.ups[idx]
-        return up(deep, skip)  # type: ignore[bad-argument-type]
+        return up(deep, skip)  # type: ignore[pyrefly:bad-argument-type, pyrefly:bad-return]
 
     def _bottleneck[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
@@ -193,7 +193,7 @@ class UNet[InC: IntVar, OutC: IntVar](nn.Module):
         down: Down[C, C] = self.bn_downs[0]
         up: Up[C, C] = self.bn_ups[0]
         deep = down(x)
-        return up(deep, x)  # type: ignore[bad-argument-type]
+        return up(deep, x)  # type: ignore[pyrefly:bad-argument-type, pyrefly:bad-return]
 
     def recurse[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]], depth: Int[I]

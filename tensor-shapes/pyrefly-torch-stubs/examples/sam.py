@@ -543,7 +543,7 @@ class ImageEncoderViT[EmbDim: IntVar, OutC: IntVar](nn.Module):
         # erasing IS to Any. Re-annotate after the loop.
         for blk in self.blocks:
             h = blk(h)
-        h_blocked: Tensor[[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim]] = h  # type: ignore[bad-assignment]
+        h_blocked: Tensor[[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim]] = h  # type: ignore[pyrefly:bad-assignment]
         # Neck: permute to BCHW
         h_bchw = h_blocked.permute(0, 3, 1, 2)
         assert_type(h_bchw, Tensor[[B, EmbDim, (S - 16) // 16 + 1, (S - 16) // 16 + 1]])
@@ -617,7 +617,7 @@ class CrossAttention[D: IntVar, IntDim: IntVar, NHead: IntVar](nn.Module):
         # → reshape → (B, NQ, IntDim)
         out_t = out.transpose(1, 2).contiguous()
         # reshape merges last two dims; NHead * (IntDim // NHead) = IntDim can't be proven
-        out_flat: Tensor[[B, NQ, IntDim]] = out_t.reshape(  # type: ignore[bad-assignment]
+        out_flat: Tensor[[B, NQ, IntDim]] = out_t.reshape(  # type: ignore[pyrefly:bad-assignment]
             b, nq, self.num_heads * self.head_dim
         )
         return self.out_proj(out_flat)

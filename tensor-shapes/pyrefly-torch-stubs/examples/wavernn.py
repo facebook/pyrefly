@@ -339,7 +339,7 @@ class WaveRNN[
         device = specgram.device
         dtype = specgram.dtype
 
-        specgram_padded: Tensor[[B, NF, Any]] = F.pad(  # type: ignore[assignment]
+        specgram_padded: Tensor[[B, NF, Any]] = F.pad(  # type: ignore[pyrefly:bad-assignment]
             specgram, (self._pad, self._pad)
         )
         assert_type(specgram_padded, Tensor[[B, NF, Any]])
