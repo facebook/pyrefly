@@ -3744,6 +3744,14 @@ impl<'a> Transaction<'a> {
         quick_fixes::safe_delete::safe_delete_code_actions(self, handle, selection)
     }
 
+    pub fn introduce_factory_code_actions(
+        &mut self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::introduce_factory::introduce_factory_code_actions(self, handle, selection)
+    }
+
     pub fn introduce_parameter_code_actions(
         &self,
         handle: &Handle,
