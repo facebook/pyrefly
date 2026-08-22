@@ -169,6 +169,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.membership_narrow_container_type(&self.solver().force_var(*v))
             }
             Type::Union(union) => {
+                if union
+                    .members
+                    .iter()
+                    .any(|member| matches!(member, Type::TypedDict(_)))
+                {
+                    // The key type is correlated with the active TypedDict union member.
+                    return None;
+                }
                 let members: Option<Vec<_>> = union
                     .members
                     .iter()
