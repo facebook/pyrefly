@@ -1623,6 +1623,7 @@ y: str = "hello"
 _name = "x"
 __all__ = ["y"]
 __all__.append(_name)  # E: `__all__` could not be statically analyzed
+__all__.remove("y")
 "#,
     )
 }
