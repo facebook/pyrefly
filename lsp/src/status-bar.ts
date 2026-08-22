@@ -37,6 +37,9 @@ type TypeErrorDisplayStatusV2 = {
   // Markdown — fed straight into MarkdownString.
   tooltip: string;
   docsUrl: string;
+  // Version string of the language server binary, or null when the
+  // server doesn't know it.
+  pyreflyVersion: string | null;
 };
 
 /// Update the status bar based on current configuration
@@ -154,25 +157,38 @@ No errors will be shown even if there is a [\`pyrefly.toml\`](https://pyrefly.or
 function renderV2(status: TypeErrorDisplayStatusV2) {
   statusBarItem.text =
     status.label == null ? 'Pyrefly' : `Pyrefly (${status.label})`;
+  // Sections are joined with a blank line because markdown treats a
+  // single newline as a space, which would run them together on one
+  // line. The docs link is tied to the tooltip: a configured project
+  // gets an empty tooltip, and a bare "Docs" link with no explanation
+  // above it is noise. The version is independent — it is the one thing
+  // worth surfacing even when the server has nothing else to say.
+  const sections: string[] = [];
   if (status.tooltip) {
-    const md = new vscode.MarkdownString(status.tooltip);
-    // The kill-switch and IDE-override tooltips embed
-    // `command:workbench.action.openSettings?["<setting-id>"]` links so
-    // clicking the setting name jumps the user straight into the
-    // Settings UI. `MarkdownString` rejects `command:` URIs unless
-    // `isTrusted` allow-lists them — narrow the allow-list to just the
-    // one command we use rather than blanket-trusting everything.
-    md.isTrusted = {enabledCommands: ['workbench.action.openSettings']};
+    sections.push(status.tooltip);
     if (status.docsUrl) {
       // Render as `Docs: <url>` where <url> is the visible text and
       // also the link target — keeps the URL readable in the hover
       // (and copyable) while still clickable.
-      md.appendMarkdown(`\n\nDocs: [${status.docsUrl}](${status.docsUrl})`);
+      sections.push(`Docs: [${status.docsUrl}](${status.docsUrl})`);
     }
-    statusBarItem.tooltip = md;
-  } else {
-    statusBarItem.tooltip = undefined;
   }
+  if (status.pyreflyVersion) {
+    sections.push(`Pyrefly version: ${status.pyreflyVersion}`);
+  }
+  if (sections.length === 0) {
+    statusBarItem.tooltip = undefined;
+    return;
+  }
+  const md = new vscode.MarkdownString(sections.join('\n\n'));
+  // The kill-switch and IDE-override tooltips embed
+  // `command:workbench.action.openSettings?["<setting-id>"]` links so
+  // clicking the setting name jumps the user straight into the
+  // Settings UI. `MarkdownString` rejects `command:` URIs unless
+  // `isTrusted` allow-lists them — narrow the allow-list to just the
+  // one command we use rather than blanket-trusting everything.
+  md.isTrusted = {enabledCommands: ['workbench.action.openSettings']};
+  statusBarItem.tooltip = md;
 }
 
 export function getStatusBarItem(): vscode.StatusBarItem {

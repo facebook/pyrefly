@@ -49,6 +49,39 @@ pub enum ErrorQuickFix {
     ReplaceWithEnumMember { replacement: String },
 }
 
+/// Whether an error was compared with the configured baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BaselineStatus {
+    /// No baseline was configured for this check.
+    NotConfigured,
+    /// A baseline was configured but was not loaded for comparison.
+    NotCompared,
+    /// The error did not match the loaded baseline.
+    Unmatched,
+    /// The error matched the loaded baseline.
+    Matched,
+}
+
+impl BaselineStatus {
+    /// Value for the legacy JSON `baselined` field.
+    /// `None` omits the field (no baseline configured), `Some(true/false)` emits it.
+    pub fn legacy_baselined_flag(self) -> Option<bool> {
+        match self {
+            Self::NotConfigured => None,
+            Self::Matched => Some(true),
+            Self::NotCompared | Self::Unmatched => Some(false),
+        }
+    }
+
+    /// Suffix appended in text renderers, e.g. `" [baselined]"`.
+    pub fn display_suffix(self) -> &'static str {
+        match self {
+            Self::Matched => " [baselined]",
+            _ => "",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Error {
     module: Module,
@@ -56,6 +89,7 @@ pub struct Error {
     display_range: DisplayRange,
     error_kind: ErrorKind,
     severity: Severity,
+    baseline_status: BaselineStatus,
     /// First line of the error message
     msg_header: Box<str>,
     /// The rest of the error message after the first line.
@@ -138,41 +172,56 @@ impl<W: Write> ErrorRenderer<W> {
         match self.mode {
             ErrorRenderMode::Plain => writeln!(
                 self.writer,
-                "{} {} [{}]",
+                "{} {} [{}]{}",
                 error.severity.label(),
                 error.msg_header,
                 error.error_kind.to_name(),
+                error.baseline_status.display_suffix(),
             ),
-            ErrorRenderMode::Color => writeln!(
-                self.writer,
-                "{} {} {}",
-                error.severity.painted(),
-                Paint::new(&*error.msg_header),
-                Paint::dim(format!("[{}]", error.error_kind().to_name()).as_str()),
-            ),
+            ErrorRenderMode::Color => {
+                write!(
+                    self.writer,
+                    "{} {} {}",
+                    error.severity.painted(),
+                    Paint::new(&*error.msg_header),
+                    Paint::dim(format!("[{}]", error.error_kind().to_name()).as_str()),
+                )?;
+                if error.baseline_status == BaselineStatus::Matched {
+                    write!(self.writer, " {}", Paint::dim("[baselined]"))?;
+                }
+                writeln!(self.writer)
+            }
         }
     }
 
     fn write_concise(&mut self, error: &Error, origin: &str) -> io::Result<()> {
+        let header = error.msg_header.lines().map(str::trim).join(" ");
         match self.mode {
             ErrorRenderMode::Plain => writeln!(
                 self.writer,
-                "{} {}:{}: {} [{}]",
+                "{} {}:{}: {} [{}]{}",
                 error.severity.label(),
                 origin,
                 error.display_range,
-                error.msg_header,
+                header,
                 error.error_kind.to_name(),
+                error.baseline_status.display_suffix(),
             ),
-            ErrorRenderMode::Color => writeln!(
-                self.writer,
-                "{} {}:{}: {} {}",
-                error.severity.painted(),
-                Paint::blue(origin),
-                Paint::dim(error.display_range()),
-                Paint::new(&*error.msg_header),
-                Paint::dim(format!("[{}]", error.error_kind().to_name()).as_str()),
-            ),
+            ErrorRenderMode::Color => {
+                write!(
+                    self.writer,
+                    "{} {}:{}: {} {}",
+                    error.severity.painted(),
+                    Paint::blue(origin),
+                    Paint::dim(error.display_range()),
+                    Paint::new(&header),
+                    Paint::dim(format!("[{}]", error.error_kind().to_name()).as_str()),
+                )?;
+                if error.baseline_status == BaselineStatus::Matched {
+                    write!(self.writer, " {}", Paint::dim("[baselined]"))?;
+                }
+                writeln!(self.writer)
+            }
         }
     }
 
@@ -183,7 +232,7 @@ impl<W: Write> ErrorRenderer<W> {
 
 impl Error {
     /// Return the path with a cell fragment if the error is in a notebook cell.
-    fn path_string_with_fragment(&self, project_root: &Path) -> String {
+    pub fn path_string_with_fragment(&self, project_root: &Path) -> String {
         let path = self.path().as_path();
         let path = path.strip_prefix(project_root).unwrap_or(path);
         if let Some(cell) = self.display_range.start.cell() {
@@ -316,6 +365,15 @@ impl Error {
         self.severity
     }
 
+    pub fn with_baseline_status(mut self, baseline_status: BaselineStatus) -> Self {
+        self.baseline_status = baseline_status;
+        self
+    }
+
+    pub fn baseline_status(&self) -> BaselineStatus {
+        self.baseline_status
+    }
+
     /// Create a diagnostic suitable for use in LSP.
     pub fn to_diagnostic(&self) -> Diagnostic {
         let code = self.error_kind().to_name().to_owned();
@@ -423,6 +481,7 @@ impl Error {
             display_range,
             error_kind,
             severity: error_kind.default_severity(),
+            baseline_status: BaselineStatus::NotConfigured,
             msg_header,
             msg_details,
             secondary_annotations: Vec::new(),
@@ -523,6 +582,29 @@ mod tests {
     }
 
     #[test]
+    fn test_multiline_header_is_flattened_only_in_concise_output() {
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test.py")),
+            Arc::new("x".to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(0), TextSize::new(1)),
+            "revealed type: Overload[\n  (x: int) -> str\n]".to_owned(),
+            Vec::new(),
+            ErrorKind::RevealType,
+        );
+
+        let concise = render_error(&error, Path::new(""), false);
+        assert_eq!(concise.lines().count(), 1);
+        assert!(concise.contains("revealed type: Overload[ (x: int) -> str ]"));
+
+        let verbose = render_error(&error, Path::new(""), true);
+        assert!(verbose.contains("revealed type: Overload[\n  (x: int) -> str\n]"));
+    }
+
+    #[test]
     fn test_error_render() {
         let module_info = Module::new(
             ModuleName::from_str("test"),
@@ -550,6 +632,32 @@ mod tests {
   |     ^^^^^^^^
   |
 "#,
+        );
+    }
+
+    #[test]
+    fn test_baselined_error_render() {
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test.py")),
+            Arc::new("x: str = 1".to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(9), TextSize::new(10)),
+            "bad assignment".to_owned(),
+            Vec::new(),
+            ErrorKind::BadAssignment,
+        )
+        .with_baseline_status(BaselineStatus::Matched);
+
+        assert_eq!(
+            render_error(&error, Path::new(""), false),
+            "ERROR test.py:1:10-11: bad assignment [bad-assignment] [baselined]\n"
+        );
+        assert!(
+            render_error(&error, Path::new(""), true)
+                .starts_with("ERROR bad assignment [bad-assignment] [baselined]\n")
         );
     }
 

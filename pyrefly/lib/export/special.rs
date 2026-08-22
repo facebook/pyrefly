@@ -19,6 +19,8 @@ pub enum SpecialExport {
     TypeAlias,
     TypeAliasType,
     TypeVar,
+    IntVar,
+    Flag,
     ParamSpec,
     TypeVarTuple,
     Annotated,
@@ -30,6 +32,7 @@ pub enum SpecialExport {
     CollectionsNamedTuple,
     TypingNamedTuple,
     AssertType,
+    RevealType,
     NewType,
     Union,
     Optional,
@@ -51,6 +54,9 @@ pub enum SpecialExport {
     Generic,
     Protocol,
     PydanticConfigDict,
+    PydanticToCamel,
+    PydanticToPascal,
+    PydanticToSnake,
     HasAttr,
     GetAttr,
     Callable,
@@ -73,7 +79,9 @@ pub enum SpecialExport {
     TypeForm,
     UsesShapeDsl,
     ShapeDslFunction,
+    TypeShapeDslFunction,
     ShapedArray,
+    ProxyMethod,
     Sentinel,
     BuiltinsSentinel,
     AttrsLegacyAttrib,
@@ -88,6 +96,8 @@ impl SpecialExport {
             "classmethod" => Some(Self::ClassMethod),
             "abstractclassmethod" => Some(Self::AbstractClassMethod),
             "TypeVar" => Some(Self::TypeVar),
+            "IntVar" => Some(Self::IntVar),
+            "Flag" => Some(Self::Flag),
             "ParamSpec" => Some(Self::ParamSpec),
             "TypeVarTuple" => Some(Self::TypeVarTuple),
             "Annotated" => Some(Self::Annotated),
@@ -99,6 +109,7 @@ impl SpecialExport {
             "namedtuple" => Some(Self::CollectionsNamedTuple),
             "NamedTuple" => Some(Self::TypingNamedTuple),
             "assert_type" => Some(Self::AssertType),
+            "reveal_type" => Some(Self::RevealType),
             "NewType" => Some(Self::NewType),
             "Union" => Some(Self::Union),
             "Optional" => Some(Self::Optional),
@@ -120,6 +131,9 @@ impl SpecialExport {
             "override" => Some(Self::Override),
             "abstractmethod" => Some(Self::AbstractMethod),
             "ConfigDict" => Some(Self::PydanticConfigDict),
+            "to_camel" => Some(Self::PydanticToCamel),
+            "to_pascal" => Some(Self::PydanticToPascal),
+            "to_snake" => Some(Self::PydanticToSnake),
             "hasattr" => Some(Self::HasAttr),
             "getattr" => Some(Self::GetAttr),
             "TypeAliasType" => Some(Self::TypeAliasType),
@@ -143,7 +157,9 @@ impl SpecialExport {
             "TypeForm" => Some(Self::TypeForm),
             "uses_shape_dsl" => Some(Self::UsesShapeDsl),
             "shape_dsl_function" => Some(Self::ShapeDslFunction),
+            "type_shape_dsl_function" => Some(Self::TypeShapeDslFunction),
             "shaped_array" => Some(Self::ShapedArray),
+            "ProxyMethod" => Some(Self::ProxyMethod),
             "Sentinel" => Some(Self::Sentinel),
             "sentinel" => Some(Self::BuiltinsSentinel),
             "attr" | "attrib" | "ib" => Some(Self::AttrsLegacyAttrib),
@@ -155,7 +171,9 @@ impl SpecialExport {
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
-            Self::TypeVar | Self::TypeVarTuple => {
+            Self::IntVar | Self::Flag => matches!(m.as_str(), "shape_extensions"),
+            Self::TypeVar => matches!(m.as_str(), "typing" | "typing_extensions"),
+            Self::TypeVarTuple => {
                 matches!(
                     m.as_str(),
                     "typing" | "typing_extensions" | "shape_extensions"
@@ -171,6 +189,7 @@ impl SpecialExport {
             | Self::Union
             | Self::Optional
             | Self::AssertType
+            | Self::RevealType
             | Self::TypeAliasType
             | Self::NoTypeCheck
             | Self::Overload
@@ -215,6 +234,9 @@ impl SpecialExport {
             Self::OsExit => matches!(m.as_str(), "os"),
             Self::AbstractMethod | Self::AbstractClassMethod => matches!(m.as_str(), "abc"),
             Self::PydanticConfigDict => matches!(m.as_str(), "pydantic"),
+            Self::PydanticToCamel | Self::PydanticToPascal | Self::PydanticToSnake => {
+                m == ModuleName::pydantic_alias_generators()
+            }
             Self::Callable => matches!(
                 m.as_str(),
                 "typing" | "typing_extensions" | "collections.abc"
@@ -222,9 +244,13 @@ impl SpecialExport {
             Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
             Self::UsesShapeDsl => matches!(m.as_str(), "shape_extensions"),
             Self::ShapeDslFunction => matches!(m.as_str(), "shape_extensions.dsl"),
+            Self::TypeShapeDslFunction => matches!(m.as_str(), "shape_extensions"),
             Self::ShapedArray => matches!(m.as_str(), "shape_extensions"),
+            Self::ProxyMethod => matches!(m.as_str(), "shape_extensions"),
             Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
-            Self::BuiltinsSentinel => matches!(m.as_str(), "builtins"),
+            // `builtins.sentinel` (3.15+) and its `typing_extensions.sentinel`
+            // backport are the same lowercase PEP 661 constructor.
+            Self::BuiltinsSentinel => matches!(m.as_str(), "builtins" | "typing_extensions"),
             Self::AttrsLegacyAttrib | Self::AttrsNextGenField | Self::AttrsNothing => {
                 matches!(m.as_str(), "attr" | "attrs")
             }

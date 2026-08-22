@@ -7,6 +7,9 @@
 
 from typing import assert_type, TYPE_CHECKING
 
+import torch
+from shape_extensions import IntVar
+
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -21,17 +24,15 @@ assert_type(result1, int)
 
 
 # Test 2: Generic function with Tensor using Dim
-def identity_tensor[N](x: Tensor[N, 3]) -> Tensor[N, 3]:
+def identity_tensor[N: IntVar](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
     return x
 
 
-import torch
-
-x_concrete: Tensor[2, 3] = torch.randn(2, 3)
+x_concrete: Tensor[[2, 3]] = torch.randn(2, 3)
 result2 = identity_tensor(x_concrete)
-assert_type(result2, Tensor[2, 3])
+assert_type(result2, Tensor[[2, 3]])
 
 # Test what assignment works
-correct_assignment: Tensor[2, 3] = result2
-# E: `Tensor[2, 3]` is not assignable to `Tensor[100, 3]`
-wrong_assignment: Tensor[100, 3] = result2
+correct_assignment: Tensor[[2, 3]] = result2
+# E: `Tensor[[2, 3]]` is not assignable to `Tensor[[100, 3]]`
+wrong_assignment: Tensor[[100, 3]] = result2

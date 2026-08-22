@@ -21,8 +21,6 @@ Used as a CLI from the release workflows:
     python3 scripts/version_helpers.py is-prerelease  1.2.0-dev.4
 """
 
-# pyre-strict
-
 from __future__ import annotations
 
 import argparse

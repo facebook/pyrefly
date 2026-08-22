@@ -13,7 +13,6 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::error::collector::ErrorCollector;
 use crate::solver::solver::SubsetError;
-use crate::solver::solver::SubsetWithSnapshotResult;
 use crate::types::callable::Param;
 use crate::types::callable::Required;
 use crate::types::class::ClassType;
@@ -140,7 +139,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .heap
             .mk_class_type(self.stdlib.awaitable(var.to_type(self.heap)));
         if self.is_subset_eq(ty, &awaitable_ty) {
-            Some(self.resolve_var(ty, var))
+            // Await must resolve a deferred overload result before returning it.
+            // Results inside an object stay deferred because a later method call can resolve them.
+            Some(
+                self.resolve_var(ty, var)
+                    .finalize_callable_residuals_at_boundary(self.heap, true),
+            )
         } else {
             None
         }
@@ -313,23 +317,66 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn decompose_lambda(&self, hint: &Type, param_vars: &[(&Name, Var)]) -> Option<Type> {
-        let return_ty = self.fresh_var();
-        let params = param_vars
+    /// Extract resolved parameter and return types from a callable hint.
+    pub(crate) fn decompose_lambda(
+        &self,
+        hint: &Type,
+        param_names: &[&Name],
+        vararg_name: Option<&Name>,
+        kwarg_name: Option<&Name>,
+    ) -> (Vec<Option<Type>>, Option<Type>, Option<Type>, Option<Type>) {
+        let param_vars = param_names
             .iter()
-            .map(|(name, var)| {
-                Param::Pos((*name).clone(), var.to_type(self.heap), Required::Required)
-            })
+            .map(|_| self.fresh_var())
             .collect::<Vec<_>>();
+        let vararg_var = vararg_name.map(|_| self.fresh_var());
+        let kwarg_var = kwarg_name.map(|_| self.fresh_var());
+        let return_ty = self.fresh_var();
+        let mut params = Vec::with_capacity(
+            param_names.len()
+                + usize::from(vararg_name.is_some())
+                + usize::from(kwarg_name.is_some()),
+        );
+        params.extend(param_names.iter().zip(&param_vars).map(|(name, var)| {
+            Param::Pos((**name).clone(), var.to_type(self.heap), Required::Required)
+        }));
+        if let Some((name, var)) = vararg_name.zip(vararg_var) {
+            params.push(Param::Varargs(Some(name.clone()), var.to_type(self.heap)));
+        }
+        if let Some((name, var)) = kwarg_name.zip(kwarg_var) {
+            params.push(Param::Kwargs(Some(name.clone()), var.to_type(self.heap)));
+        }
         let callable_ty = self
             .heap
             .mk_callable_from_vec(params, return_ty.to_type(self.heap));
 
-        if self.is_subset_eq(&callable_ty, hint) {
+        // Decomposition reads contextual types from the hint; the inferred lambda callable is
+        // responsible for instantiating any generics in the hint.
+        let snapshot = self
+            .solver()
+            .snapshot_vars(&hint.collect_maybe_placeholder_vars());
+        let matched = self.is_subset_eq(&callable_ty, hint);
+        // Parameter matching may constrain a prefix before the full callable comparison fails.
+        let mut param_hints: Vec<Option<Type>> = param_vars
+            .iter()
+            .map(|var| self.resolve_var_opt(hint, *var))
+            .collect();
+        let mut vararg_hint = vararg_var.and_then(|var| self.resolve_var_opt(hint, var));
+        let mut kwarg_hint = kwarg_var.and_then(|var| self.resolve_var_opt(hint, var));
+        let mut return_hint = if matched {
             self.resolve_var_opt(hint, return_ty)
         } else {
             None
+        };
+        for ty in param_hints
+            .iter_mut()
+            .chain([&mut vararg_hint, &mut kwarg_hint, &mut return_hint])
+            .flatten()
+        {
+            self.solver().expand_with_bounds(ty);
         }
+        self.solver().restore_vars(snapshot);
+        (param_hints, vararg_hint, kwarg_hint, return_hint)
     }
 
     pub fn decompose_generator(&self, ty: &Type) -> Option<(Type, Type, Type)> {
@@ -388,7 +435,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Tuple::Unpacked(f) => {
-                let (prefix, middle, suffix) = *f;
+                let (prefix, middle, suffix) = f.into_parts();
                 let mut elements = prefix;
                 match middle {
                     Type::Tuple(Tuple::Unbounded(unbounded_middle)) => {
@@ -431,7 +478,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         hint: Option<HintRef<'_, '_>>,
         decompose: impl Fn(&Type) -> Option<D>,
-        infer: impl Fn(Option<D>) -> Type,
+        // The inputs to `infer` are the result of decomposing the hint, plus the original hint.
+        // The latter is passed in because we swap in a fresh error collector.
+        infer: impl Fn(Option<D>, Option<HintRef>) -> Type,
     ) -> Type {
         if let Some(hint) = hint {
             let raw_hints = hint.types();
@@ -439,26 +488,74 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let hints = flattened_hints.as_ref().map_or(raw_hints, |x| x);
             let decomposable_width = hints.iter().filter(|h| !h.is_scalar()).count();
             if decomposable_width <= MAX_DECOMPOSE_HINT_WIDTH {
-                for (hint, vs) in self.solver().partial_sort_by_vars(hints) {
-                    if hint.is_scalar() {
+                let mut ret_with_errors = None;
+                for (branch_hint, vs) in self.solver().partial_sort_by_vars(hints) {
+                    if branch_hint.is_scalar() {
                         continue;
                     }
-                    let mut ret = None;
-                    match self.solver().with_snapshot(&vs, || {
-                        let d = decompose(hint);
-                        if d.is_none() {
-                            return Err(SubsetError::Other);
+                    if vs.is_empty() {
+                        // No placeholder vars to pin, so inference has no solver state to
+                        // roll back. Infer directly and collect this hint's errors against
+                        // a fresh collector; they are speculative until we commit to it.
+                        let Some(d) = decompose(branch_hint) else {
+                            continue;
+                        };
+                        let error_collectors = hint.errors().map(|e| (e, self.error_collector()));
+                        let ret = infer(
+                            Some(d),
+                            Some(HintRef(
+                                hint.types(),
+                                error_collectors
+                                    .as_ref()
+                                    .map(|(_, branch_errors)| branch_errors),
+                            )),
+                        );
+                        if !self.is_subset_eq(&ret, branch_hint) {
+                            continue;
                         }
-                        ret = Some(infer(d));
-                        self.is_subset_eq_with_reason(ret.as_ref().unwrap(), hint)
-                    }) {
-                        SubsetWithSnapshotResult::Ok => return ret.unwrap(),
-                        SubsetWithSnapshotResult::Err(_) => {}
+                        match error_collectors {
+                            // This hint matches but produces hard errors. Remember the first
+                            // such hint as a fallback and keep looking for a clean match.
+                            Some((errors, branch_errors)) if branch_errors.has_hard() => {
+                                if ret_with_errors.is_none() {
+                                    ret_with_errors = Some((ret, errors, branch_errors));
+                                }
+                            }
+                            // Matched with at most soft errors: commit, propagating them.
+                            Some((errors, branch_errors)) => {
+                                errors.extend(branch_errors);
+                                return ret;
+                            }
+                            None => return ret,
+                        }
+                    } else {
+                        // Pinning vars mutates solver state, so infer under a snapshot that
+                        // rolls back when the inferred type doesn't match the hint. Emitting
+                        // errors from possibly-partial var answers is unsafe, so pass none.
+                        let mut ret = None;
+                        let matched = self.solver().with_snapshot(&vs, || {
+                            let Some(d) = decompose(branch_hint) else {
+                                return Err(SubsetError::Other);
+                            };
+                            let ty = infer(Some(d), Some(HintRef(hint.types(), None)));
+                            let result = self.is_subset_eq_with_reason(&ty, branch_hint);
+                            ret = Some(ty);
+                            result
+                        });
+                        if matched.is_ok() {
+                            return ret.unwrap();
+                        }
                     }
+                }
+                // If we didn't find a completely successful result, take the first hint that
+                // matched but produced hard errors.
+                if let Some((ret, errors, branch_errors)) = ret_with_errors {
+                    errors.extend(branch_errors);
+                    return ret;
                 }
             }
         }
-        infer(None)
+        infer(None, hint)
     }
 
     /// Flatten the hint candidates produced by `HintRef::split`, additionally looking through type
@@ -467,21 +564,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn flatten_alias_union_hints(&self, hints: &[Type]) -> Option<Vec<Type>> {
         if !hints
             .iter()
-            .any(|hint| matches!(hint, Type::UntypedAlias(_)))
+            .any(|hint| matches!(hint, Type::UntypedAlias(_) | Type::Union(_)))
         {
             return None;
         }
         let mut flattened_hints = Vec::new();
         for hint in hints {
-            if let Type::UntypedAlias(data) = hint {
-                let expanded_alias = self.untype_alias(data);
-                if let Type::Union(u) = expanded_alias {
-                    flattened_hints.extend(u.members);
-                } else {
-                    flattened_hints.push(expanded_alias);
+            match hint {
+                Type::UntypedAlias(data) => {
+                    let expanded_alias = self.untype_alias(data);
+                    if let Type::Union(u) = expanded_alias {
+                        flattened_hints.extend(u.members);
+                    } else {
+                        flattened_hints.push(expanded_alias);
+                    }
                 }
-            } else {
-                flattened_hints.push(hint.clone());
+                Type::Union(u) => {
+                    flattened_hints.extend(u.members.clone());
+                }
+                _ => flattened_hints.push(hint.clone()),
             }
         }
         Some(flattened_hints)

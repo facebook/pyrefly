@@ -117,6 +117,49 @@ $ $PYREFLY snippet "x: int = 'hello'" --output-format=json
 [1]
 ```
 
+## Snippet with multiple output destinations
+
+```scrut
+$ $PYREFLY snippet "x: int = 'hello'" --summary=none \
+>     --output=min-text:- --output="json:$TMPDIR/snippet.json"; rc=$?; \
+> $JQ -r '.errors[0].name' $TMPDIR/snippet.json; exit $rc
+ERROR snippet:1:10-17: `Literal['hello']` is not assignable to `int` [bad-assignment]
+bad-assignment
+[1]
+```
+
+## Snippet with CodeClimate output format
+
+```scrut
+$ $PYREFLY snippet "x: int = 'hello'" --output-format=code-climate
+[
+  {
+    "type": "issue",
+    "check_name": "pyrefly/bad-assignment",
+    "description": "`Literal['hello']` is not assignable to `int`",
+    "categories": [
+      "Bug Risk"
+    ],
+    "location": {
+      "path": "snippet",
+      "positions": {
+        "begin": {
+          "line": 1,
+          "column": 10
+        },
+        "end": {
+          "line": 1,
+          "column": 17
+        }
+      }
+    },
+    "severity": "major",
+    "fingerprint": "18e547e03ffcae99"
+  }
+] (no-eol)
+[1]
+```
+
 ## Snippet with config file
 
 ```scrut {output_stream: stderr}
@@ -154,4 +197,23 @@ Usage: pyrefly snippet [OPTIONS] <CODE>
 $ $PYREFLY --help | grep "snippet"
   snippet      Check a Python code snippet
 [0]
+```
+
+## Snippets can read from stdin
+
+```scrut
+$ cat <<EOF | $PYREFLY snippet -
+> x: int = 1
+> def foo(x: float) -> None:
+>   return x > 1.0
+> foo(x)
+ERROR Returned type `bool` is not assignable to declared return type `None` [bad-return]
+ --> snippet:3:10
+  |
+2 | def foo(x: float) -> None:
+  |                      ---- declared return type
+3 |   return x > 1.0
+  |          ^^^^^^^
+  |
+[1]
 ```

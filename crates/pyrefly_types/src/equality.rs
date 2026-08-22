@@ -13,6 +13,7 @@ use compact_str::CompactString;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::qname::QName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::uniques::Unique;
@@ -189,6 +190,7 @@ impl<T> TypeEq for PhantomData<T> {}
 impl TypeEq for Name {}
 impl TypeEq for ModuleName {}
 impl TypeEq for ModulePath {}
+impl TypeEq for ModuleStyle {}
 impl TypeEq for TextRange {}
 impl TypeEq for ShortIdentifier {}
 
@@ -326,11 +328,11 @@ mod tests {
 
     use super::*;
     use crate::callable::Callable;
-    use crate::callable::FuncFlags;
-    use crate::callable::FuncMetadata;
-    use crate::callable::Function;
-    use crate::callable::FunctionKind;
     use crate::callable::ParamList;
+    use crate::function::FuncFlags;
+    use crate::function::FuncMetadata;
+    use crate::function::Function;
+    use crate::function::FunctionKind;
     use crate::heap::TypeHeap;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
@@ -444,10 +446,7 @@ mod tests {
 
             Forallable::Function(Function {
                 signature: Callable::list(ParamList::everything(), q.clone().to_type(heap)),
-                metadata: FuncMetadata {
-                    kind: FunctionKind::Overload,
-                    flags: FuncFlags::default(),
-                },
+                metadata: FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()),
             })
             .forall(Arc::new(tparams))
         }
