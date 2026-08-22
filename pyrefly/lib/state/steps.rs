@@ -59,6 +59,7 @@ pub struct Context<'a, Lookup> {
     pub check_unannotated_defs: bool,
     pub infer_return_types: InferReturnTypes,
     pub infer_with_first_use: bool,
+    pub check_all_matches: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
     pub strict_partial_subtyping: bool,
@@ -488,6 +489,7 @@ impl Step {
     ) -> Arc<(Bindings, Arc<Answers>)> {
         let solver = Solver::new(
             ctx.infer_with_first_use,
+            ctx.check_all_matches,
             ctx.tensor_shapes,
             ctx.strict_callable_subtyping,
             ctx.strict_partial_subtyping,

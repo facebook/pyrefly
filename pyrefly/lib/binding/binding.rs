@@ -1213,16 +1213,12 @@ pub enum BindingExpect {
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
     /// A match statement that may be non-exhaustive at runtime.
-    /// Due to gaps in our type algebra, we only check exhaustiveness for enums & unions
-    /// of enum literals.
-    /// Since this makes use of narrowing, not every match subject will be
-    /// checked for exhaustiveness, only variables and chained subscripts/attributes of variables
+    /// The solver checks closed subject types by default and all representable subjects when configured.
     MatchExhaustiveness {
         subject_idx: Idx<Key>,
         narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
         subject_range: TextRange,
-        include_open_builtins: bool,
         // Should we show the raw expression of the match subject instead of the name?
         show_subject_expr: bool,
     },

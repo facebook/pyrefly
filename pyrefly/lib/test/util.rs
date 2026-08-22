@@ -105,6 +105,7 @@ pub struct TestEnv {
     check_unannotated_defs: bool,
     infer_return_types: InferReturnTypes,
     infer_with_first_use: bool,
+    check_all_matches: bool,
     recursion_depth_limit: Option<u32>,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
@@ -160,6 +161,7 @@ impl TestEnv {
             check_unannotated_defs: true,
             infer_return_types: InferReturnTypes::Checked,
             infer_with_first_use: true,
+            check_all_matches: false,
             recursion_depth_limit: None,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
@@ -404,6 +406,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_check_all_matches(mut self) -> Self {
+        self.check_all_matches = true;
+        self
+    }
+
     pub fn enable_strict_partial_subtyping(mut self) -> Self {
         self.strict_partial_subtyping = true;
         self
@@ -558,6 +565,7 @@ impl TestEnv {
         config.root.check_unannotated_defs = Some(self.check_unannotated_defs);
         config.root.infer_return_types = Some(self.infer_return_types);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
+        config.root.check_all_matches = Some(self.check_all_matches);
         config.root.recursion_depth_limit = self.recursion_depth_limit;
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
         config.root.strict_partial_subtyping = Some(self.strict_partial_subtyping);

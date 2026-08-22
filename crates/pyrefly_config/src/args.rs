@@ -265,6 +265,14 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     infer_with_first_use: Option<bool>,
+    /// Check every match statement for exhaustiveness instead of limiting checks to closed subject types.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    check_all_matches: Option<bool>,
     /// Whether to respect ignore files (.gitignore, .ignore, .git/exclude).
     #[arg(
         long,
@@ -519,6 +527,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.infer_with_first_use {
             config.root.infer_with_first_use = Some(*x);
+        }
+        if let Some(x) = &self.check_all_matches {
+            config.root.check_all_matches = Some(*x);
         }
         if let Some(x) = &self.recursion_depth_limit {
             config.root.recursion_depth_limit = Some(*x);
