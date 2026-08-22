@@ -163,6 +163,7 @@ pub enum LspDisplayMode {
 #[derive(Debug, Default)]
 pub struct TypeDisplayContext<'a> {
     qnames: SmallMap<&'a Name, QNameInfo>,
+    references: SmallMap<&'a Name, SmallSet<ModuleName>>,
     /// Display mode for formatting
     lsp_display_mode: LspDisplayMode,
     always_display_module_name: bool,
@@ -199,8 +200,17 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    fn add_reference(&mut self, module: ModuleName, name: &'a Name) {
+        self.references.entry(name).or_default().insert(module);
+    }
+
     pub fn add(&mut self, t: &'a Type) {
         t.universe(&mut |t| {
+            if let Type::Union(union) = t
+                && let Some(display) = union.display()
+            {
+                self.add_reference(display.name.0, &display.name.1);
+            }
             if let Type::ShapedArray(shaped_array) = t {
                 self.add_qname(shaped_array.base_class.qname());
             }
@@ -243,6 +253,9 @@ impl<'a> TypeDisplayContext<'a> {
         for c in self.qnames.values_mut() {
             c.info.insert(fake_module, None);
         }
+        for modules in self.references.values_mut() {
+            modules.insert(fake_module);
+        }
         self.always_display_module_name = true;
         self.always_display_builtins_module_name = true;
     }
@@ -271,6 +284,11 @@ impl<'a> TypeDisplayContext<'a> {
                     .any(|module| unqualified_modules.contains(module))
             {
                 c.info.insert(fake_module, None);
+            }
+        }
+        for modules in self.references.values_mut() {
+            if modules.len() == 1 && !modules.iter().any(|m| unqualified_modules.contains(m)) {
+                modules.insert(fake_module);
             }
         }
     }
@@ -313,10 +331,29 @@ impl<'a> TypeDisplayContext<'a> {
     }
 
     pub(crate) fn qname_needs_module(&self, qname: &QName) -> bool {
+        if self
+            .references
+            .get(qname.id())
+            .is_some_and(|modules| modules.iter().any(|module| *module != qname.module_name()))
+        {
+            return true;
+        }
         match self.qnames.get(qname.id()) {
             Some(info) => info.needs_qualification(qname),
             None => true,
         }
+    }
+
+    fn reference_needs_module(&self, module: ModuleName, name: &Name) -> bool {
+        let reference_conflict = self
+            .references
+            .get(name)
+            .is_none_or(|modules| modules.len() != 1 || !modules.contains(&module));
+        let qname_conflict = self
+            .qnames
+            .get(name)
+            .is_some_and(|info| info.info.len() != 1 || !info.info.contains_key(&module));
+        reference_conflict || qname_conflict
     }
 
     /// Get the QName for a special form, enabling go-to-definition functionality.
@@ -1341,13 +1378,19 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::Union(u)
                 if !(self.always_display_expanded_unions || is_toplevel)
-                    && let Some((module, name)) = &u.display_name =>
+                    && let Some(display) = u.display() =>
             {
-                if self.always_display_module_name && *module != ModuleName::unknown() {
-                    output.write_reference(*module, name.as_ref())
+                let (module, name) = &display.name;
+                if *module != ModuleName::unknown() && self.reference_needs_module(*module, name) {
+                    output.write_reference(*module, name.as_ref())?;
                 } else {
-                    output.write_str(name.as_str())
+                    output.write_str(name.as_str())?;
                 }
+                if !display.extras.is_empty() {
+                    output.write_str(" | ")?;
+                    self.fmt_type_sequence(display.extras.iter(), " | ", true, output)?;
+                }
+                Ok(())
             }
             Type::Union(u) => {
                 let mut literal_idx = None;
@@ -1948,6 +1991,7 @@ pub mod tests {
     use crate::types::OverloadType;
     use crate::types::TParams;
     use crate::types::Union;
+    use crate::types::UnionDisplay;
 
     pub fn fake_class(name: &str, module: &str, range: u32) -> Class {
         let mi = Module::new(
@@ -2564,12 +2608,48 @@ pub mod tests {
             "None | Literal[True, 'test'] | LiteralString"
         );
         assert_eq!(
-            Type::type_of(Type::Union(Box::new(Union {
-                members: vec![nonlit1, nonlit2],
-                display_name: Some((ModuleName::unknown(), Name::new("MyUnion")))
-            })))
+            Type::type_of(Type::Union(Box::new(Union::with_display(
+                vec![nonlit1, nonlit2],
+                UnionDisplay::new((ModuleName::unknown(), Name::new("MyUnion")), Box::new([]),),
+            ))))
             .to_string(),
             "type[MyUnion]"
+        );
+    }
+
+    #[test]
+    fn test_display_union_alias_with_extras_uses_context() {
+        let make_union = |module: &str, range| {
+            let extra = Type::ClassType(ClassType::new(
+                fake_class("Extra", module, range),
+                TArgs::default(),
+            ));
+            Type::type_of(Type::Union(Box::new(Union::with_display(
+                vec![
+                    Type::None,
+                    Type::LiteralString(LitStyle::Implicit),
+                    extra.clone(),
+                ],
+                UnionDisplay::new(
+                    (ModuleName::from_str(module), Name::new_static("Alias")),
+                    vec![extra].into_boxed_slice(),
+                ),
+            ))))
+        };
+        let first = make_union("first", 1);
+        let second = make_union("second", 2);
+
+        let ctx = TypeDisplayContext::new(&[&first]);
+        assert_eq!(ctx.display(&first).to_string(), "type[Alias | Extra]");
+
+        let ctx = TypeDisplayContext::new(&[&first, &second]);
+        assert_eq!(
+            ctx.display(&first).to_string(),
+            "type[first.Alias | first.Extra]"
+        );
+        assert_eq!(
+            ctx.display(&second).to_string(),
+            "type[second.Alias | second.Extra]"
         );
     }
 

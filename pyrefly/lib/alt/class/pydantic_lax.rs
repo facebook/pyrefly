@@ -44,7 +44,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect();
         let mut union_type = self.unions(expanded_types);
         if let Type::Union(ref mut boxed_union) = union_type {
-            boxed_union.display_name = Some((ModuleName::unknown(), display_name));
+            boxed_union.set_display_name((ModuleName::unknown(), display_name));
         }
         union_type
     }

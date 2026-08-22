@@ -601,7 +601,7 @@ def login_required(func: Callable[P, R]) -> Callable[P, ResponseReturnValue | R]
 
 def setup_required(view: Callable[..., int]) -> Callable[..., int]: ...
 
-@setup_required  # E: Argument `(*args: Unknown, **kwargs: Unknown) -> ResponseReturnValue | R` is not assignable to parameter `view` with type `(...) -> int` in function `setup_required`
+@setup_required  # E: Argument `(*args: Unknown, **kwargs: Unknown) -> ResponseReturnValue | int` is not assignable to parameter `view` with type `(...) -> int` in function `setup_required`
 @login_required
 def handler(*args, **kwargs) -> int:
     return 0
