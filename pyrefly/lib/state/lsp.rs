@@ -2625,6 +2625,46 @@ impl<'a> Transaction<'a> {
             return Ok(vec1![definition]);
         }
 
+        if let Some(AnyNodeRef::ExprStringLiteral(literal)) = covering_nodes
+            .iter()
+            .find(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(part) = literal
+                .value
+                .iter()
+                .find(|part| part.content_range().contains(position))
+            && let Some(module) = self.get_module_info(handle)
+        {
+            let contents = module.code_at(part.content_range());
+            // Only treat the string as a module path if the complete contents resolve.
+            if let Ok(Some(full_definition)) = self.find_definition_for_imported_module(
+                handle,
+                ModuleName::from_str(contents),
+                preference,
+            ) {
+                let offset = (position - part.content_range().start())
+                    .to_usize()
+                    .min(contents.len());
+                let component = contents.as_bytes()[..offset]
+                    .iter()
+                    .filter(|c| **c == b'.')
+                    .count();
+                let end = contents
+                    .match_indices('.')
+                    .nth(component)
+                    .map_or(contents.len(), |(offset, _)| offset);
+                if end == contents.len() {
+                    return Ok(vec1![full_definition]);
+                }
+                if let Ok(Some(definition)) = self.find_definition_for_imported_module(
+                    handle,
+                    ModuleName::from_str(&contents[..end]),
+                    preference,
+                ) {
+                    return Ok(vec1![definition]);
+                }
+            }
+        }
+
         match Self::identifier_from_covering_nodes(&covering_nodes) {
             Some(IdentifierWithContext {
                 identifier: id,
