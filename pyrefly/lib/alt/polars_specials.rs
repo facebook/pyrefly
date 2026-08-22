@@ -2073,7 +2073,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &Arguments,
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let schema = column_transform_schema(base, args)?;
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
@@ -2083,6 +2085,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .flat_map(positional_elements)
             .collect::<Vec<_>>();
         if let [arg] = &positional[..]
+            && args.keywords.is_empty()
             && let Type::Literal(lit) = &self.expr_infer(arg, &self.error_swallower())
             && let Lit::Str(value) = &lit.value
             && value.as_str() == POLARS_ALL_COLUMNS
@@ -2110,9 +2113,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             names.push(Some((name, is_column)));
         }
-        let mut columns = Vec::with_capacity(names.len());
+        // Keyword names are validated up front, alongside positional ones, so a name shared
+        // between a positional alias and a keyword is caught the same way as two positionals.
+        for kw in &args.keywords {
+            let Some(kw_name) = &kw.arg else {
+                return None;
+            };
+            if !output_names.insert(kw_name.id.clone()) {
+                has_repeated_name = true;
+            }
+        }
+        let mut columns = Vec::with_capacity(names.len() + args.keywords.len());
         let mut resolved_names = SmallSet::new();
-        for (output, arg) in names.iter().zip(positional) {
+        for (output, arg) in names.iter().zip(&positional) {
             let Some((name, is_column)) = output else {
                 continue;
             };
@@ -2131,11 +2144,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 columns.push((name.clone(), PolarsDType::Unknown));
             }
         }
+        // Polars evaluates every keyword expression against the receiver's original schema,
+        // same as with_columns, so a sibling's new column is not visible.
+        for kw in &args.keywords {
+            let name = kw.arg.as_ref()?.id.clone();
+            // A keyword value that itself resolves to multiple columns (e.g.
+            // `x=pl.col("a", "b")`) is a duplicate-column error in Polars, not a single
+            // named output — degrade the whole call, same as an opaque positional arg.
+            if !self.polars_expr_has_single_output(&kw.value) {
+                has_opaque = true;
+                continue;
+            }
+            let resolved = match self.polars_column_arg(&kw.value) {
+                ColumnArg::Named(col) => resolve_column(schema, &col, kw.value.range(), errors),
+                ColumnArg::Opaque => None,
+                ColumnArg::Expr => self
+                    .eval_polars_expr(&kw.value, schema, errors)
+                    .map(ExprValue::dtype),
+            };
+            if resolved.is_some() && !resolved_names.insert(name.clone()) {
+                report_duplicate_column(&name, kw.value.range(), errors);
+            }
+            columns.push((name, resolved.unwrap_or(PolarsDType::Unknown)));
+        }
         if has_opaque {
             None
         } else {
             for arg in &args.args {
                 self.expr_infer(arg, errors);
+            }
+            for kw in &args.keywords {
+                self.expr_infer(&kw.value, errors);
             }
             if !has_repeated_name {
                 return Some(dataframe_type_with_columns(schema, columns));
@@ -2328,10 +2367,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn polars_expr_has_single_output(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Call(call) => {
-                if let Expr::Attribute(attr) = &*call.func
-                    && PolarsExprMethod::parse(attr.attr.id.as_str()).is_some()
-                {
-                    return self.polars_expr_has_single_output(&attr.value);
+                if let Expr::Attribute(attr) = &*call.func {
+                    // A `when(...).then(...)` / `.otherwise(...)` chain evaluates to one value
+                    // per row, unless a branch value itself resolves to multiple columns (e.g.
+                    // `pl.col("a", "b")`), in which case the chain inherits that multiplicity.
+                    if matches!(attr.attr.id.as_str(), "then" | "otherwise") {
+                        return self.polars_when_chain_has_single_output(expr);
+                    }
+                    if PolarsExprMethod::parse(attr.attr.id.as_str()).is_some() {
+                        return self.polars_expr_has_single_output(&attr.value);
+                    }
                 }
                 match self.polars_function(&call.func) {
                     Some(PolarsFunction::Len) => true,
@@ -2356,6 +2401,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::BytesLiteral(_)
             | Expr::NoneLiteral(_) => true,
             _ => !self.is_polars_expr_value(expr),
+        }
+    }
+
+    /// Check that every branch value in a `when(...).then(...)[.when(...).then(...)]*
+    /// .otherwise(...)` chain is itself single-output. The chain's own `when`/`then`/
+    /// `otherwise` calls are a builder, not a data value, so only the branch *arguments*
+    /// need checking — an unrecognized receiver (e.g. the base `pl.when(...)` call) is
+    /// trivially fine since it isn't a data value either.
+    fn polars_when_chain_has_single_output(&self, expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else { return true };
+        let Expr::Attribute(attr) = &*call.func else {
+            return true;
+        };
+        match attr.attr.id.as_str() {
+            "then" | "otherwise" => {
+                matches!(&call.arguments.args[..], [value] if self.polars_expr_has_single_output(value))
+                    && self.polars_when_chain_has_single_output(&attr.value)
+            }
+            "when" => self.polars_when_chain_has_single_output(&attr.value),
+            _ => true,
         }
     }
 
@@ -2434,6 +2499,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::NoneLiteral(_) => {
                 literal_value(expr).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
             }
+            // A bare list/tuple display passed alongside other positional arguments (not as
+            // the sole argument, which `positional_elements` already flattens into individual
+            // column specs) becomes an anonymous value column in Polars too, regardless of its
+            // element types — its dtype is left to fall back to Unknown since nested/list
+            // dtypes aren't modeled.
+            Expr::List(_) | Expr::Tuple(_) => Some(Name::new_static(POLARS_LITERAL_OUTPUT_NAME)),
             _ => None,
         }
     }
@@ -2455,13 +2526,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Type::DataFrame(schema) = base else {
             return None;
         };
-        if !args.args.is_empty() {
-            return None;
-        }
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        // Validate names before inference so fallback does not duplicate diagnostics.
+        // A bare list/tuple literal is only a shorthand for a sequence of expressions when
+        // it's the receiver's *sole* positional argument, matching Polars' actual behavior:
+        // `with_columns([e1, e2])` flattens, but `with_columns(e0, [e1])` does not — there,
+        // the list is one opaque value (e.g. a `List`-dtype column), not two column specs.
+        let positional: Vec<&Expr> = match &args.args[..] {
+            [arg] => positional_elements(arg).iter().collect(),
+            args => args.iter().collect(),
+        };
+        // Validate names before inference so fallback does not duplicate diagnostics. A
+        // positional arg with no well-defined output name is ambiguous in shape (it could
+        // expand to any number of columns), so it degrades the whole call, the same as select.
+        let mut resolved_positional = Vec::with_capacity(positional.len());
+        for &arg in &positional {
+            let output = match self.polars_column_arg(arg) {
+                ColumnArg::Named(name) => Some((name, true)),
+                ColumnArg::Opaque => None,
+                ColumnArg::Expr => self.polars_expr_output_name(arg).map(|name| (name, false)),
+            };
+            output.as_ref()?;
+            resolved_positional.push(output);
+        }
         let mut named = Vec::with_capacity(args.keywords.len());
         for kw in &args.keywords {
             let Some(arg) = &kw.arg else {
@@ -2469,9 +2557,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             named.push((arg.id.clone(), &kw.value));
         }
-        // Polars evaluates every keyword expression against the receiver's original schema in
-        // parallel, so a sibling's new column is not visible; resolve all values before applying.
+        for arg in &args.args {
+            self.expr_infer(arg, errors);
+        }
+        // Polars evaluates every positional and keyword expression against the receiver's
+        // original schema in parallel, so a sibling's new column is not visible in the same call.
         let mut columns = schema.columns.clone();
+        for (output, arg) in resolved_positional.iter().zip(&positional) {
+            let (name, is_column) = output
+                .as_ref()
+                .expect("opacity already checked before inference");
+            let dtype = if *is_column {
+                resolve_column(schema, name, arg.range(), errors)
+            } else {
+                self.eval_polars_expr(arg, schema, errors)
+                    .map(ExprValue::dtype)
+            }
+            .unwrap_or(PolarsDType::Unknown);
+            match columns.iter_mut().find(|(c, _)| c == name) {
+                Some((_, ty)) => *ty = dtype,
+                None => columns.push((name.clone(), dtype)),
+            }
+        }
         for (name, value) in named {
             self.expr_infer(value, errors);
             let dtype = match self.polars_column_arg(value) {
