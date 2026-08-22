@@ -309,6 +309,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::FlagTuple
                     | TypeShapeDslExpressionKind::FlagRange
                     | TypeShapeDslExpressionKind::FlagSequenceLength
+                    | TypeShapeDslExpressionKind::FlagSequenceCount
                     | TypeShapeDslExpressionKind::FlagIntArithmetic(_)
                     | TypeShapeDslExpressionKind::DimensionTuple
                     | TypeShapeDslExpressionKind::Conditional

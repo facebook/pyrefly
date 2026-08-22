@@ -391,6 +391,7 @@ pub enum TypeShapeDslExpressionKind {
     FlagTuple,
     FlagRange,
     FlagSequenceLength,
+    FlagSequenceCount,
     FlagIntArithmetic(TypeShapeDslFlagIntArithmeticOp),
     Conditional,
     DimensionGenerator {
@@ -934,6 +935,29 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
                 Ok(())
             }
+            Expr::Call(call)
+                if matches!(
+                    &*call.func,
+                    Expr::Attribute(attribute) if attribute.attr.id.as_str() == "count"
+                ) =>
+            {
+                let Expr::Attribute(attribute) = &*call.func else {
+                    unreachable!("guarded count call has an attribute callee")
+                };
+                if call.arguments.args.len() != 1 || !call.arguments.keywords.is_empty() {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: call.arguments.range,
+                        message: "Flag sequence `.count` requires exactly one positional argument",
+                    });
+                }
+                self.validate_flag_sequence(&attribute.value, flow)?;
+                self.validate_flag_int(&call.arguments.args[0], flow)?;
+                self.expressions.push(TypeShapeDslExpression {
+                    range: call.range,
+                    kind: TypeShapeDslExpressionKind::FlagSequenceCount,
+                });
+                Ok(())
+            }
             _ => Err(TypeShapeDslDefinitionError {
                 range: expression.range(),
                 message: "Flag integer expression is not supported",
@@ -1258,6 +1282,18 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 })
             }
             Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
+                self.validate_flag_int(expression, flow)?;
+                Ok(DslStaticKind::Flag {
+                    origins: None,
+                    kinds: FLAG_INT,
+                })
+            }
+            Expr::Call(call)
+                if matches!(
+                    &*call.func,
+                    Expr::Attribute(attribute) if attribute.attr.id.as_str() == "count"
+                ) =>
+            {
                 self.validate_flag_int(expression, flow)?;
                 Ok(DslStaticKind::Flag {
                     origins: None,
@@ -2828,6 +2864,37 @@ impl ValidatedTypeShapeDslFunction {
                     }
                 }
             }
+            TypeShapeDslExpressionKind::FlagSequenceCount => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated count expression is a call")
+                };
+                let Expr::Attribute(attribute) = &*call.func else {
+                    unreachable!("validated count expression has an attribute callee")
+                };
+                let sequence = self.evaluate_expression(&attribute.value, environment, budget);
+                let item = self.evaluate_expression(&call.arguments.args[0], environment, budget);
+                match (sequence, item) {
+                    (DslOutcome::Invalid(error), _) | (_, DslOutcome::Invalid(error)) => {
+                        DslOutcome::Invalid(error)
+                    }
+                    (
+                        DslOutcome::Value(DslValue::FlagSequence(sequence)),
+                        DslOutcome::Value(DslValue::FlagInt(item)),
+                    ) => sequence
+                        .count(item)
+                        .map_or(DslOutcome::Value(DslValue::Unknown), |count| {
+                            DslOutcome::Value(DslValue::FlagInt(count))
+                        }),
+                    (DslOutcome::Value(DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::Unknown)) => {
+                        DslOutcome::Value(DslValue::Unknown)
+                    }
+                    (DslOutcome::ExplicitGradual, _) | (_, DslOutcome::ExplicitGradual) => {
+                        unreachable!("validated value expression cannot return gradual")
+                    }
+                    _ => unreachable!("validated count uses a Flag sequence and integer"),
+                }
+            }
             TypeShapeDslExpressionKind::FlagIntArithmetic(op) => {
                 let Expr::BinOp(binop) = expression else {
                     unreachable!("validated Flag arithmetic expression is a binary operation")
@@ -3247,6 +3314,19 @@ impl DslFlagSequence {
                 };
                 in_bounds && (i128::from(value) - i128::from(*start)) % i128::from(*step) == 0
             }
+        }
+    }
+
+    fn count(&self, value: i64) -> Option<i64> {
+        match self {
+            Self::Values(values) => i64::try_from(
+                values
+                    .iter()
+                    .filter(|candidate| **candidate == value)
+                    .count(),
+            )
+            .ok(),
+            Self::Range { .. } => Some(i64::from(self.contains(value))),
         }
     }
 

@@ -6818,6 +6818,67 @@ def invalid_metadata() -> Tensor[local_lookalike(IntTuple[2])]: ...  # E: Expect
 );
 
 testcase!(
+    test_type_shape_dsl_flag_sequence_count,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def tuple_count(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
+    if axes.count(0) == 2:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def range_count(shape: IntTuple) -> IntTuple:
+    axes = range(0, 5, 2)
+    matches = axes.count(2)
+    if matches == 1 and axes.count(1) == 0:
+        return dsl.IntTuple(())
+    return shape
+
+def apply_tuple[S: IntTuple, A: Flag[tuple[int, ...]]](
+    x: Tensor[S], axes: A,
+) -> Tensor[tuple_count(S, A)]: ...
+def apply_range[S: IntTuple](x: Tensor[S]) -> Tensor[range_count(S)]: ...
+def apply_unknown(x: Tensor[[2, 3]]) -> Tensor[
+    tuple_count(IntTuple[2, 3], tuple[int, ...])
+]: ...
+
+def test(x: Tensor[[2, 3]]) -> None:
+    assert_type(apply_tuple(x, (0, 0)), Tensor[[]])
+    assert_type(apply_tuple(x, (0, 1)), Tensor[[2, 3]])
+    assert_type(apply_range(x), Tensor[[]])
+    reveal_type(apply_unknown(x))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_flag_sequence_count,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def invalid_receiver(shape: IntTuple) -> IntTuple:
+    axis = 0
+    if axis.count(0) > 0:  # E: Flag value has the wrong domain for this operation  # E: has no attribute `count`
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_arity(shape: IntTuple) -> IntTuple:
+    axes = (0, 1)
+    if axes.count() > 0:  # E: Flag sequence `.count` requires exactly one positional argument  # E: Missing positional argument
+        return shape
+    return shape
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_bounded_generators,
     shape_dsl_tensor_env(),
     r#"
