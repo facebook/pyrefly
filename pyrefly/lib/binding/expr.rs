@@ -294,7 +294,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> Idx<Key> {
-        self.ensure_name_in_type(name, usage, tparams_builder, false)
+        self.ensure_name_in_type(name, usage, tparams_builder, false, false)
     }
 
     fn ensure_name_in_type(
@@ -303,6 +303,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: Option<&mut LegacyTParamCollector>,
         is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             name,
@@ -310,6 +311,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder
                 .map(|tparams_builder| (tparams_builder, LegacyTParamId::Name(name.clone()))),
             is_runtime_evaluated_annotation,
+            allow_class_body_forward_reference,
         )
     }
 
@@ -326,6 +328,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder.map(|tparams_builder| {
                 (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
+            false,
             false,
         )
     }
@@ -357,6 +360,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_lookup: Option<(&mut LegacyTParamCollector, LegacyTParamId)>,
         is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
         let key = Key::BoundName(ShortIdentifier::new(name));
         if name.is_empty() {
@@ -457,7 +461,12 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.insert_binding(
                         key,
-                        Binding::ClassBodyUnknownName(Box::new((cls, name.clone(), suggestion))),
+                        Binding::ClassBodyUnknownName(Box::new((
+                            cls,
+                            name.clone(),
+                            suggestion,
+                            allow_class_body_forward_reference,
+                        ))),
                     )
                 } else {
                     // Record a type error and fall back to `Any`.
@@ -1297,6 +1306,9 @@ impl<'a> BindingsBuilder<'a> {
                     usage,
                     tparams_builder,
                     check_runtime_name && !in_string_literal,
+                    in_string_literal
+                        || self.scopes.has_future_annotations()
+                        || self.sys_info.version().at_least(3, 14),
                 );
             }
             Expr::Subscript(ExprSubscript { value, .. })
