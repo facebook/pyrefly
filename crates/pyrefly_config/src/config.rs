@@ -752,6 +752,13 @@ impl ConfigFile {
             result.fallback_search_path = FallbackSearchPath::Explicit(Arc::new(vec![import_root]));
         } else {
             result.import_root = Some(import_root);
+            if matches!(layout, ProjectLayout::Src) {
+                // Pytest projects commonly keep importable test modules beside `src/`.
+                // Keep the project root lower precedence so modules under `src/` retain their
+                // canonical names.
+                result.fallback_search_path =
+                    FallbackSearchPath::Explicit(Arc::new(vec![root.to_path_buf()]));
+            }
         }
         // ignore failures rewriting path to config, since we're trying to construct
         // an ephemeral config for the user, and it's not fatal (but things might be
@@ -3265,6 +3272,36 @@ output-format = "omit-errors"
     }
 
     #[test]
+    fn test_src_layout_module_names_use_primary_and_fallback_roots() {
+        let tempdir = TempDir::new().unwrap();
+        fs::create_dir_all(tempdir.path().join("src/example")).unwrap();
+        fs::create_dir_all(tempdir.path().join("tests")).unwrap();
+        let mut config = ConfigFile::init_at_root(tempdir.path(), &ProjectLayout::Src, false);
+        config.interpreters.skip_interpreter_query = true;
+        config.configure();
+        assert_eq!(
+            config.search_path().cloned().collect::<Vec<_>>(),
+            vec![tempdir.path().join("src")]
+        );
+        assert_eq!(
+            config.fallback_search_path,
+            FallbackSearchPath::Explicit(Arc::new(vec![tempdir.path().to_path_buf()])),
+        );
+
+        let source = config.handle_from_module_path(ModulePath::filesystem(
+            tempdir.path().join("src/example/core.py"),
+        ));
+        assert_eq!(source.module(), ModuleName::from_str("example.core"));
+        assert!(!source.is_fallback());
+
+        let test = config.handle_from_module_path(ModulePath::filesystem(
+            tempdir.path().join("tests/helpers.py"),
+        ));
+        assert_eq!(test.module(), ModuleName::from_str("tests.helpers"));
+        assert!(test.is_fallback());
+    }
+
+    #[test]
     fn test_pyproject_toml_search_path() {
         let root = TempDir::new().unwrap();
         let path = root.path().join(ConfigFile::PYPROJECT_FILE_NAME);
@@ -3340,6 +3377,10 @@ output-format = "omit-errors"
             config.search_path().cloned().collect::<Vec<_>>(),
             vec![src_dir]
         );
+        assert_eq!(
+            config.fallback_search_path,
+            FallbackSearchPath::Explicit(Arc::new(vec![root.path().to_path_buf()])),
+        );
     }
 
     #[test]
@@ -3362,6 +3403,7 @@ output-format = "omit-errors"
             config.search_path().cloned().collect::<Vec<_>>(),
             vec![src_dir]
         );
+        assert_eq!(config.fallback_search_path, FallbackSearchPath::Empty);
     }
 
     #[test]
