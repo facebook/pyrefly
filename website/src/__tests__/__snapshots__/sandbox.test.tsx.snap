@@ -29,6 +29,15 @@ exports[`Sandbox Component render sandbox correctly 1`] = `
           +
         </button>
       </div>
+      <a
+        href="https://github.com/facebook/pyrefly/commit/123456789abcdef"
+        id="pyrefly-build"
+        rel="noopener noreferrer"
+        target="_blank"
+        title="Pyrefly 1.2.3-test, commit 123456789abcdef"
+      >
+        Pyrefly 1.2.3-test (commit 123456789)
+      </a>
     </div>
     <div>
       <div
