@@ -206,10 +206,9 @@ pub(crate) fn type_to_structured(
                 let inner_idx = if non_none.len() == 1 {
                     type_to_structured(non_none[0], table, pending_class_traits)
                 } else {
-                    let inner_union = Type::Union(Box::new(Union {
-                        members: non_none.into_iter().cloned().collect(),
-                        display_name: None,
-                    }));
+                    let inner_union = Type::Union(Box::new(Union::new(
+                        non_none.into_iter().cloned().collect(),
+                    )));
                     type_to_structured(&inner_union, table, pending_class_traits)
                 };
                 insert_wrapper_other_form("typing.Optional", inner_idx, table)

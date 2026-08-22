@@ -20,6 +20,7 @@ use crate::tuple::Tuple;
 use crate::type_var::Restriction;
 use crate::typed_dict::TypedDict;
 use crate::types::Type;
+use crate::types::UnionDisplay;
 
 const PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS: usize = 3;
 
@@ -99,7 +100,7 @@ fn large_alias_union_info(xs: &[Type]) -> Option<LargeAliasUnion> {
     for x in xs {
         match x {
             Type::Union(u)
-                if u.display_name.is_some()
+                if u.display().is_some()
                     && u.members.len() >= PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS =>
             {
                 if info.is_some() {
@@ -107,9 +108,10 @@ fn large_alias_union_info(xs: &[Type]) -> Option<LargeAliasUnion> {
                 }
                 info = Some(LargeAliasUnion {
                     name: u
-                        .display_name
-                        .clone()
-                        .expect("guarded by display_name.is_some()"),
+                        .display()
+                        .expect("guarded by display().is_some()")
+                        .name
+                        .clone(),
                     members: u.members.clone(),
                 });
             }
@@ -121,11 +123,11 @@ fn large_alias_union_info(xs: &[Type]) -> Option<LargeAliasUnion> {
 
 /// If the final union is a strict superset of a single large alias union, keep that
 /// alias name in the display output and append only the extra members.
-fn large_alias_union_display_name(
+fn large_alias_union_display(
     members: &[Type],
     alias_union: &LargeAliasUnion,
-) -> Option<(ModuleName, Name)> {
-    let alias_members: SmallSet<_> = alias_union.members.iter().cloned().collect();
+) -> Option<UnionDisplay> {
+    let alias_members: SmallSet<_> = alias_union.members.iter().collect();
     if alias_members
         .iter()
         .any(|alias_member| !members.contains(alias_member))
@@ -138,15 +140,13 @@ fn large_alias_union_display_name(
     let extras = members
         .iter()
         .filter(|member| !alias_members.contains(*member))
-        .map(|member| member.to_string())
-        .collect::<Vec<_>>();
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     if extras.is_empty() {
         return None;
     }
-    Some((
-        alias_union.name.0,
-        Name::new(format!("{} | {}", alias_union.name.1, extras.join(" | "))),
-    ))
+    Some(UnionDisplay::new(alias_union.name.clone(), extras))
 }
 
 /// After literal/enum squashing, a union with more than this many members is widened to
@@ -177,11 +177,11 @@ fn unions_internal(
         }
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
         try_collapse(res, heap).unwrap_or_else(|members| {
-            let display_name = alias_union
+            let display = alias_union
                 .as_ref()
-                .and_then(|alias_union| large_alias_union_display_name(&members, alias_union));
-            if let Some(name) = display_name {
-                heap.mk_union_with_name(members, name)
+                .and_then(|alias_union| large_alias_union_display(&members, alias_union));
+            if let Some(display) = display {
+                heap.mk_union_with_display(members, display)
             } else {
                 heap.mk_union(members)
             }
