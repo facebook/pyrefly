@@ -33,8 +33,10 @@ pub(crate) fn replace_with_enum_member_code_action(
 }
 
 fn enum_member_replacement(error: &Error) -> Option<&str> {
-    let ErrorQuickFix::ReplaceWithEnumMember { replacement } = error.quick_fixes().first()?;
-    Some(replacement.as_str())
+    error.quick_fixes().iter().find_map(|fix| match fix {
+        ErrorQuickFix::ReplaceWithEnumMember { replacement } => Some(replacement.as_str()),
+        _ => None,
+    })
 }
 
 fn enclosing_string_literal_range(ast: &ModModule, error_range: TextRange) -> Option<TextRange> {

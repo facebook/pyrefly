@@ -47,6 +47,7 @@ pub struct SecondaryAnnotation {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorQuickFix {
     ReplaceWithEnumMember { replacement: String },
+    ReplaceDeprecatedContextManagerReturn { from: String, to: String },
 }
 
 /// Whether an error was compared with the configured baseline.
