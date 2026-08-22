@@ -29,6 +29,7 @@
 - [Pyright reportMissingImports in Pyrefly](/en/docs/migrate/pyright/missing-imports/): Map Pyright reportMissingImports to Pyrefly missing-import and fix interpreter, search-path, stub, and optional dependency issues.
 - [Pyright Strict Mode in Pyrefly](/en/docs/migrate/pyright/strict-mode/): Translate Pyright strict type checking into Pyrefly presets and explicit error severities, including path-specific strict rules.
 - [Pyright reportUnknownMemberType in Pyrefly](/en/docs/migrate/pyright/unknown-member-type/): Map Pyright reportUnknownMemberType to Pyrefly unknown-attribute-type and distinguish unknown member types from missing attributes.
+- [Pants Integration](/en/docs/pants/): Run Pyrefly type checking over Pants Python targets with the pants-pyrefly plugin
 - [Pydantic Support](/en/docs/pydantic/): Pyrefly support for Pydantic.
 - [Pydantic Lax Mode Type Conversions](/en/docs/pydantic-lax-conversions/): Complete reference of how Pyrefly converts types in Pydantic lax mode.
 - [FAQ](/en/docs/pyrefly-faq/): Frequently Asked Questions about Pyrefly, a PEP 484 compliant Type Checker for Python and IDE extension.

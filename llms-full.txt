@@ -9541,6 +9541,394 @@ reporting than a reason to disable the rule project-wide.
 ---
 
 ---
+title: Pants Integration
+slug: /pants
+description: Run Pyrefly type checking over Pants Python targets with the pants-pyrefly plugin
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Pants Integration
+
+The [Pants](https://www.pantsbuild.org/) integration is provided by the
+community plugin [`pants-pyrefly`](https://github.com/tague/pants-pyrefly)
+(available on [PyPI](https://pypi.org/project/pants-pyrefly/); check there for
+the latest version). Installing it makes Pyrefly a checker in the Pants
+[`check`](https://www.pantsbuild.org/stable/docs/python/goals/check) goal, so
+`pants check ::` type-checks your repository.
+
+Pants downloads the official prebuilt Pyrefly binary (pinned by SHA256) and runs
+it hermetically in a sandbox. Instead of maintaining a `pyrefly.toml`
+`search-path` by hand, the plugin derives Pyrefly's first-party search paths
+from your Pants source roots and points Pyrefly at a venv built from each
+target's resolved third-party requirements, so imports resolve the same way they
+do at runtime.
+
+## When to use it
+
+- Your Python code is already built with Pants and you want `pants check` to
+  type-check it with Pyrefly, using the same source roots, resolves, and
+  interpreter constraints Pants already knows about.
+- You are moving a Pants repo off mypy and want the migration to happen through
+  Pants — config conversion, incremental adoption, and CI gating — rather than
+  as a separate out-of-band `pyrefly` invocation.
+
+If you do not use Pants, use [`pyrefly check`](./configuration.mdx) as before.
+
+Unlike the [Bazel integration](./bazel.mdx), the Pants plugin *does* read
+`pyrefly.toml` (or `pyproject.toml` `[tool.pyrefly]`): strictness and
+per-directory policy stay in your Pyrefly config, while the plugin supplies the
+build-graph facts — search paths, interpreter, and the file list — plus a few
+reporting overrides (`output_format`, `min_severity`, `only`, `baseline`) that
+it passes on the command line, where they take precedence over the config file.
+
+## Setup
+
+### 1. Install the plugin
+
+Add the plugin and enable its backend in `pants.toml`. Keep your existing
+`pants.backend.python` entry; `pants_pyrefly` is added alongside it:
+
+```toml
+[GLOBAL]
+plugins = ["pants-pyrefly==PANTS_PYREFLY_VERSION"]
+backend_packages.add = [
+    "pants.backend.python",
+    "pants_pyrefly",
+]
+```
+
+Replace `PANTS_PYREFLY_VERSION` with the latest
+[release](https://pypi.org/project/pants-pyrefly/). The published wheel is pure
+Python and declares no `pantsbuild.pants` dependency, so one release installs
+into any supported Pants version; see the plugin's
+[compatibility table](https://github.com/tague/pants-pyrefly#pants-compatibility)
+for the supported Pants range and the Pyrefly version each plugin release pins.
+
+To pin a different Pyrefly than the plugin's default, set `[pyrefly].version`
+(with matching `[pyrefly].known_versions`).
+
+To vendor the plugin instead — for rapid iteration or to pin to an exact source
+state — copy `pants-plugins/pants_pyrefly/` into your repo and load it the way
+in-repo plugins are normally loaded:
+
+```toml
+[GLOBAL]
+pythonpath = ["%(buildroot)s/pants-plugins"]
+backend_packages.add = ["pants.backend.python", "pants_pyrefly"]
+```
+
+If you keep plugin code in its own resolve, add it there and run
+`pants generate-lockfiles`.
+
+### 2. Create a Pyrefly config
+
+`pants pyrefly-init` wraps [`pyrefly init`](./configuration.mdx). Running it
+through Pants means the plugin supplies the Pyrefly binary, so you do not need
+Pyrefly installed separately:
+
+```shell
+pants pyrefly-init
+```
+
+If your build root has a `pyproject.toml`, this adds a `[tool.pyrefly]` table to
+it; otherwise it creates a `pyrefly.toml`. Either way it refuses to overwrite an
+existing Pyrefly config — remove that first to regenerate.
+
+**Migrating an existing checker?** If the repo has a mypy configuration, `init`
+translates it instead of writing defaults; go to
+[Bootstrapping from Mypy](#bootstrapping-a-configuration-from-mypy) below and
+run that section's command *instead* of the bare `pants pyrefly-init` above,
+since `init` will not overwrite the config a plain run just wrote. Pyright
+configurations are also migrated, but only from `[tool.pyright]` in
+`pyproject.toml`: the plugin does not stage `pyrightconfig.json` into the
+sandbox, so a config in that file is invisible to `pyrefly-init`.
+
+Checking policy — strictness, per-directory overrides, error suppression — is
+configured here as documented in [Configuration](./configuration.mdx), not on
+the plugin. The plugin discovers this file automatically; use `[pyrefly].config`
+to point at a non-standard path.
+
+### 3. Run
+
+```shell
+# one subtree
+pants check path/to/dir::
+
+# whole repo
+pants check ::
+```
+
+Diagnostics are printed in Pyrefly's usual format, and anything at or above the
+reporting threshold — `error` by default, or whatever `[pyrefly].min_severity`
+sets — fails the goal. Targets are partitioned by resolve and interpreter
+constraints, and each partition gets its own Pyrefly invocation against the
+interpreter and requirements for that partition. If Pyrefly itself fails (an
+exit code other than "clean" or "found errors"), the plugin reports that as a
+tool failure rather than as type errors.
+
+If more than one checker is enabled (during a mypy transition, for example),
+scope the goal to one of them. `--only` belongs to `check`, so it goes after the
+goal name:
+
+```shell
+pants check --only=pyrefly ::
+```
+
+### 4. Configure your editor
+
+Pyrefly ships an [LSP server](./IDE.mdx), but on its own it does not know your
+Pants source roots, so first-party imports will not resolve. Write them into
+your Pyrefly config as `search-path`, along with the `python-version` your
+interpreter constraints imply:
+
+```shell
+pants pyrefly-lsp-config
+```
+
+For third-party imports, point your editor's interpreter at an exported venv
+(`pants export --resolve=python-default`). If your Pyrefly config lives in
+`pyproject.toml` under `[tool.pyrefly]`, the goal prints the keys to add rather
+than writing a `pyrefly.toml` that would shadow it.
+
+:::note
+
+Pyrefly *adds* a config file's `search-path` to whatever is passed on the
+command line rather than replacing it, so the roots written here are also in
+effect during `pants check`. That is usually harmless, but if one of them is the
+build root (`.`), it re-exposes every file under a second module name inside the
+sandbox — the exact problem the staging described in
+[How it works](#how-it-works) exists to prevent. If `check` starts reporting
+duplicate-module errors right after you run this goal, that is the cause.
+
+:::
+
+## Configuration
+
+Options live in the `[pyrefly]` subsystem in `pants.toml`, and each has a
+corresponding command-line flag:
+
+| Option | Description |
+| --- | --- |
+| `skip` | Don't run Pyrefly during `check`. |
+| `args` | Extra arguments passed to Pyrefly, e.g. `--pyrefly-args='--python-version 3.12'`. |
+| `output_format` | Override Pyrefly's output format — any value [`--output-format`](./configuration.mdx#output-format) accepts, e.g. `json`, `github` (GitHub Actions annotations), `junit-xml`, `sarif`. |
+| `min_severity` | Only report errors at or above this severity: `ignore`, `info`, `warn`, `error`. |
+| `only` | Only report these [error kinds](./error-kinds.mdx), e.g. `bad-assignment`. Useful for triaging one category at a time. |
+| `config` / `config_discovery` | Point at a Pyrefly config in a non-standard location, or turn off automatic discovery. |
+| `baseline` | Path to a Pyrefly baseline JSON; `check` then reports only errors new since the baseline. |
+| `extra_type_stubs` | Stub-only packages to add to the type-check environment without making them runtime dependencies, e.g. `types-requests`. Resolved directly rather than from a lockfile, so pin versions. |
+| `version` / `known_versions` / `url_template` | Pin or override the downloaded Pyrefly binary. |
+
+Opt an individual target out of Pyrefly with the `skip_pyrefly` field:
+
+```python
+python_sources(skip_pyrefly=True)
+```
+
+`config`, `config_discovery`, `extra_type_stubs`, and the binary-pinning options
+are advanced; `pants help-advanced pyrefly` lists them alongside
+`[pyrefly].interpreter_constraints`, the fallback used for targets that declare
+none of their own. See also the plugin's
+[Configuration section](https://github.com/tague/pants-pyrefly#configuration).
+
+## Bootstrapping a configuration from Mypy
+
+Pyrefly can read an existing mypy configuration and produce an equivalent
+`pyrefly.toml`, so you start from your repo's established strictness and
+per-module policy rather than from Pyrefly's defaults.
+
+The migration reads mypy's own config files: `mypy.ini`, or `[tool.mypy]` in
+`pyproject.toml`. Two things it will not pick up:
+
+- **`setup.cfg`.** Pyrefly's migration does not read it; move a `[mypy]` section
+  there into `mypy.ini` first.
+- **Pants's mypy subsystem options.** `[mypy].args` and friends in `pants.toml`
+  are Pants configuration rather than mypy configuration. If that is where all
+  your mypy settings live, there is nothing on disk to migrate and you should
+  configure Pyrefly from scratch instead.
+
+### 1. Install alongside Mypy
+
+Follow [Install the plugin](#1-install-the-plugin) above, but keep the mypy
+backend enabled during the transition so you can run both checkers and compare
+their output:
+
+```toml
+[GLOBAL]
+backend_packages.add = [
+    "pants.backend.python",
+    "pants.backend.python.typecheck.mypy",   # keep during the transition
+    "pants_pyrefly",
+]
+```
+
+`pants check ::` now runs both. Scope to one with `check`'s `--only`:
+
+```shell
+pants check --only=pyrefly ::
+pants check --only=mypy ::
+```
+
+### 2. Convert the config
+
+```shell
+pants pyrefly-init --pyrefly-init-migrate-from=mypy
+```
+
+This runs `pyrefly init --migrate-from mypy` and writes the translated settings
+to `pyrefly.toml`. Passing `mypy` explicitly forces mypy as the source; with no
+flag, `init` auto-detects (mypy, then Pyright).
+
+When `init` detects a mypy config it selects the
+[`legacy` preset](./configuration.mdx#preset-legacy), which turns off a few
+checks mypy does not have so the first Pyrefly run does not bury you in error
+classes mypy never flagged. Behavior still differs between the two checkers; the
+preset narrows the gap rather than closing it.
+
+Review the generated config — the mapping is close but not one-to-one. Broad
+settings like `ignore_missing_imports`, per-module overrides, and strictness
+flags carry over. **mypy plugins do not**: Pyrefly has no plugin system, so a
+`plugins = ` entry is dropped.
+
+For most of the widely used mypy plugins this does not matter, because Pyrefly
+supports the same libraries natively and automatically —
+[Pydantic](./pydantic.mdx), [Django](./django.mdx)'s ORM, [attrs](./attrs.mdx),
+and [DataFrames](./dataframes.mdx). Where a plugin has no native counterpart —
+SQLAlchemy's declarative-ORM plugin is the common case, and Pydantic v1, which
+Pyrefly deliberately does not support — the dynamic attributes it synthesized
+will surface as errors, and stub packages such as `sqlalchemy2-stubs` only
+partly bridge the gap. For those packages, either suppress the errors, fold them
+into a baseline, or keep mypy enabled for just those packages during the
+transition.
+
+[Migrating from Mypy](./migrate/mypy/index.mdx) covers the checker-level
+differences — command-line equivalents, suppression syntax, and behavioral
+divergences — independently of Pants.
+
+### 3. Adopt incrementally with a baseline
+
+A large codebase will have pre-existing errors under a stricter configuration.
+Record them in a
+[baseline](./error-suppressions.mdx#baseline-files-experimental) so `check` only
+fails on *new* ones. Set the path in `pants.toml` — the plugin materializes the
+baseline into its sandbox only when `[pyrefly].baseline` names it, so a
+`baseline` key in `pyrefly.toml` has no effect here — and commit the file:
+
+```toml
+[pyrefly]
+baseline = "build-support/pyrefly-baseline.json"
+```
+
+```shell
+pants pyrefly-update-baseline ::   # record current errors
+pants check ::                     # now reports only errors introduced since
+```
+
+Re-run `pants pyrefly-update-baseline` as you fix errors to ratchet the baseline
+down.
+
+Prefer inline suppressions? `pants pyrefly-suppress ::` rewrites the targeted
+files in place, adding a `# pyrefly: ignore` comment on the line above each
+error (see [Error Suppressions](./error-suppressions.mdx)); delete them as you
+fix, or run `pants pyrefly-suppress --pyrefly-suppress-remove-unused ::` to
+strip stale ones. It edits your working tree, so run it on a clean checkout. A
+baseline file and inline suppressions solve the same problem — pick one.
+
+### 4. Track progress
+
+`pants pyrefly-coverage` reports the share of typable symbols that have a
+non-`Any` type — Pyrefly's **strict** coverage, not the looser metric that
+counts `Any` as covered (see [Measuring Type Coverage](./report.mdx) for both).
+It works well as a migration ratchet in CI, though its threshold is therefore
+not comparable to a `pyrefly coverage check --fail-under` number:
+
+```shell
+pants pyrefly-coverage ::
+pants pyrefly-coverage --pyrefly-coverage-fail-under=80 ::
+```
+
+### 5. Remove Mypy
+
+Once Pyrefly is green (or a baseline established) and CI gates on it, drop
+`pants.backend.python.typecheck.mypy` from `backend_packages` and delete the
+mypy configuration.
+
+## Goals
+
+Besides participating in `check`, the plugin adds these goals:
+
+| Goal | Purpose |
+| --- | --- |
+| `pyrefly-init` | Bootstrap `pyrefly.toml`, migrating a mypy or Pyright config when present. |
+| `pyrefly-lsp-config` | Write Pants's source roots into `pyrefly.toml` as `search-path` for the IDE/LSP. |
+| `pyrefly-update-baseline` | Record current errors in the baseline named by `[pyrefly].baseline`. |
+| `pyrefly-suppress` | Add (or, with `--remove-unused`, strip) inline `# pyrefly: ignore` comments. |
+| `pyrefly-coverage` | Report type coverage, optionally failing under a threshold. |
+| `pyrefly-dump-config` | Print the effective Pyrefly configuration Pants assembles. Diagnostic only. |
+
+## How it works
+
+Each partition of targets — grouped by resolve and interpreter constraints —
+gets one Pyrefly invocation over that partition's sources.
+
+- **First-party code** resolves through `--search-path`, the analogue of
+  `MYPYPATH`, derived from your Pants source roots. Because Pants gives each
+  file exactly one source root while Pyrefly makes a file importable under
+  *every* search path containing it, nested source roots would otherwise give a
+  module two identities. The plugin removes the nesting structurally: it
+  re-stages each source root's files into its own non-nesting sibling directory
+  in the sandbox and passes
+  [`--disable-search-path-heuristics`](configuration.mdx#disable-search-path-heuristics),
+  then maps the synthetic paths back to real repo paths in diagnostics, baseline
+  files, and `suppress` edits — so it is invisible in the output. The diagnostic
+  goals (`pyrefly-coverage`, `pyrefly-dump-config`, `pyrefly-lsp-config`) skip
+  the staging and pass your real roots, deduplicated to each file's nearest
+  root; `[pyrefly].exclude_source_roots` force-drops a root on that path only,
+  and has no effect on `check`.
+- **Third-party dependencies** are materialized into a venv, and Pyrefly's
+  `--python-interpreter-path` points at it, so Pyrefly discovers `site-packages`
+  and the target Python version exactly as `import` would at runtime.
+
+When imports or the interpreter resolve differently than you expect, dump the
+configuration Pants actually assembles:
+
+```shell
+pants pyrefly-dump-config ::               # whole repo
+pants pyrefly-dump-config src/project::    # a subtree
+```
+
+This runs Pyrefly's `dump-config` over the same partitions and file list as
+`check`, so it is the right tool for confirming which config file, interpreter,
+and source roots a given target resolves against. Two differences from `check`
+worth knowing when you read the output: `dump-config` does not re-stage sources,
+so the `search-path` it prints is your real source roots (nearest-root deduped)
+rather than the synthetic sandbox roots `check` passes; and the reporting
+options — `output_format`, `min_severity`, `only`, `baseline`, and
+`[pyrefly].args` — apply to `check` only, so they do not appear here.
+
+Common causes of resolution problems:
+
+- **A first-party module reports a missing import** — it is not reachable from a
+  source root. `pants roots` lists them.
+- **A third-party package reports a missing import** — the requirement is not in
+  that target's resolve, or it ships no types. Add it as a dependency; add
+  stub-only packages through `[pyrefly].extra_type_stubs`.
+- **A whole partition fails to find an interpreter** — no installed interpreter
+  matches that partition's `interpreter_constraints`.
+
+For implementation details and the plugin's compatibility promise, see the
+[`pants-pyrefly` README](https://github.com/tague/pants-pyrefly).
+
+
+---
+
+---
 title: Pydantic Lax Mode Type Conversions
 description: Complete reference of how Pyrefly converts types in Pydantic lax mode.
 ---
@@ -10631,7 +11019,7 @@ The skill produces a `verify_port.sh` report with these key metrics:
 | **`ig` (ignore)** | `type: ignore` comments. Lower is better. Each should have a category (algebraic gap, conditional equality, stub gap). |
 | **`bs` (bare sig)** | Bare `Tensor` in function signatures. Should be 0 for well-typed modules. |
 | **`bv` (bare var)** | Bare `Tensor` in local variable annotations. Lower is better. |
-| **`sh` (shaped)** | `assert_type` calls with full shapes (e.g., `Tensor[B, D]`). Higher is better. |
+| **`sh` (shaped)** | `assert_type` calls with full shapes (e.g., `Tensor[[B, D]]`). Higher is better. |
 | **`ba` (bare assert)** | `assert_type(x, Tensor)` — tracking gaps. Lower is better. Each should have a root-cause comment. |
 | **`sm` (smoke)** | Smoke test functions. At least 1-2 per model. |
 
@@ -10717,7 +11105,11 @@ description: Experiment with Int operators, type-level arithmetic in shapes, and
 ## `Int[X]`
 
 `Int[X]` is a type constructor that bridges runtime integer values to
-type-level symbols. It is defined in the `shape_extensions` package.
+type-level symbols. It is defined in the `shape_extensions` package,
+alongside the other names used throughout this page: `IntVar` (the bound
+for shape type parameters), `IntTuple` (the bound for whole-shape type
+parameters), and `Elements` (splices a whole-shape type parameter into a
+`Tensor` argument list).
 
 ### Basics
 
@@ -10755,11 +11147,11 @@ For optional dimensions — parameters that may or may not be present — use
 `if param is not None:` to recover `Int[X]` inside the branch:
 
 ```python
-class Attention[D, RK](nn.Module):
+class Attention[D: IntVar, RK: IntVar](nn.Module):
     def __init__(self, dim: Int[D], rank_k: Int[RK] | None = None):
         ...
 
-    def forward[B, T](self, x: Tensor[B, T, D]) -> Tensor[B, T, D]:
+    def forward[B: IntVar, T: IntVar](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
         if self.rank_k is not None:
             # rank_k is Int[RK] here
             ...
@@ -10770,11 +11162,11 @@ class Attention[D, RK](nn.Module):
 | Pattern | Purpose |
 |---------|---------|
 | `def __init__(self, dim: Int[D])` | Accept a dimension as a constructor parameter |
-| `class Model[D](nn.Module)` | Make a dimension a class-level type parameter |
-| `def forward[B](self, x: Tensor[B, D])` | Bind a per-call dimension |
+| `class Model[D: IntVar](nn.Module)` | Make a dimension a class-level type parameter |
+| `def forward[B: IntVar](self, x: Tensor[[B, D]])` | Bind a per-call dimension |
 | `self.head_dim = dim // n_head` | Compute a derived dimension (`Int[D // NHead]`) |
 
-## `Tensor[D1, D2, ...]`
+## `Tensor[[D1, D2, ...]]`
 
 `Tensor` with type arguments represents a tensor with a known shape. The
 type arguments are the dimensions, in order.
@@ -10783,19 +11175,20 @@ type arguments are the dimensions, in order.
 
 | Form | Meaning |
 |------|---------|
-| `Tensor[3, 4]` | Concrete 2D tensor with shape `(3, 4)` |
-| `Tensor[B, C, H, W]` | Generic 4D tensor with symbolic dimensions |
-| `Tensor[B, 3 * C, H // 2]` | Dimensions can contain arithmetic expressions |
-| `Tensor[*Bs, D]` | Variadic: any number of leading batch dimensions |
+| `Tensor[[3, 4]]` | Concrete 2D tensor with shape `(3, 4)` |
+| `Tensor[[B, C, H, W]]` | Generic 4D tensor with symbolic dimensions |
+| `Tensor[[B, 3 * C, H // 2]]` | Dimensions can contain arithmetic expressions |
+| `Tensor[[*Elements[Bs], D]]` | Variadic: any number of leading batch dimensions (`Bs: IntTuple`) |
 | `Tensor` (bare) | Shape unknown — tracking gap |
 
-### Variadic dimensions with `*Bs`
+### Variadic dimensions with `Elements`
 
-Use `TypeVarTuple` (or PEP 646 `*Bs` syntax) for dimensions that should be
-propagated without being enumerated:
+Use a type parameter bound to `IntTuple`, spliced into the shape list with
+`*Elements[...]`, for dimensions that should be propagated without being
+enumerated:
 
 ```python
-def forward[*Bs](self, x: Tensor[*Bs, InDim]) -> Tensor[*Bs, OutDim]:
+def forward[Bs: IntTuple](self, x: Tensor[[*Elements[Bs], InDim]]) -> Tensor[[*Elements[Bs], OutDim]]:
     ...
 ```
 
@@ -10803,11 +11196,12 @@ This accepts any number of leading dimensions (batch, sequence, etc.) and
 preserves them in the output.
 
 **Don't hide known class dims inside variadic params.** If the module has a
-class-level Int `D`, use `Tensor[*Bs, D]` not `Tensor[*S]`.
+class-level Int `D`, use `Tensor[[*Elements[Bs], D]]` not folding `D` into
+the variadic carrier itself.
 
 ### `.shape` and `.size()`
 
-When `x: Tensor[B, C, H, W]`:
+When `x: Tensor[[B, C, H, W]]`:
 
 - `x.shape` has type `tuple[Int[B], Int[C], Int[H], Int[W]]`
 - `x.size(0)` has type `Int[B]`
@@ -10824,7 +11218,7 @@ reports an error.
 
 ```python
 h = self.fc1(x)
-assert_type(h, Tensor[B, 512])  # checked by pyrefly
+assert_type(h, Tensor[[B, 512]])  # checked by pyrefly
 ```
 
 Use `assert_type` during development to verify inferred shapes as you port
@@ -10855,7 +11249,7 @@ Use it to understand what pyrefly infers before writing `assert_type`:
 
 ```python
 h = self.fc1(x)
-reveal_type(h)  # Revealed type: Tensor[B, 512]
+reveal_type(h)  # Revealed type: Tensor[[B, 512]]
 ```
 
 Replace `reveal_type` with `assert_type` once you know the expected type.
@@ -10866,11 +11260,11 @@ Annotations can contain arithmetic on type parameters and literals:
 
 | Expression | Example |
 |-----------|---------|
-| Addition | `Tensor[B, C1 + C2, H, W]` — concatenation |
-| Subtraction | `Tensor[B, T, D - 1]` |
-| Multiplication | `Tensor[B, NHead * DK]` — multi-head reshape |
-| Floor division | `Tensor[B, NHead, T, D // NHead]` |
-| Exponentiation | `Tensor[B, C * 2 ** I, H // 2 ** I]` |
+| Addition | `Tensor[[B, C1 + C2, H, W]]` — concatenation |
+| Subtraction | `Tensor[[B, T, D - 1]]` |
+| Multiplication | `Tensor[[B, NHead * DK]]` — multi-head reshape |
+| Floor division | `Tensor[[B, NHead, T, D // NHead]]` |
+| Exponentiation | `Tensor[[B, C * 2 ** I, H // 2 ** I]]` |
 
 ### Simplification rules
 
@@ -10895,7 +11289,7 @@ When annotating local variables, choose from most to least desirable:
 
 1. **`assert_type`** — verifies the checker's inference. Proves the system
    works, not just that you annotated correctly.
-2. **Annotation fallback** — `x: Tensor[B, C, H, W] = untracked_op(...)`.
+2. **Annotation fallback** — `x: Tensor[[B, C, H, W]] = untracked_op(...)`.
    The checker can't infer the shape, but the annotation is compatible.
    Document WHY.
 3. **`type: ignore`** — the checker produces a WRONG type (algebraic gap).
@@ -10910,8 +11304,8 @@ annotations as an alternative front-end:
 
 | Pyrefly native | Jaxtyping equivalent |
 |---------------|---------------------|
-| `Tensor[M, 2, M // 2]` | `Shaped[Tensor, "M 2 M//2"]` |
-| `Tensor[B, C, H, W]` | `Shaped[Tensor, "B C H W"]` |
+| `Tensor[[M, 2, M // 2]]` | `Shaped[Tensor, "M 2 M//2"]` |
+| `Tensor[[B, C, H, W]]` | `Shaped[Tensor, "B C H W"]` |
 
 Jaxtyping annotations are translated internally to generics and display
 back in jaxtyping syntax. Note that jaxtyping cannot share symbolic
@@ -10938,37 +11332,73 @@ description: How to configure Pyrefly for tensor shape checking and set up your 
 This page walks you through configuring Pyrefly for tensor shape checking and
 getting your first shape-annotated code running.
 
-## Configuration
+## Installation
 
 Tensor shape checking requires shape-aware stubs to be available through normal
-import resolution. For a local setup, add the fixture stub directory to your
-`pyrefly.toml` (or under `[tool.pyrefly]` in `pyproject.toml`):
+import resolution. Install them from PyPI:
+
+```bash
+pip install pyrefly-torch-stubs
+```
+
+`pyrefly-torch-stubs` is a PEP 561 stub-only package: it carries type
+information for PyTorch, and leaves the runtime `torch` package alone. PyTorch's
+own type stubs don't carry shape information, so these stubs take precedence
+over them and provide shape-aware versions (e.g., `nn.Conv2d.__init__` that
+captures kernel size, stride, and padding as type-level values, and a `forward`
+that computes the output spatial dimensions).
+
+Installing it also pulls in `pyrefly-shape-extensions`, which provides the
+`shape_extensions` package. `shape_extensions` exports `Int` — the bridge
+between runtime integer values and type-level symbols. Both packages are
+versioned in lockstep with Pyrefly.
+
+Tensor shape support is enabled automatically when Pyrefly can resolve the
+`shape_extensions` package, so nothing else needs configuring, as long as
+Pyrefly resolves imports against the
+[Python environment](../configuration#python-interpreter-path) you installed
+into.
+
+### Checking against a local copy of the stubs
+
+The stubs also live in Pyrefly's source tree under
+[`tensor-shapes/`](https://github.com/facebook/pyrefly/tree/main/tensor-shapes),
+which is where to work if you want to read or modify them. Copy that directory
+into your project and point `search-path` at the two package directories inside
+it. The paths are relative to the location of your `pyrefly.toml` (or of your
+`pyproject.toml`, if you configure Pyrefly under `[tool.pyrefly]`):
 
 ```toml
-search_path = [
-    "path/to/fixtures",
+search-path = [
+    "tensor-shapes/pyrefly-torch-stubs",
+    "tensor-shapes/pyrefly-shape-extensions",
 ]
 ```
 
-Tensor shape support is enabled automatically when Pyrefly can resolve the
-`shape_extensions` package. The fixture directory provides `shape_extensions`
-and shape-aware versions of library stubs.
+A copy that lives inside your project is also checked as project code. The stubs
+use PEP 696 type parameter defaults (`class Conv1d[..., S: IntVar = 1]`), which
+Pyrefly parses only under `python-version` 3.13 or later, so checking them under
+an earlier version reports:
 
-**`search_path`** points to a directory of *fixture stubs* — `.pyi` files that
-provide shape-generic type signatures for PyTorch modules and functions. The
-real `torch` library's type stubs don't carry shape information, so the fixtures
-replace them with shape-aware versions (e.g., `nn.Conv2d.__init__` that captures
-kernel size, stride, and padding as type-level values, and a `forward` that
-computes the output spatial dimensions).
+```
+ERROR Cannot set default type for a type parameter on Python 3.12 (syntax was added in Python 3.13) [invalid-syntax]
+```
 
-The stubs live in Pyrefly's source tree under
-[`tensor-shapes/`](https://github.com/facebook/pyrefly/tree/main/tensor-shapes).
-To use them in your project, copy the `tensor-shapes/` directory into your
-project and set `search_path` to point to it. The path is relative to the
-location of your `pyrefly.toml`.
+Either raise the version Pyrefly checks against. `python-version` sets the
+version your code is checked for; it does not change the interpreter your code
+runs on:
 
-The fixtures also provide the `shape_extensions` package, which exports `Int` — the
-bridge between runtime integer values and type-level symbols.
+```toml
+python-version = "3.13"
+```
+
+Or, if your project targets an earlier version and you don't want to change how
+your own code is checked, exclude the copy from checking instead. Imports still
+resolve through `search-path`:
+
+```toml
+project-excludes = ["tensor-shapes/**"]
+```
 
 ## Imports and runtime considerations
 
@@ -11071,10 +11501,10 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import Int
+from shape_extensions import Int, IntVar
 
 
-class TwoLayerNet[InDim, HidDim, OutDim](nn.Module):
+class TwoLayerNet[InDim: IntVar, HidDim: IntVar, OutDim: IntVar](nn.Module):
     def __init__(
         self,
         in_dim: Int[InDim],
@@ -11085,8 +11515,8 @@ class TwoLayerNet[InDim, HidDim, OutDim](nn.Module):
         self.fc1 = nn.Linear(in_dim, hid_dim)
         self.fc2 = nn.Linear(hid_dim, out_dim)
 
-    def forward[B](self, x: Tensor[B, InDim]) -> Tensor[B, OutDim]:
-        h = self.fc1(x)          # pyrefly infers: Tensor[B, HidDim]
+    def forward[B: IntVar](self, x: Tensor[[B, InDim]]) -> Tensor[[B, OutDim]]:
+        h = self.fc1(x)          # pyrefly infers: Tensor[[B, HidDim]]
         return self.fc2(torch.relu(h))
 ```
 
@@ -11094,7 +11524,7 @@ Run `pyrefly check hello_shapes.py`. You should see no errors — pyrefly
 infers the shapes through the `nn.Linear` calls.
 
 If you're using an IDE with Pyrefly's language server, you'll see inlay
-type hints showing the inferred shape of `h` as `Tensor[B, HidDim]`
+type hints showing the inferred shape of `h` as `Tensor[[B, HidDim]]`
 without needing any `assert_type` calls.
 
 ### Inlay hints in action
@@ -11147,7 +11577,7 @@ modules, make it generic so dimensions propagate through constructors:
 
 ```python
 @dataclass
-class GPTConfig[VocabSize, BlockSize, NEmbedding, NHead, NLayer]:
+class GPTConfig[VocabSize: IntVar, BlockSize: IntVar, NEmbedding: IntVar, NHead: IntVar, NLayer: IntVar]:
     block_size: Int[BlockSize]
     vocab_size: Int[VocabSize]
     n_layer: Int[NLayer]
@@ -11160,17 +11590,17 @@ class GPTConfig[VocabSize, BlockSize, NEmbedding, NHead, NLayer]:
 Modules extract only the type parameters they need, using `Any` for the rest:
 
 ```python
-class MLP[NEmbedding](nn.Module):
+class MLP[NEmbedding: IntVar](nn.Module):
     def __init__(self, config: GPTConfig[Any, Any, NEmbedding, Any, Any]):
         super().__init__()
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd)
 
-    def forward[B, T](
-        self, x: Tensor[B, T, NEmbedding]
-    ) -> Tensor[B, T, NEmbedding]:
+    def forward[B: IntVar, T: IntVar](
+        self, x: Tensor[[B, T, NEmbedding]]
+    ) -> Tensor[[B, T, NEmbedding]]:
         h = F.gelu(self.c_fc(x))
-        assert_type(h, Tensor[B, T, 4 * NEmbedding])
+        assert_type(h, Tensor[[B, T, 4 * NEmbedding]])
         return self.c_proj(h)
 ```
 
@@ -11224,7 +11654,7 @@ remain grouped:
 self.fc1 = nn.Linear(dim, hidden)
 self.fc2 = nn.Linear(hidden, dim)
 
-def forward[B](self, x: Tensor[B, D]) -> Tensor[B, D]:
+def forward[B: IntVar](self, x: Tensor[[B, D]]) -> Tensor[[B, D]]:
     h = F.relu(self.fc1(x))
     return self.fc2(h)
 ```
@@ -11247,16 +11677,16 @@ Fix: use a class with a typed `forward` method:
 
 ```python
 # Good: class preserves shape contract
-class Block[InC, OutC](nn.Module):
+class Block[InC: IntVar, OutC: IntVar](nn.Module):
     def __init__(self, in_c: Int[InC], out_c: Int[OutC]) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(in_c, 128, ...), nn.Conv2d(128, out_c, ...)
         )
 
-    def forward[B, H, W](
-        self, x: Tensor[B, InC, H, W]
-    ) -> Tensor[B, OutC, H, W]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, InC, H, W]]
+    ) -> Tensor[[B, OutC, H, W]]:
         return self.net(x)
 ```
 
@@ -11273,7 +11703,7 @@ Fix: add an explicit `Int` field to the config:
 
 ```python
 @dataclass
-class Config[K, MlpOut]:
+class Config[K: IntVar, MlpOut: IntVar]:
     num_output_features: Int[K]
     mlp_output_dim: Int[MlpOut]        # explicit — was hidden_units[-1]
     mlp_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
@@ -11286,7 +11716,7 @@ resort is a **typed interface**: the module's `forward` signature provides
 the shape contract, and `type: ignore` narrows the internal result:
 
 ```python
-class DynamicMLP[InDim, OutDim](nn.Module):
+class DynamicMLP[InDim: IntVar, OutDim: IntVar](nn.Module):
     def __init__(self, in_dim: Int[InDim], out_dim: Int[OutDim],
                  hidden: list[int]) -> None:
         super().__init__()
@@ -11298,15 +11728,15 @@ class DynamicMLP[InDim, OutDim](nn.Module):
         layers.append(nn.Linear(prev, out_dim))
         self.layers = nn.ModuleList(layers)
 
-    def forward[B](self, x: Tensor[B, InDim]) -> Tensor[B, OutDim]:
+    def forward[B: IntVar](self, x: Tensor[[B, InDim]]) -> Tensor[[B, OutDim]]:
         h = x
         for layer in self.layers:
             h = layer(h)
-        result: Tensor[B, OutDim] = h  # type: ignore[bad-assignment]
+        result: Tensor[[B, OutDim]] = h  # type: ignore[bad-assignment]
         return result
 ```
 
-The caller sees a clean `Tensor[B, InDim] -> Tensor[B, OutDim]` contract.
+The caller sees a clean `Tensor[[B, InDim]] -> Tensor[[B, OutDim]]` contract.
 The `type: ignore` is localized to the module's internals.
 
 Use typed interfaces only after exhausting all restructuring options —
@@ -11371,27 +11801,27 @@ This gives a recursive signature where `recurse` takes and returns the same
 shape:
 
 ```python
-class UNet[NChannels, NClasses](nn.Module):
-    def _encode[B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: int
-    ) -> Tensor[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1]:
+class UNet[NChannels: IntVar, NClasses: IntVar](nn.Module):
+    def _encode[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: int
+    ) -> Tensor[[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1]]:
         idx = len(self.downs) - depth
         down: Down[C, 2 * C] = self.downs[idx]
         return down(x)
 
-    def _decode[B, C, H, W](
+    def _decode[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self,
-        skip: Tensor[B, C, H, W],
-        deep: Tensor[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1],
+        skip: Tensor[[B, C, H, W]],
+        deep: Tensor[[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1]],
         depth: int,
-    ) -> Tensor[B, C, H, W]:
+    ) -> Tensor[[B, C, H, W]]:
         idx = len(self.ups) - depth
         up: Up[2 * C, C] = self.ups[idx]
         return up(deep, skip)
 
-    def recurse[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Int[I]
-    ) -> Tensor[B, C, H, W]:
+    def recurse[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[I]
+    ) -> Tensor[[B, C, H, W]]:
         if depth == 0:
             return x
         skip = x
@@ -11440,27 +11870,27 @@ Use `@overload` to separate the base case from the recursive case:
 
 ```python
 class Generator(nn.Module):
-    def _apply_stage[B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: int
-    ) -> Tensor[B, C // 2, (H - 1) * 2 + 2, (W - 1) * 2 + 2]:
+    def _apply_stage[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: int
+    ) -> Tensor[[B, C // 2, (H - 1) * 2 + 2, (W - 1) * 2 + 2]]:
         idx = len(self.up_stages) - depth
         stage: GenUpStage[C] = self.up_stages[idx]
         return stage(x)
 
     @overload
-    def _chain[B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Int[1]
-    ) -> Tensor[B, C // 2, H * 2, W * 2]: ...
+    def _chain[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[1]
+    ) -> Tensor[[B, C // 2, H * 2, W * 2]]: ...
 
     @overload
-    def _chain[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Int[I]
-    ) -> Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]: ...
+    def _chain[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[I]
+    ) -> Tensor[[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]]: ...
 
-    def _chain[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Int[I]
-    ) -> (Tensor[B, C // 2, H * 2, W * 2]
-         | Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]):
+    def _chain[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[I]
+    ) -> (Tensor[[B, C // 2, H * 2, W * 2]]
+         | Tensor[[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]]):
         y = self._apply_stage(x, depth)
         if depth == 1:
             return y
@@ -11483,11 +11913,11 @@ This `_apply_stage` + `_chain` pattern separates concerns:
 The caller invokes `_chain` with a concrete depth:
 
 ```python
-def forward[B](self, input: Tensor[B, 100, 1, 1]) -> Tensor[B, 3, 64, 64]:
+def forward[B: IntVar](self, input: Tensor[[B, 100, 1, 1]]) -> Tensor[[B, 3, 64, 64]]:
     h0 = F.relu(self.project_bn(self.project(input)))
-    assert_type(h0, Tensor[B, 512, 4, 4])
+    assert_type(h0, Tensor[[B, 512, 4, 4]])
     h1 = self._chain(h0, 3)  # 512->64, 4->32
-    assert_type(h1, Tensor[B, 64, 32, 32])
+    assert_type(h1, Tensor[[B, 64, 32, 32]])
     return torch.tanh(self.output(h1))
 ```
 
@@ -11577,7 +12007,7 @@ Make the dimension parameters into `Int[...]` and add class-level type
 parameters:
 
 ```python
-class BaselineActor[S, A](nn.Module):
+class BaselineActor[S: IntVar, A: IntVar](nn.Module):
     def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(state_size, 400)
@@ -11596,7 +12026,7 @@ The forward method has one dynamic dimension — **batch size** — that
 varies across calls. Make it a method-level type parameter:
 
 ```python
-def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
     h1 = F.relu(self.fc1(state))
     h2 = F.relu(self.fc2(h1))
     return torch.tanh(self.out(h2))
@@ -11610,13 +12040,13 @@ method-level param (bound per call).
 Add `assert_type` after each intermediate to verify what pyrefly infers:
 
 ```python
-def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
     h1 = F.relu(self.fc1(state))
-    assert_type(h1, Tensor[B, 400])
+    assert_type(h1, Tensor[[B, 400]])
     h2 = F.relu(self.fc2(h1))
-    assert_type(h2, Tensor[B, 400])
+    assert_type(h2, Tensor[[B, 400]])
     act = torch.tanh(self.out(h2))
-    assert_type(act, Tensor[B, A])
+    assert_type(act, Tensor[[B, A]])
     return act
 ```
 
@@ -11637,12 +12067,12 @@ the shape annotations are consistent end-to-end:
 def test_baseline_actor():
     actor = BaselineActor(24, 4)
     state = torch.randn(8, 24)
-    # pyrefly infers: Tensor[8, 24]
+    # pyrefly infers: Tensor[[8, 24]]
     act = actor(state)
-    # pyrefly infers: Tensor[8, 4]
+    # pyrefly infers: Tensor[[8, 4]]
 ```
 
-Use concrete dimensions in tests (`Tensor[8, 24]`, not generic `Tensor[B, S]`)
+Use concrete dimensions in tests (`Tensor[[8, 24]]`, not generic `Tensor[[B, S]]`)
 so the type checker verifies the full shape calculation.
 
 ## The complete port
@@ -11659,23 +12089,23 @@ import TabItem from '@theme/TabItem';
     import torch.nn as nn
     import torch.nn.functional as F
     from torch import Tensor
-    from shape_extensions import Int
+    from shape_extensions import Int, IntVar
 
 
-    class BaselineActor[S, A](nn.Module):
+    class BaselineActor[S: IntVar, A: IntVar](nn.Module):
         def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
             super().__init__()
             self.fc1 = nn.Linear(state_size, 400)
             self.fc2 = nn.Linear(400, 400)
             self.out = nn.Linear(400, action_size)
 
-        def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+        def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
             h1 = F.relu(self.fc1(state))
-            # pyrefly infers: Tensor[B, 400]
+            # pyrefly infers: Tensor[[B, 400]]
             h2 = F.relu(self.fc2(h1))
-            # pyrefly infers: Tensor[B, 400]
+            # pyrefly infers: Tensor[[B, 400]]
             act = torch.tanh(self.out(h2))
-            # pyrefly infers: Tensor[B, A]
+            # pyrefly infers: Tensor[[B, A]]
             return act
     ```
   </TabItem>
@@ -11760,7 +12190,7 @@ Here's a Transformer encoder that stacks `n_layers` identical
 `EncoderLayer` modules:
 
 ```python
-class Encoder[NHead, DK, DInner](nn.Module):
+class Encoder[NHead: IntVar, DK: IntVar, DInner: IntVar](nn.Module):
     def __init__(
         self,
         n_head: Int[NHead],
@@ -11773,13 +12203,13 @@ class Encoder[NHead, DK, DInner](nn.Module):
             [EncoderLayer(n_head, d_k, d_inner) for _ in range(n_layers)]
         )
 
-    def forward[B, T](
-        self, src_seq: Tensor[B, T, NHead * DK]
-    ) -> Tensor[B, T, NHead * DK]:
+    def forward[B: IntVar, T: IntVar](
+        self, src_seq: Tensor[[B, T, NHead * DK]]
+    ) -> Tensor[[B, T, NHead * DK]]:
         enc_output = src_seq
         for layer in self.layer_stack:
             enc_output, _attn = layer(enc_output)
-            assert_type(enc_output, Tensor[B, T, NHead * DK])
+            assert_type(enc_output, Tensor[[B, T, NHead * DK]])
         return enc_output
 ```
 
@@ -11787,7 +12217,7 @@ Notice that `n_layers` is `int`, not `Int` — it's an iteration count that
 doesn't flow into any tensor dimension. Only values that determine tensor
 shapes need to be `Int`.
 
-Each `EncoderLayer` takes `Tensor[B, T, NHead * DK]` and returns the same
+Each `EncoderLayer` takes `Tensor[[B, T, NHead * DK]]` and returns the same
 shape, so the loop preserves the invariant and the type checker is
 satisfied.
 
@@ -11807,15 +12237,15 @@ widens to a less precise type.
 The fix is to separate the first iteration:
 
 ```python
-# Problem: x widens to Tensor[B, F, D] | Tensor[B, K, D]
+# Problem: x widens to Tensor[[B, F, D]] | Tensor[[B, K, D]]
 x = input_embs
 for layer in self.layers:
     x = layer(x)
-out: Tensor[B, K, D] = x  # type: ignore[bad-assignment]
+out: Tensor[[B, K, D]] = x  # type: ignore[bad-assignment]
 
 # Solution: no union, no type: ignore
 x = self.layers[0](input_embs)        # [B, F, D] -> [B, K, D]
-assert_type(x, Tensor[B, K, D])
+assert_type(x, Tensor[[B, K, D]])
 for i in range(1, len(self.layers)):
     x = self.layers[i](x)             # [B, K, D] -> [B, K, D]
 ```
@@ -11827,14 +12257,15 @@ separating them, you avoid the union widening entirely.
 
 Many architectures accept an activation function as a parameter (ReLU, GELU,
 SiLU, etc.). Since each activation's forward signature is
-`Tensor[*S] -> Tensor[*S]`, you can express this with a type alias:
+`Tensor[S] -> Tensor[S]` for a whole-shape type parameter `S: IntTuple`, you
+can express this with a type alias:
 
 ```python
 ShapePreservingActivation = (
     type[nn.ReLU] | type[nn.GELU] | type[nn.SiLU] | type[nn.Tanh]
 )
 
-class ResBlock[C](nn.Module):
+class ResBlock[C: IntVar](nn.Module):
     def __init__(self, c: Int[C], act_fn: ShapePreservingActivation) -> None:
         super().__init__()
         self.net = nn.Sequential(
@@ -11854,7 +12285,7 @@ Multi-head attention involves reshaping tensors from `[B, T, D]` to
 directly in annotations:
 
 ```python
-class CausalSelfAttention[NEmbedding, NHead](nn.Module):
+class CausalSelfAttention[NEmbedding: IntVar, NHead: IntVar](nn.Module):
     def __init__(
         self,
         n_embd: Int[NEmbedding],
@@ -11866,19 +12297,19 @@ class CausalSelfAttention[NEmbedding, NHead](nn.Module):
         self.n_head = n_head
         self.n_embd = n_embd
 
-    def forward[B, T](
-        self, x: Tensor[B, T, NEmbedding]
-    ) -> Tensor[B, T, NEmbedding]:
+    def forward[B: IntVar, T: IntVar](
+        self, x: Tensor[[B, T, NEmbedding]]
+    ) -> Tensor[[B, T, NEmbedding]]:
         qkv = self.c_attn(x)
-        assert_type(qkv, Tensor[B, T, 3 * NEmbedding])
+        assert_type(qkv, Tensor[[B, T, 3 * NEmbedding]])
         q, k, v = qkv.split(self.n_embd, dim=2)
-        assert_type(q, Tensor[B, T, NEmbedding])
+        assert_type(q, Tensor[[B, T, NEmbedding]])
 
         # Reshape for multi-head: [B, T, D] -> [B, NHead, T, D // NHead]
         head_dim = self.n_embd // self.n_head
         q = q.view(q.size(0), q.size(1), self.n_head, head_dim)
         q = q.transpose(1, 2)
-        assert_type(q, Tensor[B, NHead, T, NEmbedding // NHead])
+        assert_type(q, Tensor[[B, NHead, T, NEmbedding // NHead]])
         ...
 ```
 
@@ -11951,8 +12382,8 @@ import TabItem from '@theme/TabItem';
 </Tabs>
 
 With tensor shapes enabled, Pyrefly infers and displays the shape of every
-intermediate tensor — `Tensor[B, T, NEmbedding]` for embeddings,
-`Tensor[T]` for position indices — without any manual annotations on local
+intermediate tensor — `Tensor[[B, T, NEmbedding]]` for embeddings,
+`Tensor[[T]]` for position indices — without any manual annotations on local
 variables.
 
 ```sandbox
@@ -11965,7 +12396,7 @@ description: See tensor shape tracking, variadic batch dimensions, and shape mis
 Pyrefly's tensor shape support is built on two extensions that work together:
 
 1. **Symbolic integer arithmetic** in the core type system — lets you write
-   `Tensor[B, C, H, W]` and have arithmetic like `D // NHead` work at the
+   `Tensor[[B, C, H, W]]` and have arithmetic like `D // NHead` work at the
    type level.
 2. **Shape transform specifications** for PyTorch operators — a library of
    shape rules that tells Pyrefly how each operator transforms shapes.
@@ -11976,12 +12407,15 @@ a few annotations at class and function boundaries.
 
 ### Symbolic integer arithmetic
 
-You can write tensor types with integer dimensions — `Tensor[3, 4]` is a
+You can write tensor types with integer dimensions — `Tensor[[3, 4]]` is a
 2D tensor with shape `(3, 4)`. This works for modules too: `nn.Linear[3, 4]`
-takes `Tensor[..., 3]` as input and returns `Tensor[..., 4]`.
+accepts a tensor with any number of leading dimensions followed by a `3`,
+and returns one with the same leading dimensions followed by a `4` — see
+[Variadic dimensions with `Elements`](./tensor-shapes-reference.mdx#variadic-dimensions-with-elements)
+in the Reference page for the syntax that expresses this.
 
 **`Int[X]`** bridges runtime integer values to the type level. When
-`x: Tensor[3, 4]`, then `x.shape` has type `tuple[Int[3], Int[4]]` — you
+`x: Tensor[[3, 4]]`, then `x.shape` has type `tuple[Int[3], Int[4]]` — you
 can extract dimensions from tensors and use them to construct new ones.
 Arithmetic works too: if `a: Int[3]` and `b: Int[4]`, then
 `a * b: Int[12]`.
@@ -11989,16 +12423,16 @@ Arithmetic works too: if `a: Int[3]` and `b: Int[4]`, then
 **Generic type parameters** let you write shape-polymorphic modules:
 
 ```python
-class Linear[N, M]:
+class Linear[N: IntVar, M: IntVar]:
     def __init__(self, n: Int[N], m: Int[M]):
         ...
 
-    def forward[*Xs](self, inp: Tensor[*Xs, N]) -> Tensor[*Xs, M]:
+    def forward[Xs: IntTuple](self, inp: Tensor[[*Elements[Xs], N]]) -> Tensor[[*Elements[Xs], M]]:
         ...
 
 linear: Linear[3, 4] = Linear(3, 4)
-inp: Tensor[2, 5, 3] = ...
-x: Tensor[2, 5, 4] = linear(inp)
+inp: Tensor[[2, 5, 3]] = ...
+x: Tensor[[2, 5, 4]] = linear(inp)
 ```
 
 `Int` encodes symbolic shapes at the type level throughout PyTorch, covering modules as well as tensors.
@@ -12006,10 +12440,10 @@ x: Tensor[2, 5, 4] = linear(inp)
 **Arithmetic on type variables** lets you write custom shape transforms:
 
 ```python
-def custom_rand_tensor[A, B](a: Int[A], b: Int[B]) -> Tensor[(A + B) // 2]:
+def custom_rand_tensor[A: IntVar, B: IntVar](a: Int[A], b: Int[B]) -> Tensor[[(A + B) // 2]]:
     return torch.randn((a + b) // 2)
 
-x: Tensor[3] = custom_rand_tensor(2, 4)
+x: Tensor[[3]] = custom_rand_tensor(2, 4)
 ```
 
 While these examples use type annotations for exposition, the types of local
@@ -12022,7 +12456,7 @@ Some PyTorch operators have simple shape signatures that can be expressed as
 standard type stubs. For example, `torch.mm`:
 
 ```python
-def mm[M, K, N](x: Tensor[M, K], y: Tensor[K, N]) -> Tensor[M, N]:
+def mm[M: IntVar, K: IntVar, N: IntVar](x: Tensor[[M, K]], y: Tensor[[K, N]]) -> Tensor[[M, N]]:
     ...
 ```
 
@@ -12073,7 +12507,7 @@ express tensor shapes in type annotations that other libraries like `typeguard`
 and `beartype` can check at runtime. The syntax is designed to be universal for
 array-like containers (supporting JAX, NumPy, and PyTorch), but is somewhat
 verbose — for example, `Shaped[Tensor, "M 2 M//2"]` instead of
-`Tensor[M, 2, M // 2]`.
+`Tensor[[M, 2, M // 2]]`.
 
 Pyrefly supports jaxtyping annotations as an alternative front-end to our native
 syntax; these annotations are translated internally to use generics and display
