@@ -3774,6 +3774,14 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::change_signature::change_signature_code_actions(self, handle, selection)
     }
+    pub fn convert_import_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::convert_import::convert_import_code_actions(self, handle, selection)
+            .map(Vec1::into_vec)
+    }
 
     /// Determines whether a module is a third-party package.
     ///

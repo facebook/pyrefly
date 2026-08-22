@@ -395,7 +395,13 @@ impl ModuleName {
                 }
             };
         }
-        Self::from_relative_path_components(components).ok()
+        let module = Self::from_relative_path_components(components).ok()?;
+        // Joining empty components renders one fewer dot, so restore it when there is no suffix.
+        if module.as_str().chars().all(|c| c == '.') {
+            Some(Self::from_string(format!(".{}", module.as_str())))
+        } else {
+            Some(module)
+        }
     }
 
     pub fn append(self, name: &Name) -> Self {
@@ -670,6 +676,9 @@ mod tests {
         assert_module_name("bar.py", "foo/baz.py", ".foo.baz");
         assert_module_name("foo/bar.py", "baz.py", "..baz");
         assert_module_name("foo/bar/boz.py", "baz.py", "...baz");
+        assert_module_name("foo/bar.py", "foo/__init__.py", ".");
+        assert_module_name("foo/bar/baz.py", "foo/__init__.py", "..");
+        assert_module_name("foo/bar.py", "foo/sub/__init__.py", ".sub");
     }
 
     #[test]
