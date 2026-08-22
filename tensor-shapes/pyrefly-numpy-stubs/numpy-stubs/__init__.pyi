@@ -6,7 +6,7 @@
 from typing import Any, Literal, overload
 
 import shape_extensions
-from numpy._shapes import diag_extent, matmul_2d_ir, reduce_ir
+from numpy._shapes import diag_extent, matmul_2d_ir, reduce_shape
 from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar, uses_shape_dsl
 
 from . import linalg as linalg, random as random
@@ -249,14 +249,40 @@ def expand_dims[N: IntVar, M: IntVar, DType](
     a: ndarray[[N, M], DType],
     axis: Literal[2, -1],
 ) -> ndarray[[N, M, 1], DType]: ...
-@uses_shape_dsl(reduce_ir)
-def sum(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
-@uses_shape_dsl(reduce_ir)
-def mean(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
-@uses_shape_dsl(reduce_ir)
-def min(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
-@uses_shape_dsl(reduce_ir)
-def max(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
+
+# These stubs track reduction shapes but leave reduction dtype gradual.
+def sum[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+def mean[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+def min[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+def max[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
 @overload
 def argmin[N: IntVar, M: IntVar](
     a: ndarray[[N, M]],

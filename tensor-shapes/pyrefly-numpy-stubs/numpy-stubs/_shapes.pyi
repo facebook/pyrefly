@@ -4,8 +4,8 @@
 # LICENSE file in the root directory of this source tree.
 
 import shape_extensions.dsl as dsl
-from shape_extensions import Int, type_shape_dsl_function
-from shape_extensions.dsl import Error, shape_dsl_function, ShapedArray, symint
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions.dsl import Error, shape_dsl_function, ShapedArray
 
 @type_shape_dsl_function
 def int_min(a: Int, b: Int) -> Int:
@@ -36,44 +36,28 @@ def matmul_2d_ir(a: ShapedArray, b: ShapedArray) -> ShapedArray:
         raise Error("matmul inner dimensions must match")
     return ShapedArray(shape=[a.shape[0], b.shape[1]])
 
-@shape_dsl_function
-def normalize_axis(rank: int, axis: int) -> int:
-    if axis < 0:
-        return axis + rank
-    return axis
-
-@shape_dsl_function
-def count_axis(axes: list[int], axis: int) -> int:
-    return len([candidate for candidate in axes if candidate == axis])
-
-@shape_dsl_function
+@type_shape_dsl_function
 def reduce_shape(
-    shape: list[int | symint],
-    axis: int | list[int] | None,
+    shape: IntTuple,
+    axis: int | tuple[int, ...] | None,
     keepdims: bool,
-) -> list[int | symint]:
-    if axis == None:
-        if keepdims:
-            return [1 for _ in range(len(shape))]
-        return []
-    axes = axis if isinstance(axis, list) else [axis]
-    normalized = [normalize_axis(len(shape), axis) for axis in axes]
-    out_of_bounds = [axis for axis in normalized if axis < 0 or axis > len(shape) - 1]
-    if len(out_of_bounds) > 0:
-        raise Error("axis out of bounds")
-    duplicate_axes = [axis for axis in normalized if count_axis(normalized, axis) > 1]
-    if len(duplicate_axes) > 0:
-        raise Error("duplicate axis")
-    return [
-        1 if i in normalized else dim
-        for i, dim in enumerate(shape)
-        if keepdims or not (i in normalized)
-    ]
-
-@shape_dsl_function
-def reduce_ir(
-    a: ShapedArray,
-    axis: int | list[int] | None = None,
-    keepdims: bool = False,
-) -> ShapedArray:
-    return ShapedArray(shape=reduce_shape(a.shape, axis, keepdims))
+) -> IntTuple:
+    if axis is None:
+        axes = range(len(shape))
+    elif dsl.is_int_value(axis):
+        axes = (axis,)
+    else:
+        axes = axis
+    # The DSL does not support unary negation of a Flag integer.
+    if any(item < 0 - len(shape) or item >= len(shape) for item in axes):
+        return dsl.Invalid("axis out of bounds")
+    normalized = tuple(item + len(shape) if item < 0 else item for item in axes)
+    if any(normalized.count(item) > 1 for item in normalized):
+        return dsl.Invalid("duplicate axis")
+    if keepdims:
+        return dsl.IntTuple(
+            (1 if index in normalized else shape[index] for index in range(len(shape)))
+        )
+    return dsl.IntTuple(
+        (shape[index] for index in range(len(shape)) if index not in normalized)
+    )
