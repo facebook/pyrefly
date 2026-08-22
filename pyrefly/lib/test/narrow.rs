@@ -1688,6 +1688,72 @@ def test_isinstance_then_issubclass(x: object) -> None:
 );
 
 testcase!(
+    test_isinstance_type_and_issubclass_else,
+    r#"
+from typing import Iterable, assert_type
+import enum
+
+def main(categories: Iterable[str] | type[enum.Enum]) -> None:
+    cached_categories: tuple[str, ...]
+    if isinstance(categories, type) and issubclass(categories, enum.Enum):
+        cached_categories = tuple(member.value for member in categories)
+    else:
+        assert_type(categories, Iterable[str])
+        cached_categories = tuple(categories)
+    "#,
+);
+
+testcase!(
+    test_isinstance_type_and_issubclass_argparse_choices,
+    r#"
+import argparse
+import enum
+from typing import assert_type
+
+def main(parser: argparse.ArgumentParser) -> None:
+    for action in parser._actions:
+        if isinstance(action.choices, type) and issubclass(action.choices, enum.Enum):
+            assert_type(action.choices, type[enum.Enum])
+            action.choices = list(action.choices)
+    "#,
+);
+
+testcase!(
+    test_isinstance_any_as_class_object,
+    r#"
+from typing import Any, assert_type
+
+class ModelField:
+    def __init__(self, type_: type[Any]) -> None:
+        self.type_: Any = type_
+
+    def analyze(self, replace_with_any: bool) -> None:
+        if replace_with_any:
+            self.type_ = Any
+        if self.type_ is Any or self.type_ is object:
+            return
+        if isinstance(self.type_, type):
+            assert_type(self.type_, type[Any])
+            isinstance(None, self.type_)
+    "#,
+);
+
+testcase!(
+    test_isinstance_type_preserves_bounded_class_object_typevar,
+    r#"
+from typing import TypeVar, assert_type
+
+C = TypeVar("C", bound=type)
+
+def reg(cls: C) -> C:
+    if not isinstance(cls, type):
+        raise TypeError
+    assert_type(cls, C)
+    return cls
+    "#,
+);
+
+testcase!(
     test_issubclass_with_metaclass_instance,
     r#"
 class ModelBase(type):

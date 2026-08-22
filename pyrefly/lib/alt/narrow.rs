@@ -446,6 +446,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Narrow a type by removing values identity-equal to `right` (`is not` semantics).
     fn narrow_is_not(&self, ty: &Type, right: &Type) -> Type {
         self.distribute_over_union(ty, |t| match (t, right) {
+            (Type::ClassDef(left), Type::ClassDef(right)) if left == right => self.heap.mk_never(),
             (_, right) if Self::is_identity_literal(right) && Self::literal_equal(t, right) => {
                 self.heap.mk_never()
             }
@@ -697,9 +698,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn narrow_isinstance_from_definite(&self, left: &Type, right: &Type) -> Type {
+        let builtins_type = self.heap.mk_class_type(self.stdlib.builtins_type().clone());
+        let is_class_object_member = |left: &Type| match left {
+            Type::Type(_) | Type::ClassDef(_) => true,
+            Type::Quantified(q) => {
+                self.is_subset_eq(&q.upper_bound(self.stdlib, self.heap), &builtins_type)
+            }
+            _ => false,
+        };
+        let mut has_class_object_member = false;
+        self.map_over_union(left, |left| {
+            has_class_object_member |= is_class_object_member(left);
+        });
         self.distribute_over_union(left, |l| {
             self.with_fresh_class_info_target(l, right, |right| {
-                if right.is_any() {
+                if matches!(&right, Type::ClassType(cls) if cls.is_builtin("type")) {
+                    if is_class_object_member(l) {
+                        l.clone()
+                    } else if has_class_object_member {
+                        self.heap.mk_never()
+                    } else if left.is_union() {
+                        // A class object may satisfy a union member through its metaclass.
+                        self.heap.mk_type_of(self.heap.mk_any_implicit())
+                    } else {
+                        right.clone()
+                    }
+                } else if right.is_any() {
                     // NOTE(grievejia): The most precise refinement would be `left`:
                     // `isinstance(x, Any)` provides no concrete evidence about the type
                     // of `x`, so keeping the original type is sound. In practice, that is
@@ -1001,14 +1025,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut res = Vec::new();
         for (right, allows_negative_narrow) in self.expr_as_class_info(right_expr, errors) {
             if allows_negative_narrow
-                && let Some(left_untyped) =
-                    self.untype_opt(left.clone(), right_expr.range(), errors)
                 && let Some((tparams, right)) = self.unwrap_class_object_silently(&right)
             {
                 let (vs, right) = self
                     .solver()
                     .fresh_quantified(&tparams, right, self.uniques);
-                res.push(self.issubclass_result(self.subtract(&left_untyped, &right), left));
+                res.push(self.distribute_over_union(left, |left| {
+                    let Some(left_untyped) =
+                        self.untype_opt(left.clone(), right_expr.range(), errors)
+                    else {
+                        return left.clone();
+                    };
+                    let instance_result = self.subtract(&left_untyped, &right);
+                    if instance_result.is_never() {
+                        instance_result
+                    } else {
+                        self.issubclass_result(instance_result, left)
+                    }
+                }));
                 // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
                 // * If `left` is an invalid specialization, the error has already been reported at its definition site.
                 // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
