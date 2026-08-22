@@ -2574,8 +2574,8 @@ def qualified_builtins_frozenset(x: int | str) -> None:
 def non_literal_arg(x: int | str) -> None:
     y = [1, 2]
     if x in frozenset(y):
-        # Can't statically enumerate elements, no narrowing.
-        assert_type(x, int | str)
+        # The element type is known even when the elements cannot be enumerated.
+        assert_type(x, int)
 "#,
 );
 
@@ -2609,6 +2609,34 @@ def test(key: str) -> None:
 );
 
 testcase!(
+    test_narrow_in_iterable_element_type,
+    r#"
+from typing import assert_type
+
+def generate_missing() -> list[str]:
+    return ["a", "b"]
+
+def takes_string(arg: str) -> None: ...
+
+def test_list(arg: str | None) -> None:
+    missing = generate_missing()
+    if arg in missing:
+        assert_type(arg, str)
+        takes_string(arg)
+
+def test_set(arg: str | None, missing: set[str]) -> None:
+    if arg in missing:
+        assert_type(arg, str)
+        takes_string(arg)
+
+def test_frozenset(arg: str | None, missing: frozenset[str]) -> None:
+    if arg in missing:
+        assert_type(arg, str)
+        takes_string(arg)
+"#,
+);
+
+testcase!(
     test_narrow_in_does_not_widen,
     r#"
 from typing import Any, Literal, Mapping, assert_type
@@ -2627,6 +2655,12 @@ def test_list(x: Literal[1] | str) -> None:
         assert_type(x, Literal[1] | str)
     if x in list_object:
         assert_type(x, Literal[1] | str)
+
+def test_list_optional(x: str | None) -> None:
+    if x in list_any:
+        assert_type(x, str | None)
+    if x in list_object:
+        assert_type(x, str | None)
 
 def test_set(x: Literal[1] | str) -> None:
     if x in set_any:

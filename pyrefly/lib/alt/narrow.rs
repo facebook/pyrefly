@@ -1594,7 +1594,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
                 if !self.behaves_like_any(&right_ty)
                     && let Some(iter_ty) = self.unwrap_iterable(&right_ty)
-                    && let Some(iter_ty) = self.membership_narrow_type(&iter_ty)
+                    && !self.behaves_like_any(&iter_ty)
                 {
                     return self.intersect(ty, &iter_ty);
                 }
