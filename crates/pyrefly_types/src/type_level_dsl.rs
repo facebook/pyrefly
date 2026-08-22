@@ -25,6 +25,7 @@ use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtAssign;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtIf;
 use ruff_python_ast::StmtReturn;
@@ -64,7 +65,6 @@ impl TypeShapeDslDomain {
     }
 }
 
-/// The input domains accepted by type-level shape DSL functions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslInputDomain {
     Value(TypeShapeDslDomain),
@@ -80,12 +80,45 @@ impl fmt::Display for TypeShapeDslInputDomain {
     }
 }
 
-/// A syntax-validated DSL definition paired with its resolved parameter domains.
+/// A validated DSL definition paired with its resolved input and result domains.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub struct ResolvedTypeShapeDslFunction {
     definition: Arc<ValidatedTypeShapeDslFunction>,
     parameter_domains: Vec<TypeShapeDslInputDomain>,
     result_domain: TypeShapeDslDomain,
+}
+
+impl ResolvedTypeShapeDslFunction {
+    pub fn try_new(
+        definition: Arc<ValidatedTypeShapeDslFunction>,
+        parameter_domains: Vec<TypeShapeDslInputDomain>,
+        result_domain: TypeShapeDslDomain,
+    ) -> Option<Self> {
+        if definition.parsed.parameter_count() != parameter_domains.len() {
+            return None;
+        }
+        Some(Self {
+            definition,
+            parameter_domains,
+            result_domain,
+        })
+    }
+
+    pub fn name(&self) -> &Name {
+        self.definition.name()
+    }
+
+    pub fn parameter_name(&self, index: usize) -> &Name {
+        self.definition.parameter_name(index)
+    }
+
+    pub fn parameter_domains(&self) -> &[TypeShapeDslInputDomain] {
+        &self.parameter_domains
+    }
+
+    pub fn result_domain(&self) -> TypeShapeDslDomain {
+        self.result_domain
+    }
 }
 
 impl Visit<Type> for TypeShapeDslDomain {
@@ -140,6 +173,123 @@ pub struct ParsedTypeShapeDslFunction {
     definition: Arc<StmtFunctionDef>,
 }
 
+/// An owned function AST whose restricted declaration syntax and body have been validated.
+/// Future evaluation may interpret the definition relying on these invariants.
+///
+/// Identity is derived from the parsed program's pointer identity plus the resolved metadata. The
+/// latter is required because resolving an intrinsic depends on imports outside this AST, so an
+/// unedited declaration whose gradual constructor now resolves to a different domain is unequal.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ValidatedTypeShapeDslFunction {
+    parsed: ParsedTypeShapeDslFunction,
+    // These source-keyed facts are validation invariants for the retained AST, not a body IR.
+    returns: Vec<TypeShapeDslReturn>,
+    conditions: Vec<TypeShapeDslCondition>,
+    expressions: Vec<TypeShapeDslExpression>,
+    assignments: Vec<TypeShapeDslAssignment>,
+    /// The number of lexical slots the body needs: one per parameter, then one per local.
+    slot_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeShapeDslReturn {
+    statement_range: TextRange,
+    value_range: TextRange,
+    kind: TypeShapeDslReturnKind,
+}
+
+impl TypeShapeDslReturn {
+    pub fn range(&self) -> TextRange {
+        self.value_range
+    }
+
+    pub fn kind(&self) -> &TypeShapeDslReturnKind {
+        &self.kind
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeShapeDslCondition {
+    range: TextRange,
+    kind: TypeShapeDslConditionKind,
+}
+
+impl TypeShapeDslCondition {
+    pub fn range(&self) -> TextRange {
+        self.range
+    }
+
+    pub fn kind(&self) -> &TypeShapeDslConditionKind {
+        &self.kind
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeShapeDslExpression {
+    range: TextRange,
+    kind: TypeShapeDslExpressionKind,
+}
+
+impl TypeShapeDslExpression {
+    pub fn range(&self) -> TextRange {
+        self.range
+    }
+
+    pub fn kind(&self) -> &TypeShapeDslExpressionKind {
+        &self.kind
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TypeShapeDslAssignment {
+    range: TextRange,
+    slot: usize,
+}
+
+/// The validated source of a type-level shape DSL function's return value. Resolving this depends
+/// on more than the AST, so it participates in `ValidatedTypeShapeDslFunction` identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TypeShapeDslReturnKind {
+    /// Return the parameter at the given zero-based position.
+    Parameter(usize),
+    Local {
+        slot: usize,
+        domain: TypeShapeDslDomain,
+    },
+    AliasedParameter {
+        slot: usize,
+        parameters: Box<[usize]>,
+    },
+    /// Return the broadcast of two shape parameters.
+    Broadcast {
+        left_slot: usize,
+        right_slot: usize,
+        left_parameters: Box<[usize]>,
+        right_parameters: Box<[usize]>,
+    },
+    /// Return an arithmetic expression over two integer flag parameters.
+    IntFlagArithmetic {
+        left: usize,
+        op: TypeShapeDslArithmeticOp,
+        right: usize,
+    },
+    /// Evaluate a validated value expression from the retained AST.
+    Expression,
+    /// Return an invalid shape computation with a source-provided message.
+    Invalid,
+    /// Return the gradual value for the function's declared result domain.
+    Gradual(TypeShapeDslDomain),
+}
+
+/// The arithmetic a validated dimension or Flag expression applies. Reached through
+/// `TypeShapeDslReturnKind` and `TypeShapeDslExpressionKind`, so it shares their identity
+/// requirements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TypeShapeDslArithmeticOp {
+    Add,
+    Subtract,
+}
+
 /// A closed, canonical operation the DSL recognizes by callable identity rather than by spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeShapeDslIntrinsic {
@@ -151,59 +301,35 @@ pub enum TypeShapeDslIntrinsic {
     Len,
 }
 
-/// What a validated DSL body returns. Resolving this depends on more than the AST, so it
-/// participates in `ValidatedTypeShapeDslFunction` identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TypeShapeDslReturnKind {
-    Parameter(usize),
-    Broadcast {
-        left: usize,
-        right: usize,
-    },
-    IntFlagArithmetic {
-        left: usize,
-        op: TypeShapeDslArithmeticOp,
-        right: usize,
-    },
-    Expression,
-    Invalid,
-    Gradual(TypeShapeDslDomain),
-}
-
-/// Arithmetic supported between an `Int` value and a `Flag[int]` value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TypeShapeDslArithmeticOp {
-    Add,
-    Subtract,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeShapeDslReturn {
-    statement_range: TextRange,
-    value_range: TextRange,
-    kind: TypeShapeDslReturnKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// What a validated DSL value expression computes. Like `TypeShapeDslReturnKind` this depends on
+/// intrinsic resolution, so it participates in `ValidatedTypeShapeDslFunction` identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslExpressionKind {
-    DimensionParameter(usize),
+    DimensionSlot {
+        slot: usize,
+        parameter_origins: Option<Box<[usize]>>,
+    },
     DimensionLiteral(Option<i64>),
-    IntTupleIndex { shape: usize, index: Option<i64> },
+    IntTupleIndex {
+        shape: usize,
+        parameter_origins: Option<Box<[usize]>>,
+        index: Option<i64>,
+    },
     DimensionTuple,
     IntTupleConstructor,
+    Slot(usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeShapeDslExpression {
-    range: TextRange,
-    kind: TypeShapeDslExpressionKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// What a validated DSL condition tests. Like `TypeShapeDslReturnKind` this depends on intrinsic
+/// resolution, so it participates in `ValidatedTypeShapeDslFunction` identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslConditionKind {
     Equal(usize, usize),
-    IsConcreteInt(usize),
     LessThan(usize, usize),
+    IsConcreteInt {
+        slot: usize,
+        parameter_origins: Option<Box<[usize]>>,
+    },
     FlagIntLessThanLiteral {
         parameter: usize,
         literal: Option<i64>,
@@ -214,10 +340,33 @@ pub enum TypeShapeDslConditionKind {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeShapeDslCondition {
-    range: TextRange,
-    kind: TypeShapeDslConditionKind,
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DslStaticKind {
+    UnknownParameters(Box<[usize]>),
+    Dimension,
+}
+
+impl DslStaticKind {
+    fn parameter_origins(&self) -> Option<&[usize]> {
+        match self {
+            Self::UnknownParameters(parameters) => Some(parameters),
+            _ => None,
+        }
+    }
+
+    fn join(self, other: Self) -> Option<Self> {
+        match (self, other) {
+            (left, right) if left == right => Some(left),
+            (Self::UnknownParameters(left), Self::UnknownParameters(right)) => {
+                let mut parameters = left.into_vec();
+                parameters.extend(right);
+                parameters.sort_unstable();
+                parameters.dedup();
+                Some(Self::UnknownParameters(parameters.into_boxed_slice()))
+            }
+            _ => None,
+        }
+    }
 }
 
 enum IntegerLiteral {
@@ -237,6 +386,7 @@ impl IntegerLiteral {
 }
 
 fn integer_literal(expr: &Expr) -> IntegerLiteral {
+    // TODO: Preserve the sign of out-of-`i64` thresholds instead of falling back to gradual.
     match expr {
         Expr::NumberLiteral(number) => match &number.value {
             Number::Int(value) => value
@@ -267,94 +417,128 @@ fn integer_literal(expr: &Expr) -> IntegerLiteral {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DslStatementFlow {
-    Continue,
-    Return,
+#[derive(Clone)]
+struct DslValidationFlow {
+    assigned: Vec<bool>,
+    maybe_assigned: Vec<bool>,
+    kinds: Vec<DslStaticKind>,
 }
 
 struct DslValidator<'a, F> {
-    resolve_intrinsic: &'a F,
-    slots: HashMap<Name, usize>,
+    parameters: &'a Parameters,
+    intrinsic: &'a F,
     returns: Vec<TypeShapeDslReturn>,
     conditions: Vec<TypeShapeDslCondition>,
     expressions: Vec<TypeShapeDslExpression>,
+    assignments: Vec<TypeShapeDslAssignment>,
+    slots: HashMap<Name, usize>,
+    declared_local_kinds: Vec<Option<DslStaticKind>>,
 }
 
 impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
-    fn new(parameters: &'a Parameters, resolve_intrinsic: &'a F) -> Self {
-        let slots = parameters
-            .args
-            .iter()
-            .enumerate()
-            .map(|(index, parameter)| (parameter.parameter.name.id.clone(), index))
-            .collect();
-        Self {
-            resolve_intrinsic,
-            slots,
-            returns: Vec::new(),
-            conditions: Vec::new(),
-            expressions: Vec::new(),
+    fn new(parameters: &'a Parameters, intrinsic: &'a F) -> (Self, DslValidationFlow) {
+        let mut slots = HashMap::new();
+        let mut kinds = Vec::new();
+        for (index, parameter) in parameters.args.iter().enumerate() {
+            slots.insert(parameter.parameter.name.id.clone(), index);
+            kinds.push(DslStaticKind::UnknownParameters(Box::new([index])));
+        }
+        let assigned = vec![true; kinds.len()];
+        let maybe_assigned = assigned.clone();
+        (
+            Self {
+                parameters,
+                intrinsic,
+                returns: Vec::new(),
+                conditions: Vec::new(),
+                expressions: Vec::new(),
+                assignments: Vec::new(),
+                slots,
+                declared_local_kinds: vec![None; kinds.len()],
+            },
+            DslValidationFlow {
+                assigned,
+                maybe_assigned,
+                kinds,
+            },
+        )
+    }
+
+    fn intrinsic(&self, expression: &Expr) -> Option<TypeShapeDslIntrinsic> {
+        if expression_root_name(expression).is_some_and(|name| self.slots.contains_key(name)) {
+            None
+        } else {
+            (self.intrinsic)(expression)
         }
     }
 
-    fn slot(&self, expression: &Expr) -> Option<usize> {
+    fn normalize_flow(&self, flow: &mut DslValidationFlow) {
+        assert_eq!(
+            flow.assigned.len(),
+            flow.maybe_assigned.len(),
+            "DSL validation flow assignment facts must stay aligned"
+        );
+        assert_eq!(
+            flow.assigned.len(),
+            flow.kinds.len(),
+            "DSL validation flow kinds must stay aligned with assignment facts"
+        );
+        while flow.kinds.len() < self.declared_local_kinds.len() {
+            let kind = self.declared_local_kinds[flow.kinds.len()]
+                .clone()
+                .expect("DSL locals must have a declared kind before flow normalization");
+            flow.assigned.push(false);
+            flow.maybe_assigned.push(false);
+            flow.kinds.push(kind);
+        }
+    }
+
+    fn slot(
+        &self,
+        expression: &Expr,
+        flow: &DslValidationFlow,
+    ) -> Result<usize, TypeShapeDslDefinitionError> {
         let Expr::Name(name) = expression else {
-            return None;
+            return Err(TypeShapeDslDefinitionError {
+                range: expression.range(),
+                message: "value must be a bare parameter or local name",
+            });
         };
-        self.slots.get(&name.id).copied()
-    }
-
-    fn validate_block(
-        &mut self,
-        block: &[Stmt],
-    ) -> Result<DslStatementFlow, TypeShapeDslDefinitionError> {
-        let mut flow = DslStatementFlow::Continue;
-        for statement in block {
-            if flow == DslStatementFlow::Return {
-                return Err(TypeShapeDslDefinitionError {
-                    range: statement.range(),
-                    message: "statement is unreachable",
-                });
-            }
-            flow = self.validate_statement(statement)?;
+        let Some(&slot) = self.slots.get(&name.id) else {
+            return Err(TypeShapeDslDefinitionError {
+                range: name.range,
+                message: "local value must be assigned before use",
+            });
+        };
+        if !flow.assigned.get(slot).copied().unwrap_or(false) {
+            return Err(TypeShapeDslDefinitionError {
+                range: name.range,
+                message: "local value must be definitely assigned before use",
+            });
         }
-        Ok(flow)
+        Ok(slot)
     }
 
-    fn validate_statement(
-        &mut self,
-        statement: &Stmt,
-    ) -> Result<DslStatementFlow, TypeShapeDslDefinitionError> {
-        match statement {
-            Stmt::Return(return_stmt) => {
-                self.validate_return(return_stmt)?;
-                Ok(DslStatementFlow::Return)
-            }
-            Stmt::If(if_stmt) => {
-                self.validate_if(if_stmt)?;
-                Ok(DslStatementFlow::Continue)
-            }
-            _ => Err(TypeShapeDslDefinitionError {
-                range: statement.range(),
-                message: "body supports only `if` and `return`",
-            }),
-        }
-    }
-
-    fn validate_dimension_expression(
+    fn validate_dimension(
         &mut self,
         expression: &Expr,
+        flow: &DslValidationFlow,
     ) -> Result<(), TypeShapeDslDefinitionError> {
         let kind = match expression {
             Expr::Name(_) => {
-                let Some(parameter) = self.slot(expression) else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: expression.range(),
-                        message: "dimension name must match a parameter name",
-                    });
-                };
-                TypeShapeDslExpressionKind::DimensionParameter(parameter)
+                let slot = self.slot(expression, flow)?;
+                match &flow.kinds[slot] {
+                    DslStaticKind::UnknownParameters(parameters) => {
+                        TypeShapeDslExpressionKind::DimensionSlot {
+                            slot,
+                            parameter_origins: Some(parameters.clone()),
+                        }
+                    }
+                    DslStaticKind::Dimension => TypeShapeDslExpressionKind::DimensionSlot {
+                        slot,
+                        parameter_origins: None,
+                    },
+                }
             }
             Expr::NumberLiteral(_) => {
                 let Ok(literal) = integer_literal(expression).into_value() else {
@@ -381,11 +565,15 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 });
             }
             Expr::Subscript(subscript) => {
-                let Some(shape) = self.slot(&subscript.value) else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: subscript.value.range(),
-                        message: "indexed value must name an `IntTuple` parameter",
-                    });
+                let shape = self.slot(&subscript.value, flow)?;
+                let parameter_origins = match &flow.kinds[shape] {
+                    DslStaticKind::UnknownParameters(parameters) => Some(parameters.clone()),
+                    _ => {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: subscript.value.range(),
+                            message: "indexed dimension source must be an `IntTuple` value",
+                        });
+                    }
                 };
                 let Ok(index) = integer_literal(&subscript.slice).into_value() else {
                     return Err(TypeShapeDslDefinitionError {
@@ -393,12 +581,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         message: "`IntTuple` index must be an integer literal",
                     });
                 };
-                TypeShapeDslExpressionKind::IntTupleIndex { shape, index }
+                TypeShapeDslExpressionKind::IntTupleIndex {
+                    shape,
+                    parameter_origins,
+                    index,
+                }
             }
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: expression.range(),
-                    message: "`IntTuple` elements must be Int parameters, integer literals, or indexed IntTuple parameters",
+                    message: "`IntTuple` elements must be dimensions, integer literals, or indexed IntTuple values",
                 });
             }
         };
@@ -412,11 +604,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
     fn validate_int_tuple_constructor(
         &mut self,
         call: &ExprCall,
+        flow: &DslValidationFlow,
     ) -> Result<(), TypeShapeDslDefinitionError> {
-        if call.arguments.args.len() != 1
-            || !call.arguments.keywords.is_empty()
-            || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
-        {
+        if call.arguments.args.len() != 1 || !call.arguments.keywords.is_empty() {
             return Err(TypeShapeDslDefinitionError {
                 range: call.arguments.range,
                 message: "`dsl.IntTuple` requires exactly one positional tuple argument",
@@ -435,7 +625,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     message: "`dsl.IntTuple` does not support starred elements",
                 });
             }
-            self.validate_dimension_expression(element)?;
+            self.validate_dimension(element, flow)?;
         }
         self.expressions.push(TypeShapeDslExpression {
             range: tuple.range,
@@ -448,14 +638,250 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(())
     }
 
+    fn validate_assignment_value(
+        &mut self,
+        expression: &Expr,
+        flow: &DslValidationFlow,
+    ) -> Result<DslStaticKind, TypeShapeDslDefinitionError> {
+        match expression {
+            Expr::Name(_) => {
+                let slot = self.slot(expression, flow)?;
+                self.expressions.push(TypeShapeDslExpression {
+                    range: expression.range(),
+                    kind: TypeShapeDslExpressionKind::Slot(slot),
+                });
+                Ok(flow.kinds[slot].clone())
+            }
+            Expr::Subscript(_) => {
+                self.validate_dimension(expression, flow)?;
+                Ok(DslStaticKind::Dimension)
+            }
+            _ => Err(TypeShapeDslDefinitionError {
+                range: expression.range(),
+                message: "local assignment value is not supported by the type-level DSL",
+            }),
+        }
+    }
+
+    fn assign(
+        &mut self,
+        statement: &StmtAssign,
+        flow: &mut DslValidationFlow,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        let [Expr::Name(target)] = statement.targets.as_slice() else {
+            return Err(TypeShapeDslDefinitionError {
+                range: statement.range,
+                message: "body supports only `if` and `return`; local assignment requires exactly one bare name target",
+            });
+        };
+        let kind = self.validate_assignment_value(&statement.value, flow)?;
+        let slot = if let Some(&slot) = self.slots.get(&target.id) {
+            self.normalize_flow(flow);
+            if flow.maybe_assigned[slot] {
+                return Err(TypeShapeDslDefinitionError {
+                    range: target.range,
+                    message: if slot < self.parameters.args.len() {
+                        "type-level DSL parameters are immutable and cannot be assigned"
+                    } else {
+                        "type-level DSL locals are immutable and cannot be reassigned"
+                    },
+                });
+            }
+            slot
+        } else {
+            let slot = self.declared_local_kinds.len();
+            self.slots.insert(target.id.clone(), slot);
+            self.declared_local_kinds.push(Some(kind.clone()));
+            self.normalize_flow(flow);
+            slot
+        };
+        flow.assigned[slot] = true;
+        flow.maybe_assigned[slot] = true;
+        flow.kinds[slot] = kind;
+        self.assignments.push(TypeShapeDslAssignment {
+            range: statement.range,
+            slot,
+        });
+        Ok(())
+    }
+
+    fn validate_condition(
+        &mut self,
+        condition: &Expr,
+        flow: &DslValidationFlow,
+    ) -> Result<(DslValidationFlow, DslValidationFlow), TypeShapeDslDefinitionError> {
+        if let Expr::BoolOp(bool_op) = condition {
+            if bool_op.op != BoolOp::And {
+                return Err(TypeShapeDslDefinitionError {
+                    range: bool_op.range,
+                    message: "condition supports only the boolean operator `and`",
+                });
+            }
+            for value in &bool_op.values {
+                self.validate_condition(value, flow)?;
+            }
+            return Ok((flow.clone(), flow.clone()));
+        }
+
+        if let Expr::Call(call) = condition
+            && self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::IsConcreteInt)
+        {
+            if call.arguments.args.len() != 1
+                || !call.arguments.keywords.is_empty()
+                || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
+            {
+                return Err(TypeShapeDslDefinitionError {
+                    range: call.arguments.range,
+                    message: "`is_concrete_int` condition requires exactly one positional argument",
+                });
+            }
+            let slot = self.slot(&call.arguments.args[0], flow)?;
+            let parameter_origins = flow.kinds[slot]
+                .parameter_origins()
+                .map(<[usize]>::to_vec)
+                .map(Vec::into_boxed_slice);
+            let kind = TypeShapeDslConditionKind::IsConcreteInt {
+                slot,
+                parameter_origins,
+            };
+            self.conditions.push(TypeShapeDslCondition {
+                range: call.range,
+                kind,
+            });
+            return Ok((flow.clone(), flow.clone()));
+        }
+
+        let Expr::Compare(compare) = condition else {
+            return Err(TypeShapeDslDefinitionError {
+                range: condition.range(),
+                message: "condition supports only `is_concrete_int`, `and`, `==`, and `<`",
+            });
+        };
+        if compare.ops.len() == 1
+            && compare.ops[0] == CmpOp::Eq
+            && compare.comparators.len() == 1
+            && let Expr::Call(call) = compare.left.as_ref()
+            && self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len)
+        {
+            if call.arguments.args.len() != 1
+                || !call.arguments.keywords.is_empty()
+                || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
+            {
+                return Err(TypeShapeDslDefinitionError {
+                    range: call.arguments.range,
+                    message: "`len` requires exactly one positional argument",
+                });
+            }
+            let shape = self.slot(&call.arguments.args[0], flow)?;
+            let Some(parameters) = flow.kinds[shape].parameter_origins() else {
+                return Err(TypeShapeDslDefinitionError {
+                    range: call.arguments.args[0].range(),
+                    message: "`len` argument must name an `IntTuple` parameter or immutable alias",
+                });
+            };
+            let [shape] = parameters else {
+                return Err(TypeShapeDslDefinitionError {
+                    range: call.arguments.args[0].range(),
+                    message: "`len` argument must have one parameter origin",
+                });
+            };
+            let Ok(literal) = integer_literal(&compare.comparators[0]).into_value() else {
+                return Err(TypeShapeDslDefinitionError {
+                    range: compare.comparators[0].range(),
+                    message: "`len` comparison requires an integer literal",
+                });
+            };
+            self.conditions.push(TypeShapeDslCondition {
+                range: compare.range,
+                kind: TypeShapeDslConditionKind::LengthEqualLiteral {
+                    shape: *shape,
+                    literal,
+                },
+            });
+            return Ok((flow.clone(), flow.clone()));
+        }
+        if compare.ops.len() != 1
+            || !matches!(compare.ops[0], CmpOp::Eq | CmpOp::Lt)
+            || compare.comparators.len() != 1
+        {
+            return Err(TypeShapeDslDefinitionError {
+                range: compare.range,
+                message: "comparison must be exactly `<Int parameter> == <Int parameter>`, `<Int parameter> < <Int parameter>`, or `<int parameter> < <integer literal>`",
+            });
+        }
+        let op = compare.ops[0];
+        let right = &compare.comparators[0];
+        if !matches!(compare.left.as_ref(), Expr::Name(_)) {
+            return Err(TypeShapeDslDefinitionError {
+                range: compare.left.range(),
+                message: "left comparison operand must name a parameter",
+            });
+        }
+        let left_slot = self.slot(&compare.left, flow)?;
+        let Some(left_parameters) = flow.kinds[left_slot].parameter_origins() else {
+            return Err(TypeShapeDslDefinitionError {
+                range: compare.left.range(),
+                message: "left comparison operand must name a parameter or immutable alias",
+            });
+        };
+        let [left] = left_parameters else {
+            return Err(TypeShapeDslDefinitionError {
+                range: compare.left.range(),
+                message: "left comparison operand must have one parameter origin",
+            });
+        };
+        let kind = if let Expr::Name(_) = right {
+            let right_slot = self.slot(right, flow)?;
+            let Some(right_parameters) = flow.kinds[right_slot].parameter_origins() else {
+                return Err(TypeShapeDslDefinitionError {
+                    range: right.range(),
+                    message: "right comparison operand must name a parameter or immutable alias",
+                });
+            };
+            let [right] = right_parameters else {
+                return Err(TypeShapeDslDefinitionError {
+                    range: right.range(),
+                    message: "right comparison operand must have one parameter origin",
+                });
+            };
+            match op {
+                CmpOp::Eq => TypeShapeDslConditionKind::Equal(*left, *right),
+                CmpOp::Lt => TypeShapeDslConditionKind::LessThan(*left, *right),
+                _ => unreachable!("validated comparison operator is equality or less-than"),
+            }
+        } else if op == CmpOp::Lt {
+            let Ok(literal) = integer_literal(right).into_value() else {
+                return Err(TypeShapeDslDefinitionError {
+                    range: right.range(),
+                    message: "right `<` operand must name a parameter or be an integer literal",
+                });
+            };
+            TypeShapeDslConditionKind::FlagIntLessThanLiteral {
+                parameter: *left,
+                literal,
+            }
+        } else {
+            return Err(TypeShapeDslDefinitionError {
+                range: right.range(),
+                message: "condition operands must name parameters or immutable aliases",
+            });
+        };
+        self.conditions.push(TypeShapeDslCondition {
+            range: compare.range,
+            kind,
+        });
+        Ok((flow.clone(), flow.clone()))
+    }
+
     fn validate_return(
         &mut self,
         return_stmt: &StmtReturn,
+        flow: &DslValidationFlow,
     ) -> Result<(), TypeShapeDslDefinitionError> {
         let kind = match return_stmt.value.as_deref() {
             Some(returned @ Expr::Attribute(_))
                 if matches!(
-                    (self.resolve_intrinsic)(returned),
+                    self.intrinsic(returned),
                     Some(TypeShapeDslIntrinsic::Gradual(_))
                 ) =>
             {
@@ -464,25 +890,48 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     message: "gradual return must be called",
                 });
             }
-            Some(returned @ Expr::Name(returned_name)) => {
-                if matches!(
-                    (self.resolve_intrinsic)(returned),
-                    Some(TypeShapeDslIntrinsic::Gradual(_))
-                ) {
+            Some(returned @ Expr::Name(name)) => {
+                let returned_intrinsic = self.intrinsic(returned);
+                if matches!(returned_intrinsic, Some(TypeShapeDslIntrinsic::Gradual(_))) {
                     return Err(TypeShapeDslDefinitionError {
-                        range: returned_name.range,
+                        range: name.range,
                         message: "gradual return must be called",
                     });
+                } else {
+                    let Some(&slot) = self.slots.get(&name.id) else {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: name.range,
+                            message: "returned name must match a parameter name or definitely assigned local",
+                        });
+                    };
+                    if !flow.assigned.get(slot).copied().unwrap_or(false) {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: name.range,
+                            message: "local value must be definitely assigned before use",
+                        });
+                    }
+                    if slot < self.parameters.args.len() {
+                        TypeShapeDslReturnKind::Parameter(slot)
+                    } else {
+                        let domain = match &flow.kinds[slot] {
+                            DslStaticKind::Dimension => TypeShapeDslDomain::Int,
+                            DslStaticKind::UnknownParameters(parameters) => {
+                                self.returns.push(TypeShapeDslReturn {
+                                    statement_range: return_stmt.range,
+                                    value_range: returned.range(),
+                                    kind: TypeShapeDslReturnKind::AliasedParameter {
+                                        slot,
+                                        parameters: parameters.clone(),
+                                    },
+                                });
+                                return Ok(());
+                            }
+                        };
+                        TypeShapeDslReturnKind::Local { slot, domain }
+                    }
                 }
-                let Some(index) = self.slot(returned) else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: returned_name.range,
-                        message: "returned name must match a parameter name",
-                    });
-                };
-                TypeShapeDslReturnKind::Parameter(index)
             }
-            Some(Expr::Call(call)) => match (self.resolve_intrinsic)(&call.func) {
+            Some(Expr::Call(call)) => match self.intrinsic(&call.func) {
                 Some(TypeShapeDslIntrinsic::Gradual(domain)) => {
                     if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
                         return Err(TypeShapeDslDefinitionError {
@@ -499,19 +948,34 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                             message: "`broadcast` requires exactly two positional arguments",
                         });
                     }
-                    let (Some(left), Some(right)) = (
-                        self.slot(&call.arguments.args[0]),
-                        self.slot(&call.arguments.args[1]),
-                    ) else {
+                    let (Expr::Name(_), Expr::Name(_)) =
+                        (&call.arguments.args[0], &call.arguments.args[1])
+                    else {
                         return Err(TypeShapeDslDefinitionError {
                             range: call.arguments.range,
                             message: "`broadcast` arguments must be bare parameter names",
                         });
                     };
-                    TypeShapeDslReturnKind::Broadcast { left, right }
+                    let left = self.slot(&call.arguments.args[0], flow)?;
+                    let right = self.slot(&call.arguments.args[1], flow)?;
+                    let (Some(left_parameters), Some(right_parameters)) = (
+                        flow.kinds[left].parameter_origins(),
+                        flow.kinds[right].parameter_origins(),
+                    ) else {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: call.arguments.range,
+                            message: "`broadcast` arguments must be IntTuple parameters or immutable aliases of them",
+                        });
+                    };
+                    TypeShapeDslReturnKind::Broadcast {
+                        left_slot: left,
+                        right_slot: right,
+                        left_parameters: left_parameters.to_vec().into_boxed_slice(),
+                        right_parameters: right_parameters.to_vec().into_boxed_slice(),
+                    }
                 }
                 Some(TypeShapeDslIntrinsic::IntTuple) => {
-                    self.validate_int_tuple_constructor(call)?;
+                    self.validate_int_tuple_constructor(call, flow)?;
                     TypeShapeDslReturnKind::Expression
                 }
                 Some(TypeShapeDslIntrinsic::Invalid) => {
@@ -526,7 +990,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     }
                     TypeShapeDslReturnKind::Invalid
                 }
-                Some(TypeShapeDslIntrinsic::IsConcreteInt | TypeShapeDslIntrinsic::Len) | None => {
+                None | Some(_) => {
                     return Err(TypeShapeDslDefinitionError {
                         range: return_stmt.range,
                         message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)` or `dsl.IntTuple(...)`",
@@ -534,8 +998,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
             },
             Some(Expr::BinOp(binop)) => {
-                let (Some(left), Some(right)) = (self.slot(&binop.left), self.slot(&binop.right))
-                else {
+                let (Some(left), Some(right)) = (
+                    parameter_index(self.parameters, &binop.left),
+                    parameter_index(self.parameters, &binop.right),
+                ) else {
                     return Err(TypeShapeDslDefinitionError {
                         range: binop.range,
                         message: "arithmetic return operands must be bare parameter names",
@@ -565,153 +1031,276 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             value_range: return_stmt
                 .value
                 .as_deref()
-                .expect("validated return must have a value")
-                .range(),
+                .map_or(return_stmt.range, |value| value.range()),
             kind,
         });
         Ok(())
     }
 
-    fn validate_if(&mut self, if_stmt: &StmtIf) -> Result<(), TypeShapeDslDefinitionError> {
-        if !if_stmt.elif_else_clauses.is_empty() {
-            return Err(TypeShapeDslDefinitionError {
-                range: if_stmt.range,
-                message: "does not support `else` or `elif`",
-            });
+    fn merge_flows(
+        &self,
+        flows: Vec<DslValidationFlow>,
+        range: TextRange,
+    ) -> Result<Option<DslValidationFlow>, TypeShapeDslDefinitionError> {
+        let mut flows = flows.into_iter();
+        let Some(mut result) = flows.next() else {
+            return Ok(None);
+        };
+        for mut flow in flows {
+            self.normalize_flow(&mut result);
+            self.normalize_flow(&mut flow);
+            for slot in 0..result.assigned.len() {
+                result.assigned[slot] &= flow.assigned[slot];
+                result.maybe_assigned[slot] |= flow.maybe_assigned[slot];
+                if result.assigned[slot] {
+                    let Some(kind) = result.kinds[slot].clone().join(flow.kinds[slot].clone())
+                    else {
+                        return Err(TypeShapeDslDefinitionError {
+                            range,
+                            message: "all continuing branch assignments to a local must have the same value domain",
+                        });
+                    };
+                    result.kinds[slot] = kind;
+                }
+            }
         }
-        self.validate_condition(&if_stmt.test)?;
-        // Without an `else`, this statement may fall through even if its body returns.
-        self.validate_block(&if_stmt.body)?;
-        Ok(())
+        Ok(Some(result))
     }
 
-    fn validate_condition(&mut self, condition: &Expr) -> Result<(), TypeShapeDslDefinitionError> {
-        if let Expr::BoolOp(bool_op) = condition {
-            if bool_op.op != BoolOp::And {
+    fn validate_if(
+        &mut self,
+        if_stmt: &StmtIf,
+        flow: &DslValidationFlow,
+    ) -> Result<Option<DslValidationFlow>, TypeShapeDslDefinitionError> {
+        let (when_true, mut when_false) = self.validate_condition(&if_stmt.test, flow)?;
+        let mut continuing = Vec::new();
+        if let Some(flow) = self.validate_suite(&if_stmt.body, when_true)? {
+            continuing.push(flow);
+        }
+        let mut has_else = false;
+        for clause in &if_stmt.elif_else_clauses {
+            if let Some(test) = &clause.test {
+                let (when_true, next_false) = self.validate_condition(test, &when_false)?;
+                if let Some(flow) = self.validate_suite(&clause.body, when_true)? {
+                    continuing.push(flow);
+                }
+                when_false = next_false;
+            } else {
+                has_else = true;
+                if let Some(flow) = self.validate_suite(&clause.body, when_false.clone())? {
+                    continuing.push(flow);
+                }
+            }
+        }
+        if !has_else {
+            continuing.push(when_false);
+        }
+        self.merge_flows(continuing, if_stmt.range)
+    }
+
+    fn validate_suite(
+        &mut self,
+        suite: &[Stmt],
+        mut flow: DslValidationFlow,
+    ) -> Result<Option<DslValidationFlow>, TypeShapeDslDefinitionError> {
+        let mut can_continue = true;
+        for statement in suite {
+            if !can_continue {
                 return Err(TypeShapeDslDefinitionError {
-                    range: bool_op.range,
-                    message: "condition supports only the boolean operator `and`",
+                    range: statement.range(),
+                    message: "statement is unreachable",
                 });
             }
-            for value in &bool_op.values {
-                self.validate_condition(value)?;
+            match statement {
+                Stmt::Assign(assign) => self.assign(assign, &mut flow)?,
+                Stmt::Return(return_stmt) => {
+                    self.validate_return(return_stmt, &flow)?;
+                    can_continue = false;
+                }
+                Stmt::If(if_stmt) => match self.validate_if(if_stmt, &flow)? {
+                    Some(merged) => flow = merged,
+                    None => can_continue = false,
+                },
+                _ => {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: statement.range(),
+                        message: "body supports only `if` and `return`, plus supported immutable local assignments",
+                    });
+                }
             }
-            return Ok(());
         }
-
-        let kind = self.validate_atomic_condition(condition)?;
-        self.conditions.push(TypeShapeDslCondition {
-            range: condition.range(),
-            kind,
-        });
-        Ok(())
+        Ok(can_continue.then_some(flow))
     }
+}
 
-    fn validate_atomic_condition(
-        &self,
-        condition: &Expr,
-    ) -> Result<TypeShapeDslConditionKind, TypeShapeDslDefinitionError> {
-        match condition {
-            Expr::Compare(compare) => {
-                if compare.ops.len() == 1
-                    && compare.ops[0] == CmpOp::Eq
-                    && compare.comparators.len() == 1
-                    && let Expr::Call(call) = compare.left.as_ref()
-                    && (self.resolve_intrinsic)(&call.func) == Some(TypeShapeDslIntrinsic::Len)
-                {
-                    if call.arguments.args.len() != 1
-                        || !call.arguments.keywords.is_empty()
-                        || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
-                    {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: call.arguments.range,
-                            message: "`len` requires exactly one positional argument",
-                        });
-                    }
-                    let Some(shape) = self.slot(&call.arguments.args[0]) else {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: call.arguments.args[0].range(),
-                            message: "`len` argument must name an `IntTuple` parameter",
-                        });
-                    };
-                    let Ok(literal) = integer_literal(&compare.comparators[0]).into_value() else {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: compare.comparators[0].range(),
-                            message: "`len` comparison requires an integer literal",
-                        });
-                    };
-                    return Ok(TypeShapeDslConditionKind::LengthEqualLiteral { shape, literal });
-                }
-                if compare.ops.len() != 1
-                    || !matches!(compare.ops[0], CmpOp::Eq | CmpOp::Lt)
-                    || compare.comparators.len() != 1
-                {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: compare.range,
-                        message: "comparison must be exactly `<Int parameter> == <Int parameter>`, `<Int parameter> < <Int parameter>`, or `<int parameter> < <integer literal>`",
-                    });
-                }
-                let Some(left) = self.slot(&compare.left) else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: compare.left.range(),
-                        message: "left comparison operand must name a parameter",
-                    });
-                };
-                let right = &compare.comparators[0];
-                Ok(match (compare.ops[0], self.slot(right)) {
-                    (CmpOp::Eq, Some(right)) => TypeShapeDslConditionKind::Equal(left, right),
-                    (CmpOp::Lt, Some(right)) => TypeShapeDslConditionKind::LessThan(left, right),
-                    (CmpOp::Lt, None) => {
-                        let literal = match integer_literal(right) {
-                            IntegerLiteral::NotLiteral => {
-                                return Err(TypeShapeDslDefinitionError {
-                                    range: right.range(),
-                                    message: "right `<` operand must name a parameter or be an integer literal",
-                                });
-                            }
-                            IntegerLiteral::Unrepresentable => None,
-                            IntegerLiteral::Value(value) => Some(value),
-                        };
-                        TypeShapeDslConditionKind::FlagIntLessThanLiteral {
-                            parameter: left,
-                            literal,
-                        }
-                    }
-                    (CmpOp::Eq, None) => {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: right.range(),
-                            message: "condition operands must name parameters",
-                        });
-                    }
-                    _ => unreachable!("validated comparison operator is equality or less-than"),
-                })
-            }
-            Expr::Call(call)
-                if (self.resolve_intrinsic)(&call.func)
-                    == Some(TypeShapeDslIntrinsic::IsConcreteInt) =>
-            {
-                if call.arguments.args.len() != 1
-                    || !call.arguments.keywords.is_empty()
-                    || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
-                {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: call.arguments.range,
-                        message: "`is_concrete_int` condition requires exactly one positional argument",
-                    });
-                }
-                let Some(parameter) = self.slot(&call.arguments.args[0]) else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: call.arguments.args[0].range(),
-                        message: "`is_concrete_int` argument must name a parameter",
-                    });
-                };
-                Ok(TypeShapeDslConditionKind::IsConcreteInt(parameter))
-            }
-            _ => Err(TypeShapeDslDefinitionError {
-                range: condition.range(),
-                message: "condition supports only `is_concrete_int`, `and`, `==`, and `<`",
-            }),
+fn parameter_index(parameters: &Parameters, expr: &Expr) -> Option<usize> {
+    let Expr::Name(name) = expr else {
+        return None;
+    };
+    parameters
+        .args
+        .iter()
+        .position(|parameter| parameter.parameter.name.id == name.id)
+}
+
+// The AST is executable program state, not a derived cache, so its identity must participate in
+// incremental equality. Aliases within one module generation share this `Arc`; reparsing an edited
+// definition creates a new allocation and invalidates every dependent call result. In particular,
+// this must not be wrapped in `IdentityIgnored` like the derived V1 helper-closure cache.
+impl PartialEq for ParsedTypeShapeDslFunction {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.definition, &other.definition)
+    }
+}
+
+impl Eq for ParsedTypeShapeDslFunction {}
+
+impl Hash for ParsedTypeShapeDslFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (Arc::as_ptr(&self.definition) as *const () as usize).hash(state);
+    }
+}
+
+// This ordering is a process-local tie-breaker required by type nodes that derive `Ord`; it must
+// not be used for stable output. Comparing the same identity as equality keeps `cmp` consistent
+// with the pointer-based `Eq` above while distinguishing reparsed definitions.
+impl PartialOrd for ParsedTypeShapeDslFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ParsedTypeShapeDslFunction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let self_ptr = Arc::as_ptr(&self.definition) as *const () as usize;
+        let other_ptr = Arc::as_ptr(&other.definition) as *const () as usize;
+        self_ptr.cmp(&other_ptr)
+    }
+}
+
+impl Visit<Type> for ParsedTypeShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for ParsedTypeShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl Visit<Type> for Arc<ParsedTypeShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for Arc<ParsedTypeShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl TypeEqTrait for ParsedTypeShapeDslFunction {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other
+    }
+}
+
+// `TextRange` has no total order, so the resolved metadata is ordered by its offsets. Like the
+// pointer ordering on the parsed program this is a process-local tie-breaker required by type
+// nodes that derive `Ord`, and it stays consistent with the derived `Eq` above.
+impl PartialOrd for ValidatedTypeShapeDslFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ValidatedTypeShapeDslFunction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        fn offsets(range: TextRange) -> (TextSize, TextSize) {
+            (range.start(), range.end())
         }
+        self.parsed
+            .cmp(&other.parsed)
+            .then_with(|| {
+                self.returns
+                    .iter()
+                    .map(|x| {
+                        (
+                            offsets(x.statement_range),
+                            offsets(x.value_range),
+                            x.kind.clone(),
+                        )
+                    })
+                    .cmp(other.returns.iter().map(|x| {
+                        (
+                            offsets(x.statement_range),
+                            offsets(x.value_range),
+                            x.kind.clone(),
+                        )
+                    }))
+            })
+            .then_with(|| {
+                self.conditions
+                    .iter()
+                    .map(|x| (offsets(x.range), x.kind.clone()))
+                    .cmp(
+                        other
+                            .conditions
+                            .iter()
+                            .map(|x| (offsets(x.range), x.kind.clone())),
+                    )
+            })
+            .then_with(|| {
+                self.expressions
+                    .iter()
+                    .map(|x| (offsets(x.range), x.kind.clone()))
+                    .cmp(
+                        other
+                            .expressions
+                            .iter()
+                            .map(|x| (offsets(x.range), x.kind.clone())),
+                    )
+            })
+            .then_with(|| {
+                self.assignments
+                    .iter()
+                    .map(|x| (offsets(x.range), x.slot))
+                    .cmp(other.assignments.iter().map(|x| (offsets(x.range), x.slot)))
+            })
+            .then_with(|| self.slot_count.cmp(&other.slot_count))
+    }
+}
+
+impl Visit<Type> for ValidatedTypeShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for ValidatedTypeShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl Visit<Type> for Arc<ValidatedTypeShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for Arc<ValidatedTypeShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl TypeEqTrait for ValidatedTypeShapeDslFunction {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other
+    }
+}
+
+fn expression_root_name(expr: &Expr) -> Option<&Name> {
+    match expr {
+        Expr::Name(name) => Some(&name.id),
+        Expr::Attribute(attribute) => expression_root_name(&attribute.value),
+        _ => None,
     }
 }
 
@@ -776,23 +1365,41 @@ impl ParsedTypeShapeDslFunction {
         })
     }
 
-    /// Validate the body, which so far may only return a parameter or a gradual intrinsic.
-    pub fn validate_body(
+    /// Validate the body: its lexical slots, control flow, and every resolved execution fact
+    /// evaluation later replays against the retained AST.
+    pub fn validate(
         &self,
-        resolve_intrinsic: impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
+        intrinsic: impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
     ) -> Result<ValidatedTypeShapeDslFunction, TypeShapeDslDefinitionError> {
-        let mut validator = DslValidator::new(&self.definition.parameters, &resolve_intrinsic);
-        if validator.validate_block(&self.definition.body)? != DslStatementFlow::Return {
+        let parameters = &self.definition.parameters;
+        // `DslValidator::intrinsic` suppresses resolution for any name bound by a slot, which
+        // seeds with every parameter, so shadowing needs no separate check here.
+        let (mut validator, flow) = DslValidator::new(parameters, &intrinsic);
+        if validator
+            .validate_suite(&self.definition.body, flow)?
+            .is_some()
+        {
             return Err(TypeShapeDslDefinitionError {
                 range: self.definition.name.range(),
                 message: "every control-flow path must return",
             });
         }
+        let DslValidator {
+            returns,
+            conditions,
+            expressions,
+            assignments,
+            declared_local_kinds,
+            ..
+        } = validator;
+        let slot_count = declared_local_kinds.len();
         Ok(ValidatedTypeShapeDslFunction {
             parsed: self.clone(),
-            returns: validator.returns,
-            conditions: validator.conditions,
-            expressions: validator.expressions,
+            returns,
+            conditions,
+            expressions,
+            assignments,
+            slot_count,
         })
     }
 
@@ -838,155 +1445,7 @@ impl ParsedTypeShapeDslFunction {
     }
 }
 
-// The AST is executable program state, not a derived cache, so its identity must participate in
-// incremental equality. Aliases within one module generation share this `Arc`; reparsing an edited
-// definition creates a new allocation and invalidates every dependent call result. In particular,
-// this must not be wrapped in `IdentityIgnored` like the derived V1 helper-closure cache.
-impl PartialEq for ParsedTypeShapeDslFunction {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.definition, &other.definition)
-    }
-}
-
-impl Eq for ParsedTypeShapeDslFunction {}
-
-impl Hash for ParsedTypeShapeDslFunction {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (Arc::as_ptr(&self.definition) as *const () as usize).hash(state);
-    }
-}
-
-// This ordering is a process-local tie-breaker required by type nodes that derive `Ord`; it must
-// not be used for stable output. Comparing the same identity as equality keeps `cmp` consistent
-// with the pointer-based `Eq` above while distinguishing reparsed definitions.
-impl PartialOrd for ParsedTypeShapeDslFunction {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ParsedTypeShapeDslFunction {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let self_ptr = Arc::as_ptr(&self.definition) as *const () as usize;
-        let other_ptr = Arc::as_ptr(&other.definition) as *const () as usize;
-        self_ptr.cmp(&other_ptr)
-    }
-}
-
-impl Visit<Type> for ParsedTypeShapeDslFunction {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-impl VisitMut<Type> for ParsedTypeShapeDslFunction {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-
-impl Visit<Type> for Arc<ParsedTypeShapeDslFunction> {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-impl VisitMut<Type> for Arc<ParsedTypeShapeDslFunction> {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-
-impl TypeEqTrait for ParsedTypeShapeDslFunction {
-    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
-        self == other
-    }
-}
-
-/// An owned function AST whose restricted declaration syntax and body have been validated.
-/// Future evaluation may interpret the definition relying on these invariants.
-///
-/// Identity is derived from the parsed program's pointer identity plus the resolved metadata. The
-/// latter is required because resolving an intrinsic depends on imports outside this AST, so an
-/// unedited declaration whose gradual constructor now resolves to a different domain is unequal.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ValidatedTypeShapeDslFunction {
-    parsed: ParsedTypeShapeDslFunction,
-    // These source-keyed facts are validation invariants for the retained AST, not a body IR.
-    returns: Vec<TypeShapeDslReturn>,
-    conditions: Vec<TypeShapeDslCondition>,
-    expressions: Vec<TypeShapeDslExpression>,
-}
-
-// `TextRange` has no total order, so the resolved metadata is ordered by its offsets. Like the
-// pointer ordering on the parsed program this is a process-local tie-breaker required by type
-// nodes that derive `Ord`, and it stays consistent with the derived `Eq` above.
-impl PartialOrd for ValidatedTypeShapeDslFunction {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ValidatedTypeShapeDslFunction {
-    fn cmp(&self, other: &Self) -> Ordering {
-        fn offsets(range: TextRange) -> (TextSize, TextSize) {
-            (range.start(), range.end())
-        }
-        self.parsed
-            .cmp(&other.parsed)
-            .then_with(|| {
-                self.returns
-                    .iter()
-                    .map(|x| (offsets(x.statement_range), offsets(x.value_range), x.kind))
-                    .cmp(
-                        other
-                            .returns
-                            .iter()
-                            .map(|x| (offsets(x.statement_range), offsets(x.value_range), x.kind)),
-                    )
-            })
-            .then_with(|| {
-                self.conditions
-                    .iter()
-                    .map(|x| (offsets(x.range), x.kind))
-                    .cmp(other.conditions.iter().map(|x| (offsets(x.range), x.kind)))
-            })
-            .then_with(|| {
-                self.expressions
-                    .iter()
-                    .map(|x| (offsets(x.range), x.kind))
-                    .cmp(other.expressions.iter().map(|x| (offsets(x.range), x.kind)))
-            })
-    }
-}
-
-impl Visit<Type> for ValidatedTypeShapeDslFunction {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-impl VisitMut<Type> for ValidatedTypeShapeDslFunction {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-
-impl Visit<Type> for Arc<ValidatedTypeShapeDslFunction> {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-impl VisitMut<Type> for Arc<ValidatedTypeShapeDslFunction> {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-
-impl TypeEqTrait for ValidatedTypeShapeDslFunction {
-    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
-        self == other
-    }
-}
-
 impl ValidatedTypeShapeDslFunction {
-    fn parameter_count(&self) -> usize {
-        self.parsed.parameter_count()
-    }
-
     pub fn name(&self) -> &Name {
         self.parsed.name()
     }
@@ -996,100 +1455,15 @@ impl ValidatedTypeShapeDslFunction {
     }
 
     pub fn returns(&self) -> impl Iterator<Item = TypeShapeDslReturn> + '_ {
-        self.returns.iter().copied()
+        self.returns.iter().cloned()
     }
 
     pub fn conditions(&self) -> impl Iterator<Item = TypeShapeDslCondition> + '_ {
-        self.conditions.iter().copied()
+        self.conditions.iter().cloned()
     }
 
     pub fn expressions(&self) -> impl Iterator<Item = TypeShapeDslExpression> + '_ {
-        self.expressions.iter().copied()
-    }
-}
-
-impl TypeShapeDslReturn {
-    pub fn range(self) -> TextRange {
-        self.value_range
-    }
-
-    pub fn kind(self) -> TypeShapeDslReturnKind {
-        self.kind
-    }
-}
-
-impl TypeShapeDslCondition {
-    pub fn range(self) -> TextRange {
-        self.range
-    }
-
-    pub fn kind(self) -> TypeShapeDslConditionKind {
-        self.kind
-    }
-}
-
-impl TypeShapeDslExpression {
-    pub fn range(self) -> TextRange {
-        self.range
-    }
-
-    pub fn kind(self) -> TypeShapeDslExpressionKind {
-        self.kind
-    }
-}
-
-impl ResolvedTypeShapeDslFunction {
-    pub fn try_new(
-        definition: Arc<ValidatedTypeShapeDslFunction>,
-        parameter_domains: Vec<TypeShapeDslInputDomain>,
-        result_domain: TypeShapeDslDomain,
-    ) -> Option<Self> {
-        if definition.parameter_count() != parameter_domains.len() {
-            return None;
-        }
-        let resolved = Self {
-            definition,
-            parameter_domains,
-            result_domain,
-        };
-        if !resolved
-            .definition
-            .returns()
-            .all(|return_| resolved.return_domain(return_.kind()) == Some(result_domain))
-        {
-            return None;
-        }
-        Some(resolved)
-    }
-
-    pub fn name(&self) -> &Name {
-        self.definition.name()
-    }
-
-    pub fn parameter_name(&self, index: usize) -> &Name {
-        self.definition.parameter_name(index)
-    }
-
-    pub fn parameter_domains(&self) -> &[TypeShapeDslInputDomain] {
-        &self.parameter_domains
-    }
-
-    pub fn result_domain(&self) -> TypeShapeDslDomain {
-        self.result_domain
-    }
-
-    fn return_domain(&self, kind: TypeShapeDslReturnKind) -> Option<TypeShapeDslDomain> {
-        match kind {
-            TypeShapeDslReturnKind::Parameter(index) => match self.parameter_domains[index] {
-                TypeShapeDslInputDomain::Value(domain) => Some(domain),
-                TypeShapeDslInputDomain::Flag(_) => None,
-            },
-            TypeShapeDslReturnKind::Broadcast { .. } => Some(TypeShapeDslDomain::IntTuple),
-            TypeShapeDslReturnKind::IntFlagArithmetic { .. } => Some(TypeShapeDslDomain::Int),
-            TypeShapeDslReturnKind::Expression => Some(TypeShapeDslDomain::IntTuple),
-            TypeShapeDslReturnKind::Invalid => Some(self.result_domain),
-            TypeShapeDslReturnKind::Gradual(domain) => Some(domain),
-        }
+        self.expressions.iter().cloned()
     }
 }
 
@@ -1117,12 +1491,19 @@ enum DslValue {
     DimensionTuple(Vec<Int>),
 }
 
-enum DslEvaluation {
+#[derive(Clone)]
+enum DslOutcome {
     Value(DslValue),
     ExplicitGradual,
-    AutomaticFallback,
+    Invalid(ShapeError),
 }
 
+struct DslEnvironment {
+    parameter_count: usize,
+    slots: Vec<DslValue>,
+}
+
+#[derive(Clone, Copy)]
 enum DslCondition {
     True,
     False,
@@ -1131,11 +1512,7 @@ enum DslCondition {
 
 enum DslControlFlow {
     Continue,
-    Return(DslEvaluation),
-}
-
-struct DslEnvironment {
-    slots: Vec<DslValue>,
+    Return(DslOutcome),
 }
 
 impl Visit<Type> for TypeLevelDslFunction {
@@ -1193,153 +1570,169 @@ impl TypeLevelDslCall {
 
     /// Evaluates the call, reporting incompatible concrete shapes.
     pub fn evaluate(&self) -> Result<Type, ShapeError> {
+        let project = |outcome| match outcome {
+            DslOutcome::Value(DslValue::Unknown) => Ok(self.fallback()),
+            DslOutcome::Value(value) => Ok(value.into_type()),
+            DslOutcome::ExplicitGradual => Ok(self.fallback()),
+            DslOutcome::Invalid(error) => Err(error),
+        };
         match &self.function {
             TypeLevelDslFunction::Broadcast => {
                 let [left, right] = self.args.as_slice() else {
                     unreachable!("native broadcast DSL calls are constructed with two arguments");
                 };
-                Ok(
-                    match evaluate_broadcast(
-                        &DslValue::from_type(left, TypeShapeDslDomain::IntTuple),
-                        &DslValue::from_type(right, TypeShapeDslDomain::IntTuple),
-                    )? {
-                        DslEvaluation::Value(value) => value.into_type(),
-                        DslEvaluation::AutomaticFallback => self.fallback(),
-                        DslEvaluation::ExplicitGradual => {
-                            unreachable!("native broadcast does not return explicit gradual")
-                        }
-                    },
-                )
+                project(evaluate_broadcast(
+                    &DslValue::from_shape_type(left),
+                    &DslValue::from_shape_type(right),
+                ))
             }
             TypeLevelDslFunction::UserDefined(function) => {
-                Ok(match function.evaluate(&self.args)? {
-                    DslEvaluation::Value(value) => value.into_type(),
-                    DslEvaluation::ExplicitGradual | DslEvaluation::AutomaticFallback => {
-                        self.fallback()
-                    }
-                })
+                project(function.definition.evaluate(&self.args, function))
             }
         }
     }
 }
 
-impl ResolvedTypeShapeDslFunction {
-    fn evaluate(&self, args: &[Type]) -> Result<DslEvaluation, ShapeError> {
+impl ValidatedTypeShapeDslFunction {
+    fn evaluate(&self, args: &[Type], signature: &ResolvedTypeShapeDslFunction) -> DslOutcome {
+        let parameter_count = self.parsed.parameter_count();
+        assert_eq!(
+            parameter_count,
+            signature.parameter_domains().len(),
+            "validated type-level DSL AST must align with its signature"
+        );
         assert_eq!(
             args.len(),
-            self.parameter_domains.len(),
-            "type-level DSL values must align with resolved parameters"
+            parameter_count,
+            "type-level DSL values must align with validated parameters"
         );
-        let environment = DslEnvironment {
-            slots: args
-                .iter()
-                .zip(&self.parameter_domains)
-                .map(|(argument, domain)| lower_parameter(argument, *domain))
-                .collect(),
+        let mut slots = args
+            .iter()
+            .zip(signature.parameter_domains())
+            .map(|(argument, domain)| lower_parameter(argument, *domain))
+            .collect::<Vec<_>>();
+        slots.resize(self.slot_count, DslValue::Unknown);
+        let mut environment = DslEnvironment {
+            parameter_count: args.len(),
+            slots,
         };
-        match self.evaluate_block(&self.definition.parsed.definition.body, &environment)? {
-            DslControlFlow::Return(result) => Ok(result),
+        match self.evaluate_suite(&self.parsed.definition.body, &mut environment, signature) {
+            DslControlFlow::Return(result) => result,
             DslControlFlow::Continue => {
                 unreachable!("validated type-level DSL function cannot fall through")
             }
         }
     }
 
-    fn evaluate_block(
+    fn evaluate_suite(
         &self,
-        block: &[Stmt],
-        environment: &DslEnvironment,
-    ) -> Result<DslControlFlow, ShapeError> {
-        for statement in block {
+        suite: &[Stmt],
+        environment: &mut DslEnvironment,
+        signature: &ResolvedTypeShapeDslFunction,
+    ) -> DslControlFlow {
+        for statement in suite {
             match statement {
+                Stmt::Assign(assign) => {
+                    // Restricted DSL bodies keep these source-keyed validation tables small;
+                    // retaining source order also keeps their diagnostic and inspection APIs simple.
+                    let slot = self
+                        .assignments
+                        .iter()
+                        .find_map(|assignment| {
+                            (assignment.range == assign.range).then_some(assignment.slot)
+                        })
+                        .expect("validated assignment must have indexed-storage metadata");
+                    match self.evaluate_expression(&assign.value, environment) {
+                        DslOutcome::Value(value) => environment.assign(slot, value),
+                        DslOutcome::ExplicitGradual => {
+                            unreachable!("validated assignment expression cannot return gradual")
+                        }
+                        DslOutcome::Invalid(error) => {
+                            return DslControlFlow::Return(DslOutcome::Invalid(error));
+                        }
+                    }
+                }
                 Stmt::Return(return_stmt) => {
                     let kind = self
-                        .definition
                         .returns
                         .iter()
                         .find_map(|return_| {
-                            (return_.statement_range == return_stmt.range).then_some(return_.kind)
+                            (return_.statement_range == return_stmt.range)
+                                .then(|| return_.kind.clone())
                         })
                         .expect("validated return statement must have validation metadata");
-                    return Ok(DslControlFlow::Return(match kind {
-                        TypeShapeDslReturnKind::Parameter(index) => {
-                            let TypeShapeDslInputDomain::Value(domain) =
-                                self.parameter_domains[index]
-                            else {
-                                unreachable!("resolved Flag parameters cannot be returned")
-                            };
+                    return DslControlFlow::Return(match kind {
+                        TypeShapeDslReturnKind::Parameter(return_index) => {
                             assert_eq!(
-                                domain,
-                                self.result_domain(),
-                                "resolved parameter return domain must match the result domain"
+                                signature.parameter_domains()[return_index],
+                                TypeShapeDslInputDomain::Value(signature.result_domain()),
+                                "validated parameter return domain must match its result domain"
                             );
-                            match environment.value(index) {
-                                DslValue::Unknown => DslEvaluation::AutomaticFallback,
-                                value => DslEvaluation::Value(value.clone()),
-                            }
+                            DslOutcome::Value(environment.value(return_index).clone())
+                        }
+                        TypeShapeDslReturnKind::Local { slot, .. } => {
+                            DslOutcome::Value(environment.value(slot).clone())
+                        }
+                        TypeShapeDslReturnKind::AliasedParameter { slot, .. } => {
+                            DslOutcome::Value(environment.value(slot).clone())
                         }
                         TypeShapeDslReturnKind::IntFlagArithmetic { left, op, right } => {
-                            assert_eq!(
-                                self.result_domain(),
-                                TypeShapeDslDomain::Int,
-                                "resolved arithmetic return must produce Int"
-                            );
-                            assert_eq!(
-                                self.parameter_domains[left],
-                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int),
-                                "resolved arithmetic left operand must be Int"
-                            );
-                            assert_eq!(
-                                self.parameter_domains[right],
-                                TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int)),
-                                "resolved arithmetic right operand must be Flag[int]"
-                            );
                             let (Some(left), Some(right)) =
                                 (environment.dimension(left), environment.flag_int(right))
                             else {
-                                return Ok(DslControlFlow::Return(
-                                    DslEvaluation::AutomaticFallback,
+                                return DslControlFlow::Return(DslOutcome::Value(
+                                    DslValue::Unknown,
                                 ));
                             };
-                            let result = match op {
-                                TypeShapeDslArithmeticOp::Add => Int::add(
-                                    Type::Int(left.clone()),
-                                    Type::Int(Int::Literal(right)),
-                                ),
-                                TypeShapeDslArithmeticOp::Subtract => Int::sub(
-                                    Type::Int(left.clone()),
-                                    Type::Int(Int::Literal(right)),
-                                ),
+                            let result = match (left, op) {
+                                (Int::Literal(left), TypeShapeDslArithmeticOp::Add) => {
+                                    left.checked_add(right).map(Int::Literal)
+                                }
+                                (Int::Literal(left), TypeShapeDslArithmeticOp::Subtract) => {
+                                    left.checked_sub(right).map(Int::Literal)
+                                }
+                                (_, TypeShapeDslArithmeticOp::Subtract) if right == i64::MIN => {
+                                    None
+                                }
+                                (left, TypeShapeDslArithmeticOp::Add) => literal_offset(left)
+                                    .and_then(|offset| {
+                                        offset.checked_add(right).map(|_| {
+                                            Int::add(
+                                                Type::Int(left.clone()),
+                                                Type::Int(Int::Literal(right)),
+                                            )
+                                        })
+                                    }),
+                                (left, TypeShapeDslArithmeticOp::Subtract) => literal_offset(left)
+                                    .and_then(|offset| {
+                                        offset.checked_sub(right).map(|_| {
+                                            Int::sub(
+                                                Type::Int(left.clone()),
+                                                Type::Int(Int::Literal(right)),
+                                            )
+                                        })
+                                    }),
                             };
-                            Int::from_type(&canonicalize(Type::Int(result)))
-                                .map_or(DslEvaluation::AutomaticFallback, |result| {
-                                    DslEvaluation::Value(DslValue::Dimension(result))
+                            result
+                                .and_then(|result| Int::from_type(&canonicalize(Type::Int(result))))
+                                .map_or(DslOutcome::Value(DslValue::Unknown), |result| {
+                                    DslOutcome::Value(DslValue::Dimension(result))
                                 })
                         }
-                        TypeShapeDslReturnKind::Broadcast { left, right } => {
-                            assert_eq!(
-                                self.result_domain(),
-                                TypeShapeDslDomain::IntTuple,
-                                "resolved broadcast return must produce IntTuple"
-                            );
-                            assert_eq!(
-                                self.parameter_domains[left],
-                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
-                                "resolved broadcast left operand must be IntTuple"
-                            );
-                            assert_eq!(
-                                self.parameter_domains[right],
-                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
-                                "resolved broadcast right operand must be IntTuple"
-                            );
-                            evaluate_broadcast(environment.value(left), environment.value(right))?
-                        }
+                        TypeShapeDslReturnKind::Broadcast {
+                            left_slot,
+                            right_slot,
+                            ..
+                        } => evaluate_broadcast(
+                            environment.value(left_slot),
+                            environment.value(right_slot),
+                        ),
                         TypeShapeDslReturnKind::Expression => {
                             let expression = return_stmt
                                 .value
                                 .as_deref()
                                 .expect("validated expression return has a value");
-                            self.evaluate_expression(expression, environment)?
+                            self.evaluate_expression(expression, environment)
                         }
                         TypeShapeDslReturnKind::Invalid => {
                             let Some(Expr::Call(call)) = return_stmt.value.as_deref() else {
@@ -1349,75 +1742,107 @@ impl ResolvedTypeShapeDslFunction {
                             else {
                                 unreachable!("validated Invalid return has a string message")
                             };
-                            return Err(ShapeError::ShapeComputation {
+                            DslOutcome::Invalid(ShapeError::ShapeComputation {
                                 message: message.value.to_str().to_owned(),
-                            });
+                            })
                         }
-                        TypeShapeDslReturnKind::Gradual(_) => DslEvaluation::ExplicitGradual,
-                    }));
+                        TypeShapeDslReturnKind::Gradual(domain) => {
+                            assert_eq!(
+                                domain,
+                                signature.result_domain(),
+                                "validated explicit gradual DSL return domain must match its result domain"
+                            );
+                            DslOutcome::ExplicitGradual
+                        }
+                    });
                 }
-                Stmt::If(if_stmt) => match self.evaluate_condition(&if_stmt.test, environment) {
-                    DslCondition::True => match self.evaluate_block(&if_stmt.body, environment)? {
-                        DslControlFlow::Continue => {}
-                        result @ DslControlFlow::Return(_) => return Ok(result),
-                    },
-                    DslCondition::False => {}
-                    DslCondition::Unknown => {
-                        return Ok(DslControlFlow::Return(DslEvaluation::AutomaticFallback));
-                    }
+                Stmt::If(if_stmt) => match self.evaluate_if(if_stmt, environment, signature) {
+                    DslControlFlow::Continue => {}
+                    result @ DslControlFlow::Return(_) => return result,
                 },
-                _ => unreachable!("validated type-level DSL block contains only if and return"),
+                _ => unreachable!(
+                    "validated type-level DSL suite contains only assignments, if, and return"
+                ),
             }
         }
-        Ok(DslControlFlow::Continue)
+        DslControlFlow::Continue
+    }
+
+    fn evaluate_if(
+        &self,
+        if_stmt: &StmtIf,
+        environment: &mut DslEnvironment,
+        signature: &ResolvedTypeShapeDslFunction,
+    ) -> DslControlFlow {
+        match self.evaluate_condition(&if_stmt.test, environment) {
+            Err(error) => return DslControlFlow::Return(DslOutcome::Invalid(error)),
+            Ok(DslCondition::True) => {
+                return self.evaluate_suite(&if_stmt.body, environment, signature);
+            }
+            Ok(DslCondition::False) => {}
+            Ok(DslCondition::Unknown) => {
+                return DslControlFlow::Return(DslOutcome::Value(DslValue::Unknown));
+            }
+        }
+        for clause in &if_stmt.elif_else_clauses {
+            match &clause.test {
+                Some(test) => match self.evaluate_condition(test, environment) {
+                    Err(error) => return DslControlFlow::Return(DslOutcome::Invalid(error)),
+                    Ok(DslCondition::True) => {
+                        return self.evaluate_suite(&clause.body, environment, signature);
+                    }
+                    Ok(DslCondition::False) => {}
+                    Ok(DslCondition::Unknown) => {
+                        return DslControlFlow::Return(DslOutcome::Value(DslValue::Unknown));
+                    }
+                },
+                None => return self.evaluate_suite(&clause.body, environment, signature),
+            }
+        }
+        DslControlFlow::Continue
     }
 
     fn expression_kind(&self, expression: &Expr) -> TypeShapeDslExpressionKind {
-        self.definition
-            .expressions
+        self.expressions
             .iter()
-            .find_map(|metadata| (metadata.range == expression.range()).then_some(metadata.kind))
+            .find_map(|metadata| {
+                (metadata.range == expression.range()).then(|| metadata.kind.clone())
+            })
             .expect("validated DSL value expression must have validation metadata")
     }
 
-    fn evaluate_expression(
-        &self,
-        expression: &Expr,
-        environment: &DslEnvironment,
-    ) -> Result<DslEvaluation, ShapeError> {
-        Ok(match self.expression_kind(expression) {
-            TypeShapeDslExpressionKind::DimensionParameter(parameter) => {
-                match environment.value(parameter) {
-                    DslValue::Unknown => DslEvaluation::AutomaticFallback,
-                    value @ DslValue::Dimension(_) => DslEvaluation::Value(value.clone()),
-                    _ => unreachable!("validated dimension parameter evaluates to an Int"),
-                }
+    fn evaluate_expression(&self, expression: &Expr, environment: &DslEnvironment) -> DslOutcome {
+        match self.expression_kind(expression) {
+            TypeShapeDslExpressionKind::DimensionSlot { slot, .. } => {
+                DslOutcome::Value(environment.value(slot).clone())
             }
             TypeShapeDslExpressionKind::DimensionLiteral(literal) => literal
-                .map_or(DslEvaluation::AutomaticFallback, |literal| {
-                    DslEvaluation::Value(DslValue::Dimension(Int::Literal(literal)))
+                .map_or(DslOutcome::Value(DslValue::Unknown), |literal| {
+                    DslOutcome::Value(DslValue::Dimension(Int::Literal(literal)))
                 }),
-            TypeShapeDslExpressionKind::IntTupleIndex { shape, index } => {
+            TypeShapeDslExpressionKind::IntTupleIndex { shape, index, .. } => {
                 let Some(index) = index else {
-                    return Ok(DslEvaluation::AutomaticFallback);
+                    return DslOutcome::Value(DslValue::Unknown);
                 };
                 let shape = match environment.value(shape) {
                     DslValue::Shape(shape) => shape,
-                    DslValue::Unknown => return Ok(DslEvaluation::AutomaticFallback),
-                    _ => unreachable!("validated IntTuple parameter evaluates to a shape"),
+                    DslValue::Unknown => return DslOutcome::Value(DslValue::Unknown),
+                    _ => {
+                        unreachable!("validated IntTuple index parameter evaluates to a shape")
+                    }
                 };
                 let IntTupleView::Concrete(shape) = shape.view() else {
-                    return Ok(DslEvaluation::AutomaticFallback);
+                    return DslOutcome::Value(DslValue::Unknown);
                 };
                 let length = shape.len() as i128;
                 let index = i128::from(index);
                 let index = if index < 0 { index + length } else { index };
                 if index < 0 || index >= length {
-                    return Err(ShapeError::ShapeComputation {
+                    return DslOutcome::Invalid(ShapeError::ShapeComputation {
                         message: "IntTuple index out of bounds".to_owned(),
                     });
                 }
-                DslEvaluation::Value(DslValue::Dimension(shape[index as usize].clone()))
+                DslOutcome::Value(DslValue::Dimension(shape[index as usize].clone()))
             }
             TypeShapeDslExpressionKind::DimensionTuple => {
                 let Expr::Tuple(tuple) = expression else {
@@ -1426,70 +1851,98 @@ impl ResolvedTypeShapeDslFunction {
                 let mut dimensions = Vec::with_capacity(tuple.elts.len());
                 let mut unknown = false;
                 for element in &tuple.elts {
-                    match self.evaluate_expression(element, environment)? {
-                        DslEvaluation::Value(DslValue::Dimension(dimension)) => {
+                    match self.evaluate_expression(element, environment) {
+                        DslOutcome::Value(DslValue::Dimension(dimension)) => {
                             dimensions.push(dimension)
                         }
-                        DslEvaluation::AutomaticFallback | DslEvaluation::ExplicitGradual => {
-                            unknown = true;
+                        DslOutcome::Value(DslValue::Unknown) => unknown = true,
+                        DslOutcome::ExplicitGradual => {
+                            unreachable!("validated value expression cannot return gradual")
                         }
-                        DslEvaluation::Value(_) => {
+                        invalid @ DslOutcome::Invalid(_) => return invalid,
+                        DslOutcome::Value(_) => {
                             unreachable!("validated IntTuple element produces an Int value")
                         }
                     }
                 }
                 if unknown {
-                    DslEvaluation::AutomaticFallback
+                    DslOutcome::Value(DslValue::Unknown)
                 } else {
-                    DslEvaluation::Value(DslValue::DimensionTuple(dimensions))
+                    DslOutcome::Value(DslValue::DimensionTuple(dimensions))
                 }
             }
             TypeShapeDslExpressionKind::IntTupleConstructor => {
                 let Expr::Call(call) = expression else {
                     unreachable!("validated IntTuple constructor expression is a call")
                 };
-                match self.evaluate_expression(&call.arguments.args[0], environment)? {
-                    DslEvaluation::Value(DslValue::DimensionTuple(dimensions)) => {
-                        DslEvaluation::Value(DslValue::Shape(IntTuple::new(dimensions)))
+                match self.evaluate_expression(&call.arguments.args[0], environment) {
+                    DslOutcome::Value(DslValue::DimensionTuple(dimensions)) => {
+                        DslOutcome::Value(DslValue::Shape(IntTuple::new(dimensions)))
                     }
-                    DslEvaluation::AutomaticFallback | DslEvaluation::ExplicitGradual => {
-                        DslEvaluation::AutomaticFallback
+                    DslOutcome::Value(DslValue::Unknown) => DslOutcome::Value(DslValue::Unknown),
+                    DslOutcome::ExplicitGradual => {
+                        unreachable!("validated value expression cannot return gradual")
                     }
-                    DslEvaluation::Value(_) => {
+                    invalid @ DslOutcome::Invalid(_) => invalid,
+                    DslOutcome::Value(_) => {
                         unreachable!("validated IntTuple constructor receives dimensions")
                     }
                 }
             }
-        })
+            TypeShapeDslExpressionKind::Slot(slot) => {
+                DslOutcome::Value(environment.value(slot).clone())
+            }
+        }
     }
 
-    fn evaluate_condition(&self, condition: &Expr, environment: &DslEnvironment) -> DslCondition {
+    fn evaluate_condition(
+        &self,
+        condition: &Expr,
+        environment: &DslEnvironment,
+    ) -> Result<DslCondition, ShapeError> {
         if let Expr::BoolOp(bool_op) = condition {
-            let mut result = DslCondition::True;
+            if bool_op.op != BoolOp::And {
+                unreachable!("validated boolean condition uses only `and`");
+            }
+            let mut unknown = false;
             for value in &bool_op.values {
-                match self.evaluate_condition(value, environment) {
-                    DslCondition::False => return DslCondition::False,
-                    DslCondition::Unknown => result = DslCondition::Unknown,
+                let value = match self.evaluate_condition(value, environment) {
+                    Ok(value) => value,
+                    // An unknown prefix may short-circuit before this operand for a concrete
+                    // instantiation, so an error here is not deterministic.
+                    Err(_error) if unknown => return Ok(DslCondition::Unknown),
+                    Err(error) => return Err(error),
+                };
+                match value {
+                    DslCondition::False => return Ok(DslCondition::False),
+                    DslCondition::Unknown => unknown = true,
                     DslCondition::True => {}
                 }
             }
-            return result;
+            return Ok(if unknown {
+                DslCondition::Unknown
+            } else {
+                DslCondition::True
+            });
         }
 
         let kind = self
-            .definition
             .conditions
             .iter()
-            .find_map(|condition_metadata| {
-                (condition_metadata.range == condition.range()).then_some(condition_metadata.kind)
+            .find_map(|metadata| {
+                (metadata.range == condition.range()).then(|| metadata.kind.clone())
             })
             .expect("validated atomic condition must have validation metadata");
-        match kind {
-            TypeShapeDslConditionKind::IsConcreteInt(parameter) => {
-                match environment.dimension(parameter) {
-                    Some(Int::Literal(_)) => DslCondition::True,
-                    Some(_) => DslCondition::False,
-                    None => DslCondition::Unknown,
+        Ok(match kind {
+            TypeShapeDslConditionKind::IsConcreteInt { slot, .. } => {
+                match environment.value(slot) {
+                    DslValue::Dimension(Int::Literal(_)) => DslCondition::True,
+                    // Symbolic and explicit-gradual `Int` values are definitively non-concrete.
+                    DslValue::Dimension(_) => DslCondition::False,
+                    // An admitted argument we cannot read as an `Int` is gradual, so it must fall
+                    // back rather than take the false branch and produce a precise result.
+                    DslValue::Unknown => DslCondition::Unknown,
+                    _ => unreachable!("validated is_concrete_int operand is an Int dimension"),
                 }
             }
             TypeShapeDslConditionKind::LessThan(left, right) => {
@@ -1497,8 +1950,9 @@ impl ResolvedTypeShapeDslFunction {
                     DslCondition::False
                 } else {
                     match (environment.dimension(left), environment.dimension(right)) {
-                        (Some(Int::Int), _) | (_, Some(Int::Int)) => DslCondition::Unknown,
-                        (Some(left), Some(right)) if left == right => DslCondition::False,
+                        (Some(left), Some(right)) if left == right && !matches!(left, Int::Int) => {
+                            DslCondition::False
+                        }
                         (Some(Int::Literal(left)), Some(Int::Literal(right))) if left < right => {
                             DslCondition::True
                         }
@@ -1508,14 +1962,19 @@ impl ResolvedTypeShapeDslFunction {
                 }
             }
             TypeShapeDslConditionKind::Equal(left, right) => {
-                // Reflexive equality is true even when the parameter itself is gradual.
                 if left == right {
                     DslCondition::True
                 } else {
                     match (environment.dimension(left), environment.dimension(right)) {
+                        (Some(Int::Literal(left)), Some(Int::Literal(right))) => {
+                            if left == right {
+                                DslCondition::True
+                            } else {
+                                DslCondition::False
+                            }
+                        }
                         (Some(Int::Int), _) | (_, Some(Int::Int)) => DslCondition::Unknown,
                         (Some(left), Some(right)) if left == right => DslCondition::True,
-                        (Some(Int::Literal(_)), Some(Int::Literal(_))) => DslCondition::False,
                         _ => DslCondition::Unknown,
                     }
                 }
@@ -1528,11 +1987,13 @@ impl ResolvedTypeShapeDslFunction {
                 }
             }
             TypeShapeDslConditionKind::LengthEqualLiteral { shape, literal } => {
-                let Some(shape) = environment.shape(shape) else {
-                    return DslCondition::Unknown;
+                let shape = match environment.value(shape) {
+                    DslValue::Shape(shape) => shape,
+                    DslValue::Unknown => return Ok(DslCondition::Unknown),
+                    _ => unreachable!("validated len operand evaluates to an IntTuple"),
                 };
                 let IntTupleView::Concrete(shape) = shape.view() else {
-                    return DslCondition::Unknown;
+                    return Ok(DslCondition::Unknown);
                 };
                 match literal {
                     Some(literal) if i128::from(literal) == shape.len() as i128 => {
@@ -1542,50 +2003,30 @@ impl ResolvedTypeShapeDslFunction {
                     None => DslCondition::Unknown,
                 }
             }
-        }
+        })
     }
 }
 
-impl DslEnvironment {
-    fn value(&self, slot: usize) -> &DslValue {
-        &self.slots[slot]
-    }
-
-    fn dimension(&self, slot: usize) -> Option<&Int> {
-        match self.value(slot) {
-            DslValue::Dimension(value) => Some(value),
-            DslValue::Unknown => None,
-            _ => unreachable!("validated dimension slot evaluates to an Int"),
-        }
-    }
-
-    fn flag_int(&self, slot: usize) -> Option<i64> {
-        match self.value(slot) {
-            DslValue::FlagInt(value) => Some(*value),
-            DslValue::Unknown => None,
-            _ => unreachable!("validated Flag[int] slot evaluates to a Flag[int] value"),
-        }
-    }
-
-    fn shape(&self, slot: usize) -> Option<&IntTuple> {
-        match self.value(slot) {
-            DslValue::Shape(value) => Some(value),
-            DslValue::Unknown => None,
-            _ => unreachable!("validated shape slot evaluates to an IntTuple"),
-        }
-    }
-}
-
-fn evaluate_broadcast(left: &DslValue, right: &DslValue) -> Result<DslEvaluation, ShapeError> {
+fn evaluate_broadcast(left: &DslValue, right: &DslValue) -> DslOutcome {
     let (DslValue::Shape(left), DslValue::Shape(right)) = (left, right) else {
         if matches!(left, DslValue::Unknown) || matches!(right, DslValue::Unknown) {
-            return Ok(DslEvaluation::AutomaticFallback);
+            return DslOutcome::Value(DslValue::Unknown);
         }
         unreachable!("validated broadcast operands evaluate to shapes")
     };
-    broadcast_shapes(left, right)
-        .map(DslValue::Shape)
-        .map(DslEvaluation::Value)
+    match broadcast_shapes(left, right) {
+        Ok(shape) => DslOutcome::Value(DslValue::Shape(shape)),
+        Err(error) => DslOutcome::Invalid(error),
+    }
+}
+
+fn literal_offset(value: &Int) -> Option<i64> {
+    match value {
+        Int::Literal(value) => Some(*value),
+        Int::Add(left, right) => literal_offset(left)?.checked_add(literal_offset(right)?),
+        Int::Sub(left, right) => literal_offset(left)?.checked_sub(literal_offset(right)?),
+        _ => Some(0),
+    }
 }
 
 fn flag_int_literal(ty: &Type) -> Option<i64> {
@@ -1604,31 +2045,6 @@ fn flag_int_literal(ty: &Type) -> Option<i64> {
     }
 }
 
-impl DslValue {
-    fn from_type(ty: &Type, domain: TypeShapeDslDomain) -> Self {
-        match domain {
-            TypeShapeDslDomain::Int => Int::from_type(ty).map_or(Self::Unknown, Self::Dimension),
-            TypeShapeDslDomain::IntTuple => IntTuple::from_shape_arg_type(ty)
-                .or_else(|| tuple_carrier_to_shape(ty))
-                .map_or(Self::Unknown, Self::Shape),
-        }
-    }
-
-    fn into_type(self) -> Type {
-        match self {
-            Self::Dimension(value) => Type::Int(value),
-            Self::Shape(value) => value.to_shape_arg_type(),
-            Self::Unknown => unreachable!("unknown DSL values project through fallback"),
-            Self::FlagInt(_) => {
-                unreachable!("Flag controls cannot be returned from the type-level DSL")
-            }
-            Self::DimensionTuple(_) => {
-                unreachable!("intermediate DSL values cannot be returned directly")
-            }
-        }
-    }
-}
-
 fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
     match domain {
         TypeShapeDslInputDomain::Value(domain) => DslValue::from_type(ty, domain),
@@ -1638,5 +2054,61 @@ fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
             }
             flag_int_literal(ty).map_or(DslValue::Unknown, DslValue::FlagInt)
         }
+    }
+}
+
+impl DslValue {
+    fn from_type(ty: &Type, domain: TypeShapeDslDomain) -> Self {
+        match domain {
+            TypeShapeDslDomain::Int => Int::from_type(ty).map_or(Self::Unknown, Self::Dimension),
+            TypeShapeDslDomain::IntTuple => Self::from_shape_type(ty),
+        }
+    }
+
+    fn from_shape_type(ty: &Type) -> Self {
+        IntTuple::from_shape_arg_type(ty)
+            .or_else(|| tuple_carrier_to_shape(ty))
+            .map_or(Self::Unknown, Self::Shape)
+    }
+
+    fn into_type(self) -> Type {
+        match self {
+            Self::Dimension(value) => Type::Int(value),
+            Self::Shape(value) => value.to_shape_arg_type(),
+            Self::Unknown => unreachable!("unknown DSL values project through the fallback"),
+            Self::FlagInt(_) | Self::DimensionTuple(_) => {
+                unreachable!("intermediate DSL values cannot be returned directly")
+            }
+        }
+    }
+}
+
+impl DslEnvironment {
+    fn value(&self, slot: usize) -> &DslValue {
+        &self.slots[slot]
+    }
+
+    fn dimension(&self, parameter: usize) -> Option<&Int> {
+        match &self.slots[parameter] {
+            DslValue::Dimension(value) => Some(value),
+            DslValue::Unknown => None,
+            _ => unreachable!("validated dimension parameter has the Int domain"),
+        }
+    }
+
+    fn flag_int(&self, parameter: usize) -> Option<i64> {
+        match &self.slots[parameter] {
+            DslValue::FlagInt(value) => Some(*value),
+            DslValue::Unknown => None,
+            _ => unreachable!("validated Flag[int] parameter has the Flag[int] value domain"),
+        }
+    }
+
+    fn assign(&mut self, slot: usize, value: DslValue) {
+        assert!(
+            slot >= self.parameter_count,
+            "validated assignment cannot target a parameter slot"
+        );
+        self.slots[slot] = value;
     }
 }

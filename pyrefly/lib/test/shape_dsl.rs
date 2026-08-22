@@ -1957,14 +1957,14 @@ def non_parameter(a: Int, b: Int) -> Int:
 
 @type_shape_dsl_function
 def with_else(a: Int, b: Int) -> Int:
-    if a == b:  # E: @type_shape_dsl_function does not support `else` or `elif`
+    if a == b:
         return a
     else:
         return b
 
 @type_shape_dsl_function
 def unsupported_statement(a: Int) -> Int:
-    x = a  # E: @type_shape_dsl_function body supports only `if` and `return`
+    x = a
     return x
 
 @type_shape_dsl_function
@@ -6109,6 +6109,102 @@ def f(shapeless: Array[IntTuple, int], concrete: Array[[3], int]) -> None:
     # Sameness and gradual assignability are unaffected.
     assert_type(shapeless, Array[IntTuple, int])
     assert_type(concrete, Array[[3], int])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_single_assignment_locals,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, broadcast, type_shape_dsl_function
+import shape_extensions.dsl as dsl
+from torch import Tensor
+from typing import reveal_type
+
+@type_shape_dsl_function
+def choose_shape(left: IntTuple, right: IntTuple, a: Int, b: Int) -> IntTuple:
+    if a == b:
+        result = left
+    else:
+        result = right
+    return result
+
+@type_shape_dsl_function
+def alias_broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    local_left = left
+    local_right = right
+    return broadcast(local_left, local_right)
+
+@type_shape_dsl_function
+def select_dimension(shape: IntTuple) -> IntTuple:
+    first = shape[0]
+    return dsl.IntTuple((first,))
+
+@type_shape_dsl_function
+def disjoint_local_domains(shape: IntTuple, a: Int, b: Int) -> IntTuple:
+    if a == b:
+        result = shape[0]
+        return shape
+    result = shape
+    return result
+
+def choose_left() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], Int[1], Int[1])]: ...
+def choose_right() -> Tensor[choose_shape(IntTuple[2], IntTuple[3], Int[1], Int[2])]: ...
+def apply_broadcast[Left: IntTuple, Right: IntTuple](
+    left: Tensor[Left], right: Tensor[Right],
+) -> Tensor[alias_broadcast(Left, Right)]: ...
+def apply_select[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[select_dimension(Shape)]: ...
+def disjoint_equal() -> Tensor[disjoint_local_domains(IntTuple[4, 5], Int[1], Int[1])]: ...
+def disjoint_unequal() -> Tensor[disjoint_local_domains(IntTuple[4, 5], Int[1], Int[2])]: ...
+
+def test(left: Tensor[[2, 1]], right: Tensor[[1, 3]], x: Tensor[[4, 5]]) -> None:
+    reveal_type(choose_left())  # E: revealed type: Tensor[[2]]
+    reveal_type(choose_right())  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_broadcast(left, right))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_select(x))  # E: revealed type: Tensor[[4]]
+    reveal_type(disjoint_equal())  # E: revealed type: Tensor[[4, 5]]
+    reveal_type(disjoint_unequal())  # E: revealed type: Tensor[[4, 5]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_single_assignment_locals,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def reassigned(shape: IntTuple) -> IntTuple:
+    result = shape
+    result = shape  # E: locals are immutable and cannot be reassigned
+    return result
+
+@type_shape_dsl_function
+def assigned_parameter(shape: IntTuple) -> IntTuple:
+    shape = shape  # E: parameters are immutable and cannot be assigned
+    return shape
+
+@type_shape_dsl_function
+def branch_only(shape: IntTuple, a: Int, b: Int) -> IntTuple:
+    if a == b:
+        result = shape
+    return result  # E: local value must be definitely assigned before use  # E: may be uninitialized
+
+@type_shape_dsl_function
+def incompatible_branch_alias(left: Int, right: IntTuple, a: Int, b: Int) -> IntTuple:
+    if a == b:
+        result = left
+    else:
+        result = right
+    return result  # E: local alias return domain must match the declared result  # E: Returned type
+
+@type_shape_dsl_function
+def incompatible_branch_domains(shape: IntTuple, a: Int, b: Int) -> IntTuple:
+    if a == b:  # E: all continuing branch assignments to a local must have the same value domain
+        result = shape[0]
+    else:
+        result = shape
+    return shape
 "#,
 );
 
