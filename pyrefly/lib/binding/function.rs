@@ -480,8 +480,9 @@ impl<'a> BindingsBuilder<'a> {
     /// This function must not be called unless the function body statements will be bound;
     /// it relies on that binding to ensure we don't have a dangling `Idx<Key>` (which could lead
     /// to a panic).
-    fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> Idx<Key> {
-        let last_exprs = function_last_expressions(body, self.sys_info).map(|x| {
+    fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> (Idx<Key>, bool) {
+        let (last_exprs, has_infinite_loop) = function_last_expressions(body, self.sys_info);
+        let last_exprs = last_exprs.map(|x| {
             x.into_map(|(last, x)| {
                 (
                     last.clone(),
@@ -490,9 +491,12 @@ impl<'a> BindingsBuilder<'a> {
             })
             .into_boxed_slice()
         });
-        self.insert_binding(
-            Key::ReturnImplicit(ShortIdentifier::new(func_name)),
-            Binding::ReturnImplicit(ReturnImplicit { last_exprs }),
+        (
+            self.insert_binding(
+                Key::ReturnImplicit(ShortIdentifier::new(func_name)),
+                Binding::ReturnImplicit(ReturnImplicit { last_exprs }),
+            ),
+            has_infinite_loop,
         )
     }
 
@@ -504,7 +508,7 @@ impl<'a> BindingsBuilder<'a> {
         is_async: bool,
         yields_and_returns: YieldsAndReturns,
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
-        implicit_return: Option<Idx<Key>>,
+        implicit_return: Option<(Idx<Key>, bool)>,
         should_infer_return_type: bool,
         is_stub: bool,
     ) {
@@ -516,6 +520,10 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 None
             };
+        let has_reachable_return = yields_and_returns
+            .returns
+            .iter()
+            .any(|(_, _, is_unreachable)| !is_unreachable);
 
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
@@ -565,7 +573,11 @@ impl<'a> BindingsBuilder<'a> {
 
         let return_type_binding = {
             let kind = match (return_ann_with_range, implicit_return, is_stub) {
-                (Some((range, annotation)), Some(implicit_return), false) => {
+                (
+                    Some((range, annotation)),
+                    Some((implicit_return, has_infinite_loop)),
+                    false,
+                ) => {
                     self.insert_binding(
                         KeyExpect::ValidateImplicitReturn(range),
                         BindingExpect::ValidateImplicitReturn {
@@ -573,7 +585,8 @@ impl<'a> BindingsBuilder<'a> {
                             implicit_return,
                             is_async,
                             is_generator,
-                            has_explicit_return: !return_keys.is_empty(),
+                            has_explicit_return: has_reachable_return,
+                            has_infinite_loop,
                         },
                     );
                     ReturnTypeKind::ShouldTrustAnnotation {
@@ -592,7 +605,7 @@ impl<'a> BindingsBuilder<'a> {
                         is_generator,
                     }
                 }
-                (None, Some(implicit_return), _) if should_infer_return_type => {
+                (None, Some((implicit_return, _)), _) if should_infer_return_type => {
                     // We don't have an explicit return annotation, but we want to infer it.
                     ReturnTypeKind::ShouldInferType {
                         returns: return_keys,
@@ -962,11 +975,18 @@ impl<'a> BindingsBuilder<'a> {
 /// * Return None to say there are branches that fall off the end always.
 /// * Return Some([]) to say that we can never reach the end (e.g. always return, raise)
 /// * Return Some(xs) to say this set might be the last expression.
+///
+/// The boolean records whether an unconditional loop is one of the terminal paths.
 fn function_last_expressions<'a>(
     x: &'a [Stmt],
     sys_info: SysInfo,
-) -> Option<Vec<(LastStmt, &'a Expr)>> {
-    fn f<'a>(sys_info: SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
+) -> (Option<Vec<(LastStmt, &'a Expr)>>, bool) {
+    fn f<'a>(
+        sys_info: SysInfo,
+        x: &'a [Stmt],
+        res: &mut Vec<(LastStmt, &'a Expr)>,
+        has_infinite_loop: &mut bool,
+    ) -> Option<()> {
         fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
             match statement {
                 Stmt::Break(_) => {
@@ -987,7 +1007,7 @@ fn function_last_expressions<'a>(
                 for y in &x.items {
                     res.push((LastStmt::With(kind), &y.context_expr));
                 }
-                f(sys_info, &x.body, res)?;
+                f(sys_info, &x.body, res, has_infinite_loop)?;
             }
             Stmt::While(x) => {
                 let test_value = sys_info.evaluate_bool(&x.test);
@@ -999,10 +1019,11 @@ fn function_last_expressions<'a>(
                 }
                 if test_value == Some(true) && !has_break {
                     // Infinite loop with no break never falls through.
+                    *has_infinite_loop = true;
                 } else if has_break || x.orelse.is_empty() {
                     return None;
                 } else {
-                    f(sys_info, &x.orelse, res)?;
+                    f(sys_info, &x.orelse, res, has_infinite_loop)?;
                 }
             }
             Stmt::For(x) => {
@@ -1012,7 +1033,7 @@ fn function_last_expressions<'a>(
                 if has_break || x.orelse.is_empty() {
                     return None;
                 }
-                f(sys_info, &x.orelse, res)?;
+                f(sys_info, &x.orelse, res, has_infinite_loop)?;
             }
             Stmt::If(x) => {
                 let mut last_test = None;
@@ -1020,7 +1041,7 @@ fn function_last_expressions<'a>(
                 for (test, body) in sys_info.pruned_if_branches(x) {
                     any_branch_processed = true;
                     last_test = test;
-                    f(sys_info, body, res)?;
+                    f(sys_info, body, res, has_infinite_loop)?;
                 }
                 if !any_branch_processed {
                     // All branches were pruned, so the code falls through
@@ -1045,16 +1066,18 @@ fn function_last_expressions<'a>(
                         .iter()
                         .any(|stmt| matches!(stmt, Stmt::Return(_)))
                 {
-                    f(sys_info, &x.finalbody, res)?;
+                    f(sys_info, &x.finalbody, res, has_infinite_loop)?;
                 } else {
                     if x.orelse.is_empty() {
-                        f(sys_info, &x.body, res)?;
+                        f(sys_info, &x.body, res, has_infinite_loop)?;
                     } else {
-                        f(sys_info, &x.orelse, res)?;
+                        f(sys_info, &x.orelse, res, has_infinite_loop)?;
                     }
                     for handler in &x.handlers {
                         match handler {
-                            ExceptHandler::ExceptHandler(x) => f(sys_info, &x.body, res)?,
+                            ExceptHandler::ExceptHandler(x) => {
+                                f(sys_info, &x.body, res, has_infinite_loop)?
+                            }
                         }
                     }
                     // If we don't have a matching handler, we raise an exception, which is fine.
@@ -1063,7 +1086,7 @@ fn function_last_expressions<'a>(
             Stmt::Match(x) => {
                 let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
-                    f(sys_info, &case.body, res)?;
+                    f(sys_info, &case.body, res, has_infinite_loop)?;
                     // Must match the binding step's exhaustiveness judgment in
                     // `stmt_match`; otherwise the `Key::Exhaustive(Match, ...)` promised
                     // below is never inserted and solve time panics.
@@ -1089,8 +1112,9 @@ fn function_last_expressions<'a>(
     }
 
     let mut res = Vec::new();
-    f(sys_info, x, &mut res)?;
-    Some(res)
+    let mut has_infinite_loop = false;
+    let last_exprs = f(sys_info, x, &mut res, &mut has_infinite_loop).map(|()| res);
+    (last_exprs, has_infinite_loop)
 }
 
 fn is_docstring(x: &Stmt) -> bool {

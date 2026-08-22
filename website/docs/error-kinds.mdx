@@ -901,6 +901,20 @@ def f(x: bool = False) -> int | None:
     return 0 if x else None
 ```
 
+## infinite-loop
+
+Default severity: `warn`
+
+This warning is emitted when a function declares a return type other than
+`None`, `Never`, or `NoReturn`, but its body has no reachable return and ends
+in an unconditional loop.
+
+```python
+def f() -> int:  # Function declared to return `int` but can never return [infinite-loop]
+    while True:
+        pass
+```
+
 ## internal-error
 
 Ideally you'll never see this one. If you do, please consider [filing a bug](https://github.com/facebook/pyrefly/issues).
