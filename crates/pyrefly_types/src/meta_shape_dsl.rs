@@ -4068,20 +4068,14 @@ mod tests {
         let array = ClassType::new(fake_class("Array", "arrays"), TArgs::default());
         let shape = IntTuple::new(vec![Int::Literal(2)]);
         let other_shape = IntTuple::new(vec![Int::Literal(3)]);
-        let union = Type::Union(Box::new(Union {
-            members: vec![
-                ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
-                ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
-            ],
-            display_name: None,
-        }));
-        let mismatched_union = Type::Union(Box::new(Union {
-            members: vec![
-                ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
-                ShapedArrayType::new(array, other_shape).to_type(),
-            ],
-            display_name: None,
-        }));
+        let union = Type::Union(Box::new(Union::new(vec![
+            ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
+            ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
+        ])));
+        let mismatched_union = Type::Union(Box::new(Union::new(vec![
+            ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
+            ShapedArrayType::new(array, other_shape).to_type(),
+        ])));
 
         assert_eq!(extract::shaped_array_shape(&union), Some(shape));
         assert!(extract::shaped_array_shape(&mismatched_union).is_none());

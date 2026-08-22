@@ -32,6 +32,7 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
+use crate::callable::DisplayOnly;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
@@ -695,10 +696,55 @@ pub enum SuperObj {
     Class(ClassType),
 }
 
+/// Presentation metadata for a union that contains a named alias plus additional members.
+#[derive(Debug, Clone)]
+pub struct UnionDisplay {
+    pub name: (ModuleName, Name),
+    pub extras: Box<[Type]>,
+}
+
+impl UnionDisplay {
+    pub fn new(name: (ModuleName, Name), extras: Box<[Type]>) -> Self {
+        Self { name, extras }
+    }
+}
+
 #[derive(Debug, Clone, Eq)]
 pub struct Union {
     pub members: Vec<Type>,
-    pub display_name: Option<(ModuleName, Name)>,
+    display: DisplayOnly<Option<UnionDisplay>>,
+}
+
+impl Union {
+    pub fn new(members: Vec<Type>) -> Self {
+        Self {
+            members,
+            display: DisplayOnly(None),
+        }
+    }
+
+    pub fn with_display(members: Vec<Type>, display: UnionDisplay) -> Self {
+        Self {
+            members,
+            display: DisplayOnly(Some(display)),
+        }
+    }
+
+    pub fn display(&self) -> Option<&UnionDisplay> {
+        self.display.as_ref()
+    }
+
+    pub fn set_display_name(&mut self, name: (ModuleName, Name)) {
+        self.display.0 = Some(UnionDisplay::new(name, Box::new([])));
+    }
+
+    pub fn take_display(&mut self) -> Option<UnionDisplay> {
+        self.display.0.take()
+    }
+
+    pub fn set_display(&mut self, display: UnionDisplay) {
+        self.display.0 = Some(display);
+    }
 }
 
 impl PartialEq for Union {
@@ -736,6 +782,11 @@ impl Visit<Type> for Union {
         for member in &self.members {
             member.visit(f);
         }
+        if let Some(display) = self.display() {
+            for extra in &display.extras {
+                extra.visit(f);
+            }
+        }
     }
 }
 
@@ -743,6 +794,11 @@ impl VisitMut<Type> for Union {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
         for member in &mut self.members {
             member.visit_mut(f);
+        }
+        if let Some(display) = &mut self.display.0 {
+            for extra in &mut display.extras {
+                extra.visit_mut(f);
+            }
         }
     }
 }
@@ -2226,10 +2282,7 @@ impl Type {
 
     /// Creates a union from the provided types without simplifying
     pub fn union(members: Vec<Type>) -> Self {
-        Type::Union(Box::new(Union {
-            members,
-            display_name: None,
-        }))
+        Type::Union(Box::new(Union::new(members)))
     }
 
     /// Returns `true` if this type is an explicit type variable — i.e., a `Quantified` or
@@ -2302,6 +2355,7 @@ mod tests {
     use crate::types::TParams;
     use crate::types::Type;
     use crate::types::Union;
+    use crate::types::UnionDisplay;
 
     #[test]
     fn test_targs_visit_only_visits_applied_arguments() {
@@ -2325,19 +2379,19 @@ mod tests {
         assert_eq!(visited, vec![Type::Ellipsis]);
     }
 
-    /// `display_name` is presentation-only, so two unions with identical members
-    /// but different names must agree across `Eq`, `Ord`, and `TypeEq`.
+    /// Union display metadata is presentation-only, so two unions with identical members
+    /// but different displays must agree across `Eq`, `Ord`, and `TypeEq`.
     #[test]
     fn test_union_display_name_ignored_by_comparisons() {
         let members = vec![Type::None, Type::LiteralString(LitStyle::Implicit)];
-        let named = Union {
-            members: members.clone(),
-            display_name: Some((ModuleName::builtins(), Name::new_static("TA"))),
-        };
-        let anonymous = Union {
-            members,
-            display_name: None,
-        };
+        let named = Union::with_display(
+            members.clone(),
+            UnionDisplay::new(
+                (ModuleName::builtins(), Name::new_static("TA")),
+                vec![Type::LiteralString(LitStyle::Implicit)].into_boxed_slice(),
+            ),
+        );
+        let anonymous = Union::new(members);
 
         assert_eq!(named, anonymous);
         assert_eq!(named.cmp(&anonymous), Ordering::Equal);

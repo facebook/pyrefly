@@ -6602,7 +6602,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     preserve_aliases,
                 )?;
                 if let Type::Union(f) = &mut aliased_type {
-                    f.display_name = Some((self.module().name(), (*ta.name).clone()));
+                    f.set_display_name((self.module().name(), (*ta.name).clone()));
                 }
                 if preserve_aliases {
                     let alias = ta.with_type(self.heap.mk_type(aliased_type));
