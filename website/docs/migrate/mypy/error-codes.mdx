@@ -1,0 +1,180 @@
+---
+title: Mypy Error Codes to Pyrefly
+slug: /migrate/mypy/error-codes
+description:
+    Map mypy error codes to Pyrefly error kinds, with exact automatic migration
+    status and one-to-many compatibility notes.
+keywords:
+    - mypy error codes
+    - mypy disable error code
+    - mypy error code mapping
+    - pyrefly error kinds
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Mypy configs often set severity policy by error code, in `disable_error_code`,
+`enable_error_code`, and per-module overrides. Pyrefly expresses the same policy
+with [error kinds](../../error-kinds.mdx), which use different names, so
+`pyrefly init` has to translate each code as it converts the config.
+
+Some mypy error codes are not able to be translated by `pyrefly init` or when
+the two tools group the same scenario differently a translated code is not
+always an exact equivalent. Review the table below to compare mypy and Pyrefly
+error codes.
+
+## How to read the table
+
+- **Automatic:** `pyrefly init` translates the code.
+- **Manual:** a useful Pyrefly kind exists, but `pyrefly init` does not
+  translate it, so you should update your Pyrefly config manually.
+- **Split / broad / related:** a similar error kind exists in Pyrefly but do not
+  assume equal coverage in both directions.
+- **Not mapped:** no current one-to-one translation.
+
+:::warning
+
+This table describes **configuration migration**. Enabling the mapped Pyrefly
+kind does not make every diagnostic identical to mypy's.
+
+:::
+
+## Complete mapping
+
+| Mypy code                         | Closest Pyrefly kind(s)                                                     | Config migration | Fidelity      | Notes                                                                                                                                                      |
+| --------------------------------- | --------------------------------------------------------------------------- | ---------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attr-defined`                    | `missing-attribute`                                                         | Automatic        | Direct-ish    | Pyrefly reports missing module attributes as `missing-module-attribute`.                                                                                   |
+| `name-defined`                    | `unknown-name`                                                              | Automatic        | Direct        |                                                                                                                                                            |
+| `call-arg`                        | `bad-argument-count`                                                        | Automatic        | Partial       | Pyrefly also has more specific call-shape kinds such as `missing-argument`, `unexpected-keyword`, and `unexpected-positional-argument`.                    |
+| `arg-type`                        | `bad-argument-type`                                                         | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `call-overload`                   | `no-matching-overload`                                                      | Automatic        | Direct-ish    | Pyrefly may also emit `incompatible-overload-residual` in higher-order generic calls.                                                                      |
+| `valid-type`                      | `invalid-annotation`                                                        | Automatic        | Broad         | Some invalid type forms are split into `invalid-literal`, `invalid-type-alias`, `invalid-type-var`, or `not-a-type`.                                       |
+| `nonetype-type`                   | `invalid-annotation`                                                        | Manual           | Related       | No dedicated one-to-one kind.                                                                                                                              |
+| `var-annotated`                   | `implicit-any-empty-container`, `implicit-any`, or a context-specific error | Manual           | Related       | Pyrefly splits implicit `Any` by source rather than using one "annotation required" code.                                                                  |
+| `override`                        | `bad-override`                                                              | Automatic        | Direct-ish    | Pyrefly has sub-kinds for mutable attributes and parameter names.                                                                                          |
+| `return`                          | `bad-return`                                                                | Automatic        | Broad         | Mypy uses this for missing-return paths; Pyrefly groups incompatible and missing returns under `bad-return`.                                               |
+| `return-value`                    | `bad-return`                                                                | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `assignment`                      | `bad-assignment`                                                            | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `method-assign`                   | `bad-assignment` or `read-only`                                             | Manual           | Related       | Depends on whether the failure is type incompatibility or attempted mutation.                                                                              |
+| `type-arg`                        | `implicit-any-type-argument`                                                | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `type-var`                        | `bad-specialization`                                                        | Automatic        | Partial       | Pyrefly uses `invalid-type-var` for many TypeVar definition and usage errors.                                                                              |
+| `union-attr`                      | `missing-attribute`                                                         | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `index`                           | `bad-index`, `unsupported-operation`                                        | Automatic        | Split         | One mypy code maps to two Pyrefly kinds.                                                                                                                   |
+| `operator`                        | `unsupported-operation`                                                     | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `list-item`                       | Usually `bad-assignment` or `bad-argument-type`                             | Manual           | No stable 1:1 | The Pyrefly kind depends on the surrounding expected type.                                                                                                 |
+| `dict-item`                       | `bad-typed-dict`                                                            | Automatic        | Approximate   | This is what the converter emits, but ordinary dict-literal item errors are not semantically identical to `bad-typed-dict`; review the generated override. |
+| `typeddict-item`                  | `bad-typed-dict` or `bad-typed-dict-key`                                    | Manual           | Related       |                                                                                                                                                            |
+| `typeddict-unknown-key`           | `bad-typed-dict-key`                                                        | Automatic        | Direct        |                                                                                                                                                            |
+| `has-type`                        | No direct equivalent                                                        | Not mapped       | None          | Pyrefly reports a more specific inference or definition error instead.                                                                                     |
+| `import`                          | `missing-import`                                                            | Automatic        | Broad         | Mypy's umbrella import code also covers missing stubs; Pyrefly separates `missing-import` and `untyped-import`.                                            |
+| `import-not-found`                | `missing-import`                                                            | Automatic        | Direct        |                                                                                                                                                            |
+| `import-untyped`                  | `untyped-import`                                                            | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `no-redef`                        | `redefinition`                                                              | Manual           | Direct-ish    | The converter does not translate `no-redef`.                                                                                                               |
+| `func-returns-value`              | Usually `bad-assignment` or `bad-return`                                    | Manual           | No stable 1:1 |                                                                                                                                                            |
+| `abstract`                        | `bad-instantiation`                                                         | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `type-abstract`                   | `bad-instantiation`                                                         | Manual           | Related       | Pyrefly has no separate "abstract class object passed where a concrete type is expected" kind.                                                             |
+| `valid-newtype`                   | `invalid-argument`                                                          | Manual           | Related       |                                                                                                                                                            |
+| `str-format`                      | No direct equivalent                                                        | Not mapped       | None          | Use runtime tests or a linter for format-string checks.                                                                                                    |
+| `str-bytes-safe`                  | No direct equivalent                                                        | Not mapped       | None          |                                                                                                                                                            |
+| `exit-return`                     | `bad-return`                                                                | Manual           | Related       |                                                                                                                                                            |
+| `literal-required`                | `invalid-literal`                                                           | Manual           | Direct-ish    |                                                                                                                                                            |
+| `unused-coroutine`                | `unused-coroutine`                                                          | Automatic        | Direct        |                                                                                                                                                            |
+| `empty-body`                      | `empty-body`                                                                | Manual           | Direct        |                                                                                                                                                            |
+| `safe-super`                      | `abstract-method-call`                                                      | Manual           | Related       |                                                                                                                                                            |
+| `top-level-await`                 | `not-async`                                                                 | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `await-not-async`                 | `not-async`                                                                 | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `no-untyped-def`                  | `implicit-any-parameter`, `unannotated-return`                              | Automatic        | Split         | The `implicit-any` umbrella enables every implicit-`Any` sub-kind, which is broader than mypy's code.                                                      |
+| `no-untyped-call`                 | No direct equivalent                                                        | Not mapped       | None          | Pyrefly reports the downstream unknown/`Any` consequences rather than the call itself.                                                                     |
+| `redundant-cast`                  | `redundant-cast`                                                            | Automatic        | Direct        |                                                                                                                                                            |
+| `assert-type`                     | `assert-type`                                                               | Automatic        | Direct        |                                                                                                                                                            |
+| `comparison-overlap`              | `incompatible-comparison`, `unnecessary-comparison`                         | Manual           | Split/related |                                                                                                                                                            |
+| `no-any-unimported`               | `untyped-import`, `missing-import`, and the implicit-`Any` kinds            | Manual           | No exact 1:1  | The tools model import-derived `Any` differently.                                                                                                          |
+| `no-any-return`                   | `no-any-return`                                                             | Automatic        | Direct-ish    | Pyrefly has explicit and implicit sub-kinds under this umbrella.                                                                                           |
+| `unreachable`                     | `unreachable`                                                               | Manual           | Direct-ish    | Pyrefly also has `unreachable-match-case`.                                                                                                                 |
+| `annotation-unchecked`            | No direct equivalent                                                        | Not mapped       | None          | Pyrefly's checking of unannotated functions is controlled by `check-unannotated-defs`.                                                                     |
+| `typeddict-readonly-mutated`      | `read-only`                                                                 | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `possibly-undefined`              | `unbound-name`                                                              | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `redundant-expr`                  | `redundant-condition`                                                       | Automatic        | Related       |                                                                                                                                                            |
+| `truthy-bool`                     | `redundant-condition`                                                       | Automatic        | Related       |                                                                                                                                                            |
+| `truthy-function`                 | `redundant-condition`                                                       | Automatic        | Related       |                                                                                                                                                            |
+| `truthy-iterable`                 | `redundant-condition`                                                       | Automatic        | Related       |                                                                                                                                                            |
+| `str-unpack`                      | `string-as-iterable`                                                        | Manual           | Related       |                                                                                                                                                            |
+| `name-match`                      | `name-mismatch`                                                             | Automatic        | Direct        |                                                                                                                                                            |
+| `no-overload-impl`                | `invalid-overload`                                                          | Automatic        | Direct        |                                                                                                                                                            |
+| `ignore-without-code`             | No direct equivalent                                                        | Not mapped       | None          | Pyrefly can detect unused or misplaced ignores, but not this exact policy.                                                                                 |
+| `unused-awaitable`                | `unused-coroutine`                                                          | Automatic        | Related       | Mypy's awaitable rule is broader than coroutines.                                                                                                          |
+| `redundant-self`                  | No direct equivalent                                                        | Not mapped       | None          |                                                                                                                                                            |
+| `used-before-def`                 | `unbound-name`                                                              | Automatic        | Direct-ish    |                                                                                                                                                            |
+| `unused-ignore`                   | `unused-type-ignore` or `unused-ignore`                                     | Manual           | Direct-ish    | Choose based on the ignore syntax you are enforcing.                                                                                                       |
+| `explicit-override`               | `missing-override-decorator`                                                | Manual           | Direct        |                                                                                                                                                            |
+| `unimported-reveal`               | `unimported-directive`                                                      | Manual           | Direct-ish    |                                                                                                                                                            |
+| `mutable-override`                | `bad-override-mutable-attribute`                                            | Automatic        | Direct        |                                                                                                                                                            |
+| `exhaustive-match`                | `non-exhaustive-match`                                                      | Manual           | Direct        |                                                                                                                                                            |
+| `metaclass`                       | `invalid-inheritance`                                                       | Automatic        | Related       |                                                                                                                                                            |
+| `maybe-unrecognized-str-typeform` | `invalid-annotation` or `not-a-type`                                        | Manual           | Related       |                                                                                                                                                            |
+| `syntax`                          | `parse-error`                                                               | Automatic        | Direct-ish    | Pyrefly also has `invalid-syntax` for checker-level syntax restrictions.                                                                                   |
+| `misc`                            | No direct umbrella                                                          | Not mapped       | None          | Map the underlying scenario, not mypy's catch-all code.                                                                                                    |
+| `overload-cannot-match`           | `inconsistent-overload`                                                     | Manual           | Related       | No exact one-to-one rule.                                                                                                                                  |
+| `overload-overlap`                | `inconsistent-overload`                                                     | Manual           | Related       | No exact one-to-one rule.                                                                                                                                  |
+| `prop-decorator`                  | `invalid-decorator`                                                         | Manual           | Related       |                                                                                                                                                            |
+| `untyped-decorator`               | `untyped-function-decorator`                                                | Manual           | Direct-ish    | Class decorators use `untyped-class-decorator`.                                                                                                            |
+| `narrowed-type-not-subtype`       | No direct equivalent                                                        | Not mapped       | None          | A more specific annotation or argument error may be emitted instead.                                                                                       |
+| `explicit-any`                    | `explicit-any`                                                              | Automatic        | Direct        |                                                                                                                                                            |
+| `deprecated`                      | `deprecated`                                                                | Automatic        | Direct        |                                                                                                                                                            |
+
+## Configuration example
+
+Mypy:
+
+```toml
+[tool.mypy]
+enable_error_code = ["explicit-override", "possibly-undefined"]
+disable_error_code = ["import-untyped"]
+```
+
+A reviewed Pyrefly equivalent is:
+
+```toml
+[errors]
+missing-override-decorator = "error"
+unbound-name = "error"
+untyped-import = "ignore"
+```
+
+`explicit-override` is not in the converter's code map even though Pyrefly has a
+close equivalent, so `missing-override-decorator` has to be added by hand.
+
+## Strictness flags that become error kinds
+
+`pyrefly init` also converts a handful of mypy flags directly into error
+severities:
+
+| Mypy flag                                                        | Generated Pyrefly policy                                    | Caveat                                                                   |
+| ---------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `warn_return_any` or `strict`                                    | `no-any-return = "error"`                                   | Pyrefly has explicit and implicit sub-kinds                              |
+| `warn_redundant_casts` or `strict`                               | `redundant-cast = "warn"`                                   | Generated at warning severity, not error                                 |
+| `disallow_untyped_defs`, `disallow_incomplete_defs`, or `strict` | `implicit-any-parameter` and `unannotated-return` as errors | The two tools divide partially annotated definitions differently         |
+| `disallow_any_generics` or `strict`                              | `implicit-any = "error"`                                    | This umbrella is broader than missing generic arguments alone            |
+| `disallow_any_explicit`                                          | `explicit-any = "error"`                                    | Not enabled by mypy `strict`                                             |
+| `allow_redefinitions`                                            | `redefinition = "ignore"`                                   | The converter reads this key, not mypy's documented `allow_redefinition` |
+
+## Related guides and references
+
+- [Migrate from mypy](index.mdx)
+- [Mypy config reference](config-reference.mdx)
+- [Mypy strict mode](strict-mode.mdx)
+- [Pyrefly error kinds](../../error-kinds.mdx)
+- [Mypy default error codes](https://mypy.readthedocs.io/en/stable/error_code_list.html)
+- [Mypy optional error codes](https://mypy.readthedocs.io/en/stable/error_code_list2.html)
+
+:::note
+
+Last reviewed against upstream mypy error-code documentation and Pyrefly's
+migration source on 2026-08-08.
+
+:::

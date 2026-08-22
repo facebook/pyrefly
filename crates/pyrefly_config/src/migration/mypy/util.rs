@@ -118,6 +118,7 @@ pub fn expand_config_file_dir(path: &str) -> String {
 
 #[derive(Default)]
 pub struct MypyErrorConfigFlags {
+    pub warn_return_any: bool,
     pub warn_redundant_casts: bool,
     pub disallow_untyped_defs: bool,
     pub disallow_incomplete_defs: bool,
@@ -125,7 +126,7 @@ pub struct MypyErrorConfigFlags {
     pub disallow_any_explicit: bool,
     pub strict: bool,
     pub report_deprecated_as_note: bool,
-    pub allow_redefinitions: bool,
+    pub allow_redefinition: bool,
 }
 
 /// Create an error config from disable and enable error codes
@@ -134,15 +135,18 @@ pub fn make_error_config(
     disables: Vec<String>,
     enables: Vec<String>,
 ) -> Option<ErrorDisplayConfig> {
-    let mut errors = HashMap::new();
+    let mut mypy_codes = HashMap::new();
     for error_code in disables {
-        errors.insert(error_code, Severity::Ignore);
+        mypy_codes.insert(error_code, Severity::Ignore);
     }
     // enable_error_code overrides disable_error_code
     for error_code in enables {
-        errors.insert(error_code, Severity::Error);
+        mypy_codes.insert(error_code, Severity::Error);
     }
+    let mut errors = code_to_kind(mypy_codes);
+
     if let Some(MypyErrorConfigFlags {
+        warn_return_any,
         warn_redundant_casts,
         disallow_untyped_defs,
         disallow_incomplete_defs,
@@ -150,47 +154,48 @@ pub fn make_error_config(
         disallow_any_explicit,
         strict,
         report_deprecated_as_note,
-        allow_redefinitions,
+        allow_redefinition,
     }) = mypy_error_config_flags
     {
         // These severities take precedence over enable/disable
+        if warn_return_any || strict {
+            errors.insert(ErrorKind::NoAnyReturn, Severity::Error);
+        }
         if warn_redundant_casts || strict {
-            errors.insert(
-                ErrorKind::RedundantCast.to_name().to_owned(),
-                Severity::Warn,
-            );
+            errors.insert(ErrorKind::RedundantCast, Severity::Warn);
         }
         if disallow_untyped_defs || disallow_incomplete_defs || strict {
-            errors.insert(
-                ErrorKind::ImplicitAnyParameter.to_name().to_owned(),
-                Severity::Error,
-            );
-            errors.insert(
-                ErrorKind::UnannotatedReturn.to_name().to_owned(),
-                Severity::Error,
-            );
+            errors.insert(ErrorKind::ImplicitAnyParameter, Severity::Error);
+            errors.insert(ErrorKind::UnannotatedReturn, Severity::Error);
         }
         if disallow_any_generics || strict {
-            errors.insert(ErrorKind::ImplicitAny.to_name().to_owned(), Severity::Error);
+            errors.insert(ErrorKind::ImplicitAny, Severity::Error);
         }
         if disallow_any_explicit {
-            errors.insert(ErrorKind::ExplicitAny.to_name().to_owned(), Severity::Error);
+            errors.insert(ErrorKind::ExplicitAny, Severity::Error);
         }
-        if report_deprecated_as_note && errors.contains_key(ErrorKind::Deprecated.to_name()) {
-            errors.insert(ErrorKind::Deprecated.to_name().to_owned(), Severity::Info);
+        if report_deprecated_as_note
+            && matches!(
+                errors.get(&ErrorKind::Deprecated),
+                Some(Severity::Error | Severity::Warn)
+            )
+        {
+            errors.insert(ErrorKind::Deprecated, Severity::Info);
         }
-        if allow_redefinitions {
-            errors.insert(
-                ErrorKind::Redefinition.to_name().to_owned(),
-                Severity::Ignore,
-            );
+        if allow_redefinition {
+            errors.insert(ErrorKind::Redefinition, Severity::Ignore);
         }
     }
-    code_to_kind(errors)
+
+    if errors.is_empty() {
+        None
+    } else {
+        Some(ErrorDisplayConfig::new(errors))
+    }
 }
 
 /// Convert mypy error codes to pyrefly ErrorKinds.
-fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig> {
+fn code_to_kind(errors: HashMap<String, Severity>) -> HashMap<ErrorKind, Severity> {
     let mut map = HashMap::new();
     let mut add = |value, kind| {
         // If multiple Mypy overrides map to the same Pyrefly error
@@ -243,20 +248,58 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
             }
             "deprecated" => add(severity, ErrorKind::Deprecated),
             "name-match" => add(severity, ErrorKind::NameMismatch),
-            _ => {}
+            "no-any-return" => add(severity, ErrorKind::NoAnyReturn),
+            _ => tracing::warn!(
+                "Cannot migrate unsupported or unrecognized mypy error code `{code}`; audit the generated [errors] table"
+            ),
         }
     }
 
-    if map.is_empty() {
-        None
-    } else {
-        Some(ErrorDisplayConfig::new(map))
-    }
+    map
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_error_flags_are_applied_as_typed_overrides() {
+        let config = make_error_config(
+            Some(MypyErrorConfigFlags {
+                warn_return_any: true,
+                warn_redundant_casts: true,
+                disallow_untyped_defs: true,
+                disallow_any_generics: true,
+                disallow_any_explicit: true,
+                allow_redefinition: true,
+                ..Default::default()
+            }),
+            vec![],
+            vec![],
+        )
+        .expect("enabled flags should produce error overrides");
+        let entries = config.iter().collect::<HashMap<_, _>>();
+
+        assert_eq!(entries.get(&ErrorKind::NoAnyReturn), Some(&Severity::Error));
+        assert_eq!(
+            entries.get(&ErrorKind::RedundantCast),
+            Some(&Severity::Warn)
+        );
+        assert_eq!(
+            entries.get(&ErrorKind::ImplicitAnyParameter),
+            Some(&Severity::Error)
+        );
+        assert_eq!(
+            entries.get(&ErrorKind::UnannotatedReturn),
+            Some(&Severity::Error)
+        );
+        assert_eq!(entries.get(&ErrorKind::ImplicitAny), Some(&Severity::Error));
+        assert_eq!(entries.get(&ErrorKind::ExplicitAny), Some(&Severity::Error));
+        assert_eq!(
+            entries.get(&ErrorKind::Redefinition),
+            Some(&Severity::Ignore)
+        );
+    }
 
     #[test]
     fn test_expand_config_file_dir() {

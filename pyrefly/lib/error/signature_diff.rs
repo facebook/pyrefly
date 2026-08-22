@@ -265,7 +265,7 @@ class B(A):
         );
         assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
         let expected = r#"Class member `B.foo` overrides parent class `A` in an inconsistent manner
-  `B.foo` has type `(self: B) -> None`, which is not assignable to `(self: B, a: int, b: int, c: int) -> Unknown`, the type of `A.foo`
+  `B.foo` has type `() -> None`, which is not assignable to `(a: int, b: int, c: int) -> Unknown`, the type of `A.foo`
   Signature mismatch:
   expected: def foo(self: B, a: int, b: int, c: int) -> Unknown: ...
                            ^^^^^^^^^^^^^^^^^^^^^^^^     ^^^^^^^ return type
@@ -294,7 +294,7 @@ class B(A):
         );
         assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
         let expected = r#"Class member `B.foo` overrides parent class `A` in an inconsistent manner
-  `B.foo` has type `(self: B, x: int, y: str) -> None`, which is not assignable to `(self: B) -> None`, the type of `A.foo`
+  `B.foo` has type `(x: int, y: str) -> None`, which is not assignable to `() -> None`, the type of `A.foo`
   Signature mismatch:
   expected: def foo(self: B) -> None: ...
                            ^ parameters
@@ -319,7 +319,7 @@ class B(A):
         );
         assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
         let expected = r#"Class member `B.foo` overrides parent class `A` in an inconsistent manner
-  `B.foo` has type `(self: B, x: str) -> None`, which is not assignable to `(self: B, x: int) -> None`, the type of `A.foo`
+  `B.foo` has type `(x: str) -> None`, which is not assignable to `(x: int) -> None`, the type of `A.foo`
   Signature mismatch:
   expected: def foo(self: B, x: int) -> None: ...
                                 ^^^ parameters
@@ -344,7 +344,7 @@ class B(A):
         );
         assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
         let expected = r#"Class member `B.foo` overrides parent class `A` in an inconsistent manner
-  `B.foo` has type `(self: B, x: int) -> str`, which is not assignable to `(self: B, x: int) -> int`, the type of `A.foo`
+  `B.foo` has type `(x: int) -> str`, which is not assignable to `(x: int) -> int`, the type of `A.foo`
   Signature mismatch:
   expected: def foo(self: B, x: int) -> int: ...
                                         ^^^ return type
@@ -377,9 +377,9 @@ class B(A):
         assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
         // Overloads have multiple signatures, so no signature diff is shown.
         let expected = r#"Class member `B.foo` overrides parent class `A` in an inconsistent manner
-  `B.foo` has type `(self: B, x: float) -> float`, which is not assignable to `Overload[
-  (self: B, x: int) -> int
-  (self: B, x: str) -> str
+  `B.foo` has type `(x: float) -> float`, which is not assignable to `Overload[
+  (x: int) -> int
+  (x: str) -> str
 ]`, the type of `A.foo`"#;
         assert_eq!(messages[0], expected);
     }
@@ -401,7 +401,7 @@ class B(A):
         );
         assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
         let expected = r#"Class member `B.foo` overrides parent class `A` in an inconsistent manner
-  `B.foo` has type `(self: B, x: str) -> str`, which is not assignable to `(self: B, x: int) -> int`, the type of `A.foo`
+  `B.foo` has type `(x: str) -> str`, which is not assignable to `(x: int) -> int`, the type of `A.foo`
   Signature mismatch:
   expected: def foo(self: B, x: int) -> int: ...
                                 ^^^     ^^^ return type
@@ -431,7 +431,7 @@ class B(A):
         );
         assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
         let expected = r#"Class member `B.foo` overrides parent class `A` in an inconsistent manner
-  `B.foo` has type `(self: Unknown) -> None`, which is not consistent with `(self: B, x: int) -> int` in `A.foo` (the type of read-write attributes cannot be changed)
+  `B.foo` has type `(self: Unknown) -> None`, which is not consistent with `(x: int) -> int` in `A.foo` (the type of read-write attributes cannot be changed)
   Signature mismatch:
   expected: def foo(self: B, x: int) -> int: ...
                           ^^^^^^^^^     ^^^ return type
@@ -463,7 +463,7 @@ class B(A):
         );
         assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
         let expected = r#"Class member `B.method` overrides parent class `A` in an inconsistent manner
-  `B.method` has type `(self: Unknown) -> None`, which is not assignable to `(self: B, x: int) -> int`, the type of `A.method`
+  `B.method` has type `() -> None`, which is not assignable to `(x: int) -> int`, the type of `A.method`
   Signature mismatch:
   expected: def method(self: B, x: int) -> int: ...
                              ^^^^^^^^^     ^^^ return type

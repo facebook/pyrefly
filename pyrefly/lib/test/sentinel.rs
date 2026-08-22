@@ -114,7 +114,7 @@ testcase!(
 from typing_extensions import Sentinel
 
 A = Sentinel("A")
-B: A = Sentinel("B")  # E: `Sentinel` is not assignable to `A`
+B: A = Sentinel("B")  # E: `sentinel` is not assignable to `A`
     "#,
 );
 
@@ -188,6 +188,35 @@ A = sentinel("A")  # E: Could not find name `sentinel`
 );
 
 testcase!(
+    // typing_extensions backports the lowercase `sentinel` for pre-3.15, so
+    // importing it must behave exactly like the uppercase `Sentinel` and the
+    // builtin lowercase form, not fall back to the function's return type.
+    test_sentinel_lowercase_from_typing_extensions,
+    r#"
+from typing import Literal, assert_type
+from typing_extensions import sentinel
+
+A = sentinel("A")
+def foo(a: A | Literal[False]):
+    if a:
+        assert_type(a, A)
+    else:
+        assert_type(a, Literal[False])
+    "#,
+);
+
+testcase!(
+    test_sentinel_lowercase_from_typing_extensions_reveal,
+    r#"
+from typing import reveal_type
+from typing_extensions import sentinel
+
+Lower = sentinel("Lower")
+reveal_type(Lower)  # E: Lower
+    "#,
+);
+
+testcase!(
     test_sentinel_in_class_body,
     r#"
 from typing import assert_type
@@ -214,13 +243,13 @@ MISSING.__name__
 );
 
 testcase!(
-    test_typeshed_sentinel_3_14_no_dunder_name,
+    test_typeshed_sentinel_3_14_has_dunder_name,
     TestEnv::new().with_version(PythonVersion::new(3, 14, 0)),
     r#"
 from typing_extensions import Sentinel
 
 MISSING = Sentinel("MISSING")
-MISSING.__name__  # E: Object of class `Sentinel` has no attribute `__name__`
+MISSING.__name__
     "#,
 );
 
@@ -249,5 +278,40 @@ class Cls:
     IN_CLASS = Sentinel("IN_CLASS")
 
 reveal_type(Cls.IN_CLASS)  # E: Cls.IN_CLASS
+    "#,
+);
+
+testcase!(
+    test_nonliteral_sentinel_name_ok,
+    r#"
+from typing import reveal_type
+from typing_extensions import Sentinel
+def name() -> str: ...
+X = Sentinel(name())
+reveal_type(X)  # E: X
+    "#,
+);
+
+testcase!(
+    test_nonstring_sentinel_name_errors,
+    r#"
+from typing import reveal_type
+from typing_extensions import Sentinel
+def id() -> int: ...
+X = Sentinel(id())  # E: `int` is not assignable to parameter `name` with type `str`
+reveal_type(X)  # E: X
+    "#,
+);
+
+testcase!(
+    test_literal_name,
+    r#"
+from typing import Literal, reveal_type
+from typing_extensions import Sentinel
+def name() -> Literal["MyAwesomeSentinel"]: ...
+X = Sentinel(name())
+Y = Sentinel("JustAsAwesomeSentinel")
+reveal_type(X)  # E: MyAwesomeSentinel
+reveal_type(Y)  # E: JustAsAwesomeSentinel
     "#,
 );

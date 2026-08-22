@@ -9,6 +9,7 @@
 
 import * as monaco from 'monaco-editor';
 import { default as MonacoEditor, loader } from '@monaco-editor/react';
+import stabilizeInlayHintDecorations from './stabilizeInlayHintDecorations';
 
 type CompletionItem = monaco.languages.CompletionItem;
 type Range = monaco.IRange;
@@ -92,6 +93,10 @@ function setInlayHintFunctionForMonaco(
     model: monaco.editor.ITextModel,
     f: InlayHintFunction
 ): void {
+    stabilizeInlayHintDecorations(
+        model,
+        monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+    );
     inlayHintFunctionsForMonaco.set(model, f);
 }
 
