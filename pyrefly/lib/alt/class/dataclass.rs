@@ -1026,6 +1026,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(crate) fn constructor_to_callable_distributed(&self, ty: &Type) -> Option<Type> {
         let instance = match ty {
             Type::ClassDef(cls) => self.promote_silently(cls),
+            Type::SpecializedClass(cls) => Type::ClassType(cls.clone()),
             Type::Type(inner) => (**inner).clone(),
             _ => return None,
         };

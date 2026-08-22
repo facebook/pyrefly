@@ -237,6 +237,9 @@ impl TypeConverter<'_> {
 
             // --- Class definitions (the class object itself, e.g. `type[int]`) ---
             PyreflyType::ClassDef(cls) => convert_class_def(cls),
+            PyreflyType::SpecializedClass(ct) => {
+                mark_instantiable(self.convert_class_type(ct, TypeFlags::INSTANCE))
+            }
 
             // --- Literals (Literal[42], Literal["hi"], etc.) ---
             PyreflyType::Literal(lit) => convert_literal(lit),

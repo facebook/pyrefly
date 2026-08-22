@@ -296,6 +296,10 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
         Type::ClassDef(class) => {
             ClassNamesFromType::from_class(class, context).prepend_modifier(TypeModifier::Type)
         }
+        Type::SpecializedClass(class_type) => {
+            ClassNamesFromType::from_class(class_type.class_object(), context)
+                .prepend_modifier(TypeModifier::Type)
+        }
         Type::Type(inner) if let Type::ClassType(class_type) = &**inner => {
             ClassNamesFromType::from_class(class_type.class_object(), context)
                 .prepend_modifier(TypeModifier::Type)

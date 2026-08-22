@@ -1081,13 +1081,12 @@ for a in A:  # E: Type `type[A]` is not iterable
 );
 
 testcase!(
-    bug = "Although A[int] is a generic alias and can be iterated over, type[A[int]] is a type and cannot be iterated over.",
     test_getitem_cannot_iterate_generic_class,
     r#"
 class A[T]:
     def __getitem__(self, i: int) -> int: ...
 def f(x: type[A[int]]):
-    for a in x:  # Expect an error here
+    for a in x:  # E: Type `type[A[int]]` is not iterable
         pass
     "#,
 );
