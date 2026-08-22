@@ -13,6 +13,8 @@ use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::type_level_dsl::MAX_HELPER_GRAPH_EDGES;
+use pyrefly_types::type_level_dsl::MAX_HELPER_GRAPH_NODES;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_var::FlagDomain;
@@ -1636,31 +1638,31 @@ def statement(x: Int) -> Int:
 
 @type_shape_dsl_function
 def non_intrinsic(x: Int) -> Int:
-    return ordinary()  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
+    return ordinary()  # E: DSL helper callee must be a validated
 
 @type_shape_dsl_function
 def same_spelling_is_not_intrinsic(x: Int) -> Int:
-    return gradual()  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
+    return gradual()  # E: DSL helper callee must be a validated
 
 @type_shape_dsl_function
 def spoof_class(x: Int) -> Int:
-    return SpoofInt.gradual()  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Returned type
+    return SpoofInt.gradual()  # E: DSL helper callee must be a validated  # E: Returned type
 
 @type_shape_dsl_function
 def direct_cycle(x: Int) -> Int:
-    return direct_cycle(x)  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
+    return direct_cycle(x)  # E: recursive DSL helper calls are not supported
 
 @type_shape_dsl_function
 def mutual_cycle_left(x: Int) -> Int:
-    return mutual_cycle_right(x)  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
+    return mutual_cycle_right(x)  # E: DSL helper callee must be a validated
 
 @type_shape_dsl_function
 def mutual_cycle_right(x: Int) -> Int:
-    return mutual_cycle_left(x)  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression
+    return mutual_cycle_left(x)  # E: DSL helper callee must be a validated
 
 @type_shape_dsl_function
 def shadowed_module_alias(dsl: Int) -> Int:
-    return dsl.Int.gradual()  # E: return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression  # E: Object of class `int` has no attribute `Int`
+    return dsl.Int.gradual()  # E: DSL helper callee must be a validated  # E: Object of class `int` has no attribute `Int`
 
 @type_shape_dsl_function
 def wrong_domain(x: Int) -> Int:
@@ -7347,5 +7349,290 @@ def non_boolean_element(shape: IntTuple) -> IntTuple:
     if any(item for item in range(2)):  # E: condition supports only
         return shape
     return shape
+"#,
+);
+
+#[test]
+fn test_type_shape_dsl_diamond_graph_is_flat_and_depth_bounded() {
+    assert_eq!(MAX_HELPER_GRAPH_NODES, 4096);
+    assert_eq!(MAX_HELPER_GRAPH_EDGES, 16384);
+    let mut source = r#"
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def helper_0(shape: IntTuple, choice: int) -> IntTuple:
+    return shape
+"#
+    .to_owned();
+    for level in 1..=33 {
+        source.push_str(&format!(
+            r#"
+@type_shape_dsl_function
+def helper_{level}(shape: IntTuple, choice: int) -> IntTuple:
+    if choice < {level}:
+        return helper_{previous}(shape, choice)
+    return helper_{previous}(shape, choice)
+"#,
+            previous = level - 1,
+        ));
+    }
+    let mut env = shaped_array_env();
+    env.add("main", &source);
+    let (state, handle) = env.to_state();
+    let main = handle("main");
+    let solutions = state
+        .transaction()
+        .get_solutions(&main)
+        .expect("diamond helper module should solve");
+    let helper_32 = solutions.get(&KeyExport(Name::new("helper_32")));
+    assert!(
+        matches!(helper_32, Type::Function(function)
+            if matches!(&function.metadata.kind,
+                FunctionKind::TypeShapeDsl(_, resolved)
+                    if resolved.helper_graph_metrics() == (33, 64, 32))),
+        "expected a flat 33-node/64-edge depth-32 graph, got `{helper_32}`",
+    );
+    let helper_33 = solutions.get(&KeyExport(Name::new("helper_33")));
+    assert!(
+        matches!(helper_33, Type::Function(function)
+            if matches!(&function.metadata.kind, FunctionKind::Def(_))),
+        "depth-33 helper should recover as an ordinary function, got `{helper_33}`",
+    );
+    let errors = state
+        .transaction()
+        .get_errors([&main])
+        .collect_display_errors();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.msg().contains("DSL helper call depth exceeds 32")),
+        "expected a depth-bound diagnostic, got {errors:?}",
+    );
+}
+
+testcase!(
+    test_type_shape_dsl_helpers,
+    {
+        let mut env = shape_dsl_tensor_env();
+        env.add_with_path(
+            "dsl_helpers",
+            "dsl_helpers.pyi",
+            r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def leaf(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[0],))
+
+@type_shape_dsl_function
+def identity(shape: IntTuple) -> IntTuple:
+    return shape
+
+@type_shape_dsl_function
+def middle(shape: IntTuple) -> IntTuple:
+    return leaf(shape)
+
+@type_shape_dsl_function
+def int_leaf(dimension: Int) -> Int:
+    return dimension
+
+@type_shape_dsl_function
+def axis_helper(shape: IntTuple, axis: int) -> IntTuple:
+    if axis == 0:
+        return leaf(shape)
+    return shape
+
+@type_shape_dsl_function
+def unknown(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def invalid(shape: IntTuple) -> IntTuple:
+    return dsl.Invalid("helper rejected shape")
+"#,
+        );
+        env
+    },
+    r#"
+import dsl_helpers as qualified
+import shape_extensions.dsl as dsl
+from dsl_helpers import axis_helper, identity, int_leaf, invalid, leaf as imported_leaf, unknown
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+leaf_alias = imported_leaf
+
+@type_shape_dsl_function
+def imported(shape: IntTuple) -> IntTuple:
+    return leaf_alias(shape)
+
+@type_shape_dsl_function
+def propagate_argument(shape: IntTuple) -> IntTuple:
+    return identity(shape)
+
+@type_shape_dsl_function
+def helper_of_helper(shape: IntTuple) -> IntTuple:
+    return qualified.middle(shape)
+
+@type_shape_dsl_function
+def local_argument(shape: IntTuple) -> Int:
+    dimension = shape[0]
+    return int_leaf(dimension)
+
+@type_shape_dsl_function
+def parameter_flag(shape: IntTuple, axis: int) -> IntTuple:
+    return axis_helper(shape, axis)
+
+@type_shape_dsl_function
+def local_flag(shape: IntTuple) -> IntTuple:
+    axis = 0
+    return axis_helper(shape, axis)
+
+@type_shape_dsl_function
+def axis_without_none(shape: IntTuple, axis: int | tuple[int, ...]) -> IntTuple:
+    if dsl.is_int_value(axis):
+        return axis_helper(shape, axis)
+    return shape
+
+@type_shape_dsl_function
+def narrowed_union(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
+    if axis is None:
+        return shape
+    return axis_without_none(shape, axis)
+
+@type_shape_dsl_function
+def diamond(shape: IntTuple, choice: int) -> IntTuple:
+    if choice < 1:
+        return imported(shape)
+    return helper_of_helper(shape)
+
+@type_shape_dsl_function
+def joined_argument(first: IntTuple, second: IntTuple, choice: int) -> IntTuple:
+    if choice < 1:
+        selected = first
+    else:
+        selected = second
+    return imported_leaf(selected)
+
+@type_shape_dsl_function
+def propagate_gradual(shape: IntTuple) -> IntTuple:
+    return unknown(shape)
+
+@type_shape_dsl_function
+def propagate_invalid(shape: IntTuple) -> IntTuple:
+    return invalid(shape)
+
+def apply_imported(x: Tensor[[2, 3]]) -> Tensor[imported(IntTuple[2, 3])]: ...
+def apply_gradual_argument() -> Tensor[propagate_argument(IntTuple)]: ...
+def apply_nested(x: Tensor[[2, 3]]) -> Tensor[helper_of_helper(IntTuple[2, 3])]: ...
+def apply_local(x: Tensor[[2, 3]]) -> Tensor[[local_argument(IntTuple[2, 3])]]: ...
+def apply_parameter_flag(x: Tensor[[2, 3]]) -> Tensor[parameter_flag(IntTuple[2, 3], 0)]: ...
+def apply_local_flag(x: Tensor[[2, 3]]) -> Tensor[local_flag(IntTuple[2, 3])]: ...
+def apply_narrowed_union(x: Tensor[[2, 3]]) -> Tensor[narrowed_union(IntTuple[2, 3], 0)]: ...
+def apply_diamond(x: Tensor[[2, 3]]) -> Tensor[diamond(IntTuple[2, 3], 0)]: ...
+def apply_joined_first(x: Tensor[[2, 3]]) -> Tensor[joined_argument(IntTuple[2, 3], IntTuple[4, 5], 0)]: ...
+def apply_joined_second(x: Tensor[[2, 3]]) -> Tensor[joined_argument(IntTuple[2, 3], IntTuple[4, 5], 1)]: ...
+def apply_unknown(x: Tensor[[2, 3]]) -> Tensor[propagate_gradual(IntTuple[2, 3])]: ...
+def apply_invalid(x: Tensor[[2, 3]]) -> Tensor[propagate_invalid(IntTuple[2, 3])]: ...
+
+def test(x: Tensor[[2, 3]]) -> None:
+    assert_type(apply_imported(x), Tensor[[2]])
+    reveal_type(apply_gradual_argument())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_nested(x), Tensor[[2]])
+    assert_type(apply_local(x), Tensor[[2]])
+    assert_type(apply_parameter_flag(x), Tensor[[2]])
+    assert_type(apply_local_flag(x), Tensor[[2]])
+    assert_type(apply_narrowed_union(x), Tensor[[2]])
+    assert_type(apply_diamond(x), Tensor[[2]])
+    assert_type(apply_joined_first(x), Tensor[[2]])
+    assert_type(apply_joined_second(x), Tensor[[4]])
+    reveal_type(apply_unknown(x))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    apply_invalid(x)  # E: helper rejected shape
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_helpers,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def shape_helper(shape: IntTuple) -> IntTuple:
+    return shape
+
+@type_shape_dsl_function
+def int_helper(dimension: Int) -> Int:
+    return dimension
+
+@type_shape_dsl_function
+def wrong_argument(shape: IntTuple) -> IntTuple:
+    return shape_helper(shape, shape)  # E: DSL helper argument domains must exactly match  # E: Expected 1 positional
+
+@type_shape_dsl_function
+def wrong_domain(shape: IntTuple) -> IntTuple:
+    return int_helper(shape)  # E: DSL helper argument domains must exactly match  # E: Returned type  # E: is not assignable to parameter
+
+@type_shape_dsl_function
+def wrong_result(dimension: Int) -> IntTuple:
+    return int_helper(dimension)  # E: DSL helper result domain must match  # E: Returned type
+
+def ordinary(shape: IntTuple) -> IntTuple: ...
+
+@type_shape_dsl_function
+def arbitrary(shape: IntTuple) -> IntTuple:
+    return ordinary(shape)  # E: DSL helper callee must be a validated
+
+@type_shape_dsl_function
+def keyword(shape: IntTuple) -> IntTuple:
+    return shape_helper(shape=shape)  # E: DSL helper calls accept only positional arguments
+
+@type_shape_dsl_function
+def direct_recursive(shape: IntTuple) -> IntTuple:
+    return direct_recursive(shape)  # E: recursive DSL helper calls are not supported
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_helpers_share_generator_budget,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def large_leaf(shape: IntTuple) -> IntTuple:
+    if any(item == -1 for item in range(2500)):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def large_root(shape: IntTuple) -> IntTuple:
+    if any(item == -1 for item in range(2500)):
+        return dsl.IntTuple(())
+    return large_leaf(shape)
+
+@type_shape_dsl_function
+def small_leaf(shape: IntTuple) -> IntTuple:
+    if any(item == -1 for item in range(2000)):
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def small_root(shape: IntTuple) -> IntTuple:
+    if any(item == -1 for item in range(2000)):
+        return dsl.IntTuple(())
+    return small_leaf(shape)
+
+def apply_large(x: Tensor[[2, 3]]) -> Tensor[large_root(IntTuple[2, 3])]: ...
+def apply_small(x: Tensor[[2, 3]]) -> Tensor[small_root(IntTuple[2, 3])]: ...
+
+def test(x: Tensor[[2, 3]]) -> None:
+    reveal_type(apply_large(x))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_small(x), Tensor[[2, 3]])
 "#,
 );

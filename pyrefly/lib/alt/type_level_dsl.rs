@@ -9,6 +9,7 @@ use std::slice;
 use std::sync::Arc;
 
 use pyrefly_types::callable::Param;
+use pyrefly_types::function::FuncDefId;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
@@ -21,7 +22,9 @@ use pyrefly_types::type_level_dsl::TypeShapeDslFlagIntComparisonOp;
 use pyrefly_types::type_level_dsl::TypeShapeDslFlagValueKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
+use pyrefly_types::type_level_dsl::TypeShapeDslProgramError;
 use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
+use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::FlagMember;
 use pyrefly_types::type_var::Restriction;
@@ -60,6 +63,111 @@ fn type_shape_dsl_flag_domain() -> FlagDomain {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Resolves the shape-specific helper calls retained during syntax validation.
+    ///
+    /// `FunctionKind` is the narrow boundary with Pyrefly's ordinary function model. Resolving
+    /// callees here gives imports and aliases normal name-resolution semantics while keeping the
+    /// helper graph and evaluator entirely in the shape DSL representation.
+    fn resolve_type_shape_dsl_function(
+        &self,
+        func_id: &Arc<FuncDefId>,
+        definition: Arc<ValidatedTypeShapeDslFunction>,
+        parameter_domains: Vec<TypeShapeDslInputDomain>,
+        result_domain: TypeShapeDslDomain,
+        function_range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<ResolvedTypeShapeDslFunction> {
+        let mut helpers = Vec::new();
+        let mut valid = true;
+        let swallowed_errors = self.error_swallower();
+        for helper_call in definition.helper_calls() {
+            let callee = self.expr_infer(helper_call.callee(), &swallowed_errors);
+            match callee.callee_kind() {
+                Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(helper_id, helper))) => {
+                    let argument_domains = helper_call.argument_domains(&parameter_domains);
+                    if argument_domains.as_deref() != Some(helper.parameter_domains()) {
+                        self.error(
+                            errors,
+                            helper_call.callee().range(),
+                            ErrorKind::InvalidArgument,
+                            format!(
+                                "DSL helper argument domains must exactly match `{}`",
+                                helper.name()
+                            ),
+                        );
+                        valid = false;
+                        continue;
+                    }
+                    if helper.result_domain() != result_domain {
+                        self.error(
+                            errors,
+                            helper_call.callee().range(),
+                            ErrorKind::InvalidArgument,
+                            "DSL helper result domain must match the caller result domain"
+                                .to_owned(),
+                        );
+                        valid = false;
+                        continue;
+                    }
+                    if func_id.as_ref() == helper_id.as_ref()
+                        || helper.contains_function(func_id.as_ref())
+                    {
+                        self.error(
+                            errors,
+                            helper_call.callee().range(),
+                            ErrorKind::InvalidArgument,
+                            TypeShapeDslProgramError::Cycle.message().to_owned(),
+                        );
+                        valid = false;
+                        continue;
+                    }
+                    helpers.push((helper_id.clone(), helper.clone()));
+                }
+                Some(CalleeKind::Function(FunctionKind::Def(callee_id)))
+                    if func_id.as_ref() == callee_id.as_ref() =>
+                {
+                    self.error(
+                        errors,
+                        helper_call.callee().range(),
+                        ErrorKind::InvalidArgument,
+                        TypeShapeDslProgramError::Cycle.message().to_owned(),
+                    );
+                    valid = false;
+                }
+                _ => {
+                    self.error(
+                        errors,
+                        helper_call.callee().range(),
+                        ErrorKind::InvalidArgument,
+                        "@type_shape_dsl_function return value must be a bare parameter name or validated DSL helper call; DSL helper callee must be a validated `@type_shape_dsl_function`".to_owned(),
+                    );
+                    valid = false;
+                }
+            }
+        }
+        if !valid {
+            return None;
+        }
+        match ResolvedTypeShapeDslFunction::try_new(
+            func_id.clone(),
+            definition,
+            parameter_domains,
+            result_domain,
+            helpers,
+        ) {
+            Ok(function) => Some(function),
+            Err(error) => {
+                self.error(
+                    errors,
+                    function_range,
+                    ErrorKind::InvalidArgument,
+                    error.message().to_owned(),
+                );
+                None
+            }
+        }
+    }
+
     /// Validates resolved DSL annotations, emitting diagnostics and metadata only on success.
     pub(super) fn validate_type_shape_dsl_declaration(
         &self,
@@ -426,22 +534,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslReturnKind::IntFlagArithmetic { .. }
                     | TypeShapeDslReturnKind::Expression
                     | TypeShapeDslReturnKind::Invalid
+                    | TypeShapeDslReturnKind::HelperCall(_)
                     | TypeShapeDslReturnKind::Gradual(_) => {}
                 }
             }
             if valid_body && let FunctionKind::Def(func_id) = function_kind {
-                return Some(FunctionKind::TypeShapeDsl(
-                    func_id.clone(),
-                    Arc::new(
-                        ResolvedTypeShapeDslFunction::try_new(
-                            func_id.clone(),
-                            validated,
-                            parameter_domains,
-                            result,
-                        )
-                        .expect("resolved DSL domains were checked against the validated AST"),
-                    ),
-                ));
+                if let Some(function) = self.resolve_type_shape_dsl_function(
+                    func_id,
+                    validated,
+                    parameter_domains,
+                    result,
+                    function_range,
+                    errors,
+                ) {
+                    return Some(FunctionKind::TypeShapeDsl(
+                        func_id.clone(),
+                        Arc::new(function),
+                    ));
+                }
             } else if valid_body {
                 self.error(
                     errors,

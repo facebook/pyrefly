@@ -230,6 +230,83 @@ def identity(x: Int) -> Int:
 }
 
 #[test]
+fn test_type_shape_dsl_helper_edit_invalidates_caller() {
+    let mut i = Incremental::with_files(vec![
+        "helpers".to_owned(),
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+from typing import Callable
+
+class Int: pass
+class IntTuple: pass
+def shaped_array[T](*, shape: str) -> Callable[[type[T]], type[T]]: ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def leaf(first: Int, second: Int) -> Int:
+    return first
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from helpers import leaf
+from shape_extensions import Int, IntTuple, shaped_array, type_shape_dsl_function
+
+@shaped_array(shape="Shape")
+class Tensor[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def middle(first: Int, second: Int) -> Int:
+    return leaf(first, second)
+
+@type_shape_dsl_function
+def root(first: Int, second: Int) -> Int:
+    return middle(first, second)
+
+def chosen() -> Tensor[[root(Int[2], Int[3])]]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import Tensor, chosen
+
+result: Tensor[[2]] = chosen()
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def leaf(first: Int, second: Int) -> Int:
+    return second
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "helpers", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
+}
+
+#[test]
 fn test_type_shape_dsl_gradual_reexport_target_invalidates_importer() {
     let mut i = Incremental::with_files(vec![
         "main".to_owned(),

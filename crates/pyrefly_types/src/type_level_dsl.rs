@@ -50,6 +50,7 @@ use crate::shaped_array::broadcast_shapes;
 use crate::shaped_array::tuple_carrier_to_shape;
 use crate::tuple::Tuple;
 use crate::type_var::FlagDomain;
+use crate::type_var::FlagMember;
 use crate::types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
@@ -71,6 +72,73 @@ impl TypeShapeDslDomain {
 pub enum TypeShapeDslInputDomain {
     Value(TypeShapeDslDomain),
     Flag(FlagDomain),
+}
+
+/// A syntactically valid helper call retained until ordinary name resolution is available.
+///
+/// DSL validation records the callee AST and each argument's shape-domain source. The solver then
+/// resolves imports and aliases through normal function identity before attaching the resulting
+/// helper program at the narrow boundary between Pyrefly's function model and the shape DSL.
+#[derive(Debug, Clone)]
+pub struct TypeShapeDslHelperCall {
+    callee: Expr,
+    arguments: Vec<TypeShapeDslHelperArgument>,
+}
+
+// The parsed function owns the retained AST, so a callee's source range identifies it within
+// that function even though `Expr` itself does not implement `Eq` or `Hash`.
+impl PartialEq for TypeShapeDslHelperCall {
+    fn eq(&self, other: &Self) -> bool {
+        self.callee.range() == other.callee.range() && self.arguments == other.arguments
+    }
+}
+
+impl Eq for TypeShapeDslHelperCall {}
+
+impl Hash for TypeShapeDslHelperCall {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.callee.range().hash(state);
+        self.arguments.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum TypeShapeDslHelperArgumentProvenance {
+    Parameters(Box<[usize]>),
+    Exact(TypeShapeDslInputDomain),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct TypeShapeDslHelperArgument {
+    slot: usize,
+    provenance: TypeShapeDslHelperArgumentProvenance,
+}
+
+impl TypeShapeDslHelperCall {
+    pub fn callee(&self) -> &Expr {
+        &self.callee
+    }
+
+    pub fn argument_domains(
+        &self,
+        caller_domains: &[TypeShapeDslInputDomain],
+    ) -> Option<Vec<TypeShapeDslInputDomain>> {
+        self.arguments
+            .iter()
+            .map(|argument| match &argument.provenance {
+                TypeShapeDslHelperArgumentProvenance::Exact(domain) => Some(*domain),
+                TypeShapeDslHelperArgumentProvenance::Parameters(parameters) => {
+                    let mut domains = parameters
+                        .iter()
+                        .map(|parameter| caller_domains[*parameter]);
+                    let first = domains
+                        .next()
+                        .expect("validated helper argument provenance is nonempty");
+                    domains.all(|domain| domain == first).then_some(first)
+                }
+            })
+            .collect()
+    }
 }
 
 impl fmt::Display for TypeShapeDslInputDomain {
@@ -99,6 +167,8 @@ struct ResolvedTypeShapeDslNode {
     definition: Arc<ValidatedTypeShapeDslFunction>,
     parameter_domains: Vec<TypeShapeDslInputDomain>,
     result_domain: TypeShapeDslDomain,
+    /// Targets correspond positionally to `definition.helper_calls`.
+    helper_targets: Box<[ResolvedTypeShapeDslNodeId]>,
 }
 
 impl ResolvedTypeShapeDslNode {
@@ -118,6 +188,8 @@ impl ResolvedTypeShapeDslNode {
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 struct ResolvedTypeShapeDslProgram {
     nodes: Box<[ResolvedTypeShapeDslNode]>,
+    edge_count: usize,
+    max_depth: usize,
 }
 
 impl ResolvedTypeShapeDslProgram {
@@ -136,7 +208,23 @@ impl ResolvedTypeShapeDslProgram {
         budget: &mut DslEvaluationBudget,
     ) -> DslOutcome {
         let node = self.node(id);
-        node.definition.evaluate(args, self, id, budget)
+        let parameter_count = node.definition.parsed.parameter_count();
+        assert_eq!(
+            parameter_count,
+            node.parameter_domains().len(),
+            "validated type-level DSL AST must align with its signature"
+        );
+        assert_eq!(
+            args.len(),
+            parameter_count,
+            "type-level DSL values must align with validated parameters"
+        );
+        let slots = args
+            .iter()
+            .zip(node.parameter_domains())
+            .map(|(argument, domain)| lower_parameter(argument, *domain))
+            .collect::<Vec<_>>();
+        self.evaluate_lowered(id, slots, budget)
     }
 }
 
@@ -152,20 +240,31 @@ impl ResolvedTypeShapeDslFunction {
         definition: Arc<ValidatedTypeShapeDslFunction>,
         parameter_domains: Vec<TypeShapeDslInputDomain>,
         result_domain: TypeShapeDslDomain,
-    ) -> Option<Self> {
-        if definition.parsed.parameter_count() != parameter_domains.len() {
-            return None;
+        helpers: Vec<(Arc<FuncDefId>, Arc<Self>)>,
+    ) -> Result<Self, TypeShapeDslProgramError> {
+        if definition.parsed.parameter_count() != parameter_domains.len()
+            || definition.helper_calls.len() != helpers.len()
+        {
+            return Err(TypeShapeDslProgramError::InconsistentDependency);
         }
         let root = ResolvedTypeShapeDslNode {
             id,
             definition,
             parameter_domains,
             result_domain,
+            helper_targets: Box::new([]),
         };
-        Some(Self {
-            program: Arc::new(ResolvedTypeShapeDslProgram {
-                nodes: vec![root].into_boxed_slice(),
-            }),
+        let mut builder = ResolvedTypeShapeDslProgramBuilder::new(root);
+        let mut targets = Vec::with_capacity(helpers.len());
+        for (id, helper) in helpers {
+            if helper.root().id != id {
+                return Err(TypeShapeDslProgramError::InconsistentDependency);
+            }
+            targets.push(builder.import_node(&helper.program, ResolvedTypeShapeDslNodeId::ROOT)?);
+        }
+        builder.set_targets(ResolvedTypeShapeDslNodeId::ROOT, targets)?;
+        Ok(Self {
+            program: Arc::new(builder.finish()?),
         })
     }
 
@@ -193,6 +292,195 @@ impl ResolvedTypeShapeDslFunction {
 
     pub fn result_domain(&self) -> TypeShapeDslDomain {
         self.root().result_domain
+    }
+
+    pub fn contains_function(&self, id: &FuncDefId) -> bool {
+        self.program.nodes.iter().any(|node| node.id.as_ref() == id)
+    }
+
+    pub fn helper_graph_metrics(&self) -> (usize, usize, usize) {
+        (
+            self.program.nodes.len(),
+            self.program.edge_count,
+            self.program.max_depth,
+        )
+    }
+}
+
+pub const MAX_HELPER_CALL_DEPTH: usize = 32;
+pub const MAX_HELPER_GRAPH_NODES: usize = 4096;
+pub const MAX_HELPER_GRAPH_EDGES: usize = 16384;
+
+#[derive(Debug, Clone, Copy)]
+pub enum TypeShapeDslProgramError {
+    Cycle,
+    Depth,
+    NodeBudget,
+    EdgeBudget,
+    InconsistentDependency,
+}
+
+impl TypeShapeDslProgramError {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Cycle => "recursive DSL helper calls are not supported",
+            Self::Depth => "DSL helper call depth exceeds 32",
+            Self::NodeBudget => "DSL helper graph exceeds the 4096-function budget",
+            Self::EdgeBudget => "DSL helper graph exceeds the 16384-call-edge budget",
+            Self::InconsistentDependency => {
+                "DSL helper graph contains inconsistent definitions for one function"
+            }
+        }
+    }
+}
+
+struct ResolvedTypeShapeDslProgramBuilderNode {
+    node: ResolvedTypeShapeDslNode,
+    targets: Option<Vec<ResolvedTypeShapeDslNodeId>>,
+}
+
+struct ResolvedTypeShapeDslProgramBuilder {
+    nodes: Vec<ResolvedTypeShapeDslProgramBuilderNode>,
+    visited: HashMap<Arc<FuncDefId>, ResolvedTypeShapeDslNodeId>,
+    edge_count: usize,
+}
+
+impl ResolvedTypeShapeDslProgramBuilder {
+    // `FuncDefId` contains mutable class data, but its `Eq` and `Hash` use immutable source identity.
+    #[allow(clippy::mutable_key_type)]
+    fn new(root: ResolvedTypeShapeDslNode) -> Self {
+        let visited = HashMap::from([(root.id.clone(), ResolvedTypeShapeDslNodeId::ROOT)]);
+        Self {
+            nodes: vec![ResolvedTypeShapeDslProgramBuilderNode {
+                node: root,
+                targets: None,
+            }],
+            visited,
+            edge_count: 0,
+        }
+    }
+
+    fn import_node(
+        &mut self,
+        source: &ResolvedTypeShapeDslProgram,
+        source_id: ResolvedTypeShapeDslNodeId,
+    ) -> Result<ResolvedTypeShapeDslNodeId, TypeShapeDslProgramError> {
+        let source_node = source.node(source_id);
+        if let Some(&target_id) = self.visited.get(&source_node.id) {
+            let target = &self.nodes[target_id.index()];
+            if target.node.definition != source_node.definition
+                || target.node.parameter_domains != source_node.parameter_domains
+                || target.node.result_domain != source_node.result_domain
+            {
+                return Err(TypeShapeDslProgramError::InconsistentDependency);
+            }
+            if let Some(targets) = &target.targets {
+                let target_ids = targets
+                    .iter()
+                    .map(|target| self.nodes[target.index()].node.id.as_ref())
+                    .collect::<Vec<_>>();
+                let source_ids = source_node
+                    .helper_targets
+                    .iter()
+                    .map(|target| source.node(*target).id.as_ref())
+                    .collect::<Vec<_>>();
+                if target_ids != source_ids {
+                    return Err(TypeShapeDslProgramError::InconsistentDependency);
+                }
+            }
+            return Ok(target_id);
+        }
+        if self.nodes.len() >= MAX_HELPER_GRAPH_NODES {
+            return Err(TypeShapeDslProgramError::NodeBudget);
+        }
+        let target_id = ResolvedTypeShapeDslNodeId(
+            u32::try_from(self.nodes.len()).expect("helper graph node budget fits in u32"),
+        );
+        self.visited.insert(source_node.id.clone(), target_id);
+        self.nodes.push(ResolvedTypeShapeDslProgramBuilderNode {
+            node: ResolvedTypeShapeDslNode {
+                id: source_node.id.clone(),
+                definition: source_node.definition.clone(),
+                parameter_domains: source_node.parameter_domains.clone(),
+                result_domain: source_node.result_domain,
+                helper_targets: Box::new([]),
+            },
+            targets: None,
+        });
+        let targets = source_node
+            .helper_targets
+            .iter()
+            .map(|target| self.import_node(source, *target))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.set_targets(target_id, targets)?;
+        Ok(target_id)
+    }
+
+    fn set_targets(
+        &mut self,
+        id: ResolvedTypeShapeDslNodeId,
+        targets: Vec<ResolvedTypeShapeDslNodeId>,
+    ) -> Result<(), TypeShapeDslProgramError> {
+        if self.nodes[id.index()].node.definition.helper_calls.len() != targets.len() {
+            return Err(TypeShapeDslProgramError::InconsistentDependency);
+        }
+        if self.edge_count + targets.len() > MAX_HELPER_GRAPH_EDGES {
+            return Err(TypeShapeDslProgramError::EdgeBudget);
+        }
+        self.edge_count += targets.len();
+        let old = self.nodes[id.index()].targets.replace(targets);
+        assert!(old.is_none(), "DSL helper targets are assigned once");
+        Ok(())
+    }
+
+    fn finish(self) -> Result<ResolvedTypeShapeDslProgram, TypeShapeDslProgramError> {
+        let nodes = self
+            .nodes
+            .into_iter()
+            .map(|node| ResolvedTypeShapeDslNode {
+                helper_targets: node
+                    .targets
+                    .expect("every DSL helper node has resolved targets")
+                    .into_boxed_slice(),
+                ..node.node
+            })
+            .collect::<Vec<_>>();
+        let mut state = vec![0u8; nodes.len()];
+        let mut depths = vec![0usize; nodes.len()];
+        fn depth(
+            id: ResolvedTypeShapeDslNodeId,
+            nodes: &[ResolvedTypeShapeDslNode],
+            state: &mut [u8],
+            depths: &mut [usize],
+        ) -> Result<usize, TypeShapeDslProgramError> {
+            match state[id.index()] {
+                1 => return Err(TypeShapeDslProgramError::Cycle),
+                2 => return Ok(depths[id.index()]),
+                _ => {}
+            }
+            state[id.index()] = 1;
+            let mut result = 0;
+            for target in &nodes[id.index()].helper_targets {
+                result = result.max(depth(*target, nodes, state, depths)? + 1);
+            }
+            if result > MAX_HELPER_CALL_DEPTH {
+                return Err(TypeShapeDslProgramError::Depth);
+            }
+            state[id.index()] = 2;
+            depths[id.index()] = result;
+            Ok(result)
+        }
+        let max_depth = depth(
+            ResolvedTypeShapeDslNodeId::ROOT,
+            &nodes,
+            &mut state,
+            &mut depths,
+        )?;
+        Ok(ResolvedTypeShapeDslProgram {
+            nodes: nodes.into_boxed_slice(),
+            edge_count: self.edge_count,
+            max_depth,
+        })
     }
 }
 
@@ -262,6 +550,7 @@ pub struct ValidatedTypeShapeDslFunction {
     conditions: Vec<TypeShapeDslCondition>,
     expressions: Vec<TypeShapeDslExpression>,
     assignments: Vec<TypeShapeDslAssignment>,
+    helper_calls: Vec<TypeShapeDslHelperCall>,
     /// The number of indexed storage entries the body needs: one per parameter, then one per local.
     slot_count: usize,
 }
@@ -354,6 +643,8 @@ pub enum TypeShapeDslReturnKind {
     Invalid,
     /// Return the gradual value for the function's declared result domain.
     Gradual(TypeShapeDslDomain),
+    /// Evaluate a statically resolved user-defined DSL helper.
+    HelperCall(usize),
 }
 
 /// The arithmetic a validated dimension or Flag expression applies. Reached through
@@ -558,6 +849,21 @@ enum GeneratorValidationKind {
     FlagValue,
 }
 
+fn flag_domain_from_kinds(kinds: u8) -> Option<FlagDomain> {
+    if kinds == 0 || kinds & !FLAG_ANY != 0 {
+        return None;
+    }
+    let mut members = [
+        (FLAG_INT, FlagMember::Int),
+        (FLAG_SEQUENCE, FlagMember::Tuple),
+        (FLAG_NONE, FlagMember::NoneType),
+    ]
+    .into_iter()
+    .filter_map(|(bit, member)| (kinds & bit != 0).then_some(member));
+    let first = FlagDomain::of(members.next()?);
+    Some(members.fold(first, |domain, member| domain.join(FlagDomain::of(member))))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DslStaticKind {
     UnknownParameters(Box<[usize]>),
@@ -692,6 +998,7 @@ struct DslValidator<'a, F> {
     conditions: Vec<TypeShapeDslCondition>,
     expressions: Vec<TypeShapeDslExpression>,
     assignments: Vec<TypeShapeDslAssignment>,
+    helper_calls: Vec<TypeShapeDslHelperCall>,
     slots: HashMap<Name, usize>,
     declared_local_kinds: Vec<Option<DslStaticKind>>,
 }
@@ -714,6 +1021,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 conditions: Vec::new(),
                 expressions: Vec::new(),
                 assignments: Vec::new(),
+                helper_calls: Vec::new(),
                 slots,
                 declared_local_kinds: vec![None; kinds.len()],
             },
@@ -1826,7 +2134,64 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     }
                     TypeShapeDslReturnKind::Invalid
                 }
-                None | Some(_) => {
+                None => {
+                    if !call.arguments.keywords.is_empty()
+                        || call
+                            .arguments
+                            .args
+                            .iter()
+                            .any(|argument| matches!(argument, Expr::Starred(_)))
+                    {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: call.arguments.range,
+                            message: "DSL helper calls accept only positional arguments",
+                        });
+                    }
+                    let mut arguments = Vec::with_capacity(call.arguments.args.len());
+                    for argument in &call.arguments.args {
+                        let slot = self.slot(argument, flow).map_err(|_| {
+                            TypeShapeDslDefinitionError {
+                                range: argument.range(),
+                                message: "return value must be a bare parameter name or validated DSL helper call; helper arguments must be bare parameter or local names",
+                            }
+                        })?;
+                        let provenance = match &flow.kinds[slot] {
+                            DslStaticKind::UnknownParameters(parameters) => {
+                                TypeShapeDslHelperArgumentProvenance::Parameters(parameters.clone())
+                            }
+                            DslStaticKind::Dimension => {
+                                TypeShapeDslHelperArgumentProvenance::Exact(
+                                    TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int),
+                                )
+                            }
+                            DslStaticKind::Flag { kinds, .. } => {
+                                let Some(domain) = flag_domain_from_kinds(*kinds) else {
+                                    return Err(TypeShapeDslDefinitionError {
+                                        range: argument.range(),
+                                        message: "DSL helper arguments must have a nonempty supported Flag domain",
+                                    });
+                                };
+                                TypeShapeDslHelperArgumentProvenance::Exact(
+                                    TypeShapeDslInputDomain::Flag(domain),
+                                )
+                            }
+                            DslStaticKind::GeneratorElement => {
+                                return Err(TypeShapeDslDefinitionError {
+                                    range: argument.range(),
+                                    message: "generator elements cannot escape their generator",
+                                });
+                            }
+                        };
+                        arguments.push(TypeShapeDslHelperArgument { slot, provenance });
+                    }
+                    let helper = self.helper_calls.len();
+                    self.helper_calls.push(TypeShapeDslHelperCall {
+                        callee: (*call.func).clone(),
+                        arguments,
+                    });
+                    TypeShapeDslReturnKind::HelperCall(helper)
+                }
+                Some(_) => {
                     return Err(TypeShapeDslDefinitionError {
                         range: return_stmt.range,
                         message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)` or `dsl.IntTuple(...)`",
@@ -2102,6 +2467,17 @@ impl Ord for ValidatedTypeShapeDslFunction {
                     .map(|x| (offsets(x.range), x.slot))
                     .cmp(other.assignments.iter().map(|x| (offsets(x.range), x.slot)))
             })
+            .then_with(|| {
+                self.helper_calls
+                    .iter()
+                    .map(|call| (offsets(call.callee.range()), &call.arguments))
+                    .cmp(
+                        other
+                            .helper_calls
+                            .iter()
+                            .map(|call| (offsets(call.callee.range()), &call.arguments)),
+                    )
+            })
             .then_with(|| self.slot_count.cmp(&other.slot_count))
     }
 }
@@ -2225,6 +2601,7 @@ impl ParsedTypeShapeDslFunction {
             conditions,
             expressions,
             assignments,
+            helper_calls,
             declared_local_kinds,
             ..
         } = validator;
@@ -2235,6 +2612,7 @@ impl ParsedTypeShapeDslFunction {
             conditions,
             expressions,
             assignments,
+            helper_calls,
             slot_count,
         })
     }
@@ -2300,6 +2678,10 @@ impl ValidatedTypeShapeDslFunction {
 
     pub fn expressions(&self) -> impl Iterator<Item = TypeShapeDslExpression> + '_ {
         self.expressions.iter().cloned()
+    }
+
+    pub fn helper_calls(&self) -> impl Iterator<Item = &TypeShapeDslHelperCall> {
+        self.helper_calls.iter()
     }
 }
 
@@ -2450,41 +2832,28 @@ impl TypeLevelDslCall {
     }
 }
 
-impl ValidatedTypeShapeDslFunction {
-    fn evaluate(
+impl ResolvedTypeShapeDslProgram {
+    fn evaluate_lowered(
         &self,
-        args: &[Type],
-        program: &ResolvedTypeShapeDslProgram,
         node_id: ResolvedTypeShapeDslNodeId,
+        mut slots: Vec<DslValue>,
         budget: &mut DslEvaluationBudget,
     ) -> DslOutcome {
-        let signature = program.node(node_id);
-        let parameter_count = self.parsed.parameter_count();
+        let node = self.node(node_id);
         assert_eq!(
-            parameter_count,
-            signature.parameter_domains().len(),
-            "validated type-level DSL AST must align with its signature"
+            slots.len(),
+            node.parameter_domains().len(),
+            "DSL helper arguments must align with validated parameters"
         );
-        assert_eq!(
-            args.len(),
-            parameter_count,
-            "type-level DSL values must align with validated parameters"
-        );
-        let mut slots = args
-            .iter()
-            .zip(signature.parameter_domains())
-            .map(|(argument, domain)| lower_parameter(argument, *domain))
-            .collect::<Vec<_>>();
-        slots.resize(self.slot_count, DslValue::Unknown);
+        slots.resize(node.definition.slot_count, DslValue::Unknown);
         let mut environment = DslEnvironment {
-            parameter_count: args.len(),
+            parameter_count: node.parameter_domains().len(),
             slots,
         };
         match self.evaluate_suite(
-            &self.parsed.definition.body,
-            &mut environment,
-            program,
             node_id,
+            &node.definition.parsed.definition.body,
+            &mut environment,
             budget,
         ) {
             DslControlFlow::Return(result) => result,
@@ -2496,26 +2865,26 @@ impl ValidatedTypeShapeDslFunction {
 
     fn evaluate_suite(
         &self,
+        node_id: ResolvedTypeShapeDslNodeId,
         suite: &[Stmt],
         environment: &mut DslEnvironment,
-        program: &ResolvedTypeShapeDslProgram,
-        node_id: ResolvedTypeShapeDslNodeId,
         budget: &mut DslEvaluationBudget,
     ) -> DslControlFlow {
-        let signature = program.node(node_id);
+        let node = self.node(node_id);
+        let definition = &node.definition;
         for statement in suite {
             match statement {
                 Stmt::Assign(assign) => {
                     // Restricted DSL bodies keep these source-keyed validation tables small;
                     // retaining source order also keeps their diagnostic and inspection APIs simple.
-                    let slot = self
+                    let slot = definition
                         .assignments
                         .iter()
                         .find_map(|assignment| {
                             (assignment.range == assign.range).then_some(assignment.slot)
                         })
                         .expect("validated assignment must have indexed-storage metadata");
-                    match self.evaluate_expression(&assign.value, environment, budget) {
+                    match definition.evaluate_expression(&assign.value, environment, budget) {
                         DslOutcome::Value(value) => environment.assign(slot, value),
                         DslOutcome::ExplicitGradual => {
                             unreachable!("validated assignment expression cannot return gradual")
@@ -2526,7 +2895,7 @@ impl ValidatedTypeShapeDslFunction {
                     }
                 }
                 Stmt::Return(return_stmt) => {
-                    let kind = self
+                    let kind = definition
                         .returns
                         .iter()
                         .find_map(|return_| {
@@ -2537,8 +2906,8 @@ impl ValidatedTypeShapeDslFunction {
                     return DslControlFlow::Return(match kind {
                         TypeShapeDslReturnKind::Parameter(return_index) => {
                             assert_eq!(
-                                signature.parameter_domains()[return_index],
-                                TypeShapeDslInputDomain::Value(signature.result_domain()),
+                                node.parameter_domains()[return_index],
+                                TypeShapeDslInputDomain::Value(node.result_domain()),
                                 "validated parameter return domain must match its result domain"
                             );
                             DslOutcome::Value(environment.value(return_index).clone())
@@ -2605,7 +2974,7 @@ impl ValidatedTypeShapeDslFunction {
                                 .value
                                 .as_deref()
                                 .expect("validated expression return has a value");
-                            self.evaluate_expression(expression, environment, budget)
+                            definition.evaluate_expression(expression, environment, budget)
                         }
                         TypeShapeDslReturnKind::Invalid => {
                             let Some(Expr::Call(call)) = return_stmt.value.as_deref() else {
@@ -2622,15 +2991,25 @@ impl ValidatedTypeShapeDslFunction {
                         TypeShapeDslReturnKind::Gradual(domain) => {
                             assert_eq!(
                                 domain,
-                                signature.result_domain(),
+                                node.result_domain(),
                                 "validated explicit gradual DSL return domain must match its result domain"
                             );
                             DslOutcome::ExplicitGradual
                         }
+                        TypeShapeDslReturnKind::HelperCall(helper_index) => {
+                            let helper = &definition.helper_calls[helper_index];
+                            let target = node.helper_targets[helper_index];
+                            let arguments = helper
+                                .arguments
+                                .iter()
+                                .map(|argument| environment.value(argument.slot).clone())
+                                .collect();
+                            self.evaluate_lowered(target, arguments, budget)
+                        }
                     });
                 }
                 Stmt::If(if_stmt) => {
-                    match self.evaluate_if(if_stmt, environment, program, node_id, budget) {
+                    match self.evaluate_if(node_id, if_stmt, environment, budget) {
                         DslControlFlow::Continue => {}
                         result @ DslControlFlow::Return(_) => return result,
                     }
@@ -2645,16 +3024,16 @@ impl ValidatedTypeShapeDslFunction {
 
     fn evaluate_if(
         &self,
+        node_id: ResolvedTypeShapeDslNodeId,
         if_stmt: &StmtIf,
         environment: &mut DslEnvironment,
-        program: &ResolvedTypeShapeDslProgram,
-        node_id: ResolvedTypeShapeDslNodeId,
         budget: &mut DslEvaluationBudget,
     ) -> DslControlFlow {
-        match self.evaluate_condition(&if_stmt.test, environment, budget) {
+        let definition = &self.node(node_id).definition;
+        match definition.evaluate_condition(&if_stmt.test, environment, budget) {
             Err(error) => return DslControlFlow::Return(DslOutcome::Invalid(error)),
             Ok(DslCondition::True) => {
-                return self.evaluate_suite(&if_stmt.body, environment, program, node_id, budget);
+                return self.evaluate_suite(node_id, &if_stmt.body, environment, budget);
             }
             Ok(DslCondition::False) => {}
             Ok(DslCondition::Unknown | DslCondition::UnknownWithPossibleError) => {
@@ -2663,16 +3042,10 @@ impl ValidatedTypeShapeDslFunction {
         }
         for clause in &if_stmt.elif_else_clauses {
             match &clause.test {
-                Some(test) => match self.evaluate_condition(test, environment, budget) {
+                Some(test) => match definition.evaluate_condition(test, environment, budget) {
                     Err(error) => return DslControlFlow::Return(DslOutcome::Invalid(error)),
                     Ok(DslCondition::True) => {
-                        return self.evaluate_suite(
-                            &clause.body,
-                            environment,
-                            program,
-                            node_id,
-                            budget,
-                        );
+                        return self.evaluate_suite(node_id, &clause.body, environment, budget);
                     }
                     Ok(DslCondition::False) => {}
                     Ok(DslCondition::Unknown | DslCondition::UnknownWithPossibleError) => {
@@ -2680,19 +3053,15 @@ impl ValidatedTypeShapeDslFunction {
                     }
                 },
                 None => {
-                    return self.evaluate_suite(
-                        &clause.body,
-                        environment,
-                        program,
-                        node_id,
-                        budget,
-                    );
+                    return self.evaluate_suite(node_id, &clause.body, environment, budget);
                 }
             }
         }
         DslControlFlow::Continue
     }
+}
 
+impl ValidatedTypeShapeDslFunction {
     fn expression_kind(&self, expression: &Expr) -> TypeShapeDslExpressionKind {
         self.expressions
             .iter()
