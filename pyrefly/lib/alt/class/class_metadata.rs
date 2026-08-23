@@ -53,6 +53,7 @@ use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::DataclassKind;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::class_metadata::DjangoModelMetadata;
+use crate::alt::types::class_metadata::DjangoRestFrameworkSerializerKind;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::alt::types::class_metadata::ExplicitSlots;
 use crate::alt::types::class_metadata::InitDefaults;
@@ -307,6 +308,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         };
 
+        let mut django_rest_framework_serializer_kind = None;
+        for (base_class_object, metadata) in &bases_with_metadata {
+            if base_class_object.has_toplevel_qname(
+                ModuleName::rest_framework_serializers().as_str(),
+                "ModelSerializer",
+            ) || metadata.is_django_rest_framework_model_serializer()
+            {
+                django_rest_framework_serializer_kind =
+                    Some(DjangoRestFrameworkSerializerKind::ModelSerializer);
+                break;
+            }
+            if base_class_object.has_toplevel_qname(
+                ModuleName::rest_framework_serializers().as_str(),
+                "Serializer",
+            ) || metadata.is_django_rest_framework_serializer()
+            {
+                django_rest_framework_serializer_kind =
+                    Some(DjangoRestFrameworkSerializerKind::Serializer);
+            }
+        }
+
         // Check if this class inherits from marshmallow.Schema
         let is_marshmallow_schema =
             bases_with_metadata
@@ -324,16 +346,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     base_class_object
                         .has_toplevel_qname(ModuleName::factory_base().as_str(), "Factory")
                         || metadata.is_factory_boy_factory()
-                });
-
-        let is_django_rest_framework_model_serializer =
-            bases_with_metadata
-                .iter()
-                .any(|(base_class_object, metadata)| {
-                    base_class_object.has_toplevel_qname(
-                        ModuleName::rest_framework_serializers().as_str(),
-                        "ModelSerializer",
-                    ) || metadata.is_django_rest_framework_model_serializer()
                 });
 
         let is_metaclass = bases_with_metadata
@@ -574,9 +586,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             pydantic_model_kind,
             is_attrs_class,
             django_model_metadata,
+            django_rest_framework_serializer_kind,
             is_marshmallow_schema,
             is_factory_boy_factory,
-            is_django_rest_framework_model_serializer,
             is_metaclass,
             explicit_slots,
             capture_init.map(|names| names.to_vec()),
