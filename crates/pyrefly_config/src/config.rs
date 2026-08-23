@@ -1064,6 +1064,11 @@ impl ConfigFile {
                  self.root.infer_with_first_use.unwrap())
     }
 
+    pub fn check_all_matches(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_check_all_matches, path)
+            .unwrap_or_else(|| self.root.check_all_matches.unwrap())
+    }
+
     pub fn strict_callable_subtyping(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_strict_callable_subtyping, path)
             .unwrap_or_else(||
@@ -1471,6 +1476,7 @@ impl ConfigFile {
             apply_preset_default!(check_unannotated_defs);
             apply_preset_default!(infer_return_types);
             apply_preset_default!(infer_with_first_use);
+            apply_preset_default!(check_all_matches);
             apply_preset_default!(strict_callable_subtyping);
             apply_preset_default!(strict_partial_subtyping);
             apply_preset_default!(spec_compliant_overloads);
@@ -1528,6 +1534,10 @@ impl ConfigFile {
 
         if self.root.infer_with_first_use.is_none() {
             self.root.infer_with_first_use = Some(true);
+        }
+
+        if self.root.check_all_matches.is_none() {
+            self.root.check_all_matches = Some(false);
         }
 
         if self.root.strict_callable_subtyping.is_none() {
@@ -2047,6 +2057,7 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
+                    check_all_matches: None,
                     pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
                     strict_partial_subtyping: None,
@@ -2075,6 +2086,7 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
+                        check_all_matches: None,
                         pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
                         strict_partial_subtyping: None,
@@ -2702,6 +2714,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                check_all_matches: Some(false),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -2721,6 +2734,7 @@ output-format = "omit-errors"
                         replace_imports_with_any: Some(vec![
                             ModuleWildcard::new("highest").unwrap(),
                         ]),
+                        check_all_matches: Some(true),
                         ignore_errors_in_generated_code: None,
                         ..Default::default()
                     },
@@ -2753,6 +2767,9 @@ output-format = "omit-errors"
 
         // test empty value falls back to next
         assert!(config.ignore_errors_in_generated_code(Path::new("this/is/highest/priority")));
+        // test scalar sub-config override and root fallback
+        assert!(config.check_all_matches(Path::new("this/is/highest/priority")));
+        assert!(!config.check_all_matches(Path::new("this/does/not/match/any")));
         // test no pattern match
         assert!(config.replace_imports_with_any(
             Some(Path::new("this/does/not/match/any")),
@@ -2944,6 +2961,17 @@ output-format = "omit-errors"
         without_preset.configure();
 
         assert_eq!(with_preset.root, without_preset.root);
+    }
+
+    #[test]
+    fn test_check_all_matches() {
+        let mut default = ConfigFile::default();
+        default.configure();
+        assert!(!default.check_all_matches(Path::new("test.py")));
+
+        let mut enabled = ConfigFile::parse_config("check-all-matches = true").unwrap();
+        enabled.configure();
+        assert!(enabled.check_all_matches(Path::new("test.py")));
     }
 
     #[test]
@@ -3685,6 +3713,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                check_all_matches: None,
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -3727,6 +3756,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                check_all_matches: None,
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),

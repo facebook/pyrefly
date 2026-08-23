@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -898,6 +899,63 @@ def describe(flag: bool):
         case True:
             pass
     # Missing False case
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3294
+testcase!(
+    test_open_domain_match_not_checked_by_default,
+    r#"
+def describe_int(x: int):
+    match x:
+        case 1:
+            pass
+        case 2:
+            pass
+"#,
+);
+
+testcase!(
+    test_check_all_matches_reports_open_domains,
+    TestEnv::new().enable_check_all_matches(),
+    r#"
+def describe_int(x: int):
+    match x: # E: Match on `int` is not exhaustive
+        case 1:
+            pass
+
+def describe_str(x: str):
+    match x: # E: Match on `str` is not exhaustive
+        case "a":
+            pass
+        case "b":
+            pass
+
+def describe_list(x: list[int]):
+    match x: # E: Match on `list[int]` is not exhaustive
+        case [1]:
+            pass
+        case [2]:
+            pass
+
+def describe_object(x: object):
+    match x: # E: Match on `object` is not exhaustive
+        case int():
+            pass
+
+def describe_guarded(x: int | bytes | str):
+    match x: # E: Match on `bytes | int | str` is not exhaustive
+        case int():
+            pass
+        case _ if isinstance(x, str):
+            pass
+
+def get_int() -> int:
+    return 0
+
+match get_int(): # E: Match on `get_int()` is not exhaustive
+    case 0:
+        pass
 "#,
 );
 
