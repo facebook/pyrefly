@@ -2911,18 +2911,39 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         )
     }
 
-    fn get_deprecated(&self, module: ModuleName, name: &Name) -> Option<Deprecation> {
-        self.with_exports(
-            module,
-            |exports, lookup| match exports.exports(lookup).get(name)? {
-                ExportLocation::ThisModule(Export {
-                    deprecation: Some(d),
-                    ..
-                }) => Some(d.clone()),
-                _ => None,
-            },
-            ModuleDep::GetDeprecated(name.clone()),
-        )?
+    fn get_deprecated(&self, mut module: ModuleName, name: &Name) -> Option<Deprecation> {
+        let mut seen = HashSet::new();
+        let mut name = name.clone();
+
+        loop {
+            if !seen.insert((module, name.clone())) {
+                return None;
+            }
+
+            let next = self.with_exports(
+                module,
+                |exports, lookup| match exports.exports(lookup).get(&name)? {
+                    ExportLocation::ThisModule(Export { deprecation, .. }) => {
+                        Some(Err(deprecation.clone()))
+                    }
+                    ExportLocation::OtherModule(other_module, original_name) => {
+                        Some(Ok((*other_module, original_name.clone())))
+                    }
+                },
+                ModuleDep::GetDeprecated(name.clone()),
+            )?;
+
+            match next {
+                None => return None,
+                Some(Err(deprecation)) => return deprecation,
+                Some(Ok((other_module, original_name))) => {
+                    if let Some(original_name) = original_name {
+                        name = original_name;
+                    }
+                    module = other_module;
+                }
+            }
+        }
     }
 
     fn reexport_source(&self, module: ModuleName, name: &Name) -> Option<ModuleName> {

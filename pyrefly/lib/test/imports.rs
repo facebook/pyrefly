@@ -1019,6 +1019,85 @@ x()  # E: `foo.x` is deprecated
 "#,
 );
 
+fn env_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "mypkg._private",
+        "mypkg/_private.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Don't use this class")
+class MyClass: ...
+
+@deprecated("Don't use this function")
+def my_func(): ...
+
+class NonDeprecatedClass: ...
+"#,
+    );
+    t.add_with_path(
+        "mypkg",
+        "mypkg/__init__.py",
+        r#"
+from mypkg._private import MyClass, my_func, NonDeprecatedClass # E: `MyClass` is deprecated # E: `my_func` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_reexport_warn,
+    env_reexport_deprecated(),
+    r#"
+from mypkg import MyClass # E: `MyClass` is deprecated
+from mypkg import my_func # E: `my_func` is deprecated
+from mypkg import NonDeprecatedClass
+
+_ = MyClass()
+my_func()  # E: `mypkg._private.my_func` is deprecated
+"#,
+);
+
+fn env_chained_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg.origin",
+        "pkg/origin.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Deprecation message")
+class DepClass: ...
+"#,
+    );
+    t.add_with_path(
+        "pkg.middle",
+        "pkg/middle.py",
+        r#"
+from pkg.origin import DepClass as MiddleClass # E: `DepClass` is deprecated
+"#,
+    );
+    t.add_with_path(
+        "pkg.outer",
+        "pkg/outer.py",
+        r#"
+from pkg.middle import MiddleClass # E: `MiddleClass` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_chained_reexport_warn,
+    env_chained_reexport_deprecated(),
+    r#"
+from pkg.outer import MiddleClass # E: `MiddleClass` is deprecated
+
+_ = MiddleClass()
+"#,
+);
+
 fn env_func_x_deprecated_conditionally() -> TestEnv {
     TestEnv::one(
         "foo",
