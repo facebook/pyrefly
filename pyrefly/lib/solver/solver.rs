@@ -3673,6 +3673,54 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         }
     }
 
+    /// Infer an empty container's element while widening literal unions to their runtime classes.
+    fn partial_contained_answer(&self, ty: &Type) -> Type {
+        // Small explicit unions are useful annotations. Wider unions are generally implementation
+        // enumerations and make poor first-use inference targets for an empty container.
+        const MAX_PRECISE_LITERAL_MEMBERS: usize = 32;
+
+        let ty = ty
+            .clone()
+            .promote_implicit_literals(self.type_order.stdlib());
+        match ty {
+            Type::Union(union)
+                if union
+                    .members
+                    .iter()
+                    .filter(|member| matches!(member, Type::Literal(_) | Type::LiteralString(_)))
+                    .count()
+                    > MAX_PRECISE_LITERAL_MEMBERS =>
+            {
+                let members = union
+                    .members
+                    .into_iter()
+                    .map(|member| match member {
+                        Type::Literal(literal) => literal
+                            .value
+                            .general_class_type(self.type_order.stdlib())
+                            .clone()
+                            .to_type(),
+                        Type::LiteralString(_) => self.type_order.stdlib().str().clone().to_type(),
+                        _ => member,
+                    })
+                    .collect::<Vec<_>>();
+                let is_int =
+                    |member: &Type| matches!(member, Type::ClassType(cls) if cls.is_builtin("int"));
+                let is_bool = |member: &Type| matches!(member, Type::ClassType(cls) if cls.is_builtin("bool"));
+                if members.iter().any(is_int)
+                    && members
+                        .iter()
+                        .all(|member| is_int(member) || is_bool(member))
+                {
+                    self.type_order.stdlib().int().clone().to_type()
+                } else {
+                    unions(members, &self.solver.heap)
+                }
+            }
+            _ => ty,
+        }
+    }
+
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
     ///
     /// This function does two things: it checks that got <: want, and it solves free variables assuming that
@@ -4000,14 +4048,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     }
                     Variable::PartialContained(_) => {
                         drop(v1_ref);
+                        let t2 = self.partial_contained_answer(t2);
                         // When an empty container's element is pinned to None, widen to
                         // None | Any. A bare None in the first use almost always means the
                         // container will later hold some other (unknown) type, analogous
                         // to how `self.x = None` is inferred as `None | Any` for attributes.
                         let answer = if t2.is_none() {
-                            unions(vec![t2.clone(), Type::any_implicit()], &self.solver.heap)
+                            unions(vec![t2, Type::any_implicit()], &self.solver.heap)
                         } else {
-                            t2.clone()
+                            t2
                         };
                         variables.update(*v1, Variable::answer(answer));
                         Ok(())
@@ -4145,9 +4194,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         Ok(())
                     }
                     Variable::PartialContained(_) => {
-                        let t1_p = t1
-                            .clone()
-                            .promote_implicit_literals(self.type_order.stdlib());
+                        let t1_p = self.partial_contained_answer(t1);
                         drop(v2_ref);
                         // Widen None to None | Any (see comment at the other
                         // PartialContained pinning site above).
