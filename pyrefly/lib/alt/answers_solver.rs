@@ -32,6 +32,7 @@ use pyrefly_graph::calculation::ProposalResult;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_types::class::ClassType;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::AnchorIndex;
 use pyrefly_types::quantified::Quantified;
@@ -1769,6 +1770,13 @@ pub struct ThreadState {
     /// check is currently in progress, used as a coinductive guard against
     /// self-referential protocols. See `filter_overloads_by_self_type`.
     overload_self_filter_stack: RefCell<FxHashSet<(Type, Type)>>,
+    /// `(got_type, protocol_class_type, attr_name)` tuples whose protocol-member check is
+    /// currently in progress, used as a coinductive guard against recursive protocol checks
+    /// (e.g. `__getattr__` annotated with a protocol).
+    protocol_member_guard_stack: RefCell<FxHashSet<(Type, ClassType, Name)>>,
+    /// Tracks whether any coinductive assumption was used during solving
+    /// (e.g. recursive protocol member resolution via dynamic fallback).
+    coinductive_assumptions_used: Cell<bool>,
 }
 
 impl ThreadState {
@@ -1782,6 +1790,8 @@ impl ThreadState {
             trace_sink: RefCell::new(None),
             trace_sink_stack: RefCell::new(Vec::new()),
             overload_self_filter_stack: RefCell::new(FxHashSet::default()),
+            protocol_member_guard_stack: RefCell::new(FxHashSet::default()),
+            coinductive_assumptions_used: Cell::new(false),
         }
     }
 
@@ -2228,6 +2238,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .overload_self_filter_stack
             .borrow_mut()
             .remove(key);
+    }
+
+    /// Mark a protocol member check `(got, protocol_class_type, attr_name)` as in progress.
+    /// Returns `true` if it was already active, signaling a coinductive cycle.
+    pub(crate) fn enter_protocol_member_check(&self, key: (Type, ClassType, Name)) -> bool {
+        let is_cycle = !self
+            .thread_state
+            .protocol_member_guard_stack
+            .borrow_mut()
+            .insert(key);
+        if is_cycle {
+            self.thread_state.coinductive_assumptions_used.set(true);
+        }
+        is_cycle
+    }
+
+    pub(crate) fn exit_protocol_member_check(&self, key: &(Type, ClassType, Name)) {
+        self.thread_state
+            .protocol_member_guard_stack
+            .borrow_mut()
+            .remove(key);
+    }
+
+    pub(crate) fn coinductive_assumptions_used(&self) -> bool {
+        self.thread_state.coinductive_assumptions_used.get()
+    }
+
+    pub(crate) fn set_coinductive_assumptions_used(&self, value: bool) {
+        self.thread_state.coinductive_assumptions_used.set(value);
     }
 
     /// Given the target idx of a ForwardToFirstUse binding, find the NameAssign's

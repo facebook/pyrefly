@@ -130,6 +130,14 @@ impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
             .is_protocol_subset_at_attr(got, protocol, name, is_subset)
     }
 
+    pub fn coinductive_assumptions_used(self) -> bool {
+        self.0.coinductive_assumptions_used()
+    }
+
+    pub fn set_coinductive_assumptions_used(self, value: bool) {
+        self.0.set_coinductive_assumptions_used(value)
+    }
+
     pub fn as_tuple_type(self, cls: &ClassType) -> Option<Type> {
         self.0.as_tuple(cls).map(Type::Tuple)
     }
