@@ -48,6 +48,8 @@ use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::lsp::wasm::hover::get_hover;
 use crate::state::load::FileContents;
+use crate::state::lsp::AllOffPartial;
+use crate::state::lsp::InlayHintConfig;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
@@ -697,7 +699,7 @@ impl Playground {
             )
     }
 
-    pub fn inlay_hint(&self) -> Vec<InlayHint> {
+    pub fn inlay_hint(&self, call_argument_names: bool) -> Vec<InlayHint> {
         let handle = match self.handles.get(&self.active_filename) {
             Some(h) => h,
             None => return Vec::new(),
@@ -705,7 +707,18 @@ impl Playground {
         let transaction = self.state.transaction();
         transaction
             .get_module_info(handle)
-            .zip(transaction.inlay_hints(handle, Default::default(), Default::default()))
+            .zip(transaction.inlay_hints(
+                handle,
+                InlayHintConfig {
+                    call_argument_names: if call_argument_names {
+                        AllOffPartial::All
+                    } else {
+                        AllOffPartial::Off
+                    },
+                    ..Default::default()
+                },
+                Default::default(),
+            ))
             .map(|(info, hints)| {
                 hints.into_map(|hint| {
                     let position = Position::from_display_pos(info.display_pos(hint.position));
@@ -721,6 +734,31 @@ impl Playground {
 mod tests {
     use super::*;
     use crate::config::error_kind::ErrorKind;
+
+    #[test]
+    fn test_parameter_name_inlay_hints_can_be_enabled() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "def f(value: int) -> None:\n    pass\n\nf(1)".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        assert!(
+            state
+                .inlay_hint(false)
+                .iter()
+                .all(|hint| hint.label != "value= ")
+        );
+        assert!(
+            state
+                .inlay_hint(true)
+                .iter()
+                .any(|hint| hint.label == "value= ")
+        );
+    }
 
     #[test]
     fn test_autocomplete_includes_auto_import_edit() {
