@@ -12,10 +12,13 @@ use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::request::CallHierarchyIncomingCalls;
 use lsp_types::request::CallHierarchyOutgoingCalls;
 use lsp_types::request::CallHierarchyPrepare;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::Message;
 use pyrefly_lsp_test::Request;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -240,6 +243,80 @@ fn test_incoming_call_hierarchy_basic() {
             } else {
                 panic!("Expected Some(incoming_calls), got None");
             }
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// Regression test for #3636: incoming calls must be found in files the client never
+/// opened. `test_incoming_call_hierarchy_basic` opens both files, so it cannot catch
+/// this — only `callee.py` is opened here, and `caller.py` is reached through the index.
+#[test]
+fn test_incoming_call_hierarchy_unopened_caller_file() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("call_hierarchy_test");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let callee_file = root_path.join("callee.py");
+
+    // Deliberately open ONLY the callee. caller.py stays closed, so it is held at
+    // `Require::Indexing` and has no AST until the call hierarchy asks for one.
+    interaction.client.did_open("callee.py");
+
+    let callee_uri = Url::from_file_path(&callee_file).unwrap();
+    let call_hierarchy_item = json!({
+        "name": "my_function",
+        "kind": SymbolKind::FUNCTION,
+        "uri": callee_uri.to_string(),
+        "range": {
+            "start": {"line": 6, "character": 0},
+            "end": {"line": 8, "character": 13}
+        },
+        "selectionRange": {
+            "start": {"line": 6, "character": 4},
+            "end": {"line": 6, "character": 15}
+        }
+    });
+
+    interaction
+        .client
+        .send_request::<CallHierarchyIncomingCalls>(json!({
+            "item": call_hierarchy_item
+        }))
+        .expect_response_with(|result| {
+            let incoming_calls =
+                result.expect("Expected Some(incoming_calls) for an unopened caller file");
+            let caller_names: Vec<String> = incoming_calls
+                .iter()
+                .map(|call| call.from.name.clone())
+                .collect();
+
+            for expected in ["caller_one", "caller_two", "method_caller"] {
+                assert!(
+                    caller_names.contains(&expected.to_owned()),
+                    "Expected to find {} in an unopened file, got: {:?}",
+                    expected,
+                    caller_names
+                );
+            }
+
+            true
         })
         .unwrap();
 

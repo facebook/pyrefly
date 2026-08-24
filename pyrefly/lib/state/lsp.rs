@@ -5007,7 +5007,9 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
                 definition.module.path().dupe(),
                 sys_info,
             );
-            transaction.transitive_rdeps(definition_handle.dupe())
+            let rdeps = transaction.transitive_rdeps(definition_handle.dupe());
+            transaction.run_for_handles(&[definition_handle], Require::Everything)?;
+            rdeps
         }
     };
     for fs_counterpart_of_in_memory_handles in transitive_rdeps
@@ -5028,8 +5030,6 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
         .into_iter()
         .sorted_by_key(|h| h.path().dupe())
         .collect();
-
-    transaction.run_for_handles(&candidate_handles, Require::Everything)?;
 
     Ok(candidate_handles)
 }
