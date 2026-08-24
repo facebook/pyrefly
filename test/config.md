@@ -205,7 +205,6 @@ $ mkdir -p $TMPDIR/extends/src && \
 > printf 'def f(x):\n    return x\n' > $TMPDIR/extends/src/a.py && \
 > $PYREFLY check -c $TMPDIR/extends/pyrefly.toml --output-format=min-text $TMPDIR/extends/src/a.py
 ERROR */extends/src/a.py:1:7-8: `f` is missing an annotation for parameter `x` [implicit-any-parameter] (glob)
- INFO 1 error
 [1]
 ```
 
