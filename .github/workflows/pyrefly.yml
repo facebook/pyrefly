@@ -1,6 +1,7 @@
 name: pyrefly
 on:
   push:
+    branches: [ main ]
     paths:
       - '**/*'
       - '!.*'
