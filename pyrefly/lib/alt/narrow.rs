@@ -1721,7 +1721,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     if let Type::TypeIs(t) = ret {
                         let target = if is_builtin_callable {
-                            // `callable` proves callability but reveals nothing about the return type.
+                            // `callable` is annotated as `TypeIs[Callable[..., object]]` which is
+                            // too conservative and prone to false positives, see
+                            // https://github.com/facebook/pyrefly/issues/911
                             self.heap.mk_callable_ellipsis(self.heap.mk_any_implicit())
                         } else {
                             *t
