@@ -1407,6 +1407,64 @@ fn remove_unused_import_quickfix_removes_last_alias() {
 }
 
 #[test]
+fn remove_unused_import_quickfix_removes_alias_in_type_checking_block() {
+    let code = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\n    import sys\nprint(sys.version)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import sys\nprint(sys.version)\n",
+        after
+    );
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_emptied_type_checking_block() {
+    let code = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import TYPE_CHECKING\nx = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_nested_emptied_blocks() {
+    let code = "from typing import TYPE_CHECKING\nx = 1\nif x:\n    if TYPE_CHECKING:\n        import os\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import TYPE_CHECKING\nx = 1\n", after);
+}
+
+// Removing the whole `if` would drop the `else` branch, so no fix is offered.
+#[test]
+fn remove_unused_import_quickfix_skips_block_with_else_clause() {
+    let code =
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\nelse:\n    x = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    assert_eq!(None, unused_import_action_after(code, cursor_offset));
+}
+
+// A `try` body that keeps a statement is edited normally; only emptying it is
+// refused, which is what the next test pins down.
+#[test]
+fn remove_unused_import_quickfix_removes_alias_in_try_block() {
+    let code =
+        "try:\n    import os\n    import sys\nexcept ImportError:\n    pass\nprint(sys.version)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    import sys\nexcept ImportError:\n    pass\nprint(sys.version)\n",
+        after
+    );
+}
+
+// Removing the whole `try` would drop the `except` branch, so no fix is offered.
+#[test]
+fn remove_unused_import_quickfix_skips_emptied_try_block() {
+    let code = "try:\n    import os\nexcept ImportError:\n    pass\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    assert_eq!(None, unused_import_action_after(code, cursor_offset));
+}
+
+#[test]
 fn remove_unused_import_quickfix_keeps_statement_after_semicolon() {
     let code = "import os; x = 1\n";
     let cursor_offset = code.find("os").unwrap();

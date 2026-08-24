@@ -5,9 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::iter;
+
 use dupe::Dupe;
 use pyrefly_python::module::Module;
 use ruff_python_ast::Alias;
+use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
@@ -33,48 +36,114 @@ pub(crate) fn remove_unused_import_code_action(
     ))
 }
 
-fn import_removal_range(source: &str, ast: &ModModule, unused: &UnusedImport) -> Option<TextRange> {
-    for stmt in &ast.body {
-        match stmt {
-            Stmt::Import(import) if import.range().contains_range(unused.range) => {
-                return alias_removal_range(source, import.range(), &import.names, unused.range);
-            }
-            Stmt::ImportFrom(import_from) if import_from.range().contains_range(unused.range) => {
-                return alias_removal_range(
-                    source,
-                    import_from.range(),
-                    &import_from.names,
-                    unused.range,
-                );
-            }
-            _ => {}
-        }
-    }
-    None
+/// A block enclosing the import, and the statement that owns the block. The
+/// module body owns itself, so it is not stored: running off the end of the
+/// chain is what reaching the module looks like.
+struct EnclosingBlock<'a> {
+    owner: &'a Stmt,
+    body: &'a [Stmt],
 }
 
-fn alias_removal_range(
-    source: &str,
+struct FoundImport<'a> {
     stmt_range: TextRange,
-    aliases: &[Alias],
-    unused_range: TextRange,
-) -> Option<TextRange> {
-    let index = aliases
+    aliases: &'a [Alias],
+    /// The blocks containing the import, innermost first.
+    blocks: Vec<EnclosingBlock<'a>>,
+}
+
+fn import_removal_range(source: &str, ast: &ModModule, unused: &UnusedImport) -> Option<TextRange> {
+    let found = find_import(&ast.body, unused)?;
+    let index = found
+        .aliases
         .iter()
-        .position(|alias| alias.range().contains_range(unused_range))?;
-    if aliases.len() == 1 {
-        return statement_removal_range(source, stmt_range);
+        .position(|alias| alias.range().contains_range(unused.range))?;
+
+    if found.aliases.len() > 1 {
+        return Some(if index == 0 {
+            TextRange::new(
+                found.aliases[index].range().start(),
+                found.aliases[index + 1].range().start(),
+            )
+        } else {
+            TextRange::new(
+                found.aliases[index - 1].range().end(),
+                found.aliases[index].range().end(),
+            )
+        });
     }
-    if index == 0 {
-        Some(TextRange::new(
-            aliases[index].range().start(),
-            aliases[index + 1].range().start(),
-        ))
-    } else {
-        Some(TextRange::new(
-            aliases[index - 1].range().end(),
-            aliases[index].range().end(),
-        ))
+
+    // Removing the only alias removes the statement, which would leave an empty
+    // block behind if it is the only statement there. An `if` with no other
+    // clauses exists solely for its body, so remove it too, repeatedly: the
+    // import may be nested several such blocks deep. Every other compound
+    // statement either has sibling clauses that removal would orphan or a header
+    // with runtime effects, so the import cannot be removed on its own.
+    let mut stmt_range = found.stmt_range;
+    for block in &found.blocks {
+        if block.body.len() > 1 {
+            break;
+        }
+        match block.owner {
+            Stmt::If(if_stmt) if if_stmt.elif_else_clauses.is_empty() => {
+                stmt_range = if_stmt.range();
+            }
+            _ => return None,
+        }
+    }
+    statement_removal_range(source, stmt_range)
+}
+
+/// Find the import binding `unused`, along with the chain of blocks containing
+/// it. Only blocks that share the module scope are searched, since an import in
+/// a function or class body binds elsewhere and is never reported as unused.
+fn find_import<'a>(body: &'a [Stmt], unused: &UnusedImport) -> Option<FoundImport<'a>> {
+    let stmt = body
+        .iter()
+        .find(|stmt| stmt.range().contains_range(unused.range))?;
+    let (stmt_range, aliases) = match stmt {
+        Stmt::Import(import) => (import.range(), import.names.as_slice()),
+        Stmt::ImportFrom(import) => (import.range(), import.names.as_slice()),
+        _ => {
+            let (nested, mut found) = nested_bodies(stmt)
+                .into_iter()
+                .find_map(|nested| find_import(nested, unused).map(|found| (nested, found)))?;
+            found.blocks.push(EnclosingBlock {
+                owner: stmt,
+                body: nested,
+            });
+            return Some(found);
+        }
+    };
+    Some(FoundImport {
+        stmt_range,
+        aliases,
+        blocks: Vec::new(),
+    })
+}
+
+/// The blocks directly inside `stmt` that share the scope `stmt` is written in.
+fn nested_bodies(stmt: &Stmt) -> Vec<&[Stmt]> {
+    match stmt {
+        Stmt::If(x) => iter::once(x.body.as_slice())
+            .chain(x.elif_else_clauses.iter().map(|c| c.body.as_slice()))
+            .collect(),
+        Stmt::Try(x) => [
+            x.body.as_slice(),
+            x.orelse.as_slice(),
+            x.finalbody.as_slice(),
+        ]
+        .into_iter()
+        .chain(
+            x.handlers
+                .iter()
+                .map(|ExceptHandler::ExceptHandler(handler)| handler.body.as_slice()),
+        )
+        .collect(),
+        Stmt::For(x) => vec![x.body.as_slice(), x.orelse.as_slice()],
+        Stmt::While(x) => vec![x.body.as_slice(), x.orelse.as_slice()],
+        Stmt::With(x) => vec![x.body.as_slice()],
+        Stmt::Match(x) => x.cases.iter().map(|case| case.body.as_slice()).collect(),
+        _ => Vec::new(),
     }
 }
 
