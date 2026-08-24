@@ -60,6 +60,22 @@ match None: # E: Missing cases: None
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4631.
+testcase!(
+    test_recursive_alias_mapping_pattern_does_not_overflow,
+    r#"
+from typing import Mapping
+
+def fn(obj: U):
+    match obj:
+        case {'a': {'b': []}}:
+            pass
+
+T = 'T' | str | Mapping[str, 'T']  # E: `|` union syntax does not work with string literals # E: Found cyclic self-reference in `T`
+U = Mapping[str, T]
+"#,
+);
+
 testcase!(
     test_match_case_unreachable_for_disjoint_subject_type,
     r#"
