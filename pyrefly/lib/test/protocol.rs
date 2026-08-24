@@ -1471,6 +1471,18 @@ cls2: type[CanFly] = A      # OK
 );
 
 testcase!(
+    test_call_classmethod_on_protocol,
+    r#"
+from typing import Protocol
+class P(Protocol):
+    @classmethod
+    def f(cls) -> None:
+        return None
+P.f()
+    "#,
+);
+
+testcase!(
     test_runtime_checkable_unsafe_overlap,
     r#"
 from typing import Protocol, runtime_checkable

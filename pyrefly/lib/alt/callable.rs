@@ -54,6 +54,7 @@ use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallBoundary;
 use crate::solver::solver::CallContext;
 use crate::solver::solver::QuantifiedHandle;
+use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
@@ -473,6 +474,7 @@ impl CallArgPreEval<'_> {
         hint: &Type,
         param_name: Option<&Name>,
         vararg: bool,
+        is_self_arg: bool,
         range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
@@ -490,12 +492,20 @@ impl CallArgPreEval<'_> {
         match self {
             Self::Type(ty, done) => {
                 *done = true;
-                solver.check_type_with_options(
+                let fresh_call_errors = solver.error_collector();
+                let res = solver.check_type_with_options(
                     ty,
                     hint,
                     range,
-                    TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
+                    TypeCheckOptions::new(&fresh_call_errors, tcc).with_call_context(call_context),
                 );
+                // A protocol class may bind its own classmethods even though it cannot be passed
+                // explicitly as an argument.
+                if !(is_self_arg
+                    && matches!(res, Some(SubsetError::TypeOfProtocolNeedsConcreteClass(_))))
+                {
+                    call_errors.extend(fresh_call_errors);
+                }
                 solver.maybe_error_unknown_argument_type(ty, range, arg_errors);
                 Some((*ty).clone())
             }
@@ -909,7 +919,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             Ok(param_list_owner.push(ps).items().iter().rev().collect())
         };
-        for arg in self_arg.iter().chain(args.iter()) {
+        for (arg, is_self_arg) in self_arg
+            .iter()
+            .map(|arg| (arg, true))
+            .chain(args.iter().map(|arg| (arg, false)))
+        {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
@@ -984,6 +998,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ty,
                                 name,
                                 false,
+                                is_self_arg,
                                 arg.range(),
                                 arg_errors,
                                 call_errors,
@@ -1024,6 +1039,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ty,
                             name,
                             true,
+                            is_self_arg,
                             arg.range(),
                             arg_errors,
                             call_errors,
@@ -1609,6 +1625,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 callable_name,
                 &hint,
                 name,
+                false,
                 false,
                 range,
                 arg_errors,
