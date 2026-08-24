@@ -2468,3 +2468,30 @@ from bar import e  # E: `e` is not exported from module `bar`
 from bar import f
 "#,
 );
+
+fn env_implicit_reexport_removed_from_all() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+c: int = 3
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import c
+__all__ = ["c"]
+__all__.remove("c")
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport_removed_from_all,
+    env_implicit_reexport_removed_from_all().enable_implicit_reexport_error(),
+    r#"
+from bar import c  # E: `c` is not exported from module `bar`
+"#,
+);

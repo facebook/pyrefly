@@ -112,6 +112,8 @@ pub struct Exports {
     definitions: Definitions,
     /// Names statically known to be in a partially resolvable explicit `__all__`.
     partially_known_dunder_all: SmallSet<Name>,
+    /// Names statically known to be in a user-defined explicit `__all__`.
+    explicit_dunder_all_names: Option<SmallSet<Name>>,
     /// Names that are available via `from <this_module> import *`
     wildcard: Calculation<Arc<SmallSet<Name>>>,
     /// Names that are available via `from <this_module> import <name>` along with their locations
@@ -146,6 +148,7 @@ impl Exports {
         );
         definitions.inject_implicit_globals();
         let partially_known_dunder_all = Self::get_partially_known_dunder_all(&definitions);
+        let explicit_dunder_all_names = Self::get_explicit_dunder_all_names(&definitions);
         definitions.ensure_dunder_all(module_info.path().style());
         if module_info.name() == ModuleName::builtins() {
             // The `builtins` module is a bit weird. It has no `__all__` in TypeShed,
@@ -165,6 +168,7 @@ impl Exports {
             is_init: module_info.path().is_init(),
             definitions,
             partially_known_dunder_all,
+            explicit_dunder_all_names,
             wildcard: Calculation::new(),
             exports: Calculation::new(),
             docstring_range: Docstring::range_from_stmts(x),
@@ -251,6 +255,14 @@ impl Exports {
                         || self_def.main_guard_only != other_def.main_guard_only
                         || self.partially_known_dunder_all.contains(name)
                             != other.partially_known_dunder_all.contains(name)
+                        || self
+                            .explicit_dunder_all_names
+                            .as_ref()
+                            .is_some_and(|all| all.contains(name))
+                            != other
+                                .explicit_dunder_all_names
+                                .as_ref()
+                                .is_some_and(|all| all.contains(name))
                     {
                         changed.0.names.entry(name.clone()).or_default().metadata = true;
                     }
@@ -307,19 +319,32 @@ impl Exports {
 
     /// Return an iterator with entries in `__all__` that are user-defined or None if `__all__` was not present.
     pub fn get_explicit_dunder_all_names_iter(&self) -> Option<impl Iterator<Item = &Name>> {
-        match self.definitions.dunder_all.kind {
-            DunderAllKind::Specified => Some(
-                self.definitions
-                    .dunder_all
-                    .entries
-                    .iter()
-                    .filter_map(|entry| match entry {
-                        DunderAllEntry::Name(_, name) => Some(name),
-                        _ => None,
-                    }),
-            ),
-            _ => None,
+        self.explicit_dunder_all_names
+            .as_ref()
+            .map(|names| names.iter())
+    }
+
+    /// Returns statically known entries in an explicit `__all__`.
+    pub fn get_explicit_dunder_all_names(definitions: &Definitions) -> Option<SmallSet<Name>> {
+        if definitions.dunder_all.kind != DunderAllKind::Specified {
+            return None;
         }
+
+        let mut names = SmallSet::new();
+
+        for entry in &definitions.dunder_all.entries {
+            match entry {
+                DunderAllEntry::Name(_, name) => {
+                    names.insert(name.clone());
+                }
+                DunderAllEntry::Remove(_, name) => {
+                    names.shift_remove(name);
+                }
+                DunderAllEntry::Module(..) => {}
+            }
+        }
+
+        Some(names)
     }
 
     // Returns statically known entries in an unresolvable `__all__`.
@@ -490,8 +515,10 @@ impl Exports {
         if self.partially_known_dunder_all.contains(name) {
             return false;
         }
-        if let Some(mut all) = self.get_explicit_dunder_all_names_iter()
-            && all.any(|n| n == name)
+        if self
+            .explicit_dunder_all_names
+            .as_ref()
+            .is_some_and(|all| all.contains(name))
         {
             return false;
         }
