@@ -5127,6 +5127,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Whether an inherited permissive `__new__` should yield to an overridden `__init__`
+    /// when presenting the class as a callable.
+    pub(crate) fn constructor_prefers_init_over_inherited_new(&self, cls: &ClassType) -> bool {
+        let Some(new_member) =
+            self.get_class_member_with_defining_class(cls.class_object(), &dunder::NEW)
+        else {
+            return false;
+        };
+        self.get_dunder_init(cls, false).is_some()
+            && new_member.defining_class != *cls.class_object()
+            && new_member.value.is_function_without_return_annotation()
+            && new_member
+                .value
+                .ty()
+                .visit_toplevel_func_metadata::<bool>(&|meta| {
+                    meta.flags.has_gradual_variadic_params
+                })
+    }
     fn get_dunder_init_helper(&self, instance: &Instance, get_object_init: bool) -> Option<Type> {
         let init_method =
             self.get_class_member_with_defining_class(instance.class, &dunder::INIT)?;
