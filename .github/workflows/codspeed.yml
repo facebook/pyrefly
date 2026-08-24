@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
   id-token: write # OpenID Connect auth with CodSpeed (no token secret required)
+
+# GitHub sets `head_ref` only for a pull request. A new push to a pull request
+# cancels the previous run. All other events use the unique `run_id`. Each of
+# these runs gets its own group, and no run cancels a different run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   # Instruction-count (Valgrind) measurement of the small, deterministic
   # microbenchmarks. They are single-threaded and fast, so callgrind's overhead
