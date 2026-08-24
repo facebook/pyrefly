@@ -27,12 +27,12 @@ pub(crate) fn remove_unused_import_code_action(
     ast: &ModModule,
     unused: &UnusedImport,
 ) -> Option<(String, Module, TextRange, String)> {
-    let range = import_removal_range(module_info.contents(), ast, unused)?;
+    let (range, replacement) = import_removal_edit(module_info.contents(), ast, unused)?;
     Some((
         format!("Remove unused import: `{}`", unused.name.as_str()),
         module_info.dupe(),
         range,
-        String::new(),
+        replacement,
     ))
 }
 
@@ -51,7 +51,13 @@ struct FoundImport<'a> {
     blocks: Vec<EnclosingBlock<'a>>,
 }
 
-fn import_removal_range(source: &str, ast: &ModModule, unused: &UnusedImport) -> Option<TextRange> {
+/// The range to replace and the text to put there. The text is empty for a plain
+/// removal, and `pass` when a block would otherwise be left without a statement.
+fn import_removal_edit(
+    source: &str,
+    ast: &ModModule,
+    unused: &UnusedImport,
+) -> Option<(TextRange, String)> {
     let found = find_import(&ast.body, unused)?;
     let index = found
         .aliases
@@ -59,7 +65,7 @@ fn import_removal_range(source: &str, ast: &ModModule, unused: &UnusedImport) ->
         .position(|alias| alias.range().contains_range(unused.range))?;
 
     if found.aliases.len() > 1 {
-        return Some(if index == 0 {
+        let range = if index == 0 {
             TextRange::new(
                 found.aliases[index].range().start(),
                 found.aliases[index + 1].range().start(),
@@ -69,15 +75,14 @@ fn import_removal_range(source: &str, ast: &ModModule, unused: &UnusedImport) ->
                 found.aliases[index - 1].range().end(),
                 found.aliases[index].range().end(),
             )
-        });
+        };
+        return Some((range, String::new()));
     }
 
     // Removing the only alias removes the statement, which would leave an empty
     // block behind if it is the only statement there. An `if` with no other
     // clauses exists solely for its body, so remove it too, repeatedly: the
-    // import may be nested several such blocks deep. Every other compound
-    // statement either has sibling clauses that removal would orphan or a header
-    // with runtime effects, so the import cannot be removed on its own.
+    // import may be nested several such blocks deep.
     let mut stmt_range = found.stmt_range;
     for block in &found.blocks {
         if block.body.len() > 1 {
@@ -87,10 +92,13 @@ fn import_removal_range(source: &str, ast: &ModModule, unused: &UnusedImport) ->
             Stmt::If(if_stmt) if if_stmt.elif_else_clauses.is_empty() => {
                 stmt_range = if_stmt.range();
             }
-            _ => return None,
+            // The owner keeps running whether or not the block does anything, so
+            // it needs a body. Replacing just the statement leaves the
+            // indentation, and any trailing comment, in place.
+            _ => return Some((stmt_range, "pass".to_owned())),
         }
     }
-    statement_removal_range(source, stmt_range)
+    Some((statement_removal_range(source, stmt_range)?, String::new()))
 }
 
 /// Find the import binding `unused`, along with the chain of blocks containing
@@ -178,9 +186,8 @@ fn statement_removal_range(source: &str, stmt_range: TextRange) -> Option<TextRa
                 line_end.to_usize() - rest.len(),
             )
         }
-        // A statement preceded on its line by something other than a `;` is the
-        // body of a one-line compound statement, which cannot be removed on its
-        // own.
+        // Reached only when another statement precedes this one on the line,
+        // which requires a `;` to separate them.
         None => (
             line_start.to_usize() + before.rfind(';')?,
             stmt_range.end().to_usize(),

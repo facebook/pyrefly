@@ -1433,17 +1433,30 @@ fn remove_unused_import_quickfix_removes_nested_emptied_blocks() {
     assert_eq!("from typing import TYPE_CHECKING\nx = 1\n", after);
 }
 
-// Removing the whole `if` would drop the `else` branch, so no fix is offered.
+// Removing the whole `if` would drop the `else` branch, so the body keeps a `pass`.
 #[test]
-fn remove_unused_import_quickfix_skips_block_with_else_clause() {
+fn remove_unused_import_quickfix_passes_block_with_else_clause() {
     let code =
         "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\nelse:\n    x = 1\n";
     let cursor_offset = code.find("import os").unwrap() + "import ".len();
-    assert_eq!(None, unused_import_action_after(code, cursor_offset));
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    pass\nelse:\n    x = 1\n",
+        after
+    );
 }
 
-// A `try` body that keeps a statement is edited normally; only emptying it is
-// refused, which is what the next test pins down.
+// A loop header runs whatever its body does, so the loop stays with a `pass`.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_loop_body() {
+    let code = "for i in range(3):\n    import os\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("for i in range(3):\n    pass\nx = 1\n", after);
+}
+
+// A `try` body that keeps another statement is edited in place; emptying it
+// leaves a `pass`, which is what the next test pins down.
 #[test]
 fn remove_unused_import_quickfix_removes_alias_in_try_block() {
     let code =
@@ -1456,12 +1469,65 @@ fn remove_unused_import_quickfix_removes_alias_in_try_block() {
     );
 }
 
-// Removing the whole `try` would drop the `except` branch, so no fix is offered.
+// Dropping the `try` would take handlers that may do real work with it, so the
+// body keeps a `pass` and the handlers are left for the user to judge.
 #[test]
-fn remove_unused_import_quickfix_skips_emptied_try_block() {
-    let code = "try:\n    import os\nexcept ImportError:\n    pass\n";
+fn remove_unused_import_quickfix_passes_emptied_try_statement() {
+    let code = "try:\n    import os\nexcept ImportError:\n    pass\nx = 1\n";
     let cursor_offset = code.find("import os").unwrap() + "import ".len();
-    assert_eq!(None, unused_import_action_after(code, cursor_offset));
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nx = 1\n",
+        after
+    );
+}
+
+// The capability probe from the review of D116863962: the handler sets a
+// fallback that the rest of the program reads, so it must survive the fix.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_keeping_capability_probe() {
+    let code = "available = True\ntry:\n    import os\nexcept ImportError:\n    available = False\nprint(available)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "available = True\ntry:\n    pass\nexcept ImportError:\n    available = False\nprint(available)\n",
+        after
+    );
+}
+
+// A `finally` block runs even when the body is empty, so it must not be dropped.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_with_finally() {
+    let code =
+        "try:\n    import os\nexcept ImportError:\n    pass\nfinally:\n    print('done')\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nfinally:\n    print('done')\nx = 1\n",
+        after
+    );
+}
+
+// An `else` block runs whenever the body completes, so it must not be dropped.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_with_else() {
+    let code =
+        "try:\n    import os\nexcept ImportError:\n    pass\nelse:\n    print('ok')\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nelse:\n    print('ok')\nx = 1\n",
+        after
+    );
+}
+
+// Emptying a handler body says nothing about the `try` body, which must survive.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_except_handler() {
+    let code = "try:\n    x = 1\nexcept ImportError:\n    import os\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("try:\n    x = 1\nexcept ImportError:\n    pass\n", after);
 }
 
 #[test]
